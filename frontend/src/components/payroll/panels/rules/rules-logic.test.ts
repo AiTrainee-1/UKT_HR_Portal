@@ -208,7 +208,7 @@ describe("where a rule is changed", () => {
   });
 
   it("counts the rules of some groups", () => {
-    expect(countRules(SETTINGS_GROUPS)).toBe(4);
+    expect(countRules(SETTINGS_GROUPS)).toBe(5);
     expect(countRules([])).toBe(0);
     expect(countRules(ASHA.groups)).toBe(3);
   });
@@ -222,6 +222,9 @@ describe("the icon of a group of rules", () => {
     expect(kind("Permissions")).toBe("late");
     expect(kind("Overtime")).toBe("overtime");
     expect(kind("PF and ESI")).toBe("deductions");
+    expect(kind("PF, ESI and TDS")).toBe("deductions");
+    expect(kind("TDS")).toBe("deductions");
+    expect(kind("Co Emp rules")).toBe("deductions");
     expect(kind("Advance deductions")).toBe("deductions");
     expect(kind("Attendance")).toBe("attendance");
     expect(kind("Shift")).toBe("shift");
@@ -238,6 +241,7 @@ describe("the icon of a group of rules", () => {
     expect(ruleGroupKind("Attendance mode & late detection")).toBe("attendance");
     expect(ruleGroupKind("Half day & permissions")).toBe("late");
     expect(ruleGroupKind("Statutory (PF / ESI)")).toBe("deductions");
+    expect(ruleGroupKind("Statutory (PF / ESI / TDS)")).toBe("deductions");
     expect(ruleGroupKind("Pay basis")).toBe("pay");
     expect(ruleGroupKind("Overtime / Compensation switch")).toBe("overtime");
     expect(ruleGroupKind("Pay cycle")).toBe("cycle");
@@ -330,6 +334,9 @@ describe("the export", () => {
     expect(headings(production)).toEqual(["Pay cycle", "Rate per shift", "Shift", "PF / ESI", "Bank details"]);
     // a kind nobody has named reads as words
     expect(chipKindLabel("saturday_half")).toBe("Saturday half");
+    // the new model's kinds: a TDS employee, a Co Emp employee
+    expect(chipKindLabel("tds")).toBe("TDS");
+    expect(chipKindLabel("co_emp")).toBe("Co Emp");
     expect(chipKindLabel("")).toBe("");
   });
 

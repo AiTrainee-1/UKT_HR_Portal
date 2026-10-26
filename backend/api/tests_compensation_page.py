@@ -83,11 +83,17 @@ class CtcBreakdownSplitTests(CompensationBase):
 
     def setUp(self):
         super().setUp()
+        # PF 12% for everyone; ESI 0.75% for salaries up to 21,000 (the full-salary basis). Only Co Emp employees have either.
         ps = PayrollSettings.get()
-        ps.pf_rate = Decimal("12")
-        ps.esi_rate = Decimal("0.75")
-        ps.esi_applicable_below = Decimal("21000")
+        ps.staff_pf_rules = [
+            {"id": "p1", "label": "PF", "basis": "total", "minAmount": 0, "maxAmount": 0, "ratePercent": 12}
+        ]
+        ps.staff_esi_rules = [
+            {"id": "e1", "label": "ESI", "basis": "total", "minAmount": 0, "maxAmount": 21000, "ratePercent": 0.75}
+        ]
         ps.save()
+        self.asha.co_emp_enabled = True
+        self.asha.save()
 
     def row(self, code="C1"):
         return next(r for r in self.get().json()["results"] if r["employeeCode"] == code)
@@ -151,11 +157,30 @@ class CtcBreakdownSplitTests(CompensationBase):
         self.asha.refresh_from_db()
         self.assertIsNone(salary_split.breakup_of(self.asha))
 
-    def test_the_pf_rate_applies_to_the_first_portion(self):
+    def test_the_pf_rule_percentage_applies_to_the_first_portion(self):
         ps = PayrollSettings.get()
-        ps.pf_rate = Decimal("10")
+        ps.staff_pf_rules = [{**ps.staff_pf_rules[0], "ratePercent": 10}]
         ps.save()
         self.assertEqual(self.row()["employerPf"], 1500.0)  # 10% of 15,000
+
+    def test_employer_esi_is_the_matched_rule_percentage_of_the_first_portion(self):
+        Employee.objects.filter(pk=self.asha.pk).update(salary_amount=Decimal("20000"))
+        r = self.row()
+        # 20,000 is within the ESI rule: 0.75% of the 10,000 first portion = 75; PF 12% of 10,000 = 1,200
+        self.assertEqual((r["employerPf"], r["employerEsi"]), (1200.0, 75.0))
+        self.assertEqual(r["annualCtc"], (20000 + 1200 + 75) * 12)
+
+    def test_only_a_co_emp_employee_has_employer_pf_and_esi(self):
+        Employee.objects.filter(pk=self.asha.pk).update(salary_amount=Decimal("20000"), co_emp_enabled=False)
+        r = self.row()
+        self.assertEqual((r["employerPf"], r["employerEsi"], r["annualCtc"]), (0.0, 0.0, 240000.0))
+
+    def test_a_tds_employee_has_no_employer_pf_or_esi(self):
+        Employee.objects.filter(pk=self.asha.pk).update(
+            co_emp_enabled=False, tds_enabled=True, tds_percent=Decimal("10")
+        )
+        r = self.row()
+        self.assertEqual((r["employerPf"], r["employerEsi"]), (0.0, 0.0))
 
 
 class PageStaysAvailableTests(CompensationBase):

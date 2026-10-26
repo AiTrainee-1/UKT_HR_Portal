@@ -7,7 +7,7 @@ permission module (see permission_registry.URL_MODULE_MAP): GET needs "view", PU
     GET  /api/sms-control/settings     channel, switches, expiry and limits, with a `version` and `warnings`
     PUT  /api/sms-control/settings     change them (all-or-nothing, stale guard)
     GET  /api/sms-control/messages     the SMS log (filters + pagination), never a code or a full number
-    POST /api/sms-control/test         {"phone": "9876543210"}: one test SMS with the dummy code 123456
+    POST /api/sms-control/test         {"phone": "9876543210"}: one test SMS with the dummy code 1234
 
 Nothing here ever returns, accepts or logs the auth key: it lives in the server's .env only, and the overview says only
 whether each value is set. Branch logins see only their own branch's messages; changing the settings and sending a test
@@ -90,7 +90,7 @@ INT_FIELDS = (
     ("otpExpiryMinutes", "otp_expiry_minutes", "Code expiry (minutes)", (1, 15)),
     ("resendCooldownSeconds", "resend_cooldown_seconds", "Resend cooldown (seconds)", (30, 600)),
     ("maxRequestsPerHour", "max_requests_per_hour", "Codes per employee per hour", (1, 20)),
-    ("maxAttemptsPerCode", "max_attempts_per_code", "Wrong attempts per code", (3, 10)),
+    ("maxAttemptsPerCode", "max_attempts_per_code", "Wrong attempts per code", (3, 5)),
     ("maxPerPhonePerHour", "max_per_phone_per_hour", "SMS per phone number per hour", (1, 20)),
     ("hourlyCap", "hourly_cap", "Hourly limit on all SMS", (1, 10000)),
     ("dailyCap", "daily_cap", "Daily limit on all SMS", (1, 10000)),
@@ -502,7 +502,7 @@ def _test_answer(ok: bool, message: str, status: int = 200) -> Response:
 @api_view(["POST"])
 @require_hr
 def sms_test(request: Request) -> Response:
-    """Send ONE test SMS (the real template, the dummy code 123456) to the number given. Answers 200 {"ok", "message"}
+    """Send ONE test SMS (the real template, the dummy code 1234) to the number given. Answers 200 {"ok", "message"}
     for everything that is about the send itself (accepted, refused by 2Factor, not configured, a limit); 400 for a
     number that is not a number, 429 after TEST_LIMIT_PER_HOUR tests in an hour by this HR user, 403 for a branch
     login."""

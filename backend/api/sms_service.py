@@ -60,7 +60,7 @@ PER_RECIPIENT_ERRORS = ("number", "rejected")
 #: a refused request writes a 'blocked' log row at most once per employee per reason within this window
 BLOCKED_ROW_WINDOW = timedelta(minutes=1)
 #: the dummy code of the SMS Control page's test message
-TEST_CODE = "123456"
+TEST_CODE = "1234"
 
 # What the person asking for a code is told (plain sentences; the apps show them as they are).
 MSG_UNAVAILABLE = "SMS OTP isn't available right now. Please contact HR."

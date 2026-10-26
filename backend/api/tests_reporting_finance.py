@@ -1001,8 +1001,7 @@ class AdvanceEngineAgreementTests(TestCase):
         self.addCleanup(wa.stop)
 
         ps = PayrollSettings.get()
-        ps.staff_payroll_rules_enabled = False
-        ps.late_deduction_slabs = []
+        ps.late_deduction_slabs = []  # (the employees below are not Co Emp, so no PF / ESI is deducted)
         ps.attendance_mode = "simple"
         ps.save()
         dept = Department.objects.create(name="ENGINE")
@@ -1242,9 +1241,7 @@ class AdvanceEngineAgreementTests(TestCase):
 
     def test_production_advance_is_recovered_in_the_month_the_period_ends(self):
         ps = PayrollSettings.get()
-        ps.prod_payroll_rules_enabled = False
-        ps.prod_pf_ef_enabled = False
-        ps.prod_late_detection_enabled = False
+        ps.prod_late_detection_enabled = False  # (the worker below is not Co Emp, so no PF / ESI is deducted)
         ps.save()
         worker = Employee.objects.create(
             employee_code="EP1",
@@ -1409,8 +1406,7 @@ class BonusRegisterTests(_Case):
         """Real payroll slip -> real /api/bonus/generate -> the register shows exactly what the Bonus page stored."""
         Bonus.objects.all().delete()
         ps = PayrollSettings.get()
-        ps.staff_payroll_rules_enabled = False
-        ps.late_deduction_slabs = []
+        ps.late_deduction_slabs = []  # (the employee below is not Co Emp, so no PF / ESI is deducted)
         ps.attendance_mode = "simple"
         ps.save()
         emp = Employee.objects.create(

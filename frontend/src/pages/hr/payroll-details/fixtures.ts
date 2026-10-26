@@ -1,9 +1,11 @@
 import type {
   IssueCode,
   IssueSeverity,
+  PayrollBreakdownResponse,
   PayrollDay,
   PayrollDetails,
   PayrollIssue,
+  PayrollStatutory,
   RuleGroup,
 } from "@/lib/api-client/custom-hooks";
 
@@ -300,21 +302,22 @@ const STAFF_RULES: RuleGroup[] = [
         settingsPath: "/hr/settings?tab=payroll#loss-of-pay",
       },
       {
-        key: "pf_rate",
-        label: "Provident fund",
-        value: "12% of basic",
+        key: "pf_rules",
+        label: "Provident fund (PF)",
+        value: "12% of Basic + DA + Retaining when Basic is ₹0 to ₹25,000",
+        detail: "Co Emp employees only: this employee is on the Co Emp list",
         source: "settings",
-        settingsPath: "/hr/settings?tab=payroll#pf-rate",
-        applied: "12% of basic",
+        settingsPath: "/hr/settings?tab=pf_esi#staff-pf-rules",
+        applied: "12% of Basic + DA + Retaining when Basic is ₹0 to ₹25,000",
         changed: false,
       },
       {
-        key: "esi_rate",
+        key: "esi_rules",
         label: "ESI",
-        value: "0.75% of gross while gross is ₹21,000 or less",
-        detail: "Not applicable at this salary",
+        value: "0.75% of Basic + DA + Retaining when Basic is ₹0 to ₹21,000",
+        detail: "No ESI rule matched: this employee's Basic salary is above it",
         source: "settings",
-        settingsPath: "/hr/settings?tab=payroll#esi-rate",
+        settingsPath: "/hr/settings?tab=pf_esi#staff-esi-rules",
       },
     ],
   },
@@ -431,10 +434,10 @@ export function staffDetails(over: Partial<PayrollDetails> = {}): PayrollDetails
       {
         key: "pf",
         label: "Provident fund",
-        note: "12% of basic ₹13,332.69",
+        note: "12% of Basic + DA + Retaining ₹13,332.69",
         amount: 1599.92,
         kind: "deduction",
-        ruleKey: "pf_rate",
+        ruleKey: "pf_rules",
       },
       {
         key: "late",
@@ -563,7 +566,14 @@ export function productionDetails(over: Partial<PayrollDetails> = {}): PayrollDe
       { key: "gross", label: "Gross salary", note: null, amount: 2925, kind: "subtotal" },
     ],
     deductions: [
-      { key: "pf", label: "PF", note: "12% of gross", amount: 351, kind: "deduction", ruleKey: "pf_rate" },
+      {
+        key: "pf",
+        label: "PF",
+        note: "12% of Basic + DA + Retaining ₹2,925",
+        amount: 351,
+        kind: "deduction",
+        ruleKey: "pf_rules",
+      },
       { key: "advance", label: "Advance recovery", note: "Advance #31", amount: 300, kind: "deduction" },
       { key: "total_deductions", label: "Total deductions", note: null, amount: 651, kind: "subtotal" },
     ],
@@ -599,11 +609,11 @@ export function productionDetails(over: Partial<PayrollDetails> = {}): PayrollDe
         items: [
           { key: "rate_per_shift", label: "Rate per shift", value: "₹650", source: "employee", settingsPath: null },
           {
-            key: "pf_rate",
-            label: "PF / EF",
-            value: "12% of gross",
+            key: "pf_rules",
+            label: "PF",
+            value: "12% of the first 50% of the pay when the monthly equivalent is ₹0 to ₹25,000",
             source: "settings",
-            settingsPath: "/hr/settings?tab=production_payroll#pf-rate",
+            settingsPath: "/hr/settings?tab=pf_esi#production-pf-rules",
           },
         ],
       },
@@ -670,10 +680,10 @@ export function cleanDetails(over: Partial<PayrollDetails> = {}): PayrollDetails
     employee: { ...STAFF_EMPLOYEE, id: 43, code: "UKT-0143", name: "Arun Prasad", esiNumber: "31001234560000999" },
     money: {
       gross: 29500,
-      deductions: 3540,
+      deductions: 1880.63,
       bonus: 0,
       otAmount: 0,
-      net: 25960,
+      net: 27619.37,
       monthlySalary: 29500,
       dailyRate: 1134.62,
     },
@@ -689,9 +699,15 @@ export function cleanDetails(over: Partial<PayrollDetails> = {}): PayrollDetails
       effectivePaidDays: 26,
     },
     deductions: [
-      { key: "pf", label: "Provident fund", note: "12% of basic", amount: 1770, kind: "deduction" },
-      { key: "esi", label: "ESI", note: "0.75% of gross", amount: 1770, kind: "deduction" },
-      { key: "total_deductions", label: "Total deductions", note: null, amount: 3540, kind: "subtotal" },
+      {
+        key: "pf",
+        label: "Provident fund",
+        note: "12% of Basic + DA + Retaining ₹14,750",
+        amount: 1770,
+        kind: "deduction",
+      },
+      { key: "esi", label: "ESI", note: "0.75% of Basic + DA + Retaining ₹14,750", amount: 110.63, kind: "deduction" },
+      { key: "total_deductions", label: "Total deductions", note: null, amount: 1880.63, kind: "subtotal" },
     ],
     rules: STAFF_RULES.map((g) => ({
       ...g,
@@ -707,7 +723,7 @@ export function cleanDetails(over: Partial<PayrollDetails> = {}): PayrollDetails
       d.flags.length > 0 || d.status === "absent" || d.status === "unpaid_leave" ? day({ date: d.date }) : d,
     ),
     advances: [],
-    history: [{ payrollId: 91, label: "September 2026", net: 25960, status: "paid", issues: 0 }],
+    history: [{ payrollId: 91, label: "September 2026", net: 27619.37, status: "paid", issues: 0 }],
     neighbours: { previousId: 101, nextId: 103, position: 4, total: 42 },
     ...over,
   });
@@ -756,4 +772,105 @@ export function noBreakdownDetails(over: Partial<PayrollDetails> = {}): PayrollD
       "No day-by-day breakdown is stored for this payroll (it has no salary slip), so the days, rules and issues that come from it are not available here.",
     ...over,
   });
+}
+
+// ── A TDS employee: TDS instead of PF and ESI ─────────────────────────────────
+
+/** An employee on the TDS list: 10% of the earned gross is deducted as TDS, and no PF or ESI ever is. */
+export function tdsDetails(over: Partial<PayrollDetails> = {}): PayrollDetails {
+  const base = cleanDetails();
+  return staffDetails({
+    payrollId: 106,
+    employee: { ...STAFF_EMPLOYEE, id: 44, code: "UKT-0144", name: "Karthik Rajan", pfNumber: null, esiNumber: null },
+    money: {
+      gross: 29500,
+      deductions: 2950,
+      bonus: 0,
+      otAmount: 0,
+      net: 26550,
+      monthlySalary: 29500,
+      dailyRate: 1134.62,
+    },
+    summary: { ...base.summary },
+    deductions: [
+      { key: "tds", label: "TDS (10%)", note: "10% of the earned gross ₹29,500", amount: 2950, kind: "deduction" },
+      { key: "total_deductions", label: "Total deductions", note: null, amount: 2950, kind: "subtotal" },
+    ],
+    rules: [],
+    issues: [],
+    issueCounts: { total: 0, bySeverity: { critical: 0, warning: 0, info: 0 }, byCode: {} },
+    days: [],
+    advances: [],
+    history: [],
+    neighbours: { previousId: 105, nextId: null, position: 6, total: 42 },
+    ...over,
+  });
+}
+
+// ── What payroll stored about PF / ESI / TDS (the details page reads it from the payslip's breakdown) ──────────
+
+/** A Co Emp employee: the PF rule matched (12% below ₹25,000 of Basic), no ESI rule did. */
+export const CO_EMP_STATUTORY: PayrollStatutory = {
+  category: "co_emp",
+  pfWages: 13332.69,
+  firstPortionMonthly: 14750,
+  pfRule: {
+    id: "pf1",
+    label: "PF below 25,000",
+    basis: "basic",
+    minAmount: 0,
+    maxAmount: 25000,
+    ratePercent: 12,
+    amountTested: 10000,
+  },
+  esiRule: null,
+  eligibility: { basic: 10000, firstPortion: 14750, total: 29500 },
+  rulesScope: "global",
+  branchId: null,
+  tds: null,
+  reason: null,
+};
+
+export const TDS_STATUTORY: PayrollStatutory = {
+  category: "tds",
+  pfWages: null,
+  pfRule: null,
+  esiRule: null,
+  eligibility: null,
+  rulesScope: "global",
+  tds: { percent: 10, base: 29500, amount: 2950 },
+  reason: null,
+};
+
+export const NOT_CO_EMP_STATUTORY: PayrollStatutory = {
+  category: "none",
+  pfRule: null,
+  esiRule: null,
+  tds: null,
+  reason: "Not a Co Emp employee: no PF/ESI",
+};
+
+/** The breakdown answer of /api/payroll/<id>/breakdown with just the part the details page reads. */
+export function breakdownOf(
+  payrollId: number,
+  deductions: Partial<NonNullable<PayrollBreakdownResponse["breakdown"]>["deductions"]>,
+  salaryMode: "monthly" | "shift" = "monthly",
+): PayrollBreakdownResponse {
+  return {
+    payrollId,
+    employee: { id: 42, code: "UKT-0142", name: "Meena Subramanian", employmentType: "staff", salary: 29500 },
+    month: 10,
+    year: 2026,
+    salaryMode,
+    status: "pending",
+    summary: { grossSalary: 0, deductions: 0, bonus: 0, netSalary: 0 },
+    breakdown: {
+      type: salaryMode === "shift" ? "production" : "staff",
+      days: [],
+      summary: {},
+      earnings: { grossSalary: 0 },
+      deductions: { advances: 0, advanceDetails: [], total: 0, ...deductions },
+      netSalary: 0,
+    },
+  };
 }

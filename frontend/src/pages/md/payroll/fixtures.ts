@@ -50,6 +50,7 @@ const PROVENANCE: Provenance[] = [
   entry("distribution", "Spread of pay"),
   entry("components", "Components"),
   entry("statutory-due", "Statutory dues"),
+  entry("tds", "TDS (tax deducted at source)"),
   entry("statutory-bonus", "Statutory bonus"),
   entry("advances-outstanding", "Advances outstanding"),
   entry("advances-month", "Advances in the month"),
@@ -162,6 +163,7 @@ const sepTotals: Totals = {
   totalDeductions: 2195,
   netPay: 108392.69,
   employerStatutory: 2145,
+  tdsDeducted: 0, // nobody in the scenario is on the TDS list: the page shows no TDS anywhere
   employerCost: 112732.69,
   headcount: 7,
   slips: 8,
@@ -179,6 +181,7 @@ const augTotals: Totals = {
   totalDeductions: 3695,
   netPay: 130805,
   employerStatutory: 2145,
+  tdsDeducted: 0,
   employerCost: 136645,
   headcount: 7,
   slips: 8,
@@ -211,6 +214,7 @@ export const summaryFixture: PayrollSummary = {
     salaryEarned: { abs: -24912.31, pct: -18.5 },
     overtimePay: { abs: 1000, pct: null },
     totalDeductions: { abs: -1500, pct: -40.6 },
+    tdsDeducted: { abs: 0, pct: null },
     netPay: { abs: -22412.31, pct: -17.1 },
     employerCost: { abs: -23912.31, pct: -17.5 },
     headcount: { abs: 0, pct: 0 },
@@ -261,6 +265,7 @@ const point = (month: string, label: string, gross: number | null, extra: Partia
   costPerHead: gross != null ? Math.round(gross / 7) : null,
   overtimePay: gross != null ? 0 : null,
   overtimeSharePct: gross != null ? 0 : null,
+  tdsDeducted: gross != null ? 0 : null,
   ...extra,
 });
 
@@ -366,6 +371,7 @@ const line = (
   costPerHead: Math.round((gross / heads) * 100) / 100,
   lopDays: lop,
   employerCost: gross,
+  tdsDeducted: 0,
   sharePct: share,
   previous: { headcount: heads, grossPay: prev, costPerHead: Math.round((prev / heads) * 100) / 100 },
   change: {
@@ -395,6 +401,56 @@ export const departmentsFixture: PayrollDepartments = {
     { ...line(1, "Staff", null, 5, 89307.69, 114000, 80.8, 16, 1000), id: "staff" as const },
     { ...line(2, "Production", null, 2, 21280, 20500, 19.2, null), id: "production" as const },
   ],
+};
+
+/** The TDS the "with TDS" fixtures add: one employee on the TDS list, 10% of the earned gross. */
+const TDS = 2500;
+
+/** The month's deductions with a TDS line, as the backend answers when one employee on the TDS list had TDS taken: the
+ *  `tds` head sits between ESI and the advance recovery, and `tdsDeducted` / `tdsPeople` are set. */
+export const withTdsFixture = (base: PayrollComponents): PayrollComponents => {
+  const tds = {
+    id: "tds",
+    label: "TDS (tax deducted at source)",
+    amount: TDS,
+    previous: 0,
+    change: { abs: TDS, pct: null },
+    sharePct: 53.2,
+  };
+  const at = base.deductions.findIndex((d) => d.id === "advance" || d.id === "late" || d.id === "other-deductions");
+  const deductions = [...base.deductions];
+  deductions.splice(at < 0 ? deductions.length : at, 0, tds);
+  return {
+    ...base,
+    deductions,
+    totalDeductions: base.totalDeductions && { ...base.totalDeductions, amount: base.totalDeductions.amount + TDS },
+    tdsDeducted: TDS,
+    tdsPeople: 1,
+    notes: [
+      ...base.notes,
+      "TDS of ₹2,500.00 was deducted from 1 employee on the TDS list. It is a separate remittance to the income-tax department, so it is not part of the statutory dues (PF and ESI).",
+    ],
+  };
+};
+
+/** The month's summary with TDS in the totals: the deductions go up by it, the take-home down by it, and the change on
+ *  last month (which had none) is the whole amount with no percentage. */
+export const withTdsSummaryFixture = (base: PayrollSummary): PayrollSummary => {
+  const totals = base.totals && {
+    ...base.totals,
+    tdsDeducted: TDS,
+    totalDeductions: base.totals.totalDeductions + TDS,
+    netPay: Math.round((base.totals.netPay - TDS) * 100) / 100,
+  };
+  return {
+    ...base,
+    totals,
+    change: base.change && {
+      ...base.change,
+      totalDeductions: { abs: 1000, pct: 27.1 },
+      tdsDeducted: { abs: TDS, pct: null },
+    },
+  };
 };
 
 export const componentsFixture: PayrollComponents = {
@@ -509,6 +565,8 @@ export const componentsFixture: PayrollComponents = {
     sharePct: 101.9,
   },
   statutoryDue: 3840,
+  tdsDeducted: 0,
+  tdsPeople: 0,
   payable: { slips: 6, netPay: 63145 },
   statutoryBonus: {
     financialYear: "2026-27",

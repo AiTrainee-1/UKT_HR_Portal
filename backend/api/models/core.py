@@ -202,14 +202,20 @@ class Employee(models.Model):
     location_tracking_enabled = models.BooleanField(
         default=False, db_column="location_tracking_enabled"
     )
-    # "Co Emp" toggle (HR portal: Employees -> Co Emp tab). Marks an employee
-    # as visible to an external application consuming this HRMS's API -off
-    # by default, so nothing is exposed externally until HR explicitly opts
-    # an employee in. Purely a visibility flag; it has no effect on anything
-    # inside this application.
+    # "Co Emp" toggle (HR portal: Employees -> Co Emp tab). Two meanings, both on this one switch:
+    #   * the employee is visible to the external CoPortal consuming this HRMS's API (off by default, so nothing is
+    #     exposed externally until HR explicitly opts an employee in), and
+    #   * PF and ESI apply to this employee and to nobody else (pf_esi.py: the rule lists of Settings -> PF & ESI).
     co_emp_enabled = models.BooleanField(
         default=False, db_column="co_emp_enabled"
     )
+    # TDS (Employees -> Co Emp tab -> TDS): the employee has tax deducted at source (tds_percent % of the period's
+    # earned gross, payroll_views) and NO PF / ESI. Mutually exclusive with co_emp_enabled -the TDS endpoints and the
+    # Co Emp toggle (employee_views.py) swap one for the other in one transaction. A TDS employee stays visible in the
+    # CoPortal, so every CoPortal scope reads co_emp_enabled OR tds_enabled (pf_esi.COPORTAL_Q).
+    # db_default: a release still running during a rolling deploy must keep inserting employees without these columns.
+    tds_enabled = models.BooleanField(default=False, db_default=False, db_column="tds_enabled")
+    tds_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column="tds_percent")
     # Profile-detail fields (HR-managed, no self-service edit yet) — surfaced
     # on the mobile Employee Profile screen's header tags / detail cards.
     nationality = models.TextField(null=True, blank=True, db_column="nationality")

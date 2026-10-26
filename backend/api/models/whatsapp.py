@@ -159,6 +159,9 @@ class EmployeeOtp(models.Model):
     code_hash = models.TextField(db_column="code_hash")
     phone_number = models.TextField(db_column="phone_number")
     attempts = models.IntegerField(default=0, db_column="attempts")
+    #: digits in this code: 4 when it was sent by SMS, 6 when by WhatsApp (every row from before the SMS channel: 6).
+    #: Stored so a code issued before HR switches the channel still verifies with the length it was issued with.
+    code_length = models.SmallIntegerField(default=6, db_default=6, db_column="code_length")
     expires_at = models.DateTimeField(db_column="expires_at")
     consumed_at = models.DateTimeField(null=True, blank=True, db_column="consumed_at")
     requested_ip = models.TextField(blank=True, default="", db_column="requested_ip")

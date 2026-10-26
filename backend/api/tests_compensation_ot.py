@@ -955,9 +955,6 @@ class PayrollOtPayTests(OtBase):
 
     def setUp(self):
         super().setUp()
-        ps = PayrollSettings.get()
-        ps.staff_payroll_rules_enabled = False
-        ps.save()
         for i in range(2, 32):
             d = date(2026, 3, i)
             if d.weekday() != 6:

@@ -16,10 +16,11 @@ and 2Factor puts the OTP we pass in the XXXX place.
 The request, as implemented:
 
     GET {TWOFACTOR_API_BASE}/{api_key}/SMS/+{phone}/{otp}/{template_name}
-        e.g. https://2factor.in/API/V1/<api key>/SMS/+919876543210/482913/UKT_HRMS_OTP
+        e.g. https://2factor.in/API/V1/<api key>/SMS/+919876543210/4829/UKT_HRMS_OTP
 
 `phone` is the international format with the country code (the documentation's example is +919999999999). `otp` is the
-code we generated, 4 to 6 characters (we send 6 digits). `template_name` is optional in the API (a default template
+code we generated, 4 to 6 characters (we send 4 digits: the template says "XXXX", and 6-digit codes were not delivered
+through it; otp_service.CODE_LENGTH is the one place that number lives). `template_name` is optional in the API (a default template
 is used without it); we always send the approved one.
 
 The answer: HTTP 200 {"Status": "Success", "Details": "<session id>"} when accepted ("accepted" is not "delivered").

@@ -43,6 +43,8 @@ export type World = {
   rules: EmployeeRules[];
   slips: SalarySlipItem[];
   settings: Record<string, unknown>;
+  /** What /api/pf-esi-settings answers (the PF / ESI rules the Generate dialog and the Rules view count). */
+  pfEsi: Record<string, unknown>;
   departments: { id: number; name: string }[];
   skipCheck: ProductionSkipCheck;
   /** What the server says today is (YYYY-MM-DD): a period ends once its last day is not after it. */
@@ -100,6 +102,16 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
           ownLateRules: false,
         },
       },
+    },
+    pfEsi: {
+      scope: { branchId: null, branchName: null, isOverride: false },
+      canEdit: true,
+      staff: { pfRules: [], esiRules: [] },
+      production: {
+        pfRules: [{ id: "p1", label: "Below 25,000", basis: "total", minAmount: 0, maxAmount: 25000, ratePercent: 12 }],
+        esiRules: [],
+      },
+      branches: [],
     },
     departments: [
       { id: 4, name: "Weaving" },
@@ -214,6 +226,8 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
         return copy(world.skipCheck);
       case "/api/payroll-settings":
         return copy(world.settings);
+      case "/api/pf-esi-settings":
+        return copy(world.pfEsi);
       case "/api/departments":
         return copy(world.departments);
       case "/api/branches":

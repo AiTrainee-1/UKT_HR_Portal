@@ -187,6 +187,11 @@ URL_MODULE_MAP: dict[str, str] = {
     "dashboard/": "dashboard",
 
     "employees": "employees",
+    # TDS membership (Employees -> Co Emp -> TDS) and the PF / ESI coverage counts shown beside it: the same permission as the
+    # Co Emp toggle itself. (/pf-esi-settings is deliberately NOT mapped: any HR login may read the rules, and the view lets
+    # only the Super Admin change them.)
+    "tds": "employees",
+    "pf-esi/coverage": "employees",
 
     "departments": "employees.departments",
     "designations": "employees.designations",

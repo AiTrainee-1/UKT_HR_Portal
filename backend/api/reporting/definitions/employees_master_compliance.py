@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from decimal import Decimal
 
 from django.db.models import Count, Sum
 
 from api.branch_scope import scope_to_branch
+from api.pf_esi import CATEGORY_CO_EMP, category_of
 
 from .. import filters as F
 from ..registry import register
@@ -43,6 +43,7 @@ from .employees_master_base import (
     status_label,
     type_label,
 )
+from .payroll_statutory_common import CATEGORY_LABEL
 
 CATEGORY = "employees"
 
@@ -128,6 +129,7 @@ STAT_COLUMNS = (
     ColumnSpec("employeeName", "Employee", TEXT, 1.8),
     ColumnSpec("department", "Dept", TEXT, 1.2),
     ColumnSpec("employmentType", "Type", BADGE, 1.2),
+    ColumnSpec("category", "Category", BADGE, 1.0),
     ColumnSpec("pfNumber", "PF Number", TEXT, 1.6),
     ColumnSpec("esiNumber", "ESI Number", TEXT, 1.6),
     ColumnSpec("uanNumber", "UAN", TEXT, 1.5),
@@ -152,30 +154,6 @@ _DOC_CHECKS = (
 
 def _yes_no(flag: bool | None) -> str | None:
     return None if flag is None else ("Yes" if flag else "No")
-
-
-def _esi_ceilings(emps) -> dict:
-    """{branch_id: ESI wage ceiling} for the staff in scope, resolved the way payroll resolves it: from the
-    EMPLOYEE's branch settings (``settings_for_employee``), once per branch -- never per row."""
-    from api.user_settings import settings_for_employee
-
-    out: dict = {}
-    for e in emps:
-        if e.branch_id not in out and (e.employment_type or "").strip() == "staff":
-            out[e.branch_id] = settings_for_employee(e).esi_applicable_below
-    return out
-
-
-def _esi_ceiling_exceeded(emp, ceilings: dict):
-    """The ESI wage ceiling when this employee's monthly salary is ABOVE it (ESI is then not applicable, so an
-    ESI number is not owed), else None. Payroll deducts ESI from staff only at or below the ceiling; an employee with
-    no salary on file is not assumed to be above it, and production pay (worked out from shifts) is never exempted."""
-    if (emp.employment_type or "").strip() != "staff" or emp.salary_amount is None:
-        return None
-    ceiling = ceilings.get(emp.branch_id)
-    if ceiling is None:
-        return None
-    return ceiling if Decimal(str(emp.salary_amount)) > Decimal(str(ceiling)) else None
 
 
 def _statutory_run(ctx) -> ReportResult:
@@ -218,11 +196,11 @@ def _statutory_run(ctx) -> ReportResult:
 
     rows = []
     counter: Counter = Counter()
-    ceilings = _esi_ceilings(emps)
-    exempt_count = 0  # staff above the ESI wage ceiling who were not asked for an ESI number
-    exempt_ceilings: set = set()
+    exempt_count = 0  # employees PF / ESI do not apply to (not Co Emp) who were not asked for a PF / ESI / UAN number
     for e in emps:
         pf, esi, uan = _real_id(e.pf_number), _real_id(e.esi_number), _real_id(e.uan_number)
+        # PF and ESI apply to Co Emp employees only (pf_esi.py), so only they owe a PF number, an ESI number and a UAN.
+        owes_numbers = category_of(e) == CATEGORY_CO_EMP
         account, ifsc = _real_id(e.bank_account), _real_id(e.bank_ifsc)
         present = docs.get(e.id, set())
         slip = deducted.get(e.id)
@@ -230,17 +208,15 @@ def _statutory_run(ctx) -> ReportResult:
         esi_ded = None if slip is None else (slip["esi"] or 0) > 0
 
         found: list[tuple[str, str]] = []  # (issue code, text)
-        if pf is None:
-            found.append(("missing_pf", "PF number missing"))
-        if esi is None:
-            ceiling = _esi_ceiling_exceeded(e, ceilings)
-            if ceiling is None:
+        if owes_numbers:
+            if pf is None:
+                found.append(("missing_pf", "PF number missing"))
+            if esi is None:
                 found.append(("missing_esi", "ESI number missing"))
-            else:
-                exempt_count += 1
-                exempt_ceilings.add(ceiling)
-        if uan is None:
-            found.append(("missing_uan", "UAN missing"))
+            if uan is None:
+                found.append(("missing_uan", "UAN missing"))
+        elif pf is None or esi is None or uan is None:
+            exempt_count += 1
         if account is None or ifsc is None:
             what = "a/c and IFSC" if account is None and ifsc is None else "a/c" if account is None else "IFSC"
             found.append(("missing_bank", f"Bank {what} missing"))
@@ -274,6 +250,7 @@ def _statutory_run(ctx) -> ReportResult:
             "employeeName": _person_name(e),
             "department": department_name(e),
             "employmentType": type_label(e.employment_type),
+            "category": CATEGORY_LABEL[category_of(e)],
             "pfNumber": pf,
             "esiNumber": esi,
             "uanNumber": uan,
@@ -309,9 +286,10 @@ def _statutory_run(ctx) -> ReportResult:
     notes = [
         "Bank account and ID proof are masked to their last four characters. PF / ESI / UAN numbers are shown in full: "
         "this is the only report that prints them.",
-        "PF and ESI numbers are only required for employees the scheme covers (it depends on payroll settings and wage "
-        "ceilings), so a missing number is a gap to check, not always a breach. 'Deducted' comes from the generated "
-        "salary slips"
+        "PF, ESI and UAN numbers are only required of Co Emp employees, the only ones PF and ESI apply to (see the "
+        "Category column; Settings > PF & ESI holds the rules), so a blank number is not counted as missing for TDS "
+        "employees or for employees who are not Co Emp. A number that is filled in is still format- and "
+        "duplicate-checked for everyone. 'Deducted' comes from the generated salary slips"
         + (f" of {period[1]:02d}/{period[0]}" if period else "")
         + "; a blank means no slip exists for that month.",
         "The app stores no Aadhaar or PAN numbers: the Aadhaar / PAN / passbook columns show whether a document has "
@@ -320,13 +298,9 @@ def _statutory_run(ctx) -> ReportResult:
         "('-', 'NA', 'N/A', 'NIL', 'NONE', '0') counts as a missing number.",
     ]
     if exempt_count:
-        ceiling_text = " / ".join(
-            "Rs " + f"{c:,.2f}".rstrip("0").rstrip(".") for c in sorted(Decimal(str(c)) for c in exempt_ceilings)
-        )
         notes.append(
-            f"{exempt_count} staff member(s) earn more than the ESI wage ceiling in payroll settings ({ceiling_text}), "
-            "so ESI does not apply to them and a blank ESI number is not counted as missing. PF is checked for everyone: "
-            "there is no PF ceiling in the settings, and a PF / ESI rate of 0 only means payroll does not deduct it."
+            f"{exempt_count} employee(s) are not Co Emp (TDS employees included), so PF and ESI do not apply to them and "
+            "their blank PF / ESI / UAN numbers are not counted as missing."
         )
     if checked and counter["missing_uan"] * 10 > checked * 9:
         notes.append(

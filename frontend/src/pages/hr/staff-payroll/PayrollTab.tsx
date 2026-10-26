@@ -21,6 +21,7 @@ import { dateTime, fileStem, plural } from "@/components/payroll/kit/format";
 import { exportTableToCsv, exportTableToExcel } from "@/components/payroll/kit/export-table";
 import { addSkipped } from "@/components/payroll/kit/issue-summary";
 import { EmptyNote } from "@/components/payroll/kit/parts";
+import { withTdsColumns } from "@/components/payroll/kit/statutory";
 import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { ViewSwitch, type ViewOption } from "@/components/payroll/kit/ViewSwitch";
@@ -136,6 +137,8 @@ export function PayrollTab({
 
   const company = settings.data?.companyName ?? "UK Textiles";
   const stem = fileStem("Staff_Payroll", MONTH_NAMES[month - 1], year);
+  // the register gets its two TDS columns only when some employee on screen has TDS
+  const registerColumns = withTdsColumns(REGISTER_COLUMNS, shown);
   const exportItems: ExportItem[] = [
     {
       key: "register-xlsx",
@@ -146,7 +149,7 @@ export function PayrollTab({
       run: () =>
         exportTableToExcel({
           rows: shown,
-          columns: REGISTER_COLUMNS,
+          columns: registerColumns,
           filename: `${stem}_Register`,
           sheetName: "Payroll register",
           company,
@@ -160,7 +163,7 @@ export function PayrollTab({
       hint: "The same rows as a plain text file",
       icon: FileText,
       disabled: shown.length === 0,
-      run: () => exportTableToCsv({ rows: shown, columns: REGISTER_COLUMNS, filename: `${stem}_Register` }),
+      run: () => exportTableToCsv({ rows: shown, columns: registerColumns, filename: `${stem}_Register` }),
     },
   ];
 

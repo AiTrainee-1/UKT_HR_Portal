@@ -3,7 +3,7 @@ import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock, NoteBanner } from "@/components/md/kit/states";
 import { inr, inrCompact } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
-import { deltaView } from "./logic";
+import { deltaView, hasTds, tdsSub } from "./logic";
 import { CardError, Delta, Metric, cardNotes, emptyReason, failed } from "./parts";
 import type { PayrollQueries } from "./queries";
 import type { ComponentLine } from "./types";
@@ -67,7 +67,15 @@ export default function ComponentsCard({ query, label }: { query: PayrollQueries
       subtitle={`Earnings and deductions in ${label}, with the month before`}
       loading={query.isPending}
       provenance={data?.provenance}
-      provenanceIds={["components", "deductions", "employer-cost", "statutory-due", "statutory-bonus"]}
+      provenanceIds={[
+        "components",
+        "deductions",
+        "employer-cost",
+        "statutory-due",
+        // the TDS rule is explained only where TDS is shown
+        ...(hasTds(data?.tdsDeducted) ? ["tds"] : []),
+        "statutory-bonus",
+      ]}
       actions={
         <AskAiButton
           question={`What are the biggest earnings and deductions in ${label}, and what changed since the month before?`}
@@ -120,8 +128,16 @@ export default function ComponentsCard({ query, label }: { query: PayrollQueries
             <Metric
               label="Statutory dues (estimate)"
               value={data.statutoryDue != null ? inrCompact(data.statutoryDue) : "—"}
-              sub="PF and ESI: employees' deductions plus the employer's share"
+              sub="PF and ESI of Co Emp employees: their deductions plus the employer's share"
             />
+            {hasTds(data.tdsDeducted) && (
+              <Metric
+                label="TDS deducted"
+                value={inrCompact(data.tdsDeducted)}
+                sub={tdsSub(data.tdsPeople)}
+                testId="md-payroll-components-tds"
+              />
+            )}
             <Metric
               label="Net pay still to be marked paid"
               value={data.payable ? inrCompact(data.payable.netPay) : "—"}
@@ -141,7 +157,8 @@ export default function ComponentsCard({ query, label }: { query: PayrollQueries
             <NoteBanner key={n}>{n}</NoteBanner>
           ))}
           <p className="text-[11.5px] leading-snug text-md-ink-soft">
-            Income tax (TDS) and arrears are not recorded in this system, so they are not shown.
+            TDS is shown only for employees on the TDS list (it is part of Deductions when there is any). Arrears are
+            not recorded in this system, so they are not shown.
           </p>
         </div>
       )}

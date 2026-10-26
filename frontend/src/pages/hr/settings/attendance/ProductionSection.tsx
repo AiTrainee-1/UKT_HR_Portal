@@ -2,8 +2,16 @@ import { Factory } from "lucide-react";
 import { clock, minutesOf } from "@/lib/arrival-rules";
 import { useProductionShiftConfig } from "@/lib/api-client/custom-hooks";
 import { ManagedElsewhere, PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "../kit/SettingBlock";
+import { ATTENDANCE_SETTINGS } from "../AttendanceTab.meta";
 import { rupees } from "./example";
 import { productionDay } from "./preview";
+
+/** The title and purpose of a block of this page, from the search catalogue (the same words the search finds). */
+function block(id: string) {
+  const meta = ATTENDANCE_SETTINGS.find((m) => m.id === id);
+  if (!meta) throw new Error(`No Attendance setting "${id}"`);
+  return { id, title: meta.title, purpose: meta.purpose };
+}
 
 /** The production example's rate (the Payroll tabs use the same made-up ₹600 per shift). */
 const PER_SHIFT = 600;
@@ -13,9 +21,10 @@ const EXAMPLES = [
 ];
 
 /**
- * Production attendance is not set on this tab. From the start date of the production shift rules a production day is
- * worked out by the Production Shifts tab (groups, ladders, breaks, grace). What is left here is the OLD calculation, which
- * every earlier day keeps: its punch times and pay segments, read-only and no longer edited anywhere.
+ * The Production page of the Attendance tab: nothing is set here. Production attendance is not set on this tab. From the
+ * start date of the production shift rules a production day is worked out by the Production Shifts tab (groups, ladders,
+ * breaks, grace), and what a late day costs is on Late Detection, Production page. What is left here is the OLD
+ * calculation, which every earlier day keeps: its punch times and pay segments, read-only and no longer edited anywhere.
  */
 export function ProductionSection() {
   const { data: config, isLoading, isError } = useProductionShiftConfig();
@@ -28,7 +37,7 @@ export function ProductionSection() {
       id="attendance-production"
       icon={Factory}
       title="Production workers"
-      purpose="Nothing above applies to production workers: a production day earns the shifts worked out by the production shift rules on the Production Shifts tab, whatever mode is chosen. (Production Payroll has a Strict / Simple setting of its own, used only by its late check.)"
+      purpose="Nothing on the Staff page applies to production workers: a production day earns the shifts worked out by the production shift rules on the Production Shifts tab, whatever mode is chosen. (Late Detection, Production page, has a Strict / Simple setting of its own, used only by its late check.)"
       usedBy={[
         { label: "Production Attendance", to: "/hr/attendance/production" },
         { label: "Production Payroll", to: "/hr/production-payroll" },
@@ -36,9 +45,43 @@ export function ProductionSection() {
       testId="attendance-production"
     >
       <SettingBlock
-        id="production-attendance"
-        title="Old production punch times and pay segments"
-        purpose="Before the production shift rules start, a production day earns the segments its punches cover: a segment is earned when the worker arrives by its start plus the grace and leaves no earlier than its end minus the grace. This is the old calculation, kept read-only for those days; from the rules' start date the Production Shifts tab decides."
+        {...block("production-days-valued")}
+        affects={[
+          {
+            where: "Production Attendance",
+            what: "shifts earned per day, and the Late / Early Out flags shown there",
+            to: "/hr/attendance/production",
+          },
+          {
+            where: "Production Payroll",
+            what: "pay = total shifts earned x salary per shift; late deductions per pay period",
+            to: "/hr/production-payroll",
+          },
+          { where: "Staff", what: "never affected by anything on this page" },
+        ]}
+      >
+        <ManagedElsewhere
+          title="How shifts are earned"
+          to="/hr/settings?tab=production_shifts"
+          linkLabel="Open Production Shifts"
+          testId="production-days-elsewhere"
+        >
+          Settings - Production Shifts: the factory's timings (Day, Night and Sunday), the ladders of shifts earned, the
+          unpaid breaks and the grace are edited there, and a day from the start date is worked out with them.
+        </ManagedElsewhere>
+        <ManagedElsewhere
+          title="What a late day costs"
+          to="/hr/settings?tab=late_detection#prod-late-switch"
+          linkLabel="Open Late Detection - Production"
+          testId="production-days-late-elsewhere"
+        >
+          Settings - Late Detection, Production page: the switch, what counts as late and each pay cycle's free late
+          days and deduction slabs are set there.
+        </ManagedElsewhere>
+      </SettingBlock>
+
+      <SettingBlock
+        {...block("production-attendance")}
         affects={[
           {
             where: "Production Attendance",
@@ -148,9 +191,7 @@ export function ProductionSection() {
       </SettingBlock>
 
       <SettingBlock
-        id="production-late"
-        title="Production late deductions"
-        purpose="What a late production arrival costs is set on Settings - Production Payroll (Late Detection), with its own free allowance and slabs. From the start date of the production shift rules a day is judged late from its group's start and the grace on the Production Shifts tab; before it, from the old production shift in Manage Shift, not from Punch 1 above."
+        {...block("production-late")}
         affects={[
           {
             where: "Production Payroll",
@@ -161,11 +202,11 @@ export function ProductionSection() {
       >
         <ManagedElsewhere
           title="Production late rules"
-          to="/hr/settings?tab=production_payroll"
-          linkLabel="Open Production Payroll settings"
+          to="/hr/settings?tab=late_detection#prod-late-switch"
+          linkLabel="Open Late Detection - Production"
           testId="production-late-elsewhere"
         >
-          The staff late rules (this tab and Late Detection) never apply to production workers.
+          The staff late rules (the Staff pages of this tab and of Late Detection) never apply to production workers.
         </ManagedElsewhere>
       </SettingBlock>
     </SettingsSection>

@@ -277,7 +277,7 @@ export default function Bonus() {
                   },
                   {
                     icon: Percent, color: "text-green-600 bg-green-50", title: "Bonus Percentage",
-                    body: "Minimum 8.33% of annual earned wages (basic + DA), maximum 20%. The rate applied here is configured in Settings → Payroll → Bonus.",
+                    body: "Minimum 8.33% of annual earned wages (basic + DA), maximum 20%. The rate applied here is configured in Settings → Staff Payroll → Bonus, or Settings → Production Payroll → Pay & Bonus for production.",
                   },
                   {
                     icon: IndianRupee, color: "text-purple-600 bg-purple-50", title: "Calculation Ceiling",

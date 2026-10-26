@@ -1,10 +1,15 @@
 """
-Statutory payroll statements: PF, ESI and the PF/ESI coverage register.
+Statutory payroll statements: PF, ESI, TDS and the PF/ESI coverage register.
 
-All three read the stored SalarySlip rows (so an employee who has since left still appears) and quote
+All of them read the stored SalarySlip rows (so an employee who has since left still appears) and quote
 the deductions the payroll engine actually made. Employer shares are NOT stored anywhere in the system;
 where a statement shows one it is a clearly labelled statutory-derived estimate (constants in
 payroll_statutory_common) and never replaces the figure deducted from the employee.
+
+Who has what (pf_esi.py): only Co Emp employees have PF and ESI (the rules of Settings -> PF & ESI, taken from the
+first portion of pay), only TDS employees have TDS (a percentage of the earned gross), everybody else has none. Slips
+stored from 2026-10-24 on record this in ``breakdown_details.deductions.statutory``; older slips have no such block and
+are read the way they always were (PF wages = the slip's basic, ESI wages = its gross salary, no TDS).
 """
 
 from __future__ import annotations
@@ -14,12 +19,14 @@ from decimal import ROUND_HALF_UP, Decimal
 from django.db.models import F, OuterRef, Subquery
 
 from api.models import SalarySlip
+from api.pf_esi import CATEGORY_CO_EMP, CATEGORY_NONE, CATEGORY_TDS, category_of
 
 from ..filters import month_days, period, scope, select
 from ..formatting import month_label
 from ..registry import register
-from ..types import BADGE, CURRENCY, NUMBER, TEXT, ColumnSpec, ReportResult, ReportSpec
+from ..types import BADGE, CURRENCY, NUMBER, PERCENT, TEXT, ColumnSpec, ReportResult, ReportSpec
 from .payroll_statutory_common import (
+    CATEGORY_LABEL,
     EDLI_RATE,
     EPF_ADMIN_RATE,
     EPF_RATE,
@@ -36,13 +43,16 @@ from .payroll_statutory_common import (
     dec_or_none,
     dept_name,
     employee_type_q,
+    esi_wages_of,
     money,
     natural_key,
     no_slips_note,
     period_text,
+    pf_wages_of,
+    pct,
     provisional_note,
     provisional_slip_ids,
-    read_settings,
+    slip_category,
     slip_type,
     slip_type_q,
     visible_types,
@@ -58,7 +68,9 @@ def _month_slips(ctx, year: int, month: int, *breakdown: str):
     qs = SalarySlip.objects.filter(
         ctx.emp_q("employee__"), slip_type_q(visible_types(ctx)), year=year, month=month
     ).select_related("employee__department")
-    return with_breakdown(qs, *breakdown).order_by("employee_id", "id")
+    # the statutory block is always read: it says what PF / ESI wages the slip's percentages were taken from
+    names = dict.fromkeys(("bd_stat_category", "bd_stat_wages", *breakdown))
+    return with_breakdown(qs, *names).order_by("employee_id", "id")
 
 
 def _attendance_days(slip, typ: str, summ: dict, days_in_month: Decimal):
@@ -93,10 +105,16 @@ def _accumulate(slips, year: int, month: int, extra=None):
             "type": typ,
             "slip_id": s.id,
             "gross": dec(s.gross_salary) + dec(s.ot_amount),
-            "pf_wages": dec(s.basic),
+            "gross_pay": dec(s.gross_salary),
+            "category": slip_category(s),  # co_emp | tds | none; None on a slip stored before 2026-10-24
+            "pf_wages": pf_wages_of(s),
             "pf": dec(s.pf_deduction),
-            "esi_wages": dec(s.gross_salary),
+            "esi_wages": esi_wages_of(s),
             "esi": dec(s.esi_deduction),
+            "tds": dec(s.tds_deduction),
+            "tds_pcts": {dec(s.tds_percent)} if s.tds_percent is not None else set(),
+            "tds_pct": dec(s.tds_percent) if s.tds_percent is not None else None,
+            "has_tds": s.tds_percent is not None or dec(s.tds_deduction) > 0,
             "days_paid": days_paid,
             "ncp": ncp,
         }
@@ -111,8 +129,12 @@ def _accumulate(slips, year: int, month: int, extra=None):
             if s.id > cur["slip_id"]:
                 acc[key] = one
         else:
-            for k in ("gross", "pf_wages", "pf", "esi_wages", "esi"):
+            for k in ("gross", "gross_pay", "pf_wages", "pf", "esi_wages", "esi", "tds"):
                 cur[k] += one[k]
+            cur["category"] = one["category"] or cur["category"]  # the newest slip says which category they are in
+            cur["tds_pcts"] = cur["tds_pcts"] | one["tds_pcts"]
+            cur["tds_pct"] = one["tds_pct"] if one["tds_pct"] is not None else cur["tds_pct"]
+            cur["has_tds"] = cur["has_tds"] or one["has_tds"]
             for k in ("days_paid", "ncp"):
                 cur[k] = None if cur[k] is None or one[k] is None else cur[k] + one[k]
             for k, v in one.items():
@@ -211,8 +233,11 @@ def _run_pf(ctx) -> ReportResult:
     edli = whole_rupee(tot["edli_wages"] * EDLI_RATE / 100)
     admin = whole_rupee(tot["epf_wages"] * EPF_ADMIN_RATE / 100)
     notes = [
-        f"Employee PF is the amount deducted on the salary slips for {month_label(year, month)}; PF wages are the "
-        "basic pay on the slip. Employees who have since left are included (the statement is driven by slips).",
+        f"Employee PF is the amount deducted on the salary slips for {month_label(year, month)}. PF wages are the "
+        "wages the PF percentage was taken from: Basic + DA + Retaining Allowance (the first portion of pay, prorated "
+        "for attendance) on slips from 2026-10-24, the Basic on the slip on older slips. Only Co Emp employees can have "
+        "PF (Settings > PF & ESI sets the rule and percentage). Employees who have since left are included (the "
+        "statement is driven by slips).",
         "Employer shares are statutory-derived estimates (the system stores no employer rates): EPF 12% of EPF "
         "wages, of which EPS 8.33% on wages capped at Rs. 15,000 and the rest to EPF; whole-rupee rounding. "
         + ("EPF wages are capped at Rs. 15,000." if capped else "EPF wages are the actual PF wages (no cap)."),
@@ -299,20 +324,27 @@ register(
 
 
 # -- ESI statement ------------------------------------------------------------------------------------------
-def _esi_extra(slip, typ: str) -> dict:
-    limit = dec_or_none(slip.bd_esi_limit)
-    basis = dec_or_none(as_dict(slip.bd_earn).get("monthlySalary")) if typ == STAFF else dec_or_none(slip.bd_month_eq)
-    return {"flag_above": bool(limit is not None and basis is not None and basis > limit)}
+def _esi_coverage_text(covered: bool, category: str | None) -> str:
+    """Why this employee has (or has no) ESI on the slip(s) of the month."""
+    if covered:
+        return "Covered"
+    if category == CATEGORY_TDS:
+        return "TDS employee"
+    if category == CATEGORY_NONE:
+        return "Not Co Emp"
+    if category == CATEGORY_CO_EMP:
+        return "Co Emp, no rule matched"
+    return "Not covered"  # a slip stored before 2026-10-24 records no reason
 
 
 def _run_esi(ctx) -> ReportResult:
     year, month = ctx.period
     coverage = ctx.param("coverage") or "covered"
-    slips = list(_month_slips(ctx, year, month, "bd_summary", "bd_earn", "bd_esi_limit", "bd_month_eq"))
-    accs, dupes = _accumulate(slips, year, month, extra=_esi_extra)
+    slips = list(_month_slips(ctx, year, month, "bd_summary"))
+    accs, dupes = _accumulate(slips, year, month)
 
     rows: list[dict] = []
-    covered_n = above_n = missing_ip = 0
+    covered_n = no_rule_n = missing_ip = 0
     wages = ee_tot = er_tot = _ZERO
     for a in accs:
         emp = a["emp"]
@@ -321,8 +353,8 @@ def _run_esi(ctx) -> ReportResult:
         if covered:
             covered_n += 1
             missing_ip += esi_no is None
-        elif a["flag_above"]:
-            above_n += 1
+        elif a["category"] == CATEGORY_CO_EMP:
+            no_rule_n += 1
         if (coverage == "covered" and not covered) or (coverage == "exempt" and covered):
             continue
         er = total = None
@@ -340,24 +372,29 @@ def _run_esi(ctx) -> ReportResult:
                 "department": dept_name(emp),
                 "employmentType": TYPE_LABEL[a["type"]],
                 "daysPaid": money(a["days_paid"]),
-                "grossSalary": money(a["esi_wages"]),
+                "grossSalary": money(a["gross_pay"]),
                 "esiWages": money(a["esi_wages"]) if covered else None,
                 "eeShare": money(a["esi"]),
                 "erShare": money(er),
                 "totalContribution": money(total),
-                "coverage": "Covered" if covered else ("Above ceiling" if a["flag_above"] else "Not covered"),
+                "coverage": _esi_coverage_text(covered, a["category"]),
                 "idCheck": ("OK" if esi_no else "Missing IP no.") if covered else None,
             }
         )
 
     notes = [
         f"Employee ESI is the amount deducted on the salary slips for {month_label(year, month)}. ESI wages are the "
-        "slip's gross salary as payroll used it, which excludes overtime pay (the statutory wage base includes it); "
-        "they are shown only for employees with ESI deducted, 'Gross salary' is shown for everyone listed.",
+        "wages the ESI percentage was taken from: like PF, the first portion of pay (Basic + DA + Retaining Allowance, "
+        "prorated for attendance). Slips before 2026-10-24 took ESI from the earned gross salary instead, which excludes "
+        "overtime pay (the statutory wage base includes it). ESI wages are shown only for employees with ESI deducted, "
+        "'Gross salary' (the slip's gross pay) is shown for everyone listed.",
         "Employer share is a statutory-derived estimate at 3.25% of ESI wages (the system stores no employer "
-        "rate). ESIC rounds each contribution up to the next rupee; amounts here keep payroll's paise.",
-        "'Above ceiling' = the salary payroll tested (staff: monthly salary; production: gross x 2) was over the "
-        "ESI limit stored in the slip. Contribution-period stickiness (Apr-Sep / Oct-Mar) is not modelled.",
+        "rate). ESIC rounds each contribution up to the next rupee; amounts here keep payroll's paise. "
+        "Contribution-period stickiness (Apr-Sep / Oct-Mar) is not modelled.",
+        "Only Co Emp employees can have ESI, and only when an ESI rule of Settings > PF & ESI covers their salary. "
+        "Coverage says why nothing was deducted: 'Co Emp, no rule matched' (no ESI rule covers the salary), 'TDS "
+        "employee' (TDS employees have no PF or ESI), 'Not Co Emp'. 'Not covered' is a slip stored before 2026-10-24 "
+        "with no ESI, which does not record the reason.",
         "Days paid: staff = calendar days minus loss-of-pay days; production = days worked in the pay periods ending in the month.",
     ] + _dupe_note(dupes)
     _flag_provisional(ctx, slips, year, month, notes)
@@ -369,7 +406,7 @@ def _run_esi(ctx) -> ReportResult:
         {"label": "Employee contribution", "value": money(ee_tot), "format": "currency"},
         {"label": "Employer contribution (est.)", "value": money(er_tot), "format": "currency"},
         {"label": "Total contribution", "value": money(ee_tot + er_tot), "format": "currency"},
-        {"label": "Above ESI ceiling (exempt)", "value": above_n, "format": "integer"},
+        {"label": "Co Emp, no ESI rule matched", "value": no_rule_n, "format": "integer"},
         {"label": "Covered, IP number missing", "value": missing_ip, "format": "integer"},
     ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
@@ -392,7 +429,7 @@ register(
                 "Coverage",
                 [
                     ("covered", "ESI covered only"),
-                    ("exempt", "Not covered / above ceiling"),
+                    ("exempt", "Not covered"),
                     ("all", "All employees with a slip"),
                 ],
                 default="covered",
@@ -410,10 +447,93 @@ register(
             ColumnSpec("eeShare", "Employee share", CURRENCY, 1.3, total="sum"),
             ColumnSpec("erShare", "Employer 3.25% (est.)", CURRENCY, 1.4, total="sum"),
             ColumnSpec("totalContribution", "Total contribution", CURRENCY, 1.4, total="sum"),
-            ColumnSpec("coverage", "Coverage", BADGE, 1.2),
+            ColumnSpec("coverage", "Coverage", BADGE, 1.4),
             ColumnSpec("idCheck", "ID check", BADGE, 1.2),
         ),
         run=_run_esi,
+    )
+)
+
+
+# -- TDS statement ------------------------------------------------------------------------------------------
+def _run_tds(ctx) -> ReportResult:
+    year, month = ctx.period
+    slips = list(_month_slips(ctx, year, month, "bd_summary"))
+    accs, dupes = _accumulate(slips, year, month)
+
+    rows: list[dict] = []
+    base_tot = tds_tot = _ZERO
+    mixed = 0
+    for a in accs:
+        if not a["has_tds"]:
+            continue
+        emp = a["emp"]
+        mixed += len(a["tds_pcts"]) > 1
+        base_tot += a["gross"]
+        tds_tot += a["tds"]
+        rows.append(
+            {
+                "employeeCode": emp.employee_code,
+                "employeeName": f"{emp.first_name or ''} {emp.last_name or ''}".strip(),
+                "department": dept_name(emp),
+                "employmentType": TYPE_LABEL[a["type"]],
+                "tdsPercent": float(a["tds_pct"]) if a["tds_pct"] is not None else None,
+                "tdsBase": money(a["gross"]),
+                "tdsDeducted": money(a["tds"]),
+            }
+        )
+
+    notes = [
+        f"TDS is the amount deducted on the salary slips for {month_label(year, month)}: the employee's TDS percentage "
+        "x the earned gross of the pay period (staff: gross pay + overtime pay; production: the period's gross), "
+        "rounded to paise. Only employees added to TDS (Employees > Co Emp > TDS) have it; they have no PF or ESI.",
+        "TDS base is that earned gross as the slip stored it, and the TDS % is the percentage stored on the slip (not the "
+        "employee's current one). Employees who have since left are included (the statement is driven by slips). A "
+        "slip generated before 2026-10-24 carries no TDS, so such a month lists nobody. Several production slips in "
+        "the month are summed into one row.",
+        "The system stores no PAN numbers, so none is printed here. This is a payroll statement of what was deducted, "
+        "not a return or a Form 16.",
+    ] + _dupe_note(dupes)
+    if mixed:
+        notes.append(
+            f"{mixed} employee(s) had a different TDS % on different slips of the month: the percentage of the newest "
+            "slip is shown."
+        )
+    _flag_provisional(ctx, slips, year, month, notes)
+    if not slips:
+        notes.insert(0, no_slips_note(year, month))
+    elif not rows:
+        notes.insert(0, f"No salary slip of {month_label(year, month)} carries TDS (within your access and filters).")
+    summary = [
+        {"label": "Employees with TDS", "value": len(rows), "format": "integer"},
+        {"label": "TDS base (earned gross)", "value": money(base_tot), "format": "currency"},
+        {"label": "TDS deducted", "value": money(tds_tot), "format": "currency"},
+        {"label": "Effective TDS rate", "value": pct(tds_tot, base_tot), "format": "percent"},
+    ]
+    return ReportResult(rows=rows, summary=summary, notes=notes)
+
+
+register(
+    ReportSpec(
+        id="tds-statement",
+        title="TDS Statement",
+        description="Tax deducted at source per employee for a month: the TDS percentage, the earned gross it was taken "
+        "from and the TDS deducted on the salary slip.",
+        category="payroll",
+        icon="HandCoins",
+        tags=("tds", "tax deducted at source", "income tax", "withholding", "statutory"),
+        modules=PAYROLL_MODULES,
+        filters=(period(default="lastMonth"), *scope(status=None)),
+        columns=(
+            ColumnSpec("employeeCode", "Emp Code", TEXT, 1.0),
+            ColumnSpec("employeeName", "Employee", TEXT, 2.2),
+            ColumnSpec("department", "Department", TEXT, 1.5),
+            ColumnSpec("employmentType", "Type", BADGE, 0.9),
+            ColumnSpec("tdsPercent", "TDS %", PERCENT, 0.9),
+            ColumnSpec("tdsBase", "TDS base (gross + OT)", CURRENCY, 1.5, total="sum"),
+            ColumnSpec("tdsDeducted", "TDS deducted", CURRENCY, 1.4, total="sum"),
+        ),
+        run=_run_tds,
     )
 )
 
@@ -422,54 +542,50 @@ register(
 def _run_coverage(ctx) -> ReportResult:
     types = visible_types(ctx)
     coverage = ctx.param("coverage") or "all"
+    category = ctx.param("category") or "all"
     latest = (
         SalarySlip.objects.filter(slip_type_q(types), employee=OuterRef("pk"))
         .order_by("-year", "-month", F("period_end").desc(nulls_last=True), "-id")
         .values("id")[:1]
     )
     emps = list(ctx.employees().filter(employee_type_q(types)).annotate(latest_slip_id=Subquery(latest)))
+    if category != "all":
+        emps = [e for e in emps if category_of(e) == category]
     ids = [e.latest_slip_id for e in emps if e.latest_slip_id]
-    slips = (
-        {
-            s.id: s
-            for s in with_breakdown(SalarySlip.objects.filter(id__in=ids), "bd_earn", "bd_esi_limit", "bd_month_eq")
-        }
-        if ids
-        else {}
-    )
+    slips = {s.id: s for s in with_breakdown(SalarySlip.objects.filter(id__in=ids), "bd_month_eq")} if ids else {}
 
-    settings = read_settings()
     rows: list[dict] = []
-    n_pf = n_esi = n_neither = n_missing = n_near = n_noslip = 0
+    n_pf = n_esi = n_neither = n_missing = n_co_emp_none = n_tds = n_noslip = 0
     for e in sorted(emps, key=lambda x: natural_key(x.employee_code)):
         s = slips.get(e.latest_slip_id)
         uan, pf_no, esi_no = _ids(e)
         typ = slip_type(s) if s else (PRODUCTION if e.employment_type == PRODUCTION else STAFF)
-        limit = dec_or_none(s.bd_esi_limit) if s else None
         if typ == STAFF:
             basis = e.salary_amount
         else:
             basis = dec_or_none(s.bd_month_eq) if s else None
+        # the employee's CURRENT category (Employees > Co Emp); PF / ESI themselves come from the latest slip
+        emp_category = category_of(e)
         pf_cov = bool(s and s.pf_deduction > 0)
         esi_cov = bool(s and s.esi_deduction > 0)
-        above = bool(s and not esi_cov and limit is not None and basis is not None and basis > limit)
-        near = bool(s and limit and basis is not None and basis <= limit and basis >= limit * Decimal("0.9"))
         gaps = []
         if pf_cov:
             gaps += [n for n, v in (("UAN", uan), ("PF no.", pf_no)) if v is None]
         if esi_cov and esi_no is None:
             gaps.append("ESI no.")
+        neither = bool(s and not pf_cov and not esi_cov)
         n_noslip += s is None
         n_pf += pf_cov
         n_esi += esi_cov
-        n_neither += bool(s and not pf_cov and not esi_cov)
+        n_neither += neither
         n_missing += bool(gaps)
-        n_near += near
+        n_co_emp_none += neither and emp_category == CATEGORY_CO_EMP
+        n_tds += emp_category == CATEGORY_TDS
         keep = {
             "all": True,
             "pf": pf_cov,
             "esi": esi_cov,
-            "neither": bool(s and not pf_cov and not esi_cov),
+            "neither": neither,
             "missing-ids": bool(gaps),
             "no-slip": s is None,
         }[coverage]
@@ -481,10 +597,13 @@ def _run_coverage(ctx) -> ReportResult:
                 "employeeName": f"{e.first_name or ''} {e.last_name or ''}".strip(),
                 "department": dept_name(e),
                 "employmentType": TYPE_LABEL[typ],
+                "category": CATEGORY_LABEL[emp_category],
+                "tdsPercent": float(e.tds_percent)
+                if emp_category == CATEGORY_TDS and e.tds_percent is not None
+                else None,
                 "salaryBasis": money(dec_or_none(basis)),
-                "esiCeiling": money(limit),
                 "pfCovered": "No slip" if s is None else ("Yes" if pf_cov else "No"),
-                "esiCovered": "No slip" if s is None else ("Yes" if esi_cov else ("Above ceiling" if above else "No")),
+                "esiCovered": "No slip" if s is None else ("Yes" if esi_cov else "No"),
                 "pfNumber": pf_no,
                 "esiNumber": esi_no,
                 "uanNumber": uan,
@@ -493,15 +612,16 @@ def _run_coverage(ctx) -> ReportResult:
             }
         )
 
-    on = "ON" if settings.staff_payroll_rules_enabled else "OFF"
-    pon = "ON" if settings.prod_payroll_rules_enabled else "OFF"
     notes = [
-        "Coverage is inferred from the PF / ESI deducted on each employee's latest salary slip (there is no "
-        "per-employee PF/ESI switch). Employees with no slip show 'No slip'.",
-        f"Company-wide payroll rules switch: staff PF/ESI rules {on}, production PF/ESI rules {pon} (a branch may "
-        "override; production may also use salary-range rules). While a switch is off nobody in that group is covered.",
-        "Salary / monthly equivalent: staff = monthly salary on the profile; production = latest slip gross x 2, "
-        "the figure payroll tests against the ESI ceiling. 'Near ceiling' = within 10% below the ESI limit.",
+        "PF and ESI coverage is inferred from what was deducted on each employee's latest salary slip (there is no "
+        "per-employee PF / ESI amount to read). Employees with no slip show 'No slip'. Only Co Emp employees can have PF "
+        "and ESI, and only when a rule of Settings > PF & ESI covers their salary.",
+        "Category is the employee's CURRENT setting (Employees > Co Emp): Co Emp = the PF / ESI rules apply; TDS = tax "
+        "deducted at source (the TDS % is shown) and no PF or ESI; Not Co Emp = neither. A slip generated before the "
+        "employee was moved shows what was deducted then, so a change of category shows in PF / ESI only after the next "
+        "payroll.",
+        "Salary / monthly equiv.: staff = monthly salary on the profile; production = the latest slip's gross scaled to a "
+        "month the way payroll does (weekly x4, bi-weekly x2, monthly x1), the figure the PF / ESI rules are tested on.",
     ]
     summary = [
         {"label": "Employees", "value": len(emps), "format": "integer"},
@@ -510,7 +630,8 @@ def _run_coverage(ctx) -> ReportResult:
         {"label": "Covered by neither", "value": n_neither, "format": "integer"},
         {"label": "No slip yet", "value": n_noslip, "format": "integer"},
         {"label": "Covered, IDs missing", "value": n_missing, "format": "integer"},
-        {"label": "Within 10% of ESI ceiling", "value": n_near, "format": "integer"},
+        {"label": "Co Emp, no PF/ESI on latest slip", "value": n_co_emp_none, "format": "integer"},
+        {"label": "TDS employees", "value": n_tds, "format": "integer"},
     ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
@@ -519,14 +640,21 @@ register(
     ReportSpec(
         id="statutory-coverage",
         title="PF / ESI Coverage Register",
-        description="Who is under PF and ESI (from the latest slip), with UAN, PF and ESI numbers and salary against "
-        "the ESI ceiling.",
+        description="Who is under PF and ESI (from the latest slip), with each employee's Co Emp / TDS category and "
+        "their UAN, PF and ESI numbers.",
         category="payroll",
         icon="ShieldCheck",
-        tags=("pf", "esi", "uan", "identifiers", "coverage", "statutory"),
+        tags=("pf", "esi", "uan", "identifiers", "coverage", "statutory", "co emp", "tds"),
         modules=PAYROLL_MODULES,
         filters=(
             *scope(status="active"),
+            select(
+                "category",
+                "Category",
+                [(CATEGORY_CO_EMP, "Co Emp"), (CATEGORY_TDS, "TDS"), (CATEGORY_NONE, "Not Co Emp")],
+                placeholder="All categories",
+                help="The employee's current setting in Employees > Co Emp.",
+            ),
             select(
                 "coverage",
                 "Coverage",
@@ -546,8 +674,9 @@ register(
             ColumnSpec("employeeName", "Employee", TEXT, 2.2),
             ColumnSpec("department", "Department", TEXT, 1.5),
             ColumnSpec("employmentType", "Type", BADGE, 1.1),
+            ColumnSpec("category", "Category", BADGE, 1.1),
+            ColumnSpec("tdsPercent", "TDS %", PERCENT, 0.8),
             ColumnSpec("salaryBasis", "Salary / monthly equiv.", CURRENCY, 1.3),
-            ColumnSpec("esiCeiling", "ESI ceiling", CURRENCY, 1.1),
             ColumnSpec("pfCovered", "PF", BADGE, 0.8),
             ColumnSpec("esiCovered", "ESI", BADGE, 1.0),
             ColumnSpec("pfNumber", "PF No.", TEXT, 1.3),

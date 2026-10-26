@@ -50,6 +50,10 @@ export type SalarySlipItem = {
   grossSalary: number;
   pfDeduction: number;
   esiDeduction: number;
+  /** TDS (tax deducted at source): only on the slip of an employee on the TDS list; absent / 0 for everyone else. */
+  tdsDeduction?: number;
+  /** The percentage the TDS was worked out with (null / absent when the slip has no TDS). */
+  tdsPercent?: number | null;
   advanceDeduction: number;
   otherDeductions: number;
   totalDeductions: number;
@@ -73,6 +77,44 @@ export type SalarySlipItem = {
 };
 
 // ── Payroll Breakdown (full traceability) ─────────────────────────────────────
+
+/** The salary figure a PF / ESI rule's range is tested on (Settings → PF & ESI). */
+export type StatutoryBasis = "basic" | "first_portion" | "total";
+
+/** A PF or ESI rule as payroll matched it for one payroll, with the amount it was tested on. */
+export type StatutoryRuleMatch = {
+  id: string;
+  label: string;
+  basis: StatutoryBasis | string;
+  minAmount: number;
+  /** 0 = no upper limit. */
+  maxAmount: number;
+  ratePercent: number;
+  /** The employee's full monthly amount of `basis` (not prorated), which is what the range was tested on. */
+  amountTested: number;
+};
+
+/**
+ * What payroll recorded about how PF, ESI and TDS were decided (`breakdown_details.deductions.statutory`). Only
+ * payrolls generated after the PF / ESI / TDS redesign have it. Co Emp employees get PF / ESI from the rules; TDS employees
+ * get TDS only; everyone else gets nothing (`category: "none"`, with the `reason`).
+ */
+export type PayrollStatutory = {
+  category: "co_emp" | "tds" | "none";
+  /** Basic + DA + Retaining Allowance for the days paid: the amount PF and ESI are worked out on. */
+  pfWages?: number | null;
+  /** The same three components for a full month. */
+  firstPortionMonthly?: number | null;
+  pfRule?: StatutoryRuleMatch | null;
+  esiRule?: StatutoryRuleMatch | null;
+  /** The monthly figures every rule's range could have been tested on. */
+  eligibility?: { basic: number; firstPortion: number; total: number } | null;
+  /** Whose rules were used: the global set or the branch's own. */
+  rulesScope?: "global" | "branch" | null;
+  branchId?: number | null;
+  tds?: { percent: number; base: number; amount: number } | null;
+  reason?: string | null;
+};
 
 // A day may also carry the compensation marker (compensationKind / Minutes / Note) once payroll stores it: the payroll
 // engine does not today, so the screens draw it only when it is there.
@@ -187,8 +229,14 @@ export type PayrollBreakdown = {
     pfRate?: number;
     esi?: number;
     esiRate?: number;
-    // Salary-range rule applied to production PF/EF (null/absent = flat rates)
+    // Legacy: the salary-range PF/EF rule of a production payroll generated before the PF / ESI redesign (null/absent =
+    // flat rates). New payrolls never carry it: they carry `statutory` below instead.
     pfEfRule?: { label: string; pfRate: number; efRate: number } | null;
+    // TDS: the amount deducted and the percentage it was worked out with; only on payrolls of TDS employees.
+    tds?: number;
+    tdsPercent?: number | null;
+    // How PF / ESI / TDS were decided for this payroll (absent on payrolls generated before the redesign).
+    statutory?: PayrollStatutory | null;
     advances: number;
     advanceDetails: { advanceId: number; repaymentId: number; amount: number; notes?: string | null }[];
     lateShiftPenalty?: number;
@@ -321,7 +369,12 @@ export type PayrollRunItem = {
   otAmount: number;
   baseSalary: number;
   grossSalary: number;
+  /** Everything deducted: PF, ESI, TDS, advance recovery and the late deduction (so it already includes `tdsDeduction`). */
   deductions: number;
+  /** TDS taken from an employee on the TDS list (part of `deductions`); absent or 0 for every other row. */
+  tdsDeduction?: number;
+  /** The percentage that TDS was worked out with; null / absent when the row has no TDS. */
+  tdsPercent?: number | null;
   bonus: number;
   finalSalary: number;
   status: string;
@@ -518,7 +571,7 @@ export const useDeleteSessionConfig = () =>
     mutationFn: (id: number) => customFetch<void>(`/api/session-configs/${id}`, { method: "DELETE" }),
   });
 
-// ── Payroll Settings (singleton -PF/ESI rates) ───────────────────────────────
+// ── Payroll Settings (singleton: company profile, pay calendar, bonus, late rules, SMTP...) ──────────────────
 
 export type PayrollSettingsItem = {
   // Company profile -drives branding across the whole portal
@@ -531,14 +584,8 @@ export type PayrollSettingsItem = {
   companyPan: string;
   companyAddress: string;
   companyRegistration: string;
-  // Staff deductions
-  pfRate: number;
-  esiRate: number;
-  esiApplicableBelow: number;
-  // Production deductions
-  prodPfRate: number;
-  prodEsiRate: number;
-  prodEsiApplicableBelow: number;
+  // PF and ESI are no longer part of this document: their rules (per staff / production, global or per branch) live at
+  // /api/pf-esi-settings (see ./pf-esi-settings.ts).
   // Compensation (CTC breakdown -does not affect payroll generation)
   basicPercent: number;
   hraPercent: number;
@@ -546,7 +593,14 @@ export type PayrollSettingsItem = {
   bonusPercent: number;
   bonusWageCeiling: number;
   bonusEligibilityCeiling: number;
+  // The financial year start month is ONE company-wide value that staff and production bonus share.
   bonusFyStartMonth: number;
+  // Statutory Bonus of PRODUCTION employees (Settings -> Production Payroll -> Pay & Bonus): the same three values,
+  // kept apart from the staff ones above. Absent on a backend that predates the split (the Settings page then shows
+  // them read-only).
+  prodBonusPercent?: number;
+  prodBonusWageCeiling?: number;
+  prodBonusEligibilityCeiling?: number;
   // OT / Compensation (Compensation page's OT detection + announce)
   otDetectionEnabled?: boolean;
   otThresholdMinutes?: number;
@@ -555,8 +609,9 @@ export type PayrollSettingsItem = {
   payDay: number;
   productionPayType: string;
   defaultSalaryPerShift?: number;
-  // Production pay cycles (Settings → Production Payroll → Weekly / BiWeekly / Monthly): one period rule and one set of
-  // late rules per cycle. The five prodPeriod* values below are the old single schedule: no longer used by payroll.
+  // Production pay cycles: one period rule per cycle (Settings → Production Payroll → Weekly / BiWeekly / Monthly) and
+  // one set of late rules per cycle (Settings → Late Detection → Production). A save sends only the keys it owns: the
+  // server merges prodCycles key by key. The five prodPeriod* values below are the old single schedule: no longer used.
   prodCycles?: ProdCyclesSettings;
   // Old single production period configuration (superseded by prodCycles)
   prodPeriodFrequency: "weekly" | "2weeks" | "3weeks" | "monthly";
@@ -564,7 +619,7 @@ export type PayrollSettingsItem = {
   prodPeriodWeekdayAnchor?: "mon_sat" | "sun_sat" | null;
   prodPeriodAnchorDate?: string | null;
   prodPeriodCustomDays?: number | null;
-  // Production attendance mode + Late Detection (Settings → Payroll → Production)
+  // Production attendance mode + Late Detection (Settings → Late Detection → Production)
   prodAttendanceMode: "simple" | "strict";
   prodLateDetectionEnabled?: boolean;
   prodLateFreeAllowance?: number;
@@ -625,17 +680,20 @@ export type PayrollSettingsItem = {
   // Permission policy -approved permissions per employee per calendar month
   // that actually protect that day (shift the Late Detection boundary).
   permissionMonthlyCap?: number;
+  // Permission pricing (staff only; Settings -> Late Detection -> Staff): when ON, the approved permissions beyond
+  // permissionMonthlyCap leave the late pool and are priced on their own, after `permissionFreeAllowance` free ones,
+  // by `permissionDeductionSlabs` (the same lookup as the late slabs). OFF (the default) changes nothing. All three are
+  // company-wide rules, like permissionMonthlyCap. Absent on a backend that predates them.
+  permissionPricingEnabled?: boolean;
+  permissionFreeAllowance?: number;
+  permissionDeductionSlabs?: { fromPermissions: number; deductionShifts: number }[];
   // False for a branch-assigned HR login: the Late Detection switches, the
   // Half-Day times and permissionMonthlyCap are company-wide rules a branch
   // login can see but not change (the server answers 403 company_wide_rule
   // if any of them is sent). True for an admin / branch-less login; absent on
   // an older backend, which is treated as editable.
   companyWideRulesEditable?: boolean;
-  prodPfEfEnabled?: boolean;
-  prodPfEfRules: { label: string; minSalary: number; maxSalary: number; pfRate: number; efRate: number }[];
   // Feature toggles (Settings master switches)
-  staffPayrollRulesEnabled?: boolean;
-  prodPayrollRulesEnabled?: boolean;
   compensationFeatureEnabled?: boolean;
   // Backup
   backupDirectory?: string;

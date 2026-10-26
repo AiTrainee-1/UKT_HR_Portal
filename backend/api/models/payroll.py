@@ -203,6 +203,12 @@ class SalarySlip(models.Model):
     gross_salary = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="gross_salary")
     pf_deduction = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="pf_deduction")
     esi_deduction = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="esi_deduction")
+    # TDS (Employee.tds_enabled): tds_percent % of the period's earned gross, and the % that was used (a snapshot, so a
+    # later change of the employee's percentage never rewrites an old slip). 0 / NULL for everyone who is not in TDS.
+    tds_deduction = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, db_default=0, db_column="tds_deduction"
+    )
+    tds_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column="tds_percent")
     advance_deduction = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="advance_deduction")
     other_deductions = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="other_deductions")
     total_deductions = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="total_deductions")
@@ -307,6 +313,11 @@ class Payroll(models.Model):
     base_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="base_salary")
     gross_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="gross_salary")
     deductions = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # The TDS part of `deductions` and the % it was taken at (same meaning as SalarySlip.tds_deduction / tds_percent).
+    tds_deduction = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, db_default=0, db_column="tds_deduction"
+    )
+    tds_percent = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column="tds_percent")
     bonus = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     final_salary = models.DecimalField(max_digits=10, decimal_places=2, db_column="final_salary")
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
@@ -370,34 +381,48 @@ class PayrollSettings(models.Model):
     company_address = models.TextField(blank=True, default="", db_column="company_address")
     company_registration = models.TextField(blank=True, default="", db_column="company_registration")
 
-    # ── Staff deductions ──────────────────────────────────────────────────
+    # ── PF / ESI rules (pf_esi.py) ─────────────────────────────────────────
+    # The ONLY PF/ESI configuration there is (2026-10-24): four independent lists of rules per employee class
+    # (staff / production) and kind (PF / ESI), edited by the Super Admin on Settings -> PF & ESI. A rule is
+    #   {"id": str, "label": str, "basis": "basic" | "first_portion" | "total",
+    #    "minAmount": num >= 0, "maxAmount": num (0 = no upper limit), "ratePercent": num 0..100}
+    # and matches an employee when minAmount <= (the employee's full monthly amount of `basis`) <= maxAmount; the
+    # first match in list order wins, no match = no deduction. Only employees whose Co Emp switch is on are ever
+    # judged by them. A branch can carry its own copy of all four lists in BranchSettingsOverride.overrides (written by
+    # the same Super Admin endpoint only); a branch without one follows these. db_default: a release still running
+    # during a rolling deploy must keep inserting rows without knowing the columns exist.
+    staff_pf_rules = models.JSONField(default=list, blank=True, db_default=[], db_column="staff_pf_rules")
+    staff_esi_rules = models.JSONField(default=list, blank=True, db_default=[], db_column="staff_esi_rules")
+    prod_pf_rules = models.JSONField(default=list, blank=True, db_default=[], db_column="prod_pf_rules")
+    prod_esi_rules = models.JSONField(default=list, blank=True, db_default=[], db_column="prod_esi_rules")
+
+    # ── RETIRED PF / ESI methods (kept: additive-only schema policy; NOTHING reads or writes them any more) ──────
+    # Replaced by the rule lists above on 2026-10-24; migration 0127 converted whatever was configured into rules.
     pf_rate = models.DecimalField(
         max_digits=5, decimal_places=2, default=0,
-        db_column="pf_rate", help_text="Staff employee PF % (e.g. 12). 0 = disabled."
+        db_column="pf_rate", help_text="RETIRED (see staff_pf_rules). Was: staff flat PF %."
     )
     esi_rate = models.DecimalField(
         max_digits=5, decimal_places=2, default=0,
-        db_column="esi_rate", help_text="Staff employee ESI % (e.g. 0.75). 0 = disabled."
+        db_column="esi_rate", help_text="RETIRED (see staff_esi_rules). Was: staff flat ESI %."
     )
     esi_applicable_below = models.DecimalField(
         max_digits=10, decimal_places=2, default=21000,
         db_column="esi_applicable_below",
-        help_text="Staff: ESI applies only when full monthly salary is below this amount."
+        help_text="RETIRED (see staff_esi_rules). Was: staff ESI ceiling."
     )
-
-    # ── Production deductions ─────────────────────────────────────────────
     prod_pf_rate = models.DecimalField(
         max_digits=5, decimal_places=2, default=0,
-        db_column="prod_pf_rate", help_text="Production employee PF % (e.g. 12). 0 = disabled."
+        db_column="prod_pf_rate", help_text="RETIRED (see prod_pf_rules). Was: production flat PF %."
     )
     prod_esi_rate = models.DecimalField(
         max_digits=5, decimal_places=2, default=0,
-        db_column="prod_esi_rate", help_text="Production employee ESI % (e.g. 0.75). 0 = disabled."
+        db_column="prod_esi_rate", help_text="RETIRED (see prod_esi_rules). Was: production flat ESI %."
     )
     prod_esi_applicable_below = models.DecimalField(
         max_digits=10, decimal_places=2, default=21000,
         db_column="prod_esi_applicable_below",
-        help_text="Production: ESI applies only when monthly-equivalent earnings are below this amount."
+        help_text="RETIRED (see prod_esi_rules). Was: production ESI ceiling."
     )
 
     # ── Compensation (CTC breakdown) ─────────────────────────────────────
@@ -435,6 +460,28 @@ class PayrollSettings(models.Model):
     bonus_fy_start_month = models.IntegerField(
         default=4, db_column="bonus_fy_start_month",
         help_text="Financial year start month (1-12). Default 4 = April (Indian FY)."
+    )
+    # ── Statutory Bonus, PRODUCTION employees (2026-10-24) ───────────────────
+    # Staff and production employees now have their own bonus rate, wage ceiling and eligibility limit: the three
+    # bonus_* fields above are the STAFF values, these three are the PRODUCTION ones (growth_views.bonus_rules_for
+    # picks by Employee.employment_type). bonus_fy_start_month stays ONE company-wide calendar value. Migration 0129
+    # copied each current bonus_* value (the universal row and every branch override that sets one) into its prod_*
+    # twin, so no bonus changed until HR edits a production value. Branch-overridable like the staff ones.
+    # db_default: an old backend instance still running during a rolling deploy inserts rows without these columns.
+    prod_bonus_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal("8.33"), db_default=Decimal("8.33"),
+        db_column="prod_bonus_percent",
+        help_text="Production only. Statutory bonus % applied to eligible wages (Act range: 8.33 min, 20 max)."
+    )
+    prod_bonus_wage_ceiling = models.DecimalField(
+        max_digits=10, decimal_places=2, default=7000, db_default=7000,
+        db_column="prod_bonus_wage_ceiling",
+        help_text="Production only. Monthly wage ceiling used in the bonus calculation base -min(basic, this) per record."
+    )
+    prod_bonus_eligibility_ceiling = models.DecimalField(
+        max_digits=10, decimal_places=2, default=21000, db_default=21000,
+        db_column="prod_bonus_eligibility_ceiling",
+        help_text="Production only. Employees earning at or below this monthly wage are bonus-eligible."
     )
 
     # ── General ───────────────────────────────────────────────────────────
@@ -663,7 +710,9 @@ class PayrollSettings(models.Model):
     # Early-Out occurrences (when enabled), and excess Permissions (approved
     # but beyond permission_monthly_cap) all draw on this same count. The
     # first `late_free_allowance` of that pool are free; everything beyond
-    # it is "billable" and priced by the slab table below.
+    # it is "billable" and priced by the slab table below. (With the
+    # Permission Deduction Slabs switch ON the excess permissions leave this
+    # pool and are priced on their own: see permission_pricing_enabled below.)
     late_free_allowance = models.IntegerField(
         default=3, db_column="late_free_allowance",
         help_text=(
@@ -685,6 +734,33 @@ class PayrollSettings(models.Model):
             "Shift deduction thresholds. Each row: fromLates (billable late "
             "count reached) -> deductionShifts (shifts cut). Highest matching "
             "row wins; the last row holds for anything beyond it."
+        ),
+    )
+
+    # ── Permission Deduction Slabs (staff only, 2026-10-24) ─────────────────
+    # OFF (the default) changes nothing: an excess permission (approved beyond permission_monthly_cap) is one mark in
+    # the late pool above, priced by late_free_allowance + late_deduction_slabs. ON: excess permissions LEAVE the late
+    # pool and are priced on their own, exactly the way the late pool is: the first permission_free_allowance of them are
+    # free, the rest ("billable permissions") are priced by permission_deduction_slabs, penalty = shifts x daily rate.
+    # A day that was late AND carries an excess permission on the same edge stays ONE incident, counted in the late pool
+    # (see attendance_final.late_pool_summary). All three are company-wide rules (the engines read the company row only);
+    # the table has the shape of late_deduction_slabs but its rows are {"fromPermissions": N, "deductionShifts": D},
+    # stored ascending with duplicates removed. Production permissions are never priced.
+    # db_default on all three: an old backend instance still running during a rolling deploy inserts rows without them.
+    permission_pricing_enabled = models.BooleanField(
+        default=False, db_default=False, db_column="permission_pricing_enabled",
+        help_text="Staff only. Off: excess permissions are marks in the late pool. On: they are priced by their own slabs.",
+    )
+    permission_free_allowance = models.IntegerField(
+        default=0, db_default=0, db_column="permission_free_allowance",
+        help_text="Staff only. Excess permissions per month that cost nothing before the permission slabs start (0-999).",
+    )
+    permission_deduction_slabs = models.JSONField(
+        default=list, blank=True, db_default=[], db_column="permission_deduction_slabs",
+        help_text=(
+            "Staff only. Rows {fromPermissions, deductionShifts}: once the billable excess permissions reach "
+            "fromPermissions, deductionShifts shifts are cut. Highest matching row wins; the last row holds beyond it; "
+            "empty = no deduction."
         ),
     )
 
@@ -791,17 +867,14 @@ class PayrollSettings(models.Model):
     prod_extra_start = models.TimeField(default="17:50", db_column="prod_extra_start")
     prod_extra_end   = models.TimeField(default="20:00", db_column="prod_extra_end")
 
-    # ── Production PF/EF salary-range rules ────────────────────────────────
-    # list of {"label": str, "minSalary": num, "maxSalary": num, "pfRate": num, "efRate": num}
-    # When enabled, the rule matching the employee's monthly-equivalent earnings
-    # takes precedence over the flat prod_pf_rate / prod_esi_rate.
+    # ── RETIRED production PF/EF salary-range rules (kept, never read or written any more) ──────────────
+    # list of {"label": str, "minSalary": num, "maxSalary": num, "pfRate": num, "efRate": num}; converted into
+    # prod_pf_rules / prod_esi_rules by migration 0127 (see the PF / ESI rules block above).
     prod_pf_ef_enabled = models.BooleanField(default=False, db_column="prod_pf_ef_enabled")
     prod_pf_ef_rules = models.JSONField(default=list, blank=True, db_column="prod_pf_ef_rules")
 
-    # ── Feature toggles (Settings page master switches) ────────────────────
-    # Flat PF/ESI payroll rules per employee class. Disabled by default —
-    # when off, the flat rates above are NOT applied even if non-zero.
-    # (Production salary-range rules keep their own prod_pf_ef_enabled toggle.)
+    # ── RETIRED feature toggles (kept, never read or written any more) ─────────────────────────────────
+    # The flat-rate master switches of the old Payroll / Production Payroll tabs.
     staff_payroll_rules_enabled = models.BooleanField(default=False, db_column="staff_payroll_rules_enabled")
     prod_payroll_rules_enabled = models.BooleanField(default=False, db_column="prod_payroll_rules_enabled")
     # OT / Compensation background-features master switch. It controls what the feature DOES, never whether

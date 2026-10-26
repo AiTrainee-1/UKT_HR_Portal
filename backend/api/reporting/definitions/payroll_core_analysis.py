@@ -1,7 +1,7 @@
 """
 Payroll core - analysis reports:
 
-    department-salary-cost    headcount, earnings, statutory and net cost by department (month or financial year)
+    department-salary-cost    headcount, earnings, statutory (PF, ESI, TDS) and net cost by department (month or financial year)
     payroll-month-comparison  twelve-month payroll trend with month-on-month change
     annual-earnings-statement employee-wise financial-year (or month-wise) earnings and deductions
     salary-master             current salary / shift rate, increment history summary and identifiers per employee
@@ -31,7 +31,9 @@ from ..types import BADGE, CURRENCY, DATE, INTEGER, PERCENT, TEXT, ColumnSpec, R
 from .payroll_core_common import (
     EMPLOYER_ESI_RATE,
     EMPLOYER_PF_RATE,
+    ESI_WAGES_SQL,
     LATE_SQL,
+    PF_WAGES_SQL,
     SLIP_TYPE_SQL,
     current_fy,
     financial_year_filter,
@@ -75,6 +77,7 @@ def _slip_aggregates() -> dict:
         ot=_sum("ot_amount"),
         pf=_sum("pf_deduction"),
         esi=_sum("esi_deduction"),
+        tds=_sum("tds_deduction"),
         adv=_sum("advance_deduction"),
         late=_sum("late_amt"),
         ded=_sum("total_deductions"),
@@ -107,6 +110,7 @@ DEPT_KEYS = (
     "totalEarnings",
     "employeePf",
     "employeeEsi",
+    "employeeTds",
     "employerEstimate",
     "employerCost",
     "advanceRecovered",
@@ -138,6 +142,7 @@ def _dept_row(a: dict, dept_label: str, type_label: str) -> dict:
         "totalEarnings": total_earnings,
         "employeePf": round(_f(a["pf"]), 2),
         "employeeEsi": round(_f(a["esi"]), 2),
+        "employeeTds": round(_f(a["tds"]), 2),
         "employerEstimate": round(employer, 2),
         "employerCost": round(total_earnings + employer, 2),
         "advanceRecovered": round(_f(a["adv"]), 2),
@@ -155,8 +160,8 @@ def _dept_aggregates(qs, *by):
             basic_amt=_sum("basic"),
             hra_amt=_sum("hra"),
             other_amt=ExpressionWrapper(_sum("allowances") + _sum("incentives") + _sum("bonuses"), output_field=_DEC),
-            pf_base=_sum(Case(When(pf_deduction__gt=0, then=F("basic")), default=0, output_field=_DEC)),
-            esi_base=_sum(Case(When(esi_deduction__gt=0, then=F("gross_salary")), default=0, output_field=_DEC)),
+            pf_base=_sum(Case(When(pf_deduction__gt=0, then=PF_WAGES_SQL), default=0, output_field=_DEC)),
+            esi_base=_sum(Case(When(esi_deduction__gt=0, then=ESI_WAGES_SQL), default=0, output_field=_DEC)),
             **_slip_aggregates(),
         )
     )
@@ -241,9 +246,13 @@ def _department_cost_run(ctx) -> ReportResult:
         "transferred is counted wholly under the department they belong to today. Employees with no department appear "
         "as 'Unassigned'. Headcount counts each person once, even with several production period slips.",
         "Total earnings = gross pay + overtime. Employer cost = total earnings + an ESTIMATE of employer PF "
-        f"({EMPLOYER_PF_RATE}% of the Basic wage on slips where PF was deducted) and employer ESI ({EMPLOYER_ESI_RATE}% of "
-        "gross pay on slips where ESI was deducted). Payroll does not store employer contributions: these are statutory "
-        "rates applied by this report, without the Rs 15,000 PF wage cap, EDLI or admin charges.",
+        f"({EMPLOYER_PF_RATE}% of the PF wages on slips where PF was deducted) and employer ESI ({EMPLOYER_ESI_RATE}% of "
+        "the ESI wages on slips where ESI was deducted). PF and ESI wages are the wages the deduction was taken from: the "
+        "first portion of pay (Basic + DA + Retaining Allowance) on slips from 2026-10-24, the Basic (PF) and the gross "
+        "pay (ESI) on older slips. Only Co Emp employees have PF and ESI. Payroll does not store employer contributions: "
+        "these are statutory rates applied by this report, without the Rs 15,000 PF wage cap, EDLI or admin charges.",
+        "Employee TDS is deducted only from employees added to TDS (Employees > Co Emp > TDS); it is 0 for everyone "
+        "else. It is a deduction from the employee's pay, not an employer cost.",
         "Production slips belong to the month their pay period ends in, and they store the whole period wage under Basic "
         "(no HRA / allowance split), so a department with production staff shows their wages in the Basic column. Late "
         "deduction = the slip's late-detection snapshot; advance recovered = the figure stored on the slip. Share % is "
@@ -299,7 +308,7 @@ register(
             ColumnSpec("employmentType", "Type", TEXT, 1.6),
             ColumnSpec("headcount", "Employees", INTEGER, 1.1, total="sum"),
             ColumnSpec("slips", "Slips", INTEGER, 0.7, total="sum"),
-            # 20 columns: the PDF exporter prints reports of more than 18 columns on landscape A3, which is what the money
+            # 21 columns: the PDF exporter prints reports of more than 18 columns on landscape A3, which is what the money
             # columns and their bold totals need to stay on one line.
             _cur("basic", "Basic"),
             _cur("hra", "HRA"),
@@ -309,6 +318,7 @@ register(
             _cur("totalEarnings", "Total earnings", 1.5),
             _cur("employeePf", "Employee PF"),
             _cur("employeeEsi", "Employee ESI"),
+            _cur("employeeTds", "Employee TDS"),
             _cur("employerEstimate", "Employer PF + ESI (est.)"),
             _cur("employerCost", "Employer cost (est.)", 1.5),
             _cur("advanceRecovered", "Advance recovered"),
@@ -484,6 +494,7 @@ def _annual_run(ctx) -> ReportResult:
                 "totalEarnings": earn,
                 "pfDeduction": round(_f(a["pf"]), 2),
                 "esiDeduction": round(_f(a["esi"]), 2),
+                "tdsDeduction": round(_f(a["tds"]), 2),
                 "advanceDeduction": round(_f(a["adv"]), 2),
                 "lateDeduction": round(_f(a["late"]), 2),
                 "totalDeductions": round(_f(a["ded"]), 2),
@@ -504,6 +515,7 @@ def _annual_run(ctx) -> ReportResult:
         {"label": "Total earnings", "value": col("totalEarnings"), "format": "currency"},
         {"label": "Total PF", "value": col("pfDeduction"), "format": "currency"},
         {"label": "Total ESI", "value": col("esiDeduction"), "format": "currency"},
+        {"label": "Total TDS", "value": col("tdsDeduction"), "format": "currency"},
         {"label": "Total net pay", "value": col("netPay"), "format": "currency"},
     ]
     all_notes = [
@@ -513,8 +525,9 @@ def _annual_run(ctx) -> ReportResult:
         "Total earnings = gross pay + overtime; for production, Basic is the period wages (there is no HRA / allowance "
         "split). Employees who have left are included when they were paid in the year. An employee who changed between "
         "staff and production has one row per type.",
-        "This is a payroll earnings statement built from the stored slips. It is NOT a Form 16: the system holds no "
-        "income-tax (TDS) data.",
+        "This is a payroll earnings statement built from the stored slips. The TDS column is the tax deducted at source "
+        "on the slips of employees added to TDS (0 for everyone else). It is NOT a Form 16: the system holds no PAN, "
+        "challan or tax-slab data.",
         *notes,
     ]
     if not rows:
@@ -526,7 +539,7 @@ register(
     ReportSpec(
         id="annual-earnings-statement",
         title="Annual Earnings Statement",
-        description="Financial-year earnings heads, PF, ESI, advance and late deductions and net pay per employee.",
+        description="Financial-year earnings heads, PF, ESI, TDS, advance and late deductions and net pay per employee.",
         category=CATEGORY,
         modules=BOTH,
         icon="CalendarDays",
@@ -551,6 +564,7 @@ register(
             _cur("totalEarnings", "Total earnings"),
             _cur("pfDeduction", "PF"),
             _cur("esiDeduction", "ESI"),
+            _cur("tdsDeduction", "TDS"),
             _cur("advanceDeduction", "Advance"),
             _cur("lateDeduction", "Late deduction"),
             _cur("totalDeductions", "Total deductions"),
@@ -807,10 +821,12 @@ def _ctc_run(ctx) -> ReportResult:
     all_notes = [
         "ESTIMATE, not a statutory figure. It mirrors the Compensation page: the salary is shown as each employee's "
         "50% + 50% split (Basic + DA + Retaining Allowance, then Other + Petrol + HRA + Special Allowance + CA), employer "
-        "PF = the PF rate x the first portion (Basic + DA + Retaining Allowance) with no wage cap or EPS split, and "
-        "employer ESI = salary x the EMPLOYEE ESI rate when salary is within the ESI ceiling (the statutory employer "
-        "rate is 3.25%, so this understates it).",
-        "Annual CTC = (monthly salary + employer PF + employer ESI) x 12. Rates come from each employee's branch settings.",
+        "PF = the percentage of the PF rule that matches the employee x the first portion (Basic + DA + Retaining "
+        "Allowance) with no wage cap or EPS split, and employer ESI = the percentage of the matching ESI rule x the same "
+        "first portion (the statutory employer ESI rate is 3.25%, so this can understate it).",
+        "Only Co Emp employees have PF and ESI: everybody else, TDS employees included, shows 0 for both. Annual CTC = "
+        "(monthly salary + employer PF + employer ESI) x 12. The rules (Settings > PF & ESI) come from each employee's "
+        "branch.",
     ]
     if automatic:
         all_notes.append(

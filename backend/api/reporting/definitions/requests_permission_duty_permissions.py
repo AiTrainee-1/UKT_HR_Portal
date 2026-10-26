@@ -8,7 +8,8 @@ Sources of truth (read-only):
   ``EmployeePermission.normalize_type``.
 * The monthly cap: the first ``PayrollSettings.permission_monthly_cap`` APPROVED permissions of an employee in a
   calendar month (ranked by date, id; all three types together) are within the cap, later ones are Excess and join the
-  late pool. Cap status comes from ``attendance_final.bulk_permission_cap_status`` and the excess count from
+  late pool (or, with Permission Deduction Slabs ON, are priced on their own by the permission slabs). Cap status comes
+  from ``attendance_final.bulk_permission_cap_status`` and the excess count from
   ``attendance_final.late_pool_summary`` -- the same code payroll runs -- never from a re-implementation.
 * ``AttendanceDayRecord`` flags (stored) for the effect a permission had on its day; ``SalarySlip.breakdown_details``
   for what payroll actually charged.
@@ -452,9 +453,17 @@ def _counts_run(ctx) -> ReportResult:
         ),
     )
     data = [r for r in rows if r.get("_kind") != "subtotal"]
+    priced = bool(settings.permission_pricing_enabled)
     notes = [
         f"Monthly cap in force: {cap} approved permission(s) per employee per calendar month; all three types count "
-        "together. Excess = approved permissions beyond the cap (they join the late pool, priced by payroll).",
+        "together. Excess = approved permissions beyond the cap ("
+        + (
+            "Permission Deduction Slabs are ON: after "
+            f"{max(0, int(settings.permission_free_allowance or 0))} free per month they are priced on their own, see the "
+            "Excess Permission Salary Impact report)."
+            if priced
+            else "they join the late pool, priced by payroll)."
+        ),
         "The type columns count APPROVED permissions only; Pending and Rejected are shown separately and never count "
         "toward the cap. 'Unclassified' = older requests saved without a type (they still count).",
         "Cap-used can exceed 100% when HR approves beyond the cap. Production employees' permissions have no "
@@ -563,6 +572,24 @@ def _excess_cost(late: dict, daily_rate, settings) -> float | None:
     return float(_money(charged * rate) - _money(without * rate))
 
 
+_IMPACT_COLS = (
+    *EMP_COLS,
+    ColumnSpec("approvedPermissions", "Approved", INTEGER, 1.2, total="sum"),
+    ColumnSpec("monthlyCap", "Cap", INTEGER, 0.6),
+    ColumnSpec("excessPermissions", "Excess", INTEGER, 0.85, total="sum"),
+    ColumnSpec("lateInCount", "Late-in", INTEGER, 0.95, total="sum"),
+    ColumnSpec("earlyOutCount", "Early-out", INTEGER, 1.1, total="sum"),
+    ColumnSpec("totalPool", "Pool total", INTEGER, 0.85, total="sum"),
+    ColumnSpec("freeAllowance", "Free", INTEGER, 0.6),
+    ColumnSpec("billableLate", "Billable", INTEGER, 0.95, total="sum"),
+    ColumnSpec("shiftDeductions", "Shifts cut", NUMBER, 0.9, total="sum"),
+    ColumnSpec("dailyRate", "Daily rate", CURRENCY, 1.1),
+    ColumnSpec("latePenalty", "Late-pool deduction", CURRENCY, 1.3, total="sum"),
+    ColumnSpec("excessCost", "Due to excess permissions", CURRENCY, 1.7, total="sum"),
+    ColumnSpec("slipStatus", "Payslip", BADGE, 1.4),
+)
+
+
 def _impact_run(ctx) -> ReportResult:
     from api.attendance_final import late_pool_summary
     from api.models import EmployeePermission, SalarySlip
@@ -599,6 +626,7 @@ def _impact_run(ctx) -> ReportResult:
 
     rows = []
     changed = 0
+    priced_any = False  # at least one payslip was generated with Permission Deduction Slabs ON
     for emp in employees:
         approved = live.get(emp.id, 0)
         slip = slips.get(emp.id)
@@ -644,6 +672,18 @@ def _impact_run(ctx) -> ReportResult:
                         "excessCost": _excess_cost(late, earn.get("dailyRate"), settings),
                     }
                 )
+                perm = ded.get("permissionSummary") if isinstance(ded.get("permissionSummary"), dict) else {}
+                if perm.get("enabled"):
+                    # Permission Deduction Slabs were ON for this payslip: the excess permissions left the late pool and
+                    # were priced on their own, so what they cost is exactly that stored deduction.
+                    priced_any = True
+                    row.update(
+                        {
+                            "pricedPermissions": _as_int(perm.get("priced")),
+                            "permissionDeduction": r2(ded.get("permissionPenalty")),
+                            "excessCost": r2(ded.get("permissionPenalty")),
+                        }
+                    )
                 drifted = max(0, approved - cap_used) != stored_excess
                 row["slipStatus"] = "Changed since payslip" if drifted else "Payslip generated"
                 changed += 1 if drifted else 0
@@ -653,7 +693,7 @@ def _impact_run(ctx) -> ReportResult:
     if show == "excess":
         rows = [r for r in rows if (r["excessPermissions"] or 0) > 0]
     elif show == "penalised":
-        rows = [r for r in rows if (r["latePenalty"] or 0) > 0]
+        rows = [r for r in rows if (r["latePenalty"] or 0) > 0 or (r.get("permissionDeduction") or 0) > 0]
 
     sum_keys = (
         "approvedPermissions",
@@ -666,6 +706,8 @@ def _impact_run(ctx) -> ReportResult:
         "latePenalty",
         "excessCost",
     )
+    if priced_any:
+        sum_keys += ("pricedPermissions", "permissionDeduction")
     rows = S.department_subtotals(rows, sum_keys)
     data = [r for r in rows if r.get("_kind") != "subtotal"]
     return ReportResult(
@@ -683,7 +725,7 @@ def _impact_run(ctx) -> ReportResult:
             },
             {
                 "label": "Employees penalised",
-                "value": sum(1 for r in data if (r["latePenalty"] or 0) > 0),
+                "value": sum(1 for r in data if (r["latePenalty"] or 0) > 0 or (r.get("permissionDeduction") or 0) > 0),
                 "format": "integer",
             },
             {
@@ -708,7 +750,30 @@ def _impact_run(ctx) -> ReportResult:
             "predates the flagged-day counts.",
             "'Changed since payslip' = permissions were approved, rejected or removed after the payslip was generated "
             "(live excess differs from the payslip); regenerate the payslip to apply the change.",
-        ],
+        ]
+        + (
+            [
+                "A payslip generated with Permission Deduction Slabs ON prices the excess permissions on their own: its "
+                "late pool then holds late-in + early-out only (a late day carrying an excess permission on the same edge "
+                "stays one late occurrence), 'Priced permissions' are the excess permissions the slabs priced, "
+                "'Permission deduction' is that deduction and 'Due to excess permissions' equals it."
+            ]
+            if priced_any
+            else []
+        ),
+        columns=[
+            *_IMPACT_COLS,
+            *(
+                [
+                    ColumnSpec("pricedPermissions", "Priced permissions", INTEGER, 1.2, total="sum"),
+                    ColumnSpec("permissionDeduction", "Permission deduction", CURRENCY, 1.5, total="sum"),
+                ]
+                if priced_any
+                else []
+            ),
+        ]
+        if priced_any
+        else None,
     )
 
 
@@ -735,22 +800,7 @@ register(
                 ),
             ),
         ),
-        columns=(
-            *EMP_COLS,
-            ColumnSpec("approvedPermissions", "Approved", INTEGER, 1.2, total="sum"),
-            ColumnSpec("monthlyCap", "Cap", INTEGER, 0.6),
-            ColumnSpec("excessPermissions", "Excess", INTEGER, 0.85, total="sum"),
-            ColumnSpec("lateInCount", "Late-in", INTEGER, 0.95, total="sum"),
-            ColumnSpec("earlyOutCount", "Early-out", INTEGER, 1.1, total="sum"),
-            ColumnSpec("totalPool", "Pool total", INTEGER, 0.85, total="sum"),
-            ColumnSpec("freeAllowance", "Free", INTEGER, 0.6),
-            ColumnSpec("billableLate", "Billable", INTEGER, 0.95, total="sum"),
-            ColumnSpec("shiftDeductions", "Shifts cut", NUMBER, 0.9, total="sum"),
-            ColumnSpec("dailyRate", "Daily rate", CURRENCY, 1.1),
-            ColumnSpec("latePenalty", "Late-pool deduction", CURRENCY, 1.3, total="sum"),
-            ColumnSpec("excessCost", "Due to excess permissions", CURRENCY, 1.7, total="sum"),
-            ColumnSpec("slipStatus", "Payslip", BADGE, 1.4),
-        ),
+        columns=_IMPACT_COLS,
         run=_impact_run,
     )
 )

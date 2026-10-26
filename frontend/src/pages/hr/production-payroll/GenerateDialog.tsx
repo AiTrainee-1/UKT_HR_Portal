@@ -13,6 +13,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { plural } from "@/components/payroll/kit/format";
 import { Chip } from "@/components/payroll/kit/parts";
+import { StatutoryRulesChip, StatutoryWhoNote } from "@/components/payroll/kit/StatutoryNote";
+import { usePfEsiRulesSlice } from "@/components/payroll/kit/statutory-rules";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -50,6 +52,7 @@ export function GenerateDialog({
   const { toast } = useToast();
   const { triggerGenerateProduction, isGenerating } = usePayrollGeneration();
   const settings = usePayrollSettings();
+  const statutoryRules = usePfEsiRulesSlice();
   const [checkSkips, setCheckSkips] = useState(false);
   // The real engine, run on every employee inside a transaction that is always rolled back: slow, so only on request.
   const skip = useProductionSkipCheck(checkSkips ? { cycle, ...period } : null);
@@ -145,7 +148,7 @@ export function GenerateDialog({
             </li>
             <li className="flex items-start gap-2">
               <Cog size={13} className="mt-0.5 shrink-0 text-amber-500" />
-              Prices late days with the late rules of the {info.label} cycle, and PF / ESI with the production rates.
+              Prices late days with the late rules of the {info.label} cycle.
             </li>
             <li className="flex items-start gap-2">
               <Wallet size={13} className="mt-0.5 shrink-0 text-amber-500" />
@@ -184,8 +187,16 @@ export function GenerateDialog({
                 ) : (
                   <Chip tone="neutral">Late detection off</Chip>
                 )}
+                <StatutoryRulesChip kind="production" rules={statutoryRules} testId="pcp-generate-statutory" />
               </div>
             )}
+            <StatutoryWhoNote
+              kind="production"
+              rules={statutoryRules}
+              linkClassName="text-amber-700"
+              className="mt-3 border-t pt-3"
+              testId="pcp-generate-statutory-note"
+            />
           </div>
 
           <div className="rounded-xl border border-dashed border-gray-200 p-3">

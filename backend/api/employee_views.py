@@ -9,6 +9,7 @@ from .branch_scope import get_branch_scope, scope_to_branch
 from .models import Department, Employee
 from .serializers import employee_json, parse_decimal
 from .view_common import _error
+from django.db import transaction
 from django.db.models import Case, F, Q, TextField, Value, When
 from django.db.models.functions import Concat
 from rest_framework.decorators import api_view
@@ -457,7 +458,14 @@ def _employee_get(request: Request, pk: int) -> Response:
 
 
 def _employee_update(request: Request, pk: int) -> Response:
-    emp = scope_to_branch(_employee_queryset(), request).filter(pk=pk).first()
+    # One transaction with the employee row locked: the TDS endpoints (tds_views.py) lock the same row, so the Co Emp /
+    # TDS swap can never be half done or overwritten by a save that read the employee a moment earlier.
+    with transaction.atomic():
+        return _employee_update_locked(request, pk)
+
+
+def _employee_update_locked(request: Request, pk: int) -> Response:
+    emp = scope_to_branch(_employee_queryset().select_for_update(of=("self",)), request).filter(pk=pk).first()
     if not emp:
         return _error("Employee not found", 404)
 
@@ -536,7 +544,10 @@ def _employee_update(request: Request, pk: int) -> Response:
         emp_type = request.data.get("employmentType")
         if emp_type not in (Employee.EMPLOYMENT_TYPE_STAFF, Employee.EMPLOYMENT_TYPE_PRODUCTION):
             return _error("employmentType must be 'staff' or 'production'")
+    if "coEmpEnabled" in request.data and not isinstance(request.data["coEmpEnabled"], bool):
+        return _error("coEmpEnabled must be true or false")
 
+    was_tds = emp.tds_enabled
     for json_key, model_key in field_map.items():
         if json_key in request.data:
             value = request.data[json_key]
@@ -545,6 +556,13 @@ def _employee_update(request: Request, pk: int) -> Response:
             elif model_key == "date_of_birth":
                 value = value or None
             setattr(emp, model_key, value)
+    # Co Emp and TDS are mutually exclusive (pf_esi.py): switching Co Emp ON for a TDS employee takes them out of TDS in
+    # the same save. (TDS itself is only ever changed through /tds/employees; tdsEnabled / tdsPercent in this body are
+    # not read.)
+    moved_from_tds = bool(request.data.get("coEmpEnabled") is True and was_tds)
+    if moved_from_tds:
+        emp.tds_enabled = False
+        emp.tds_percent = None
 
     # Keep the 50% + 50% salary split (salary_split.py) true to the salary. A submitted split is validated; a new
     # salary with none submitted re-scales the stored split (or creates the default one); an unchanged salary leaves
@@ -593,6 +611,10 @@ def _employee_update(request: Request, pk: int) -> Response:
     emp = _employee_queryset().get(pk=pk)
     log_action(request, "update", "employees", record_id=pk,
                description=f"Updated employee {emp.employee_code} -{emp.first_name} {emp.last_name}")
+    if moved_from_tds:
+        log_action(request, "update", "employees", record_id=pk,
+                   description=f"Moved {emp.employee_code} -{emp.first_name} {emp.last_name} from TDS to Co Emp "
+                               "(PF/ESI category): Co Emp turned on, TDS removed")
     return Response(_serialize_employee(emp))
 
 

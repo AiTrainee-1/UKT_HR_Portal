@@ -51,7 +51,7 @@ function whyNot(o: SmsOverview | undefined): { text: string; to?: string; linkLa
 const hide = (phone: string) => `••••••${phone.slice(-4)}`;
 
 /**
- * Test: send one SMS through the real template, with the code 123456, to a number typed here. It counts against the caps and is
+ * Test: send one SMS through the real template, with the code 1234, to a number typed here. It counts against the caps and is
  * logged (as a test message) like any other. What the server says is shown as it says it, including why it refused.
  */
 export default function TestTab({ readOnly }: { readOnly: boolean }) {
@@ -90,7 +90,7 @@ export default function TestTab({ readOnly }: { readOnly: boolean }) {
     <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]" data-testid="sms-test">
       <Panel
         title="Send a test SMS"
-        description={`Sends one real SMS through ${name}, with its approved template, to the number below, with the code 123456, so you can see that ${name} accepts it and how it reads.`}
+        description={`Sends one real SMS through ${name}, with its approved template, to the number below, with the code 1234, so you can see that ${name} accepts it and how it reads.`}
         icon={Send}
       >
         <form onSubmit={(e) => void submit(e)} className="space-y-3" noValidate>

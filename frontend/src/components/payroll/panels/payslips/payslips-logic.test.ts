@@ -8,6 +8,7 @@ import {
   errorText,
   filterSlips,
   parseYear,
+  registerColumnsFor,
   registerFileStem,
   slipCycleLabel,
   slipDepartments,
@@ -249,6 +250,37 @@ describe("the Payslip register", () => {
 
   it("writes when it was emailed", () => {
     expect(cells(SLIPS[0])[9]).toMatch(/^\d{1,2} [A-Z][a-z]{2} 2026, \d{2}:\d{2}$/);
+  });
+
+  it("has no TDS columns while no slip has TDS: the very same columns", () => {
+    expect(registerColumnsFor(SLIPS)).toBe(REGISTER_COLUMNS);
+    expect(registerColumnsFor([slip(9, "No Tds", "E009", { tdsDeduction: 0, tdsPercent: null })])).toBe(
+      REGISTER_COLUMNS,
+    );
+  });
+
+  it("adds 'TDS %' and 'TDS' before Deductions when a slip has TDS, empty on the slips that have none", () => {
+    const tds = slip(9, "Karthik Rajan", "E009", { tdsDeduction: 2500, tdsPercent: 10, totalDeductions: 2500 });
+    const columns = registerColumnsFor([...SLIPS, tds]);
+    expect(columns.map((c) => c.label)).toEqual([
+      "Slip no",
+      "Code",
+      "Name",
+      "Department",
+      "Designation",
+      "Period",
+      "Gross",
+      "TDS %",
+      "TDS",
+      "Deductions",
+      "Net",
+      "Emailed at",
+    ]);
+    const read = (label: string, s: SalarySlipItem) => columns.find((c) => c.label === label)!.value!(s);
+    expect(read("TDS", tds)).toBe(2500);
+    expect(read("TDS %", tds)).toBe(10);
+    expect(read("TDS", SLIPS[0])).toBeNull();
+    expect(read("TDS %", SLIPS[0])).toBeNull();
   });
 
   it("names the file after who, which month and the register", () => {

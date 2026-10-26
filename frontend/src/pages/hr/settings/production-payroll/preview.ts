@@ -2,7 +2,7 @@
  * Worked examples for the Production Payroll tab, with the engine's own rules:
  *   late deduction   backend/api/payroll_views.py      late_shift_deduction (the production slab pool, per cycle)
  *   a late day       backend/api/payroll_views.py      _production_late_days (Simple / Strict, seconds count)
- *   PF / ESI         backend/api/payroll_views.py      _generate_production_payroll, with the cycle's monthly factor
+ *   monthly estimate backend/api/pf_esi.py             production_amounts (the period gross x the cycle's monthly factor)
  * The pay period maths is in ./cycles.ts. Money is whole paise, rounded as the engine rounds.
  */
 
@@ -91,14 +91,12 @@ export function judgeProductionDay(input: {
   return { late: arrivedLate || leftEarly, arrivedLate, leftEarly };
 }
 
-// ── PF and ESI on a cycle's payslip ──
+// ── the estimated monthly pay on a cycle's payslip ──
 
 /**
- * One production payslip on a pay cycle: gross = shifts x rate per shift, and the "estimated monthly pay" the PF / ESI
- * salary bands and the ESI ceiling are tested on is the period's gross x 4 (Weekly), x 2 (BiWeekly) or x 1 (Monthly: a
- * production month is four weeks). The rest is the Payroll tab's productionPay: a matching band wins (even while the
- * flat switch is off; its EF % has no ceiling test), otherwise the flat rates when their switch is on (ESI only while
- * the estimate is at or below the ceiling), otherwise none.
+ * One production payslip on a pay cycle: gross = shifts x rate per shift, and the "estimated monthly pay" the PF / ESI rules
+ * of the PF & ESI tab are tested on (their "Full monthly salary" basis) is the period's gross x 4 (Weekly), x 2 (BiWeekly)
+ * or x 1 (Monthly: a production month is four weeks). PF and ESI themselves are not worked out here.
  */
 export function cyclePay(input: ProductionPayInput, cycle: PayCycle): ProductionPay {
   return productionPay({ ...input, monthlyFactor: CYCLE_INFO[cycle].monthlyFactor });

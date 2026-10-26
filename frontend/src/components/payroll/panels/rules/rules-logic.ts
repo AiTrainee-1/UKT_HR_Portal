@@ -14,6 +14,11 @@ import { PRODUCTION_EMPLOYEES_PATH, SHIFTS_PATH, employeeEditPath } from "../ski
 //   groups  "Attendance & late detection", "Half day & permissions", "Statutory (PF / ESI)", "Pay basis",
 //           "Overtime / Compensation switch" (staff); "Pay cycle", "Attendance mode & late detection",
 //           "Statutory (PF / ESI)", "Pay basis" (production)
+//
+// PF and ESI follow the Settings -> PF & ESI model: they apply only to Co Emp employees (rules with a salary range and a
+// percentage, per Staff / Production, global or per unit), and TDS only to employees on the TDS list. The panel does not
+// know those rules: it draws whatever groups and chips the server sends, so this file only has to recognise the words
+// ("PF", "ESI", "TDS", "Co Emp", "statutory") to pick an icon and a column heading.
 
 // ── Flags: problems with an employee's rule assignment ────────────────────────
 
@@ -134,6 +139,10 @@ const KNOWN_GROUPS: Record<string, RuleGroupKind> = {
   "attendance mode & late detection": "attendance",
   "half day & permissions": "late",
   "statutory (pf / esi)": "deductions",
+  "statutory (pf / esi / tds)": "deductions",
+  "pf, esi & tds": "deductions",
+  "pf & esi": "deductions",
+  tds: "deductions",
   "pay basis": "pay",
   "overtime / compensation switch": "overtime",
   "pay cycle": "cycle",
@@ -146,7 +155,7 @@ export function ruleGroupKind(name: string): RuleGroupKind {
   if (/^attendance/.test(n)) return "attendance";
   if (/late|early|permission|grace/.test(n)) return "late";
   if (/overtime|\bot\b/.test(n)) return "overtime";
-  if (/\bpf\b|\besi\b|provident|statutory|deduction|advance|tax/.test(n)) return "deductions";
+  if (/\bpf\b|\besi\b|\btds\b|\bco emp\b|provident|statutory|deduction|advance|tax/.test(n)) return "deductions";
   if (/attendance|punch|present|absent|half|lunch/.test(n)) return "attendance";
   if (/shift|roster|saturday|holiday/.test(n)) return "shift";
   if (/cycle|period|week|salary day|pay day/.test(n)) return "cycle";
@@ -162,6 +171,9 @@ export const CHIP_KIND_LABELS: Record<string, string> = {
   saturday_off: "Saturday off",
   pf: "PF",
   esi: "ESI",
+  tds: "TDS",
+  co_emp: "Co Emp",
+  pf_esi: "PF / ESI",
   bank: "Bank details",
   cycle: "Pay cycle",
   rate: "Rate per shift",

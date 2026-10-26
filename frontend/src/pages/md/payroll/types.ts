@@ -39,6 +39,9 @@ export type Totals = {
   totalDeductions: number;
   netPay: number;
   employerStatutory: number;
+  /** Tax deducted at source from employees on the TDS list (part of `totalDeductions`; a separate remittance from PF and
+   *  ESI). 0 when nobody had TDS; absent on an answer from before the TDS redesign. */
+  tdsDeducted?: number;
   employerCost: number;
   headcount: number;
   slips: number;
@@ -60,7 +63,10 @@ export type ChangeKey =
   | "employerCostPerHead"
   | "overtimeSharePct";
 
-export type ChangeMap = Record<ChangeKey, Change | null>;
+export type ChangeMap = Record<ChangeKey, Change | null> & {
+  /** The change in TDS deducted (`pct` is null when last month had none); absent on an older answer. */
+  tdsDeducted?: Change | null;
+};
 
 export type MonthBlock = { month: string; label: string; totals: Totals };
 
@@ -94,6 +100,8 @@ export type TrendRow = {
   costPerHead: number | null;
   overtimePay: number | null;
   overtimeSharePct: number | null;
+  /** TDS deducted in the month (null with no payroll; absent on an older answer). */
+  tdsDeducted?: number | null;
 };
 
 export type PayrollTrend = MdEnvelope & {
@@ -135,6 +143,8 @@ export type GroupLine = {
   costPerHead: number | null;
   lopDays: number | null;
   employerCost: number;
+  /** TDS deducted from the group's employees (0 when none; absent on an older answer). */
+  tdsDeducted?: number;
   sharePct: number | null;
   previous: { headcount: number; grossPay: number; costPerHead: number | null } | null;
   change: { grossPay: Change | null; costPerHead: Change | null; headcount: Change | null } | null;
@@ -208,12 +218,18 @@ export type PayrollComponents = MdEnvelope & {
   previousLabel?: string | null;
   earnings: ComponentLine[];
   grossPay?: ComponentLine;
+  /** The deduction heads that are not nil in either month: PF and ESI (Co Emp employees), `tds` (employees on the TDS
+   *  list: only listed when there is some), advance recovery, late deduction, other. */
   deductions: ComponentLine[];
   totalDeductions?: ComponentLine;
   netPay?: ComponentLine;
   employer: ComponentLine[];
   employerCost?: ComponentLine;
+  /** PF and ESI due (deducted plus the employer's estimated share). TDS is not in it. */
   statutoryDue?: number;
+  /** TDS deducted in the month and how many employees it was taken from; 0 / 0 when nobody is on the TDS list. */
+  tdsDeducted?: number;
+  tdsPeople?: number;
   payable?: { slips: number; netPay: number };
   statutoryBonus?: BonusBlock | null;
   netGap?: number;

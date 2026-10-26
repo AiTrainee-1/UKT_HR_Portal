@@ -198,7 +198,7 @@ The HR portal has a **sidebar** on the left with sections for each module. On mo
 Click **Add Employee** (top right). Fill in:
 - Personal details: Name, date of birth, gender, blood group, contact info
 - Professional details: Employee code, department, designation, date of joining
-- Salary details: Basic salary, allowances, PF/ESI membership
+- Salary details: Salary Amount and its 50% + 50% split (whether the employee pays PF / ESI is decided by the **Co Emp** switch, see below)
 - Documents: Upload Aadhaar, PAN, photographs, etc.
 
 > **Important:** The employee code is the system's unique identifier for an employee. It cannot be changed after it's used in any attendance or payroll record. Choose it carefully (e.g., format like `EMP001`).
@@ -247,6 +247,18 @@ Add many employees at once, or fix many existing ones, with Excel. **Staff and P
 - **Big files:** up to 5,000 employees and 10 MB per file. If a file is too big to process in one go the server tells you, **changes nothing**, and says how many rows to split it into; when you upload the parts, leave *employees not in the file* on **Keep**.
 - **Every file is checked first.** Nothing is saved when you choose the file: you see every row and what would happen to it, then press **Import / Apply**. The result shows the tallies and, for every row, the Excel row number, the employee code and name, the outcome (Created, Updated, Unchanged, Duplicate, Invalid, Failed, Not found, Skipped) and the reason or the fields that changed. **Needs attention** lists only the rows that did not go through. **Report** downloads the same as an Excel file.
 - **Employees missing from an update file:** if people of that kind are not in the file you uploaded, you are asked what to do with them: **leave them as they are** (the default), **make them Inactive**, or **delete them and all their data**. You can decide one by one, and deleting asks you to type DELETE. Nothing is ever removed on its own.
+
+#### Co Emp and TDS (Employees → Co Emp tab)
+
+**What it's for:** deciding **who pays PF and ESI** and **who has TDS** (tax deducted at source). Nothing else on this tab edits an employee: use the Employees list to edit, make inactive or delete.
+
+- **Co Emp is the PF / ESI switch.** Only an employee whose **Co Emp** switch is **ON** can ever have PF or ESI deducted, and then only if a PF or ESI rule in **Settings → PF & ESI** fits their salary. Every other employee has no PF and no ESI, whatever the rules say. The same switch keeps the employee visible in the company portal (CoPortal), exactly as before.
+- **Staff and Production are listed separately.** Each row shows the employee and the switch. Switching Co Emp on or off takes effect at the **next payroll generation**; payroll already generated is never changed.
+- **TDS: Tax Deducted at Source.** The **TDS** button (next to Inactive, Bulk Upload and Add Employee) opens the TDS list for Staff and Production. **Add Employee** asks for the **employee code** and a **TDS percentage** (more than 0, up to 100, two decimals at most). If the employee was Co Emp they are **moved out of Co Emp** into TDS automatically (they now have TDS instead of PF and ESI); an employee who was not Co Emp is simply added. The pencil changes the percentage later; the bin removes the employee from TDS, after which they have **neither** PF/ESI nor TDS until you switch Co Emp on again. Switching Co Emp on for an employee who is in TDS asks you first and takes them out of TDS. An employee is in **one** of the two, never both. TDS employees stay visible in the company portal.
+- **What TDS does in payroll.** TDS is the employee's TDS percentage of everything they **earned in the period** (the pay earned plus overtime for staff; the period's pay for production), rounded to paise, and it comes off the net pay. It shows as a **`TDS (10%)` line on that employee's salary slip**, in the payroll Details page, in a **TDS column** of the Salary Statement and the payroll reports, and in the **TDS Statement** report. Employees who are not on the TDS list never get a TDS line.
+- **How many employees have PF / ESI, and how many do not.** The **PF / ESI coverage** box at the top of the tab counts the active employees of each kind: **total**, **Co Emp**, **with PF**, **with ESI**, **with both**, **Co Emp but no PF or ESI** (no rule fits their salary), **TDS** and **not Co Emp** (so no PF or ESI). A Production worker who is Co Emp but has no generated payroll yet shows as **not evaluated**, because production pay changes every period. **Download Excel** and **Download PDF** give the same numbers with one row per employee (one sheet or section for Staff and one for Production); the same report is in **Reports → Payroll & Salary → PF / ESI Coverage**. A branch login only sees its own branch.
+- **Who can do it.** Anyone with the Employees permission can read the tab; switching Co Emp and changing TDS needs Edit. Every TDS change is written to the audit log.
+- **When you start using this.** From now on PF and ESI depend on this switch. **Until you switch Co Emp on for them, employees who used to get PF / ESI get none on the next payroll generation.** Already generated payroll is not recomputed. The PF and ESI settings that existed before were carried over as rules, so after you switch the right people on, the percentages are what they were.
 
 #### Separating an Employee (Making Inactive)
 When an employee resigns or is terminated:
@@ -541,7 +553,8 @@ For each pending punch verification:
 - Late attendance deductions (per the Late Detection policy in Settings)
 - Without-Permission (WP) deductions
 - Approved advance repayments (EMI deductions)
-- PF and ESI deductions if applicable
+- PF and ESI deductions (only for employees switched on as **Co Emp**, by the rules in Settings → PF & ESI)
+- TDS (only for employees on the **TDS** list: their percentage of what they earned)
 
 #### Generating Payroll (Step by Step)
 
@@ -555,7 +568,7 @@ For each pending punch verification:
 8. After payment is made, mark the payroll as **Paid**.
 
 #### Salary Slips
-- After finalizing, salary slips can be **downloaded** as PDF for each employee.
+- After finalizing, salary slips can be **downloaded** as PDF for each employee. An employee on the TDS list has a **`TDS (10%)`** line (their own percentage) in the deductions; nobody else has a TDS line.
 - Use **Bulk Export** to download all slips for the month as a ZIP file.
 - Alternatively, slips can be **emailed** to employees (requires SMTP to be configured in Settings), or sent via **WhatsApp** if WhatsApp is configured (see `backend.md`).
 - Employees can also download their own slips from the Employee portal.
@@ -576,7 +589,7 @@ The page is about **one month** at a time. Use the arrows or the Month / Year bo
 **The Details page.** Click **Details** on a card (or an employee's name in the Salary tab, or **Open details** on an issue) to open that payroll on a page of its own. **Back to Payroll** (or the browser's Back button) returns to the same month, view and filters. The page shows the figures (gross, deductions, net, and a gross-to-net bar), how the salary was worked out, the rules it was generated under and whether they changed since, every issue with its date, a calendar of the month day by day (what each day counted as, the first and last punch, what was flagged), the pay and deductions in detail (late deduction, advances, overtime, bonus), whether the employee's bank, IFSC, PF and ESI details are in place, and the earlier payrolls. **Previous / Next** move through the month's payrolls; **Mark as paid**, **Payslip** (view / download), **Export** (workbook, issues as Excel or CSV, Print) and **Settings** are in the header. Everything on the page is read from what payroll stored: nothing on it recalculates the pay.
 
 **Salary tab: the Salary Statement.** The month's salary in the format of the printed statement ("Salary Statement From 01-09-2026 To 30-09-2026"): grouped by department with a running serial number, a total per department and a grand total. Columns: SNO, ID NO, Name, Designation, Basic salary, Total, Present, CL, LOP, HD, Total Days, PTRL, Others Allow, E salary, T.Advance, Advance, ESI, PF, TDS, Others, Lop& PSAmt, Total Deduction, NET and Remarks. **Scroll** shows it as a table; **Pages** shows the paper preview ("Page 1 of n"). Search and the department / status filters narrow it, and **Export** gives **Excel**, **PDF** or **Print** of the rows shown (the totals are worked out again for them). Each row opens its Details (click the name), can have its bonus and deductions adjusted (pencil) and be marked paid (**Pay**).
-- How the columns are worked out: *Basic* is the first salary-split portion (Basic + DA + Retaining Allowance); *Total* is the monthly salary; *PTRL* is the Petrol allowance and *Others Allow* the rest of the second portion; *Present* is the days paid as worked (a half day counts 0.5) without Casual Leave, *CL* the approved Casual Leave days, *LOP* the working days minus Total Days; *E salary* is the salary earned for the days paid plus overtime and bonus; *T.Advance* is the advance balance before this month's recovery and *Advance* what was recovered this month; *Others* is the late deduction plus anything HR added; *NET* is the saved net payable. *Lop& PSAmt* (the pay lost to LOP) is for information and is not part of Total Deduction. **TDS is not tracked by the HRMS and is always 0**; the Notes printed under the statement say so.
+- How the columns are worked out: *Basic* is the first salary-split portion (Basic + DA + Retaining Allowance); *Total* is the monthly salary; *PTRL* is the Petrol allowance and *Others Allow* the rest of the second portion; *Present* is the days paid as worked (a half day counts 0.5) without Casual Leave, *CL* the approved Casual Leave days, *LOP* the working days minus Total Days; *E salary* is the salary earned for the days paid plus overtime and bonus; *T.Advance* is the advance balance before this month's recovery and *Advance* what was recovered this month; *Others* is the late deduction plus anything HR added; *NET* is the saved net payable. *Lop& PSAmt* (the pay lost to LOP) is for information and is not part of Total Deduction. **TDS** is the tax deducted at source from an employee on the TDS list (their TDS percentage of the pay earned) and is 0 for everybody else; *Others* never includes it. *ESI* and *PF* are 0 for employees who are not Co Emp. The Notes printed under the statement say so.
 - The PDF uses a standard font: characters outside the Latin alphabet (for example Tamil) print as "?" and the rupee sign as "Rs".
 
 **Payslip tab.** The month's salary slips with search, department and "Not yet emailed" filters; **View PDF**, **Download PDF**, **Email** and **WhatsApp** per employee, **Bulk Send**, **Bulk WhatsApp** and **Bulk Download All** for the whole month, and **Export** of the register.
@@ -617,7 +630,7 @@ The **Compensation** page (sidebar) has a **CTC Breakdown** tab that lists every
 
 followed by **Employer PF**, **Employer ESI**, **Gross Monthly** and **Annual CTC**.
 
-- **Employer PF** = the PF rate (Settings → Payroll → Payroll Rules) × the **first portion** (Basic + DA + Retaining Allowance). Employer ESI = the ESI rate × the salary, only while the salary is within the ESI ceiling. Annual CTC = (monthly salary + employer PF + employer ESI) × 12.
+- **Employer PF** = the percentage of the PF rule that fits the employee (Settings → PF & ESI) × the **first portion** (Basic + DA + Retaining Allowance). **Employer ESI** = the percentage of the ESI rule that fits × the same first portion. An employee who is not Co Emp (or is on the TDS list) has no employer PF or ESI. Annual CTC = (monthly salary + employer PF + employer ESI) × 12.
 - An employee whose split was never saved (added before the split existed) shows the **automatic** 50% + 50% split with an amber **AUTO SPLIT** tag; the page says how many. Open their Edit Employee page and save to record it — the totals do not change.
 - An employee with no monthly salary (paid per shift) shows dashes.
 - **Export to Excel** includes the same columns plus the two portion totals and whether the split is *Recorded* or *Automatic*. The Report Center's *Employer Cost / CTC Statement* uses the very same figures.
@@ -748,6 +761,16 @@ Production payroll is not paid by calendar month. Every production employee is p
 
 **Who is paid on which page** is decided on **Employees → Production Employees** (see below): an employee is paid only on the page of the cycle they are assigned to, and an employee who is not assigned yet is in no payroll at all.
 
+**The production Bonus has its own settings.** Staff and production employees no longer share one bonus rate: **Settings → Staff Payroll → Bonus** holds the *staff* bonus rate, wage ceiling and eligibility limit, and **Settings → Production Payroll → Pay & Bonus** holds the *production* ones. Each employee is calculated with the settings of their own kind (the bonus preview, the generated register and the reports all agree), and a unit can have its own production values like it can for staff. The financial-year start month is one value for staff and production (**Staff Payroll → Payroll Rules**). Set it from the company (administrator) login: the bonus calculation reads the value of the employee's own unit, while the reports and the MD portal read the company's, so a different value saved from a unit's login would make the same financial year mean different months in different places. When this was introduced the production values were set equal to what production was already paid under, so **no bonus changed** until you edit a production value.
+
+**The production ceilings apply to each payslip, not to a month.** A production payslip holds the pay of one pay period (a week, two weeks or four weeks), so the bonus works like this: for every payslip of the financial year it takes the payslip's pay or the wage ceiling, whichever is lower, adds them up, and takes the bonus rate of that sum; the worker is eligible when the latest payslip of the year is at or below the eligibility limit. A year holds 52 Weekly payslips, 26 BiWeekly payslips or 13 Monthly payslips (a production month is four weeks), so one ceiling means very different things on the three cycles: choose the ceiling and the limit for the cycle the worker is paid on. Example with production rate 12%, wage ceiling 5,000 and eligibility limit 15,000:
+
+- **Weekly (52 payslips).** Paid 2,000 a week: base 52 x 2,000 = 104,000, bonus 12,480. Paid 6,000 a week: each payslip counts only 5,000, base 52 x 5,000 = 260,000, bonus 31,200, and the worker is still eligible because 6,000 is under 15,000. Paid 16,000 in a week: not eligible.
+- **BiWeekly (26 payslips).** Paid 4,000 each: base 104,000, bonus 12,480. Paid 7,000 each (about 15,000 a month): base 26 x 5,000 = 130,000, bonus 15,600, eligible. Paid 16,000 each: not eligible.
+- **Monthly (13 payslips).** Paid 4,000 each: base 52,000, bonus 6,240. Paid 10,000 each: base 13 x 5,000 = 65,000, bonus 7,800. Paid 16,000 each: not eligible.
+
+The same yearly pay of about 130,000 earns 15,600 on the Weekly and BiWeekly cycles and 7,800 on the Monthly cycle. The Bonus screen says **Applied per payslip** for this reason.
+
 **Where the periods come from:** **Settings → Production Payroll → Weekly / BiWeekly / Monthly** — the weekday a week starts on (any of the seven: a Monday week runs Monday to Sunday, a Wednesday week Wednesday to Tuesday, a Sunday week Sunday to Saturday) and the date the first period starts. Weekly needs no date; BiWeekly and Monthly do (it decides how the weeks pair up), and their page says so until it is set. The same tabs hold each cycle's free late days and late-deduction slabs.
 
 #### Production Employees (Employees → Production Employees)
@@ -774,7 +797,7 @@ Generating is safe to repeat: employees who already have payroll for the period 
 Each cycle page (Weekly, BiWeekly, Monthly) is built like the Staff Payroll page, for **one pay period** at a time (chosen in the Pay period box, or by typing a date inside it). The tab, the period, the view and the filters are kept in the page's address, so a reload and Back from a Details page return to the same screen.
 - **Payroll tab:** the same dashboard and the same four views as Staff Payroll: **Records**, **Issues** (every detection of the period with the day it was detected: absent days, late arrivals, missing punches, half shifts, **No attendance** for a worker with no shift at all in the period, late deductions, advance recovery, missing bank / PF / ESI details), **Skipped** (the employees on the cycle who cannot be paid: no salary per shift, or dates that overlap payroll already paid, with the reason) and **Rules** (the cycle's period and late rules from Settings → Production Payroll, and the rules each worker is paid under). **Export** gives the payroll register (Excel / CSV) and **Export bank file** the bank sheet.
 - **Employees tab:** the cycle's roster for the period, each worker marked Not generated / Generated - pending / Paid / Cannot be generated, with their rules and issues, **Generate** for one worker (or **Generate again** for a pending payslip) and **Details** for a generated one.
-- **Salary tab: the Production Salary Statement** for the period, grouped by department, with the columns SNO, ID NO, Name, Designation, Rate / shift, Days worked, Absent, Late, Shifts, E salary, T.Advance, Advance, ESI / EF, PF, Others, Total Deduction, NET and Remarks (Scroll / Pages views, Excel / PDF / Print, adjust and Pay on each row). *E salary* is shifts earned × rate per shift plus HR bonus.
+- **Salary tab: the Production Salary Statement** for the period, grouped by department, with the columns SNO, ID NO, Name, Designation, Rate / shift, Days worked, Absent, Late, Shifts, E salary, T.Advance, Advance, ESI / EF, PF, TDS, Others, Total Deduction, NET and Remarks (Scroll / Pages views, Excel / PDF / Print, adjust and Pay on each row). *E salary* is shifts earned × rate per shift plus HR bonus.
 - **Payslip tab:** the cycle's salary slips only.
 - **Details page:** the same page as for staff, with the production figures: shifts earned × rate per shift, the day-by-day shifts, the late deduction and its free days.
 
@@ -1019,6 +1042,27 @@ Configures the automatic late penalty rules:
 - **Late Slabs:** After the free allowance is used, each additional late arrival triggers a salary deduction. Example: "After 3 lates total, each additional late = 0.5 shift deduction."
 - **Without-Permission (WP) Slabs:** Separate table for unplanned absences (no prior leave approval). Same structure as late slabs.
 
+##### Permission Deduction Slabs (Settings → Late Detection → Staff)
+
+**What it's for:** deciding what an *excess permission* costs. Each employee may have a number of approved permissions every month that protect the day (the **Permission monthly cap**, 3 by default). An approved permission **beyond** the cap protects nothing: it is an *excess permission*. Until now every excess permission was simply one more mark in the late pool, priced by the same free marks and late slabs as a late arrival. With **Permission Deduction Slabs** you can price them on their own, with a free allowance and a slab table of their own, written the same way as the late slabs. It is for **staff only** (production permissions are never charged) and applies to **everybody in the company**: it is not set per branch, and only an administrator can change it.
+
+**It is OFF unless you turn it on, and OFF = nothing changes.** While the switch is off, every number on every payslip, report and employee screen is exactly what it was before this existed, whatever is typed in the free allowance and the table. The switch cannot be turned on while the table is empty (you are asked to add at least one slab first).
+
+**The settings**
+- **Switch:** turns the whole feature on or off.
+- **Free excess permissions a month:** how many excess permissions cost nothing (0 to 999).
+- **Slabs:** rows of *"from this many billable permissions"* and *"shifts to deduct"* (the first number is a whole number from 1 to 999, the shifts from 0 to 31 with up to two decimals, at most 50 rows). The **highest row the count reaches applies**, and the **last row keeps applying beyond itself**. Rows are kept in ascending order and a repeated number keeps only the last row you typed.
+
+**What changes when it is ON**
+1. The excess permissions **leave the late pool**: the late pool then counts only late arrivals and early departures, and the late free marks and late slabs no longer see permissions.
+2. Excess permissions are counted by themselves: *billable permissions = excess permissions - free excess permissions* (never below 0). The deduction is the shifts of the highest slab row reached, times the employee's daily rate.
+3. The payslip shows it as **its own line, "Permission deduction"**, next to the late deduction, and it is included in the total deductions and in the net salary.
+4. **One incident is never charged twice.** If the day an excess permission was approved for was also a late arrival (or early departure) on the same side, that day stays **one late mark in the late pool** and the permission is *not* charged again.
+
+**Worked example.** Cap 3, free excess permissions 2, slabs *from 1 = 0.25 shift, from 3 = 0.5 shift, from 6 = 1 shift*, daily rate 1,000. An employee with 8 approved permissions in the month has 5 excess permissions, 3 billable (5 - 2): the highest row reached is *from 3*, so 0.5 shift = **500** is deducted. With 4 approved permissions there is 1 excess permission, inside the 2 free ones: nothing is deducted. With 3 approved or fewer: nothing. (With the switch **off**, the same 5 excess permissions would simply be 5 more marks in the late pool, priced by the late slabs.)
+
+**Where you see it:** the payslip and the payroll **Details** page (the *Permission deduction* line and its rule), the **Rules** tab and the Details page's rules (with *changed since this payroll was generated* when you edit them later), the **Late Detection** and **Permission** reports, and the employee's own My Shift screen. A payslip that was already generated is never changed by this setting: generate it again to apply a change.
+
 ---
 
 #### Compensation
@@ -1195,13 +1239,51 @@ Changes here apply to all **newly generated** documents. Previously generated do
 
 ---
 
+#### PF & ESI (Super Admin only to change)
+
+**What it's for:** the rules that decide **how much PF and ESI each Co Emp employee pays**. They apply **only to employees switched on in Employees → Co Emp** (see above); everybody else pays no PF and no ESI, and employees on the TDS list pay TDS instead. The old flat PF / ESI rates, the ESI ceiling, the production salary bands and the "payroll rules" switches no longer exist: this tab replaces all of them.
+
+**Who can change it.** Only the **Super Admin**. Every other login sees the same page **read-only**, showing the rules their own unit's employees are paid under.
+
+**The two pages.** **Staff** and **Production** each have a list of **PF rules** and a list of **ESI rules**. They are separate lists on purpose, so PF and ESI can have different limits (for example PF below 25,000 and ESI below 30,000). Each rule is one row:
+
+| Column | Meaning |
+|---|---|
+| **Rule name** | A label for you (shown in payroll details, reports and the Rules view) |
+| **Range based on** | What the From / To limits are measured on: **Basic salary**, **Basic + DA + Retaining Allowance**, or **Full monthly salary** |
+| **From (₹)** and **To (₹)** | The limits, both included. **To = 0 means no upper limit** |
+| **Percentage (%)** | The PF or ESI percentage for employees who fit the range |
+
+You can **add**, **edit** and **delete** rules. The **first rule that fits** an employee applies, and an employee who fits no rule pays none of that kind. Ranges inside one list must not overlap (the page names the two rules that do). One **Save PF & ESI Rules** button saves all four lists; if somebody else saved first you are asked to reload and apply your change again.
+
+**What the percentage is taken from.** The percentage is applied to **Basic + DA + Retaining Allowance**, the first 50% of the salary (see *Salary Split*), reduced for days not paid in the same way as the rest of the pay. ESI is taken from the same amount as PF. The **range** decides who is eligible: it is measured on the employee's **full monthly** figure of the basis you chose (never on a part month), so a short month cannot move someone into or out of a rule. **Staff** use the recorded salary split; **Production** workers are tested on their **monthly estimate** (the period's pay × 4 for Weekly, × 2 for BiWeekly, × 1 for Monthly) and the percentage is taken from the first 50% of the period's pay.
+
+> **Careful with "Basic".** If no split is recorded for an employee, the automatic split gives **Basic only one sixth of the salary** (the first half is shared by Basic, DA and Retaining Allowance). So a rule "**Basic** below 25,000" covers salaries **up to 150,000** unless HR records a split. For "**salary** below 25,000", choose **Full monthly salary** as *Range based on*.
+
+**Worked examples.**
+- Staff, salary 20,000, Co Emp, PF rule "up to 25,000 Basic, 12%" and ESI rule "up to 30,000 Basic, 0.75%": the automatic split gives Basic 3,333.33 and a first portion of 10,000, so the employee fits both. For a full month PF = 12% of 10,000 = **1,200** and ESI = 0.75% of 10,000 = **75**. If 22 of the month's 24 working days are paid, the first portion earned is 9,166.67: PF **1,100.00**, ESI **68.75**.
+- Staff, salary 30,000, on **TDS at 10%**: TDS = 10% of 30,000 = **3,000** for a full month, no PF and no ESI, net pay 27,000.
+- Production, Weekly pay of 5 shifts × 500 = 2,500, Co Emp, PF rule "Full monthly salary up to 20,000, 12%": the monthly estimate is 2,500 × 4 = 10,000, which fits; PF = 12% of the first 50% of the period's pay (1,250) = **150**.
+
+**All units or one unit.** The scope picker at the top (Super Admin only) chooses whose rules you are looking at. **All units (global)** are the rules every unit follows. You can also pick a **unit** (a branch) and give it a rule set **of its own**: it replaces the global rules for that unit's employees and shows, read-only, in that unit's logins. A unit with no rule set of its own follows the global rules; **Reset to global** gives a unit back to them. Rules are judged by the **employee's** unit when payroll is generated.
+
+**When you change a rule.** It applies to payroll generated **after** the change. Payroll already generated keeps the figures it was generated with, and is never recomputed by changing a rule or a Co Emp switch. The Details page of a payroll shows the rule it was priced with and warns when the rules have changed since.
+
+**Rollout.** Until HR switches **Co Emp** on for the employees who should pay PF / ESI, **employees who used to get PF / ESI get none on the next generation**. The old PF / ESI settings were converted into rules automatically, so the percentages and limits you had are already in the lists.
+
+#### What NOT to do in PF & ESI
+- ❌ Do not expect a rule to charge anyone who is not switched on as Co Emp: it never will.
+- ❌ Do not use **Basic** for a "salary below X" limit unless splits are recorded: choose **Full monthly salary**.
+- ❌ Do not change rules between generating a month and paying it and expect the generated slips to change: regenerate deliberately if that is what you want.
+
+---
+
 #### Payroll (Staff)
 
 | Setting | What it controls |
 |---------|-----------------|
 | Pay Cycle | The start and end dates of the monthly pay period for staff |
-| PF Rate | Employer and employee provident fund contribution percentage |
-| ESI Rate | Employee State Insurance contribution percentage |
+| PF and ESI | Moved to the **PF & ESI** tab (rules by salary range, only for Co Emp employees) |
 | Payable Components | Which allowances are active (HRA, transport, medical, etc.) |
 
 ---
@@ -1350,7 +1432,7 @@ On every page: the period and unit/department filters at the top; **Needs your a
 
 ### 4.12 SMS Control (Codes by SMS)
 
-**What it's for:** Employees get a one-time code (a 6-digit number) when they sign in with a code, when they forgot their password and when they set their first password. SMS Control lets HR choose whether those codes arrive by **WhatsApp** (the default) or by **SMS**, and shows whether it is working. Salary slips, alerts and approvals stay on WhatsApp either way.
+**What it's for:** Employees get a one-time code (4 digits when it comes by SMS, 6 digits on WhatsApp) when they sign in with a code, when they forgot their password and when they set their first password. SMS Control lets HR choose whether those codes arrive by **WhatsApp** (the default) or by **SMS**, and shows whether it is working. Salary slips, alerts and approvals stay on WhatsApp either way.
 
 **Why SMS:** the WhatsApp number that sent the codes was restricted by WhatsApp twice, and an employee without a code cannot sign in. SMS works on every phone, with no internet, and costs a few paise for each message.
 
@@ -1375,7 +1457,7 @@ On every page: the period and unit/department filters at the top; **Needs your a
 **The limits that protect you** (you can change them in Settings → Limits):
 - A code works for 5 minutes, and only once.
 - An employee waits 60 seconds before asking again, and can ask for 5 codes an hour.
-- A code is cancelled after 5 wrong tries.
+- A code is cancelled after 5 wrong tries (SMS codes have only 4 digits, so this limit cannot be raised above 5).
 - One phone number receives at most 5 SMS an hour.
 - The company sends at most 300 SMS an hour and 1,500 a day.
 - After 3 failed sends in 10 minutes, SMS pauses for 10 minutes by itself.
@@ -1467,6 +1549,7 @@ This applies to every request that asks for a date: **Leave** (a single day, sev
 **Downloading a Slip:**
 - Click on any month to download the salary slip as a PDF.
 - The PDF is generated with the company branding configured in Settings.
+- If tax is deducted at source from you (you are on the TDS list), your slip has a **TDS** line with your percentage; otherwise it has none.
 
 ---
 
@@ -1537,7 +1620,7 @@ Employees can sign in, reset a forgotten password or set a first password with a
 
 **How it works**
 1. Type your **Employee Code**. You never type a phone number: the code goes to the mobile number HR has registered for you, and the screen shows only its last four digits.
-2. Press **Send code**. The 6-digit code arrives in a few seconds.
+2. Press **Send code**. The code (4 digits by SMS, 6 on WhatsApp) arrives in a few seconds.
 3. Type the code. It works **once** and only for a few minutes (the screen tells you how long).
 4. For a forgotten or first password, you then choose a new password of at least 8 characters.
 
@@ -1567,7 +1650,7 @@ flowchart TD
     F --> G[Present Days]
     F --> H[LOP / Late Deductions]
     F --> I[Advance EMI Deductions]
-    F --> J[PF / ESI]
+    F --> J[PF / ESI / TDS]
     G & H & I & J --> K[Draft Payroll Created]
     K --> L[HR reviews each employee's pay]
     L --> M{All correct?}
@@ -1810,7 +1893,7 @@ When an HR user's permission for a specific module is set to "View Only," they c
 | **Payroll** | Do not generate payroll twice for the same month — always check if it's already been generated. |
 | **Payroll** | Do not finalize payroll if you're unsure about any record. Re-check first. |
 | **Advances** | Do not approve advances where the EMI exceeds what the employee can afford. |
-| **Settings** | Do not change payroll settings (PF rates, pay components) mid-month if payroll is not yet generated. |
+| **Settings** | Do not change payroll settings (PF & ESI rules, pay components) mid-month if payroll is not yet generated. |
 | **Backup** | Do not restore from a backup unless it is truly necessary — it will erase all data created after the backup date. |
 | **User Management** | Do not give Department Approver access to employees who haven't been briefed. |
 

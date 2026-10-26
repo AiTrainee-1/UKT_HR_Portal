@@ -1,8 +1,8 @@
 /**
  * Worked examples for the Payroll tab, computed with the payroll engine's own formulas, so the figures a preview shows
  * are the figures a payslip would print:
- *   staff PF / ESI / OT pay   backend/api/payroll_views.py  _generate_staff_payroll
- *   production PF / ESI       backend/api/payroll_views.py  _generate_production_payroll (flat rates and salary bands)
+ *   staff pay / OT pay        backend/api/payroll_views.py  _generate_staff_payroll
+ *   production pay            backend/api/payroll_views.py  _generate_production_payroll
  *   statutory bonus           backend/api/growth_views.py   _calculate_bonus_for_employee, _fy_label_for_date, _fy_month_years
  *   overtime                  backend/api/overtime.py       detect_overtime_for_month
  *   salary pay day            backend/api/md_portal/analytics/payroll.py  _pay_day, _due_status_items
@@ -79,11 +79,6 @@ export type StaffPayInput = {
   workingDays: number;
   /** Days paid: present shifts plus paid leave (a half day counts 0.5). */
   daysPaid: number;
-  /** Settings -> Payroll -> "Deduct PF and ESI from staff pay". */
-  rulesOn: boolean;
-  pfRate: number;
-  esiRate: number;
-  esiCeiling: number;
   /** Announced OT "pay" days in the month, and whether the OT & Compensation features are on. */
   otDays?: number;
   otOn?: boolean;
@@ -95,18 +90,14 @@ export type StaffPay = {
   hra: number;
   dailyRate: number;
   ot: number;
-  pf: number;
-  esi: number;
-  /** True when the full monthly salary is at or below the ESI ceiling (and the ESI rate is above 0). */
-  esiApplies: boolean;
-  deductions: number;
+  /** Pay plus OT pay: PF, ESI and TDS are not part of these examples (they have their own tab, PF & ESI). */
   net: number;
 };
 
 /**
- * One staff payslip's pay, PF and ESI in paise. Basic is 50% (and HRA 20%) of the salary, pro-rated by the days paid:
- * fixed in the engine, whatever the employee's recorded Salary Split says. PF = Basic x PF rate (no wage ceiling).
- * ESI = pay earned (without OT pay) x ESI rate, only when the FULL monthly salary is at or below the ceiling.
+ * One staff payslip's pay in paise: the salary pro-rated by the days paid, plus OT pay. Basic is 50% (and HRA 20%) of the
+ * salary earned, pro-rated the same way. PF and ESI are not worked out here: their rules are on the PF & ESI tab and its
+ * own examples (./pf-esi/preview.ts).
  */
 export function staffPay(input: StaffPayInput): StaffPay {
   const salary = toPaise(input.salary);
@@ -117,28 +108,10 @@ export function staffPay(input: StaffPayInput): StaffPay {
   const hra = divRoundHalfUp(divRoundHalfUp(salary * 20, 100) * days, working);
   const dailyRate = divRoundHalfUp(salary * 100, working);
   const ot = input.otOn && input.otDays ? dailyRate * input.otDays : 0;
-  let pf = 0;
-  let esi = 0;
-  let esiApplies = false;
-  if (input.rulesOn) {
-    pf = input.pfRate > 0 ? percentOf(basic, input.pfRate) : 0;
-    esiApplies = input.esiRate > 0 && salary <= toPaise(input.esiCeiling);
-    esi = esiApplies ? percentOf(gross, input.esiRate) : 0;
-  }
-  const deductions = pf + esi;
-  return { gross, basic, hra, dailyRate, ot, pf, esi, esiApplies, deductions, net: gross + ot - deductions };
+  return { gross, basic, hra, dailyRate, ot, net: gross + ot };
 }
 
 // ── production payslip ──
-
-/** One salary band of Settings -> Payroll -> Production PF/EF, as stored (values may be anything an old client sent). */
-export type PfEfRule = {
-  label?: unknown;
-  minSalary?: unknown;
-  maxSalary?: unknown;
-  pfRate?: unknown;
-  efRate?: unknown;
-};
 
 /** The "estimated monthly pay" factor of a production payslip that belongs to no pay cycle: the old fixed period pay x 2. */
 export const NO_CYCLE_MONTHLY_FACTOR = 2;
@@ -148,20 +121,12 @@ export type ProductionPayInput = {
   shifts: number;
   /** The employee's own Salary Per Shift (₹). */
   ratePerShift: number;
-  /** Flat rates: "Deduct flat-rate PF and ESI from production pay" and its three values. */
-  flatOn: boolean;
-  pfRate: number;
-  esiRate: number;
-  esiCeiling: number;
-  /** Salary bands: their own switch and rows. */
-  bandsOn: boolean;
-  bands: PfEfRule[];
   /** Late deduction already priced in paise (Production Payroll -> Late Detection). */
   latePenalty?: number;
   /**
-   * What the period's pay is multiplied by to get the "estimated monthly pay" the bands and the ESI ceiling are tested
-   * on: 4 on the Weekly cycle, 2 on BiWeekly, 1 on Monthly (a production month is four weeks). Left out it is 2, the
-   * rule payroll keeps for a payslip that belongs to no cycle.
+   * What the period's pay is multiplied by to get the "estimated monthly pay" the PF / ESI rules are tested on (their
+   * "Full monthly salary" basis): 4 on the Weekly cycle, 2 on BiWeekly, 1 on Monthly (a production month is four weeks).
+   * Left out it is 2, the rule payroll keeps for a payslip that belongs to no cycle.
    */
   monthlyFactor?: number;
 };
@@ -170,138 +135,17 @@ export type ProductionPay = {
   gross: number;
   /** "Estimated monthly pay" = the period's pay x the cycle's factor (4 Weekly, 2 BiWeekly, 1 Monthly). */
   monthlyEstimate: number;
-  /** Which mechanism decided PF / ESI: a salary band, the flat rates, or nothing. */
-  source: "band" | "flat" | "none";
-  /** The matching band (1-based position in the list) when source is "band". */
-  band: { position: number; label: string } | null;
-  pfRate: number;
-  esiRate: number;
-  pf: number;
-  esi: number;
   latePenalty: number;
+  /** Pay less the late penalty (PF, ESI and TDS are not part of these examples). */
   net: number;
 };
 
-/** A stored number the way the engine reads it: `Decimal(str(value or 0))`; null when it cannot be read. */
-function engineNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === "" || value === 0 || value === false) return 0;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "string" && /^\s*[+-]?(\d+\.?\d*|\.\d+)\s*$/.test(value)) return Number(value);
-  return null;
-}
-
-/**
- * The first band (in list order) whose range holds `monthlyEstimatePaise`: Min <= estimate and (Max <= 0 or estimate
- * <= Max), both ends included. Rows whose Min or Max cannot be read are skipped, as the engine does.
- */
-export function matchingBand(bands: PfEfRule[], monthlyEstimatePaise: number): number {
-  const estimate = monthlyEstimatePaise / 100;
-  for (let i = 0; i < bands.length; i++) {
-    const band = bands[i];
-    if (!band || typeof band !== "object") continue;
-    const low = engineNumber(band.minSalary);
-    const high = engineNumber(band.maxSalary);
-    if (low === null || high === null) continue;
-    if (estimate >= low && (high <= 0 || estimate <= high)) return i;
-  }
-  return -1;
-}
-
-/**
- * One production payslip: gross = shifts x rate per shift. PF / ESI: a matching salary band wins (even while the flat
- * switch is off; its EF % has no ceiling test); otherwise the flat rates when their switch is on (ESI only while the
- * estimated monthly pay is at or below the ceiling); otherwise none. The late penalty comes off take-home pay.
- */
+/** One production payslip: gross = shifts x rate per shift; the late penalty comes off take-home pay. */
 export function productionPay(input: ProductionPayInput): ProductionPay {
   const gross = divRoundHalfUp(Math.round(input.shifts * 100) * toPaise(input.ratePerShift), 100);
   const monthlyEstimate = gross * (input.monthlyFactor ?? NO_CYCLE_MONTHLY_FACTOR);
   const latePenalty = input.latePenalty ?? 0;
-  const index = input.bandsOn ? matchingBand(input.bands, monthlyEstimate) : -1;
-  let result: Pick<ProductionPay, "source" | "band" | "pfRate" | "esiRate" | "pf" | "esi">;
-  if (index >= 0) {
-    const band = input.bands[index];
-    const pfRate = engineNumber(band.pfRate) ?? 0;
-    const esiRate = engineNumber(band.efRate) ?? 0;
-    result = {
-      source: "band",
-      band: { position: index + 1, label: typeof band.label === "string" ? band.label : "" },
-      pfRate,
-      esiRate,
-      pf: pfRate > 0 ? percentOf(gross, pfRate) : 0,
-      esi: esiRate > 0 ? percentOf(gross, esiRate) : 0,
-    };
-  } else if (input.flatOn) {
-    result = {
-      source: "flat",
-      band: null,
-      pfRate: input.pfRate,
-      esiRate: input.esiRate,
-      pf: input.pfRate > 0 ? percentOf(gross, input.pfRate) : 0,
-      esi: input.esiRate > 0 && monthlyEstimate <= toPaise(input.esiCeiling) ? percentOf(gross, input.esiRate) : 0,
-    };
-  } else {
-    result = { source: "none", band: null, pfRate: 0, esiRate: 0, pf: 0, esi: 0 };
-  }
-  return { gross, monthlyEstimate, latePenalty, ...result, net: gross - result.pf - result.esi - latePenalty };
-}
-
-export type BandIssue = { kind: "overlap" | "gap" | "open-top" | "unreadable" | "never"; text: string };
-
-/**
- * What a list of salary bands leaves to chance: two bands that overlap (the higher one in the list wins), estimates no
- * band covers (gaps, or nothing above the highest band), rows the engine skips, and rows that can never match.
- * Estimates are whole paise, so a gap is any paisa between two bands.
- */
-export function bandIssues(bands: PfEfRule[]): BandIssue[] {
-  const issues: BandIssue[] = [];
-  const ranges: { position: number; low: number; high: number }[] = [];
-  bands.forEach((band, i) => {
-    const low = engineNumber(band?.minSalary);
-    const high = engineNumber(band?.maxSalary);
-    if (low === null || high === null) {
-      issues.push({ kind: "unreadable", text: `Band ${i + 1} has a Min or Max that is not a number: it is skipped.` });
-      return;
-    }
-    const top = high <= 0 ? Infinity : high;
-    if (top < low) {
-      issues.push({ kind: "never", text: `Band ${i + 1} can never match: its Max is below its Min.` });
-      return;
-    }
-    ranges.push({ position: i + 1, low: toPaise(low), high: top === Infinity ? Infinity : toPaise(top) });
-  });
-  for (let a = 0; a < ranges.length; a++) {
-    for (let b = a + 1; b < ranges.length; b++) {
-      const from = Math.max(ranges[a].low, ranges[b].low);
-      const to = Math.min(ranges[a].high, ranges[b].high);
-      if (from <= to) {
-        const until = to === Infinity ? "upwards" : `to ${formatPaise(to)}`;
-        issues.push({
-          kind: "overlap",
-          text: `Bands ${ranges[a].position} and ${ranges[b].position} overlap from ${formatPaise(from)} ${until}: band ${ranges[a].position} wins there.`,
-        });
-      }
-    }
-  }
-  if (ranges.length > 0) {
-    const sorted = [...ranges].sort((x, y) => x.low - y.low);
-    let covered = -1; // highest paisa covered so far
-    for (const r of sorted) {
-      if (r.low > covered + 1) {
-        issues.push({
-          kind: "gap",
-          text: `An estimated monthly pay from ${formatPaise(covered + 1)} to ${formatPaise(r.low - 1)} matches no band.`,
-        });
-      }
-      covered = Math.max(covered, r.high);
-    }
-    if (covered !== Infinity) {
-      issues.push({
-        kind: "open-top",
-        text: `An estimated monthly pay above ${formatPaise(covered)} matches no band.`,
-      });
-    }
-  }
-  return issues;
+  return { gross, monthlyEstimate, latePenalty, net: gross - latePenalty };
 }
 
 // ── statutory bonus ──

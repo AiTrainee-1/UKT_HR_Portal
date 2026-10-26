@@ -172,6 +172,73 @@ class OtherDatasets(Fixture):
         )
         self.assertEqual(r["rows"][1]["sum_net_salary"], 5000.0)
 
+    def test_tds_is_a_slip_figure_like_pf_and_esi(self):
+        slips = (
+            (self.a, "Staff TDS", "5200", "10", "0", "0"),
+            (self.b, "Production TDS", "150", "5", "0", "0"),
+            (self.c, "Co Emp", "0", None, "1200", "75"),
+        )
+        for n, (emp, _, tds, percent, pf, esi) in enumerate(slips):
+            SalarySlip.objects.create(
+                employee=emp,
+                month=9,
+                year=2026,
+                slip_number=f"TDS{n}",
+                gross_salary=Decimal("20000"),
+                pf_deduction=Decimal(pf),
+                esi_deduction=Decimal(esi),
+                tds_deduction=Decimal(tds),
+                tds_percent=Decimal(percent) if percent else None,
+                total_deductions=Decimal(tds) + Decimal(pf) + Decimal(esi),
+            )
+        r = self.run_query(
+            {
+                "dataset": "salary_slips",
+                "group_by": ["department"],
+                "metrics": [
+                    {"fn": "sum", "field": "tds_deduction"},
+                    {"fn": "avg", "field": "tds_percent"},
+                    {"fn": "max", "field": "tds_percent"},
+                    {"fn": "sum", "field": "pf_deduction"},
+                ],
+            }
+        )
+        by = {row["department"]: row for row in r["rows"]}
+        self.assertEqual(
+            by["Dsl Stitching"],
+            {
+                "department": "Dsl Stitching",
+                "sum_tds_deduction": 5350.0,
+                "avg_tds_percent": 7.5,
+                "max_tds_percent": 10.0,
+                "sum_pf_deduction": 0.0,
+            },
+        )
+        self.assertEqual(by["Dsl Cutting"]["sum_tds_deduction"], 0.0)
+        self.assertIsNone(by["Dsl Cutting"]["avg_tds_percent"])  # nobody there is on the TDS list
+        self.assertEqual(by["Dsl Cutting"]["sum_pf_deduction"], 1200.0)
+
+    def test_slips_with_tds_can_be_filtered_and_counted(self):
+        for n, (emp, tds) in enumerate(((self.a, "5200"), (self.b, "150"), (self.c, "0"))):
+            SalarySlip.objects.create(
+                employee=emp,
+                month=9,
+                year=2026,
+                slip_number=f"TDSF{n}",
+                gross_salary=Decimal("20000"),
+                tds_deduction=Decimal(tds),
+                tds_percent=Decimal("10") if tds != "0" else None,
+            )
+        r = self.run_query(
+            {"dataset": "salary_slips", "filters": [{"field": "tds_deduction", "op": "gt", "value": "0"}]},
+            type="staff",
+        )
+        self.assertEqual(r["rows"], [{"count": 1}])  # only A is staff; B is production
+        r = self.run_query(
+            {"dataset": "salary_slips", "filters": [{"field": "tds_percent", "op": "not_null"}]},
+        )
+        self.assertEqual(r["rows"], [{"count": 2}])
+
     def test_visits_know_only_the_unit_and_say_that_other_filters_do_not_apply(self):
         visitor = Visitor.objects.create(name="Guest", phone="1")
         VisitorVisit.objects.create(
@@ -263,6 +330,37 @@ class Refusals(Fixture):
 
 
 class Catalog(TestCase):
+    def test_tds_is_declared_beside_pf_and_esi_with_the_same_rules(self):
+        slips = Q.DATASETS["salary_slips"]
+        pf, esi = slips.field("pf_deduction"), slips.field("esi_deduction")
+        for name in ("tds_deduction", "tds_percent"):
+            f = slips.field(name)
+            self.assertEqual((f.kind, f.measure, f.source), ("number", True, name), name)
+            self.assertEqual((f.kind, f.measure), (pf.kind, pf.measure))
+        self.assertEqual((pf.kind, esi.kind), ("number", "number"))
+        self.assertIn("tds_deduction (number, measure)", Q.catalog_text())
+        self.assertIn("tds_percent (number, measure)", Q.catalog_text())
+        self.assertEqual(slips.person_fields, ())  # salary only ever as slip totals, never by person
+
+    def test_no_dataset_exposes_a_person_or_a_private_detail(self):
+        private = (
+            "first_name",
+            "last_name",
+            "employee_code",
+            "phone",
+            "bank",
+            "email",
+            "pan",
+            "aadhaar",
+            "uan",
+            "number",
+        )
+        for dataset in Q.DATASETS.values():
+            for f in dataset.fields:
+                source = f.source if isinstance(f.source, str) else f.name
+                for word in private:
+                    self.assertNotIn(word, source, f"{dataset.name}.{f.name}")
+
     def test_every_dataset_is_described_for_the_model(self):
         text = Q.catalog_text()
         for name in Q.DATASETS:

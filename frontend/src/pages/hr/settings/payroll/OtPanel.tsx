@@ -25,21 +25,18 @@ const block = (id: string) => ({ id, ...payrollText(id) });
 export function OtPanel({
   featuresOn,
   onFeatures,
-  staffRates,
   branchLogin,
   readOnly,
 }: {
   /** The master switch as it stands; it saves itself as soon as it is changed. */
   featuresOn: boolean;
   onFeatures: (enabled: boolean) => void;
-  /** Staff PF / ESI as on the Payroll Rules sub-tab, for the take-home figures. */
-  staffRates: { rulesOn: boolean; pfRate: number; esiRate: number; esiCeiling: number };
   branchLogin: boolean;
   readOnly: boolean;
 }) {
   const [confirmFeaturesOff, setConfirmFeaturesOff] = useState(false);
 
-  const month = { salary: 20_000, workingDays: 26, daysPaid: 26, otDays: 2, ...staffRates };
+  const month = { salary: 20_000, workingDays: 26, daysPaid: 26, otDays: 2 };
   const withOt = staffPay({ ...month, otOn: true });
   const withoutOt = staffPay({ ...month, otOn: false });
 
@@ -91,15 +88,15 @@ export function OtPanel({
             </>
           }
           preview={
-            <PreviewCard scenario="A ₹20,000 staff salary, 26 working days all paid, 2 overtime days assigned as Payment (1 shift each), with the PF and ESI of the Payroll Rules sub-tab.">
+            <PreviewCard scenario="A ₹20,000 staff salary, 26 working days all paid, 2 overtime days assigned as Payment (1 shift each). PF, ESI and TDS come off afterwards, on their own tab.">
               <PreviewLine
                 label={`Features on${featuresOn ? " (as set now)" : ""}`}
-                result={`OT pay ${formatPaise(withOt.ot)} - take-home ${formatPaise(withOt.net)}`}
+                result={`OT pay ${formatPaise(withOt.ot)} - pay ${formatPaise(withOt.net)}`}
                 tone={featuresOn ? "info" : "neutral"}
               />
               <PreviewLine
                 label={`Features off${featuresOn ? "" : " (as set now)"}`}
-                result={`no OT pay - take-home ${formatPaise(withoutOt.net)}; the 2 records are kept`}
+                result={`no OT pay - pay ${formatPaise(withoutOt.net)}; the 2 records are kept`}
                 tone={featuresOn ? "neutral" : "info"}
               />
             </PreviewCard>

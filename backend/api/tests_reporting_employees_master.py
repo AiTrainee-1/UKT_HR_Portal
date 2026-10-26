@@ -90,6 +90,9 @@ class _World(TestCase):
         cls.des_sup = Designation.objects.create(title="Supervisor", department=cls.d_sew1, level="senior")
 
         def mk(code, first, last, **kw):
+            # Co Emp: the only employees PF and ESI apply to, so the only ones the statutory report asks PF / ESI / UAN
+            # numbers of (StatutoryComplianceTests rely on it; ReviewFixTests cover the other categories)
+            kw.setdefault("co_emp_enabled", True)
             return Employee.objects.create(employee_code=code, first_name=first, last_name=last, **kw)
 
         cls.e1 = mk(
@@ -258,7 +261,7 @@ class _World(TestCase):
         return r
 
     def make(self, code, **kw):
-        base = dict(first_name=code, last_name="Extra", employment_type="staff", status="active")
+        base = dict(first_name=code, last_name="Extra", employment_type="staff", status="active", co_emp_enabled=True)
         base.update(kw)
         return Employee.objects.create(employee_code=code, **base)
 
@@ -2323,15 +2326,15 @@ class AdversarialReviewTests(_World):
             self.assertIn("UAN missing", issues)
             self.assertNotIn("shared with", issues)
 
-    def test_esi_number_is_not_demanded_of_staff_above_the_esi_wage_ceiling(self):
+    def test_pf_esi_and_uan_numbers_are_not_demanded_of_an_employee_who_is_not_co_emp(self):
         e = self.make(
-            "HIGH1", branch=self.b1, department=self.d_cut1, salary_amount=Decimal("50000"), pf_number="TN/TPR/900",
-            uan_number="100000000099", bank_account="1234567890123", bank_ifsc="HDFC0001234",
+            "HIGH1", branch=self.b1, department=self.d_cut1, salary_amount=Decimal("50000"), co_emp_enabled=False,
+            bank_account="1234567890123", bank_ifsc="HDFC0001234",
         )  # fmt: skip
         for cat in ("aadhaar_card", "pan_card", "bank_passbook"):
             self.doc(e, cat)
         rows = {r["employeeCode"]: r for r in self.get("statutory-compliance", includeCompliant="true")["rows"]}
-        self.assertNotIn("ESI number missing", rows["HIGH1"]["issues"] or "")
+        self.assertEqual(rows["HIGH1"]["issues"], None)  # PF and ESI never apply to them: nothing is missing
 
     # -- permissions / leaks ----------------------------------------------------------------------
     def test_exits_register_hides_resignation_reasons_from_a_role_without_the_resignations_module(self):
@@ -2555,7 +2558,7 @@ class ReviewFixTests(_World):
         for fmt in ("xlsx", "pdf"):
             self.export("service-milestones", fmt, employeeStatus="all")
 
-    # -- statutory: placeholders and the ESI wage ceiling ----------------------------------------------
+    # -- statutory: placeholders and who owes PF / ESI numbers -----------------------------------------
     def test_every_placeholder_spelling_is_a_missing_number_and_never_a_duplicate(self):
         for code, ph in (("P1", "NIL"), ("P2", "not applicable"), ("P3", "0000000000"), ("P4", "n.a."), ("P5", "None")):
             self.make(code, branch=self.b1, pf_number=ph, esi_number=ph, uan_number=ph, bank_account=ph, bank_ifsc=ph)
@@ -2594,50 +2597,50 @@ class ReviewFixTests(_World):
         body = self.get("statutory-compliance", user=user, includeCompliant="true", **params)
         return body, {r["employeeCode"]: r["issues"] or "" for r in body["rows"]}
 
-    def test_esi_number_is_owed_up_to_the_ceiling_and_not_above_it(self):
-        self._high_earner("AT", salary_amount=Decimal("21000"))  # payroll deducts ESI at or below the ceiling
-        self._high_earner("JUST", salary_amount=Decimal("21000.01"))
-        self._high_earner("HIGH1")
-        self._high_earner("NOSAL", salary_amount=None)  # unknown salary is never assumed to be above the ceiling
-        self._high_earner("PROD", employment_type="production", salary_amount=None, salary_per_shift=Decimal("5000"))
+    def test_pf_esi_and_uan_numbers_are_owed_by_co_emp_employees_only(self):
+        self.make("CO1", branch=self.b1, department=self.d_cut1)  # Co Emp: PF and ESI apply to them
+        self.make(
+            "TDS1", branch=self.b1, department=self.d_cut1, co_emp_enabled=False, tds_enabled=True,
+            tds_percent=Decimal("10"),
+        )  # fmt: skip
+        self.make("NOT1", branch=self.b1, department=self.d_cut1, co_emp_enabled=False)
         body, issues = self._issues()
-        self.assertIn("ESI number missing", issues["AT"])
-        self.assertNotIn("ESI number missing", issues["JUST"])
-        self.assertNotIn("ESI number missing", issues["HIGH1"])
-        self.assertIn("ESI number missing", issues["NOSAL"])
-        self.assertIn("ESI number missing", issues["PROD"])  # production pay comes from shifts: not exempted here
-        # the counts follow: the exempt two are neither 'missing ESI' nor spoil 'fully compliant'
-        self.assertEqual(cards(body)["ESI number missing"], 4 + 3)  # E2, E6, E7, E10 + AT, NOSAL, PROD
-        self.assertEqual(issues["HIGH1"], "")
-        note = next(n for n in body["notes"] if "ESI wage ceiling" in n)
-        self.assertIn("2 staff member(s)", note)
-        self.assertIn("Rs 21,000", note)
+        for owed in ("PF number missing", "ESI number missing", "UAN missing"):
+            self.assertIn(owed, issues["CO1"], owed)
+            self.assertNotIn(owed, issues["TDS1"], owed)
+            self.assertNotIn(owed, issues["NOT1"], owed)
+        # they still have other gaps, so they are listed; the Category column says who they are
+        rows = {r["employeeCode"]: r for r in body["rows"]}
+        self.assertEqual(
+            (rows["CO1"]["category"], rows["TDS1"]["category"], rows["NOT1"]["category"], rows["E1"]["category"]),
+            ("Co Emp", "TDS", "Not Co Emp", "Co Emp"),
+        )
+        # the counts follow: only Co Emp employees can be missing a PF / ESI number or a UAN
+        c = cards(body)
+        self.assertEqual((c["PF number missing"], c["ESI number missing"], c["UAN missing"]), (3 + 1, 4 + 1, 4 + 1))
+        note = next(n for n in body["notes"] if "employee(s) are not Co Emp" in n)
+        self.assertIn("2 employee(s)", note)
+        self.assertIn("TDS employees included", note)
+        text = " ".join(body["notes"]).lower()
+        self.assertNotIn("ceiling", text)
+        self.assertIn("only required of co emp employees", text)
 
-    def test_an_esi_number_that_is_present_is_still_format_checked_above_the_ceiling(self):
-        self._high_earner("HIGH1", esi_number="9999")
+    def test_a_pf_or_esi_deduction_is_still_flagged_for_a_number_that_is_missing(self):
+        # whoever got PF / ESI deducted needs the number, whatever the employee's category is today
+        emp = self.make("NOT1", branch=self.b1, department=self.d_cut1, co_emp_enabled=False)
+        SalarySlip.objects.create(employee=emp, month=8, year=2026, slip_number="S-N1-08", pf_deduction=100)
+        _body, issues = self._issues()
+        self.assertIn("PF deducted in payroll but no PF number", issues["NOT1"])
+        self.assertNotIn("PF number missing", issues["NOT1"])
+
+    def test_an_employee_who_is_not_asked_for_a_number_is_still_format_and_duplicate_checked(self):
+        self._high_earner("HIGH1", esi_number="9999", co_emp_enabled=False)
+        self._high_earner("HIGH2", pf_number="TN/TPR/001", co_emp_enabled=False)  # E1's PF number
         _body, issues = self._issues()
         self.assertEqual(issues["HIGH1"], "ESI number should be 10 or 17 digits")
+        self.assertIn("PF number shared with E1", issues["HIGH2"])
 
-    def test_the_esi_ceiling_follows_the_settings_of_the_employees_own_branch(self):
-        from .models import BranchSettingsOverride, PayrollSettings
-
-        self._high_earner("U1_HIGH", branch=self.b1)
-        self._high_earner("U2_HIGH", branch=self.b2)
-        BranchSettingsOverride.objects.create(branch=self.b1, overrides={"esi_applicable_below": "60000"})
-        _body, issues = self._issues(employeeStatus="active")
-        self.assertIn("ESI number missing", issues["U1_HIGH"])  # Unit 1's own ceiling is Rs 60,000
-        self.assertNotIn("ESI number missing", issues["U2_HIGH"])  # Unit 2 keeps the company one (Rs 21,000)
-        # ... whoever is asking: the Unit 1 user gets the same answer for their people
-        _body, issues = self._issues(user=self.branch_user)
-        self.assertIn("ESI number missing", issues["U1_HIGH"])
-        # and the company-wide ceiling moves both
-        PayrollSettings.objects.update(esi_applicable_below=Decimal("80000"))
-        BranchSettingsOverride.objects.all().delete()
-        _body, issues = self._issues()
-        self.assertIn("ESI number missing", issues["U1_HIGH"])
-        self.assertIn("ESI number missing", issues["U2_HIGH"])
-
-    def test_the_esi_ceiling_lookup_does_not_grow_with_the_number_of_staff(self):
+    def test_the_statutory_report_does_not_run_a_query_per_employee(self):
         def queries():
             self.client.get("/api/reports/run/statutory-compliance", {"includeCompliant": "true"}, **hdr(self.admin))
             with CaptureQueriesContext(connection) as q:
@@ -2646,7 +2649,7 @@ class ReviewFixTests(_World):
 
         before = queries()
         for i in range(15):
-            self._high_earner(f"H{i}", branch=(self.b1, self.b2)[i % 2])
+            self._high_earner(f"H{i}", branch=(self.b1, self.b2)[i % 2], co_emp_enabled=bool(i % 2))
         self.assertLessEqual(queries() - before, 1)
 
     # -- exits: confidential reasons -------------------------------------------------------------------

@@ -42,16 +42,17 @@ import {
 import { dateTime, inr, inr2, monthYear, plural } from "@/components/payroll/kit/format";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
 import { Avatar, BusyIcon, Chip, EmptyNote, KpiTile, SkeletonRows } from "@/components/payroll/kit/parts";
+import { hasTds, tdsAmount, tdsLabel } from "@/components/payroll/kit/statutory";
 import { cn } from "@/lib/utils";
 import { pageSlice } from "../records/records-logic";
 import {
   ALL_DEPARTMENTS,
   MONTH_NAMES,
-  REGISTER_COLUMNS,
   emailedDay,
   errorText,
   filterSlips,
   parseYear,
+  registerColumnsFor,
   registerFileStem,
   slipCycleLabel,
   slipDepartments,
@@ -251,6 +252,8 @@ export function PayslipsPanel({ kind, cycle, accent, testIdPrefix, month, year, 
 
   // ── the register ──
   const registerFile = registerFileStem(kind, cycle, period.month, period.year);
+  // two TDS columns join the register only when a slip listed has TDS
+  const registerColumns = registerColumnsFor(filtered);
   const exportItems: ExportItem[] = [
     {
       key: "excel",
@@ -262,7 +265,7 @@ export function PayslipsPanel({ kind, cycle, accent, testIdPrefix, month, year, 
         const { exportTableToExcel } = await import("@/components/payroll/kit/export-table");
         await exportTableToExcel({
           rows: filtered,
-          columns: REGISTER_COLUMNS,
+          columns: registerColumns,
           filename: registerFile,
           sheetName: "Payslips",
           company: settings?.companyName || "UKTextiles",
@@ -279,7 +282,7 @@ export function PayslipsPanel({ kind, cycle, accent, testIdPrefix, month, year, 
       disabled: filtered.length === 0,
       run: async () => {
         const { exportTableToCsv } = await import("@/components/payroll/kit/export-table");
-        exportTableToCsv({ rows: filtered, columns: REGISTER_COLUMNS, filename: registerFile });
+        exportTableToCsv({ rows: filtered, columns: registerColumns, filename: registerFile });
       },
     },
   ];
@@ -583,6 +586,16 @@ export function PayslipsPanel({ kind, cycle, accent, testIdPrefix, month, year, 
                           <Chip tone="neutral" icon={CalendarRange}>
                             {slipPeriodText(slip)}
                           </Chip>
+                          {hasTds(slip) && (
+                            <span data-testid={`${p}-slip-tds-${slip.id}`}>
+                              <Chip
+                                tone="warning"
+                                title="Tax deducted at source, part of the deductions on this payslip"
+                              >
+                                {tdsLabel(slip)} {inr(tdsAmount(slip))}
+                              </Chip>
+                            </span>
+                          )}
                           {sent ? (
                             <Chip tone="success" icon={CheckCircle2} title={dateTime(slip.emailedAt)}>
                               Emailed {sent}

@@ -5,6 +5,7 @@ import type { PayCycle, SalarySlipItem } from "@/lib/api-client/custom-hooks";
 import { PAY_CYCLE_INFO } from "@/lib/api-client/custom-hooks";
 import { dateShort, dateTime, fileStem, monthYear, periodLabel } from "@/components/payroll/kit/format";
 import type { TableColumn } from "@/components/payroll/kit/export-table";
+import { withTdsColumns } from "@/components/payroll/kit/statutory";
 
 export const MONTH_NAMES = [
   "January",
@@ -156,6 +157,13 @@ export const REGISTER_COLUMNS: TableColumn<SalarySlipItem>[] = [
   { key: "netSalary", label: "Net", width: 14, type: "money" },
   { key: "emailedAt", label: "Emailed at", width: 20, value: (s) => (s.emailedAt ? dateTime(s.emailedAt) : "") },
 ];
+
+/**
+ * The register for the slips listed: the same columns, plus "TDS %" and "TDS" just before the deductions total when one
+ * of the slips has TDS (an employee on the TDS list). With no TDS slip it is `REGISTER_COLUMNS` itself.
+ */
+export const registerColumnsFor = (slips: readonly SalarySlipItem[]): TableColumn<SalarySlipItem>[] =>
+  withTdsColumns(REGISTER_COLUMNS, slips, "totalDeductions");
 
 /** "Payslip_register_Weekly_Feb_2026" / "Payslip_register_Staff_October_2026": a file name safe on every system. */
 export function registerFileStem(

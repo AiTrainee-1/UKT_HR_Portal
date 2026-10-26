@@ -29,6 +29,7 @@ test("an employee signs in with a WhatsApp OTP, end to end", async ({ request })
     otpActivate: true,
     passwordLogin: true,
     otpChannel: "whatsapp",
+    codeLength: 6,
   });
 
   // Ask for a code by Employee Code: it must be WhatsApped to the number on file.

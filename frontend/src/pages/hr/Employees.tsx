@@ -8,8 +8,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Switch } from "@/components/ui/switch";
-import { Skeleton } from "@/components/ui/skeleton";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
@@ -21,13 +19,17 @@ import {
 } from "@/lib/api-client";
 import {
   useListBranches, getListBranchesQueryKey,
-  useListEmployeesPaginated, useEmployeeCount, useUpdateEmployeeCoEmp,
+  useListEmployeesPaginated, useEmployeeCount,
 } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, UserCheck, UserX, Trash2, Eye, Pencil, UploadCloud } from "lucide-react";
+import { Landmark, Plus, Search, UserCheck, UserX, Trash2, Eye, Pencil, UploadCloud } from "lucide-react";
 import { DataPagination } from "@/components/ui/DataPagination";
+import { useUrlParams } from "@/components/payroll/kit/url-state";
+import { CoEmpTab } from "./co-emp/CoEmpTab";
+import { TdsPanel } from "./co-emp/TdsPanel";
+import { EMPLOYEES_URL_DEFAULTS, parseClass, parseEmployeesTab, type EmployeesTab } from "./co-emp/logic";
 
 export default function Employees() {
   const [, navigate] = useLocation();
@@ -39,11 +41,16 @@ export default function Employees() {
   // are still reachable -see the Inactive toggle in the header.
   const [statusFilter, setStatusFilter] = useState("active");
   const viewingInactive = statusFilter === "inactive";
-  const [typeFilter, setTypeFilter] = useState<"staff" | "production" | "coemp">("staff");
-  // "Co Emp" is a cross-cutting view (every employee, regardless of staff vs.
-  // production), not a real employmentType -so it's excluded from the filter
-  // sent to the server rather than treated as a third employmentType value.
+  // The tab, and inside Co Emp the class pill and the TDS panel, live in the address
+  // (/hr/employees?tab=coemp&type=production&view=tds): a reload or a pasted link lands on the same screen.
+  const [urlState, setUrlState] = useUrlParams(EMPLOYEES_URL_DEFAULTS);
+  const typeFilter: EmployeesTab = parseEmployeesTab(urlState.tab);
+  const coEmpClass = parseClass(urlState.type);
+  // "Co Emp" is not an employmentType: it is its own view (see co-emp/CoEmpTab.tsx) which lists ONE class at a time and
+  // asks the server for that class itself, so the roster below is not fetched at all while it is showing.
   const viewingCoEmp = typeFilter === "coemp";
+  const viewingTds = viewingCoEmp && urlState.view === "tds";
+  const selectTab = (tab: EmployeesTab) => setUrlState({ tab, type: "", view: "" });
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -72,9 +79,10 @@ export default function Employees() {
     search: debouncedSearch || undefined,
   };
 
+  // The roster (Staff / Production tabs) is only fetched while one of them is showing; Co Emp asks for its own list.
   const { data: pageData, isLoading, isPlaceholderData } = useListEmployeesPaginated({
     ...filterParams, page, pageSize,
-  });
+  }, { enabled: !viewingCoEmp });
   const paginatedEmployees = pageData?.results ?? [];
   const totalEmployees = pageData?.count ?? 0;
   const staffCount = pageData?.staffCount ?? 0;
@@ -86,13 +94,12 @@ export default function Employees() {
     departmentId: filterParams.departmentId,
     branchId: filterParams.branchId,
     status: "inactive",
-  });
+  }, { enabled: !viewingCoEmp });
 
   const { data: departments } = useListDepartments();
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
   const deleteMutation = useDeleteEmployee();
   const statusMutation = useUpdateEmployeeStatus();
-  const coEmpMutation = useUpdateEmployeeCoEmp();
 
   const totalPages = Math.max(1, Math.ceil(totalEmployees / pageSize));
 
@@ -132,60 +139,81 @@ export default function Employees() {
     });
   };
 
-  const handleToggleCoEmp = (employeeId: number, current: boolean) => {
-    coEmpMutation.mutate({ employeeId, enabled: !current }, {
-      onSuccess: () => { toast({ title: !current ? "Enabled for Co Emp" : "Disabled for Co Emp" }); refresh(); },
-      onError: () => toast({ title: "Update failed", variant: "destructive" }),
-    });
-  };
-
   return (
     <HrLayout>
       <div className="min-h-[calc(100vh-140px)] flex flex-col justify-between gap-6">
         <div className="space-y-5 flex-1">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black">Employees</h2>
-            <p className="text-muted-foreground text-sm mt-0.5">{totalEmployees} records</p>
-            {/* Staff / Production toggle */}
-            <div className="mt-2">
+            <p className="text-muted-foreground text-sm mt-0.5">
+              {viewingCoEmp
+                ? "Co Emp decides who PF/ESI applies to"
+                : `${totalEmployees} records`}
+            </p>
+            {/* Staff / Production / Co Emp toggle. The counts come from the roster list, which Co Emp does not fetch,
+                so they are left off there rather than shown stale. */}
+            <div className="mt-2" data-testid="employees-tabs">
               <PillTabs
                 items={[
-                  { value: "staff", label: "Staff", count: staffCount },
-                  { value: "production", label: "Production", count: productionCount },
+                  { value: "staff", label: "Staff", count: viewingCoEmp ? undefined : staffCount },
+                  { value: "production", label: "Production", count: viewingCoEmp ? undefined : productionCount },
                   { value: "coemp", label: "Co Emp" },
                 ]}
                 value={typeFilter}
-                onChange={(v) => setTypeFilter(v as "staff" | "production" | "coemp")}
+                onChange={(v) => selectTab(parseEmployeesTab(v))}
               />
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* Drives the same `statusFilter` the Select below does, rather
-                than adding a second source of truth -so the two controls can
-                never disagree about what the table is showing. */}
-            <Button
-              variant={viewingInactive ? "default" : "outline"}
-              onClick={() => setStatusFilter(viewingInactive ? "active" : "inactive")}
-              data-testid="button-toggle-inactive"
-              title={viewingInactive ? "Back to active employees" : "Show inactive employees only"}
-            >
-              <UserX size={16} className="mr-2" />
-              {viewingInactive ? "Viewing Inactive" : "Inactive"}
-              {!viewingInactive && inactiveCount > 0 && (
-                <span className="ml-2 rounded-full bg-gray-200 px-1.5 py-0.5 text-[10px] font-bold text-gray-700">
-                  {inactiveCount}
-                </span>
-              )}
-            </Button>
-            <Button variant="outline" onClick={() => navigate("/hr/employees/bulk-upload")} data-testid="button-bulk-upload">
-              <UploadCloud size={16} className="mr-2" /> Bulk Upload
-            </Button>
-            <Button onClick={() => navigate("/hr/employees/new")} data-testid="button-add-employee">
-              <Plus size={16} className="mr-2" /> Add Employee
-            </Button>
+            {viewingCoEmp ? (
+              // Co Emp has no Inactive / Bulk Upload / Add Employee here: one button opens the TDS panel (and closes it again).
+              <Button
+                variant={viewingTds ? "default" : "outline"}
+                onClick={() => setUrlState({ view: viewingTds ? "" : "tds" })}
+                aria-pressed={viewingTds}
+                data-testid="button-tds"
+              >
+                <Landmark size={16} className="mr-2" />
+                TDS – Tax Deducted at Source
+              </Button>
+            ) : (
+              <>
+                {/* Drives the same `statusFilter` the Select below does, rather
+                    than adding a second source of truth -so the two controls can
+                    never disagree about what the table is showing. */}
+                <Button
+                  variant={viewingInactive ? "default" : "outline"}
+                  onClick={() => setStatusFilter(viewingInactive ? "active" : "inactive")}
+                  data-testid="button-toggle-inactive"
+                  title={viewingInactive ? "Back to active employees" : "Show inactive employees only"}
+                >
+                  <UserX size={16} className="mr-2" />
+                  {viewingInactive ? "Viewing Inactive" : "Inactive"}
+                  {!viewingInactive && inactiveCount > 0 && (
+                    <span className="ml-2 rounded-full bg-gray-200 px-1.5 py-0.5 text-[10px] font-bold text-gray-700">
+                      {inactiveCount}
+                    </span>
+                  )}
+                </Button>
+                <Button variant="outline" onClick={() => navigate("/hr/employees/bulk-upload")} data-testid="button-bulk-upload">
+                  <UploadCloud size={16} className="mr-2" /> Bulk Upload
+                </Button>
+                <Button onClick={() => navigate("/hr/employees/new")} data-testid="button-add-employee">
+                  <Plus size={16} className="mr-2" /> Add Employee
+                </Button>
+              </>
+            )}
           </div>
         </div>
+
+        {viewingTds ? (
+          <TdsPanel
+            cls={coEmpClass}
+            onClassChange={(type) => setUrlState({ type })}
+            onBack={() => setUrlState({ view: "" })}
+          />
+        ) : (<>
 
         {/* Filters */}
         <Card>
@@ -237,7 +265,18 @@ export default function Employees() {
           </CardContent>
         </Card>
 
-        {/* Table */}
+        {viewingCoEmp ? (
+          <CoEmpTab
+            cls={coEmpClass}
+            onClassChange={(type) => setUrlState({ type })}
+            filters={{
+              departmentId: filterParams.departmentId,
+              branchId: filterParams.branchId,
+              status: filterParams.status,
+              search: filterParams.search,
+            }}
+          />
+        ) : (
         <Card>
           {viewingInactive && (
             <div className="flex items-center gap-2 border-b bg-amber-50/70 px-4 py-2.5">
@@ -260,7 +299,6 @@ export default function Employees() {
                   <TableHead className="hidden lg:table-cell">Phone</TableHead>
                   <TableHead className="hidden lg:table-cell">Salary</TableHead>
                   <TableHead>Status</TableHead>
-                  {viewingCoEmp && <TableHead>Co Emp</TableHead>}
                   <TableHead className="pr-4 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -273,7 +311,7 @@ export default function Employees() {
               >
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={viewingCoEmp ? 10 : 9} className="py-16">
+                    <TableCell colSpan={9} className="py-16">
                       <CircleLoader />
                     </TableCell>
                   </TableRow>
@@ -327,16 +365,6 @@ export default function Employees() {
                           {emp.status}
                         </StatusBadge>
                       </TableCell>
-                      {viewingCoEmp && (
-                        <TableCell>
-                          <Switch
-                            checked={emp.coEmpEnabled ?? false}
-                            onCheckedChange={() => handleToggleCoEmp(emp.id, emp.coEmpEnabled ?? false)}
-                            aria-label={`Toggle Co Emp for ${emp.firstName} ${emp.lastName}`}
-                            data-testid={`switch-coemp-${emp.id}`}
-                          />
-                        </TableCell>
-                      )}
                       <TableCell className="pr-4 text-right">
                         <div className="flex items-center gap-1 justify-end">
                           <ActionTooltip label="View profile" color="blue">
@@ -406,24 +434,28 @@ export default function Employees() {
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={viewingCoEmp ? 10 : 9} className="text-center py-12 text-muted-foreground">No employees found</TableCell>
+                    <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">No employees found</TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
           </CardContent>
         </Card>
+        )}
+        </>)}
       </div>
 
-      <DataPagination
-        page={page}
-        totalPages={totalPages}
-        onPageChange={setPage}
-        pageSize={pageSize}
-        onPageSizeChange={setPageSize}
-        totalItems={totalEmployees}
-        className="px-4 border-t bg-card rounded-lg shadow-sm shrink-0"
-      />
+      {!viewingCoEmp && (
+        <DataPagination
+          page={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
+          totalItems={totalEmployees}
+          className="px-4 border-t bg-card rounded-lg shadow-sm shrink-0"
+        />
+      )}
 
     </div>
     </HrLayout>

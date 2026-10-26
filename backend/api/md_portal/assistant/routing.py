@@ -20,7 +20,7 @@ DOMAIN_HINTS: dict[str, str] = {
     "employees": "employee headcount workforce staff people attrition tenure joiner leaver joined left age gender designation composition birthday anniversary milestone directory profile",
     "visitors": "visitor outpass gate guest entry exit pass visit",
     "tea-break": "tea break overrun",
-    "payroll": "payroll salary pay paid cost gross net deduction advance bonus slip wage ctc statutory pf esi",
+    "payroll": "payroll salary pay paid cost gross net deduction advance bonus slip wage ctc statutory pf esi tds tax",
     "recruitment": "recruitment hiring hire vacancy position applicant candidate interview resign resignation notice funnel opening joinee",
     "activity": "activity audit log login signin user sensitive action device logged",
     "dashboard": "briefing brief overview summary company attention insight overall everything",

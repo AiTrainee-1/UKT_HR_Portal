@@ -12,6 +12,8 @@ export function adjustTargetFromRun(run: PayrollRunItem, periodLabel: string): A
     otAmount: run.otAmount,
     bonus: run.bonus,
     deductions: run.deductions,
+    tdsDeduction: run.tdsDeduction,
+    tdsPercent: run.tdsPercent,
     finalSalary: run.finalSalary,
     notes: run.notes,
   };

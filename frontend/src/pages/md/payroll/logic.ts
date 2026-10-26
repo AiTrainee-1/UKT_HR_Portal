@@ -31,6 +31,18 @@ export function signedInrCompact(value: number | null | undefined): string {
   return `${value > 0 ? "+" : ""}${inrCompact(value)}`;
 }
 
+/** True when employees on the TDS list had TDS taken: the page shows a TDS figure only then, never "TDS ₹0". */
+export const hasTds = (amount: number | null | undefined): amount is number => amount != null && amount > 0;
+
+/** The sub-line of the TDS figure: how many employees it was taken from, and that it is not a PF / ESI due. */
+export function tdsSub(people: number | null | undefined): string {
+  const from =
+    people != null && people > 0
+      ? `From ${people} ${people === 1 ? "employee" : "employees"} on the TDS list`
+      : "From employees on the TDS list";
+  return `${from} · paid to the income-tax department, not part of the PF and ESI dues`;
+}
+
 export type DeltaView = { text: string; tone: Tone; direction: "up" | "down" | "flat" };
 
 /**

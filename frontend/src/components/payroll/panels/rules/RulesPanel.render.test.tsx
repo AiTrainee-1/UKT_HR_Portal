@@ -14,6 +14,7 @@ import { STAFF_SCOPE, PRODUCTION_SCOPE } from "../issues/fixtures";
 const h = vi.hoisted(() => ({
   rules: vi.fn(),
   settings: vi.fn(),
+  pfEsi: vi.fn(),
   refetch: vi.fn(),
   excel: vi.fn(),
   csv: vi.fn(),
@@ -27,6 +28,26 @@ vi.mock("@/lib/api-client/custom-hooks", async (original) => ({
   usePayrollRules: (...args: unknown[]) => h.rules(...args),
   usePayrollSettings: () => h.settings(),
 }));
+
+// the PF / ESI rule counts the note at the top reads (GET /api/pf-esi-settings)
+vi.mock("@/components/payroll/kit/statutory-rules", async (original) => ({
+  ...(await original<typeof import("@/components/payroll/kit/statutory-rules")>()),
+  usePfEsiRulesSlice: () => h.pfEsi(),
+}));
+
+const RULE = { id: "r1", label: "Below 25,000", basis: "basic", minAmount: 0, maxAmount: 25000, ratePercent: 12 };
+const pfEsiSlice = (over: Record<string, unknown> = {}) => ({
+  data: {
+    scope: { branchId: null, branchName: null, isOverride: false },
+    canEdit: true,
+    staff: { pfRules: [RULE], esiRules: [{ ...RULE, id: "r2", ratePercent: 0.75 }] },
+    production: { pfRules: [], esiRules: [] },
+    branches: [],
+    ...over,
+  },
+  isLoading: false,
+  isError: false,
+});
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,6 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   serve(makeRules());
   h.settings.mockReturnValue({ data: { companyName: "UK Textiles Test" } });
+  h.pfEsi.mockReturnValue(pfEsiSlice());
   h.excel.mockResolvedValue(undefined);
 });
 
@@ -150,7 +172,7 @@ describe("the rules configured on the Settings page", () => {
       "Four punches a day: in, lunch out, lunch in, out.",
     );
     expect(text(must("rules-group-1").querySelector("h4"))).toBe("Late deductions · 1 rule");
-    expect(text(must("rules-group-2").querySelector("h4"))).toBe("PF and ESI · 1 rule");
+    expect(text(must("rules-group-2").querySelector("h4"))).toBe("PF and ESI · 2 rules");
   });
 
   it("link each rule to the Settings page where it is changed", () => {
@@ -161,8 +183,36 @@ describe("the rules configured on the Settings page", () => {
     expect(must("rules-group-1").querySelector("a")?.getAttribute("href")).toBe(
       "/hr/settings?tab=late_detection#free-allowance",
     );
-    expect(must("rules-group-2").querySelector("a")?.getAttribute("href")).toBe("/hr/settings?tab=payroll#pf-rate");
-    expect(must("rules-settings").querySelectorAll('[data-testid="rule-link"]')).toHaveLength(4);
+    expect(must("rules-group-2").querySelector("a")?.getAttribute("href")).toBe(
+      "/hr/settings?tab=pf_esi#staff-pf-rules",
+    );
+    expect(must("rules-settings").querySelectorAll('[data-testid="rule-link"]')).toHaveLength(5);
+  });
+
+  it("start with who PF, ESI and TDS apply to, and where that is decided", () => {
+    mount();
+    const note = must("rules-statutory-note");
+    expect(text(note)).toContain("PF and ESI are deducted only from Co Emp employees");
+    expect(text(note)).toContain("Employees on the TDS list have TDS deducted at their own percentage instead");
+    expect(note.querySelector('a[href="/hr/settings?tab=pf_esi"]')).not.toBeNull();
+    expect(note.querySelector('a[href="/hr/employees"]')).not.toBeNull();
+    // rules are set for Staff: nothing to warn about
+    expect(q("rules-statutory-note-none")).toBeNull();
+  });
+
+  it("say so when no PF or ESI rule is set for this kind of payroll (read from Settings, never invented)", () => {
+    mount({ scope: PRODUCTION_SCOPE, accent: "amber" }); // the fake answer has no Production rules
+    expect(text(must("rules-statutory-note-none"))).toBe(
+      "No PF or ESI rules are set for Production: nobody will have PF or ESI deducted until rules are added.",
+    );
+    expect(must("rules-statutory-note").querySelector("a")?.className).toContain("text-amber-700");
+  });
+
+  it("stay silent about the rules when they could not be read", () => {
+    h.pfEsi.mockReturnValue({ data: undefined, isLoading: false, isError: true });
+    mount();
+    expect(q("rules-statutory-note")).not.toBeNull(); // the sentence on who it applies to is static
+    expect(q("rules-statutory-note-none")).toBeNull();
   });
 
   it("leave out a detail that is not there", () => {
@@ -271,10 +321,12 @@ describe("the rules assigned to each employee", () => {
     mount();
     click(must("rules-expand-PC-S1"));
     const pf = must("rules-detail-PC-S1").querySelector<HTMLElement>('[data-testid="rule-pf"]')!;
-    expect(text(pf.querySelector('[data-testid="rule-applied"]'))).toBe("Generated with 12% of basic");
+    expect(text(pf.querySelector('[data-testid="rule-applied"]'))).toBe(
+      "Generated with 10% of Basic + DA + Retaining (Co Emp)",
+    );
     expect(text(pf)).toContain("Changed since");
     expect(pf.querySelector('[data-testid="rule-link"]')?.getAttribute("href")).toBe(
-      "/hr/settings?tab=payroll#pf-rate",
+      "/hr/settings?tab=pf_esi#staff-pf-rules",
     );
     expect(text(pf.querySelector('[data-testid="rule-link"]'))).toBe("Edit in Settings");
   });

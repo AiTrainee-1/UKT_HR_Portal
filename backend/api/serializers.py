@@ -111,6 +111,9 @@ def employee_json(emp, department_name: str | None = None) -> dict:
         "passwordUpdatedAt": _dt(emp.password_updated_at),
         "locationTrackingEnabled": emp.location_tracking_enabled,
         "coEmpEnabled": emp.co_emp_enabled,
+        # TDS category (pf_esi.py): tax deducted at source, never together with Co Emp. tdsPercent is null unless tdsEnabled.
+        "tdsEnabled": emp.tds_enabled,
+        "tdsPercent": _float_or_none(emp.tds_percent) if emp.tds_enabled else None,
         "nationality": emp.nationality,
         "workstation": emp.workstation,
         "zone": emp.zone,

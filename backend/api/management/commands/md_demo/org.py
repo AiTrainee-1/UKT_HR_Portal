@@ -34,6 +34,7 @@ from api.models import (
     TeaBreakRule,
 )
 from api.permission_registry import MODULE_TREE
+from api.pf_esi import BASIS_FIRST_PORTION, BASIS_TOTAL, CLASS_PRODUCTION, CLASS_STAFF, KIND_ESI, KIND_PF, RULE_FIELDS
 
 from .common import DEMO_TAG, MD_USERNAME, QR_TOKEN_PREFIX, World, at
 
@@ -576,6 +577,31 @@ def build_leave_types(world: World) -> None:
     world.insert(LeaveType, fresh)
 
 
+def _demo_rule(rule_id: str, label: str, basis: str, high: int, rate: str) -> dict:
+    percent = Decimal(rate)  # stored the way the settings API stores a rule: a whole number as an int
+    return {
+        "id": rule_id,
+        "label": label,
+        "basis": basis,
+        "minAmount": 0,
+        "maxAmount": high,
+        "ratePercent": int(percent) if percent == percent.to_integral_value() else float(percent),
+    }
+
+
+#: The PF and ESI rules (Settings, PF & ESI) a Tirupur manufacturer would run: PF 12% when the first portion (Basic + DA +
+#: Retaining Allowance) is up to 15,000 a month, ESI 0.75% when the whole monthly salary is up to 21,000. They apply only to
+#: the employees HR marked Co Emp (people.py). Staff and production keep their own lists, as the real settings do.
+DEMO_PF_ESI_RULES: dict[str, list[dict]] = {
+    RULE_FIELDS[(klass, kind)]: [_demo_rule(f"demo-{klass}-{kind}", label, basis, high, rate)]
+    for klass in (CLASS_STAFF, CLASS_PRODUCTION)
+    for kind, label, basis, high, rate in (
+        (KIND_PF, "PF: first portion up to 15,000", BASIS_FIRST_PORTION, 15000, "12"),
+        (KIND_ESI, "ESI: salary up to 21,000", BASIS_TOTAL, 21000, "0.75"),
+    )
+}
+
+
 def build_settings(world: World) -> None:
     """Company settings the payroll and attendance engines read. A settings row that already exists is left as it is
     (the seeder adapts to it); a missing one is created with the rules a Tirupur manufacturer would run."""
@@ -592,14 +618,7 @@ def build_settings(world: World) -> None:
             slip_company_name="UK TEXTILES - H.O",
             slip_company_address="TIRUPUR",
             attendance_mode="strict",
-            pf_rate=Decimal("12"),
-            esi_rate=Decimal("0.75"),
-            esi_applicable_below=Decimal("21000"),
-            staff_payroll_rules_enabled=True,
-            prod_pf_rate=Decimal("12"),
-            prod_esi_rate=Decimal("0.75"),
-            prod_esi_applicable_below=Decimal("21000"),
-            prod_payroll_rules_enabled=True,
+            **DEMO_PF_ESI_RULES,
             ot_detection_enabled=True,
             ot_threshold_minutes=60,
             ot_compensation_type="pay",

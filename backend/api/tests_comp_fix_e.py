@@ -100,9 +100,11 @@ class MasterSwitchIsCompanyWideTests(CompBase):
 
         self.assertTrue(settings_for_employee(self.b_emp).compensation_feature_enabled)
         BranchSettingsOverride.objects.filter(branch=self.branch).update(
-            overrides={"compensation_feature_enabled": False, "pf_rate": "9"}
+            overrides={"compensation_feature_enabled": False, "bonus_percent": "9"}
         )
-        self.assertEqual(settings_for_employee(self.b_emp).pf_rate, Decimal("9"))  # other private values still apply
+        self.assertEqual(
+            settings_for_employee(self.b_emp).bonus_percent, Decimal("9")
+        )  # other private values still apply
 
     def test_a_branch_login_cannot_store_it(self):
         from .user_settings import persist_overlay, settings_for_employee

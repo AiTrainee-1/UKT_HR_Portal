@@ -11,8 +11,11 @@ import {
   noBridgeFixture,
   noExceptionsFixture,
   noPayrollSummary,
+  componentsFixture,
   statusFixture,
   summaryFixture,
+  withTdsFixture,
+  withTdsSummaryFixture,
 } from "./fixtures";
 import type { PayrollStatus } from "./types";
 
@@ -69,6 +72,7 @@ describe("Payroll Analysis page", () => {
     expect(textOf("md-payroll-kpi-gross")).toContain("includes ₹1,000 overtime");
     expect(textOf("md-payroll-kpi-gross")).toContain("-17.8%");
     expect(textOf("md-payroll-kpi-deductions-value")).toBe("₹2,195");
+    expect(textOf("md-payroll-kpi-deductions")).not.toContain("TDS"); // nobody on the TDS list: nothing about TDS
     expect(textOf("md-payroll-kpi-people-value")).toBe("7");
     expect(textOf("md-payroll-kpi-people")).toContain("5 staff · 2 production");
     expect(textOf("md-payroll-kpi-per-head-value")).toBe("₹15,798");
@@ -156,7 +160,70 @@ describe("Payroll Analysis page", () => {
     expect(textOf("md-payroll-components-net")).toContain("₹1,08,393");
     expect(textOf("md-payroll-components-payable")).toContain("₹63,145");
     expect(textOf("md-payroll-components-bonus")).toContain("₹8,000 not yet marked paid");
-    expect(textOf("md-payroll-components")).toContain("Income tax (TDS) and arrears are not recorded");
+    // PF, ESI and TDS now follow the Co Emp / TDS lists: the footnote and the statutory sub-line say so
+    expect(textOf("md-payroll-components")).toContain("TDS is shown only for employees on the TDS list");
+    expect(textOf("md-payroll-components")).toContain("Arrears are not recorded in this system");
+    expect(textOf("md-payroll-components")).not.toContain("Income tax (TDS) and arrears are not recorded");
+    expect(textOf("md-payroll-components-extras")).toContain("PF and ESI of Co Emp employees");
+    expect(by("md-payroll-components-deductions-tds")).toBeNull(); // no TDS employee this month: no empty TDS line
+    expect(by("md-payroll-components-tds")).toBeNull(); // ... and no empty TDS figure beside the statutory dues
+  });
+
+  it("lists TDS among the deductions when an employee on the TDS list had some", async () => {
+    page = await open({ "/api/md/payroll/components": withTdsFixture(componentsFixture) });
+    expect(textOf("md-payroll-components-deductions-tds")).toContain("TDS");
+    expect(textOf("md-payroll-components-deductions-tds")).toContain("₹2,500");
+    expect(textOf("md-payroll-components-deductions-deductions")).toContain("₹4,695");
+  });
+
+  it("keeps the TDS line between ESI and the advance recovery, where the server puts it", async () => {
+    page = await open({ "/api/md/payroll/components": withTdsFixture(componentsFixture) });
+    const heads = [...page.container.querySelectorAll('[data-testid="md-payroll-components-deductions"] tbody tr')].map(
+      (row) => row.getAttribute("data-testid")?.replace("md-payroll-components-deductions-", ""),
+    );
+    expect(heads).toEqual(["pf", "esi", "tds", "advance", "late", "deductions"]);
+  });
+
+  it("shows the TDS deducted beside the statutory dues, apart from them, when there is any", async () => {
+    page = await open({ "/api/md/payroll/components": withTdsFixture(componentsFixture) });
+    expect(textOf("md-payroll-components-tds")).toContain("TDS deducted");
+    expect(textOf("md-payroll-components-tds")).toContain("₹2,500");
+    expect(textOf("md-payroll-components-tds")).toContain("From 1 employee on the TDS list");
+    expect(textOf("md-payroll-components-tds")).toContain("not part of the PF and ESI dues");
+    // the dues themselves are unchanged: TDS is not one of them
+    expect(textOf("md-payroll-components-extras")).toContain("₹3,840");
+    // the server's own sentence about it is shown, and the popover explains the TDS rule
+    expect(textOf("md-payroll-components")).toContain("TDS of ₹2,500.00 was deducted from 1 employee");
+    await page.click('[data-testid="md-payroll-components"] [data-testid="provenance-button"]');
+    expect(document.body.textContent).toContain("TDS (tax deducted at source)");
+  });
+
+  it("explains the TDS rule in the components popover only where TDS is shown", async () => {
+    page = await open();
+    await page.click('[data-testid="md-payroll-components"] [data-testid="provenance-button"]');
+    expect(document.body.textContent).toContain("Statutory dues");
+    expect(document.body.textContent).not.toContain("TDS (tax deducted at source)");
+  });
+
+  it("says how much of the deductions is TDS on the deductions card, only when there is TDS", async () => {
+    page = await open({ "/api/md/payroll/summary": withTdsSummaryFixture(summaryFixture) });
+    expect(textOf("md-payroll-kpi-deductions-value")).toBe("₹4,695");
+    expect(textOf("md-payroll-kpi-deductions")).toContain("4.2% of gross pay · includes ₹2,500 TDS");
+    expect(textOf("md-payroll-kpi-net-value")).toBe("₹1.1 L");
+  });
+
+  it("still opens on an answer from before the TDS fields existed", async () => {
+    const { tdsDeducted: _a, ...totals } = summaryFixture.totals!;
+    const { tdsDeducted: _b, ...change } = summaryFixture.change!;
+    const { tdsDeducted: _c, tdsPeople: _d, ...components } = componentsFixture;
+    page = await open({
+      "/api/md/payroll/summary": { ...summaryFixture, totals, change },
+      "/api/md/payroll/components": components,
+    });
+    expect(textOf("md-payroll-kpi-deductions-value")).toBe("₹2,195");
+    expect(textOf("md-payroll-kpi-deductions")).not.toContain("TDS");
+    expect(textOf("md-payroll-components-payable")).toContain("₹63,145");
+    expect(by("md-payroll-components-tds")).toBeNull();
   });
 
   it("shows how pay is spread without naming anyone", async () => {

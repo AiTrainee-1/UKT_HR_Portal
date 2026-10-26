@@ -3,6 +3,12 @@ import { allModuleKeys } from "@/lib/permission-modules";
 import { SETTINGS_TAB_MODULE, SUPER_ADMIN_ONLY_TABS } from "./constants";
 import { SETTINGS_GROUPS, searchSettings } from "./kit/catalog";
 import { ALL_SETTINGS } from "./metas";
+import { ATTENDANCE_VIEW_OF } from "./AttendanceTab.meta";
+import { LATE_CYCLE_OF, LATE_VIEW_OF } from "./LateDetectionTab.meta";
+import { PAYROLL_SUB_TAB_OF } from "./PayrollTab.meta";
+import { PF_ESI_SUB_TAB_OF } from "./PfEsiTab.meta";
+import { PRODUCTION_SHIFT_VIEW_OF } from "./ProductionShiftsTab.meta";
+import { PRODUCTION_SUB_TAB_OF } from "./ProductionPayrollTab.meta";
 import { SETTINGS_TABS, SETTINGS_TAB_COMPONENTS } from "./tabs";
 
 // The Settings tab registry: every tab is in one group, has a permission key the Account Management role editor knows, a
@@ -83,6 +89,7 @@ describe("the Settings tab registry", () => {
     expect(order.indexOf("production_shifts")).toBe(order.indexOf("attendance") + 1);
     // and it is searchable, by the words HR would use
     expect(ALL_SETTINGS.filter((m) => m.tab === "production_shifts").map((m) => m.id)).toEqual([
+      "staff-shifts-where",
       "rules-enabled",
       "rules-effective-from",
       "rules-grace",
@@ -131,11 +138,191 @@ describe("the Settings tab registry", () => {
     expect(find("curl")).toContain("guide-examples");
   });
 
+  it("registers the PF & ESI tab in the Pay group with the Payroll permission, searchable, every block on one of its pages", () => {
+    const tab = SETTINGS_TABS.find((t) => t.id === "pf_esi");
+    expect(tab?.label).toBe("PF & ESI");
+    expect(tab?.group).toBe("pay");
+    // read by every login that may see Payroll settings; changing the rules is the super admin's alone, which the API decides
+    expect(SETTINGS_TAB_MODULE.pf_esi).toBe("settings.payroll");
+    expect(SUPER_ADMIN_ONLY_TABS.has("pf_esi")).toBe(false);
+    expect(tab?.purpose).toContain("Co Emp");
+    expect(tab?.usedBy.map((u) => u.to).filter(Boolean)).toEqual([
+      "/hr/payroll",
+      "/hr/production-payroll",
+      "/hr/employees",
+      "/hr/compensation/ctc-breakdown",
+      "/hr/reports",
+    ]);
+    // it sits with the payroll tabs, right after Production Payroll
+    const order = SETTINGS_TABS.filter((t) => t.group === "pay").map((t) => t.id);
+    expect(order.indexOf("pf_esi")).toBe(order.indexOf("production_payroll") + 1);
+    // the blocks the search can reach: whose rules, then both pages
+    expect(ALL_SETTINGS.filter((m) => m.tab === "pf_esi").map((m) => m.id)).toEqual([
+      "pf-esi-scope",
+      "staff-pf-esi-how",
+      "staff-pf-rules",
+      "staff-esi-rules",
+      "prod-pf-esi-how",
+      "prod-pf-rules",
+      "prod-esi-rules",
+    ]);
+    const find = (query: string) =>
+      searchSettings(ALL_SETTINGS, SETTINGS_TABS, query)
+        .filter((m) => m.tab === "pf_esi")
+        .map((m) => m.id);
+    expect(find("provident fund")).toEqual(expect.arrayContaining(["staff-pf-rules", "prod-pf-rules"]));
+    expect(find("employee state insurance")).toEqual(expect.arrayContaining(["staff-esi-rules", "prod-esi-rules"]));
+    expect(find("reset to global")).toEqual(["pf-esi-scope"]);
+    expect(find("who pays")).toEqual(expect.arrayContaining(["staff-pf-esi-how", "prod-pf-esi-how"]));
+    // each pf setting has a page, so a link opens it
+    expect(PF_ESI_SUB_TAB_OF["staff-esi-rules"]).toBe("staff");
+    expect(PF_ESI_SUB_TAB_OF["prod-pf-rules"]).toBe("production");
+    expect(PF_ESI_SUB_TAB_OF["pf-esi-scope"]).toBeUndefined();
+  });
+
+  it("no longer lists any of the old PF and ESI methods on the Payroll and Production Payroll tabs", () => {
+    const gone = [
+      "staff-pf-esi-switch",
+      "staff-pf-rate",
+      "staff-esi-rate",
+      "staff-esi-ceiling",
+      "prod-pf-esi-switch",
+      "prod-pf-rate",
+      "prod-esi-rate",
+      "prod-esi-ceiling",
+      "pf-ef-switch",
+      "pf-ef-rules",
+    ];
+    const payroll = ALL_SETTINGS.filter((m) => m.tab === "payroll").map((m) => m.id);
+    for (const id of gone) expect(payroll, id).not.toContain(id);
+    // Staff Payroll holds staff and company-wide settings only: the suggested rate per shift moved to Production Payroll
+    expect(payroll).toEqual([
+      "pay-day",
+      "fy-start-month",
+      "bonus-percent",
+      "bonus-wage-ceiling",
+      "bonus-eligibility-ceiling",
+      "compensation-features",
+    ]);
+    // the Production Payroll tab keeps a pointer, not a control
+    const production = ALL_SETTINGS.filter((m) => m.tab === "production_payroll" && m.id === "prod-pf-esi-where");
+    expect(production).toHaveLength(1);
+    expect(production[0].purpose).toContain("PF & ESI tab");
+  });
+
   it("keeps the old production wording out of the tabs that now point to Production Shifts", () => {
     const attendance = ALL_SETTINGS.filter((m) => m.tab === "attendance" && m.section === "Production workers");
-    expect(attendance.map((m) => m.id)).toEqual(["production-attendance", "production-late"]);
-    expect(attendance[0].title).toContain("Old production");
-    expect(attendance[0].purpose).toContain("Production Shifts tab");
+    expect(attendance.map((m) => m.id)).toEqual(["production-days-valued", "production-attendance", "production-late"]);
+    expect(attendance[1].title).toContain("Old production");
+    expect(attendance[1].purpose).toContain("Production Shifts tab");
     expect(SETTINGS_TABS.find((t) => t.id === "attendance")?.purpose).toContain("Production Shifts");
+  });
+
+  it("labels the payroll tabs Staff Payroll and Production Payroll, and keeps their ids (permission keys and addresses)", () => {
+    const label = (id: string) => SETTINGS_TABS.find((t) => t.id === id)?.label;
+    expect(label("payroll")).toBe("Staff Payroll");
+    expect(label("production_payroll")).toBe("Production Payroll");
+    expect(SETTINGS_TAB_MODULE.payroll).toBe("settings.payroll");
+    expect(SETTINGS_TAB_MODULE.production_payroll).toBe("settings.production_payroll");
+    expect(SETTINGS_TABS.find((t) => t.id === "payroll")?.purpose).toContain("company-wide");
+    // the pay tabs keep their order: Staff Payroll, Production Payroll, PF & ESI
+    const order = SETTINGS_TABS.filter((t) => t.group === "pay").map((t) => t.id);
+    expect(order.slice(0, 3)).toEqual(["payroll", "production_payroll", "pf_esi"]);
+  });
+
+  it("puts every Production Payroll setting on a sub-tab, and every moved setting on its new tab", () => {
+    const ids = (tab: string) => ALL_SETTINGS.filter((m) => m.tab === tab).map((m) => m.id);
+    expect(ids("production_payroll").sort()).toEqual(
+      [
+        "prod-shifts-earned",
+        "prod-pf-esi-where",
+        "prod-assigned-shifts",
+        ...["weekly", "biweekly", "monthly"].flatMap((c) => [`${c}-week-start`, `${c}-first-period`]),
+        "default-salary-per-shift",
+        "prod-bonus-percent",
+        "prod-bonus-wage-ceiling",
+        "prod-bonus-eligibility-ceiling",
+      ].sort(),
+    );
+    for (const id of ids("production_payroll")) expect(PRODUCTION_SUB_TAB_OF[id], id).toBeTruthy();
+    expect(PRODUCTION_SUB_TAB_OF["default-salary-per-shift"]).toBe("payBonus");
+    expect(PRODUCTION_SUB_TAB_OF["prod-bonus-percent"]).toBe("payBonus");
+    expect(PRODUCTION_SUB_TAB_OF["prod-shifts-earned"]).toBe("overview");
+    expect(PRODUCTION_SUB_TAB_OF["biweekly-first-period"]).toBe("biweekly");
+    // the late rules left Production Payroll for Late Detection -> Production, with the same ids
+    const gone = [
+      "prod-late-switch",
+      "prod-attendance-mode",
+      ...["weekly", "biweekly", "monthly"].flatMap((c) => [`${c}-late-allowance`, `${c}-late-slabs`]),
+    ];
+    for (const id of gone) {
+      expect(ids("production_payroll"), id).not.toContain(id);
+      expect(ids("late_detection"), id).toContain(id);
+      expect(LATE_VIEW_OF[id], id).toBe("production");
+    }
+    expect(LATE_CYCLE_OF["biweekly-late-slabs"]).toBe("biweekly");
+    expect(LATE_CYCLE_OF["prod-late-switch"]).toBeUndefined();
+    // one home per setting: no id is on two tabs of the pay and time groups
+    const homes = new Map<string, string[]>();
+    for (const m of ALL_SETTINGS) homes.set(m.id, [...(homes.get(m.id) ?? []), m.tab]);
+    const shared = [...homes].filter(([, tabs]) => tabs.length > 1).map(([id]) => id);
+    expect(shared).toEqual([]);
+    // the Staff Payroll sub-tabs
+    expect(PAYROLL_SUB_TAB_OF["pay-day"]).toBe("rates");
+    expect(PAYROLL_SUB_TAB_OF["bonus-percent"]).toBe("bonus");
+    expect(PAYROLL_SUB_TAB_OF["default-salary-per-shift"]).toBeUndefined();
+  });
+
+  it("gives every setting of a tab with a Staff | Production switch the page that holds it, so a link or the search opens it", () => {
+    const check = (tab: string, viewOf: Record<string, string>) => {
+      for (const m of ALL_SETTINGS.filter((x) => x.tab === tab)) {
+        expect(["staff", "production"], `${tab}#${m.id}`).toContain(viewOf[m.id]);
+      }
+    };
+    check("attendance", ATTENDANCE_VIEW_OF);
+    check("production_shifts", PRODUCTION_SHIFT_VIEW_OF);
+    check("late_detection", LATE_VIEW_OF);
+    expect(ATTENDANCE_VIEW_OF["late-window"]).toBe("staff");
+    expect(ATTENDANCE_VIEW_OF["production-attendance"]).toBe("production");
+    expect(PRODUCTION_SHIFT_VIEW_OF["staff-shifts-where"]).toBe("staff");
+    expect(PRODUCTION_SHIFT_VIEW_OF["shift-groups"]).toBe("production");
+    expect(LATE_VIEW_OF["free-allowance"]).toBe("staff");
+    expect(LATE_VIEW_OF["permission-deduction-slabs"]).toBe("staff");
+    expect(LATE_VIEW_OF["weekly-late-allowance"]).toBe("production");
+  });
+
+  it("registers the permission pricing and the production late rules for the search, in words HR would use", () => {
+    const find = (query: string) =>
+      searchSettings(ALL_SETTINGS, SETTINGS_TABS, query)
+        .filter((m) => m.tab === "late_detection")
+        .map((m) => m.id);
+    expect(ALL_SETTINGS.filter((m) => m.tab === "late_detection").map((m) => m.id)).toEqual([
+      "free-allowance",
+      "deduction-slabs",
+      "permission-cap",
+      "permission-pricing",
+      "permission-free-allowance",
+      "permission-deduction-slabs",
+      "prod-late-switch",
+      "prod-attendance-mode",
+      "weekly-late-allowance",
+      "weekly-late-slabs",
+      "biweekly-late-allowance",
+      "biweekly-late-slabs",
+      "monthly-late-allowance",
+      "monthly-late-slabs",
+    ]);
+    expect(find("permission slabs")).toContain("permission-deduction-slabs");
+    expect(find("price permissions")).toContain("permission-pricing");
+    expect(find("free permissions")).toContain("permission-free-allowance");
+    expect(find("biweekly late")).toEqual(expect.arrayContaining(["biweekly-late-allowance", "biweekly-late-slabs"]));
+    expect(find("late production")).toContain("prod-late-switch");
+    const production = searchSettings(ALL_SETTINGS, SETTINGS_TABS, "production bonus").map((m) => `${m.tab}#${m.id}`);
+    // the three production bonus settings come first; the staff ones can only follow (they mention production)
+    expect(production.slice(0, 3).sort()).toEqual([
+      "production_payroll#prod-bonus-eligibility-ceiling",
+      "production_payroll#prod-bonus-percent",
+      "production_payroll#prod-bonus-wage-ceiling",
+    ]);
   });
 });

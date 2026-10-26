@@ -27,26 +27,37 @@ import { ProductionSection } from "./attendance/ProductionSection";
 import { SaveFooter } from "./attendance/SaveFooter";
 import { TabContents } from "./attendance/TabContents";
 import { useDraft } from "./attendance/useDraft";
+import { ATTENDANCE_VIEW_OF } from "./AttendanceTab.meta";
+import { CLASS_VIEWS, ClassPills, UnsavedChip, useAddressView } from "./kit/view";
 
-const CONTENTS = [
+const STAFF_CONTENTS = [
   { id: "attendance-how-it-works", label: "How it works" },
   { id: "attendance-mode-section", label: "Mode" },
   { id: "attendance-day", label: "Full / Half / Absent" },
   { id: "attendance-late-marks", label: "Late and Early Out" },
   { id: "attendance-lunch", label: "Lunch return" },
   { id: "attendance-midnight", label: "After midnight" },
-  { id: "attendance-production", label: "Production" },
 ];
 
+const PRODUCTION_CONTENTS = [{ id: "attendance-production", label: "Production workers" }];
+
 /**
- * Settings -> Attendance: how a staff day's punches become Full Day / Half Day / Absent and which arrivals and departures
- * are marked. Everything for staff is one form saved by "Save Attendance Settings" (after a confirm: the rules re-judge
- * past days); production attendance is only explained here, it is edited on the Production Shifts tab.
+ * Settings -> Attendance, a Staff page and a Production page behind a pill switch.
+ *
+ * Staff: how a staff day's punches become Full Day / Half Day / Absent and which arrivals and departures are marked.
+ * Everything for staff is one form saved by "Save Attendance Settings" (after a confirm: the rules re-judge past days).
+ *
+ * Production: read-only. Production attendance is not set on this tab: it is edited on the Production Shifts tab, and what
+ * a late production day costs on Late Detection, Production page. The page explains that, with links, and shows the old
+ * calculation that days before the production shift rules keep.
+ *
+ * The staff draft lives here, so switching pills never loses what was typed.
  */
 export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
   const { data } = usePayrollSettings();
   const update = useUpdatePayrollSettings();
+  const [view, chooseView] = useAddressView(CLASS_VIEWS, "staff", ATTENDANCE_VIEW_OF);
 
   const saved = useMemo(() => (data ? staffDraftFrom(data) : null), [data]);
   const carried = useMemo(() => (data ? carriedKeysFrom(data) : null), [data]);
@@ -96,9 +107,24 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
         ? `Fix this first: ${problem}`
         : undefined;
 
+  if (view === "production") {
+    return (
+      <div className="space-y-4" data-testid="attendance-tab">
+        <ClassPills value={view} onChange={chooseView}>
+          {dirty && <UnsavedChip>Not saved yet: Staff</UnsavedChip>}
+        </ClassPills>
+        <div className="space-y-4" data-testid="attendance-page-production">
+          <TabContents items={PRODUCTION_CONTENTS} />
+          <ProductionSection />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-4">
-      <TabContents items={CONTENTS} />
+    <div className="space-y-4" data-testid="attendance-tab">
+      <ClassPills value={view} onChange={chooseView} />
+      <TabContents items={STAFF_CONTENTS} />
 
       {data && !access.companyWideEditable && (
         <div
@@ -167,8 +193,6 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
           hint={hint}
         />
       </div>
-
-      <ProductionSection />
 
       <ConfirmSave
         open={confirming}

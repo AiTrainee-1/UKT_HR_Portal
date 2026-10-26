@@ -99,10 +99,6 @@ export const exampleDailyRate = (): number =>
     salary: EXAMPLE_MONTH_SALARY,
     workingDays: EXAMPLE_WORKING_DAYS,
     daysPaid: EXAMPLE_WORKING_DAYS,
-    rulesOn: false,
-    pfRate: 0,
-    esiRate: 0,
-    esiCeiling: 0,
   }).dailyRate;
 
 /** What `shifts` come to as Pay in the example: shifts x the daily rate, rounded to the paisa like payroll. */

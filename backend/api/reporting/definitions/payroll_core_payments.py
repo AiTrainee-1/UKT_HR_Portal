@@ -3,7 +3,7 @@ Payroll core - money movement and deductions:
 
     bank-advice              net pay to transfer by bank (with an HDFC bulk-upload sheet in Excel) + a separate cash list
     payroll-payment-status   which slips are marked paid / pending, and where slip and payroll disagree
-    salary-deduction-summary employee-wise PF, ESI, advance recovery and late deductions
+    salary-deduction-summary employee-wise PF, ESI, TDS, advance recovery and late deductions
 
 Net pay is always the SLIP's net_salary (what the employee is handed). Payroll.final_salary can differ after a
 'mark paid' edit, so that difference is surfaced, never silently picked.
@@ -531,6 +531,7 @@ DEDUCTION_SUM = (
     "totalEarnings",
     "pfDeduction",
     "esiDeduction",
+    "tdsDeduction",
     "advanceDeduction",
     "lateDeduction",
     "otherDeductions",
@@ -540,6 +541,7 @@ DEDUCTION_SUM = (
 HEAD_KEYS = {
     "pf": "pfDeduction",
     "esi": "esiDeduction",
+    "tds": "tdsDeduction",
     "advance": "advanceDeduction",
     "late": "lateDeduction",
     "other": "otherDeductions",
@@ -565,6 +567,7 @@ def _deduction_run(ctx) -> ReportResult:
                 "totalEarnings": d["total_earnings"],
                 "pfDeduction": d["pf"],
                 "esiDeduction": d["esi"],
+                "tdsDeduction": d["tds"],
                 "advanceDeduction": d["advance"],
                 "lateDeduction": d["late"],
                 "otherDeductions": d["other"],
@@ -600,6 +603,7 @@ def _deduction_run(ctx) -> ReportResult:
         {"label": "Total deductions", "value": total_ded, "format": "currency"},
         {"label": "PF", "value": col("pfDeduction"), "format": "currency"},
         {"label": "ESI", "value": col("esiDeduction"), "format": "currency"},
+        {"label": "TDS", "value": col("tdsDeduction"), "format": "currency"},
         {"label": "Advance recovery", "value": col("advanceDeduction"), "format": "currency"},
         {"label": "Late deduction", "value": col("lateDeduction"), "format": "currency"},
         {"label": "Other / manual", "value": col("otherDeductions"), "format": "currency"},
@@ -610,7 +614,9 @@ def _deduction_run(ctx) -> ReportResult:
         "Deduction % = total deductions / total earnings (gross pay + overtime); the summary card uses every slip of the "
         "selection, including the ones the Deduction head filter hides. Late deduction comes from the slip's "
         "late-detection snapshot (production slips keep it only inside total deductions); Other / manual = total less "
-        "PF, ESI, advance and late - normally zero, so a value there points to a legacy or manually edited slip.",
+        "PF, ESI, TDS, advance and late - normally zero, so a value there points to a legacy or manually edited slip.",
+        "PF and ESI are deducted only from Co Emp employees; TDS only from employees added to TDS (a percentage of their "
+        "earned gross). The TDS column is 0 for everyone else.",
         "Absence and unpaid leave are NOT deduction lines: they are already reduced from the pro-rated gross pay.",
         "Advance recovery is the figure stored on the slip. Regenerating a month after the instalment was recovered "
         "stores 0 there even though the instalment stays recovered, so it can be understated for regenerated months "
@@ -622,6 +628,7 @@ def _deduction_run(ctx) -> ReportResult:
             for label, key in (
                 ("PF", "pfDeduction"),
                 ("ESI", "esiDeduction"),
+                ("TDS", "tdsDeduction"),
                 ("Advance", "advanceDeduction"),
                 ("Late", "lateDeduction"),
                 ("Other", "otherDeductions"),
@@ -641,11 +648,11 @@ register(
     ReportSpec(
         id="salary-deduction-summary",
         title="Salary Deduction Summary",
-        description="PF, ESI, advance recovery and late deductions per employee with total and percent of earnings.",
+        description="PF, ESI, TDS, advance recovery and late deductions per employee with total and percent of earnings.",
         category=CATEGORY,
         modules=BOTH,
         icon="Percent",
-        tags=("deductions", "pf", "esi", "advance", "late", "salary detection", "recoveries"),
+        tags=("deductions", "pf", "esi", "tds", "advance", "late", "salary detection", "recoveries"),
         filters=(
             period(default="lastMonth"),
             *scope(designation=False, status="all"),
@@ -657,6 +664,7 @@ register(
                     ("any", "Any deduction"),
                     ("pf", "PF"),
                     ("esi", "ESI"),
+                    ("tds", "TDS"),
                     ("advance", "Advance recovery"),
                     ("late", "Late deduction"),
                     ("other", "Other / manual"),
@@ -680,6 +688,7 @@ register(
             _cur("totalEarnings", "Total earnings", 1.6),
             _cur("pfDeduction", "PF"),
             _cur("esiDeduction", "ESI"),
+            _cur("tdsDeduction", "TDS"),
             _cur("advanceDeduction", "Advance"),
             _cur("lateDeduction", "Late deduction"),
             _cur("otherDeductions", "Other / manual"),

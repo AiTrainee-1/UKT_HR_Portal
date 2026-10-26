@@ -694,9 +694,22 @@ export type ReadinessItem = {
   hint: string;
 };
 
-/** Can this person be paid? Bank account, IFSC, PF and ESI numbers, each present or missing; a number is never shown in full. */
-export function readiness(emp: PayrollDetails["employee"]): ReadinessItem[] {
+/**
+ * Can this person be paid? Bank account, IFSC, PF and ESI numbers, each present or missing; a number is never shown in full.
+ * PF and ESI only ever apply to Co Emp employees: when this payroll's own record says the employee is on the TDS list or is
+ * not Co Emp (`category`), a PF / ESI number that is not on the profile is "Not needed", not a gap.
+ */
+export function readiness(
+  emp: PayrollDetails["employee"],
+  category?: "co_emp" | "tds" | "none" | null,
+): ReadinessItem[] {
   const bank = emp.bank ?? { hasAccount: false, bankName: null, hasIfsc: false, accountLast4: null };
+  const noPfEsi = category === "tds" || category === "none";
+  const notNeeded = (what: "PF" | "ESI"): Pick<ReadinessItem, "ok" | "value" | "hint"> => ({
+    ok: true,
+    value: "Not needed",
+    hint: category === "tds" ? `TDS employee: no ${what} is deducted` : `Not a Co Emp employee: no ${what} is deducted`,
+  });
   return [
     {
       key: "bank",
@@ -721,6 +734,7 @@ export function readiness(emp: PayrollDetails["employee"]): ReadinessItem[] {
       value: maskTail(emp.pfNumber) ?? "Not recorded",
       detail: null,
       hint: emp.pfNumber ? "Provident fund account is recorded" : "Not recorded on the profile (information only)",
+      ...(noPfEsi && !emp.pfNumber ? notNeeded("PF") : {}),
     },
     {
       key: "esi",
@@ -729,6 +743,7 @@ export function readiness(emp: PayrollDetails["employee"]): ReadinessItem[] {
       value: maskTail(emp.esiNumber) ?? "Not recorded",
       detail: null,
       hint: emp.esiNumber ? "ESI account is recorded" : "Not recorded on the profile (information only)",
+      ...(noPfEsi && !emp.esiNumber ? notNeeded("ESI") : {}),
     },
   ];
 }

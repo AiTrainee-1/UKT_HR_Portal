@@ -14,13 +14,16 @@ export function EmployeeCard({
   details,
   kind,
   accent,
+  statutoryCategory,
 }: {
   details: PayrollDetails;
   kind: PayrollKind;
   accent: Accent;
+  /** What this payroll's own record says the employee is for PF / ESI: Co Emp, on the TDS list, or neither (unknown: absent). */
+  statutoryCategory?: "co_emp" | "tds" | "none" | null;
 }) {
   const { employee, money } = details;
-  const checks = readiness(employee);
+  const checks = readiness(employee, statutoryCategory);
   const tenure = tenureLabel(employee.joinDate);
   const cycle = employee.payCycle ? PAY_CYCLE_INFO[employee.payCycle]?.label : null;
   const split = employee.split;

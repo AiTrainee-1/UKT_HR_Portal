@@ -123,6 +123,8 @@ export type PayrollTrendMonth = {
   headcount: number | null;
   costPerHead: number | null;
   overtimePay: number | null;
+  /** TDS deducted in the month (absent on an answer from before the TDS redesign). */
+  tdsDeducted?: number | null;
 };
 
 export type PayrollTrend = {

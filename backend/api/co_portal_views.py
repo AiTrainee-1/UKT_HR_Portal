@@ -8,10 +8,12 @@ background job in another application, not a logged-in person. There is no
 write path anywhere in this file, deliberately: the Co Portal must never be
 able to change anything in this database, only read from it.
 
-Employees are scoped to co_emp_enabled=True throughout -HR opts an employee
-into the Co Portal from the main HRMS's Employees -> Co Emp tab, and only
-those employees, plus their department/designation/branch and attendance
-punches, are ever visible through this API.
+Employees are scoped to the Co Emp ones OR the TDS ones throughout (pf_esi.COPORTAL_Q:
+co_emp_enabled=True or tds_enabled=True) -HR opts an employee into the Co Portal from the
+main HRMS's Employees -> Co Emp tab (an employee put in TDS there stays visible: the two
+categories are mutually exclusive, and both are the Co Portal's employees), and only those
+employees, plus their department/designation/branch and attendance punches, are ever
+visible through this API.
 """
 from datetime import datetime
 
@@ -22,6 +24,7 @@ from rest_framework.response import Response
 
 from .auth import require_portal_key
 from .models import AttendanceLog, Branch, Department, Designation, Employee
+from .pf_esi import COPORTAL_Q, COPORTAL_Q_VIA_EMPLOYEE
 from .serializers import co_portal_employee_json, department_json
 
 
@@ -53,7 +56,7 @@ def co_portal_employees(request: Request) -> Response:
     # updatedSince), rather than possibly falling in the gap between the two.
     as_of = timezone.now()
 
-    qs = Employee.objects.filter(co_emp_enabled=True).select_related(
+    qs = Employee.objects.filter(COPORTAL_Q).select_related(
         "department", "designation", "branch"
     )
     updated_since = request.query_params.get("updatedSince")
@@ -73,7 +76,7 @@ def co_portal_employees(request: Request) -> Response:
 @api_view(["GET"])
 @require_portal_key
 def co_portal_attendance_logs(request: Request) -> Response:
-    qs = AttendanceLog.objects.filter(employee__co_emp_enabled=True).select_related("employee")
+    qs = AttendanceLog.objects.filter(COPORTAL_Q_VIA_EMPLOYEE).select_related("employee")
     date_from = request.query_params.get("dateFrom")
     if date_from:
         qs = qs.filter(date__gte=date_from)

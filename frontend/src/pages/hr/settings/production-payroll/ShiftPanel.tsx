@@ -1,11 +1,10 @@
 import { Factory } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import type { PayrollSettingsItem, ShiftTemplate } from "@/lib/api-client/custom-hooks";
+import type { ShiftTemplate } from "@/lib/api-client/custom-hooks";
 import { ManagedElsewhere, PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "../kit/SettingBlock";
 import { PRODUCTION_SECTIONS, productionText } from "../ProductionPayrollTab.meta";
-import { formatPaise, formatPercent, type ProductionPay } from "../payroll/preview";
-import { ProductionPfOrder } from "../payroll/ProductionPfOrder";
-import { InfoBox } from "../payroll/ui";
+import { formatPaise } from "../payroll/preview";
+import { InfoBox, TextLink } from "../payroll/ui";
 import { CYCLE_INFO, CYCLES } from "./cycles";
 import { cyclePay } from "./preview";
 import { PER_SHIFT } from "./SlabEditor";
@@ -18,44 +17,23 @@ const clock = (value: string | null | undefined): string => (value ? value.slice
 /** The example worker earns six shifts a week, so a period on each cycle holds 6, 12 or 24 shifts. */
 const SHIFTS_A_WEEK = 6;
 
-const decidedBy = (p: ProductionPay): string =>
-  p.source === "band"
-    ? `band ${p.band?.label ? `"${p.band.label}"` : `#${p.band?.position}`} (PF ${formatPercent(p.pfRate)}, EF ${formatPercent(p.esiRate)})`
-    : p.source === "flat"
-      ? `the flat rates (PF ${formatPercent(p.pfRate)}, ESI ${formatPercent(p.esiRate)})`
-      : "nothing: no band matches and the flat-rate switch is off";
-
 /**
- * Settings -> Production Payroll -> "Attendance & Shift": nothing is set here. It says where production pay really
- * comes from (shifts earned in Manage Shifts, PF / ESI on the Payroll tab, scaled to a month by the pay cycle) and
- * lists the production shifts that late detection measures against, with links to each place.
+ * Settings -> Production Payroll -> "Overview" (with the chain above it): nothing is set here. It says where production pay
+ * really comes from (shifts earned from the Production Shifts tab, PF / ESI on the PF & ESI tab, scaled to a month by the
+ * pay cycle) and lists the production shifts that late detection measures against, with links to each place.
  */
 export function ShiftPanel({
-  settings,
   shifts,
   shiftsLoading,
   shiftsError,
 }: {
-  settings: PayrollSettingsItem;
   shifts: ShiftTemplate[] | undefined;
   shiftsLoading: boolean;
   shiftsError: boolean;
 }) {
   const production = (shifts ?? []).filter((s) => s.shiftType === "production");
   const pay = (count: number, cycle: (typeof CYCLES)[number]) =>
-    cyclePay(
-      {
-        shifts: count,
-        ratePerShift: PER_SHIFT,
-        flatOn: settings.prodPayrollRulesEnabled ?? false,
-        pfRate: settings.prodPfRate ?? 0,
-        esiRate: settings.prodEsiRate ?? 0,
-        esiCeiling: settings.prodEsiApplicableBelow ?? 0,
-        bandsOn: settings.prodPfEfEnabled ?? false,
-        bands: settings.prodPfEfRules ?? [],
-      },
-      cycle,
-    );
+    cyclePay({ shifts: count, ratePerShift: PER_SHIFT }, cycle);
   const samples = CYCLES.map((cycle) => {
     const count = SHIFTS_A_WEEK * CYCLE_INFO[cycle].weeks;
     return { cycle, ...CYCLE_INFO[cycle], count, pay: pay(count, cycle) };
@@ -69,7 +47,7 @@ export function ShiftPanel({
     <SettingsSection
       icon={Factory}
       title={PRODUCTION_SECTIONS.shift}
-      purpose="Nothing is set on this sub-tab. It shows where a production payslip's pay and deductions come from, whatever the pay cycle, so a wrong number can be traced to the place that owns it."
+      purpose="Nothing is set in this part of the Overview. It shows where a production payslip's pay and deductions come from, whatever the pay cycle, so a wrong number can be traced to the place that owns it."
       usedBy={[
         { label: "Production Attendance", to: "/hr/attendance/production" },
         ...cyclePages,
@@ -91,7 +69,7 @@ export function ShiftPanel({
             to: CYCLE_INFO.weekly.path,
           },
         ]}
-        note="Strict / Simple mode, the staff Late Detection tab and the late rules on this tab never change the shifts a day earns."
+        note="Strict / Simple mode, the staff late rules and the production late rules on Late Detection never change the shifts a day earns."
         preview={
           <PreviewCard scenario={`A worker whose Salary Per Shift is ${formatPaise(PER_SHIFT * 100)}.`}>
             <PreviewLine label="A day earning 1 shift" result={formatPaise(PER_SHIFT * 100)} />
@@ -132,52 +110,50 @@ export function ShiftPanel({
         affects={[
           {
             where: "Production Payroll - every cycle",
-            what: "PF and ESI on every production payslip generated from now on; the payslip breakdown names the band or shows the flat rate, and the estimated monthly pay it was tested on.",
+            what: "PF and ESI on every production payslip generated from now on follow the rules on the PF & ESI tab, for employees switched ON in Co Emp only; the payslip breakdown names the rule that matched and the monthly estimate it was tested on.",
             to: CYCLE_INFO.weekly.path,
           },
           {
             where: "Compensation - CTC Breakdown",
-            what: "Employer PF and ESI for production employees follow the flat rates, whatever the switches say.",
+            what: "Employer PF and ESI for production employees follow the same rules.",
             to: pagePath("ctc"),
           },
         ]}
-        note="The ESI ceiling and the salary bands are written for monthly pay, so they are tested on an estimated monthly pay: the period's gross x 4 on Weekly, x 2 on BiWeekly and x 1 on Monthly (a production month is four weeks)."
+        note="A rule's 'Full monthly salary' basis is tested on an estimated monthly pay: the period's gross x 4 on Weekly, x 2 on BiWeekly and x 1 on Monthly (a production month is four weeks). The amount deducted is the rule's percentage of the period's first-portion pay (Basic + DA + Retaining Allowance)."
         preview={
           <PreviewCard
-            scenario={`The same worker, ${formatPaise(PER_SHIFT * 100)} a shift and ${SHIFTS_A_WEEK} shifts a week, paid on each cycle, with the saved Payroll tab values.`}
+            scenario={`The same worker, ${formatPaise(PER_SHIFT * 100)} a shift and ${SHIFTS_A_WEEK} shifts a week, paid on each cycle: what the rules see.`}
             testId="production-pf-esi-preview"
           >
             {samples.map((s) => (
               <PreviewLine
                 key={s.cycle}
                 label={`${s.label}: ${s.count} shifts = ${formatPaise(s.pay.gross)}, estimate ${formatPaise(s.pay.monthlyEstimate)} (x${s.monthlyFactor})`}
-                result={`PF ${formatPaise(s.pay.pf)}, ESI ${formatPaise(s.pay.esi)}`}
-                tone={s.pay.source === "none" ? "neutral" : "info"}
+                result={`rules tested on ${formatPaise(s.pay.monthlyEstimate)} a month`}
+                tone="info"
               />
             ))}
-            <PreviewLine label="Decided by (Monthly example)" result={decidedBy(samples[2].pay)} />
-            <PreviewLine label="Take-home (Monthly example)" result={formatPaise(samples[2].pay.net)} tone="good" />
           </PreviewCard>
         }
       >
-        <InfoBox>
-          <p className="font-semibold">The order production payroll follows for every payslip (saved values)</p>
-          <ProductionPfOrder
-            bandsOn={settings.prodPfEfEnabled ?? false}
-            bandCount={(settings.prodPfEfRules ?? []).length}
-            flatOn={settings.prodPayrollRulesEnabled ?? false}
-            pfRate={settings.prodPfRate ?? 0}
-            esiRate={settings.prodEsiRate ?? 0}
-          />
+        <InfoBox testId="production-pf-esi-how">
+          <p className="font-semibold">How production PF and ESI are decided</p>
+          <ol className="list-decimal space-y-1 pl-5">
+            <li>
+              Only workers switched ON in Employees - Co Emp are subject to PF and ESI; everybody else pays none, ever.
+            </li>
+            <li>Each rule has a salary range, the amount the range is measured on, and a percentage.</li>
+            <li>The first rule whose range holds the worker's amount applies; no matching rule means no deduction.</li>
+          </ol>
         </InfoBox>
         <ManagedElsewhere
-          title="Set on the Payroll tab"
-          to="/hr/settings?tab=payroll#prod-pf-esi-switch"
-          linkLabel="Open Payroll settings"
+          title="Set on the PF & ESI tab"
+          to="/hr/settings?tab=pf_esi#prod-pf-rules"
+          linkLabel="Open PF & ESI"
           testId="production-pf-esi-elsewhere"
         >
-          The flat rates and their switch are under Payroll Rules; the salary bands and their own switch are under
-          Production PF/EF. A band applies even while the flat-rate switch is off.
+          The production PF rules and ESI rules, their salary ranges and percentages, and the units that have rules of
+          their own are on the PF & ESI tab, Production page. Only the Super Admin can change them.
         </ManagedElsewhere>
       </SettingBlock>
 
@@ -251,7 +227,9 @@ export function ShiftPanel({
             testId="production-assigned-elsewhere"
           >
             Late detection uses whichever shift a worker is assigned on the day, whatever its type. What counts as late
-            (Strict or Simple) is saved with the switch on the Late Detection sub-tab, the only thing it affects.
+            (Strict or Simple) is saved with the switch on{" "}
+            <TextLink to="/hr/settings?tab=late_detection#prod-attendance-mode">Late Detection - Production</TextLink>,
+            the only thing it affects.
           </ManagedElsewhere>
         </div>
       </SettingBlock>

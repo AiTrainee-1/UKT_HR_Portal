@@ -49,6 +49,11 @@ COMPANY_WIDE_FIELDS = frozenset(
         "ot_detection_enabled",
         "ot_threshold_minutes",
         "ot_compensation_type",
+        # Permission Deduction Slabs: what an excess permission costs is one company-wide answer (the attendance engines and
+        # staff payroll read the company row), so a stray branch value would only ever be displayed, never applied.
+        "permission_pricing_enabled",
+        "permission_free_allowance",
+        "permission_deduction_slabs",
     }
 )
 
@@ -57,7 +62,7 @@ class _SettingsOverlay:
     """The universal settings with one branch's overrides layered on top.
 
     Attribute access falls through to the universal row, so every existing
-    `ps.pf_rate` / `ps.attendance_mode` call site works unchanged.
+    `ps.pay_day` / `ps.attendance_mode` call site works unchanged.
     """
 
     __slots__ = ("_base", "_overrides", "_branch_id")
@@ -101,8 +106,8 @@ class _SettingsOverlay:
 def _coerce(base, name, value):
     """Bring a JSON-round-tripped value back to the field's Python type.
 
-    JSON has no Decimal, date or time, so a stored `pf_rate` comes back as a
-    string or float and would break `basic * pf_rate` in the payroll maths.
+    JSON has no Decimal, date or time, so a stored `bonus_percent` comes back as a
+    string or float and would break `gross * bonus_percent` in the payroll maths.
     The field on the model is the authority on what the type should be.
     """
     from datetime import date, time
@@ -218,11 +223,19 @@ def persist_overlay(overlay) -> dict:
     """
     from .models import BranchSettingsOverride
 
+    from .pf_esi import RULE_FIELD_NAMES
+
     base = overlay.base
     kept = {}
     for name, value in overlay.overrides.items():
         if name in COMPANY_WIDE_FIELDS:
             continue  # one company-wide answer: never stored as a branch's private value
+        if name in RULE_FIELD_NAMES:
+            # A branch's own PF / ESI rule lists are set only by the Super Admin (pf_esi_views.py), as one set of four.
+            # Saving some unrelated setting from this branch must neither drop them for happening to equal the global
+            # rules today nor change them: they stay exactly as stored.
+            kept[name] = value
+            continue
         try:
             universal = getattr(base, name)
         except AttributeError:

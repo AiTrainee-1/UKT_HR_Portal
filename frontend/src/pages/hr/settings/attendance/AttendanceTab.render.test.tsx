@@ -2,11 +2,12 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderMdPage, type RenderedPage } from "@/pages/md/testing/renderMdPage";
 import AttendanceTab from "../AttendanceTab";
-import { ATTENDANCE_SETTINGS } from "../AttendanceTab.meta";
+import { ATTENDANCE_SETTINGS, ATTENDANCE_VIEW_OF } from "../AttendanceTab.meta";
 
 // jsdom render checks of Settings -> Attendance with a fake server (the page itself is covered by
 // e2e/arrival-timeline.spec.ts): the agreed numbers and the example rows, previews that follow what is typed, the
-// confirm before saving and the exact request, the branch-login lock, and the read-only production part.
+// confirm before saving and the exact request, the branch-login lock, and the read-only Production page behind the
+// Staff | Production pills.
 
 const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }), toast }));
@@ -78,6 +79,7 @@ beforeEach(() => {
 afterEach(() => {
   page?.unmount();
   page = undefined;
+  window.history.replaceState(null, "", "/");
 });
 
 async function open(saved: Record<string, unknown> = SAVED, props: { readOnly?: boolean } = {}) {
@@ -108,6 +110,17 @@ const byTestId = (id: string) => document.body.querySelector<HTMLElement>(`[data
 const buttonNamed = (name: string) =>
   [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === name);
 const labelOf = (id: string) => page!.container.querySelector(`label[for="${id}"]`)?.textContent?.trim();
+
+const tabNamed = (name: string) =>
+  [...document.body.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+    (b) => b.querySelector(".ptab-label")?.textContent?.trim() === name,
+  );
+async function openPill(name: string) {
+  const b = tabNamed(name);
+  if (!b) throw new Error(`no pill "${name}"`);
+  await act(async () => b.click());
+  await page!.settle();
+}
 
 async function press(name: string) {
   const b = buttonNamed(name);
@@ -267,9 +280,39 @@ describe("Settings -> Attendance", () => {
     expect(protection()).toContain("the grace above is 0");
   });
 
-  it("explains production and links to the Production Shifts tab instead of repeating its editor", async () => {
+  it("has the Staff | Production pills, opens on Staff, and keeps production off the staff page", async () => {
     await open();
+    expect([
+      tabNamed("Staff")?.getAttribute("aria-selected"),
+      tabNamed("Production")?.getAttribute("aria-selected"),
+    ]).toEqual(["true", "false"]);
+    expect(byTestId("attendance-page-production")).toBeNull();
+    expect(byTestId("attendance-production")).toBeNull();
+    expect(byTestId("production-managed-elsewhere")).toBeNull();
+    expect(page!.text()).not.toContain("Old production punch times and pay segments");
+    expect(page!.requests().filter((r) => r.startsWith("/api/production-shift-config"))).toHaveLength(0);
+  });
+
+  it("explains production on its own page and links to the Production Shifts tab and to Late Detection instead of repeating their editors", async () => {
+    await open();
+    await openPill("Production");
+    expect(tabNamed("Production")?.getAttribute("aria-selected")).toBe("true");
+    expect(window.location.search).toContain("view=production");
+    // the staff page's controls are gone
+    expect(document.body.querySelector("#arrival-late-window")).toBeNull();
+    expect(buttonNamed("Save Attendance Settings")).toBeUndefined();
     expect(buttonNamed("Save Punch Times")).toBeUndefined();
+    // what a production day is valued by, and what a late one costs, with their links
+    expect(byTestId("production-days-elsewhere")?.querySelector("a")?.getAttribute("href")).toBe(
+      "/hr/settings?tab=production_shifts",
+    );
+    expect(byTestId("production-days-late-elsewhere")?.querySelector("a")?.getAttribute("href")).toBe(
+      "/hr/settings?tab=late_detection#prod-late-switch",
+    );
+    expect(byTestId("production-late-elsewhere")?.querySelector("a")?.getAttribute("href")).toBe(
+      "/hr/settings?tab=late_detection#prod-late-switch",
+    );
+    // the old read-only calculation, still there
     expect(byTestId("production-managed-elsewhere")?.querySelector("a")?.getAttribute("href")).toBe(
       "/hr/settings?tab=production_shifts",
     );
@@ -277,6 +320,34 @@ describe("Settings -> Attendance", () => {
     expect(text).toContain("Evening");
     expect(text).toContain("1.00 shift = ₹600"); // 08:35, 12:50, 13:35, 17:35
     expect(text).toContain("1.50 shift = ₹900"); // ... staying until 19:55
+    // nothing on it can be edited
+    expect(document.body.querySelector('[data-slot="input"], select, [role="switch"]')).toBeNull();
+  });
+
+  it("keeps what was typed on the Staff page while Production is open, and says so", async () => {
+    await open();
+    await page!.type("#arrival-late-window", "30");
+    await openPill("Production");
+    expect(page!.text()).toContain("Not saved yet: Staff");
+    await openPill("Staff");
+    expect(input("arrival-late-window").value).toBe("30");
+    expect(buttonNamed("Save Attendance Settings")?.disabled).toBe(false);
+  });
+
+  it("opens on the page that holds the setting the address names, or the one it asks for", async () => {
+    window.history.replaceState(null, "", "/hr/settings?tab=attendance#production-attendance");
+    await open();
+    expect(tabNamed("Production")?.getAttribute("aria-selected")).toBe("true");
+    expect(document.body.querySelector('[data-setting-id="production-attendance"]')).not.toBeNull();
+    page!.unmount();
+    window.history.replaceState(null, "", "/hr/settings?tab=attendance&view=production");
+    await open();
+    expect(tabNamed("Production")?.getAttribute("aria-selected")).toBe("true");
+    page!.unmount();
+    window.history.replaceState(null, "", "/hr/settings?tab=attendance#late-window");
+    await open();
+    expect(tabNamed("Staff")?.getAttribute("aria-selected")).toBe("true");
+    expect(document.body.querySelector('[data-setting-id="late-window"]')).not.toBeNull();
   });
 
   it("lets a view-only role try values but not save them", async () => {
@@ -286,18 +357,30 @@ describe("Settings -> Attendance", () => {
     expect(buttonNamed("Save Attendance Settings")?.disabled).toBe(true);
   });
 
-  it("has a search entry for every setting it draws, with the same title and words", async () => {
+  it("has a search entry for every setting it draws on each page, with the same title and words", async () => {
     await open();
-    const ids = [...page!.container.querySelectorAll("[id]")].map((e) => e.id);
-    expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]); // a block and its control never share an id
-    const blocks = [...page!.container.querySelectorAll<HTMLElement>("[data-setting-id]")];
-    expect(blocks.map((b) => b.dataset.settingId).sort()).toEqual(ATTENDANCE_SETTINGS.map((m) => m.id).sort());
-    for (const meta of ATTENDANCE_SETTINGS) {
-      const block = blocks.find((b) => b.dataset.settingId === meta.id)!;
-      expect(block.querySelector("h4")?.textContent?.trim(), meta.id).toBe(meta.title);
-      expect(block.querySelector('[data-testid="setting-purpose"]')?.textContent?.trim(), meta.id).toBe(meta.purpose);
-      const section = block.closest("section:not([data-setting-id])");
-      expect(section?.querySelector("h3")?.textContent?.trim(), meta.id).toBe(meta.section);
+    const seen = new Set<string>();
+    for (const [pill, view] of [
+      ["Staff", "staff"],
+      ["Production", "production"],
+    ] as const) {
+      if (pill === "Production") await openPill(pill);
+      const ids = [...page!.container.querySelectorAll("[id]")].map((e) => e.id);
+      expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]); // a block and its control never share an id
+      const blocks = [...page!.container.querySelectorAll<HTMLElement>("[data-setting-id]")];
+      for (const block of blocks) {
+        const meta = ATTENDANCE_SETTINGS.find((m) => m.id === block.dataset.settingId);
+        expect(meta, block.dataset.settingId).toBeTruthy();
+        expect(ATTENDANCE_VIEW_OF[meta!.id], `${meta!.id} is drawn on the ${view} page`).toBe(view);
+        expect(block.querySelector("h4")?.textContent?.trim(), meta!.id).toBe(meta!.title);
+        expect(block.querySelector('[data-testid="setting-purpose"]')?.textContent?.trim(), meta!.id).toBe(
+          meta!.purpose,
+        );
+        const section = block.closest("section:not([data-setting-id])");
+        expect(section?.querySelector("h3")?.textContent?.trim(), meta!.id).toBe(meta!.section);
+        seen.add(meta!.id);
+      }
     }
+    expect([...seen].sort()).toEqual(ATTENDANCE_SETTINGS.map((m) => m.id).sort());
   });
 });

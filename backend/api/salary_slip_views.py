@@ -67,6 +67,9 @@ def slip_json(s: SalarySlip, include_settings: bool = False) -> dict:
         "grossSalary": float(s.gross_salary),
         "pfDeduction": float(s.pf_deduction),
         "esiDeduction": float(s.esi_deduction),
+        # TDS (employees on the TDS list only): the amount and the percentage it was taken at; 0 / null for everybody else
+        "tdsDeduction": float(s.tds_deduction),
+        "tdsPercent": float(s.tds_percent) if s.tds_percent is not None else None,
         "advanceDeduction": float(s.advance_deduction),
         "otherDeductions": float(s.other_deductions),
         "totalDeductions": float(s.total_deductions),

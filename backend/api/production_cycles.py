@@ -16,6 +16,7 @@ period maths, the settings API and the views can all import it without a cycle.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -52,6 +53,10 @@ LEGACY_WEEK_STARTS: dict[str, str] = {"mon_sat": "monday", "sun_sat": "sunday"}
 # The keys one cycle may carry in PayrollSettings.prod_cycles.
 CYCLE_SETTING_KEYS: tuple[str, ...] = ("weekStart", "anchorDate", "lateFreeAllowance", "lateSlabs")
 LATE_ALLOWANCE_MAX = 366
+LATE_SLAB_MAX_SHIFTS = 31
+# A number typed as text: plain digits only. float() / int() would also take "1_0", "1e1", "inf" and Unicode digits.
+PLAIN_WHOLE = re.compile(r"\s*-?[0-9]+\s*")
+PLAIN_DECIMAL = re.compile(r"\s*-?[0-9]+(\.[0-9]+)?\s*")
 
 
 def normalize_cycle(value) -> str | None:
@@ -158,11 +163,17 @@ def clean_slabs(rows) -> tuple[list | None, str | None]:
         if not isinstance(row, dict):
             continue
         try:
-            from_lates = int(row["fromLates"])
-            shifts = float(row["deductionShifts"])
+            raw_from, raw_shifts = row["fromLates"], row["deductionShifts"]
+            if isinstance(raw_shifts, bool) or (
+                isinstance(raw_shifts, str) and not PLAIN_DECIMAL.fullmatch(raw_shifts)
+            ):
+                raise ValueError("deductionShifts must be a plain number")
+            if isinstance(raw_from, str) and not PLAIN_WHOLE.fullmatch(raw_from):
+                raise ValueError("fromLates must be a whole number")
+            from_lates = int(raw_from)
+            shifts = float(raw_shifts)
         except (KeyError, TypeError, ValueError, OverflowError):
             return None, "Each late slab needs a numeric fromLates and deductionShifts."
-        raw_from = row["fromLates"]
         if isinstance(raw_from, bool) or (from_lates != raw_from and not isinstance(raw_from, str)):
             return None, "Each late slab's fromLates must be a whole number."
         if shifts != shifts or shifts in (float("inf"), float("-inf")):
@@ -171,6 +182,8 @@ def clean_slabs(rows) -> tuple[list | None, str | None]:
             return None, "Late slab values cannot be negative."
         if from_lates > LATE_ALLOWANCE_MAX:
             return None, f"A late slab's fromLates cannot be more than {LATE_ALLOWANCE_MAX}."
+        if shifts > LATE_SLAB_MAX_SHIFTS:
+            return None, f"A late slab cannot cut more than {LATE_SLAB_MAX_SHIFTS} shifts."
         cleaned[from_lates] = shifts
     return [{"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)], None
 
@@ -219,9 +232,11 @@ def merge_prod_cycles(stored, patch) -> tuple[dict | None, str | None]:
             else:
                 if isinstance(value, bool) or not isinstance(value, (int, float, str)):
                     return None, f"{label} free late days must be a whole number from 0 to {LATE_ALLOWANCE_MAX}."
+                if isinstance(value, str) and not PLAIN_WHOLE.fullmatch(value):
+                    return None, f"{label} free late days must be a whole number from 0 to {LATE_ALLOWANCE_MAX}."
                 try:
                     number = float(value)
-                except ValueError:
+                except (ValueError, OverflowError):  # "x", or a whole number too big for a float
                     return None, f"{label} free late days must be a whole number from 0 to {LATE_ALLOWANCE_MAX}."
                 if number != number or not number.is_integer() or not 0 <= number <= LATE_ALLOWANCE_MAX:
                     return None, f"{label} free late days must be a whole number from 0 to {LATE_ALLOWANCE_MAX}."

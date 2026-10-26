@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Clock, Gift, IndianRupee, Layers } from "lucide-react";
+import { Clock, Gift, IndianRupee } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,27 +12,28 @@ import {
   type PayrollSettingsItem,
 } from "@/lib/api-client/custom-hooks";
 import { PAYROLL_SUB_TAB_OF, type PayrollSubTab } from "./PayrollTab.meta";
-import { addressSetting, numberOr, RANGES, saveErrorText, useDraft, useSubTabFromAddress } from "./payroll/form";
-import { bonusPayload, pfEfPayload, ratesPayload, savedPayroll } from "./payroll/sections";
+import { addressSetting, saveErrorText, useDraft, useSubTabFromAddress } from "./payroll/form";
+import { bonusPayload, ratesPayload, savedPayroll } from "./payroll/sections";
 import { RatesPanel } from "./payroll/RatesPanel";
 import { BonusPanel } from "./payroll/BonusPanel";
 import { OtPanel } from "./payroll/OtPanel";
-import { PfEfPanel } from "./payroll/PfEfPanel";
 import { BranchNotice } from "./payroll/ui";
 
 const SUB_TABS: { value: PayrollSubTab; label: string; icon: ReactNode }[] = [
   { value: "rates", label: "Payroll Rules", icon: <IndianRupee size={13} /> },
   { value: "bonus", label: "Bonus", icon: <Gift size={13} /> },
   { value: "otCompensation", label: "OT / Compensation", icon: <Clock size={13} /> },
-  { value: "prodPfEf", label: "Production PF/EF", icon: <Layers size={13} /> },
 ];
 
-type Saving = "rates" | "bonus" | "pfEf";
+type Saving = "rates" | "bonus";
 
 /**
- * Settings -> Payroll. Four sub-tabs, each a group with its own Save button that sends only that group's keys, so
- * saving one never saves or resets another group's unsaved edits. The OT & Compensation sub-tab holds only the master
- * switch of those features, which saves itself (their rules are on the Compensation tab).
+ * Settings -> Staff Payroll (tab id "payroll", kept: it is a permission key and the `?tab=` address). Three sub-tabs:
+ * Payroll Rules (the pay day and the financial year start month, both company-wide) and Bonus (staff), each a group with
+ * its own Save button that sends only that group's keys, so saving one never saves or resets another group's unsaved
+ * edits, and OT & Compensation, which holds only the master switch of those features and saves itself (their rules are on
+ * the Compensation tab). PF and ESI are not here: they have their own tab (PF & ESI). Production has its own tab,
+ * Production Payroll (its pay periods, the suggested rate and its bonus).
  */
 export default function PayrollTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
@@ -43,7 +44,6 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
   const saved = useMemo(() => savedPayroll(settings), [settings]);
   const rates = useDraft(saved.rates);
   const bonus = useDraft(saved.bonus);
-  const pfEf = useDraft(saved.pfEf);
 
   const [subTab, setSubTab] = useState<PayrollSubTab>(() => PAYROLL_SUB_TAB_OF[addressSetting()] ?? "rates");
   useSubTabFromAddress(PAYROLL_SUB_TAB_OF, setSubTab);
@@ -92,26 +92,9 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
   };
 
   const branchOnly = branchLogin ? " They apply to your branch's employees only." : "";
-  const staffRates = {
-    rulesOn: rates.form.staffRulesEnabled,
-    pfRate: numberOr(rates.form.pfRate, RANGES.percent, Number(saved.rates.pfRate) || 0),
-    esiRate: numberOr(rates.form.esiRate, RANGES.percent, Number(saved.rates.esiRate) || 0),
-    esiCeiling: numberOr(rates.form.esiApplicableBelow, RANGES.amount, Number(saved.rates.esiApplicableBelow) || 0),
-  };
-  const flatProduction = {
-    on: rates.form.prodRulesEnabled,
-    pfRate: numberOr(rates.form.prodPfRate, RANGES.percent, Number(saved.rates.prodPfRate) || 0),
-    esiRate: numberOr(rates.form.prodEsiRate, RANGES.percent, Number(saved.rates.prodEsiRate) || 0),
-    esiCeiling: numberOr(
-      rates.form.prodEsiApplicableBelow,
-      RANGES.amount,
-      Number(saved.rates.prodEsiApplicableBelow) || 0,
-    ),
-  };
   const dirtyOf: Partial<Record<PayrollSubTab, boolean>> = {
     rates: rates.dirty,
     bonus: bonus.dirty,
-    prodPfEf: pfEf.dirty,
   };
   const unsavedElsewhere = SUB_TABS.filter((t) => t.value !== subTab && dirtyOf[t.value]).map((t) => t.label);
 
@@ -159,8 +142,6 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
               draft={rates}
               saved={saved.rates}
               settings={settings}
-              bandsOn={pfEf.form.prodPfEfEnabled}
-              bandCount={pfEf.form.prodPfEfRules.length}
               readOnly={readOnly}
               saving={saving === "rates"}
               busy={saving !== null}
@@ -192,7 +173,7 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
                   bonusPayload(bonus.form),
                   bonus.discard,
                   {
-                    title: "Bonus settings saved",
+                    title: "Staff bonus settings saved",
                     description: `The Bonus page's figures use them at once; a bonus register already generated changes only when Generate is run again.${branchOnly}`,
                   },
                   "Failed to save bonus settings",
@@ -204,31 +185,8 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
             <OtPanel
               featuresOn={featuresOn}
               onFeatures={(enabled) => void applyFeatures(enabled)}
-              staffRates={staffRates}
               branchLogin={branchLogin}
               readOnly={readOnly || featuresPending !== null}
-            />
-          )}
-          {subTab === "prodPfEf" && (
-            <PfEfPanel
-              draft={pfEf}
-              saved={saved.pfEf}
-              flat={flatProduction}
-              readOnly={readOnly}
-              saving={saving === "pfEf"}
-              busy={saving !== null}
-              onSave={() =>
-                runSave(
-                  "pfEf",
-                  pfEfPayload(pfEf.form, saved.pfEf, settings),
-                  pfEf.discard,
-                  {
-                    title: "PF/EF rules saved",
-                    description: `Production payslips generated from now on use them.${branchOnly}`,
-                  },
-                  "Failed to save PF/EF rules",
-                )
-              }
             />
           )}
         </>

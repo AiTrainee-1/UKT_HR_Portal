@@ -257,9 +257,11 @@ def _employee_status(qs: QuerySet, value: str) -> QuerySet:
 
 
 def _visible_to_external(qs: QuerySet, value: bool) -> QuerySet:
-    """Employee.co_emp_enabled is the existing opt-in flag "visible to an external application" (the company portal only
-    ever sees employees HR switched on). Used ONLY to narrow: the flag is never a shared field."""
-    return qs.filter(co_emp_enabled=True) if value else qs
+    """"Visible to an external application" = the employees the company portal sees (Co Emp ones, and TDS ones: they stay
+    visible there, pf_esi.COPORTAL_Q). Used ONLY to narrow: the flags are never shared fields."""
+    from .pf_esi import COPORTAL_Q
+
+    return qs.filter(COPORTAL_Q) if value else qs
 
 
 EMPLOYEES = Dataset(

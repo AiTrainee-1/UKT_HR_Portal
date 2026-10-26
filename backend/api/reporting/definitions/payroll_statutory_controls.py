@@ -547,10 +547,11 @@ def _run_recon(ctx) -> ReportResult:
         if abs(expected_net - dec(s.net_salary)) > _TOL:
             problems.append(f"net Rs. {dec(s.net_salary):,.2f} != gross + OT - deductions (Rs. {expected_net:,.2f})")
         late = dec(s.other_deductions) if typ == STAFF else dec(s.bd_penalty)
-        parts = dec(s.pf_deduction) + dec(s.esi_deduction) + dec(s.advance_deduction) + late
+        parts = dec(s.pf_deduction) + dec(s.esi_deduction) + dec(s.tds_deduction) + dec(s.advance_deduction) + late
         if abs(parts - dec(s.total_deductions)) > _TOL:
             problems.append(
-                f"total deductions Rs. {dec(s.total_deductions):,.2f} != PF + ESI + advance + late (Rs. {parts:,.2f})"
+                f"total deductions Rs. {dec(s.total_deductions):,.2f} != PF + ESI + TDS + advance + late "
+                f"(Rs. {parts:,.2f})"
             )
         if problems:
             text = "; ".join(problems)
@@ -597,7 +598,8 @@ def _run_recon(ctx) -> ReportResult:
         "corrected here. Slip net pay is the printed figure; Payroll final pay is what the payroll screens total.",
         "Known behaviours this report detects: setting a payroll row to paid recomputes its final pay from gross + bonus - "
         "deductions and drops overtime; regenerating a month after its advance instalments were processed loses the slip's "
-        "advance deduction. Arithmetic checks use a Rs. 0.01 tolerance; production late penalties sit inside total deductions.",
+        "advance deduction. Arithmetic checks use a Rs. 0.01 tolerance: total deductions must equal PF + ESI + TDS + advance + "
+        "late (production late penalties sit inside total deductions).",
         "Variance (payroll - slip) is shown on the 'Net differs' finding only; the other findings of the same slip "
         "repeat its figures without a variance, so the Variance total and the 'Net variance' card count each "
         "difference once.",

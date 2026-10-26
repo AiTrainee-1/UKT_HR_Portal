@@ -4,10 +4,13 @@ import { PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "../kit/
 import { DEFAULT_EXAMPLE, describeShift } from "../attendance/example";
 import { PERMISSION_MINUTES, judgeStaffDay } from "../attendance/preview";
 import { UnitInput } from "../attendance/UnitInput";
+import { LATE_SECTIONS, lateText } from "../LateDetectionTab.meta";
 import type { CapDraft } from "./form";
 import { capProblem, withinCap } from "./preview";
 
 const DAYS = ["2nd", "9th", "15th", "22nd"];
+
+const block = (id: string) => ({ id, ...lateText(id) });
 
 /** The monthly permission cap: how many approved permissions a month actually protect a day. */
 export function PermissionSection({
@@ -19,6 +22,7 @@ export function PermissionSection({
   arrival,
   secondHalfStart,
   morningOn,
+  permissionsPriced,
 }: {
   draft: CapDraft;
   update: (patch: Partial<CapDraft>) => void;
@@ -29,6 +33,8 @@ export function PermissionSection({
   arrival: ArrivalSettings;
   secondHalfStart: string | null;
   morningOn: boolean | undefined;
+  /** "Price permissions separately" is on (as typed): the permissions beyond the cap are not marks of the late pool. */
+  permissionsPriced: boolean;
 }) {
   const error = companyWideEditable && capReported ? capProblem(draft.cap) : null;
   const cap = Number(draft.cap);
@@ -54,7 +60,7 @@ export function PermissionSection({
     <SettingsSection
       id="permission-policy-section"
       icon={KeyRound}
-      title="Permission Policy"
+      title={LATE_SECTIONS.permission}
       purpose={`Staff only. There are three kinds of permission, each a fixed ${PERMISSION_MINUTES} minutes: Morning Late-In, Evening Early-Out and Middle One-Hour. Employees can ask for as many as they like and HR can approve any of them; this cap decides how many of the approved ones protect a day.`}
       usedBy={[
         { label: "Staff Attendance", to: "/hr/attendance/staff" },
@@ -64,10 +70,8 @@ export function PermissionSection({
       testId="permission-policy-section"
     >
       <SettingBlock
-        id="permission-cap"
+        {...block("permission-cap")}
         labelFor="permission-monthly-cap"
-        title="Permission Monthly Cap"
-        purpose="How many approved permissions per staff member per calendar month actually protect a day, counted earliest first. A permission beyond the cap can still be approved, but it excuses nothing and adds one mark to the late pool."
         affects={[
           {
             where: "Staff Attendance",
@@ -82,7 +86,7 @@ export function PermissionSection({
           { where: "WhatsApp late alert", what: "only an in-cap Morning Late-In permission holds it back" },
           {
             where: "Late pool and Staff Payroll",
-            what: "every approved permission beyond the cap is one mark",
+            what: "every approved permission beyond the cap is one mark, or is priced on its own when permission pricing (below) is on",
             to: "/hr/payroll",
           },
           { where: "Employee apps", what: "show the monthly limit to the employee" },
@@ -128,11 +132,19 @@ export function PermissionSection({
                     />
                   ),
                 )}
-                <PreviewLine
-                  label="These four permissions add to the month's late pool"
-                  result={`${excess} mark${excess === 1 ? "" : "s"}`}
-                  tone={excess > 0 ? "warn" : "good"}
-                />
+                {permissionsPriced ? (
+                  <PreviewLine
+                    label="These four permissions are priced separately (not in the late pool)"
+                    result={`${excess} extra permission${excess === 1 ? "" : "s"}`}
+                    tone={excess > 0 ? "warn" : "good"}
+                  />
+                ) : (
+                  <PreviewLine
+                    label="These four permissions add to the month's late pool"
+                    result={`${excess} mark${excess === 1 ? "" : "s"}`}
+                    tone={excess > 0 ? "warn" : "good"}
+                  />
+                )}
               </>
             )}
           </PreviewCard>

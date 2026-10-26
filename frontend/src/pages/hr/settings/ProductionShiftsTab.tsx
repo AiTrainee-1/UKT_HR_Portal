@@ -24,6 +24,8 @@ import { TabContents } from "./attendance/TabContents";
 import { useDraft } from "./attendance/useDraft";
 import { SaveBar } from "./kit/SaveBar";
 import { SaveDock } from "./kit/SaveDock";
+import { CLASS_VIEWS, ClassPills, UnsavedChip, useAddressView } from "./kit/view";
+import { PRODUCTION_SHIFT_VIEW_OF } from "./ProductionShiftsTab.meta";
 import { isIsoDate, prettyDate, todayIst } from "./compensation/form";
 import { saveErrorText } from "./payroll/form";
 import { BranchNotice } from "./payroll/ui";
@@ -41,6 +43,7 @@ import {
 } from "./production-shifts/form";
 import { GroupsSection } from "./production-shifts/GroupsSection";
 import { TryItSection } from "./production-shifts/TryItSection";
+import { StaffShiftsPage } from "./production-shifts/StaffPage";
 import { RulesStrip } from "./production-shifts/ui";
 import { WhenSection } from "./production-shifts/WhenSection";
 
@@ -92,14 +95,21 @@ function stamp(iso: string): string {
 }
 
 /**
- * Settings -> Production Shifts (production employees only): how a production day's punches become shifts earned. The
- * default timings are the factory's own (Day from 8:30, Night from 9:00 PM, Sunday, the breaks, a 5-minute grace) and all of
- * it is editable. One form with one Save: the switch and the date the rules start, the grace, the shift groups with their
- * ladders, the breaks and four advanced numbers. A save is all-or-nothing and asks first, because it changes how every
- * production day from the start date is judged (and so what production payroll pays once it is generated again).
+ * Settings -> Production Shifts, a Staff page and a Production page behind a pill switch (the tab opens on Production, the
+ * page that holds the rules).
+ *
+ * Production (production employees only): how a production day's punches become shifts earned. The default timings are the
+ * factory's own (Day from 8:30, Night from 9:00 PM, Sunday, the breaks, a 5-minute grace) and all of it is editable. One form
+ * with one Save: the switch and the date the rules start, the grace, the shift groups with their ladders, the breaks and four
+ * advanced numbers. A save is all-or-nothing and asks first, because it changes how every production day from the start date
+ * is judged (and so what production payroll pays once it is generated again).
+ *
+ * Staff: nothing is set; the page says staff shifts and grace come from Manage Shifts and the staff attendance rules from
+ * Attendance, with links. The production draft lives here, so switching pills never loses what was typed.
  */
 export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
+  const [view, chooseView] = useAddressView(CLASS_VIEWS, "production", PRODUCTION_SHIFT_VIEW_OF);
   const query = useProductionShiftRules();
   const update = useUpdateProductionShiftRules();
   const payroll = usePayrollSettings();
@@ -132,26 +142,47 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
   const branchLogin = payroll.data?.companyWideRulesEditable === false || refusedAsBranch;
   const locked = readOnly || branchLogin;
 
+  const pills = (
+    <ClassPills value={view} onChange={chooseView}>
+      {view === "staff" && dirty && <UnsavedChip>Not saved yet: Production</UnsavedChip>}
+    </ClassPills>
+  );
+
+  if (view === "staff") {
+    return (
+      <div className="space-y-4" data-testid="production-shifts-staff-page">
+        {pills}
+        <StaffShiftsPage />
+      </div>
+    );
+  }
+
   if (query.isLoading) {
     return (
-      <div className="space-y-3" data-testid="production-shifts-loading">
-        <Skeleton className="h-20 w-full rounded-xl" />
-        <Skeleton className="h-64 w-full rounded-xl" />
-        <Skeleton className="h-64 w-full rounded-xl" />
+      <div className="space-y-4">
+        {pills}
+        <div className="space-y-3" data-testid="production-shifts-loading">
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-64 w-full rounded-xl" />
+          <Skeleton className="h-64 w-full rounded-xl" />
+        </div>
       </div>
     );
   }
 
   if (query.isError || !data || !draft || !validation || !saved) {
     return (
-      <div
-        className="flex flex-wrap items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"
-        data-testid="production-shifts-load-error"
-      >
-        The production shift rules could not be loaded.
-        <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
-          Try again
-        </Button>
+      <div className="space-y-4">
+        {pills}
+        <div
+          className="flex flex-wrap items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+          data-testid="production-shifts-load-error"
+        >
+          The production shift rules could not be loaded.
+          <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
+            Try again
+          </Button>
+        </div>
       </div>
     );
   }
@@ -215,6 +246,7 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
 
   return (
     <div className="space-y-4" data-testid="production-shifts-tab">
+      {pills}
       {branchLogin && <BranchNotice>{BRANCH_TEXT}</BranchNotice>}
       <RulesStrip enabled={data.enabled !== false} from={data.effectiveFrom} today={today} />
       <TabContents items={CONTENTS} />

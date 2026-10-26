@@ -202,6 +202,9 @@ from .payroll_insights_views import (
     production_payroll_details, production_payroll_issues, production_payroll_rules,
 )
 from .payroll_statement_views import staff_salary_statement, production_salary_statement
+from .pf_esi_coverage_export import pf_esi_coverage_export
+from .pf_esi_views import pf_esi_coverage, pf_esi_settings
+from .tds_views import tds_employee_detail, tds_employees
 from .payroll_views import (
     session_configs, session_config_detail,
     attendance_logs, process_punch_sessions,
@@ -632,6 +635,12 @@ urlpatterns = [
 
     # ── Enterprise Payroll Engine ────────────────────────────────────────────
     path("payroll-settings", payroll_settings_view),
+    # PF & ESI rules (Settings -> PF & ESI) and the Co Emp / TDS categories they apply to: see pf_esi.py
+    path("pf-esi-settings", pf_esi_settings),
+    path("pf-esi/coverage", pf_esi_coverage),
+    path("pf-esi/coverage/export", pf_esi_coverage_export),
+    path("tds/employees", tds_employees),
+    path("tds/employees/<int:pk>", tds_employee_detail),
     path("session-configs", session_configs),
     path("session-configs/<int:pk>", session_config_detail),
     path("attendance-logs", attendance_logs),

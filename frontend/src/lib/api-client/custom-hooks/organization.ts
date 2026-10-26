@@ -796,10 +796,11 @@ function employeesQueryString(params: Record<string, unknown>): string {
 export const getListEmployeesPaginatedQueryKey = (params: PaginatedEmployeesParams) =>
   ["/api/employees", "paginated", params] as const;
 
-export const useListEmployeesPaginated = (params: PaginatedEmployeesParams) =>
+export const useListEmployeesPaginated = (params: PaginatedEmployeesParams, options?: { enabled?: boolean }) =>
   useQuery<PaginatedEmployeesResult>({
     queryKey: getListEmployeesPaginatedQueryKey(params),
     queryFn: () => customFetch<PaginatedEmployeesResult>(`/api/employees?${employeesQueryString(params)}`),
+    enabled: options?.enabled ?? true,
     // Keeps the previous page's rows on screen while the next page loads,
     // instead of the table flashing empty on every click -DataPagination's
     // Next/Previous should feel instant even though it now genuinely

@@ -119,6 +119,18 @@ def _configure(**fields) -> PayrollSettings:
     return ps
 
 
+def _rule(label, low, high, rate, basis="total", rule_id=None) -> dict:
+    """One PF / ESI rule as Settings > PF & ESI stores it (pf_esi.py): a range on `basis`, 0 = no upper limit."""
+    return {
+        "id": rule_id or label.lower().replace(" ", "-"),
+        "label": label,
+        "basis": basis,
+        "minAmount": low,
+        "maxAmount": high,
+        "ratePercent": rate,
+    }
+
+
 def _staff(code, first="Test", salary="24000.00", **kw) -> Employee:
     fields = {"status": "active", "salary_type": "monthly", "salary_amount": Decimal(salary), **kw}
     return Employee.objects.create(
@@ -411,7 +423,6 @@ def staff_world() -> SimpleNamespace:
     S200 Anand has no department, no shift and no bank details, and is present every day."""
     _configure(
         attendance_mode="simple",
-        staff_payroll_rules_enabled=False,
         late_free_allowance=1,
         late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 0.5}],
         permission_monthly_cap=1,
@@ -510,8 +521,6 @@ def production_world() -> SimpleNamespace:
         prod_late_detection_enabled=True,
         prod_late_free_allowance=1,
         prod_late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 0.5}],
-        prod_payroll_rules_enabled=False,
-        prod_pf_ef_enabled=False,
         prod_cycles=CYCLES,
     )
     dept = Department.objects.create(name="Weaving")
@@ -560,7 +569,6 @@ def statement_world() -> SimpleNamespace:
     Admin: 189, 226 and 2234 (joined on 15 April), all present every day."""
     _configure(
         attendance_mode="simple",
-        staff_payroll_rules_enabled=False,
         late_deduction_slabs=[],
         permission_monthly_cap=3,
         compensation_feature_enabled=True,
@@ -987,23 +995,35 @@ class PayAndProfileIssueTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
+        # PF 12% and ESI up to a 21,000 salary, for Co Emp employees (ESI at 1.5% of the first portion = what 0.75% of the
+        # earned pay was before the PF / ESI redesign, so the amounts below are unchanged)
         _configure(
             attendance_mode="simple",
-            staff_payroll_rules_enabled=True,
-            pf_rate=Decimal("12"),
-            esi_rate=Decimal("0.75"),
-            esi_applicable_below=Decimal("21000"),
+            staff_pf_rules=[_rule("PF", 0, 0, 12)],
+            staff_esi_rules=[_rule("ESI", 0, 21000, 1.5)],
             late_deduction_slabs=[],
             compensation_feature_enabled=True,
         )
         bank = {"bank_account": "555566667777", "bank_ifsc": "ICIC0001111", "bank_name": "ICICI"}
-        cls.bare = _staff("ST1", first="Rani", salary="20400.00")  # nothing on file
+        cls.bare = _staff("ST1", first="Rani", salary="20400.00", co_emp_enabled=True)  # nothing on file
         cls.half_bank = _staff(
-            "ST3", first="Raju", salary="20400.00", bank_account="123456789", pf_number="P", esi_number="E"
+            "ST3",
+            first="Raju",
+            salary="20400.00",
+            bank_account="123456789",
+            pf_number="P",
+            esi_number="E",
+            co_emp_enabled=True,
         )
-        cls.above = _staff("ST4", first="Rohit", salary="30000.00", **bank)  # above the ESI ceiling: no ESI
-        cls.full = _staff("ST2", first="Ravi", salary="20400.00", pf_number="PF/2", esi_number="ESI/2", **bank)
-        cls.busy = _staff("AD1", first="Ajay", salary="24000.00", pf_number="PF/9", esi_number="ESI/9", **bank)
+        cls.above = _staff(
+            "ST4", first="Rohit", salary="30000.00", co_emp_enabled=True, **bank
+        )  # above the ESI ceiling
+        cls.full = _staff(
+            "ST2", first="Ravi", salary="20400.00", pf_number="PF/2", esi_number="ESI/2", co_emp_enabled=True, **bank
+        )
+        cls.busy = _staff(
+            "AD1", first="Ajay", salary="24000.00", pf_number="PF/9", esi_number="ESI/9", co_emp_enabled=True, **bank
+        )
         shift = ShiftTemplate.objects.create(
             name="General", shift_type="staff", start_time=time(9, 0), end_time=time(18, 0), grace_period_minutes=10
         )
@@ -1084,10 +1104,16 @@ class PayAndProfileIssueTests(TestCase):
             [("pf", 1440.0), ("esi", 0.0), ("advances", 2000.0)],
         )
         by_key = {line["key"]: line for line in d["deductions"]}
-        self.assertEqual(by_key["pf"]["note"], "12% of Basic ₹12,000")
         self.assertEqual(
-            by_key["esi"]["note"], "Not deducted: the monthly salary ₹24,000 is above the ESI ceiling ₹21,000"
+            by_key["pf"]["note"],
+            '12% of Basic + DA + Retaining Allowance ₹12,000 (rule "PF": the full monthly salary ₹24,000 is in ₹0 and above)',
         )
+        self.assertEqual(
+            by_key["esi"]["note"],
+            "Not deducted: no ESI rule covers this employee (Basic salary ₹4,000, Basic + DA + Retaining Allowance "
+            "₹12,000, the full monthly salary ₹24,000)",
+        )
+        self.assertEqual((by_key["pf"]["ruleKey"], by_key["esi"]["ruleKey"]), ("pf_rules", "esi_rules"))
         self.assertEqual(by_key["advances"]["note"], "1 repayment due this month")
         self.assertEqual(
             d["advances"],
@@ -1161,7 +1187,7 @@ class ProductionIssueTests(TestCase):
             penalty["rule"],
             {
                 "label": "Weekly late deduction slabs",
-                "settingsPath": "/hr/settings?tab=production_payroll#weekly-late-slabs",
+                "settingsPath": "/hr/settings?tab=late_detection#weekly-late-slabs",
             },
         )
         self.assertEqual(Payroll.objects.get(pk=self.w.raja_payroll.pk).deductions, Decimal("250.00"))
@@ -1635,7 +1661,7 @@ class StaffDayMarkerTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        _configure(attendance_mode="simple", staff_payroll_rules_enabled=False, compensation_feature_enabled=True)
+        _configure(attendance_mode="simple", compensation_feature_enabled=True)
         cls.emp = _staff("S900", first="Bela", join_date="2024-06-03")
         cls.plain, cls.birthday, cls.allowance = WORKING[0], WORKING[3], WORKING[4]
         for day in WORKING:
@@ -1887,21 +1913,20 @@ class ProductionDetailsTests(TestCase):
         )
 
 
-class ProductionBandTests(TestCase):
-    """Salary-band PF / EF: the band applied is explained, and a band list edited since is detected."""
+class ProductionRuleTests(TestCase):
+    """Production PF / ESI rules: the rule applied is explained, and a rule list edited since is detected."""
 
     @classmethod
     def setUpTestData(cls):
         _configure(
             prod_attendance_mode="simple",
             prod_late_detection_enabled=False,
-            prod_payroll_rules_enabled=False,
-            prod_pf_ef_enabled=True,
-            prod_pf_ef_rules=[
-                {"label": "Low", "minSalary": 0, "maxSalary": 10000, "pfRate": 0, "efRate": 0},
-                {"label": "Mid", "minSalary": 10001, "maxSalary": 30000, "pfRate": 12, "efRate": 1},
-                {"label": "Top", "minSalary": 30001, "maxSalary": 0, "pfRate": 12, "efRate": 0},
+            prod_pf_rules=[
+                _rule("Low", 0, 10000, 0),
+                _rule("Mid", 10001, 30000, 12),
+                _rule("Top", 30001, 0, 10),
             ],
+            prod_esi_rules=[_rule("ESI band", 0, 30000, 1)],
             prod_cycles=CYCLES,
         )
         cls.emp = _production(
@@ -1912,6 +1937,7 @@ class ProductionBandTests(TestCase):
             esi_number="ESI/B",
             bank_account="1234567890",
             bank_ifsc="X",
+            co_emp_enabled=True,
         )
         for offset in range(5):
             _day(cls.emp, date(2026, 2, 2 + offset), shifts="1.00", first_punch=time(8, 30), last_punch=time(17, 30))
@@ -1926,90 +1952,132 @@ class ProductionBandTests(TestCase):
             )
         cls.payroll = _generate_production_payroll(cls.emp, START, END, pay_cycle="weekly")[
             "payroll"
-        ]  # 6 shifts = 3,000 -> 12,000 a month
+        ]  # 6 shifts = 3,000 -> 12,000 a month; PF and ESI come from the first 50% of the pay (1,500)
 
     def details(self):
         return _get(self, f"/api/payroll/production/{self.payroll.id}/details")
 
-    def test_the_band_pf_and_ef_are_explained(self):
+    def test_the_rule_that_priced_pf_and_esi_is_explained(self):
         d = self.details()
-        self.assertEqual((float(self.payroll.gross_salary), float(self.payroll.deductions)), (3000.0, 390.0))
+        self.assertEqual((float(self.payroll.gross_salary), float(self.payroll.deductions)), (3000.0, 195.0))
         lines = {line["key"]: line for line in d["deductions"]}
-        self.assertEqual(lines["pf"]["note"], "12% of the period pay ₹3,000 (salary band Mid)")
-        self.assertEqual(lines["esi"]["note"], "1% of the period pay ₹3,000 (salary band Mid)")
         self.assertEqual(
-            (lines["pf"]["amount"], lines["esi"]["amount"], lines["esi"]["label"]), (360.0, 30.0, "ESI / EF")
+            lines["pf"]["note"],
+            '12% of the first 50% of the period pay ₹1,500 (rule "Mid": the monthly equivalent pay ₹12,000 is in '
+            "₹10,001 to ₹30,000)",
         )
-        band = _rule_items(d)["pf_ef_rule"]
-        self.assertEqual((band["applied"], band["changed"]), ("Mid", False))
         self.assertEqual(
-            band["value"],
-            "Low: ₹0 to ₹10,000: PF 0%, EF 0%; Mid: ₹10,001 to ₹30,000: PF 12%, EF 1%; Top: ₹30,001 and above: PF 12%, EF 0%",
+            lines["esi"]["note"],
+            '1% of the first 50% of the period pay ₹1,500 (rule "ESI band": the monthly equivalent pay ₹12,000 is in '
+            "₹0 to ₹30,000)",
         )
+        self.assertEqual((lines["pf"]["amount"], lines["esi"]["amount"], lines["esi"]["label"]), (180.0, 15.0, "ESI"))
+        pf = _rule_items(d)["pf_rules"]
+        self.assertEqual((pf["applied"], pf["changed"]), ("12% of the first portion", False))
+        self.assertEqual(
+            pf["value"],
+            '12% of the first 50% of the period pay (rule "Mid": the monthly equivalent pay ₹12,000 is in ₹10,001 to ₹30,000)',
+        )
+        self.assertEqual(pf["settingsPath"], "/hr/settings?tab=pf_esi#prod-pf-rules")
 
-    def test_a_band_list_edited_since_is_detected(self):
+    def test_a_rule_list_edited_since_is_detected(self):
         _configure(
-            prod_pf_ef_rules=[
-                {"label": "Low", "minSalary": 0, "maxSalary": 10000, "pfRate": 0, "efRate": 0},
-                {"label": "Mid", "minSalary": 10001, "maxSalary": 11000, "pfRate": 12, "efRate": 1},
-                {"label": "Top", "minSalary": 11001, "maxSalary": 0, "pfRate": 12, "efRate": 0},
-            ]
+            prod_pf_rules=[_rule("Low", 0, 10000, 0), _rule("Mid", 10001, 11000, 12), _rule("Top", 11001, 0, 10)],
+            prod_esi_rules=[_rule("ESI band", 0, 11000, 1)],
         )
         items = _rule_items(self.details())
-        self.assertEqual((items["pf_ef_rule"]["applied"], items["pf_ef_rule"]["changed"]), ("Mid", True))
-        self.assertIn("this pay would use Top", items["pf_ef_rule"]["detail"])
-        self.assertFalse(items["pf_rate"]["changed"])  # PF is 12% in both bands
-        self.assertTrue(items["esi_rate"]["changed"])  # EF went from 1% to 0%
+        self.assertEqual(
+            (items["pf_rules"]["applied"], items["pf_rules"]["changed"]), ("12% of the first portion", True)
+        )
+        self.assertIn('10% of the first 50% of the period pay (rule "Top"', items["pf_rules"]["value"])
+        self.assertEqual(
+            (items["esi_rules"]["applied"], items["esi_rules"]["changed"]), ("1% of the first portion", True)
+        )
+        self.assertTrue(items["esi_rules"]["value"].startswith("Not deducted: no ESI rule covers this employee"))
+
+    def test_an_unchanged_rule_list_is_not_a_change(self):
+        items = _rule_items(self.details())
+        self.assertFalse(items["pf_rules"]["changed"])
+        self.assertFalse(items["esi_rules"]["changed"])
+        self.assertFalse(items["statutory_category"]["changed"])
+        self.assertEqual(items["statutory_category"]["applied"], "Co Emp: PF and ESI are deducted by the rules")
+
+    def test_taking_the_worker_off_co_emp_since_is_a_change(self):
+        Employee.objects.filter(pk=self.emp.pk).update(co_emp_enabled=False)
+        items = _rule_items(self.details())
+        self.assertTrue(items["statutory_category"]["changed"])
+        self.assertEqual(items["pf_rules"]["value"], "Not deducted: not a Co Emp employee")
+        self.assertTrue(items["pf_rules"]["changed"])
 
 
 class BranchSettingsTests(TestCase):
-    """PF / ESI follow the EMPLOYEE's branch (settings_for_employee): a branch's own rate is what 'changed' is judged against."""
+    """PF / ESI follow the EMPLOYEE's branch (settings_for_employee): a branch's own rule set is what 'changed' is judged
+    against, and the unit's login sees that set."""
 
     @classmethod
     def setUpTestData(cls):
         _configure(
             attendance_mode="simple",
-            staff_payroll_rules_enabled=False,
-            pf_rate=Decimal("0"),
+            staff_pf_rules=[],  # nothing configured for all units
             late_deduction_slabs=[],
             compensation_feature_enabled=True,
         )
         cls.north = Branch.objects.create(name="North")
+        # the Super Admin's PF & ESI page stores all four lists of a unit that has rules of its own
         BranchSettingsOverride.objects.create(
-            branch=cls.north, overrides={"staff_payroll_rules_enabled": True, "pf_rate": "10"}
+            branch=cls.north,
+            overrides={
+                "staff_pf_rules": [_rule("North PF", 0, 0, 10)],
+                "staff_esi_rules": [],
+                "prod_pf_rules": [],
+                "prod_esi_rules": [],
+            },
         )
-        cls.nila = _staff("N1", first="Nila", salary="20000.00", branch=cls.north)
-        cls.head = _staff("H1", first="Hari", salary="20000.00")
+        cls.nila = _staff("N1", first="Nila", salary="20000.00", branch=cls.north, co_emp_enabled=True)
+        cls.head = _staff("H1", first="Hari", salary="20000.00", co_emp_enabled=True)
         for emp in (cls.nila, cls.head):
             _present(emp, WORKING)
         cls.nila_payroll = _generate_staff_payroll(cls.nila, MONTH, YEAR)["payroll"]
         cls.head_payroll = _generate_staff_payroll(cls.head, MONTH, YEAR)["payroll"]
 
-    def test_the_branchs_own_pf_rate_is_the_one_in_force_and_unchanged(self):
-        self.assertEqual(float(self.nila_payroll.deductions) > 0, True)  # the branch's 10% PF was deducted
-        d = _get(self, f"/api/payroll/{self.nila_payroll.id}/details")
-        items = _rule_items(d)
+    def test_the_branchs_own_rule_is_the_one_in_force_and_unchanged(self):
+        self.assertEqual(float(self.nila_payroll.deductions), 1000.0)  # the unit's 10% of the 10,000 first portion
+        self.assertEqual(float(self.head_payroll.deductions), 0.0)  # no rule for all units: no PF
+        items = _rule_items(_get(self, f"/api/payroll/{self.nila_payroll.id}/details"))
         self.assertEqual(
-            (items["pf_rate"]["value"], items["pf_rate"]["applied"], items["pf_rate"]["changed"]),
-            ("10% of Basic", "10% of Basic", False),
+            (items["pf_rules"]["applied"], items["pf_rules"]["changed"]), ("10% of the first portion", False)
         )
-        self.assertEqual(items["pf_esi_switch"]["value"], "On")
+        self.assertTrue(items["pf_rules"]["value"].startswith("10% of Basic + DA + Retaining Allowance ("))
+        self.assertEqual(
+            (items["pf_esi_scope"]["value"], items["pf_esi_scope"]["applied"], items["pf_esi_scope"]["changed"]),
+            ("This unit's own rules, set by the Super Admin",) * 2 + (False,),
+        )
         head = _rule_items(_get(self, f"/api/payroll/{self.head_payroll.id}/details"))
-        self.assertEqual(head["pf_esi_switch"]["value"], "Off")
-        self.assertFalse(head["pf_rate"]["changed"])
+        self.assertEqual(head["pf_esi_scope"]["value"], "The rules for all units")
+        self.assertFalse(head["pf_rules"]["changed"])
+        self.assertTrue(head["pf_rules"]["value"].startswith("Not deducted: no PF rule covers this employee"))
 
-    def test_the_rules_table_chips_show_each_employees_own_branch_settings(self):
+    def test_the_rules_table_chips_show_each_employees_own_branch_rules(self):
         rows = {e["employeeCode"]: e for e in _get(self, f"/api/payroll/rules?{STAFF_QS}")["employees"]}
         self.assertIn("PF 10%", [c["label"] for c in rows["N1"]["chips"]])
         self.assertIn("No PF", [c["label"] for c in rows["H1"]["chips"]])
 
-    def test_the_branch_login_sees_its_own_settings_in_the_rules_tab(self):
+    def test_the_branch_login_sees_its_own_rules_in_the_rules_tab(self):
         headers = _login("north_viewer", {"payroll": "view"}, branch=self.north)
         body = _get(self, f"/api/payroll/rules?{STAFF_QS}", headers)
         statutory = next(g for g in body["settings"] if g["group"] == "Statutory (PF / ESI)")
         items = {i["key"]: i for i in statutory["items"]}
-        self.assertEqual((items["pf_esi_switch"]["value"], items["pf_rate"]["value"]), ("On", "10% of Basic"))
+        self.assertEqual(items["pf_esi_scope"]["value"], "This unit's own rules, set by the Super Admin")
+        self.assertEqual(items["pf_rules"]["value"], "10% when the full monthly salary is ₹0 and above")
+        self.assertEqual(items["esi_rules"]["value"], "No rules: nobody pays it")
         self.assertEqual([e["employeeCode"] for e in body["employees"]], ["N1"])  # only its own branch's people
+
+    def test_an_unscoped_login_sees_the_rules_for_all_units(self):
+        body = _get(self, f"/api/payroll/rules?{STAFF_QS}")
+        statutory = next(g for g in body["settings"] if g["group"] == "Statutory (PF / ESI)")
+        items = {i["key"]: i for i in statutory["items"]}
+        self.assertEqual(items["pf_esi_scope"]["value"], "The rules for all units")
+        self.assertEqual(items["pf_rules"]["value"], "No rules: nobody pays it")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2045,14 +2113,19 @@ class StaffRulesTests(TestCase):
         self.assertEqual(items["late_slabs"]["value"], "From 1 billable late mark: 0.5 shift")
         self.assertEqual(items["late_slabs"]["settingsPath"], "/hr/settings?tab=late_detection#deduction-slabs")
         self.assertEqual(items["permission_cap"]["value"], "Cap of 1 approved permission a month")
-        self.assertEqual(items["pf_rate"]["settingsPath"], "/hr/settings?tab=payroll#staff-pf-rate")
+        self.assertEqual(items["pf_rules"]["settingsPath"], "/hr/settings?tab=pf_esi#staff-pf-rules")
+        self.assertEqual(items["esi_rules"]["settingsPath"], "/hr/settings?tab=pf_esi#staff-esi-rules")
+        self.assertEqual(items["pf_esi_scope"]["settingsPath"], "/hr/settings?tab=pf_esi#pf-esi-scope")
         self.assertEqual(
             items["compensation_features"]["settingsPath"], "/hr/settings?tab=payroll#compensation-features"
         )
-        self.assertTrue(all(item["source"] == "settings" for item in items.values()))
+        # the old flat-rate / ceiling / switch settings are gone for good
+        self.assertFalse({"pf_rate", "esi_rate", "esi_ceiling", "pf_esi_switch"} & set(items))
+        self.assertTrue(all(item["source"] == "settings" for key, item in items.items() if key != "tds"))
         self.assertTrue(all("applied" not in item and "changed" not in item for item in items.values()))
+        # TDS is not a Settings page setting: its percentage is set per employee on Employees > Co Emp > TDS
         without_link = {key for key, item in items.items() if item["settingsPath"] is None}
-        self.assertEqual(without_link, {"first_half_limit", "pay_basis"})
+        self.assertEqual(without_link, {"first_half_limit", "pay_basis", "tds"})
 
     def test_a_changed_setting_shows_at_once(self):
         _configure(late_free_allowance=5)
@@ -2086,7 +2159,7 @@ class StaffRulesTests(TestCase):
             [
                 ("Attendance & late detection", ["shift", "saturday_off"]),
                 ("Half day & permissions", ["first_half_limit"]),
-                ("Statutory (PF / ESI)", ["pf_rate", "esi_rate"]),
+                ("Statutory (PF / ESI)", ["statutory_category", "pf_rules", "esi_rules"]),
                 ("Pay basis", ["monthly_salary", "working_days", "daily_rate"]),
             ],
         )
@@ -2094,20 +2167,54 @@ class StaffRulesTests(TestCase):
         self.assertEqual((shift["value"], shift["source"]), ("General, starts 09:00, 10 min grace", "shift"))
         self.assertEqual(anand["groups"][0]["items"][0]["value"], "No shift assigned")
 
-    def test_pf_and_esi_chips_follow_the_settings_and_the_salary(self):
+    def chips(self):
+        return {e["employeeCode"]: {c["key"]: c["label"] for c in e["chips"]} for e in self.rules()["employees"]}
+
+    def test_pf_and_esi_chips_need_co_emp_and_follow_the_rules_and_the_salary(self):
         _configure(
-            staff_payroll_rules_enabled=True,
-            pf_rate=Decimal("12"),
-            esi_rate=Decimal("0.75"),
-            esi_applicable_below=Decimal("21000"),
+            staff_pf_rules=[_rule("PF", 0, 0, 12)],
+            staff_esi_rules=[_rule("ESI", 0, 21000, 0.75)],
         )
-        chips = {e["employeeCode"]: {c["key"]: c["label"] for c in e["chips"]} for e in self.rules()["employees"]}
+        # nobody is Co Emp yet: the rules exist but nothing applies
+        self.assertEqual((self.chips()["S100"]["pf"], self.chips()["S100"]["esi"]), ("No PF", "No ESI"))
+        Employee.objects.filter(pk=self.w.meena.pk).update(co_emp_enabled=True)
+        chips = self.chips()
+        self.assertEqual((chips["S100"]["pf"], chips["S100"]["esi"]), ("PF 12%", "No ESI"))  # 24,000 is above 21,000
+        _configure(staff_esi_rules=[_rule("ESI", 0, 30000, 0.75)])
+        self.assertEqual(self.chips()["S100"]["esi"], "ESI 0.75%")
+        self.assertEqual((self.chips()["S200"]["pf"], self.chips()["S200"]["esi"]), ("No PF", "No ESI"))  # not Co Emp
+
+    def test_a_basic_rule_judges_the_basic_component_of_the_split(self):
+        Employee.objects.filter(pk=self.w.meena.pk).update(co_emp_enabled=True)
+        # 24,000 automatic split: Basic is 4,000, the first portion 12,000
+        _configure(staff_pf_rules=[_rule("PF below 5,000 Basic", 0, 5000, 12, basis="basic")])
+        self.assertEqual(self.chips()["S100"]["pf"], "PF 12%")
+        _configure(staff_pf_rules=[_rule("PF below 3,000 Basic", 0, 3000, 12, basis="basic")])
+        self.assertEqual(self.chips()["S100"]["pf"], "No PF")
+
+    def test_a_tds_employee_has_a_tds_chip_and_no_pf_or_esi(self):
+        _configure(staff_pf_rules=[_rule("PF", 0, 0, 12)])
+        Employee.objects.filter(pk=self.w.meena.pk).update(tds_enabled=True, tds_percent=Decimal("7.50"))
+        chips = self.chips()["S100"]
+        self.assertEqual((chips["pf"], chips["esi"], chips["tds"]), ("No PF", "No ESI", "TDS (7.5%)"))
+        meena = next(e for e in self.rules()["employees"] if e["employeeCode"] == "S100")
+        items = {i["key"]: i for g in meena["groups"] for i in g["items"]}
+        self.assertEqual(items["statutory_category"]["value"], "TDS employee: TDS only, no PF or ESI")
+        self.assertEqual(items["pf_rules"]["value"], "Not deducted: TDS employee (no PF)")
+        self.assertEqual(items["tds"]["value"], "7.5% of the pay earned in the period")
+        self.assertNotIn("tds", self.chips()["S200"])
+
+    def test_the_rule_lists_are_described_in_words_on_the_settings_side(self):
+        _configure(
+            staff_pf_rules=[_rule("Low", 0, 25000, 12, basis="basic"), _rule("High", 25001, 0, 10, basis="basic")],
+            staff_esi_rules=[_rule("ESI", 0, 21000, 0.75, basis="first_portion")],
+        )
+        items = {i["key"]: i for g in self.rules()["settings"] for i in g["items"]}
         self.assertEqual(
-            (chips["S100"]["pf"], chips["S100"]["esi"]), ("PF 12%", "ESI above ceiling")
-        )  # 24,000 > 21,000
-        _configure(esi_applicable_below=Decimal("30000"))
-        chips = {e["employeeCode"]: {c["key"]: c["label"] for c in e["chips"]} for e in self.rules()["employees"]}
-        self.assertEqual(chips["S100"]["esi"], "ESI 0.75%")
+            items["pf_rules"]["value"],
+            "12% when Basic salary is ₹0 to ₹25,000; 10% when Basic salary is ₹25,001 and above",
+        )
+        self.assertEqual(items["esi_rules"]["value"], "0.75% when Basic + DA + Retaining Allowance is ₹0 to ₹21,000")
 
     def test_saturday_off_and_holidays_change_the_working_days(self):
         EmployeeShiftAssignment.objects.filter(employee=self.w.meena).update(saturday_off=True)
@@ -2149,9 +2256,10 @@ class ProductionRulesTests(TestCase):
             ("Weekly (7 days)", "Monday", "x4"),
         )
         self.assertEqual(items["first_period"]["value"], "Not needed for Weekly")
-        self.assertEqual(items["late_slabs"]["settingsPath"], "/hr/settings?tab=production_payroll#weekly-late-slabs")
-        self.assertEqual(items["late_switch"]["settingsPath"], "/hr/settings?tab=production_payroll#prod-late-switch")
-        self.assertEqual(items["pf_rate"]["settingsPath"], "/hr/settings?tab=payroll#prod-pf-rate")
+        self.assertEqual(items["late_slabs"]["settingsPath"], "/hr/settings?tab=late_detection#weekly-late-slabs")
+        self.assertEqual(items["late_switch"]["settingsPath"], "/hr/settings?tab=late_detection#prod-late-switch")
+        self.assertEqual(items["pf_rules"]["settingsPath"], "/hr/settings?tab=pf_esi#prod-pf-rules")
+        self.assertEqual(items["esi_rules"]["settingsPath"], "/hr/settings?tab=pf_esi#prod-esi-rules")
         self.assertEqual(
             items["free_allowance"]["detail"], "The shared production value applies: this cycle has none of its own"
         )
@@ -2274,7 +2382,7 @@ class StaffStatementTests(TestCase):
         self.assertEqual({by_key[k]["group"] for k in ("present", "cl", "lop", "hd", "totalDays")}, {"attendance"})
         self.assertEqual({by_key[k]["group"] for k in ("esi", "pf", "tds", "others", "totalDeduction")}, {"deductions"})
         self.assertEqual(by_key["net"]["group"], "result")
-        self.assertEqual(by_key["tds"]["sub"], "not tracked")
+        self.assertIsNone(by_key["tds"]["sub"])  # TDS is tracked now: no 'not tracked' sub-heading
 
     def test_the_printed_example_row_adds_up(self):
         # Total 29,500 over 26 working days: 22 present + 2 Casual Leave = 24 days paid, 2 LOP, HR set deductions to 1,000
@@ -2441,10 +2549,11 @@ class StaffStatementTests(TestCase):
         self.assertEqual(body["counts"], {"employees": 6, "departments": 2, "paid": 0, "pending": 6})
         self.assertTrue(body["generatedAt"])
 
-    def test_the_notes_say_how_the_columns_are_worked_out_and_that_tds_is_not_tracked(self):
+    def test_the_notes_say_how_the_columns_are_worked_out_and_who_pays_tds(self):
         notes = " ".join(self.statement()["notes"])
         self.assertIn("Basic + PTRL + Others Allow = Total", notes)
-        self.assertIn("TDS is not tracked by the HRMS and is always 0", notes)
+        self.assertIn("TDS is deducted only from employees on the TDS list", notes)
+        self.assertNotIn("not tracked", notes)
         self.assertIn("NET = E salary - Total Deduction", notes)
         self.assertIn("Lop& PSAmt = Total - E salary", notes)
 
@@ -2523,7 +2632,8 @@ class ProductionStatementTests(TestCase):
                 ("sno", "SNO"), ("code", "ID NO"), ("name", "Name"), ("designation", "Designation"),
                 ("rate", "Rate / shift"), ("worked", "Days worked"), ("absent", "Absent"), ("late", "Late"),
                 ("shifts", "Shifts"), ("eSalary", "E salary"), ("tAdvance", "T.Advance"), ("advance", "Advance"),
-                ("esi", "ESI / EF"), ("pf", "PF"), ("others", "Others"), ("totalDeduction", "Total Deduction"),
+                ("esi", "ESI / EF"), ("pf", "PF"), ("tds", "TDS"), ("others", "Others"),
+                ("totalDeduction", "Total Deduction"),
                 ("net", "NET"), ("remarks", "Remarks"),
             ],
         )  # fmt: skip
@@ -2555,6 +2665,7 @@ class ProductionStatementTests(TestCase):
                 "advance": 0.0,
                 "esi": 0.0,
                 "pf": 0.0,
+                "tds": 0.0,
                 "others": 250.0,
                 "totalDeduction": 250.0,
                 "net": 2750.0,
@@ -2596,6 +2707,7 @@ class ProductionStatementTests(TestCase):
         )
         self.assertEqual(body["counts"], {"employees": 2, "departments": 2, "paid": 0, "pending": 2})
         self.assertTrue(any("ESI / EF" in n for n in body["notes"]))
+        self.assertFalse(any("salary band" in n for n in body["notes"]))  # the PF / EF bands no longer exist
 
     def test_filters(self):
         Payroll.objects.filter(pk=self.w.raja_payroll.pk).update(status="paid")
@@ -2801,6 +2913,7 @@ class QueryBoundTests(TestCase):
         staff = _staff(
             f"Q{n:03d}", first=f"Emp{n:03d}", salary="24000.00", department=depts[n % len(depts)], designation=title,
             branch=branch if n % 2 else None, bank_account="123456789", bank_ifsc="X",
+            co_emp_enabled=n % 3 != 0, tds_enabled=n % 3 == 0, tds_percent=Decimal("10") if n % 3 == 0 else None,
         )  # fmt: skip
         EmployeeShiftAssignment.objects.create(employee=staff, shift=shift, effective_from=date(2026, 1, 1))
         _present(staff, WORKING[:20], first_punch=time(9, 0), last_punch=time(18, 0))
@@ -2825,6 +2938,7 @@ class QueryBoundTests(TestCase):
         worker = _production(
             f"QP{n:03d}", first=f"Prod{n:03d}", production_pay_cycle="weekly", department=depts[n % len(depts)],
             branch=branch if n % 2 else None, bank_account="987654321", bank_ifsc="Y",
+            co_emp_enabled=n % 3 != 0, tds_enabled=n % 3 == 0, tds_percent=Decimal("5") if n % 3 == 0 else None,
         )  # fmt: skip
         EmployeeShiftAssignment.objects.create(employee=worker, shift=shift, effective_from=date(2026, 1, 1))
         for offset in range(5):
@@ -2850,7 +2964,8 @@ class QueryBoundTests(TestCase):
 
     def test_the_query_count_does_not_grow_with_the_number_of_employees(self):
         _configure(
-            attendance_mode="simple", staff_payroll_rules_enabled=True, pf_rate=Decimal("12"), esi_rate=Decimal("0.75"),
+            attendance_mode="simple", staff_pf_rules=[_rule("PF", 0, 0, 12)], staff_esi_rules=[_rule("ESI", 0, 30000, 0.75)],
+            prod_pf_rules=[_rule("PF", 0, 0, 12)], prod_esi_rules=[_rule("ESI", 0, 0, 0.75)],
             late_free_allowance=0, late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 0.5}],
             prod_late_detection_enabled=True, prod_late_free_allowance=0,
             prod_late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 0.5}], prod_cycles=CYCLES,
@@ -2861,7 +2976,15 @@ class QueryBoundTests(TestCase):
             name="General", shift_type="staff", start_time=time(9, 0), end_time=time(18, 0), grace_period_minutes=10
         )
         branch = Branch.objects.create(name="Unit 3")
-        BranchSettingsOverride.objects.create(branch=branch, overrides={"pf_rate": "9"})
+        BranchSettingsOverride.objects.create(
+            branch=branch,
+            overrides={
+                "staff_pf_rules": [_rule("Unit PF", 0, 0, 9)],
+                "staff_esi_rules": [],
+                "prod_pf_rules": [_rule("Unit PF", 0, 0, 9)],
+                "prod_esi_rules": [],
+            },
+        )
         for n in range(2):
             self.build(n, depts, shift, branch, title)
         small = self.counts()
@@ -2875,6 +2998,281 @@ class QueryBoundTests(TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  PF / ESI / TDS on the insights pages
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TdsAndStatutoryInsightsTests(TestCase):
+    """Co Emp, TDS and nobody on the details lines, the Salary Statement and the rules, for staff and production.
+
+    February 2026, 24 working days, full attendance, salary 30,000 (so a daily rate of 1,250 and, with no split recorded, a
+    first portion of 15,000): T1 Tara is on the TDS list at 10%, C1 Chitra is Co Emp (PF 12% and ESI 0.75% of the first
+    portion = 1,800 + 112.50), P1 Pooja is neither. Production, the Weekly period 2-8 February, 5 shifts at 500 = 2,500: PT1
+    Tarun is on the TDS list at 12.5%, PC1 Chitra is Co Emp (PF 12% of the first 50% of the pay = 150)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        _configure(
+            attendance_mode="simple",
+            late_deduction_slabs=[],
+            compensation_feature_enabled=True,
+            staff_pf_rules=[_rule("PF", 0, 0, 12)],
+            staff_esi_rules=[_rule("ESI", 0, 40000, 0.75)],
+            prod_pf_rules=[_rule("PF", 0, 0, 12)],
+            prod_esi_rules=[],
+            prod_attendance_mode="simple",
+            prod_late_detection_enabled=False,
+            prod_cycles=CYCLES,
+        )
+        shift = ShiftTemplate.objects.create(
+            name="General", shift_type="staff", start_time=time(9, 0), end_time=time(18, 0), grace_period_minutes=10
+        )
+        bank = {"bank_account": "555566667777", "bank_ifsc": "ICIC0001111", "bank_name": "ICICI"}
+        cls.tds = _staff("T1", first="Tara", salary="30000.00", tds_enabled=True, tds_percent=Decimal("10.00"), **bank)
+        cls.co = _staff("C1", first="Chitra", salary="30000.00", co_emp_enabled=True, **bank)
+        cls.plain = _staff("P1", first="Pooja", salary="30000.00", **bank)
+        for emp in (cls.tds, cls.co, cls.plain):
+            EmployeeShiftAssignment.objects.create(employee=emp, shift=shift, effective_from=date(2026, 1, 1))
+            _present(emp, WORKING)
+        cls.payrolls = {
+            e.employee_code: _generate_staff_payroll(e, MONTH, YEAR)["payroll"] for e in (cls.tds, cls.co, cls.plain)
+        }
+        cls.worker = _production(
+            "PT1", first="Tarun", production_pay_cycle="weekly", tds_enabled=True, tds_percent=Decimal("12.50"), **bank
+        )
+        cls.co_worker = _production("PC1", first="Chitra", production_pay_cycle="weekly", co_emp_enabled=True, **bank)
+        for emp in (cls.worker, cls.co_worker):
+            for offset in range(5):
+                _day(emp, date(2026, 2, 2 + offset), shifts="1.00", first_punch=time(8, 30), last_punch=time(17, 30))
+        cls.worker_payroll = _generate_production_payroll(cls.worker, START, END, pay_cycle="weekly")["payroll"]
+        cls.co_worker_payroll = _generate_production_payroll(cls.co_worker, START, END, pay_cycle="weekly")["payroll"]
+
+    # ── the payrolls themselves (what the engine stored) ──
+
+    def test_the_engine_stored_the_expected_money(self):
+        t, c, p = (Payroll.objects.get(pk=self.payrolls[k].pk) for k in ("T1", "C1", "P1"))
+        self.assertEqual(
+            (t.deductions, t.tds_deduction, t.tds_percent, t.final_salary),
+            (Decimal("3000.00"), Decimal("3000.00"), Decimal("10.00"), Decimal("27000.00")),
+        )
+        self.assertEqual(
+            (c.deductions, c.tds_deduction, c.tds_percent, c.final_salary),
+            (Decimal("1912.50"), Decimal("0.00"), None, Decimal("28087.50")),
+        )
+        self.assertEqual(
+            (p.deductions, p.tds_deduction, p.final_salary), (Decimal("0.00"), Decimal("0.00"), Decimal("30000.00"))
+        )
+        w = Payroll.objects.get(pk=self.worker_payroll.pk)
+        self.assertEqual(
+            (w.gross_salary, w.tds_deduction, w.final_salary),
+            (Decimal("2500.00"), Decimal("312.50"), Decimal("2187.50")),
+        )
+
+    # ── the Salary Statement ──
+
+    def statement(self):
+        body = _get(self, f"/api/payroll/salary-statement?{STAFF_QS}")
+        return body, {r["values"]["code"]: r["values"] for g in body["groups"] for r in g["rows"]}
+
+    def test_the_statements_tds_column_carries_the_tds_and_others_leaves_it_out(self):
+        body, rows = self.statement()
+        self.assertEqual(
+            (
+                rows["T1"]["tds"],
+                rows["T1"]["pf"],
+                rows["T1"]["esi"],
+                rows["T1"]["others"],
+                rows["T1"]["totalDeduction"],
+            ),
+            (3000.0, 0.0, 0.0, 0.0, 3000.0),
+        )  # TDS is its own column: it must not turn up as 'Others'
+        self.assertEqual(
+            (
+                rows["C1"]["tds"],
+                rows["C1"]["pf"],
+                rows["C1"]["esi"],
+                rows["C1"]["others"],
+                rows["C1"]["totalDeduction"],
+            ),
+            (0.0, 1800.0, 112.5, 0.0, 1912.5),
+        )
+        self.assertEqual((rows["P1"]["tds"], rows["P1"]["totalDeduction"], rows["P1"]["net"]), (0.0, 0.0, 30000.0))
+        for code, v in rows.items():
+            self.assertAlmostEqual(
+                v["esi"] + v["pf"] + v["tds"] + v["advance"] + v["others"], v["totalDeduction"], delta=0.011, msg=code
+            )
+            self.assertAlmostEqual(v["eSalary"] - v["totalDeduction"], v["net"], delta=0.011, msg=code)
+        grand = body["total"]["values"]
+        self.assertEqual((grand["tds"], grand["pf"], grand["esi"], grand["others"]), (3000.0, 1800.0, 112.5, 0.0))
+        tds_column = next(c for c in body["columns"] if c["key"] == "tds")
+        self.assertEqual((tds_column["label"], tds_column["total"], tds_column["group"]), ("TDS", True, "deductions"))
+
+    def test_the_late_deduction_is_still_the_others_column_next_to_tds(self):
+        # a late deduction on the TDS employee's payroll: HR adds a 500 deduction after generation
+        Client().patch(
+            f"/api/payroll/{self.payrolls['T1'].id}", {"deductions": 3500}, content_type="application/json", **_admin()
+        )
+        _body, rows = self.statement()
+        self.assertEqual(
+            (rows["T1"]["tds"], rows["T1"]["others"], rows["T1"]["totalDeduction"]), (3000.0, 500.0, 3500.0)
+        )
+
+    def test_the_production_statement_has_a_tds_column_too(self):
+        body = _get(self, f"/api/payroll/production/salary-statement?{PROD_QS}")
+        rows = {r["values"]["code"]: r["values"] for g in body["groups"] for r in g["rows"]}
+        self.assertEqual(
+            (
+                rows["PT1"]["tds"],
+                rows["PT1"]["pf"],
+                rows["PT1"]["others"],
+                rows["PT1"]["totalDeduction"],
+                rows["PT1"]["net"],
+            ),
+            (312.5, 0.0, 0.0, 312.5, 2187.5),
+        )
+        self.assertEqual(
+            (rows["PC1"]["tds"], rows["PC1"]["pf"], rows["PC1"]["others"], rows["PC1"]["totalDeduction"]),
+            (0.0, 150.0, 0.0, 150.0),
+        )
+        self.assertEqual(body["total"]["values"]["tds"], 312.5)
+        self.assertIn("tds", [c["key"] for c in body["columns"]])
+
+    # ── one payroll's details ──
+
+    def lines(self, payroll, kind="staff"):
+        base = "/api/payroll" if kind == "staff" else "/api/payroll/production"
+        d = _get(self, f"{base}/{payroll.id}/details")
+        return d, {line["key"]: line for line in d["deductions"]}
+
+    def test_a_tds_payroll_lists_a_tds_line_that_adds_up_to_the_total(self):
+        d, by_key = self.lines(self.payrolls["T1"])
+        self.assertEqual([k for k, line in by_key.items() if line["kind"] != "subtotal"], ["tds"])
+        tds = by_key["tds"]
+        self.assertEqual((tds["label"], tds["amount"], tds["ruleKey"]), ("TDS (10%)", 3000.0, "tds"))
+        self.assertEqual(tds["note"], "10% of the pay earned ₹30,000")
+        taken = sum(line["amount"] for line in d["deductions"] if line["kind"] == "deduction")
+        self.assertEqual(
+            (taken, by_key["total_deductions"]["amount"], d["money"]["deductions"]), (3000.0, 3000.0, 3000.0)
+        )
+        earned = sum(line["amount"] for line in d["earnings"] if line["kind"] == "earning")
+        self.assertEqual(earned - taken, d["money"]["net"])
+        self.assertTrue(tds["ruleKey"] in set(_rule_items(d)))
+
+    def test_a_co_emp_payroll_has_pf_and_esi_lines_and_no_tds_line(self):
+        d, by_key = self.lines(self.payrolls["C1"])
+        self.assertEqual(
+            [(k, line["amount"]) for k, line in by_key.items() if line["kind"] != "subtotal"],
+            [("pf", 1800.0), ("esi", 112.5)],
+        )
+        self.assertNotIn("tds", by_key)
+        self.assertEqual(
+            by_key["pf"]["note"],
+            '12% of Basic + DA + Retaining Allowance ₹15,000 (rule "PF": the full monthly salary ₹30,000 is in ₹0 and above)',
+        )
+        self.assertEqual(
+            by_key["esi"]["note"],
+            '0.75% of Basic + DA + Retaining Allowance ₹15,000 (rule "ESI": the full monthly salary ₹30,000 is in ₹0 to ₹40,000)',
+        )
+        self.assertEqual((by_key["pf"]["ruleKey"], by_key["esi"]["ruleKey"]), ("pf_rules", "esi_rules"))
+
+    def test_a_payroll_of_nobody_has_no_pf_esi_or_tds_line(self):
+        d, by_key = self.lines(self.payrolls["P1"])
+        self.assertEqual(list(by_key), ["total_deductions"])
+        self.assertEqual(_rule_items(d)["statutory_category"]["value"], "Not Co Emp: no PF, ESI or TDS")
+        self.assertNotIn("tds", _rule_items(d))
+
+    def test_the_production_details_list_the_tds_line(self):
+        d, by_key = self.lines(self.worker_payroll, "production")
+        self.assertEqual((by_key["tds"]["label"], by_key["tds"]["amount"]), ("TDS (12.5%)", 312.5))
+        self.assertEqual(by_key["tds"]["note"], "12.5% of the pay earned ₹2,500")
+        self.assertEqual(
+            sum(line["amount"] for line in d["deductions"] if line["kind"] == "deduction"), d["money"]["deductions"]
+        )
+        self.assertEqual(d["money"]["net"], 2187.5)
+        _d, co = self.lines(self.co_worker_payroll, "production")
+        self.assertEqual((co["pf"]["amount"], "tds" in co), (150.0, False))
+
+    def test_the_tds_rule_item_follows_the_percentage_set_for_the_employee(self):
+        items = _rule_items(_get(self, f"/api/payroll/{self.payrolls['T1'].id}/details"))
+        self.assertEqual(
+            (items["tds"]["value"], items["tds"]["applied"], items["tds"]["changed"]),
+            ("10% of the pay earned in the period",) * 2 + (False,),
+        )
+        self.assertEqual(items["statutory_category"]["value"], "TDS employee: TDS only, no PF or ESI")
+        self.assertIsNone(items["tds"]["settingsPath"])
+        Employee.objects.filter(pk=self.tds.pk).update(tds_percent=Decimal("12.00"))
+        items = _rule_items(_get(self, f"/api/payroll/{self.payrolls['T1'].id}/details"))
+        self.assertEqual(
+            (items["tds"]["value"], items["tds"]["applied"], items["tds"]["changed"]),
+            ("12% of the pay earned in the period", "10% of the pay earned in the period", True),
+        )
+
+    def test_moving_a_tds_employee_to_co_emp_since_is_shown_as_a_change(self):
+        Employee.objects.filter(pk=self.tds.pk).update(tds_enabled=False, tds_percent=None, co_emp_enabled=True)
+        items = _rule_items(_get(self, f"/api/payroll/{self.payrolls['T1'].id}/details"))
+        self.assertTrue(items["statutory_category"]["changed"])
+        self.assertEqual(items["statutory_category"]["applied"], "TDS employee: TDS only, no PF or ESI")
+        self.assertTrue(items["pf_rules"]["value"].startswith("12% of Basic + DA + Retaining Allowance"))
+        self.assertEqual(items["tds"]["value"], "Not deducted: the employee is not on the TDS list now")
+        self.assertTrue(items["tds"]["changed"])
+
+    def test_a_payroll_from_before_the_redesign_still_explains_itself_and_reports_no_change(self):
+        slip = SalarySlip.objects.get(employee=self.co, month=MONTH, year=YEAR)
+        bd = slip.breakdown_details
+        bd["deductions"].pop("statutory")
+        bd["deductions"]["esiApplicableBelow"] = 21000.0  # keys the old engine wrote
+        bd["deductions"]["pfEfRule"] = None
+        SalarySlip.objects.filter(pk=slip.pk).update(breakdown_details=bd)
+        d, by_key = self.lines(self.payrolls["C1"])
+        self.assertEqual(
+            [(k, line["amount"]) for k, line in by_key.items() if line["kind"] != "subtotal"],
+            [("pf", 1800.0), ("esi", 112.5)],
+        )
+        self.assertEqual(by_key["pf"]["note"], "12% of Basic ₹15,000")
+        self.assertIsNone(by_key["pf"]["ruleKey"])  # the old switches and bands no longer exist: nothing to link to
+        items = _rule_items(d)
+        for key in ("statutory_category", "pf_rules", "esi_rules"):
+            self.assertIsNone(items[key]["applied"], key)
+            self.assertFalse(items[key]["changed"], key)
+        # and the statement still adds up for it
+        _body, rows = self.statement()
+        self.assertEqual((rows["C1"]["pf"], rows["C1"]["esi"], rows["C1"]["tds"]), (1800.0, 112.5, 0.0))
+
+    # ── the contract ──
+
+    def setUp(self):
+        self._ts_ok = (_TS_FILES / "payroll-insights.ts").exists()
+
+    def test_the_responses_match_the_typescript_contract(self):
+        if not self._ts_ok:
+            self.skipTest("the frontend sources are not next to the backend")
+        contract = _TsContract()
+        for url, type_name in (
+            (f"/api/payroll/{self.payrolls['T1'].id}/details", "PayrollDetails"),
+            (f"/api/payroll/{self.payrolls['C1'].id}/details", "PayrollDetails"),
+            (f"/api/payroll/production/{self.worker_payroll.id}/details", "PayrollDetails"),
+            (f"/api/payroll/rules?{STAFF_QS}", "PayrollRulesResponse"),
+            (f"/api/payroll/production/rules?{PROD_QS}", "PayrollRulesResponse"),
+            (f"/api/payroll/salary-statement?{STAFF_QS}", "SalaryStatement"),
+            (f"/api/payroll/production/salary-statement?{PROD_QS}", "SalaryStatement"),
+        ):
+            self.assertEqual(contract.errors(_get(self, url), ("ref", type_name)), [], url)
+
+    def test_every_settings_link_of_these_responses_exists(self):
+        if not _SETTINGS_DIR.exists():
+            self.skipTest("the frontend sources are not next to the backend")
+        tabs, anchors = _frontend_setting_ids()
+        for url in (
+            f"/api/payroll/{self.payrolls['C1'].id}/details",
+            f"/api/payroll/rules?{STAFF_QS}",
+            f"/api/payroll/production/rules?{PROD_QS}",
+            f"/api/payroll/production/{self.co_worker_payroll.id}/details",
+        ):
+            for path in _settings_paths(_get(self, url)):
+                _check_path(self, path, tabs, anchors)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Settings links and the TypeScript contract
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2885,6 +3283,7 @@ _META_FILES = {
     "payroll": "PayrollTab.meta.ts",
     "compensation": "CompensationTab.meta.ts",
     "production_payroll": "ProductionPayrollTab.meta.ts",
+    "pf_esi": "PfEsiTab.meta.ts",
 }
 
 
@@ -2923,7 +3322,8 @@ class SettingsLinkTests(TestCase):
     def test_every_setting_link_this_package_can_emit_points_at_a_setting_that_exists(self):
         tabs, anchors = _frontend_setting_ids()
         self.assertIn("production_payroll", tabs)
-        self.assertIn("weekly-late-slabs", anchors["production_payroll"])
+        self.assertIn("weekly-late-slabs", anchors["late_detection"])
+        self.assertIn("weekly-week-start", anchors["production_payroll"])
         refs = all_setting_refs()
         self.assertGreater(len(refs), 30)
         for ref in refs:

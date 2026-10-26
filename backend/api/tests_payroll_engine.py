@@ -124,6 +124,18 @@ def _breakdown(emp):
     return SalarySlip.objects.get(employee=emp, month=MONTH, year=YEAR).breakdown_details
 
 
+def _rule(rule_id, low, high, rate, basis="basic", label=None):
+    """One PF / ESI rule as the settings store it (high 0 = no upper limit)."""
+    return {
+        "id": rule_id,
+        "label": label or rule_id,
+        "basis": basis,
+        "minAmount": low,
+        "maxAmount": high,
+        "ratePercent": rate,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Pure helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -241,12 +253,10 @@ class LateDeductionSlabTests(TestCase):
 
 class StaffPayrollTests(TestCase):
     def setUp(self):
-        # Rules off, no lates penalised, unless a test opts in.
+        # No PF / ESI rules, no lates penalised, unless a test opts in.
         _configure(
-            staff_payroll_rules_enabled=False,
-            pf_rate=Decimal("12"),
-            esi_rate=Decimal("0.75"),
-            esi_applicable_below=Decimal("21000"),
+            staff_pf_rules=[],
+            staff_esi_rules=[],
             late_free_allowance=3,
             late_deduction_slabs=[],
             permission_monthly_cap=3,
@@ -345,70 +355,222 @@ class StaffPayrollTests(TestCase):
         self.assertEqual(p.total_working_days, 23)
         self.assertEqual(p.gross_salary, Decimal("11000.00"))  # 11 x (23000/23)
 
-    # ── PF / ESI ───────────────────────────────────────────────────────────
-    def test_no_statutory_deductions_while_the_master_toggle_is_off(self):
-        _configure(staff_payroll_rules_enabled=False)
-        emp = _staff(salary="20400.00")
+    # ── PF / ESI / TDS ─────────────────────────────────────────────────────
+    # PF below 25,000 Basic (12%) and ESI below 30,000 Basic (0.75%): two independent limits, both on the Basic
+    # component of the salary split. A 24,000 salary has the automatic split: first portion 12,000, Basic 4,000.
+    def _rules(self, pf_max=25000, esi_max=30000, basis="basic"):
+        _configure(
+            staff_pf_rules=[_rule("pf1", 0, pf_max, 12, basis)],
+            staff_esi_rules=[_rule("esi1", 0, esi_max, "0.75", basis)],
+        )
+
+    def _slip(self, emp):
+        return SalarySlip.objects.get(employee=emp, month=MONTH, year=YEAR)
+
+    def test_nobody_gets_pf_or_esi_who_is_not_co_emp_however_the_rules_are_set(self):
+        self._rules()
+        emp = _staff(salary="20400.00")  # co_emp_enabled is off
         _present_all(emp)
         p = self._run(emp)["payroll"]
+        slip = self._slip(emp)
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction, slip.tds_deduction), (Decimal("0.00"),) * 3)
         self.assertEqual(p.deductions, Decimal("0.00"))
         self.assertEqual(p.final_salary, Decimal("20400.00"))
+        statutory = _breakdown(emp)["deductions"]["statutory"]
+        self.assertEqual((statutory["category"], statutory["pfRule"], statutory["esiRule"]), ("none", None, None))
 
-    def test_pf_is_a_percentage_of_basic_and_esi_of_gross_when_under_the_ceiling(self):
-        _configure(staff_payroll_rules_enabled=True)
-        emp = _staff(salary="20400.00")
+    def test_a_co_emp_employee_pays_the_rule_percentage_of_the_first_portion(self):
+        self._rules()
+        emp = _staff(salary="20400.00", co_emp_enabled=True)
         _present_all(emp)
         p = self._run(emp)["payroll"]
-        # basic = 50% of 20400 = 10200 -> PF 12% = 1224.00; ESI 0.75% of 20400 = 153.00
-        slip = SalarySlip.objects.get(employee=emp, month=MONTH, year=YEAR)
+        # first portion = 50% of 20,400 = 10,200; Basic = 3,400 is inside both ranges
+        # PF 12% of 10,200 = 1,224.00; ESI 0.75% of 10,200 = 76.50 (the same first-portion base, not the whole pay)
+        slip = self._slip(emp)
         self.assertEqual(slip.basic, Decimal("10200.00"))
-        self.assertEqual(slip.pf_deduction, Decimal("1224.00"))
-        self.assertEqual(slip.esi_deduction, Decimal("153.00"))
-        self.assertEqual(p.deductions, Decimal("1377.00"))
-        self.assertEqual(p.final_salary, Decimal("19023.00"))
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (Decimal("1224.00"), Decimal("76.50")))
+        self.assertEqual(p.deductions, Decimal("1300.50"))
+        self.assertEqual(p.final_salary, Decimal("19099.50"))
+        statutory = _breakdown(emp)["deductions"]["statutory"]
+        self.assertEqual(statutory["category"], "co_emp")
+        self.assertEqual(statutory["pfWages"], 10200.0)
+        self.assertEqual((statutory["pfRule"]["id"], statutory["pfRule"]["amountTested"]), ("pf1", 3400.0))
+        self.assertEqual((statutory["esiRule"]["id"], statutory["rulesScope"]), ("esi1", "global"))
+        self.assertEqual(_breakdown(emp)["deductions"]["pfRate"], 12.0)
 
-    def test_esi_does_not_apply_above_the_ceiling_but_pf_still_does(self):
-        _configure(staff_payroll_rules_enabled=True)
-        emp = _staff(salary="24000.00")
+    def test_pf_stops_above_its_limit_but_esi_has_its_own_independent_limit(self):
+        self._rules(pf_max=25000, esi_max=30000)
+        # A recorded split decides Basic: 27,000 is above the PF limit but below the ESI one.
+        salary = Decimal("60000.00")
+        parts = {
+            "basic": Decimal("27000"),
+            "da": Decimal("1500"),
+            "retaining_allowance": Decimal("1500"),
+            "other_allowance": Decimal("10000"),
+            "petrol_allowance": Decimal("5000"),
+            "hra": Decimal("10000"),
+            "special_allowance": Decimal("3000"),
+            "ca": Decimal("2000"),
+        }
+        from . import salary_split
+
+        emp = _staff(salary=str(salary), co_emp_enabled=True, **{salary_split.COLUMNS[c]: v for c, v in parts.items()})
         _present_all(emp)
         self._run(emp)
-        slip = SalarySlip.objects.get(employee=emp)
-        self.assertEqual(slip.esi_deduction, Decimal("0.00"))
-        self.assertEqual(slip.pf_deduction, Decimal("1440.00"))  # 12% of 12000
+        slip = self._slip(emp)
+        self.assertEqual(slip.pf_deduction, Decimal("0.00"))  # Basic 27,000 > 25,000
+        self.assertEqual(slip.esi_deduction, Decimal("225.00"))  # 0.75% of the 30,000 first portion
 
-    def test_esi_ceiling_is_inclusive(self):
-        # The field's help text says "below", the code uses <=. Pinned as-is:
-        # an employee on exactly the ceiling IS charged ESI.
-        _configure(staff_payroll_rules_enabled=True, esi_applicable_below=Decimal("24000"))
-        emp = _staff(salary="24000.00")
+    def test_a_limit_is_inclusive_and_the_amount_is_the_full_monthly_basic(self):
+        parts = {
+            "basic": Decimal("25000"),
+            "da": Decimal("2500"),
+            "retaining_allowance": Decimal("2500"),
+            "other_allowance": Decimal("15000"),
+            "petrol_allowance": Decimal("5000"),
+            "hra": Decimal("5000"),
+            "special_allowance": Decimal("3000"),
+            "ca": Decimal("2000"),
+        }
+        from . import salary_split
+
+        emp = _staff(salary="60000.00", co_emp_enabled=True, **{salary_split.COLUMNS[c]: v for c, v in parts.items()})
+        _present_all(emp, WORKING_DAYS[:12])  # half the month: a part month must not change who is eligible
+        self._rules(pf_max=25000)
+        self._run(emp)
+        self.assertEqual(self._slip(emp).pf_deduction, Decimal("1800.00"))  # 12% of (30,000 x 12/24); 25,000 is IN
+        self._rules(pf_max="24999.99")
+        self._run(emp)
+        self.assertEqual(self._slip(emp).pf_deduction, Decimal("0.00"))  # Basic 25,000 is above 24,999.99
+
+    def test_the_first_matching_rule_wins_and_a_zero_max_has_no_upper_limit(self):
+        _configure(
+            staff_pf_rules=[_rule("low", 0, 5000, 10, label="Low"), _rule("high", "5000.01", 0, 4, label="High")],
+        )
+        emp = _staff(salary="24000.00", co_emp_enabled=True)  # Basic 4,000 -> "Low"
+        rich = _staff(code="PAY_R", salary="60000.00", co_emp_enabled=True)  # Basic 10,000 -> "High" (no upper limit)
+        for e in (emp, rich):
+            _present_all(e)
+            self._run(e)
+        self.assertEqual(self._slip(emp).pf_deduction, Decimal("1200.00"))  # 10% of 12,000
+        self.assertEqual(self._slip(rich).pf_deduction, Decimal("1200.00"))  # 4% of 30,000
+        self.assertEqual(_breakdown(rich)["deductions"]["statutory"]["pfRule"]["label"], "High")
+
+    def test_a_basis_can_be_the_first_portion_or_the_whole_salary(self):
+        # first portion of a 24,000 salary is 12,000; the total is 24,000
+        _configure(
+            staff_pf_rules=[_rule("fp", 0, 12000, 12, "first_portion")],
+            staff_esi_rules=[_rule("t", 0, 23999, 1, "total")],
+        )
+        emp = _staff(salary="24000.00", co_emp_enabled=True)
         _present_all(emp)
         self._run(emp)
-        self.assertEqual(SalarySlip.objects.get(employee=emp).esi_deduction, Decimal("180.00"))
+        slip = self._slip(emp)
+        self.assertEqual(slip.pf_deduction, Decimal("1440.00"))  # 12,000 is inside 0..12,000
+        self.assertEqual(slip.esi_deduction, Decimal("0.00"))  # 24,000 is above 23,999
 
-    def test_esi_eligibility_uses_full_salary_not_the_prorated_amount(self):
-        # 30000 salary, half the month worked: prorated gross 15000 is under the
-        # 21000 ceiling, but the employee's salary is not, so no ESI.
-        _configure(staff_payroll_rules_enabled=True)
-        emp = _staff(salary="30000.00")
-        _present_all(emp, WORKING_DAYS[:12])
+    def test_no_matching_rule_and_no_rules_at_all_deduct_nothing(self):
+        emp = _staff(salary="24000.00", co_emp_enabled=True)
+        _present_all(emp)
+        self._run(emp)  # no rules configured at all
+        self.assertEqual(self._slip(emp).total_deductions, Decimal("0.00"))
+        _configure(staff_pf_rules=[_rule("far", 90000, 0, 12)])
         self._run(emp)
-        self.assertEqual(SalarySlip.objects.get(employee=emp).esi_deduction, Decimal("0.00"))
+        slip = self._slip(emp)
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (Decimal("0.00"), Decimal("0.00")))
+        self.assertIn("no PF or ESI rule", _breakdown(emp)["deductions"]["statutory"]["reason"])
 
     def test_pf_is_prorated_with_attendance(self):
-        _configure(staff_payroll_rules_enabled=True)
-        emp = _staff(salary="24000.00")
+        self._rules()
+        emp = _staff(salary="24000.00", co_emp_enabled=True)
         _present_all(emp, WORKING_DAYS[:12])
         self._run(emp)
-        slip = SalarySlip.objects.get(employee=emp)
+        slip = self._slip(emp)
         self.assertEqual(slip.basic, Decimal("6000.00"))
         self.assertEqual(slip.pf_deduction, Decimal("720.00"))
+        self.assertEqual(slip.esi_deduction, Decimal("45.00"))
 
-    def test_zero_rates_deduct_nothing_even_with_rules_on(self):
-        _configure(staff_payroll_rules_enabled=True, pf_rate=Decimal("0"), esi_rate=Decimal("0"))
-        emp = _staff(salary="20000.00")
+    def test_a_zero_percent_rule_deducts_nothing(self):
+        _configure(staff_pf_rules=[_rule("zero", 0, 0, 0)], staff_esi_rules=[_rule("zero", 0, 0, 0)])
+        emp = _staff(salary="20000.00", co_emp_enabled=True)
         _present_all(emp)
         p = self._run(emp)["payroll"]
         self.assertEqual(p.deductions, Decimal("0.00"))
+
+    def test_a_tds_employee_pays_tds_only_on_everything_earned(self):
+        self._rules()
+        emp = _staff(salary="24000.00", co_emp_enabled=False, tds_enabled=True, tds_percent=Decimal("10"))
+        _present_all(emp, WORKING_DAYS[:18])  # earned 18,000
+        p = self._run(emp)["payroll"]
+        slip = self._slip(emp)
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (Decimal("0.00"), Decimal("0.00")))
+        self.assertEqual((slip.tds_deduction, slip.tds_percent), (Decimal("1800.00"), Decimal("10.00")))
+        self.assertEqual((p.tds_deduction, p.tds_percent), (Decimal("1800.00"), Decimal("10.00")))
+        self.assertEqual((slip.total_deductions, slip.net_salary), (Decimal("1800.00"), Decimal("16200.00")))
+        self.assertEqual((p.deductions, p.final_salary), (Decimal("1800.00"), Decimal("16200.00")))
+        statutory = _breakdown(emp)["deductions"]["statutory"]
+        self.assertEqual(statutory["category"], "tds")
+        self.assertEqual(statutory["tds"], {"percent": 10.0, "base": 18000.0, "amount": 1800.0})
+
+    def test_tds_is_taken_from_the_whole_earned_pay_including_ot_and_never_for_others(self):
+        _configure(compensation_feature_enabled=True)
+        emp = _staff(salary="24000.00", tds_enabled=True, tds_percent=Decimal("5"))
+        _present_all(emp)
+        OvertimeRecord.objects.create(
+            employee=emp,
+            date=WORKING_DAYS[2],
+            last_punch_out=time(21, 0),
+            ot_minutes=120,
+            status=OvertimeRecord.STATUS_ANNOUNCED,
+            compensation_type=OvertimeRecord.TYPE_PAY,
+        )
+        other = _staff(code="PAY_X", salary="24000.00", co_emp_enabled=False)  # in no category
+        _present_all(other)
+        self._run(emp)
+        self._run(other)
+        slip = self._slip(emp)
+        # 24,000 + 1,000 OT pay (one day's equivalent) = 25,000 earned -> 5% = 1,250
+        self.assertEqual((slip.ot_amount, slip.tds_deduction), (Decimal("1000.00"), Decimal("1250.00")))
+        self.assertEqual(slip.net_salary, Decimal("23750.00"))
+        self.assertEqual(self._slip(other).tds_deduction, Decimal("0.00"))
+        self.assertIsNone(self._slip(other).tds_percent)
+        self.assertIsNone(_breakdown(other)["deductions"]["statutory"]["tds"])
+
+    def test_a_tds_employee_with_no_percentage_pays_no_tds(self):
+        emp = _staff(salary="24000.00", tds_enabled=True, tds_percent=None)
+        _present_all(emp)
+        p = self._run(emp)["payroll"]
+        self.assertEqual((p.deductions, self._slip(emp).tds_percent), (Decimal("0.00"), None))
+
+    def test_bad_data_with_both_flags_set_is_still_treated_as_tds_only(self):
+        self._rules()
+        emp = _staff(salary="24000.00", co_emp_enabled=True, tds_enabled=True, tds_percent=Decimal("10"))
+        _present_all(emp)
+        self._run(emp)
+        slip = self._slip(emp)
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction, slip.tds_deduction), (0, 0, Decimal("2400.00")))
+
+    def test_advance_and_late_penalty_stack_with_pf_esi_and_tds_in_the_net(self):
+        _configure(
+            late_free_allowance=0,
+            late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 1}],
+            staff_pf_rules=[_rule("pf1", 0, 0, 12)],
+        )
+        emp = _staff(salary="24000.00", co_emp_enabled=True)
+        for d in WORKING_DAYS[:1]:
+            _day(emp, d, is_late=True)
+        for d in WORKING_DAYS[1:]:
+            _day(emp, d)
+        adv = Advance.objects.create(
+            employee=emp, advance_type="salary", amount=Decimal("500"), status="approved",
+            total_repaid=Decimal("0"), outstanding=Decimal("500"),
+        )  # fmt: skip
+        AdvanceRepayment.objects.create(advance=adv, month=MONTH, year=YEAR, amount=Decimal("500"))
+        p = self._run(emp)["payroll"]
+        slip = self._slip(emp)
+        # PF 1,440 + advance 500 + late 1 shift (1,000) = 2,940
+        self.assertEqual((slip.pf_deduction, slip.advance_deduction, slip.other_deductions), (1440, 500, 1000))
+        self.assertEqual((p.deductions, p.final_salary), (Decimal("2940.00"), Decimal("21060.00")))
 
     # ── late penalties ─────────────────────────────────────────────────────
     def _late_days(self, emp, n):
@@ -626,15 +788,7 @@ class ProductionPayrollTests(TestCase):
     START, END = date(2026, 2, 2), date(2026, 2, 11)  # 10 days, Mon-Wed of the next week
 
     def setUp(self):
-        _configure(
-            prod_payroll_rules_enabled=False,
-            prod_pf_rate=Decimal("12"),
-            prod_esi_rate=Decimal("0.75"),
-            prod_esi_applicable_below=Decimal("21000"),
-            prod_pf_ef_enabled=False,
-            prod_pf_ef_rules=[],
-            prod_late_detection_enabled=False,
-        )
+        _configure(prod_pf_rules=[], prod_esi_rules=[], prod_late_detection_enabled=False)
 
     def _run(self, emp):
         return _generate_production_payroll(emp, self.START, self.END)
@@ -672,74 +826,78 @@ class ProductionPayrollTests(TestCase):
         self.assertEqual(p.gross_salary, Decimal("1500.00"))
         self.assertEqual(p.absent_days, Decimal("7.0"))
 
-    def test_no_deductions_while_the_master_toggle_is_off(self):
+    def _slip(self, emp):
+        return SalarySlip.objects.get(employee=emp)
+
+    def test_no_production_deductions_for_an_employee_who_is_not_co_emp(self):
+        _configure(prod_pf_rules=[_rule("p", 0, 0, 12, "total")], prod_esi_rules=[_rule("e", 0, 0, 1, "total")])
         emp = _production()
         self._work(emp)
         self.assertEqual(self._run(emp)["payroll"].deductions, Decimal("0.00"))
 
-    def test_flat_rates_apply_when_the_master_toggle_is_on(self):
-        _configure(prod_payroll_rules_enabled=True)
-        emp = _production()
-        self._work(emp)  # gross 6250 -> monthly equivalent 12500, under the 21000 ceiling
-        p = self._run(emp)["payroll"]
-        slip = SalarySlip.objects.get(employee=emp)
-        self.assertEqual(slip.pf_deduction, Decimal("750.00"))
-        self.assertEqual(slip.esi_deduction, Decimal("46.88"))  # 46.875 rounds half up
-        self.assertEqual(p.final_salary, Decimal("5453.12"))
-
-    def test_flat_esi_is_skipped_above_the_ceiling_using_the_monthly_equivalent(self):
-        _configure(prod_payroll_rules_enabled=True)
-        emp = _production(per_shift="1000.00")
-        self._work(emp)  # 12.5 shifts = 12500 -> monthly equivalent 25000 > 21000
-        self._run(emp)
-        slip = SalarySlip.objects.get(employee=emp)
-        self.assertEqual(slip.esi_deduction, Decimal("0.00"))
-        self.assertEqual(slip.pf_deduction, Decimal("1500.00"))
-
-    def _rules(self):
-        return [
-            {"label": "Low", "minSalary": 0, "maxSalary": 10000, "pfRate": 0, "efRate": 0},
-            {"label": "Mid", "minSalary": 10001, "maxSalary": 20000, "pfRate": 12, "efRate": 1},
-            {"label": "Top", "minSalary": 20001, "maxSalary": 0, "pfRate": 12, "efRate": 0},
-        ]
-
-    def test_salary_range_rule_is_chosen_by_monthly_equivalent(self):
-        _configure(prod_pf_ef_enabled=True, prod_pf_ef_rules=self._rules())
-        emp = _production()
-        self._work(emp)  # equivalent 12500 -> "Mid"
-        self._run(emp)
-        b = _breakdown(emp)["deductions"]
-        self.assertEqual(b["pfEfRule"]["label"], "Mid")
-        self.assertEqual((b["pf"], b["esi"]), (750.0, 62.5))
-
-    def test_a_zero_max_salary_means_no_upper_limit(self):
-        _configure(prod_pf_ef_enabled=True, prod_pf_ef_rules=self._rules())
-        emp = _production(per_shift="1000.00")
-        self._work(emp)  # 12.5 x 1000 = 12500 -> equivalent 25000 -> "Top"
-        self._run(emp)
-        self.assertEqual(_breakdown(emp)["deductions"]["pfEfRule"]["label"], "Top")
-
-    def test_a_matching_rule_overrides_the_flat_rates(self):
-        _configure(prod_payroll_rules_enabled=True, prod_pf_ef_enabled=True, prod_pf_ef_rules=self._rules())
-        emp = _production()
-        self._work(emp, full=2, one_and_half=0)  # 1000 -> equivalent 2000 -> "Low": no deductions
-        self._run(emp)
-        b = _breakdown(emp)["deductions"]
-        self.assertEqual((b["pf"], b["esi"], b["total"]), (0.0, 0.0, 0.0))
-        self.assertEqual(b["pfEfRule"]["label"], "Low")
-
-    def test_no_matching_rule_falls_back_to_flat_rates(self):
+    def test_a_co_emp_worker_pays_the_rule_percentage_of_the_first_portion_of_the_period_pay(self):
         _configure(
-            prod_payroll_rules_enabled=True,
-            prod_pf_ef_enabled=True,
-            prod_pf_ef_rules=[{"label": "Only high", "minSalary": 90000, "maxSalary": 0, "pfRate": 5, "efRate": 5}],
+            prod_pf_rules=[_rule("p", 0, 25000, 12, "total")], prod_esi_rules=[_rule("e", 0, 30000, "0.75", "total")]
         )
-        emp = _production()
+        emp = _production(co_emp_enabled=True)
+        self._work(emp)  # gross 6,250 -> monthly equivalent 12,500, inside both ranges
+        p = self._run(emp)["payroll"]
+        slip = self._slip(emp)
+        # first portion = 50% of 6,250 = 3,125 -> PF 12% = 375.00, ESI 0.75% = 23.4375 -> 23.44
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (Decimal("375.00"), Decimal("23.44")))
+        self.assertEqual(p.final_salary, Decimal("5851.56"))
+        statutory = _breakdown_for_period(emp)["deductions"]["statutory"]
+        self.assertEqual((statutory["pfWages"], statutory["pfRule"]["amountTested"]), (3125.0, 12500.0))
+
+    def test_eligibility_is_the_monthly_equivalent_of_the_chosen_basis(self):
+        # monthly equivalent 25,000 (12.5 shifts x 1,000 x 2): Basic share is 1/6 of it (4,166.67), first portion half
+        _configure(
+            prod_pf_rules=[_rule("basic", 0, 5000, 12, "basic")],
+            prod_esi_rules=[_rule("total", 0, 24999, 1, "total")],
+        )
+        emp = _production(per_shift="1000.00", co_emp_enabled=True)
         self._work(emp)
         self._run(emp)
-        b = _breakdown_for_period(emp)["deductions"]
-        self.assertIsNone(b["pfEfRule"])
-        self.assertEqual(b["pf"], 750.0)
+        slip = self._slip(emp)
+        self.assertEqual(slip.pf_deduction, Decimal("750.00"))  # Basic 4,166.67 <= 5,000: 12% of 6,250
+        self.assertEqual(slip.esi_deduction, Decimal("0.00"))  # 25,000 is above 24,999
+        deductions = _breakdown_for_period(emp)["deductions"]
+        self.assertEqual(deductions["monthlyEquivalent"], 25000.0)
+        self.assertEqual(deductions["statutory"]["eligibility"]["basic"], 4166.67)
+
+    def test_bands_are_chosen_by_monthly_equivalent_and_a_zero_max_has_no_upper_limit(self):
+        _configure(
+            prod_pf_rules=[
+                _rule("low", 0, 10000, 0, "total", "Low"),
+                _rule("mid", "10000.01", 20000, 12, "total", "Mid"),
+                _rule("top", "20000.01", 0, 10, "total", "Top"),
+            ],
+            prod_esi_rules=[_rule("mid", "10000.01", 20000, 1, "total", "Mid")],
+        )
+        mid = _production(co_emp_enabled=True)
+        top = _production(code="PAY_T", per_shift="1000.00", co_emp_enabled=True)
+        for emp in (mid, top):
+            self._work(emp)
+            self._run(emp)
+        self.assertEqual(_breakdown_for_period(mid)["deductions"]["statutory"]["pfRule"]["label"], "Mid")  # 12,500
+        self.assertEqual(_breakdown_for_period(top)["deductions"]["statutory"]["pfRule"]["label"], "Top")  # 25,000
+        self.assertEqual(
+            (self._slip(mid).pf_deduction, self._slip(mid).esi_deduction), (Decimal("375.00"), Decimal("31.25"))
+        )
+        self.assertEqual((self._slip(top).pf_deduction, self._slip(top).esi_deduction), (Decimal("625.00"), 0))
+
+    def test_a_tds_worker_pays_tds_on_the_period_gross_and_no_pf_or_esi(self):
+        _configure(prod_pf_rules=[_rule("p", 0, 0, 12, "total")], prod_esi_rules=[_rule("e", 0, 0, 1, "total")])
+        emp = _production(tds_enabled=True, tds_percent=Decimal("2.5"))
+        self._work(emp)  # gross 6,250
+        p = self._run(emp)["payroll"]
+        slip = self._slip(emp)
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (0, 0))
+        self.assertEqual((slip.tds_deduction, slip.tds_percent), (Decimal("156.25"), Decimal("2.50")))  # 2.5% of 6,250
+        self.assertEqual(
+            (p.tds_deduction, p.deductions, p.final_salary), (Decimal("156.25"),) * 2 + (Decimal("6093.75"),)
+        )
+        self.assertEqual(_breakdown_for_period(emp)["deductions"]["tds"], 156.25)
 
     def test_advance_is_attributed_to_the_month_the_period_ends_in(self):
         emp = _production()
@@ -790,7 +948,8 @@ def _breakdown_for_period(emp):
 class PayrollEndpointTests(TestCase):
     def setUp(self):
         _configure(
-            staff_payroll_rules_enabled=False,
+            staff_pf_rules=[],
+            staff_esi_rules=[],
             late_deduction_slabs=[],
             attendance_mode="simple",
             compensation_feature_enabled=True,

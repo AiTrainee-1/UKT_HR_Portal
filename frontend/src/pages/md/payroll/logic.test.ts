@@ -9,6 +9,7 @@ import {
   deltaView,
   describeStatus,
   groupRows,
+  hasTds,
   monthOptions,
   nextLimit,
   previousMonth,
@@ -16,6 +17,7 @@ import {
   signedInr,
   signedInrCompact,
   stepIsDrawn,
+  tdsSub,
   tickMonth,
   trendChartRows,
   waterfallDomain,
@@ -379,6 +381,33 @@ describe("questions for the assistant", () => {
     expect(bridgeQuestion("Sep 2026", "Aug 2026", null)).toBe(
       "What changed in payroll in Sep 2026 compared with Aug 2026?",
     );
+  });
+});
+
+describe("TDS", () => {
+  it("is shown only when employees on the TDS list had some", () => {
+    expect(hasTds(2500)).toBe(true);
+    expect(hasTds(0.01)).toBe(true);
+    expect(hasTds(0)).toBe(false); // a company with nobody on the TDS list: no "TDS ₹0"
+    expect(hasTds(null)).toBe(false);
+    expect(hasTds(undefined)).toBe(false); // an answer from before the TDS fields existed
+  });
+
+  it("says how many employees it was taken from, and that it is not a PF / ESI due", () => {
+    expect(tdsSub(1)).toBe(
+      "From 1 employee on the TDS list · paid to the income-tax department, not part of the PF and ESI dues",
+    );
+    expect(tdsSub(3)).toContain("From 3 employees on the TDS list");
+    expect(tdsSub(undefined)).toContain("From employees on the TDS list");
+    expect(tdsSub(0)).toContain("From employees on the TDS list");
+  });
+
+  it("changes like any other figure, with no percentage when last month had none", () => {
+    expect(deltaView({ abs: 5800, pct: null }, "money", "neutral")).toEqual({
+      text: "+₹5,800",
+      tone: "neutral",
+      direction: "up",
+    });
   });
 });
 

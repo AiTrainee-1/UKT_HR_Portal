@@ -5,12 +5,16 @@ import { PAYROLL_SECTIONS, payrollText } from "../PayrollTab.meta";
 import { numberOr, RANGES, type Draft, type NumberRule } from "./form";
 import { bonusFor, formatPaise, formatPercent, formatRupees, MONTHS, staffFullMonthBasic } from "./preview";
 import { BONUS_LABELS, bonusErrors, bonusPercentWarning, describeChanges, hasErrors, type BonusForm } from "./sections";
-import { ConfirmChanges, NumberInput, StickySave } from "./ui";
+import { ConfirmChanges, NumberInput, StickySave, TextLink } from "./ui";
 
 const block = (id: string) => ({ id, ...payrollText(id) });
 const months = (n: number, basic: number) => Array.from({ length: n }, () => basic);
 
-/** Settings -> Payroll -> "Bonus": the statutory bonus rate and its two ceilings (the Bonus page's engine). */
+/**
+ * Settings -> Staff Payroll -> "Bonus": the statutory bonus rate and its two ceilings for STAFF (the Bonus page's engine).
+ * Production workers have their own on Production Payroll, Pay & Bonus; the financial year start month is one company-wide
+ * value shared by both.
+ */
 export function BonusPanel({
   draft,
   saved,
@@ -45,7 +49,6 @@ export function BonusPanel({
   const verdict = (b: ReturnType<typeof bonusFor>) => (b.eligible ? `bonus ${formatPaise(b.amount)}` : "not eligible");
   const staff20 = bonusFor({ ...rules, slipBasics: months(12, 10_000) });
   const staff12 = bonusFor({ ...rules, slipBasics: months(12, 6_000) });
-  const production = bonusFor({ ...rules, slipBasics: months(26, 9_600) });
   const atLimit = staffFullMonthBasic(eligibility * 2);
   const overLimit = staffFullMonthBasic(eligibility * 2 + 2);
 
@@ -54,7 +57,7 @@ export function BonusPanel({
       <SettingsSection
         icon={Gift}
         title={PAYROLL_SECTIONS.bonus}
-        purpose="How the Bonus page works out each employee's statutory bonus for a financial year (Payment of Bonus Act, 1965). Nothing is paid by itself: HR previews the figures and writes the bonus register with Generate on the Bonus page."
+        purpose="How the Bonus page works out each staff member's statutory bonus for a financial year (Payment of Bonus Act, 1965). Production workers have their own rate and ceilings on Production Payroll. Nothing is paid by itself: HR previews the figures and writes the bonus register with Generate on the Bonus page."
         usedBy={[{ label: "Bonus", to: "/hr/bonus" }, { label: "MD portal" }]}
       >
         <SettingBlock
@@ -64,12 +67,12 @@ export function BonusPanel({
           affects={[
             {
               where: "Bonus",
-              what: "bonus = the year's bonus wage x this rate, in the preview and when Generate writes the register (each row keeps the rate it was generated with).",
+              what: "a staff member's bonus = the year's bonus wage x this rate, in the preview and when Generate writes the register (each row keeps the rate it was generated with).",
               to: "/hr/bonus",
             },
             { where: "Bonus Excel export and the MD portal", what: "read the generated register, not this setting." },
           ]}
-          note="Generating a year's bonus again updates its rows with the rate of that moment."
+          note="Generating a year's bonus again updates its rows with the rate of that moment. Production workers are not affected: their rate is on Production Payroll."
           preview={
             <PreviewCard
               scenario={`Staff paid every day of the year (12 payslips), wage ceiling ${formatRupees(wageCeiling)}, eligibility limit ${formatRupees(eligibility)}, rate ${formatPercent(percent)}.`}
@@ -105,11 +108,11 @@ export function BonusPanel({
           affects={[
             {
               where: "Bonus",
-              what: "bonus wage = the sum, over the year's payslips, of the smaller of each payslip's Basic and this ceiling.",
+              what: "a staff member's bonus wage = the sum, over the year's payslips, of the smaller of each payslip's Basic and this ceiling.",
               to: "/hr/bonus",
             },
           ]}
-          note="Applied per payslip: a production worker has about 52 payslips a year on the Weekly cycle, 26 on BiWeekly and 13 on Monthly, each capped separately, and a production payslip's Basic is its whole period pay."
+          note="Applied per payslip: a staff member has 12 monthly payslips a year, each capped separately. Production workers have more payslips and their own ceiling, on Production Payroll."
           preview={
             <PreviewCard scenario={`Bonus rate ${formatPercent(percent)}, ceiling ${formatRupees(wageCeiling)}.`}>
               <PreviewLine
@@ -117,8 +120,8 @@ export function BonusPanel({
                 result={`wage ${formatPaise(staff20.base)} - ${verdict(staff20)}`}
               />
               <PreviewLine
-                label="Production, 26 BiWeekly payslips of ₹9,600"
-                result={`wage ${formatPaise(production.base)} - ${verdict(production)}`}
+                label="Staff, Basic ₹6,000 on each of 12 payslips"
+                result={`wage ${formatPaise(staff12.base)} - ${verdict(staff12)}`}
               />
             </PreviewCard>
           }
@@ -145,7 +148,7 @@ export function BonusPanel({
               to: "/hr/bonus",
             },
           ]}
-          note={`For staff, Basic is half the salary, so a limit of ${formatRupees(eligibility)} covers salaries up to ${formatRupees(eligibility * 2)}. For production, the latest payslip's whole period pay is compared.`}
+          note={`For staff, Basic is half the salary, so a limit of ${formatRupees(eligibility)} covers salaries up to ${formatRupees(eligibility * 2)}. Production workers have a limit of their own, on Production Payroll.`}
           preview={
             <PreviewCard scenario={`Limit ${formatRupees(eligibility)} on the year's latest payslip Basic.`}>
               <PreviewLine
@@ -156,13 +159,6 @@ export function BonusPanel({
                 label={`Staff, ${formatRupees(eligibility * 2 + 2)} salary (Basic ${formatRupees(overLimit)})`}
                 result={bonusFor({ ...rules, slipBasics: [overLimit] }).eligible ? "eligible" : "not eligible"}
               />
-              {[24_600, 9_600].map((pay) => (
-                <PreviewLine
-                  key={pay}
-                  label={`Production, latest payslip ${formatRupees(pay)}`}
-                  result={bonusFor({ ...rules, slipBasics: [pay] }).eligible ? "eligible" : "not eligible"}
-                />
-              ))}
             </PreviewCard>
           }
         >
@@ -184,9 +180,13 @@ export function BonusPanel({
         linkLabel="Financial year start month"
         testId="bonus-fy-pointer"
       >
-        Set once for the company under Payroll Rules, Pay calendar and defaults (now{" "}
-        {MONTHS[fyStartMonth - 1] ?? fyStartMonth}
-        ). It also sets the financial-year periods of payroll reports and the MD portal.
+        Set once for the company under Payroll Rules, Pay calendar (now {MONTHS[fyStartMonth - 1] ?? fyStartMonth}), for
+        staff and production alike. It also sets the financial-year periods of payroll reports and the MD portal. The
+        production bonus is on{" "}
+        <TextLink to="/hr/settings?tab=production_payroll#prod-bonus-percent">
+          Production Payroll - Pay &amp; Bonus
+        </TextLink>
+        .
       </ManagedElsewhere>
 
       <StickySave
@@ -194,7 +194,7 @@ export function BonusPanel({
         saving={saving}
         onSave={() => (draft.dirty ? setConfirming(true) : void onSave())}
         onDiscard={draft.discard}
-        saveLabel="Save Bonus Settings"
+        saveLabel="Save Staff Bonus Settings"
         disabled={readOnly || invalid || busy}
         hint={invalid ? "Fix the values marked in red first." : undefined}
       />
@@ -202,14 +202,15 @@ export function BonusPanel({
       <ConfirmChanges
         open={confirming}
         onOpenChange={setConfirming}
-        title="Save the new bonus rules?"
+        title="Save the new staff bonus rules?"
         changes={changes}
         confirmLabel="Save changes"
         onConfirm={() => void onSave()}
       >
         <p>
-          The Bonus page's figures for every employee follow them at once. A bonus register already generated keeps its
-          amounts until Generate is run again for that year, which rewrites every row with these values.
+          The Bonus page's figures for every staff member follow them at once. A bonus register already generated keeps
+          its amounts until Generate is run again for that year, which rewrites every row with these values. Production
+          workers are not affected.
         </p>
         {warning && <p className="text-amber-700">{warning}</p>}
       </ConfirmChanges>

@@ -58,6 +58,7 @@ something (yesterday, last month, the company average, a target) and always with
   (`reporting/definitions/attendance_analysis_*.py`) unless there is a stated reason not to, and say which in `provenance`.
   Approved leave and holidays are not absence; weekly offs are not scheduled days.
 * **Payroll money** comes from `SalarySlip` (the paid record), never from `Payroll.final_salary`.
+* **PF, ESI and TDS** (2026-10-24): PF and ESI exist only for Co Emp employees and TDS only for employees on the TDS list (`pf_esi.py`, `backend.md` 4.17). Payroll Analysis shows TDS as its own deduction line (`tdsDeducted`), never inside "other deductions" and not part of "statutory due" (PF + ESI + the employer estimates); the employer PF / ESI estimates are worked on the stored `statutory.pfWages` of a slip (old slips: `basic` / `gross_salary`). The assistant's `salary_slips` dataset has `tds_deduction` and `tds_percent`.
 * **Overtime** (the hours on the Attendance Overtime card, `attendance_overtime`, and the cost on Payroll Analysis) follows
   Settings → Compensation. *Hours* are informational and count the days that were detected, given automatically as the
   next-day late-in allowance (Type 1: never paid) or announced by HR (Type 2, as Pay or Day off); rejected days are left out.

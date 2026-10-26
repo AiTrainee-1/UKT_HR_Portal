@@ -1,7 +1,9 @@
 import type { SettingMeta } from "./kit/catalog";
+import type { ClassView } from "./kit/view";
 
 /** Section headings, so the blocks and this list cannot drift apart. */
 export const PRODUCTION_SHIFT_SECTIONS = {
+  staff: "Staff shifts and grace",
   when: "When the production rules apply",
   groups: "Shift groups and what each leaving time earns",
   breaks: "Breaks that are never paid",
@@ -13,6 +15,14 @@ const S = PRODUCTION_SHIFT_SECTIONS;
 
 /** Every setting block on the Production Shifts tab: its anchor id, its section and the words the block shows. */
 const BLOCKS: Omit<SettingMeta, "tab">[] = [
+  {
+    id: "staff-shifts-where",
+    section: S.staff,
+    title: "Where staff shifts and grace are set",
+    purpose:
+      "Nothing on this tab changes staff. A staff member's shift, its start and end and its grace come from the shift assigned in Manage Shifts, and how the day's punches become a Full Day, Half Day or Absent, a Late mark or an Early Out is set on Attendance, Staff page. This page only points to them; the production rules are on the Production page.",
+    keywords: ["staff", "manage shifts", "shift", "grace", "where", "explanation", "attendance", "office"],
+  },
   {
     id: "rules-enabled",
     section: S.when,
@@ -140,3 +150,11 @@ export function productionShiftText(id: string): { title: string; purpose: strin
   if (!block) throw new Error(`No Production Shifts setting "${id}"`);
   return { title: block.title, purpose: block.purpose };
 }
+
+/** The settings of the Staff page; every other setting of this tab is on the Production page (the page the tab opens on). */
+const STAFF_PAGE = new Set(["staff-shifts-where"]);
+
+/** Which page (Staff or Production) holds each setting, so a link or a search result can open it. */
+export const PRODUCTION_SHIFT_VIEW_OF: Record<string, ClassView> = Object.fromEntries(
+  BLOCKS.map((b) => [b.id, STAFF_PAGE.has(b.id) ? "staff" : "production"]),
+);

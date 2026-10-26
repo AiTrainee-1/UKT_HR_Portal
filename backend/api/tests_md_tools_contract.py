@@ -36,6 +36,20 @@ class ToolContract(MdApiTestCase):
                 self.assertIsInstance(result.get("provenance"), list)
                 self.assertTrue(result["provenance"], "explain how the figures are made (common.prov)")
 
+    def test_the_payroll_tools_describe_tds_and_the_co_emp_model_not_the_retired_one(self):
+        tools = registry.all_tools()
+        components = tools["payroll_components"].description
+        self.assertIn("TDS", components)
+        self.assertIn("Co Emp", components)
+        self.assertIn("separate remittance", components)
+        self.assertIn("TDS", tools["payroll_summary"].description)
+        for name, spec in tools.items():
+            if spec.page != "payroll":
+                continue
+            text = spec.description.lower()
+            for retired in ("esi ceiling", "salary band", "tds is not recorded", "not recorded in this system"):
+                self.assertNotIn(retired, text, name)
+
     def test_tool_names_are_unique_across_modules(self):
         registry.clear_cache()
         registry.all_tools()  # raises on a duplicate or a malformed name

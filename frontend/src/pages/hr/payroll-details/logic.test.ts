@@ -640,6 +640,30 @@ describe("payment readiness", () => {
     expect(worker.map((c) => c.ok)).toEqual([false, false, false, false]);
     expect(worker[0].value).toBe("Not on file");
   });
+
+  it("a Co Emp employee, or one whose category is not known, still has PF and ESI numbers to record", () => {
+    const worker = productionDetails().employee;
+    for (const category of [undefined, null, "co_emp"] as const) {
+      const [, , pf, esi] = readiness(worker, category);
+      expect([pf.ok, pf.value, esi.ok, esi.value]).toEqual([false, "Not recorded", false, "Not recorded"]);
+    }
+  });
+
+  it("PF and ESI numbers are 'Not needed' for an employee on the TDS list or one who is not Co Emp", () => {
+    const worker = productionDetails().employee;
+    const tds = readiness(worker, "tds");
+    expect(tds.map((c) => [c.key, c.ok, c.value])).toEqual([
+      ["bank", false, "Not on file"],
+      ["ifsc", false, "Missing"],
+      ["pf", true, "Not needed"],
+      ["esi", true, "Not needed"],
+    ]);
+    expect(tds[2].hint).toBe("TDS employee: no PF is deducted");
+    expect(readiness(worker, "none")[3].hint).toBe("Not a Co Emp employee: no ESI is deducted");
+    // a number that IS on the profile is still shown (masked), whatever the category
+    const [, , pf] = readiness({ ...worker, pfNumber: "TN/MAS/0012345/000/0142" }, "none");
+    expect([pf.ok, pf.value]).toEqual([true, "••••0142"]);
+  });
 });
 
 describe("a payroll with no breakdown behind it", () => {

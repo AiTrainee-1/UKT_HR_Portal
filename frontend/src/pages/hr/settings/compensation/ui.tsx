@@ -11,7 +11,7 @@ export type SectionProps = {
   patch: (change: Partial<CompensationDraft>) => void;
   /** View-only role: every control is disabled. */
   readOnly: boolean;
-  /** The master switch (Payroll -> OT / Compensation): while it is off nothing here acts. */
+  /** The master switch (Staff Payroll -> OT / Compensation): while it is off nothing here acts. */
   masterOn: boolean;
   validation: Validation;
   /** Today in India, YYYY-MM-DD. */
@@ -40,7 +40,7 @@ export function Problem({ children, testId }: { children: ReactNode; testId?: st
 export function masterOffNote(masterOn: boolean): string | null {
   return masterOn
     ? null
-    : "The master switch (Payroll -> OT / Compensation) is off, so this does nothing until it is turned on.";
+    : "The master switch (Staff Payroll -> OT / Compensation) is off, so this does nothing until it is turned on.";
 }
 
 /** Two or three notes for one SettingBlock `note`. */

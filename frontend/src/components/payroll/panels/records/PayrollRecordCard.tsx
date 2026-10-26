@@ -6,6 +6,7 @@ import type { EmployeeRules, PayrollKind, PayrollRunItem } from "@/lib/api-clien
 import { inr } from "@/components/payroll/kit/format";
 import { SEVERITY_META } from "@/components/payroll/kit/issue-meta";
 import { Avatar, BusyIcon, Chip, IssueChip, PayStatusChip } from "@/components/payroll/kit/parts";
+import { hasTds, tdsAmount, tdsLabel } from "@/components/payroll/kit/statutory";
 import { cn } from "@/lib/utils";
 import type { PayrollIssueSummary } from "../filters/filter-logic";
 import {
@@ -110,6 +111,8 @@ function PayrollRecordCardImpl({
   const name = displayName(run);
   const cycle = cycleLabelOf(run);
   const pending = run.status !== "paid";
+  // The TDS cell exists only on the card of an employee on the TDS list.
+  const tds = hasTds(run);
   const extras = [
     run.otAmount > 0 ? `OT ${inr(run.otAmount)}` : "",
     run.bonus > 0 ? `Bonus ${inr(run.bonus)}` : "",
@@ -196,7 +199,7 @@ function PayrollRecordCardImpl({
             </p>
             {extras.length > 0 && <p className="text-[11px] text-muted-foreground">{extras.join(" · ")}</p>}
           </div>
-          <dl className="grid grid-cols-3 gap-2 text-center">
+          <dl className={cn("grid grid-cols-3 gap-2 text-center", tds && "grid-cols-4")}>
             <div className="min-w-0">
               <dt className="text-[11px] text-muted-foreground">{metricLabel(run)}</dt>
               <dd className="text-xs font-bold text-gray-800">{metricText(run)}</dd>
@@ -205,6 +208,14 @@ function PayrollRecordCardImpl({
               <dt className="text-[11px] text-muted-foreground">Gross</dt>
               <dd className="text-xs font-bold text-gray-800">{inr(run.grossSalary)}</dd>
             </div>
+            {tds && (
+              <div className="min-w-0" data-testid={`payroll-record-tds-${run.id}`}>
+                <dt className="text-[11px] text-muted-foreground" title="Tax deducted at source (part of Deductions)">
+                  {tdsLabel(run)}
+                </dt>
+                <dd className="text-xs font-bold text-red-600">{inr(tdsAmount(run))}</dd>
+              </div>
+            )}
             <div className="min-w-0">
               <dt className="text-[11px] text-muted-foreground">Deductions</dt>
               <dd className={cn("text-xs font-bold", run.deductions > 0 ? "text-red-600" : "text-gray-800")}>

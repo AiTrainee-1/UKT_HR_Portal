@@ -12,8 +12,8 @@ Two questions are answered here with the same building blocks:
 
 Nothing is recomputed: an `applied` value is read from the stored breakdown, a current one from the live settings and the
 employee's profile / shift. The only calculations are pure look-ups of the same kind the engine makes (which late slab a
-stored count of lates falls in, which production PF/EF band a stored monthly-equivalent pay falls in), so a changed slab
-table or band list is detected without touching any payroll.
+stored count of lates falls in, which PF / ESI rule an employee's amounts fall in), so a changed slab table or rule list
+is detected without touching any payroll.
 
 Which settings an item is read from mirrors the engine: the staff attendance and late rules come from the company-wide
 settings row (the attendance engine only ever reads that one), PF / ESI / the OT switch from the employee's own branch
@@ -28,12 +28,16 @@ from datetime import date, time
 from decimal import Decimal
 from types import SimpleNamespace
 
+from . import pf_esi
 from .arrival_rules import limits_for
 from .payroll_insights import (
+    PRODUCTION_WAGES_WORDS,
     SETTINGS,
+    WAGES_WORDS,
     WEEKDAY_NAMES,
     SettingRef,
     bank_info,
+    basis_words,
     clock_of,
     cycle_ref,
     dec,
@@ -41,11 +45,20 @@ from .payroll_insights import (
     first_half_limit,
     full_name,
     inr,
+    no_rule_words,
     plain,
     plural,
+    range_words,
+    rule_words,
     shifts_text,
+    tds_label,
 )
-from .payroll_views import _build_working_days, _effective_shift_times, late_shift_deduction
+from .payroll_views import (
+    _build_working_days,
+    _effective_shift_times,
+    late_shift_deduction,
+    permission_shift_deduction,
+)
 from .production_cycles import (
     CYCLE_DAYS,
     CYCLE_LABELS,
@@ -149,19 +162,20 @@ def _permission_cap(value) -> str:
     return f"Cap of {plural(int(value), 'approved permission')} a month"
 
 
-def _period_pct(value) -> str:
-    """A production PF / ESI rate as it applied to a period's pay ('Not deducted' for 0)."""
-    return "Not deducted" if dec(value) == 0 else f"{_pct(value)} of the period pay"
+def _free_permissions(value) -> str:
+    return f"{plural(int(value), 'free excess permission')} a month"
 
 
-def _production_rate_text(ps, flat_rate) -> str:
-    """How a production worker's PF / ESI is worked out under the settings in force: salary bands when they are in use,
-    else the flat rate while its switch is on, else not at all."""
-    if ps.prod_pf_ef_enabled:
-        return "By salary band (the flat rate when no band fits)" if ps.prod_payroll_rules_enabled else "By salary band"
-    if ps.prod_payroll_rules_enabled and dec(flat_rate) > 0:
-        return _period_pct(flat_rate)
-    return "Not deducted: the flat-rate switch is off and no salary bands are in use"
+def _applied_permission_pricing(bd):
+    """Was Permission Deduction Slabs ON when a payroll was generated? _UNSET when no payroll is being explained, True /
+    False from its stored `permissionSummary`, False for a payslip older than the feature (it had a late summary but no
+    permission block: excess permissions were marks in the late pool), None when the breakdown says nothing about it."""
+    if bd is None:
+        return _UNSET
+    summary = _got(bd, "deductions", "permissionSummary")
+    if isinstance(summary, dict) and "enabled" in summary:
+        return bool(summary["enabled"])
+    return False if _got(bd, "deductions", "lateSummary") is not None else None
 
 
 def _pct(value) -> str:
@@ -185,26 +199,291 @@ def _assemble(*groups: tuple[str, list[dict]]) -> list[dict]:
     return [_group(name, items) for name, items in groups if items]
 
 
+# ── PF / ESI / TDS ───────────────────────────────────────────────────────────
+#
+# PF and ESI apply only to a Co Emp employee (Employees > Co Emp), by the rules of Settings > PF & ESI: per employee class
+# (staff / production) and kind (PF / ESI) a list of rules, each a salary range, what it is measured on and a percentage,
+# global or the unit's own copy. TDS applies only to an employee on the TDS list, at the percentage set for them. The words
+# of pf_esi.py and of the Settings page are used here, so the three screens never describe one rule differently.
+
+_CATEGORY_WORDS = {
+    "co_emp": "Co Emp: PF and ESI are deducted by the rules",
+    "tds": "TDS employee: TDS only, no PF or ESI",
+    "none": "Not Co Emp: no PF, ESI or TDS",
+}
+
+
+def describe_rules(rules: list, production: bool) -> str:
+    """'12% when Basic salary is ₹0 to ₹25,000; ...': a rule list in words (no rules: nobody pays it)."""
+    if not rules:
+        return "No rules: nobody pays it"
+    parts = [
+        f"{_pct(rule.rate_percent)} when {basis_words(rule.basis, production)} is "
+        f"{range_words(rule.min_amount, rule.max_amount)}"
+        for rule in rules
+    ]
+    shown = parts if len(parts) <= 4 else [*parts[:3], "...", parts[-1]]
+    text = "; ".join(shown)
+    return f"{text} ({len(parts)} rules)" if len(parts) > 4 else text
+
+
+def _scope_words(ps) -> str:
+    return (
+        "This unit's own rules, set by the Super Admin"
+        if pf_esi.rules_scope(ps)[0] == "branch"
+        else "The rules for all units"
+    )
+
+
+def _kind_detail(kind: str, production: bool) -> str:
+    if production:
+        return (
+            f"Only Co Emp production workers pay {kind}. The percentage is taken from {PRODUCTION_WAGES_WORDS}; the rule's "
+            "range is tested on the monthly equivalent pay (Weekly x4, BiWeekly x2, Monthly x1). The first rule that fits applies"
+        )
+    return (
+        f"Only Co Emp staff pay {kind}. The percentage is taken from {WAGES_WORDS} (the first 50% of the salary), prorated "
+        "by the days paid. The first rule whose range holds the employee's amount applies"
+    )
+
+
+def _stored_category(bd: dict | None):
+    """The category a payroll recorded for its employee (`statutory.category`): _UNSET when no payroll is being explained,
+    None when the payroll predates the PF & ESI redesign and recorded none."""
+    if bd is None:
+        return _UNSET
+    block = _got(bd, "deductions", "statutory")
+    return block.get("category") if isinstance(block, dict) else None
+
+
+def _stored_rate(bd: dict | None, kind: str):
+    """The PF / ESI percentage a payroll was priced with (0 when no rule applied), _UNSET when no payroll is being explained
+    and None when it recorded none (a payroll that predates the PF & ESI redesign): never reported as a change."""
+    if bd is None:
+        return _UNSET
+    block = _got(bd, "deductions", "statutory")
+    if not isinstance(block, dict):
+        return None
+    rule = block.get("pfRule" if kind == "pf" else "esiRule")
+    return dec(rule.get("ratePercent")) if isinstance(rule, dict) else Decimal("0")
+
+
+def employee_statutory(emp, ps, production: bool, monthly_equivalent=None) -> dict:
+    """What the rules in force NOW say about one employee: {category, pf, esi} where pf / esi are (rule, amount tested) or
+    (None, None). A Co Emp employee with no salary to judge (production: no payroll period yet) gets no rules."""
+    category = pf_esi.category_of(emp)
+    out = {"category": category, "pf": (None, None), "esi": (None, None), "amounts": None}
+    if category != pf_esi.CATEGORY_CO_EMP:
+        return out
+    if production:
+        amounts = pf_esi.production_amounts(emp, dec(monthly_equivalent)) if monthly_equivalent is not None else None
+    else:
+        amounts = pf_esi.monthly_amounts(emp)
+    out["amounts"] = amounts
+    emp_class = pf_esi.CLASS_PRODUCTION if production else pf_esi.CLASS_STAFF
+    out["pf"] = pf_esi.match_rule(pf_esi.rules_for(ps, emp_class, pf_esi.KIND_PF), amounts)
+    out["esi"] = pf_esi.match_rule(pf_esi.rules_for(ps, emp_class, pf_esi.KIND_ESI), amounts)
+    return out
+
+
+def _rate_now(statutory: dict, kind: str) -> Decimal:
+    rule = statutory[kind][0]
+    return rule.rate_percent if rule is not None else Decimal("0")
+
+
+def _rate_words(statutory: dict, kind: str, production: bool) -> str:
+    """How one employee's PF / ESI reads under the rules in force now."""
+    label = "PF" if kind == "pf" else "ESI"
+    if statutory["category"] == pf_esi.CATEGORY_TDS:
+        return f"Not deducted: TDS employee (no {label})"
+    if statutory["category"] != pf_esi.CATEGORY_CO_EMP:
+        return "Not deducted: not a Co Emp employee"
+    rule, tested = statutory[kind]
+    if rule is None:
+        if statutory["amounts"] is None:
+            return "Cannot be told yet: " + (
+                "no pay period has been generated for this worker" if production else "no salary on the profile"
+            )
+        amounts = statutory["amounts"]
+        return no_rule_words(
+            label,
+            {
+                "basic": amounts.get("basic"),
+                "firstPortion": amounts.get("first_portion"),
+                "total": amounts.get("total"),
+            },
+            production,
+        )
+    wages = PRODUCTION_WAGES_WORDS if production else WAGES_WORDS
+    return (
+        f"{_pct(rule.rate_percent)} of {wages} "
+        f"({rule_words({**rule.to_json(), 'amountTested': float(tested)}, production)})"
+    )
+
+
+def employee_statutory_items(
+    emp, ps, bd: dict | None, *, production: bool, company: bool, monthly_equivalent=None
+) -> list[dict]:
+    """The PF / ESI / TDS items of one employee's rules: the category they are in, (details page) which rule set priced the
+    payroll, the PF and ESI rule that fits them and, for a TDS employee, the TDS percentage. With `bd` (the stored
+    breakdown of the payroll being explained) each item also says what that payroll was priced with and whether that has
+    changed since."""
+    now = employee_statutory(emp, ps, production, monthly_equivalent)
+    stored_category = _stored_category(bd)
+    items = [
+        _item(
+            "statutory_category",
+            "PF, ESI and TDS apply to this employee as",
+            "employee",
+            current=now["category"],
+            text=_CATEGORY_WORDS[now["category"]],
+            detail=(
+                "Set on Employees > Co Emp: the Co Emp switch gives PF and ESI, the TDS list gives TDS. An employee is in "
+                "one of them or in neither, never both"
+            ),
+            applied=stored_category,
+            applied_fmt=lambda v: _CATEGORY_WORDS.get(v, str(v)),
+        )
+    ]
+    if company and (now["category"] == pf_esi.CATEGORY_CO_EMP or stored_category == pf_esi.CATEGORY_CO_EMP):
+        stored_scope = _got(bd, "deductions", "statutory", "rulesScope")
+        items.append(
+            _item(
+                "pf_esi_scope",
+                "Which PF and ESI rules",
+                "settings",
+                current=pf_esi.rules_scope(ps)[0],
+                text=_scope_words(ps),
+                ref=SETTINGS["pf_esi_scope"],
+                detail="A unit without rules of its own follows the rules for all units; only the Super Admin changes either",
+                applied=stored_scope,
+                applied_fmt=lambda v: (
+                    "This unit's own rules, set by the Super Admin" if v == "branch" else "The rules for all units"
+                ),
+            )
+        )
+    prefix = "prod" if production else "staff"
+    for kind, label, key in (("pf", "PF", "pf_rules"), ("esi", "ESI", "esi_rules")):
+        stored = _stored_rate(bd, kind)
+        items.append(
+            _item(
+                key,
+                label,
+                "settings",
+                current=_rate_now(now, kind),
+                text=_rate_words(now, kind, production),
+                ref=SETTINGS[f"{prefix}_{kind}_rules"],
+                detail=_kind_detail(label, production),
+                applied=stored,
+                applied_fmt=lambda v, _label=label: (
+                    "Not deducted" if dec(v) == 0 else f"{_pct(v)} of the first portion"
+                ),
+            )
+        )
+    stored_tds = _got(bd, "deductions", "tdsPercent") if bd is not None else _UNSET
+    if now["category"] == pf_esi.CATEGORY_TDS or (stored_tds is not _UNSET and stored_tds is not None):
+        percent = emp.tds_percent if now["category"] == pf_esi.CATEGORY_TDS else None
+        items.append(
+            _item(
+                "tds",
+                "TDS",
+                "employee",
+                current=percent if percent is not None else Decimal("0"),
+                text=(
+                    f"{_pct(percent)} of the pay earned in the period"
+                    if percent is not None
+                    else "Not deducted: the employee is not on the TDS list now"
+                ),
+                detail="The percentage is set for each employee when they are added to TDS (Employees > Co Emp > TDS)",
+                applied=stored_tds if bd is not None else _UNSET,
+                applied_fmt=lambda v: f"{_pct(v)} of the pay earned in the period",
+            )
+        )
+    return items
+
+
+def statutory_chips(emp, ps, production: bool, monthly_equivalent=None) -> list[dict]:
+    """The coloured facts of the Rules table: the PF and ESI the employee pays under the rules now (and TDS)."""
+    now = employee_statutory(emp, ps, production, monthly_equivalent)
+    chips: list[dict] = []
+    for kind, label in (("pf", "PF"), ("esi", "ESI")):
+        rule = now[kind][0]
+        chips.append(
+            {
+                "key": kind,
+                "label": f"{label} {_pct(rule.rate_percent)}" if rule is not None else f"No {label}",
+                "tone": "neutral",
+            }
+        )
+    if now["category"] == pf_esi.CATEGORY_TDS:
+        chips.append({"key": "tds", "label": tds_label(emp.tds_percent), "tone": "info"})
+    return chips
+
+
+def statutory_settings_items(ps, production: bool) -> list[dict]:
+    """The Settings > PF & ESI rules of a scope, as the Rules tab lists them (settings of the caller's branch)."""
+    prefix = "prod" if production else "staff"
+    emp_class = pf_esi.CLASS_PRODUCTION if production else pf_esi.CLASS_STAFF
+    items = [
+        _item(
+            "pf_esi_scope",
+            "Whose PF and ESI rules these are",
+            "settings",
+            current=None,
+            text=_scope_words(ps),
+            ref=SETTINGS["pf_esi_scope"],
+            detail="A unit's own rule set replaces the rules for all units; a unit without one follows them. Only the Super Admin changes either",
+        )
+    ]
+    for kind, label, key in (("pf", "PF rules", "pf_rules"), ("esi", "ESI rules", "esi_rules")):
+        items.append(
+            _item(
+                key,
+                label,
+                "settings",
+                current=None,
+                text=describe_rules(pf_esi.rules_for(ps, emp_class, kind), production),
+                ref=SETTINGS[f"{prefix}_{kind}_rules"],
+                detail=_kind_detail(label.split()[0], production),
+            )
+        )
+    items.append(
+        _item(
+            "tds",
+            "TDS",
+            "employee",
+            current=None,
+            text="A percentage of the pay earned, set for each employee on the TDS list",
+            detail=(
+                "Employees > Co Emp > TDS: an employee on the TDS list pays TDS instead of PF and ESI, and a Co Emp employee "
+                "is taken off Co Emp when added"
+            ),
+        )
+    )
+    return items
+
+
 # ── slabs ────────────────────────────────────────────────────────────────────
 
 
-def slab_rows(slabs) -> list[tuple[int, Decimal]]:
-    """The usable rows of a late deduction table, ascending (a malformed row is skipped, as the engine skips it)."""
+def slab_rows(slabs, key: str = "fromLates") -> list[tuple[int, Decimal]]:
+    """The usable rows of a deduction table (`key` is its threshold: fromLates for the late slabs, fromPermissions for
+    the permission slabs), ascending (a malformed row is skipped, as the engine skips it)."""
     rows: list[tuple[int, Decimal]] = []
     for row in slabs or []:
         if not isinstance(row, dict):
             continue
         try:
-            rows.append((int(row["fromLates"]), Decimal(str(row["deductionShifts"]))))
+            rows.append((int(row[key]), Decimal(str(row["deductionShifts"]))))
         except (KeyError, TypeError, ValueError, ArithmeticError):
             continue
     rows.sort(key=lambda r: r[0])
     return rows
 
 
-def describe_slabs(slabs, noun: str) -> str:
+def describe_slabs(slabs, noun: str, key: str = "fromLates") -> str:
     """'From 3 billable lates: 0.25 shift; from 6: 0.5 shift; ...': the table in words (no rows: nothing is deducted)."""
-    rows = slab_rows(slabs)
+    rows = slab_rows(slabs, key)
     if not rows:
         return f"No slabs: a {noun} costs nothing"
     shown = rows if len(rows) <= 4 else [*rows[:3], None, rows[-1]]
@@ -220,18 +499,36 @@ def describe_slabs(slabs, noun: str) -> str:
     return f"{text} ({len(rows)} slabs)" if len(rows) > 4 else text
 
 
-def _slab_item(key, label, ref, current_slabs, noun, bd_summary, with_applied: bool, detail: str) -> dict:
-    """The late deduction table. It is not stored on the payroll, so `applied` is what the payroll actually paid for its
-    billable lates, and `changed` is true when the table as it stands now would price those lates differently."""
-    item = _item(key, label, "settings", current=None, text=describe_slabs(current_slabs, noun), ref=ref, detail=detail)
+def _slab_item(
+    key,
+    label,
+    ref,
+    current_slabs,
+    noun,
+    bd_summary,
+    with_applied: bool,
+    detail: str,
+    row_key: str = "fromLates",
+    count_key: str = "billableLateCount",
+    shifts_key: str = "shiftDeductions",
+) -> dict:
+    """A deduction table (the late slabs by default; the permission slabs with row_key="fromPermissions", count_key=
+    "billable", shifts_key="shifts"). It is not stored on the payroll, so `applied` is what the payroll actually paid for
+    its billable count, and `changed` is true when the table as it stands now would price that count differently."""
+    item = _item(
+        key, label, "settings", current=None, text=describe_slabs(current_slabs, noun, row_key), ref=ref, detail=detail
+    )
     if not with_applied:
         return item
-    billable = (bd_summary or {}).get("billableLateCount")
-    stored = (bd_summary or {}).get("shiftDeductions")
+    billable = (bd_summary or {}).get(count_key)
+    stored = (bd_summary or {}).get(shifts_key)
     if billable is None or stored is None:
         item["applied"], item["changed"] = None, False
         return item
-    now = late_shift_deduction(int(billable), None, slabs=list(current_slabs or []))
+    if row_key == "fromLates":
+        now = late_shift_deduction(int(billable), None, slabs=list(current_slabs or []))
+    else:
+        now = permission_shift_deduction(int(billable), SimpleNamespace(permission_deduction_slabs=current_slabs))
     item["applied"] = f"{plural(billable, 'billable ' + noun)} cost {shifts_text(stored)}"
     item["changed"] = dec(now) != dec(stored)
     if item["changed"]:
@@ -239,6 +536,73 @@ def _slab_item(key, label, ref, current_slabs, noun, bd_summary, with_applied: b
             f"{detail}. The slabs as they stand now would take {shifts_text(now)} for those {plural(billable, noun)}"
         )
     return item
+
+
+def _permission_cap_detail(base) -> str:
+    if base.permission_pricing_enabled:
+        return (
+            "Approved permissions up to the cap protect a day; one beyond it excuses nothing and is priced by the "
+            "Permission Deduction Slabs"
+        )
+    return "Approved permissions up to the cap protect a day; one beyond it excuses nothing and adds one mark to the late pool"
+
+
+def _permission_pricing_items(base, bd) -> list[dict]:
+    """The Permission Deduction Slabs rule items (staff): the switch always, and the free allowance and the table when the
+    switch is on now or was on when the payroll being explained was generated (`bd`; None on the Rules tab)."""
+    pricing_now = bool(base.permission_pricing_enabled)
+    applied_on = _applied_permission_pricing(bd)
+    items = [
+        _item(
+            "permission_pricing",
+            "Permission deduction slabs",
+            "settings",
+            current=pricing_now,
+            fmt=_on_off,
+            ref=SETTINGS["permission_pricing"],
+            detail=(
+                "On: approved permissions beyond the monthly cap leave the late pool and are priced on their own, with "
+                "their own free allowance and slabs"
+                if pricing_now
+                else "Off: approved permissions beyond the monthly cap are marks in the late pool, priced by the late slabs"
+            ),
+            applied=applied_on,
+        )
+    ]
+    if not pricing_now and not (applied_on is True):
+        return items
+    stored = _got(bd, "deductions", "permissionSummary") if bd is not None else None
+    items.append(
+        _item(
+            "permission_free_allowance",
+            "Free excess permissions a month",
+            "settings",
+            current=base.permission_free_allowance,
+            text=_free_permissions(base.permission_free_allowance),
+            ref=SETTINGS["permission_free_allowance"],
+            detail="Only the excess permissions beyond this many cost anything",
+            applied=_got(bd, "deductions", "permissionSummary", "freeAllowance")
+            if applied_on is True
+            else (None if bd is not None else _UNSET),
+            applied_fmt=_free_permissions,
+        )
+    )
+    items.append(
+        _slab_item(
+            "permission_slabs",
+            "Permission deduction slabs",
+            SETTINGS["permission_slabs"],
+            base.permission_deduction_slabs,
+            "excess permission",
+            stored if isinstance(stored, dict) else None,
+            bd is not None and applied_on is True,
+            "The highest slab the billable permissions reach applies; the last slab holds beyond it",
+            row_key="fromPermissions",
+            count_key="billable",
+            shifts_key="shifts",
+        )
+    )
+    return items
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -286,15 +650,7 @@ def staff_chips(emp, ps, inp: StaffRuleInput) -> list[dict]:
         chips.append({"key": "shift", "label": label, "tone": "info"})
         if saturday_off:
             chips.append({"key": "saturday_off", "label": "Saturday off", "tone": "neutral"})
-    pf_on = bool(ps.staff_payroll_rules_enabled) and dec(ps.pf_rate) > 0
-    chips.append({"key": "pf", "label": f"PF {_pct(ps.pf_rate)}" if pf_on else "No PF", "tone": "neutral"})
-    esi_on = bool(ps.staff_payroll_rules_enabled) and dec(ps.esi_rate) > 0
-    if not esi_on:
-        chips.append({"key": "esi", "label": "No ESI", "tone": "neutral"})
-    elif emp.salary_amount is not None and dec(emp.salary_amount) > dec(ps.esi_applicable_below):
-        chips.append({"key": "esi", "label": "ESI above ceiling", "tone": "neutral"})
-    else:
-        chips.append({"key": "esi", "label": f"ESI {_pct(ps.esi_rate)}", "tone": "neutral"})
+    chips.extend(statutory_chips(emp, ps, production=False))
     bank = bank_info(emp)
     if not bank["hasAccount"] or not bank["hasIfsc"]:
         chips.append({"key": "bank", "label": "No bank details", "tone": "warning"})
@@ -311,25 +667,6 @@ def staff_flags(emp, inp: StaffRuleInput) -> list[str]:
     if not bank["hasAccount"] or not bank["hasIfsc"]:
         flags.append("no_bank")
     return flags
-
-
-def _inferred_rules_switch(bd: dict | None) -> bool | None:
-    """Whether the staff PF / ESI switch was on when a payroll was generated, as far as the stored numbers show: a PF or
-    ESI amount means on; a configured rate with nothing deducted from real pay means off; otherwise it cannot be told."""
-    if bd is None:
-        return None
-    d, e = bd.get("deductions") or {}, bd.get("earnings") or {}
-    if dec(d.get("pf")) > 0 or dec(d.get("esi")) > 0:
-        return True
-    if dec(d.get("pfRate")) > 0 and dec(e.get("basic")) > 0:
-        return False
-    if (
-        dec(d.get("esiRate")) > 0
-        and dec(e.get("monthlySalary")) <= dec(d.get("esiApplicableBelow"))
-        and dec(e.get("grossSalary")) > 0
-    ):
-        return False
-    return None
 
 
 def staff_rule_groups(inp: StaffRuleInput, company: bool = True) -> list[dict]:
@@ -488,7 +825,12 @@ def staff_rule_groups(inp: StaffRuleInput, company: bool = True) -> list[dict]:
                 current=base.late_free_allowance,
                 text=_free_marks(base.late_free_allowance),
                 ref=SETTINGS["late_free_allowance"],
-                detail="Late, Early Out and excess permissions share one pool: only marks beyond this are priced",
+                detail=(
+                    "Late and Early Out share one pool (excess permissions are priced on their own): only marks beyond "
+                    "this are priced"
+                    if base.permission_pricing_enabled
+                    else "Late, Early Out and excess permissions share one pool: only marks beyond this are priced"
+                ),
                 applied=_got(bd, "deductions", "lateSummary", "freeAllowance"),
                 applied_fmt=_free_marks,
             )
@@ -505,6 +847,7 @@ def staff_rule_groups(inp: StaffRuleInput, company: bool = True) -> list[dict]:
                 "The highest slab the billable count reaches applies; the last slab holds beyond it",
             )
         )
+        attendance.extend(_permission_pricing_items(base, bd))
 
     # ── half day & permissions ──
     # The limit is measured from the assignment's own start (a per-employee override beats the template), as the engine does.
@@ -562,79 +905,15 @@ def staff_rule_groups(inp: StaffRuleInput, company: bool = True) -> list[dict]:
                 current=base.permission_monthly_cap,
                 text=_permission_cap(base.permission_monthly_cap),
                 ref=SETTINGS["permission_cap"],
-                detail="Approved permissions up to the cap protect a day; one beyond it excuses nothing and adds one mark to the late pool",
+                detail=_permission_cap_detail(base),
                 applied=_got(bd, "deductions", "lateSummary", "permissionMonthlyCap"),
                 applied_fmt=_permission_cap,
             )
         )
 
-    # ── PF / ESI (the employee's own branch settings) ──
-    rules_on = bool(ps.staff_payroll_rules_enabled)
+    # ── PF / ESI / TDS (the employee's own branch settings and their Co Emp / TDS category) ──
     salary = emp.salary_amount
-    ceiling = dec(ps.esi_applicable_below)
-    if company:
-        statutory.append(
-            _item(
-                "pf_esi_switch",
-                "Deduct PF and ESI from staff pay",
-                "settings",
-                current=rules_on,
-                fmt=_on_off,
-                ref=SETTINGS["staff_pf_esi_switch"],
-                detail="While it is off no staff payslip gets a PF or ESI deduction, whatever the rates are",
-                applied=_inferred_rules_switch(bd) if bd is not None else _UNSET,
-            )
-        )
-    pf_text = (
-        f"{_pct(ps.pf_rate)} of Basic"
-        if rules_on and dec(ps.pf_rate) > 0
-        else ("Not deducted: the PF / ESI switch is off" if not rules_on else "Not deducted: the PF rate is 0%")
-    )
-    statutory.append(
-        _item(
-            "pf_rate",
-            "PF",
-            "settings",
-            current=ps.pf_rate,
-            text=pf_text,
-            ref=SETTINGS["staff_pf_rate"],
-            detail="Basic is fixed at 50% of the salary earned in the month, whatever Salary Split is recorded",
-            applied=_got(bd, "deductions", "pfRate"),
-            applied_fmt=lambda v: f"{_pct(v)} of Basic",
-        )
-    )
-    if not rules_on or dec(ps.esi_rate) <= 0:
-        esi_text = "Not deducted: the PF / ESI switch is off" if not rules_on else "Not deducted: the ESI rate is 0%"
-    elif salary is not None and dec(salary) > ceiling:
-        esi_text = f"Not applicable: the salary {inr(salary)} is above the ESI ceiling {inr(ceiling)}"
-    else:
-        esi_text = f"{_pct(ps.esi_rate)} of the pay earned"
-    statutory.append(
-        _item(
-            "esi_rate",
-            "ESI",
-            "settings",
-            current=ps.esi_rate,
-            text=esi_text,
-            ref=SETTINGS["staff_esi_rate"],
-            detail="Applies while the full monthly salary is at or below the ESI ceiling",
-            applied=_got(bd, "deductions", "esiRate"),
-            applied_fmt=lambda v: f"{_pct(v)} of the pay earned",
-        )
-    )
-    if company:
-        statutory.append(
-            _item(
-                "esi_ceiling",
-                "ESI ceiling",
-                "settings",
-                current=ceiling,
-                fmt=inr,
-                ref=SETTINGS["staff_esi_ceiling"],
-                detail="A salary equal to the ceiling still pays ESI",
-                applied=_got(bd, "deductions", "esiApplicableBelow"),
-            )
-        )
+    statutory.extend(employee_statutory_items(emp, ps, bd, production=False, company=company))
 
     # ── pay basis (the profile and the calendar) ──
     working_now = inp.working_days()
@@ -776,7 +1055,12 @@ def staff_settings_groups(base, ps) -> list[dict]:
             current=base.late_free_allowance,
             text=_free_marks(base.late_free_allowance),
             ref=SETTINGS["late_free_allowance"],
-            detail="Late, Early Out and excess permissions share one pool: only the marks beyond this are priced",
+            detail=(
+                "Late and Early Out share one pool (excess permissions are priced on their own): only the marks beyond "
+                "this are priced"
+                if base.permission_pricing_enabled
+                else "Late, Early Out and excess permissions share one pool: only the marks beyond this are priced"
+            ),
         ),
         _item(
             "late_slabs",
@@ -787,6 +1071,7 @@ def staff_settings_groups(base, ps) -> list[dict]:
             ref=SETTINGS["late_slabs"],
             detail="The highest slab the billable count reaches applies; the last slab holds beyond it",
         ),
+        *_permission_pricing_items(base, None),
     ]
     half_day = [
         _item(
@@ -813,47 +1098,10 @@ def staff_settings_groups(base, ps) -> list[dict]:
             current=base.permission_monthly_cap,
             text=_permission_cap(base.permission_monthly_cap),
             ref=SETTINGS["permission_cap"],
-            detail="Approved permissions up to the cap protect a day; one beyond it excuses nothing and adds one mark to the late pool",
+            detail=_permission_cap_detail(base),
         ),
     ]
-    statutory = [
-        _item(
-            "pf_esi_switch",
-            "Deduct PF and ESI from staff pay",
-            "settings",
-            current=bool(ps.staff_payroll_rules_enabled),
-            fmt=_on_off,
-            ref=SETTINGS["staff_pf_esi_switch"],
-            detail="While it is off no staff payslip gets a PF or ESI deduction, whatever the rates are",
-        ),
-        _item(
-            "pf_rate",
-            "PF rate",
-            "settings",
-            current=ps.pf_rate,
-            text=f"{_pct(ps.pf_rate)} of Basic",
-            ref=SETTINGS["staff_pf_rate"],
-            detail="Basic is fixed at 50% of the salary earned in the month, whatever Salary Split is recorded",
-        ),
-        _item(
-            "esi_rate",
-            "ESI rate",
-            "settings",
-            current=ps.esi_rate,
-            text=f"{_pct(ps.esi_rate)} of the pay earned",
-            ref=SETTINGS["staff_esi_rate"],
-            detail="Applies while the full monthly salary is at or below the ESI ceiling",
-        ),
-        _item(
-            "esi_ceiling",
-            "ESI ceiling",
-            "settings",
-            current=ps.esi_applicable_below,
-            fmt=inr,
-            ref=SETTINGS["staff_esi_ceiling"],
-            detail="A salary equal to the ceiling still pays ESI",
-        ),
-    ]
+    statutory = statutory_settings_items(ps, production=False)
     pay = [
         _item(
             "pay_basis",
@@ -941,52 +1189,12 @@ def staff_settings_groups(base, ps) -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def production_rule_now(ps, monthly_equivalent) -> tuple[dict | None, Decimal, Decimal]:
-    """(salary band, PF %, ESI/EF %) the CURRENT settings would apply to a production pay whose monthly-equivalent is
-    `monthly_equivalent`: the same order the engine uses (a matching band, else the flat rates while their switch is on,
-    else nothing). Only used to tell whether a payroll's stored rate has been overtaken by a settings change."""
-    equivalent = dec(monthly_equivalent)
-    if ps.prod_pf_ef_enabled:
-        for rule in ps.prod_pf_ef_rules or []:
-            try:
-                low = Decimal(str(rule.get("minSalary", 0) or 0))
-                high = Decimal(str(rule.get("maxSalary", 0) or 0))
-            except Exception:
-                continue
-            if equivalent >= low and (high <= 0 or equivalent <= high):
-                return rule, dec(rule.get("pfRate") or 0), dec(rule.get("efRate") or 0)
-    if ps.prod_payroll_rules_enabled:
-        esi = (
-            dec(ps.prod_esi_rate)
-            if dec(ps.prod_esi_rate) > 0 and equivalent <= dec(ps.prod_esi_applicable_below)
-            else Decimal("0")
-        )
-        return None, dec(ps.prod_pf_rate), esi
-    return None, Decimal("0"), Decimal("0")
-
-
-def describe_bands(rules) -> list[str]:
-    """One line per production PF / EF salary band: 'Mid: Rs 10,001 to Rs 20,000: PF 12%, EF 1%'."""
-    out = []
-    for rule in rules or []:
-        if not isinstance(rule, dict):
-            continue
-        high = dec(rule.get("maxSalary") or 0)
-        span = (
-            f"{inr(rule.get('minSalary') or 0)} to {inr(high)}"
-            if high > 0
-            else f"{inr(rule.get('minSalary') or 0)} and above"
-        )
-        out.append(
-            f"{rule.get('label') or 'Salary band'}: {span}: PF {_pct(rule.get('pfRate') or 0)}, EF {_pct(rule.get('efRate') or 0)}"
-        )
-    return out
-
-
 @dataclass
 class ProductionRuleInput:
     """What the production rule builders read: the employee, the pay cycle and period, their branch's settings, the
-    production shift assigned to them and (when explaining a payroll) its stored breakdown."""
+    production shift assigned to them and (when explaining a payroll) its stored breakdown. `monthly_equivalent` is the
+    period's pay scaled to a month (what the PF / ESI rules are tested on): from the stored breakdown when there is one,
+    else given by the caller from the payroll row."""
 
     emp: object
     cycle: str | None
@@ -995,6 +1203,12 @@ class ProductionRuleInput:
     ps: object
     assignment: object | None
     bd: dict | None = None
+    monthly_equivalent: Decimal | None = None
+
+    def equivalent(self):
+        """The monthly equivalent pay to judge the employee on, or None when it is not known."""
+        stored = _got(self.bd, "deductions", "monthlyEquivalent") if self.bd is not None else None
+        return stored if stored is not None else self.monthly_equivalent
 
     @property
     def shift(self):
@@ -1022,12 +1236,22 @@ def production_chips(emp, ps, inp: ProductionRuleInput) -> list[dict]:
                 "tone": "info",
             }
         )
-    if ps.prod_pf_ef_enabled:
-        chips.append({"key": "statutory", "label": "PF / EF by salary band", "tone": "neutral"})
-    elif ps.prod_payroll_rules_enabled and (dec(ps.prod_pf_rate) > 0 or dec(ps.prod_esi_rate) > 0):
-        chips.append({"key": "statutory", "label": f"PF {_pct(ps.prod_pf_rate)}", "tone": "neutral"})
+    now = employee_statutory(emp, ps, True, inp.equivalent())
+    rates = [(label, now[kind][0]) for kind, label in (("pf", "PF"), ("esi", "ESI")) if now[kind][0] is not None]
+    if now["category"] == pf_esi.CATEGORY_CO_EMP and now["amounts"] is None:
+        chips.append({"key": "statutory", "label": "PF / ESI: no pay period yet", "tone": "neutral"})
+    elif rates:
+        chips.append(
+            {
+                "key": "statutory",
+                "label": " + ".join(f"{label} {_pct(rule.rate_percent)}" for label, rule in rates),
+                "tone": "neutral",
+            }
+        )
     else:
         chips.append({"key": "statutory", "label": "No PF / ESI", "tone": "neutral"})
+    if now["category"] == pf_esi.CATEGORY_TDS:
+        chips.append({"key": "tds", "label": tds_label(emp.tds_percent), "tone": "info"})
     bank = bank_info(emp)
     if not bank["hasAccount"] or not bank["hasIfsc"]:
         chips.append({"key": "bank", "label": "No bank details", "tone": "warning"})
@@ -1110,7 +1334,7 @@ def production_rule_groups(inp: ProductionRuleInput, company: bool = True) -> li
                 "cycle",
                 current=factor,
                 text=f"x{factor}",
-                detail="A period's pay is multiplied by this before it is compared with the monthly PF / ESI bands and the ESI ceiling",
+                detail="A period's pay is multiplied by this before it is compared with the ranges of the monthly PF and ESI rules",
                 applied=_got(bd, "deductions", "monthlyEquivalentFactor"),
                 applied_fmt=lambda v: f"x{int(v)}",
             )
@@ -1202,97 +1426,10 @@ def production_rule_groups(inp: ProductionRuleInput, company: bool = True) -> li
         )
     )
 
-    # ── PF / ESI ──
-    equivalent = _got(bd, "deductions", "monthlyEquivalent") if bd is not None else None
-    band_now, pf_now, esi_now = production_rule_now(ps, equivalent) if equivalent is not None else (None, None, None)
-    stored_band = _got(bd, "deductions", "pfEfRule")
-    if company:
-        statutory.append(
-            _item(
-                "pf_ef_switch",
-                "Use salary bands for PF and ESI",
-                "settings",
-                current=bool(ps.prod_pf_ef_enabled),
-                fmt=_on_off,
-                ref=SETTINGS["pf_ef_switch"],
-                detail="A matching band is used instead of the flat rates, even while the flat-rate switch is off",
-                applied=(True if stored_band else None) if bd is not None else _UNSET,
-                applied_fmt=_on_off,
-            )
-        )
-        bands = describe_bands(ps.prod_pf_ef_rules)
-        band_item = _item(
-            "pf_ef_rule",
-            "Salary band",
-            "settings",
-            current=(band_now.get("label") or "Salary band") if band_now else "No band",
-            text="; ".join(bands) if bands else "No bands defined",
-            ref=SETTINGS["pf_ef_rules"],
-            detail="The first band that fits the worker's monthly-equivalent pay is used",
-        )
-        if bd is not None:
-            if equivalent is not None and stored_band:
-                label = stored_band.get("label") or "Salary band"
-                band_item["applied"] = label
-                band_item["changed"] = (band_now.get("label") if band_now else None) != stored_band.get("label")
-                if band_item["changed"]:
-                    band_item["detail"] += (
-                        f". Under the bands as they stand now this pay would use {(band_now or {}).get('label') or 'no band'}"
-                    )
-            else:
-                band_item["applied"], band_item["changed"] = None, False
-        statutory.append(band_item)
-        statutory.append(
-            _item(
-                "flat_rules_switch",
-                "Deduct flat-rate PF and ESI",
-                "settings",
-                current=bool(ps.prod_payroll_rules_enabled),
-                fmt=_on_off,
-                ref=SETTINGS["prod_pf_esi_switch"],
-                detail="Applies only when no salary band matches",
-                applied=None if bd is not None else _UNSET,
-            )
-        )
-    statutory.append(
-        _item(
-            "pf_rate",
-            "PF",
-            "settings",
-            current=pf_now if pf_now is not None else ps.prod_pf_rate,
-            text=_production_rate_text(ps, ps.prod_pf_rate),
-            ref=SETTINGS["prod_pf_rate"],
-            detail="Taken from the whole period pay, not from half of it as for staff",
-            applied=_got(bd, "deductions", "pfRate"),
-            applied_fmt=_period_pct,
-        )
+    # ── PF / ESI / TDS ──
+    statutory.extend(
+        employee_statutory_items(emp, ps, bd, production=True, company=company, monthly_equivalent=inp.equivalent())
     )
-    statutory.append(
-        _item(
-            "esi_rate",
-            "ESI / EF",
-            "settings",
-            current=esi_now if esi_now is not None else ps.prod_esi_rate,
-            text=_production_rate_text(ps, ps.prod_esi_rate),
-            ref=SETTINGS["prod_esi_rate"],
-            detail="Applies while the monthly-equivalent pay is at or below the ESI ceiling",
-            applied=_got(bd, "deductions", "esiRate"),
-            applied_fmt=_period_pct,
-        )
-    )
-    if company:
-        statutory.append(
-            _item(
-                "esi_ceiling",
-                "ESI ceiling",
-                "settings",
-                current=ps.prod_esi_applicable_below,
-                fmt=inr,
-                ref=SETTINGS["prod_esi_ceiling"],
-                detail="The monthly-equivalent pay up to which a production worker pays ESI",
-                applied=_got(bd, "deductions", "esiApplicableBelow"),
-            )
-        )
 
     # ── pay basis ──
     pay.append(
@@ -1377,7 +1514,7 @@ def production_settings_groups(ps, cycle: str) -> list[dict]:
             "cycle",
             current=factor,
             text=f"x{factor}",
-            detail="A period's pay is multiplied by this before it is compared with the monthly PF / ESI bands and the ESI ceiling",
+            detail="A period's pay is multiplied by this before it is compared with the ranges of the monthly PF and ESI rules",
         ),
     ]
     attendance = [
@@ -1422,63 +1559,7 @@ def production_settings_groups(ps, cycle: str) -> list[dict]:
             detail="The highest slab the billable lates reach applies; the last slab holds beyond it",
         ),
     ]
-    bands = describe_bands(ps.prod_pf_ef_rules)
-    statutory = [
-        _item(
-            "pf_ef_switch",
-            "Use salary bands for PF and ESI",
-            "settings",
-            current=bool(ps.prod_pf_ef_enabled),
-            fmt=_on_off,
-            ref=SETTINGS["pf_ef_switch"],
-            detail="A matching band is used instead of the flat rates, even while the flat-rate switch is off",
-        ),
-        _item(
-            "pf_ef_rule",
-            "Salary bands",
-            "settings",
-            current=None,
-            text="; ".join(bands) if bands else "No bands defined",
-            ref=SETTINGS["pf_ef_rules"],
-            detail="The first band that fits the worker's monthly-equivalent pay is used",
-        ),
-        _item(
-            "flat_rules_switch",
-            "Deduct flat-rate PF and ESI",
-            "settings",
-            current=bool(ps.prod_payroll_rules_enabled),
-            fmt=_on_off,
-            ref=SETTINGS["prod_pf_esi_switch"],
-            detail="Used when no salary band matches",
-        ),
-        _item(
-            "pf_rate",
-            "PF rate",
-            "settings",
-            current=ps.prod_pf_rate,
-            text=f"{_pct(ps.prod_pf_rate)} of the period pay",
-            ref=SETTINGS["prod_pf_rate"],
-            detail="Taken from the whole period pay, not from half of it as for staff",
-        ),
-        _item(
-            "esi_rate",
-            "ESI rate",
-            "settings",
-            current=ps.prod_esi_rate,
-            text=f"{_pct(ps.prod_esi_rate)} of the period pay",
-            ref=SETTINGS["prod_esi_rate"],
-            detail="Applies while the monthly-equivalent pay is at or below the ESI ceiling",
-        ),
-        _item(
-            "esi_ceiling",
-            "ESI ceiling",
-            "settings",
-            current=ps.prod_esi_applicable_below,
-            fmt=inr,
-            ref=SETTINGS["prod_esi_ceiling"],
-            detail="The monthly-equivalent pay up to which a production worker pays ESI",
-        ),
-    ]
+    statutory = statutory_settings_items(ps, production=True)
     pay = [
         _item(
             "shifts_earned",

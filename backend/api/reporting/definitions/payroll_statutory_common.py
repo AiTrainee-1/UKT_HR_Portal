@@ -101,9 +101,6 @@ def read_settings():
             "ot_threshold_minutes",
             "ot_compensation_type",
             "min_wage_rate",
-            "staff_payroll_rules_enabled",
-            "prod_payroll_rules_enabled",
-            "prod_pf_ef_enabled",
         )
         .first()
     )
@@ -166,9 +163,15 @@ BD = {
     "bd_earn": "breakdown_details__earnings",
     "bd_late": "breakdown_details__deductions__lateSummary",
     "bd_penalty": "breakdown_details__deductions__lateShiftPenalty",
-    "bd_esi_limit": "breakdown_details__deductions__esiApplicableBelow",
+    # Permission Deduction Slabs (staff slips generated with the switch ON): the excess permissions priced on their own
+    "bd_perm_penalty": "breakdown_details__deductions__permissionPenalty",
+    "bd_perm": "breakdown_details__deductions__permissionSummary",
     "bd_month_eq": "breakdown_details__deductions__monthlyEquivalent",
     "bd_rate": "breakdown_details__salaryPerShift",
+    # The `statutory` block of slips stored from 2026-10-24 on (pf_esi.py): the category the employee was in and the wages
+    # the PF / ESI percentage was taken from. Both are None on an older slip.
+    "bd_stat_category": "breakdown_details__deductions__statutory__category",
+    "bd_stat_wages": "breakdown_details__deductions__statutory__pfWages",
 }
 
 
@@ -179,6 +182,36 @@ def with_breakdown(qs, *names: str):
 
 def as_dict(value) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+# What a slip's (or an employee's) PF / ESI / TDS category is called on screen.
+CATEGORY_LABEL = {"co_emp": "Co Emp", "tds": "TDS", "none": "Not Co Emp"}
+
+
+def slip_category(slip) -> str | None:
+    """'co_emp' | 'tds' | 'none' from the slip's stored ``statutory`` block (needs the ``bd_stat_category`` annotation);
+    None for a slip stored before the PF / ESI / TDS redesign, which has no such block."""
+    value = getattr(slip, "bd_stat_category", None)
+    return value if value in CATEGORY_LABEL else None
+
+
+def _stored_wages(slip) -> Decimal | None:
+    return dec_or_none(getattr(slip, "bd_stat_wages", None)) if slip_category(slip) else None
+
+
+def pf_wages_of(slip) -> Decimal:
+    """The wages the slip's PF percentage was taken from (needs the ``bd_stat_category`` and ``bd_stat_wages``
+    annotations): the stored first portion (Basic + DA + Retaining Allowance, prorated) on a slip from 2026-10-24 on, the
+    slip's Basic on an older one."""
+    stored = _stored_wages(slip)
+    return stored if stored is not None else dec(slip.basic)
+
+
+def esi_wages_of(slip) -> Decimal:
+    """The wages the slip's ESI percentage was taken from: the same first portion as PF on a slip from 2026-10-24 on
+    (ESI is taken from the same base as PF), the slip's gross salary on an older one."""
+    stored = _stored_wages(slip)
+    return stored if stored is not None else dec(slip.gross_salary)
 
 
 def period_text(slip) -> str:

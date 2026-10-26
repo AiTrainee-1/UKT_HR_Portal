@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "../custom-fetch";
 import type { ApprovalProgress } from "../../approval-workflow";
+import { invalidateCoEmpQueries } from "./pf-esi";
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Geo Attendance (Office Geo Punch + On-Duty two-stage approval + live tracking)
@@ -285,10 +286,10 @@ export const useUpdateEmployeeLocationTracking = () => {
   });
 };
 
-// "Co Emp" toggle (Employees -> Co Emp tab): marks an employee as visible to
-// an external application consuming this HRMS's API. Off by default; this
-// only flips the flag itself, nothing inside this app changes behavior when
-// it's on. Same shape as useUpdateEmployeeLocationTracking above.
+// "Co Emp" toggle (Employees -> Co Emp tab): the employee is visible to the CoPortal AND is the only kind of
+// employee PF/ESI can apply to (see ./pf-esi.ts). Off by default. Turning it ON for an employee who is in TDS moves
+// them out of TDS (the server clears tdsEnabled in the same save), so the TDS list and the coverage numbers are
+// refreshed along with the employee lists.
 export const useUpdateEmployeeCoEmp = () => {
   const queryClient = useQueryClient();
   return useMutation({
@@ -297,8 +298,6 @@ export const useUpdateEmployeeCoEmp = () => {
         method: "PATCH",
         body: JSON.stringify({ coEmpEnabled: enabled }),
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
-    },
+    onSuccess: () => invalidateCoEmpQueries(queryClient),
   });
 };

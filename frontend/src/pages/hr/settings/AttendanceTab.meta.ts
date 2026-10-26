@@ -1,4 +1,5 @@
 import type { SettingMeta } from "./kit/catalog";
+import type { ClassView } from "./kit/view";
 
 const MODE = "Attendance Calculation Mode";
 const DAY = "Full Day, Half Day or Absent";
@@ -118,6 +119,15 @@ export const ATTENDANCE_SETTINGS: SettingMeta[] = [
     keywords: ["midnight", "buffer", "early arrival", "protection"],
   },
   {
+    id: "production-days-valued",
+    tab: "attendance",
+    section: PRODUCTION,
+    title: "How a production day is valued",
+    purpose:
+      "Nothing on the Staff page applies to production workers. A production day is valued by the production shift rules on the Production Shifts tab (the shift group of the day, the shifts its leaving time earns, the unpaid breaks and the grace), and what a late day costs a production worker is set on Late Detection, Production page. This page only explains that, and shows the old calculation for earlier days.",
+    keywords: ["production", "shifts earned", "production shifts", "where", "explanation", "late detection", "workers"],
+  },
+  {
     id: "production-attendance",
     tab: "attendance",
     section: PRODUCTION,
@@ -132,7 +142,15 @@ export const ATTENDANCE_SETTINGS: SettingMeta[] = [
     section: PRODUCTION,
     title: "Production late deductions",
     purpose:
-      "What a late production arrival costs is set on Settings - Production Payroll (Late Detection), with its own free allowance and slabs. From the start date of the production shift rules a day is judged late from its group's start and the grace on the Production Shifts tab; before it, from the old production shift in Manage Shift, not from Punch 1 above.",
+      "What a late production arrival costs is set on Settings - Late Detection, Production page, with its own free allowance and slabs for each pay cycle. From the start date of the production shift rules a day is judged late from its group's start and the grace on the Production Shifts tab; before it, from the old production shift in Manage Shift, not from Punch 1 above.",
     keywords: ["production", "late", "deduction", "production payroll"],
   },
 ];
+
+/** The settings of the Production page; every other setting of this tab is on the Staff page. */
+const PRODUCTION_PAGE = new Set(["production-days-valued", "production-attendance", "production-late"]);
+
+/** Which page (Staff or Production) holds each setting, so a link or a search result can open it. */
+export const ATTENDANCE_VIEW_OF: Record<string, ClassView> = Object.fromEntries(
+  ATTENDANCE_SETTINGS.map((m) => [m.id, PRODUCTION_PAGE.has(m.id) ? "production" : "staff"]),
+);

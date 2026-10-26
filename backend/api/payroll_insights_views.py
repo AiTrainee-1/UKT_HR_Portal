@@ -29,6 +29,7 @@ from rest_framework.response import Response
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .models import Payroll
+from .pf_esi import d2
 from .payroll_insights import (
     KIND_LEGACY,
     KIND_PRODUCTION,
@@ -69,7 +70,12 @@ from .payroll_insights_rules import (
     staff_rule_groups,
     staff_settings_groups,
 )
-from .production_cycles import CYCLE_LABELS, normalize_cycle
+from .production_cycles import (
+    CYCLE_LABELS,
+    DEFAULT_MONTHLY_EQUIVALENT_FACTOR,
+    MONTHLY_EQUIVALENT_FACTOR,
+    normalize_cycle,
+)
 from .view_common import error_response as _error
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -272,6 +278,7 @@ def _rules_response(request: Request, kind: str) -> Response:
     else:
         assigned = assignments_on([e.id for e in employees], scope.period_end)
         settings_groups = production_settings_groups(caller, scope.cycle)
+        factor = MONTHLY_EQUIVALENT_FACTOR.get(scope.cycle, DEFAULT_MONTHLY_EQUIVALENT_FACTOR)
         for payroll in payrolls:
             emp = payroll.employee
             inp = ProductionRuleInput(
@@ -281,6 +288,8 @@ def _rules_response(request: Request, kind: str) -> Response:
                 period_end=scope.period_end,
                 ps=resolver.for_employee(emp),
                 assignment=assigned.get(emp.id),
+                # what the PF / ESI rules are tested on: this period's pay scaled to a month
+                monthly_equivalent=d2(payroll.gross_salary * factor),
             )
             entries.append(
                 employee_rules_entry(

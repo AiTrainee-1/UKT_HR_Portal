@@ -81,7 +81,14 @@ def provider_error(details, status=400):
 
 def code_in(call) -> str:
     """The one-time code in a mocked `requests.get(url, ...)` call (the 4-to-6 digit path segment before the template)."""
-    return re.search(r"/SMS/\+\d+/(\d{6})/", call.args[0]).group(1)
+    return re.search(r"/SMS/\+\d+/(\d{4,6})/", call.args[0]).group(1)
+
+
+def log_text(log) -> str:
+    """The text a person could read in a log row. A 4-digit code is only 10 000 numbers, so the leak checks must not look
+    at what is random digits by nature (the ids, the timestamps, the number's hash): that would fail once in a while."""
+    skip = {"id", "phone_hash", "created_at", "employee", "sent_by"}
+    return " ".join(str(getattr(log, f.attname)) for f in log._meta.concrete_fields if f.name not in skip)
 
 
 class _Capture(logging.Handler):
@@ -320,7 +327,14 @@ class LoginOptionsMatrixTests(SmsBase):
     def test_sms_channel_advertises_otp_when_configured_and_names_the_channel(self):
         self.assertEqual(
             self.options(),
-            {"otpLogin": True, "otpReset": True, "otpActivate": True, "passwordLogin": True, "otpChannel": "sms"},
+            {
+                "otpLogin": True,
+                "otpReset": True,
+                "otpActivate": True,
+                "passwordLogin": True,
+                "otpChannel": "sms",
+                "codeLength": 4,
+            },
         )
 
     def test_whatsapp_channel_is_the_default_and_says_so(self):
@@ -425,12 +439,13 @@ class RequestOtpBySmsTests(SmsBase):
                 "expiresInSeconds": 300,
                 "resendAfterSeconds": 60,
                 "channel": "sms",
+                "codeLength": 4,
             },
         )
         whatsapp.assert_not_called()
         post.assert_called_once()
         self.assertEqual(post.call_args.args, (f"{BASE}/{TF_KEY}/SMS/+918220015110/{code}/{TEMPLATE_NAME}",))
-        self.assertRegex(code, r"^\d{6}$")
+        self.assertRegex(code, r"^\d{4}$")  # the template says XXXX: four digits by SMS
         self.assertNotIn("8220015110", str(body))
         self.assertNotIn(code, r.content.decode())
 
@@ -446,6 +461,7 @@ class RequestOtpBySmsTests(SmsBase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["message"], "We've sent a code to your WhatsApp.")
         self.assertEqual(r.json()["channel"], "whatsapp")
+        self.assertEqual(r.json()["codeLength"], 6)
         twofactor.assert_not_called()
         whatsapp.assert_called_once()
         self.assertFalse(SmsMessageLog.objects.exists())
@@ -453,14 +469,14 @@ class RequestOtpBySmsTests(SmsBase):
     def test_the_code_signs_in_and_nothing_stores_it(self):
         r, code, _ = self.request_code()
         row = EmployeeOtp.objects.get()
-        self.assertNotIn(code, row.code_hash)
+        self.assertNotEqual(row.code_hash, code)  # only a salted HMAC is stored: "<salt>$<digest>"
+        self.assertEqual(len(row.code_hash.split("$")), 2)
         login = self.post("otp/login", {"employeeCode": "E100", "otp": code})
         self.assertEqual(login.status_code, 200)
         self.assertEqual(login.json()["role"], "employee")
         # the code is in no SMS log field, whichever field you look at
         for log in SmsMessageLog.objects.all():
-            for field in log._meta.concrete_fields:
-                self.assertNotIn(code, str(getattr(log, field.attname)), field.name)
+            self.assertNotIn(code, log_text(log))
 
     def test_the_log_row_has_what_hr_needs_and_no_number_text_or_code(self):
         _, code, _ = self.request_code()
@@ -475,7 +491,7 @@ class RequestOtpBySmsTests(SmsBase):
         dump = " ".join(str(getattr(log, f.attname)) for f in log._meta.concrete_fields)
         self.assertNotIn("8220015110", dump)
         self.assertNotIn(TF_KEY, dump)
-        self.assertNotIn(code, dump)
+        self.assertNotIn(code, log_text(log))
 
     def test_the_code_and_the_key_are_never_logged_anywhere(self):
         with captured_logs() as lines:
@@ -667,7 +683,7 @@ class VerifyOtpBySmsTests(SmsBase):
     def test_wrong_codes_get_one_generic_message_and_the_attempt_limit_follows_the_setting(self):
         self.configure(max_attempts_per_code=3)
         _, code, _ = self.request_code()
-        wrong = "000000" if code != "000000" else "111111"
+        wrong = "0000" if code != "0000" else "1111"
         for _ in range(3):
             r = self.post("otp/login", {"employeeCode": "E100", "otp": wrong})
             self.assertEqual(r.status_code, 400)
@@ -709,6 +725,170 @@ class VerifyOtpBySmsTests(SmsBase):
         self.emp.refresh_from_db()
         self.assertTrue(bcrypt.checkpw(b"brand-new-pass", self.emp.password_hash.encode()))
         self.assertEqual(self.request_code(purpose="activate")[0].status_code, 409)  # already has a password
+
+
+# ── four digits by SMS, six by WhatsApp ─────────────────────────────────────
+
+
+class CodeLengthTests(SmsBase):
+    """The SMS code has 4 digits (the DLT template says XXXX), the WhatsApp code keeps its 6. 4 digits are only 10 000
+    combinations, so the same tests pin what stops a guesser: the wrong-attempt cap, single use, the per-employee request
+    caps (hourly AND daily for SMS) and that a new code never gives back the guesses of an old one."""
+
+    def make_row(self, code, length, purpose="login"):
+        """A live code row exactly as request_otp stores one (so a code can exist on either channel whatever is active)."""
+        return EmployeeOtp.objects.create(
+            employee=self.emp,
+            purpose=purpose,
+            code_hash=otp_service._hash(code, "ab12cd34ab12cd34", self.emp.id, purpose),
+            phone_number="918220015110",
+            expires_at=timezone.now() + timedelta(minutes=5),
+            code_length=length,
+        )
+
+    def login(self, code):
+        return self.post("otp/login", {"employeeCode": "E100", "otp": code})
+
+    def wrong_code(self, code):
+        return "0000" if code != "0000" else "1111"
+
+    def test_the_length_of_each_channel(self):
+        self.assertEqual(otp_service.code_length("sms"), 4)
+        self.assertEqual(otp_service.code_length("whatsapp"), 6)
+        self.assertEqual(otp_service.code_length("something-else"), 6)
+        self.assertEqual(otp_service.code_length(None), 6)
+
+    def test_options_and_request_answers_carry_the_length_of_the_active_channel(self):
+        self.assertEqual(self.options()["codeLength"], 4)
+        r, code, _ = self.request_code()
+        self.assertEqual((r.json()["codeLength"], len(code), EmployeeOtp.objects.get().code_length), (4, 4, 4))
+        self.configure(otp_channel="whatsapp")
+        self.assertEqual(self.options()["codeLength"], 6)
+
+    def test_the_whatsapp_channel_keeps_six_digits(self):
+        self.configure(otp_channel="whatsapp")
+        ok = mock.Mock(status_code=200, content=b"x", text="")
+        ok.json.return_value = {"status": "success", "message_payload": {"key": {"id": "WAID"}}}
+        with mock.patch("api.whatsapp_service.requests.post", return_value=ok) as post:
+            r = self.post("otp/request", {"employeeCode": "E100"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["codeLength"], 6)
+        code = re.search(r"\b(\d{6})\b", post.call_args.kwargs["json"]["message"]).group(1)
+        self.assertEqual(EmployeeOtp.objects.get().code_length, 6)
+        self.assertEqual(self.login(code).status_code, 200)
+
+    def test_a_code_of_the_wrong_shape_is_refused_with_the_active_channels_length(self):
+        for bad in ("123", "12345", "123456a", "١٢٣٤", " ", "12 34", None, 1234, ["1234"]):
+            r = self.login(bad)
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertEqual(r.json()["error"], "Enter the 4-digit code.", bad)
+        self.configure(otp_channel="whatsapp")
+        self.assertEqual(self.login("1234567").json()["error"], "Enter the 6-digit code.")
+
+    def test_a_four_digit_sms_code_is_dead_after_the_attempt_cap(self):
+        _, code, _ = self.request_code()
+        wrong = self.wrong_code(code)
+        for _ in range(5):
+            self.assertEqual(self.login(wrong).status_code, 400)
+        self.assertEqual(EmployeeOtp.objects.get().attempts, 5)
+        self.assertEqual(self.login(code).status_code, 429)  # the right code no longer works
+        self.assertEqual(self.login(code).status_code, 400)  # and it is consumed: nothing left to guess at
+        self.assertEqual(EmployeeOtp.objects.get().attempts, 6)
+
+    def test_the_sms_attempt_cap_cannot_be_set_above_five_not_even_by_a_row_saved_earlier(self):
+        self.configure(max_attempts_per_code=10)  # what the page used to allow
+        self.assertEqual(otp_service.resolve().max_attempts_per_code, 5)
+        _, code, _ = self.request_code()
+        wrong = self.wrong_code(code)
+        for _ in range(5):
+            self.login(wrong)
+        self.assertEqual(self.login(code).status_code, 429)
+        self.configure(max_attempts_per_code=3)  # a stricter page setting still wins
+        self.assertEqual(otp_service.resolve().max_attempts_per_code, 3)
+
+    def test_a_new_code_does_not_give_the_old_one_back_and_requests_are_what_bounds_the_guesses(self):
+        """Every resend starts a fresh code with fresh attempts, so what bounds the guesses is how many codes can be
+        asked for: 5 an hour (the cooldown is 60 s) and 10 in 24 hours, per employee and purpose, 5 guesses each."""
+        self.configure(max_requests_per_hour=20)  # the daily limit must hold even then
+        guesses = 0
+        codes = []
+        for round_number in range(10):
+            r, code, _ = self.request_code()
+            self.assertEqual(r.status_code, 200, round_number)
+            codes.append(code)
+            wrong = self.wrong_code(code)
+            for _ in range(5):
+                self.assertEqual(self.login(wrong).status_code, 400)
+                guesses += 1
+            self.assertEqual(self.login(wrong).status_code, 429)  # the sixth is refused: the code is dead
+            # push everything outside the hour (and the 60 s cooldown) but inside the 24 hours
+            EmployeeOtp.objects.update(created_at=timezone.now() - timedelta(hours=2, minutes=round_number))
+            SmsMessageLog.objects.update(created_at=timezone.now() - timedelta(hours=2, minutes=round_number))
+        r, code, post = self.request_code()
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("today", r.json()["error"])
+        post.assert_not_called()
+        self.assertEqual(guesses, 50)  # the most a guesser gets in 24 hours: 0.5 % of the 10 000 codes
+        total_attempts = sum(EmployeeOtp.objects.values_list("attempts", flat=True))
+        self.assertEqual(total_attempts, 60)  # 10 x (5 wrong + the refused)
+        # ... and the earlier codes do not work any more
+        self.assertEqual(self.login(codes[0]).status_code, 400)
+        # a day later it is possible again
+        EmployeeOtp.objects.update(created_at=timezone.now() - timedelta(hours=25))
+        SmsMessageLog.objects.update(created_at=timezone.now() - timedelta(hours=25))
+        self.assertEqual(self.request_code()[0].status_code, 200)
+
+    def test_the_hourly_limit_still_stops_the_sixth_code(self):
+        for _ in range(5):
+            self.assertEqual(self.request_code()[0].status_code, 200)
+            self.age_last_otp(120)
+        r, _, post = self.request_code()
+        self.assertEqual((r.status_code, "hour" in r.json()["error"]), (429, True))
+        post.assert_not_called()
+
+    def test_the_daily_limit_is_for_sms_only_and_the_whatsapp_limits_are_unchanged(self):
+        self.configure(otp_channel="whatsapp")
+        cfg = otp_service.resolve()
+        self.assertEqual(
+            (cfg.max_requests_per_day, cfg.max_attempts_per_code, cfg.max_requests_per_hour, cfg.code_length),
+            (None, 5, 5, 6),
+        )
+
+    def test_a_code_issued_by_sms_still_works_after_the_channel_is_switched_to_whatsapp(self):
+        _, code, _ = self.request_code()
+        self.configure(otp_channel="whatsapp")
+        self.assertEqual(self.options()["codeLength"], 6)
+        self.assertEqual(self.login(code).status_code, 200)  # 4 digits, issued as 4
+
+    def test_a_code_issued_by_whatsapp_still_works_after_the_channel_is_switched_to_sms(self):
+        self.make_row("482913", 6)
+        self.assertEqual(self.options()["codeLength"], 4)
+        self.assertEqual(self.login("482913").status_code, 200)  # 6 digits, issued as 6
+
+    def test_the_other_length_is_not_a_back_door_to_a_code_of_the_active_length(self):
+        # a live 6-digit code is not opened by its first four digits (nor a 4-digit code by anything of 6)
+        self.make_row("482913", 6)
+        r = self.login("4829")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("incorrect or has expired", r.json()["error"])
+        self.assertEqual(EmployeeOtp.objects.get().attempts, 1)  # counted like any wrong guess
+        EmployeeOtp.objects.all().delete()
+        self.make_row("4829", 4)
+        r = self.login("482913")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(EmployeeOtp.objects.get().attempts, 1)
+        self.assertEqual(self.login("4829").status_code, 200)
+
+    def test_a_length_that_does_not_fit_tells_nobody_whether_a_code_is_live(self):
+        # no live code at all, and a live code of the other length: the same sentence
+        none = self.login("482913")
+        self.make_row("4829", 4)
+        live = self.login("482913")
+        self.assertEqual((none.status_code, none.json()), (live.status_code, live.json()))
+
+    def test_rows_from_before_the_column_read_as_six_digits(self):
+        self.assertEqual(EmployeeOtp._meta.get_field("code_length").default, otp_service.DEFAULT_CODE_LENGTH)
+        self.assertEqual(otp_service.DEFAULT_CODE_LENGTH, 6)
 
 
 # ── limits: per number, global caps, circuit breaker ────────────────────────
@@ -1155,7 +1335,7 @@ class TestMessageTests(SmsBase):
         with mock.patch(GET, return_value=provider_ok()) as post:
             result = sms_service.send_test("98765 43210", None, "10.0.0.5")
         self.assertTrue(result.ok)
-        self.assertEqual(post.call_args.args, (f"{BASE}/{TF_KEY}/SMS/+919876543210/123456/{TEMPLATE_NAME}",))
+        self.assertEqual(post.call_args.args, (f"{BASE}/{TF_KEY}/SMS/+919876543210/1234/{TEMPLATE_NAME}",))
         log = SmsMessageLog.objects.get()
         self.assertEqual(
             (log.purpose, log.phone_masked, log.employee_id, log.requested_ip),

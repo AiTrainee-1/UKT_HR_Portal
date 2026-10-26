@@ -19,6 +19,7 @@ class PayrollSkip(Exception):
 
 
 import calendar
+import math
 import re
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -39,9 +40,13 @@ from .geo_attendance_views import source_label
 from .permission_registry import resolve_permission
 from .support_contact_views import FIELDS as SUPPORT_CONTACT_FIELDS, clean_updates
 from .clock import ist_today
+from .pf_esi import production_statutory, staff_statutory
 from .production_cycles import (
     DEFAULT_MONTHLY_EQUIVALENT_FACTOR,
+    LATE_SLAB_MAX_SHIFTS,
     MONTHLY_EQUIVALENT_FACTOR,
+    PLAIN_DECIMAL,
+    PLAIN_WHOLE,
     cycle_late_rules,
     merge_prod_cycles,
     prod_cycles_response,
@@ -235,6 +240,77 @@ def late_shift_deduction(
         else:
             break
     return deduction
+
+
+def permission_shift_deduction(billable_permissions: int, settings) -> Decimal:
+    """
+    Shifts deducted for `billable_permissions` excess permissions, per the HR-editable Permission Deduction Slabs
+    (Settings -> Late Detection -> Staff). It is late_shift_deduction with the permission table plugged into its
+    `slabs=` hook, so the lookup is the very same one (highest row reached wins, the last row holds beyond it, an empty
+    table deducts nothing): each stored row {"fromPermissions": N, "deductionShifts": D} is handed over as
+    {"fromLates": N, ...} for this one call only, and the stored settings are never changed.
+    """
+    rows = [
+        {"fromLates": row["fromPermissions"], "deductionShifts": row["deductionShifts"]}
+        for row in (getattr(settings, "permission_deduction_slabs", None) or [])
+        if isinstance(row, dict) and "fromPermissions" in row and "deductionShifts" in row
+    ]
+    return late_shift_deduction(billable_permissions, settings, slabs=rows)
+
+
+def late_pool_pricing(pool: dict, settings, daily_rate=None) -> dict:
+    """
+    What ONE attendance_final.late_pool_summary result costs: THE pricing every caller shares (payroll, the monthly
+    shift summary, the employee shift-stats preview, the reports, the insights, the demo data), so they can never
+    disagree about a deduction.
+
+      late_shifts / late_penalty              the late pool (late-in + early-out [+ excess permissions while the
+                                              Permission Deduction Slabs switch is OFF]) through the late slabs;
+      permission_shifts / permission_penalty  the excess permissions priced on their own (always 0 while the switch is OFF);
+      shifts / penalty                        both together.
+
+    A penalty is shifts x `daily_rate`, rounded half-up to the paisa per line (like payroll); no `daily_rate` (an
+    employee payroll would skip) = no rupee figure, only shifts.
+    """
+    late_shifts = late_shift_deduction(pool["billable"], settings)
+    permission_shifts = Decimal("0")
+    if pool.get("permission_pricing"):
+        permission_shifts = permission_shift_deduction(pool.get("permission_billable", 0), settings)
+
+    def penalty(shifts: Decimal) -> Decimal:
+        return _d2(shifts * daily_rate) if shifts > 0 and daily_rate else Decimal("0")
+
+    late_penalty = penalty(late_shifts)
+    permission_penalty = penalty(permission_shifts)
+    return {
+        "late_shifts": late_shifts,
+        "permission_shifts": permission_shifts,
+        "late_penalty": late_penalty,
+        "permission_penalty": permission_penalty,
+        "shifts": late_shifts + permission_shifts,
+        "penalty": late_penalty + permission_penalty,
+    }
+
+
+def permission_summary_json(pool: dict, settings, approved: int, pricing: dict) -> dict:
+    """The `deductions.permissionSummary` block of a staff payslip (and what every other screen shows about permission
+    pricing): the same keys everywhere. `excess` is always the plain fact max(0, approved - cap); with the switch ON it
+    splits into `absorbedByLate` (the permissions that are the same incident as a late / early-out day, counted once in
+    the late pool) and `priced` (the ones the permission slabs price): excess == absorbedByLate + priced. All additive;
+    every figure but approved / cap / excess is 0 while the switch is OFF."""
+    return {
+        "enabled": bool(pool.get("permission_pricing")),
+        "approved": int(approved or 0),
+        "cap": max(0, int(getattr(settings, "permission_monthly_cap", 3) or 0)),
+        "excess": int(pool["excess_permissions"]),
+        "absorbedByLate": int(pool.get("permission_absorbed", 0)),
+        "priced": int(pool.get("permission_pool", 0)),
+        "freeAllowance": max(0, int(getattr(settings, "permission_free_allowance", 0) or 0)),
+        "freeUsed": int(pool.get("permission_free_used", 0)),
+        "billable": int(pool.get("permission_billable", 0)),
+        "shifts": float(pricing["permission_shifts"]),
+        "penalty": float(pricing["permission_penalty"]),
+    }
 
 
 def _production_late_days(emp: Employee, records, ps, prod_config=None) -> tuple[int, dict]:
@@ -542,13 +618,11 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     hra = _d2(hra_full * prorate_factor)
     allowances = _d2(base_gross - basic - hra)
 
-    # PF / ESI -read live from PayrollSettings. The Staff Payroll Rules
-    # master toggle (Settings → Payroll) must be ON for any deduction to
-    # apply; rates alone are not enough.
+    # PF / ESI / TDS rules (pf_esi.py) -read live from PayrollSettings.
     # Resolved from the EMPLOYEE's branch, not from whoever is logged in.
     # That is what makes an Admin regeneration reproduce exactly what the
     # branch login would have produced, and lets one Admin run spanning
-    # several branches apply each branch's own rates.
+    # several branches apply each branch's own rules.
     ps = settings if settings is not None else settings_for_employee(emp)
 
     # OT (Overtime) compensation, Pay type only -one day's equivalent salary
@@ -576,22 +650,13 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         ot_shifts = sum((Decimal(s) if s is not None else Decimal("1") for s in ot_pay_shifts), Decimal("0"))
         ot_amount = _d2(daily_rate * ot_shifts) if ot_shifts else Decimal("0")
 
-    esi_ceiling = ps.esi_applicable_below
-    if ps.staff_payroll_rules_enabled:
-        pf_rate     = ps.pf_rate / Decimal("100")          # e.g. 12 -> 0.12
-        esi_rate    = ps.esi_rate / Decimal("100")          # e.g. 0.75 -> 0.0075
-
-        pf_deduction = _d2(basic * pf_rate) if pf_rate > 0 else Decimal("0")
-
-        monthly_gross_equivalent = _d2(emp.salary_amount)
-        esi_deduction = (
-            _d2(base_gross * esi_rate)
-            if esi_rate > 0 and monthly_gross_equivalent <= esi_ceiling
-            else Decimal("0")
-        )
-    else:
-        pf_deduction = Decimal("0")
-        esi_deduction = Decimal("0")
+    # PF / ESI / TDS. Only a Co Emp employee can have PF and ESI (rate of the first rule whose range holds the
+    # employee's full monthly Basic / first portion / salary, x the first 50% portion prorated by attendance); only a
+    # TDS employee has TDS (tds_percent % of everything earned this month); everybody else has neither.
+    statutory = staff_statutory(emp, ps, prorate_factor=prorate_factor, earned_gross=_d2(base_gross + ot_amount))
+    pf_deduction = statutory.pf
+    esi_deduction = statutory.esi
+    tds_deduction = statutory.tds
 
     # 8. Late Detection penalty -free allowance and deduction slabs are both
     #    HR-editable (Settings → Late Detection). ONE combined monthly pool:
@@ -625,8 +690,13 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     total_late = pool["total"]
     free_allowance = max(0, int(getattr(_settings, "late_free_allowance", 3) or 0))
     billable_late = pool["billable"]
-    shift_deductions = late_shift_deduction(billable_late, _settings)
-    late_penalty = _d2(shift_deductions * daily_rate) if shift_deductions > 0 else Decimal("0")
+    # The late pool and (Permission Deduction Slabs switch ON) the excess permissions priced on their own: one shared
+    # pricing for every caller. OFF: permission_penalty is 0 and nothing below differs from before the slabs existed.
+    pricing = late_pool_pricing(pool, _settings, daily_rate)
+    shift_deductions = pricing["late_shifts"]
+    late_penalty = pricing["late_penalty"]
+    permission_penalty = pricing["permission_penalty"]
+    permission_summary = permission_summary_json(pool, _settings, approved_permissions, pricing)
     late_summary_data = {
         "lateInCount": pool["late_in"],
         "earlyOutCount": pool["early_out"],
@@ -660,7 +730,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     # 9. Advances
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
-    total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty)
+    total_deductions = _d2(
+        pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty + permission_penalty
+    )
     net_salary = _d2(base_gross + ot_amount - total_deductions)
 
     # 9. Build breakdown JSON (full traceability)
@@ -710,14 +782,20 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         },
         "deductions": {
             "pf": float(pf_deduction),
-            "pfRate": float(ps.pf_rate),
+            "pfRate": float(statutory.pf_rate),
             "esi": float(esi_deduction),
-            "esiRate": float(ps.esi_rate),
-            "esiApplicableBelow": float(esi_ceiling),
+            "esiRate": float(statutory.esi_rate),
+            "tds": float(tds_deduction),
+            "tdsPercent": float(statutory.tds_percent) if statutory.tds_percent is not None else None,
+            "statutory": statutory.breakdown(),
             "advances": float(advance_total),
             "advanceDetails": advance_details,
             "lateShiftPenalty": float(late_penalty),
             "lateSummary": late_summary_data,
+            # Permission Deduction Slabs (staff, additive): the excess permissions priced on their own. Always present on a
+            # new slip; 0 / enabled False while the switch is off (then they are marks in lateSummary's pool instead).
+            "permissionPenalty": float(permission_penalty),
+            "permissionSummary": permission_summary,
             "total": float(total_deductions),
         },
         "netSalary": float(net_salary),
@@ -737,6 +815,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             base_salary=emp.salary_amount,
             gross_salary=base_gross,
             deductions=total_deductions,
+            tds_deduction=tds_deduction,
+            tds_percent=statutory.tds_percent,
             bonus=Decimal("0"),
             final_salary=net_salary,
             status="pending",
@@ -745,6 +825,12 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
                 f"= {float(effective_days)} effective days / {total_working_days} working days. "
                 f"Late: {late_count}. Early-Out: {early_out_count}. Excess permissions: {excess_permissions}. "
                 f"Absent: {absent_count}. Unpaid leave: {unpaid_leave_count}."
+                + (
+                    f" Permission slabs: {permission_summary['priced']} priced excess permission(s), "
+                    f"{pricing['permission_shifts']} shift(s) deducted."
+                    if pool["permission_pricing"]
+                    else ""
+                )
             ),
         ),
     )
@@ -765,8 +851,10 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             gross_salary=base_gross,
             pf_deduction=pf_deduction,
             esi_deduction=esi_deduction,
+            tds_deduction=tds_deduction,
+            tds_percent=statutory.tds_percent,
             advance_deduction=advance_total,
-            other_deductions=_d2(late_penalty),
+            other_deductions=_d2(late_penalty + permission_penalty),
             total_deductions=total_deductions,
             net_salary=net_salary,
             working_days=total_working_days,
@@ -822,7 +910,7 @@ def _generate_production_payroll(
     cycle (Weekly / BiWeekly / Monthly, production_cycles.py) the row is
     generated on: it is stamped on the payroll and the slip, picks the
     cycle's own late rules and scales the period's gross to a month for the
-    PF/ESI bands. Without one (older callers, tests) the shared late rules
+    PF/ESI rules. Without one (older callers, tests) the shared late rules
     and the BiWeekly x2 apply, exactly as before the cycles existed.
     Callers are responsible for confirming period_end has already elapsed
     before calling this.
@@ -902,51 +990,16 @@ def _generate_production_payroll(
     salary_per_shift = emp.salary_per_shift
     gross_amount = _d2(total_shifts * salary_per_shift)
 
-    # PF / EF for production -either salary-range rules (when enabled) or flat rates
-    # A production month is four weeks: the period's gross is scaled to one (Weekly x4, BiWeekly x2, Monthly x1)
-    # before it is tested against the monthly PF/ESI bands and ceiling.
+    # PF / ESI / TDS for production (pf_esi.py). A production month is four weeks: the period's gross is scaled to one
+    # (Weekly x4, BiWeekly x2, Monthly x1) before the employee's Basic / first portion / total share of it is tested
+    # against the PF and ESI rules. Only a Co Emp employee gets PF and ESI (rate x the period's first-portion share of
+    # the gross); only a TDS employee gets TDS (tds_percent % of the period's gross).
     monthly_factor = MONTHLY_EQUIVALENT_FACTOR.get(pay_cycle, DEFAULT_MONTHLY_EQUIVALENT_FACTOR)
     monthly_equiv = _d2(gross_amount * monthly_factor)
-
-    matched_rule = None
-    if ps.prod_pf_ef_enabled:
-        for rule in (ps.prod_pf_ef_rules or []):
-            try:
-                lo = Decimal(str(rule.get("minSalary", 0) or 0))
-                hi = Decimal(str(rule.get("maxSalary", 0) or 0))
-            except Exception:
-                continue
-            # maxSalary 0 means "no upper limit"
-            if monthly_equiv >= lo and (hi <= 0 or monthly_equiv <= hi):
-                matched_rule = rule
-                break
-
-    if matched_rule is not None:
-        rule_pf = Decimal(str(matched_rule.get("pfRate", 0) or 0)) / Decimal("100")
-        rule_ef = Decimal(str(matched_rule.get("efRate", 0) or 0)) / Decimal("100")
-        pf_deduction = _d2(gross_amount * rule_pf) if rule_pf > 0 else Decimal("0")
-        esi_deduction = _d2(gross_amount * rule_ef) if rule_ef > 0 else Decimal("0")
-        applied_pf_rate = Decimal(str(matched_rule.get("pfRate", 0) or 0))
-        applied_ef_rate = Decimal(str(matched_rule.get("efRate", 0) or 0))
-    elif ps.prod_payroll_rules_enabled:
-        # Flat rates apply only when the Production Payroll Rules master
-        # toggle (Settings → Payroll) is ON -mirrors the staff toggle.
-        prod_pf_rate  = ps.prod_pf_rate / Decimal("100")
-        prod_esi_rate = ps.prod_esi_rate / Decimal("100")
-        prod_esi_ceil = ps.prod_esi_applicable_below
-        pf_deduction = _d2(gross_amount * prod_pf_rate) if prod_pf_rate > 0 else Decimal("0")
-        esi_deduction = (
-            _d2(gross_amount * prod_esi_rate)
-            if prod_esi_rate > 0 and monthly_equiv <= prod_esi_ceil
-            else Decimal("0")
-        )
-        applied_pf_rate = ps.prod_pf_rate
-        applied_ef_rate = ps.prod_esi_rate
-    else:
-        pf_deduction = Decimal("0")
-        esi_deduction = Decimal("0")
-        applied_pf_rate = Decimal("0")
-        applied_ef_rate = Decimal("0")
+    statutory = production_statutory(emp, ps, period_gross=gross_amount, monthly_factor=monthly_factor)
+    pf_deduction = statutory.pf
+    esi_deduction = statutory.esi
+    tds_deduction = statutory.tds
 
     # Advance-repayment lookups stay month/year-keyed (that schedule is
     # itself a monthly concept) -a period is attributed to the month it
@@ -956,7 +1009,7 @@ def _generate_production_payroll(
     month, year = period_end.month, period_end.year
     advance_total, advance_details = _pending_advance_repayments(emp, month, year)
 
-    total_deductions = _d2(pf_deduction + esi_deduction + advance_total + late_penalty)
+    total_deductions = _d2(pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty)
     net_salary = _d2(gross_amount - total_deductions)
 
     total_days = (date_to - date_from).days + 1
@@ -983,21 +1036,14 @@ def _generate_production_payroll(
         },
         "deductions": {
             "pf": float(pf_deduction),
-            "pfRate": float(applied_pf_rate),
+            "pfRate": float(statutory.pf_rate),
             "esi": float(esi_deduction),
-            "esiRate": float(applied_ef_rate),
-            "esiApplicableBelow": float(ps.prod_esi_applicable_below),
+            "esiRate": float(statutory.esi_rate),
+            "tds": float(tds_deduction),
+            "tdsPercent": float(statutory.tds_percent) if statutory.tds_percent is not None else None,
+            "statutory": statutory.breakdown(),
             "monthlyEquivalent": float(monthly_equiv),
             "monthlyEquivalentFactor": monthly_factor,
-            # Which salary-range rule was applied (null = flat rates were used)
-            "pfEfRule": (
-                {
-                    "label": matched_rule.get("label") or "Salary-range rule",
-                    "pfRate": float(matched_rule.get("pfRate", 0) or 0),
-                    "efRate": float(matched_rule.get("efRate", 0) or 0),
-                }
-                if matched_rule is not None else None
-            ),
             "advances": float(advance_total),
             "advanceDetails": advance_details,
             "lateShiftPenalty": float(late_penalty) if late_summary is not None else None,
@@ -1025,6 +1071,8 @@ def _generate_production_payroll(
             base_salary=gross_amount,
             gross_salary=gross_amount,
             deductions=total_deductions,
+            tds_deduction=tds_deduction,
+            tds_percent=statutory.tds_percent,
             bonus=Decimal("0"),
             final_salary=net_salary,
             status="pending",
@@ -1052,6 +1100,8 @@ def _generate_production_payroll(
             gross_salary=gross_amount,
             pf_deduction=pf_deduction,
             esi_deduction=esi_deduction,
+            tds_deduction=tds_deduction,
+            tds_percent=statutory.tds_percent,
             advance_deduction=advance_total,
             other_deductions=Decimal("0"),
             total_deductions=total_deductions,
@@ -1140,6 +1190,8 @@ def _payroll_json(p: Payroll, employee_name: str | None = None) -> dict:
         "baseSalary": float(p.base_salary),
         "grossSalary": float(p.gross_salary),
         "deductions": float(p.deductions),
+        "tdsDeduction": float(p.tds_deduction),
+        "tdsPercent": float(p.tds_percent) if p.tds_percent is not None else None,
         "bonus": float(p.bonus),
         "finalSalary": float(p.final_salary),
         "status": p.status,
@@ -1714,7 +1766,7 @@ def seed_attendance(request: Request) -> Response:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Payroll Settings (singleton -PF/ESI rates, pay day, production pay type)
+#  Payroll Settings (singleton -pay day, production pay type, bonus, ...; PF/ESI rules live in pf_esi_views.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ps_response(ps) -> dict:
@@ -1729,14 +1781,7 @@ def _ps_response(ps) -> dict:
         "companyPan": ps.company_pan,
         "companyAddress": ps.company_address,
         "companyRegistration": ps.company_registration,
-        # Staff
-        "pfRate": float(ps.pf_rate),
-        "esiRate": float(ps.esi_rate),
-        "esiApplicableBelow": float(ps.esi_applicable_below),
-        # Production
-        "prodPfRate": float(ps.prod_pf_rate),
-        "prodEsiRate": float(ps.prod_esi_rate),
-        "prodEsiApplicableBelow": float(ps.prod_esi_applicable_below),
+        # (PF / ESI have their own endpoint and Settings tab since 2026-10-24: pf_esi_views.py, /pf-esi-settings)
         # Compensation (Compensation page's CTC breakdown -does not affect payroll generation)
         "basicPercent": float(ps.basic_percent),
         "hraPercent": float(ps.hra_percent),
@@ -1745,6 +1790,10 @@ def _ps_response(ps) -> dict:
         "bonusWageCeiling": float(ps.bonus_wage_ceiling),
         "bonusEligibilityCeiling": float(ps.bonus_eligibility_ceiling),
         "bonusFyStartMonth": ps.bonus_fy_start_month,
+        # Statutory Bonus, PRODUCTION employees (their own rate and ceilings; bonusFyStartMonth is one company value)
+        "prodBonusPercent": float(ps.prod_bonus_percent),
+        "prodBonusWageCeiling": float(ps.prod_bonus_wage_ceiling),
+        "prodBonusEligibilityCeiling": float(ps.prod_bonus_eligibility_ceiling),
         # OT / Compensation (Compensation page's OT detection + announce)
         "otDetectionEnabled": ps.ot_detection_enabled,
         "otThresholdMinutes": ps.ot_threshold_minutes,
@@ -1807,6 +1856,11 @@ def _ps_response(ps) -> dict:
         "lateDeductionSlabs": ps.late_deduction_slabs or [],
         # Permission policy
         "permissionMonthlyCap": ps.permission_monthly_cap,
+        # Permission Deduction Slabs (staff, company-wide): OFF = excess permissions are marks in the late pool; ON =
+        # they are priced on their own by this free allowance and these slabs ({fromPermissions, deductionShifts}).
+        "permissionPricingEnabled": bool(ps.permission_pricing_enabled),
+        "permissionFreeAllowance": ps.permission_free_allowance,
+        "permissionDeductionSlabs": ps.permission_deduction_slabs or [],
         # False for a branch login: the Late Detection switches, Half-Day times and the Permission
         # cap are company-wide rules (the attendance engine only ever reads the company row), so a
         # branch login can see them but not change them -see COMPANY_WIDE_RULE_KEYS.
@@ -1818,11 +1872,7 @@ def _ps_response(ps) -> dict:
         "prodSecondHalfEnd": str(ps.prod_second_half_end)[:5],
         "prodExtraStart": str(ps.prod_extra_start)[:5],
         "prodExtraEnd": str(ps.prod_extra_end)[:5],
-        "prodPfEfEnabled": ps.prod_pf_ef_enabled,
-        "prodPfEfRules": ps.prod_pf_ef_rules or [],
         # Feature toggles
-        "staffPayrollRulesEnabled": ps.staff_payroll_rules_enabled,
-        "prodPayrollRulesEnabled": ps.prod_payroll_rules_enabled,
         "compensationFeatureEnabled": ps.compensation_feature_enabled,
         # Backup
         "backupDirectory": ps.backup_directory,
@@ -1855,6 +1905,11 @@ COMPANY_WIDE_RULE_KEYS: tuple[str, ...] = (
     "halfDayFirstHalfEndTime",
     "halfDaySecondHalfStartTime",
     "permissionMonthlyCap",
+    # Permission Deduction Slabs: what an excess permission costs is decided for everybody, and only the company row is
+    # ever read by the attendance engines and by staff payroll.
+    "permissionPricingEnabled",
+    "permissionFreeAllowance",
+    "permissionDeductionSlabs",
     "arrivalLateWindowMinutes",
     "arrivalPermissionWindowMinutes",
     "arrivalExtraMinutes",
@@ -1909,12 +1964,9 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "lateFreeAllowance": ("settings.late_detection",),
     "lateDeductionSlabs": ("settings.late_detection",),
     "permissionMonthlyCap": ("settings.late_detection",),
-    "pfRate": ("settings.payroll",),
-    "esiRate": ("settings.payroll",),
-    "esiApplicableBelow": ("settings.payroll",),
-    "prodPfRate": ("settings.payroll",),
-    "prodEsiRate": ("settings.payroll",),
-    "prodEsiApplicableBelow": ("settings.payroll",),
+    "permissionPricingEnabled": ("settings.late_detection",),
+    "permissionFreeAllowance": ("settings.late_detection",),
+    "permissionDeductionSlabs": ("settings.late_detection",),
     "basicPercent": ("settings.payroll",),
     "hraPercent": ("settings.payroll",),
     "bonusPercent": ("settings.payroll",),
@@ -1927,7 +1979,9 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "otCompensationType": ("settings.payroll",),
     "payDay": ("settings.payroll",),
     "productionPayType": ("settings.payroll",),
-    "defaultSalaryPerShift": ("settings.payroll",),
+    # The suggested salary per shift is a PRODUCTION value that now sits on Production Payroll -> Pay & Bonus; the old
+    # Payroll group stays valid so a role granted only that one keeps the access it always had.
+    "defaultSalaryPerShift": ("settings.production_payroll", "settings.payroll"),
     # Production payroll period is its own Settings tab -see the note on
     # settings.late_detection above for why this gets a separate group:
     # HR can be given the flat Payroll rates without the power to change
@@ -1938,14 +1992,16 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "prodPeriodAnchorDate": ("settings.production_payroll",),
     "prodPeriodCustomDays": ("settings.production_payroll",),
     "prodCycles": ("settings.production_payroll",),
-    "prodAttendanceMode": ("settings.production_payroll",),
-    "prodLateDetectionEnabled": ("settings.production_payroll",),
-    "prodLateFreeAllowance": ("settings.production_payroll",),
-    "prodLateDeductionSlabs": ("settings.production_payroll",),
-    "prodPfEfEnabled": ("settings.payroll",),
-    "prodPfEfRules": ("settings.payroll",),
-    "staffPayrollRulesEnabled": ("settings.payroll",),
-    "prodPayrollRulesEnabled": ("settings.payroll",),
+    "prodBonusPercent": ("settings.production_payroll",),
+    "prodBonusWageCeiling": ("settings.production_payroll",),
+    "prodBonusEligibilityCeiling": ("settings.production_payroll",),
+    # The production late rules were moved to Late Detection -> Production: the role that owns that tab can save them, and
+    # the Production Payroll role keeps the access it had (either group is enough). prodCycles mixes period keys with late
+    # keys in ONE json value, so it is judged key by key: see _denied_settings_fields.
+    "prodAttendanceMode": ("settings.late_detection", "settings.production_payroll"),
+    "prodLateDetectionEnabled": ("settings.late_detection", "settings.production_payroll"),
+    "prodLateFreeAllowance": ("settings.late_detection", "settings.production_payroll"),
+    "prodLateDeductionSlabs": ("settings.late_detection", "settings.production_payroll"),
     "slipCompanyName": ("settings.salary_slip",),
     "slipCompanyAddress": ("settings.salary_slip",),
     "minWageRate": ("settings.salary_slip",),
@@ -1961,6 +2017,43 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     # HR Contact is its own Settings tab: who to call for sign-in problems and when the server is down.
     **{key: ("settings.hr_contact",) for key in SUPPORT_CONTACT_FIELDS},
 }
+
+
+# prodCycles carries two kinds of keys in one value ({cycle: {key: value}}): the period rules (week start, first period
+# start) belong to Production Payroll, the late rules (free late days, late slabs) also to Late Detection -> Production.
+_PROD_CYCLE_LATE_KEYS = ("lateFreeAllowance", "lateSlabs")
+_PROD_CYCLE_PERIOD_GROUPS = ("settings.production_payroll",)
+_PROD_CYCLE_LATE_GROUPS = ("settings.late_detection", "settings.production_payroll")
+
+
+def _groups_needed(key: str, value) -> list[tuple[str, ...]]:
+    """What saving `key` needs: a list of alternatives, and the caller must have edit access on at least one group of EVERY
+    entry. Plain keys need their FIELD_GROUPS entry. prodCycles needs one entry per inner key: the late keys accept either
+    group, the period keys (and any key not known) only Production Payroll, so a save carrying both kinds needs both parts
+    to be allowed and an empty / malformed value needs what it always needed (the later validation refuses it)."""
+    if key != "prodCycles":
+        return [FIELD_GROUPS[key]]
+    needed: list[tuple[str, ...]] = []
+    for changes in value.values() if isinstance(value, dict) else ():
+        if not isinstance(changes, dict):
+            needed.append(_PROD_CYCLE_PERIOD_GROUPS)
+            continue
+        for inner in changes:
+            needed.append(_PROD_CYCLE_LATE_GROUPS if inner in _PROD_CYCLE_LATE_KEYS else _PROD_CYCLE_PERIOD_GROUPS)
+    return list(dict.fromkeys(needed)) or [FIELD_GROUPS["prodCycles"]]
+
+
+def _denied_settings_fields(data, permissions: dict) -> list[str]:
+    """The keys of a settings save the role may not edit (empty = all allowed)."""
+    return [
+        key
+        for key in data
+        if key in FIELD_GROUPS
+        and not all(
+            any(resolve_permission(permissions, group) == "edit" for group in alternatives)
+            for alternatives in _groups_needed(key, data[key] if hasattr(data, "keys") else None)
+        )
+    ]
 
 
 def _hr_role_permissions(request) -> tuple[dict, bool]:
@@ -2004,6 +2097,97 @@ def _smtp_problem(data, ps) -> str | None:
     return None
 
 
+LATE_SLAB_MAX_FROM = 999
+
+
+def _late_slab_numbers(row) -> tuple[int, float]:
+    """(fromLates, deductionShifts) of one late-slab row exactly as they are stored. Raises KeyError / TypeError / ValueError
+    / OverflowError for a row that is not made of plain finite numbers: "nan", "inf" and 1e999 would otherwise be stored as
+    Infinity / NaN, which the JSON column refuses (a 500 on every save); "1_0", "1e1", Unicode digits, true / false and
+    2.5 lates are not what anybody typed."""
+    start, shifts = row["fromLates"], row["deductionShifts"]
+    if isinstance(start, bool) or isinstance(shifts, bool):
+        raise ValueError("a late slab is made of numbers")
+    if isinstance(start, str) and not PLAIN_WHOLE.fullmatch(start):
+        raise ValueError("fromLates must be a whole number")
+    if isinstance(shifts, str) and not PLAIN_DECIMAL.fullmatch(shifts):
+        raise ValueError("deductionShifts must be a plain number")
+    if isinstance(start, float) and not start.is_integer():
+        raise ValueError("fromLates must be a whole number")
+    from_lates = int(start)  # int(1e999) is an OverflowError, int("9" * 5000) a ValueError
+    shifts = float(shifts)
+    if not math.isfinite(shifts):
+        raise ValueError("deductionShifts must be a finite number")
+    return from_lates, shifts
+
+
+def _clean_late_slab_rows(rows: list, label: str) -> tuple[list | None, str | None]:
+    """The rows of a late-slab save as the list that is stored (ascending by fromLates, one row per threshold, the later
+    row wins), or (None, why not). These rows drive real salary deductions, so a malformed row is rejected at the door rather
+    than silently skipped on every payroll run afterwards; only rows that are not objects are ignored, as they always were.
+    `label` names the table in the messages ("late" or "Production Late")."""
+    cleaned: dict[int, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            from_lates, shifts = _late_slab_numbers(row)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None, f"Each {label} slab needs a numeric fromLates and deductionShifts"
+        if from_lates < 0 or shifts < 0:
+            return None, f"{label[0].upper()}{label[1:]} slab values cannot be negative"
+        if from_lates > LATE_SLAB_MAX_FROM or shifts > LATE_SLAB_MAX_SHIFTS:
+            return None, (
+                f"A {label} slab starts at 0 to {LATE_SLAB_MAX_FROM} lates and cuts 0 to {LATE_SLAB_MAX_SHIFTS} shifts"
+            )
+        cleaned[from_lates] = shifts
+    return [{"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)], None
+
+
+PERMISSION_SLAB_MAX_ROWS = 50
+PERMISSION_SLAB_MAX_FROM = 999
+PERMISSION_SLAB_MAX_SHIFTS = Decimal("31")
+PERMISSION_SLABS_NEEDED = "Add at least one permission slab before turning this on."
+
+
+def clean_permission_slabs(raw) -> tuple[list[dict] | None, str | None]:
+    """The Permission Deduction Slabs of a save as the list that is stored, or (None, why it cannot be).
+
+    Each row is {"fromPermissions": a whole number 1..999, "deductionShifts": a number 0..31 with at most 2 decimals}; the
+    rows drive real salary deductions, so anything else is refused (a 400, never a 500 and never silently skipped): a
+    non-list, a row that is not an object, a missing / non-numeric / fractional / boolean / out-of-range value, more than
+    50 rows. Stored ascending by fromPermissions with duplicate thresholds removed (the later row wins, as in the late
+    slabs); an empty list is valid (the switch itself refuses to be ON with an empty table)."""
+    if not isinstance(raw, list):
+        return None, "Permission slabs must be a list of rows."
+    if len(raw) > PERMISSION_SLAB_MAX_ROWS:
+        return None, f"A permission slab table can have at most {PERMISSION_SLAB_MAX_ROWS} rows."
+    cleaned: dict[int, Decimal] = {}
+    for row in raw:
+        if not isinstance(row, dict):
+            return None, "Each permission slab needs a fromPermissions and a deductionShifts."
+        start, shifts = row.get("fromPermissions"), row.get("deductionShifts")
+        # Plain digits only, at most 6 of them: int() of a longer string raises (Python's limit on huge digit strings), and
+        # "١٢" / "1_0" / "1e1" are not numbers anybody typed. A string that does not fit is refused below as not whole.
+        if isinstance(start, str) and re.fullmatch(r"\s*[0-9]{1,6}\s*", start):
+            start = int(start)
+        elif isinstance(start, float) and start.is_integer():
+            start = int(start)
+        if isinstance(start, bool) or not isinstance(start, int):
+            return None, "Each permission slab needs a whole-number fromPermissions."
+        if not 1 <= start <= PERMISSION_SLAB_MAX_FROM:
+            return None, f"A permission slab must start from a number between 1 and {PERMISSION_SLAB_MAX_FROM}."
+        if isinstance(shifts, str) and not re.fullmatch(r"\s*-?[0-9]{1,12}(\.[0-9]{1,12})?\s*", shifts):
+            shifts = None  # not a plain decimal number ("1e1", "1_0", "NaN", "Infinity", Unicode digits, a huge string)
+        amount = _settings_decimal(shifts) if shifts not in (None, "") else None
+        if amount is None or not amount.is_finite():
+            return None, "Each permission slab needs a numeric deductionShifts."
+        if not (Decimal("0") <= amount <= PERMISSION_SLAB_MAX_SHIFTS) or amount != amount.quantize(Decimal("0.01")):
+            return None, "Shifts cut by a permission slab must be between 0 and 31, with at most 2 decimals."
+        cleaned[start] = amount if amount else Decimal("0")  # "-0" is stored as 0, never as -0.0
+    return [{"fromPermissions": k, "deductionShifts": float(cleaned[k])} for k in sorted(cleaned)], None
+
+
 @api_view(["GET", "PUT"])
 @require_hr
 def payroll_settings_view(request: Request) -> Response:
@@ -2019,11 +2203,7 @@ def payroll_settings_view(request: Request) -> Response:
 
     permissions, is_super_admin = _hr_role_permissions(request)
     if not is_super_admin:
-        denied_fields = [
-            key for key in data
-            if key in FIELD_GROUPS
-            and not any(resolve_permission(permissions, group) == "edit" for group in FIELD_GROUPS[key])
-        ]
+        denied_fields = _denied_settings_fields(data, permissions)
         if denied_fields:
             return Response(
                 {
@@ -2043,8 +2223,8 @@ def payroll_settings_view(request: Request) -> Response:
             {
                 "error": "company_wide_rule",
                 "message": (
-                    "Late Detection switches, Half-Day times, the Permission monthly cap and the OT / "
-                    "Compensation switch are company-wide rules. Ask an administrator to change them."
+                    "Late Detection switches, Half-Day times, the Permission monthly cap, the Permission deduction "
+                    "slabs and the OT / Compensation switch are company-wide rules. Ask an administrator to change them."
                 ),
                 "fields": [k for k in COMPANY_WIDE_RULE_KEYS if k in data],
             },
@@ -2076,18 +2256,15 @@ def payroll_settings_view(request: Request) -> Response:
         "companyPan": ("company_pan", str),
         "companyAddress": ("company_address", str),
         "companyRegistration": ("company_registration", str),
-        "pfRate": ("pf_rate", Decimal),
-        "esiRate": ("esi_rate", Decimal),
-        "esiApplicableBelow": ("esi_applicable_below", Decimal),
-        "prodPfRate": ("prod_pf_rate", Decimal),
-        "prodEsiRate": ("prod_esi_rate", Decimal),
-        "prodEsiApplicableBelow": ("prod_esi_applicable_below", Decimal),
         "basicPercent": ("basic_percent", Decimal),
         "hraPercent": ("hra_percent", Decimal),
         "bonusPercent": ("bonus_percent", Decimal),
         "bonusWageCeiling": ("bonus_wage_ceiling", Decimal),
         "bonusEligibilityCeiling": ("bonus_eligibility_ceiling", Decimal),
         "bonusFyStartMonth": ("bonus_fy_start_month", int),
+        "prodBonusPercent": ("prod_bonus_percent", Decimal),
+        "prodBonusWageCeiling": ("prod_bonus_wage_ceiling", Decimal),
+        "prodBonusEligibilityCeiling": ("prod_bonus_eligibility_ceiling", Decimal),
         "otThresholdMinutes": ("ot_threshold_minutes", int),
         "otCompensationType": ("ot_compensation_type", str),
         "payDay": ("pay_day", int),
@@ -2136,6 +2313,7 @@ def payroll_settings_view(request: Request) -> Response:
         "defaultShiftLunchGraceMinutes": ("default_shift_lunch_grace_minutes", int),
         "lateFreeAllowance": ("late_free_allowance", int),
         "permissionMonthlyCap": ("permission_monthly_cap", int),
+        "permissionFreeAllowance": ("permission_free_allowance", int),
     }
     # Image fields may legitimately be set to null (user removed the logo /
     # signature) -str(None) would store the literal string "None".
@@ -2210,28 +2388,32 @@ def payroll_settings_view(request: Request) -> Response:
         if cycles_problem:
             return _error(cycles_problem)
         ps.prod_cycles = merged_cycles or None
-    if "prodPfEfRules" in data and isinstance(data["prodPfEfRules"], list):
-        ps.prod_pf_ef_rules = data["prodPfEfRules"]
     if "lateDeductionSlabs" in data and isinstance(data["lateDeductionSlabs"], list):
         # Sanitize before storing -these rows drive real salary deductions,
         # so a malformed row must be rejected at the door rather than silently
         # skipped every payroll run afterwards. Non-negative values only,
         # de-duplicated by threshold, stored in ascending order.
-        cleaned: dict[int, float] = {}
-        for row in data["lateDeductionSlabs"]:
-            if not isinstance(row, dict):
-                continue
-            try:
-                from_lates = int(row["fromLates"])
-                shifts = float(row["deductionShifts"])
-            except (KeyError, TypeError, ValueError):
-                return _error("Each late slab needs a numeric fromLates and deductionShifts")
-            if from_lates < 0 or shifts < 0:
-                return _error("Late slab values cannot be negative")
-            cleaned[from_lates] = shifts
-        ps.late_deduction_slabs = [
-            {"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)
-        ]
+        slabs, slab_problem = _clean_late_slab_rows(data["lateDeductionSlabs"], "late")
+        if slab_problem:
+            return _error(slab_problem)
+        ps.late_deduction_slabs = slabs
+    # Permission Deduction Slabs (staff, company-wide): the table, the free allowance (range-checked above) and the switch,
+    # judged together, before anything is saved.
+    if "permissionDeductionSlabs" in data:
+        slabs, slab_problem = clean_permission_slabs(data["permissionDeductionSlabs"])
+        if slab_problem:
+            return _error(slab_problem)
+        ps.permission_deduction_slabs = slabs
+    if "permissionPricingEnabled" in data:
+        if not isinstance(data["permissionPricingEnabled"], bool):
+            return _error("Permission pricing must be true (on) or false (off).")
+        ps.permission_pricing_enabled = data["permissionPricingEnabled"]
+    if (
+        ("permissionPricingEnabled" in data or "permissionDeductionSlabs" in data)
+        and ps.permission_pricing_enabled
+        and not (ps.permission_deduction_slabs or [])
+    ):
+        return _error(PERMISSION_SLABS_NEEDED)
     if "morningLateInEnabled" in data:
         ps.morning_late_in_enabled = bool(data["morningLateInEnabled"])
     if "eveningEarlyOutEnabled" in data:
@@ -2241,27 +2423,10 @@ def payroll_settings_view(request: Request) -> Response:
     if "prodLateDeductionSlabs" in data and isinstance(data["prodLateDeductionSlabs"], list):
         # Same sanitize/sort/dedupe rules as lateDeductionSlabs above -this
         # pool's rows drive real production payroll deductions too.
-        cleaned: dict[int, float] = {}
-        for row in data["prodLateDeductionSlabs"]:
-            if not isinstance(row, dict):
-                continue
-            try:
-                from_lates = int(row["fromLates"])
-                shifts = float(row["deductionShifts"])
-            except (KeyError, TypeError, ValueError):
-                return _error("Each Production Late slab needs a numeric fromLates and deductionShifts")
-            if from_lates < 0 or shifts < 0:
-                return _error("Production Late slab values cannot be negative")
-            cleaned[from_lates] = shifts
-        ps.prod_late_deduction_slabs = [
-            {"fromLates": k, "deductionShifts": cleaned[k]} for k in sorted(cleaned)
-        ]
-    if "prodPfEfEnabled" in data:
-        ps.prod_pf_ef_enabled = bool(data["prodPfEfEnabled"])
-    if "staffPayrollRulesEnabled" in data:
-        ps.staff_payroll_rules_enabled = bool(data["staffPayrollRulesEnabled"])
-    if "prodPayrollRulesEnabled" in data:
-        ps.prod_payroll_rules_enabled = bool(data["prodPayrollRulesEnabled"])
+        slabs, slab_problem = _clean_late_slab_rows(data["prodLateDeductionSlabs"], "Production Late")
+        if slab_problem:
+            return _error(slab_problem)
+        ps.prod_late_deduction_slabs = slabs
     if "otDetectionEnabled" in data:
         ps.ot_detection_enabled = bool(data["otDetectionEnabled"])
     if "compensationFeatureEnabled" in data:
@@ -2296,17 +2461,20 @@ _AMOUNT = (Decimal("0"), Decimal("99999999.99"), 2)  # DECIMAL(10,2) columns
 
 # Request key -> (model attribute, (lowest, highest, decimal places), what the message calls it)
 _PAYROLL_NUMBER_RANGES: dict[str, tuple[str, tuple[Decimal, Decimal, int], str]] = {
-    "pfRate": ("pf_rate", _PERCENT, "Staff PF rate"),
-    "esiRate": ("esi_rate", _PERCENT, "Staff ESI rate"),
-    "esiApplicableBelow": ("esi_applicable_below", _AMOUNT, "Staff ESI ceiling"),
-    "prodPfRate": ("prod_pf_rate", _PERCENT, "Production PF rate"),
-    "prodEsiRate": ("prod_esi_rate", _PERCENT, "Production ESI rate"),
-    "prodEsiApplicableBelow": ("prod_esi_applicable_below", _AMOUNT, "Production ESI ceiling"),
     "basicPercent": ("basic_percent", _PERCENT, "Basic %"),
     "hraPercent": ("hra_percent", _PERCENT, "HRA %"),
     "bonusPercent": ("bonus_percent", _PERCENT, "Bonus rate"),
     "bonusWageCeiling": ("bonus_wage_ceiling", _AMOUNT, "Bonus wage ceiling"),
     "bonusEligibilityCeiling": ("bonus_eligibility_ceiling", _AMOUNT, "Bonus eligibility limit"),
+    # The production Bonus has the very same ranges as the staff one.
+    "prodBonusPercent": ("prod_bonus_percent", _PERCENT, "Production bonus rate"),
+    "prodBonusWageCeiling": ("prod_bonus_wage_ceiling", _AMOUNT, "Production bonus wage ceiling"),
+    "prodBonusEligibilityCeiling": (
+        "prod_bonus_eligibility_ceiling", _AMOUNT, "Production bonus eligibility limit",
+    ),
+    "permissionFreeAllowance": (
+        "permission_free_allowance", (Decimal("0"), Decimal("999"), 0), "Permission free allowance",
+    ),
     "defaultSalaryPerShift": (
         "default_salary_per_shift", (Decimal("0"), Decimal("999999.99"), 2), "Default salary per shift",
     ),
@@ -2360,30 +2528,6 @@ def _in_range(number: Decimal, low: Decimal, high: Decimal, places: int) -> bool
     )
 
 
-def _pf_ef_rule_problem(rule) -> str | None:
-    """Why one Production PF/EF salary-range rule cannot be stored, or None."""
-    if not isinstance(rule, dict):
-        return "each rule needs a label, minSalary, maxSalary, pfRate and efRate."
-    if rule.get("label") is not None and not isinstance(rule.get("label"), str):
-        return "the label must be text."
-    values = {}
-    for key, name, limits in (
-        ("minSalary", "Min Salary", _AMOUNT),
-        ("maxSalary", "Max Salary", _AMOUNT),
-        ("pfRate", "PF %", _PERCENT),
-        ("efRate", "EF %", _PERCENT),
-    ):
-        number = _settings_decimal(rule.get(key))
-        if number is None or not number.is_finite():
-            return f"{name} must be a number."
-        if not _in_range(number, *limits):
-            return _range_message(name, *limits)
-        values[key] = number
-    if values["maxSalary"] > 0 and values["maxSalary"] < values["minSalary"]:
-        return "Max Salary must be 0 (no upper limit) or at least Min Salary."
-    return None
-
-
 def _payroll_range_problem(data, ps, stored) -> str | None:
     """Why a Payroll / Production Payroll value of this save cannot be stored, or None.
 
@@ -2421,13 +2565,6 @@ def _payroll_range_problem(data, ps, stored) -> str | None:
         and (style, frequency) != (stored.prod_period_style, stored.prod_period_frequency)
     ):
         return "Monthly frequency cannot be used with Weekday Anchored periods: choose Weekly, 2 Weeks or 3 Weeks."
-
-    rules = data.get("prodPfEfRules")
-    if isinstance(rules, list) and rules != (stored.prod_pf_ef_rules or []):
-        for position, rule in enumerate(rules, start=1):
-            problem = _pf_ef_rule_problem(rule)
-            if problem:
-                return f"Production PF/EF rule {position}: {problem}"
 
     slabs = data.get("prodLateDeductionSlabs")
     if isinstance(slabs, list):

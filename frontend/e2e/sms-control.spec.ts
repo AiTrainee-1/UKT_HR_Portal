@@ -102,12 +102,12 @@ async function codeFor(request: APIRequestContext, phone: string): Promise<strin
   const res = await request.get(`${FAKE}/last-code?mobile=${phone}`);
   expect(res.status(), `an SMS reached the fake 2Factor for ${phone}`).toBe(200);
   const { code } = await res.json();
-  expect(code).toMatch(/^\d{6}$/);
+  expect(code).toMatch(/^\d{4}$/);
   usedCodes.push(code);
   return code;
 }
 
-const wrongCode = (code: string) => (code === "000000" ? "111111" : "000000");
+const wrongCode = (code: string) => (code === "0000" ? "1111" : "0000");
 
 const asEmployee = (key: string) => employees[key];
 
@@ -333,7 +333,7 @@ test("Setup lists what the server needs by name, copies the template text, and n
   await expect(page.getByTestId("sms-2f-template-text")).toContainText(TEMPLATE_TEXT);
   await expect(page.getByTestId("sms-2f-template-name")).toContainText("UKT_HRMS_OTP");
   await expect(page.getByTestId("sms-2f-sender-id")).toContainText("UKTHRM");
-  await expect(page.getByText("2factor-sms-otp-integration.md")).toBeVisible();
+  await expect(page.getByText("twofactor-sms-otp-integration.md")).toBeVisible();
   // there is no box to type a key into, and the page never shows one
   await expect(page.getByTestId("sms-setup").locator("input, textarea, select")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText(AUTH_KEY);
@@ -353,7 +353,7 @@ test("a test SMS goes through 2Factor, is logged without the number, and tests a
   await openAs(page, adminToken, `${PAGE}/test`);
   const phone = page.getByLabel("Mobile number");
   const send = page.getByRole("button", { name: "Send a test SMS" });
-  await expect(page.getByTestId("sms-test-preview")).toContainText("123456 is your UK Textiles HRMS OTP.");
+  await expect(page.getByTestId("sms-test-preview")).toContainText("1234 is your UK Textiles HRMS OTP.");
 
   // a number that is not a mobile number is refused on the page, and nothing is sent
   await phone.fill("12345");
@@ -367,7 +367,7 @@ test("a test SMS goes through 2Factor, is logged without the number, and tests a
   await expect(page.getByTestId("sms-test-ok")).toContainText("••••••3210");
   const sent = await (await request.get(`${FAKE}/requests`)).json();
   expect(sent).toHaveLength(1);
-  expect(sent[0]).toMatchObject({ authkey: AUTH_KEY, templateId: TEMPLATE_NAME, code: "123456" });
+  expect(sent[0]).toMatchObject({ authkey: AUTH_KEY, templateId: TEMPLATE_NAME, code: "1234" });
   expect(sent[0].mobile).toBe("919876543210");
 
   // 2: 2Factor refuses it: the page says so in plain words
@@ -396,7 +396,7 @@ test("a test SMS goes through 2Factor, is logged without the number, and tests a
   await expect(sentRow).toContainText("FAKE2F");
   await expect(rows(page).filter({ hasText: "••••••3211" })).toContainText("Failed");
   await expect(page.locator("body")).not.toContainText("9876543210");
-  await expect(page.locator("body")).not.toContainText("123456");
+  await expect(page.locator("body")).not.toContainText("1234");
 
   // Overview counts them
   await tab(page, "Overview").click();

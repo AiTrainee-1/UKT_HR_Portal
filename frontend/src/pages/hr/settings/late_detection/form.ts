@@ -1,12 +1,23 @@
 import type { PayrollSettingsItem } from "@/lib/api-client/custom-hooks";
 import type { Change } from "../attendance/form";
-import { allowanceProblem, capProblem, slabsProblem, type Slab, type SlabText } from "./preview";
+import {
+  allowanceProblem,
+  capProblem,
+  pricingProblem,
+  slabsProblem,
+  type PermissionSlab,
+  type PermissionSlabText,
+  type Slab,
+  type SlabText,
+} from "./preview";
 
-// The two forms of the Late Detection tab: the late policy (free allowance + slabs, "Save Late Detection Policy") and
-// the permission policy (the monthly cap, "Save Permission Policy"). Each sends only its own keys, as it always has.
+// The three forms of the Late Detection tab's Staff page: the late policy (free allowance + slabs, "Save Late Detection
+// Policy"), the permission policy (the monthly cap, "Save Permission Policy") and the permission pricing (the switch, the
+// free permissions and the permission slabs, "Save Permission Pricing"). Each sends only its own keys.
 
 export type LateDraft = { allowance: string; slabs: SlabText[] };
 export type CapDraft = { cap: string };
+export type PricingDraft = { enabled: boolean; allowance: string; slabs: PermissionSlabText[] };
 
 const num = (text: string): number => (text.trim() === "" ? NaN : Number(text));
 
@@ -95,3 +106,85 @@ export const capChanges = (draft: CapDraft, saved: CapDraft): Change[] =>
           money: true,
         },
       ];
+
+// ── permission pricing ──
+
+const sortedPermissionRows = (rows: PermissionSlab[]) =>
+  [...rows].sort((a, b) => a.fromPermissions - b.fromPermissions);
+
+/** The saved pricing as form values (the backend's own defaults: OFF, no free permissions, no slabs). */
+export function pricingDraftFrom(data: Partial<PayrollSettingsItem>): PricingDraft {
+  return {
+    enabled: data.permissionPricingEnabled ?? false,
+    allowance: String(data.permissionFreeAllowance ?? 0),
+    slabs: sortedPermissionRows(data.permissionDeductionSlabs ?? []).map((s) => ({
+      fromPermissions: String(s.fromPermissions),
+      deductionShifts: String(s.deductionShifts),
+    })),
+  };
+}
+
+/** The rows as numbers (a row that is not a number yet stays NaN and is skipped by the examples). */
+export const permissionSlabsOf = (d: PricingDraft): PermissionSlab[] =>
+  d.slabs.map((s) => ({ fromPermissions: num(s.fromPermissions), deductionShifts: num(s.deductionShifts) }));
+
+/** Same pricing: the same switch, allowance and rows, in any order (the server stores them in ascending order). */
+export function samePricing(a: PricingDraft, b: PricingDraft): boolean {
+  if (a.enabled !== b.enabled || !sameNumber(a.allowance, b.allowance) || a.slabs.length !== b.slabs.length)
+    return false;
+  const x = sortedPermissionRows(permissionSlabsOf(a));
+  const y = sortedPermissionRows(permissionSlabsOf(b));
+  return x.every(
+    (r, i) => Object.is(r.fromPermissions, y[i].fromPermissions) && Object.is(r.deductionShifts, y[i].deductionShifts),
+  );
+}
+
+export const pricingDraftProblem = (d: PricingDraft): string | null => pricingProblem(d);
+
+/** The Save Permission Pricing request: the switch, the free permissions and the rows in ascending order. */
+export function pricingPayload(d: PricingDraft): Partial<PayrollSettingsItem> {
+  return {
+    permissionPricingEnabled: d.enabled,
+    permissionFreeAllowance: num(d.allowance),
+    permissionDeductionSlabs: sortedPermissionRows(permissionSlabsOf(d)),
+  };
+}
+
+const permissionSlabsText = (d: PricingDraft) =>
+  d.slabs.length === 0
+    ? "no slabs (nothing deducted)"
+    : sortedPermissionRows(permissionSlabsOf(d))
+        .map((s) => `${s.fromPermissions} → ${s.deductionShifts}`)
+        .join(", ");
+
+export function pricingChanges(draft: PricingDraft, saved: PricingDraft): Change[] {
+  const changes: Change[] = [];
+  if (draft.enabled !== saved.enabled) {
+    changes.push({
+      key: "enabled",
+      label: "Price permissions separately",
+      from: saved.enabled ? "On" : "Off",
+      to: draft.enabled ? "On" : "Off",
+      money: true,
+    });
+  }
+  if (!sameNumber(draft.allowance, saved.allowance)) {
+    changes.push({
+      key: "allowance",
+      label: "Free permissions",
+      from: `${saved.allowance} a month`,
+      to: `${draft.allowance} a month`,
+      money: true,
+    });
+  }
+  if (!samePricing({ ...draft, enabled: false, allowance: "0" }, { ...saved, enabled: false, allowance: "0" })) {
+    changes.push({
+      key: "slabs",
+      label: "Permission deduction slabs",
+      from: permissionSlabsText(saved),
+      to: permissionSlabsText(draft),
+      money: true,
+    });
+  }
+  return changes;
+}

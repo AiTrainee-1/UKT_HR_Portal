@@ -594,11 +594,11 @@ describe("Settings > Limits", () => {
     // look at Limits, change a number there and save it
     click(nestedTab("limits"));
     await waitFor(() => !!q("sms-section-limits"), "limits");
-    typeInto(input("sms-input-maxAttemptsPerCode"), "7");
+    typeInto(input("sms-input-maxAttemptsPerCode"), "4");
     click(must("sms-limits-save-row-save"));
     await waitFor(() => puts().length === 1, "the save");
     expect(puts()[0].body.otpChannel).toBe("whatsapp");
-    expect(puts()[0].body.maxAttemptsPerCode).toBe(7);
+    expect(puts()[0].body.maxAttemptsPerCode).toBe(4);
     // the choice made in Channel is still waiting there, unsaved
     click(nestedTab("channel"));
     await waitFor(() => !!q("sms-section-channel"), "channel");
@@ -607,7 +607,7 @@ describe("Settings > Limits", () => {
     // and what was typed in Limits is kept when it is not saved
     click(nestedTab("limits"));
     await waitFor(() => !!q("sms-section-limits"), "limits again");
-    expect(input("sms-input-maxAttemptsPerCode").value).toBe("7");
+    expect(input("sms-input-maxAttemptsPerCode").value).toBe("4");
   });
 
   it("keeps what was typed in a section while another is looked at", async () => {
@@ -981,7 +981,7 @@ describe("Test", () => {
   it("shows the message as employees will get it: the 2Factor template with a made-up code", async () => {
     await open(`${BASE}/test`, "sms-test");
     expect(text(must("sms-test-preview"))).toBe(
-      "123456 is your UK Textiles HRMS OTP. Official message from UK Textiles. Do not share it with anyone.",
+      "1234 is your UK Textiles HRMS OTP. Official message from UK Textiles. Do not share it with anyone.",
     );
     expect(text(must("sms-test"))).toContain("through 2Factor");
   });
@@ -1083,11 +1083,11 @@ describe("Setup", () => {
     await waitFor(() => clipboard.mock.calls.length === 1, "the copy");
     await settle(5);
     expect(clipboard).toHaveBeenLastCalledWith("TWOFACTOR_SENDER_ID");
-    expect(text(must("sms-setup-docs"))).toContain("2factor-sms-otp-integration.md");
+    expect(text(must("sms-setup-docs"))).toContain("twofactor-sms-otp-integration.md");
     click(must("sms-setup-docs").querySelector("button"));
     await waitFor(() => clipboard.mock.calls.length === 2, "the second copy");
     await settle(5);
-    expect(clipboard).toHaveBeenLastCalledWith("2factor-sms-otp-integration.md");
+    expect(clipboard).toHaveBeenLastCalledWith("twofactor-sms-otp-integration.md");
   });
 
   it("falls back to telling the person what to press when the browser refuses to copy", async () => {

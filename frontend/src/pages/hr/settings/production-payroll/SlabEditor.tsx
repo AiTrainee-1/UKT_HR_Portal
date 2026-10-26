@@ -6,7 +6,7 @@ import { PreviewCard, PreviewLine } from "../kit/SettingBlock";
 import { parseNumber, RANGES } from "../payroll/form";
 import { formatPaise } from "../payroll/preview";
 import type { LatePenalty } from "./preview";
-import type { SlabErrors, SlabRow } from "./sections";
+import type { SlabErrors, SlabRow } from "../late_detection/production";
 
 /** The made-up production worker every example on these tabs uses. */
 export const PER_SHIFT = 600;

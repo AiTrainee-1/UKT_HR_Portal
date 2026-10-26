@@ -158,10 +158,10 @@ export const usePayrollIssues = (
 export type RuleSource = "settings" | "employee" | "shift" | "cycle";
 
 export type RuleItem = {
-  /** "attendance_mode", "late_free_allowance", "pf_rate", ... */
+  /** "attendance_mode", "late_free_allowance", "pf_rules", ... */
   key: string;
   label: string;
-  /** In words: "Strict (4-punch)", "3 free, then slabs", "12% of basic". */
+  /** In words: "Strict (4-punch)", "3 free, then slabs", "12% when Basic is up to ₹25,000". */
   value: string;
   detail?: string | null;
   source: RuleSource;

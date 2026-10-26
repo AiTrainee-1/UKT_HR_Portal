@@ -627,24 +627,67 @@ def late_pool_summary(records, approved_permission_count: int, settings, counted
     not two: the excess permission is that occurrence (it did not shield the day, so the day was
     judged against the plain shift time), and it is already in the excess count.
 
+    PERMISSION PRICING (PayrollSettings.permission_pricing_enabled, staff only, OFF by default).
+      OFF  everything above, to the letter: the excess permissions are part of the pool and the keys
+           `permission_*` below are all zero.
+      ON   the excess permissions LEAVE the late pool (pool = late-in + early-out only) and are priced on
+           their own: the first permission_free_allowance of them are free, the rest are `permission_billable`
+           (priced by permission_deduction_slabs, see payroll_views.late_pool_pricing).
+           The one-incident rule still holds, so nothing is ever deducted twice: a flagged day whose excess
+           permission is on the SAME edge counts in the late pool (`late_in` / `early_out` then include it) and that
+           permission is "absorbed": it is not priced again. So with `excess` = approved - cap and `same_edge` =
+           the flagged day-edges that carry an excess permission on that edge:
+               permission_absorbed = min(excess, same_edge)
+               permission_pool     = excess - permission_absorbed     (the permissions priced on their own)
+           and  pool total + permission_pool == the pool total of the OFF formula  (same incidents, split in two).
+           Like today, the excess count is the whole calendar month and every type (it is not narrowed to working
+           or present days); only the same-edge test looks at the day records, so a flagged day outside
+           `counted_dates` (a Sunday, an absent day) absorbs nothing and its excess permission stays priced.
+
     `records`: the month's AttendanceDayRecords; only present / half-shift days are looked at.
     `counted_dates`: optional set of dates to restrict to (payroll passes its working days).
-    Returns plain ints; callers add their own pricing.
+    Returns plain ints / one bool; callers add their own pricing.
+    `excess_permissions` is always the plain fact max(0, approved - cap), in both modes.
     """
     late_in = early_out = 0
+    edge_in = edge_out = 0  # flagged day-edges that carry an excess permission on that same edge
     for r in records:
         if counted_dates is not None and r.date not in counted_dates:
             continue
         if r.status not in ("present", "half_shift"):
             continue
-        if r.is_late and not r.morning_permission_excess:
-            late_in += 1
-        if r.early_leave and not r.evening_permission_excess:
-            early_out += 1
+        if r.is_late:
+            if r.morning_permission_excess:
+                edge_in += 1
+            else:
+                late_in += 1
+        if r.early_leave:
+            if r.evening_permission_excess:
+                edge_out += 1
+            else:
+                early_out += 1
+    same_edge = edge_in + edge_out
     cap = max(0, int(getattr(settings, "permission_monthly_cap", 3) or 0))
     excess = max(0, int(approved_permission_count or 0) - cap)
-    total = late_in + early_out + excess
     free = max(0, int(getattr(settings, "late_free_allowance", 3) or 0))
+
+    pricing = bool(getattr(settings, "permission_pricing_enabled", False))
+    if not pricing:
+        total = late_in + early_out + excess
+        absorbed = permission_pool = permission_free_used = permission_billable = 0
+    else:
+        # Each excess permission is one incident. The ones on a flagged day-edge are that day's lateness (they stay in
+        # the late pool as the late-in / early-out they are); only the rest are priced on their own. `absorbed` never
+        # exceeds the excess count, so a stale day record can not make the same incident count twice.
+        absorbed = min(excess, same_edge)
+        permission_pool = excess - absorbed
+        take_in = min(edge_in, absorbed)
+        late_in += take_in
+        early_out += min(edge_out, absorbed - take_in)
+        total = late_in + early_out
+        permission_free = max(0, int(getattr(settings, "permission_free_allowance", 0) or 0))
+        permission_free_used = min(permission_pool, permission_free)
+        permission_billable = max(0, permission_pool - permission_free)
     return {
         "late_in": late_in,
         "early_out": early_out,
@@ -652,6 +695,13 @@ def late_pool_summary(records, approved_permission_count: int, settings, counted
         "total": total,
         "free_used": min(total, free),
         "billable": max(0, total - free),
+        # ── Permission pricing (additive; every one is 0 / False while the switch is off) ──
+        "permission_pricing": pricing,
+        "same_edge": same_edge,
+        "permission_absorbed": absorbed,
+        "permission_pool": permission_pool,
+        "permission_free_used": permission_free_used,
+        "permission_billable": permission_billable,
     }
 
 
@@ -1360,11 +1410,11 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             if morning_excess:
                 excess_notes.append(
                     f"Morning Late-In permission approved but Excess (over {cap} per month): "
-                    "judged against the plain shift start and counted in the late pool")
+                    "judged against the plain shift start and counted as an excess permission")
             if evening_excess:
                 excess_notes.append(
                     f"Evening Early-Out permission approved but Excess (over {cap} per month): "
-                    "judged against the plain shift end and counted in the late pool")
+                    "judged against the plain shift end and counted as an excess permission")
             if excess_notes:
                 computed["late_reason"] = "; ".join(
                     [r for r in [computed.get("late_reason")] if r] + excess_notes)

@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Chip } from "@/components/payroll/kit/parts";
+import { StatutoryRulesChip, StatutoryWhoNote } from "@/components/payroll/kit/StatutoryNote";
+import { usePfEsiRulesSlice } from "@/components/payroll/kit/statutory-rules";
 import { monthYear } from "@/components/payroll/kit/format";
 import { MONTH_NAMES } from "@/components/payroll/BreakdownDrawer";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
@@ -49,6 +51,7 @@ export function GenerateDialog({
 
   const existing = useListPayrollRuns({ month, year });
   const settings = usePayrollSettings();
+  const statutoryRules = usePfEsiRulesSlice();
   const skip = usePayrollSkipCheck(checkSkips ? { month, year, runType: "monthly" } : null);
   const found = useMemo(() => existingPayroll(existing.data), [existing.data]);
   const years = useMemo(() => yearOptions(new Date().getFullYear()), []);
@@ -130,7 +133,7 @@ export function GenerateDialog({
             </li>
             <li className="flex items-start gap-2">
               <Cog size={13} className="mt-0.5 shrink-0 text-indigo-500" />
-              Prices late arrivals, half days, PF and ESI with the rules in Settings (below).
+              Prices late arrivals and half days with the rules in Settings (below).
             </li>
             <li className="flex items-start gap-2">
               <Wallet size={13} className="mt-0.5 shrink-0 text-indigo-500" />
@@ -156,9 +159,7 @@ export function GenerateDialog({
                 <Chip tone="info">
                   {s.attendanceMode === "strict" ? "Strict attendance (4 punches)" : "Simple attendance"}
                 </Chip>
-                <Chip tone={s.staffPayrollRulesEnabled ? "success" : "neutral"}>
-                  {s.staffPayrollRulesEnabled ? `PF ${s.pfRate}% · ESI ${s.esiRate}%` : "PF / ESI off"}
-                </Chip>
+                <StatutoryRulesChip kind="staff" rules={statutoryRules} testId="staff-generate-statutory" />
                 <Chip tone="warning">
                   Late: {s.lateFreeAllowance ?? 0} free, {(s.lateDeductionSlabs ?? []).length} slab
                   {(s.lateDeductionSlabs ?? []).length === 1 ? "" : "s"}
@@ -166,6 +167,12 @@ export function GenerateDialog({
                 <Chip tone="neutral">Permission cap {s.permissionMonthlyCap ?? 0} a month</Chip>
               </div>
             )}
+            <StatutoryWhoNote
+              kind="staff"
+              rules={statutoryRules}
+              className="mt-3 border-t pt-3"
+              testId="staff-generate-statutory-note"
+            />
           </div>
 
           {existing.isLoading ? (

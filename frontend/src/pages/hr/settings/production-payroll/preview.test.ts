@@ -67,37 +67,19 @@ describe("a production late day", () => {
   });
 });
 
-describe("PF and ESI on a cycle's payslip", () => {
-  const flat = {
-    ratePerShift: 600,
-    flatOn: true,
-    pfRate: 12,
-    esiRate: 0.75,
-    esiCeiling: 21000,
-    bandsOn: false,
-    bands: [],
-  };
+describe("the estimated monthly pay on a cycle's payslip", () => {
+  const sample = { ratePerShift: 600 };
 
   it("estimates a month as the period x 4, x 2 or x 1: 6 shifts a week = ₹3,600, estimate ₹14,400 on every cycle", () => {
-    expect(cyclePay({ ...flat, shifts: 6 }, "weekly").monthlyEstimate).toBe(1_440_000);
-    expect(cyclePay({ ...flat, shifts: 12 }, "biweekly").monthlyEstimate).toBe(1_440_000);
-    expect(cyclePay({ ...flat, shifts: 24 }, "monthly").monthlyEstimate).toBe(1_440_000);
+    expect(cyclePay({ ...sample, shifts: 6 }, "weekly").monthlyEstimate).toBe(1_440_000);
+    expect(cyclePay({ ...sample, shifts: 12 }, "biweekly").monthlyEstimate).toBe(1_440_000);
+    expect(cyclePay({ ...sample, shifts: 24 }, "monthly").monthlyEstimate).toBe(1_440_000);
   });
 
-  it("tests the ESI ceiling on the estimate: 10 shifts in a week (₹6,000, estimate ₹24,000) pays PF but no ESI", () => {
-    const week = cyclePay({ ...flat, shifts: 10 }, "weekly");
-    expect([week.source, week.pf, week.esi, week.net]).toEqual(["flat", 72_000, 0, 528_000]);
-    const month = cyclePay({ ...flat, shifts: 10 }, "monthly");
-    expect([month.esi, month.net]).toEqual([4_500, 523_500]);
-  });
-
-  it("a matching band is tested on the estimate too, and wins over the flat rates", () => {
-    const bands = [{ label: "Low", minSalary: 0, maxSalary: 15000, pfRate: 10, efRate: 1 }];
-    const paid = cyclePay({ ...flat, shifts: 6, bandsOn: true, bands }, "weekly");
-    expect([paid.source, paid.band?.label, paid.pf, paid.esi]).toEqual(["band", "Low", 36_000, 3_600]);
-    // the same shifts on Monthly: estimate ₹3,600 is still in the band; 7 shifts a week (₹4,200 x 4 = ₹16,800) is not
-    expect(cyclePay({ ...flat, shifts: 6, bandsOn: true, bands }, "monthly").source).toBe("band");
-    expect(cyclePay({ ...flat, shifts: 7, bandsOn: true, bands }, "weekly").source).toBe("flat");
-    expect(cyclePay({ ...flat, shifts: 7, bandsOn: true, bands, flatOn: false }, "weekly").source).toBe("none");
+  it("pay is the shifts times the rate whatever the cycle: 10 shifts = ₹6,000, estimate ₹24,000 on Weekly", () => {
+    const week = cyclePay({ ...sample, shifts: 10 }, "weekly");
+    expect([week.gross, week.monthlyEstimate, week.net]).toEqual([600_000, 2_400_000, 600_000]);
+    const month = cyclePay({ ...sample, shifts: 10 }, "monthly");
+    expect([month.gross, month.monthlyEstimate]).toEqual([600_000, 600_000]);
   });
 });

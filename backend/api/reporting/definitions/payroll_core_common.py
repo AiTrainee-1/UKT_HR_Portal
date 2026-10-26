@@ -20,8 +20,14 @@ Rules this module encodes (see the payroll survey brief):
   legitimately owns both kinds of slip.
 * Legacy weekly production slips (week_number set, no period) are stale rows from before period-based payroll and are
   hidden unless the report offers - and the user ticks - ``includeLegacyWeekly``.
-* Late deduction = ``breakdown.deductions.lateShiftPenalty`` (production slips do not store it in other_deductions),
-  falling back to total deductions less PF, ESI and advance when the slip carries no breakdown snapshot.
+* Late deduction = ``breakdown.deductions.lateShiftPenalty`` (production slips do not store it in other_deductions)
+  plus, on a staff slip generated with Permission Deduction Slabs ON, ``breakdown.deductions.permissionPenalty`` (the
+  excess permissions priced on their own: SalarySlip.other_deductions holds both, so "other" stays what is neither),
+  falling back to total deductions less PF, ESI, TDS and advance when the slip carries no breakdown snapshot. TDS
+  (``SalarySlip.tds_deduction``, only TDS-category employees have any) is always taken out of that residual, so it can
+  never be mistaken for a late or an "other" deduction.
+* PF / ESI wages: slips stored from 2026-10-24 on carry ``breakdown.deductions.statutory`` (the PF / ESI rule that was
+  applied and the wages it was taken from); older slips do not, and are read the way they always were.
 """
 
 from __future__ import annotations
@@ -57,8 +63,8 @@ FY_KEY = "financialYear"
 
 # Statutory employer rates used ONLY for the cost estimates of department-salary-cost. Payroll does not store employer
 # contributions, so these are report-layer constants, labelled as such wherever they are used.
-EMPLOYER_PF_RATE = Decimal("12")  # EPF employer share (EPS 8.33% + EPF 3.67%) on PF wages (the slip's basic)
-EMPLOYER_ESI_RATE = Decimal("3.25")  # ESI employer share on ESI wages (the slip's gross)
+EMPLOYER_PF_RATE = Decimal("12")  # EPF employer share (EPS 8.33% + EPF 3.67%) on the slip's PF wages (PF_WAGES_SQL)
+EMPLOYER_ESI_RATE = Decimal("3.25")  # ESI employer share on the slip's ESI wages (ESI_WAGES_SQL)
 
 STATUS_PAID = "Paid"
 STATUS_PENDING = "Pending"
@@ -335,15 +341,31 @@ def _parts(s) -> tuple[dict, dict, dict, object]:
     return {}, {}, {}, None
 
 
-# SQL twin of the late-deduction rule in derive(): snapshot value, else total deductions less PF/ESI/advance.
+# SQL twin of the late-deduction rule in derive(): snapshot value, else total deductions less PF/ESI/TDS/advance.
 _DEC = DecimalField(max_digits=14, decimal_places=2)
 LATE_SQL = Coalesce(
-    Cast(KT("breakdown_details__deductions__lateShiftPenalty"), _DEC),
     ExpressionWrapper(
-        F("total_deductions") - F("pf_deduction") - F("esi_deduction") - F("advance_deduction"), output_field=_DEC
+        Cast(KT("breakdown_details__deductions__lateShiftPenalty"), _DEC)
+        # Permission Deduction Slabs (staff slips generated with the switch ON); a slip without it adds 0
+        + Coalesce(
+            Cast(KT("breakdown_details__deductions__permissionPenalty"), _DEC),
+            Value(Decimal("0"), output_field=_DEC),
+            output_field=_DEC,
+        ),
+        output_field=_DEC,
+    ),
+    ExpressionWrapper(
+        F("total_deductions") - F("pf_deduction") - F("esi_deduction") - F("tds_deduction") - F("advance_deduction"),
+        output_field=_DEC,
     ),
     output_field=_DEC,
 )
+# SQL twins of the PF / ESI wages the slips carry: new slips (from 2026-10-24) store the wages their PF / ESI percentage
+# was taken from (``statutory.pfWages``: the first portion, Basic + DA + Retaining Allowance, prorated); older slips have no
+# ``statutory`` block, so their wages are the slip's basic (PF) and gross salary (ESI), the way payroll used them then.
+STAT_WAGES_SQL = Cast(KT("breakdown_details__deductions__statutory__pfWages"), _DEC)
+PF_WAGES_SQL = Coalesce(STAT_WAGES_SQL, F("basic"), output_field=_DEC)
+ESI_WAGES_SQL = Coalesce(STAT_WAGES_SQL, F("gross_salary"), output_field=_DEC)
 SLIP_TYPE_SQL = Case(
     When(period_start__isnull=False, then=Value("production")),
     When(week_number__isnull=False, then=Value("production")),
@@ -361,13 +383,21 @@ def derive(s, today: date, payroll_row: dict | None = None) -> dict:
     production = is_production(s)
     has_ded_snapshot = bool(ded)
 
+    stat = ded.get("statutory") if isinstance(ded.get("statutory"), dict) else None
+    stored_wages = stat.get("pfWages") if stat else None
+    pf_wages = _d2(stored_wages) if _isnum(stored_wages) else s.basic
+    esi_wages = _d2(stored_wages) if _isnum(stored_wages) else s.gross_salary
+
     other_allowances = s.allowances + s.incentives + s.bonuses
     total_earnings = s.gross_salary + s.ot_amount
-    residual = s.total_deductions - s.pf_deduction - s.esi_deduction - s.advance_deduction
+    tds = s.tds_deduction or ZERO
+    residual = s.total_deductions - s.pf_deduction - s.esi_deduction - tds - s.advance_deduction
 
     raw_late = ded.get("lateShiftPenalty")
     if _isnum(raw_late):
         late: Decimal | None = _d2(raw_late)
+        if not production and _isnum(ded.get("permissionPenalty")):
+            late += _d2(ded["permissionPenalty"])  # Permission Deduction Slabs ON: deducted in the same place
     elif production and has_ded_snapshot:
         late = None  # production late detection was off when the slip was generated
     else:
@@ -410,6 +440,8 @@ def derive(s, today: date, payroll_row: dict | None = None) -> dict:
         "total_earnings": r2(total_earnings),
         "pf": r2(s.pf_deduction),
         "esi": r2(s.esi_deduction),
+        "tds": r2(tds),
+        "tds_percent": float(s.tds_percent) if s.tds_percent is not None else None,
         "advance": r2(s.advance_deduction),
         "late": r2(late) if late is not None else None,
         "other": r2(other),
@@ -422,6 +454,10 @@ def derive(s, today: date, payroll_row: dict | None = None) -> dict:
         "late_days": s.late_days,
         "monthly_rate": monthly_rate,
         "lop": r2(lop) if lop is not None else None,
+        "statutory": stat,  # None on a slip stored before the PF / ESI / TDS redesign (2026-10-24)
+        "category": stat.get("category") if stat else None,  # co_emp | tds | none
+        "pf_wages": r2(pf_wages),
+        "esi_wages": r2(esi_wages),
         "summary": summary,
         "earn": earn,
         "ded": ded,

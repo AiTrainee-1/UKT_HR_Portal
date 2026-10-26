@@ -2,8 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useLocation, useParams, useSearch } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { dateTime } from "@/components/payroll/kit/format";
+import { explainStatutory } from "@/components/payroll/kit/statutory";
 import { cameFromPayroll, payrollDetailsPath, payrollListPath } from "@/components/payroll/kit/url-state";
-import { usePayrollSettings, type PayrollDetails, type PayrollKind } from "@/lib/api-client/custom-hooks";
+import {
+  usePayrollBreakdown,
+  usePayrollSettings,
+  type PayrollDetails,
+  type PayrollKind,
+} from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { ACCENT, type Accent } from "./accent";
 import { AttendanceCard } from "./AttendanceCard";
@@ -31,6 +37,7 @@ import { PRINT_CSS } from "./print";
 import { RulesCard, type RuleFocus } from "./RulesCard";
 import { scrollPageToTop, useSectionSpy } from "./scroll";
 import { SectionNav } from "./SectionNav";
+import { StatutoryCard } from "./StatutoryCard";
 import { useIssueFilters } from "./use-issue-filters";
 import { isMissingError, useMarkPaid, usePayrollDetailsView } from "./use-details";
 
@@ -171,6 +178,18 @@ function DetailsBody({
   const changed = useMemo(() => changedRules(details.rules).length, [details.rules]);
   const ruleKeys = useMemo(() => new Set(details.rules.flatMap((g) => g.items.map((i) => i.key))), [details.rules]);
   const exportItems = useMemo(() => detailsExportItems({ details, company }), [details, company]);
+  // How PF / ESI / TDS were decided is stored in the payslip's breakdown, not in the details: read it from there (a payroll
+  // with no breakdown, a legacy one, or a failed request simply has no such card).
+  const breakdown = usePayrollBreakdown(details.kind === "legacy_session" ? null : details.payrollId);
+  const statutory = useMemo(
+    () =>
+      explainStatutory(
+        breakdown.data?.breakdown?.deductions?.statutory,
+        breakdown.data?.breakdown?.deductions,
+        kind === "production",
+      ),
+    [breakdown.data, kind],
+  );
 
   // `?section=issues` opens the page scrolled to that section (once per payroll and section).
   const scrolledFor = useRef<string | null>(null);
@@ -250,6 +269,7 @@ function DetailsBody({
       />
 
       <OverviewCard details={details} kind={kind} accent={accent} ruleKeys={ruleKeys} onShowRule={showRule} />
+      {statutory && <StatutoryCard view={statutory} accent={accent} />}
       <RulesCard groups={details.rules} accent={accent} focus={ruleFocus} />
       <IssuesCard details={details} accent={accent} state={filters} company={company} degraded={degraded} />
       <AttendanceCard
@@ -261,7 +281,7 @@ function DetailsBody({
         onShowIssues={() => jump("issues")}
       />
       <PayExtrasCard details={details} accent={accent} />
-      <EmployeeCard details={details} kind={kind} accent={accent} />
+      <EmployeeCard details={details} kind={kind} accent={accent} statutoryCategory={statutory?.category} />
       <HistoryCard details={details} kind={kind} accent={accent} />
     </div>
   );

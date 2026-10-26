@@ -56,15 +56,23 @@ def _late_penalty(slip, typ: str, has_late_summary: bool) -> Decimal | None:
 
     The breakdown's ``lateShiftPenalty`` is the source (production keeps a penalty ONLY in the breakdown and total,
     while ``other_deductions`` stays 0). Older slips without it: staff falls back to ``other_deductions`` (which
-    holds the late penalty for staff); production to any positive residual of total - PF - ESI - advance.
+    holds the late penalty for staff); production to any positive residual of total - PF - ESI - TDS - advance.
     None = the slip has no late data at all (production with late detection off)."""
     pen = dec_or_none(slip.bd_penalty)
     if pen is not None:
+        if typ == STAFF:
+            # Permission Deduction Slabs ON: the excess permissions priced on their own are deducted in the same
+            # place (SalarySlip.other_deductions holds both), so they are part of the staff late-type deduction.
+            pen += dec(getattr(slip, "bd_perm_penalty", None))
         return pen
     if typ == STAFF:
         return dec(slip.other_deductions)
     residual = (
-        dec(slip.total_deductions) - dec(slip.pf_deduction) - dec(slip.esi_deduction) - dec(slip.advance_deduction)
+        dec(slip.total_deductions)
+        - dec(slip.pf_deduction)
+        - dec(slip.esi_deduction)
+        - dec(slip.tds_deduction)
+        - dec(slip.advance_deduction)
     )
     if residual > 0:
         return residual
@@ -72,6 +80,7 @@ def _late_penalty(slip, typ: str, has_late_summary: bool) -> Decimal | None:
 
 
 # -- late detection and salary impact -----------------------------------------------------------------------
+_PERMISSION_KEYS = ["permissionPricedCount", "permissionBillableCount", "permissionDeduction"]
 _LATE_KEYS = [
     "lateInCount",
     "earlyOutCount",
@@ -91,9 +100,14 @@ def _run_late(ctx) -> ReportResult:
     qs = SalarySlip.objects.filter(
         ctx.emp_q("employee__"), slip_type_q(visible_types(ctx)), year=year, month=month
     ).select_related("employee__department")
-    slips = list(with_breakdown(qs, "bd_late", "bd_penalty", "bd_earn", "bd_rate").order_by("employee_id", "id"))
+    slips = list(
+        with_breakdown(qs, "bd_late", "bd_penalty", "bd_earn", "bd_rate", "bd_perm_penalty", "bd_perm").order_by(
+            "employee_id", "id"
+        )
+    )
 
     rows: list[dict] = []
+    priced_any = False  # at least one staff slip was generated with Permission Deduction Slabs ON
     occurrences = billable = 0
     affected_ids: set[int] = set()  # people, not slips: a production employee has one slip per pay period
     deducted_ids: set[int] = set()
@@ -105,8 +119,18 @@ def _run_late(ctx) -> ReportResult:
         known = bool(late)
         total = _count(late.get("totalLateCount")) if known else None
         pen = _late_penalty(s, typ, known)
+        perm = as_dict(s.bd_perm) if typ == STAFF else {}
+        perm_on = bool(perm.get("enabled"))
+        # With Permission Deduction Slabs ON the excess permissions are not in the pool, so a slip whose only deduction is
+        # the permission one has a pool total of 0 yet lost money: it is listed (and counted in the summary) like any
+        # other slip that carries a late-type deduction. The occurrence filter itself is unchanged.
+        permission_deducted = perm_on and (dec_or_none(s.bd_perm_penalty) or _ZERO) > 0
         if min_n is not None:
-            passes = (total is not None and total >= min_n) or (total is None and pen is not None and pen > 0)
+            passes = (
+                (total is not None and total >= min_n)
+                or (total is None and pen is not None and pen > 0)
+                or permission_deducted
+            )
             if not passes:
                 continue
         if only_deducted and not (pen is not None and pen > 0):
@@ -114,9 +138,12 @@ def _run_late(ctx) -> ReportResult:
         earn = as_dict(s.bd_earn)
         unit = dec_or_none(earn.get("dailyRate")) if typ == STAFF else dec_or_none(s.bd_rate)
         shift_ded = dec_or_none(late.get("shiftDeductions")) if known else None
+        if perm_on:
+            priced_any = True
+            shift_ded = (shift_ded or _ZERO) + (dec_or_none(perm.get("shifts")) or _ZERO)
         bill = _count(late.get("billableLateCount")) if known else None
         earnings = dec(s.gross_salary) + dec(s.ot_amount)
-        if total:
+        if total or permission_deducted:
             affected_ids.add(s.employee_id)
         occurrences += total or 0
         billable += bill or 0
@@ -144,10 +171,19 @@ def _run_late(ctx) -> ReportResult:
                 "lateDeductionAmount": money(pen),
                 "pctOfEarnings": pct(pen, earnings),
                 "netPay": money(dec(s.net_salary)),
+                **(
+                    {
+                        "permissionPricedCount": _count(perm.get("priced")) if perm_on else None,
+                        "permissionBillableCount": _count(perm.get("billable")) if perm_on else None,
+                        "permissionDeduction": money(dec_or_none(s.bd_perm_penalty)) if perm_on else None,
+                    }
+                    if priced_any
+                    else {}
+                ),
             }
         )
     rows.sort(key=lambda r: (r["department"].lower(), natural_key(r["employeeCode"]), r["period"]))
-    rows = dept_subtotals(rows, _LATE_KEYS)
+    rows = dept_subtotals(rows, _LATE_KEYS + (_PERMISSION_KEYS if priced_any else []))
 
     notes = [
         f"Counts and amounts are the values frozen in the salary slips generated for {month_label(year, month)} "
@@ -160,11 +196,18 @@ def _run_late(ctx) -> ReportResult:
         "Late-days on the slip can be higher than the pool total because a day that carries an excess "
         "permission is one occurrence, not two.",
     ]
+    if priced_any:
+        notes.append(
+            "Slips generated with Permission Deduction Slabs ON hold late-in + early-out only in the pool (a late day "
+            "carrying an excess permission on the same edge stays one late occurrence); the excess permissions priced "
+            "on their own are 'Permission priced' / 'Permission billable', and their deduction ('Permission deduction') "
+            "is already INCLUDED in Late deduction and in the shifts deducted, as it is in the slip's other deductions."
+        )
     if min_n is not None:
         notes.append(
             "Only slips with at least "
             + str(min_n)
-            + " late occurrence(s) (or an unexplained late deduction) are listed."
+            + " late occurrence(s) (or an unexplained late deduction, or a deduction for excess permissions) are listed."
         )
     warning = provisional_note(len(provisional_slip_ids(slips, year, month, ctx.today)), year, month, ctx.today)
     if warning:
@@ -183,7 +226,37 @@ def _run_late(ctx) -> ReportResult:
             "format": "currency",
         },
     ]
-    return ReportResult(rows=rows, summary=summary, notes=notes)
+    columns = None
+    if priced_any:
+        columns = list(_LATE_COLUMNS)
+        at = next(i for i, c in enumerate(columns) if c.key == "lateDeductionAmount")
+        columns[at + 1 : at + 1] = [
+            ColumnSpec("permissionPricedCount", "Perm. priced", INTEGER, 0.9, total="sum"),
+            ColumnSpec("permissionBillableCount", "Perm. billable", INTEGER, 0.9, total="sum"),
+            ColumnSpec("permissionDeduction", "Perm. deduction", CURRENCY, 1.1, total="sum"),
+        ]
+    return ReportResult(rows=rows, summary=summary, notes=notes, columns=columns)
+
+
+_LATE_COLUMNS = (
+    ColumnSpec("employeeCode", "Emp Code", TEXT, 0.9),
+    ColumnSpec("employeeName", "Employee", TEXT, 1.9),
+    ColumnSpec("department", "Department", TEXT, 1.2),
+    ColumnSpec("employmentType", "Type", BADGE, 0.9),
+    ColumnSpec("period", "Period", TEXT, 1.3),
+    ColumnSpec("lateInCount", "Late-in", INTEGER, 0.9, total="sum"),
+    ColumnSpec("earlyOutCount", "Early-out", INTEGER, 1.0, total="sum"),
+    ColumnSpec("excessPermissionCount", "Excess perm.", INTEGER, 0.9, total="sum"),
+    ColumnSpec("totalLateCount", "Pool total", INTEGER, 0.8, total="sum"),
+    ColumnSpec("freeAllowance", "Free allow.", INTEGER, 0.9),
+    ColumnSpec("freeUsed", "Free used", INTEGER, 0.8),
+    ColumnSpec("billableLateCount", "Billable", INTEGER, 0.9, total="sum"),
+    ColumnSpec("shiftDeductions", "Shifts ded.", NUMBER, 0.9, total="sum"),
+    ColumnSpec("unitRate", "Rate / shift", CURRENCY, 1.1),
+    ColumnSpec("lateDeductionAmount", "Late deduction", CURRENCY, 1.2, total="sum"),
+    ColumnSpec("pctOfEarnings", "% of pay", PERCENT, 0.8),
+    ColumnSpec("netPay", "Net pay", CURRENCY, 1.2, total="sum"),
+)
 
 
 register(
@@ -213,25 +286,7 @@ register(
             ),
             boolean("onlyDeducted", "Only where money was deducted"),
         ),
-        columns=(
-            ColumnSpec("employeeCode", "Emp Code", TEXT, 0.9),
-            ColumnSpec("employeeName", "Employee", TEXT, 1.9),
-            ColumnSpec("department", "Department", TEXT, 1.2),
-            ColumnSpec("employmentType", "Type", BADGE, 0.9),
-            ColumnSpec("period", "Period", TEXT, 1.3),
-            ColumnSpec("lateInCount", "Late-in", INTEGER, 0.9, total="sum"),
-            ColumnSpec("earlyOutCount", "Early-out", INTEGER, 1.0, total="sum"),
-            ColumnSpec("excessPermissionCount", "Excess perm.", INTEGER, 0.9, total="sum"),
-            ColumnSpec("totalLateCount", "Pool total", INTEGER, 0.8, total="sum"),
-            ColumnSpec("freeAllowance", "Free allow.", INTEGER, 0.9),
-            ColumnSpec("freeUsed", "Free used", INTEGER, 0.8),
-            ColumnSpec("billableLateCount", "Billable", INTEGER, 0.9, total="sum"),
-            ColumnSpec("shiftDeductions", "Shifts ded.", NUMBER, 0.9, total="sum"),
-            ColumnSpec("unitRate", "Rate / shift", CURRENCY, 1.1),
-            ColumnSpec("lateDeductionAmount", "Late deduction", CURRENCY, 1.2, total="sum"),
-            ColumnSpec("pctOfEarnings", "% of pay", PERCENT, 0.8),
-            ColumnSpec("netPay", "Net pay", CURRENCY, 1.2, total="sum"),
-        ),
+        columns=_LATE_COLUMNS,
         run=_run_late,
     )
 )
@@ -255,7 +310,9 @@ def _run_loss(ctx) -> ReportResult:
     impact = ctx.param("impact") or "any"
     types = visible_types(ctx) & {STAFF}
     base = SalarySlip.objects.filter(ctx.emp_q("employee__"), slip_type_q(types), year=year, month=month)
-    qs = with_breakdown(base.select_related("employee__department"), "bd_summary", "bd_earn", "bd_late", "bd_penalty")
+    qs = with_breakdown(
+        base.select_related("employee__department"), "bd_summary", "bd_earn", "bd_late", "bd_penalty", "bd_perm_penalty"
+    )
     slips = list(qs.order_by("employee_id", "id"))
     provisional_ids = provisional_slip_ids(slips, year, month, ctx.today)  # computed before the month ended
 
@@ -333,7 +390,8 @@ def _run_loss(ctx) -> ReportResult:
         "Staff only. Loss of pay = the monthly salary minus the gross salary on the slip, i.e. the pay lost to absent "
         "days, approved-leave days (unpaid: only Casual Leave is paid) and half-days, as payroll pro-rated it. "
         "Loss-of-pay days = working days - effective paid days; half-day loss = what remains after absent and unpaid days.",
-        "Late deduction = the late-detection penalty stored on the slip (shifts deducted x daily rate); "
+        "Late deduction = the late-detection penalty stored on the slip (shifts deducted x daily rate), plus, on a "
+        "slip generated with Permission Deduction Slabs ON, the deduction for excess permissions; "
         "see 'Late Detection - Salary Impact' for the pool behind it.",
         f"Production employees are paid shifts x rate per shift, so absence has no defined loss of pay; "
         f"{excluded} production slip(s) for this month are not included here.",

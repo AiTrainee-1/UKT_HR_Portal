@@ -3,10 +3,10 @@ import { Factory } from "lucide-react";
 import type { PayrollSettingsItem } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "../kit/SettingBlock";
-import { ProductionPfOrder } from "../payroll/ProductionPfOrder";
 import { TextLink } from "../payroll/ui";
+import { cycleLateRules } from "../late_detection/production";
 import { CYCLE_INFO, CYCLES, cycleAnchor, describeCycleRule } from "./cycles";
-import { cycleLateRules, savedProduction } from "./sections";
+import { savedProduction } from "./sections";
 
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
@@ -37,8 +37,8 @@ function CycleLinks({ to }: { to: (cycle: (typeof CYCLES)[number]) => string }) 
 }
 
 /**
- * How a production payslip is put together, and where each part is set. Production pay is configured in five places
- * (Manage Shifts, the employee, the employee's pay cycle, the Payroll tab and this tab), so the tab opens with the
+ * How a production payslip is put together, and where each part is set. Production pay is configured in several places
+ * (Manage Shifts, the employee, the employee's pay cycle, this tab and Late Detection), so the Overview opens with the
  * whole chain, from the SAVED settings, and with each cycle's rule in one line.
  */
 export function ProductionOverview({ settings }: { settings: PayrollSettingsItem }) {
@@ -61,9 +61,10 @@ export function ProductionOverview({ settings }: { settings: PayrollSettingsItem
       title="How a production payslip is worked out"
       purpose={
         <>
-          Production pay is set in five places. This tab holds each pay cycle's period and late deductions; the rest is
-          linked here. Staff lateness is a different setting, on the{" "}
-          <TextLink to="/hr/settings?tab=late_detection">Late Detection</TextLink> tab.
+          Production pay is set in several places. This tab holds each pay cycle's period, the rate suggested for new
+          production employees and the production bonus; the rest is linked here. What a late day costs is on the{" "}
+          <TextLink to="/hr/settings?tab=late_detection#prod-late-switch">Late Detection</TextLink> tab, Production
+          page.
         </>
       }
       testId="production-pay-overview"
@@ -75,27 +76,30 @@ export function ProductionOverview({ settings }: { settings: PayrollSettingsItem
           <TextLink to="/hr/settings?tab=production_shifts">Settings - Production Shifts</TextLink>
         </Step>
         <Step n={2} title="Pay = shifts earned x the worker's own rate">
-          Each employee's Salary Per Shift (on the employee). New production employees start from the suggestion on the{" "}
-          <TextLink to="/hr/settings?tab=payroll#default-salary-per-shift">Payroll tab</TextLink>.
+          Each employee's Salary Per Shift (on the employee). New production employees start from the suggestion on{" "}
+          <TextLink to="/hr/settings?tab=production_payroll#default-salary-per-shift">Pay &amp; Bonus</TextLink>.
         </Step>
         <Step n={3} title="PF and ESI">
-          <ProductionPfOrder
-            bandsOn={settings.prodPfEfEnabled ?? false}
-            bandCount={(settings.prodPfEfRules ?? []).length}
-            flatOn={settings.prodPayrollRulesEnabled ?? false}
-            pfRate={settings.prodPfRate ?? 0}
-            esiRate={settings.prodEsiRate ?? 0}
-          />
+          Only workers switched ON in Employees - Co Emp pay PF and ESI. Each one is the percentage of the matching
+          rule, taken from the period's first-portion pay, using the production rules on the{" "}
+          <TextLink to="/hr/settings?tab=pf_esi#prod-pf-rules">PF &amp; ESI tab</TextLink>.
         </Step>
         <Step n={4} title="The pay cycle and late deductions">
           Pay is worked out weekly, every two weeks or every four weeks depending on the employee's pay cycle (set on{" "}
           <TextLink to="/hr/employees/productionEmployee">Employees - Production Employees</TextLink>); each cycle's
-          period and late deductions are on its sub-tab:{" "}
+          period is on its sub-tab:{" "}
           <CycleLinks to={(cycle) => `/hr/settings?tab=production_payroll#${cycle}-week-start`} />. Late deductions are{" "}
           {settings.prodLateDetectionEnabled ? "ON" : "OFF"} for every cycle (
-          <TextLink to="/hr/settings?tab=production_payroll#prod-late-switch">Late Detection</TextLink>). HR then
-          generates each period on that cycle's Production Payroll page once it has ended:{" "}
-          <CycleLinks to={(cycle) => CYCLE_INFO[cycle].path} />.
+          <TextLink to="/hr/settings?tab=late_detection#prod-late-switch">Late Detection - Production</TextLink>, with
+          each cycle's free late days and slabs). HR then generates each period on that cycle's Production Payroll page
+          once it has ended: <CycleLinks to={(cycle) => CYCLE_INFO[cycle].path} />.
+        </Step>
+        <Step n={5} title="Statutory bonus">
+          Production workers have a bonus rate and ceilings of their own (
+          <TextLink to="/hr/settings?tab=production_payroll#prod-bonus-percent">Pay &amp; Bonus</TextLink>), apart from
+          staff (<TextLink to="/hr/settings?tab=payroll#bonus-percent">Staff Payroll - Bonus</TextLink>). The financial
+          year start month is one company-wide value on{" "}
+          <TextLink to="/hr/settings?tab=payroll#fy-start-month">Staff Payroll - Payroll Rules</TextLink>.
         </Step>
       </ol>
       <ul className="mt-2 grid gap-2 md:grid-cols-3" data-testid="production-cycle-summary">
@@ -112,7 +116,10 @@ export function ProductionOverview({ settings }: { settings: PayrollSettingsItem
               {c.label} <span className="font-normal text-gray-400">({c.days} days)</span>
             </p>
             <p>{c.rule}</p>
-            <p className="text-gray-500">Late: {c.late}</p>
+            <p className="text-gray-500">
+              Late: {c.late}{" "}
+              <TextLink to={`/hr/settings?tab=late_detection#${c.cycle}-late-allowance`}>Change</TextLink>
+            </p>
             {c.blocked && <p className="font-semibold">Payroll cannot be generated until the date is set.</p>}
           </li>
         ))}

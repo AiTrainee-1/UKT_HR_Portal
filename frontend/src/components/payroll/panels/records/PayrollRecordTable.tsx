@@ -5,6 +5,7 @@ import type { PayrollRunItem } from "@/lib/api-client/custom-hooks";
 import { inr, plural } from "@/components/payroll/kit/format";
 import { SEVERITY_META } from "@/components/payroll/kit/issue-meta";
 import { BusyIcon, Chip, PayStatusChip } from "@/components/payroll/kit/parts";
+import { anyTds, hasTds, percentText, sumTds, tdsAmount, tdsRate } from "@/components/payroll/kit/statutory";
 import { cn } from "@/lib/utils";
 import { summarizeRuns } from "../dashboard/dashboard-logic";
 import type { PayrollIssueSummary } from "../filters/filter-logic";
@@ -90,9 +91,11 @@ export function PayrollRecordTable({
 }: TableProps) {
   const totals = summarizeRuns(allRows);
   const production = rows.some(isProductionRun);
+  // The TDS column exists only while some row of the list has TDS (PF and ESI sit inside Deductions as they always did).
+  const showTds = anyTds(allRows);
   return (
     <div className="overflow-x-auto rounded-2xl border bg-white" data-testid="payroll-record-table">
-      <table className="w-full min-w-[900px] text-sm" aria-label="Payroll register">
+      <table className={cn("w-full min-w-[900px] text-sm", showTds && "min-w-[980px]")} aria-label="Payroll register">
         <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
           <tr>
             <th className="px-3 py-2.5">Employee</th>
@@ -100,6 +103,11 @@ export function PayrollRecordTable({
             <th className="px-3 py-2.5">{production ? "Cycle / period" : "Period"}</th>
             <th className="px-3 py-2.5">Attendance</th>
             <th className="px-3 py-2.5 text-right">Gross</th>
+            {showTds && (
+              <th className="px-3 py-2.5 text-right" title="Tax deducted at source (already part of Deductions)">
+                TDS
+              </th>
+            )}
             <th className="px-3 py-2.5 text-right">Deductions</th>
             <th className="px-3 py-2.5 text-right">Net</th>
             <th className="px-3 py-2.5">Status</th>
@@ -131,6 +139,28 @@ export function PayrollRecordTable({
                 </td>
                 <td className="px-3 py-2.5 align-middle text-gray-700">{metricText(run)}</td>
                 <td className="px-3 py-2.5 text-right align-middle tabular-nums">{inr(run.grossSalary)}</td>
+                {showTds && (
+                  <td
+                    className={cn(
+                      "px-3 py-2.5 text-right align-middle tabular-nums",
+                      hasTds(run) ? "text-red-600" : "text-gray-400",
+                    )}
+                    data-testid={`payroll-record-tds-${run.id}`}
+                  >
+                    {hasTds(run) ? (
+                      <>
+                        {inr(tdsAmount(run))}
+                        {tdsRate(run) !== null && (
+                          <span className="block text-[11px] font-normal text-muted-foreground">
+                            {percentText(tdsRate(run))}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                )}
                 <td
                   className={cn(
                     "px-3 py-2.5 text-right align-middle tabular-nums",
@@ -192,6 +222,11 @@ export function PayrollRecordTable({
               Total of all {plural(totals.records, "record")}
             </td>
             <td className="px-3 py-2.5 text-right tabular-nums">{inr(totals.gross)}</td>
+            {showTds && (
+              <td className="px-3 py-2.5 text-right tabular-nums text-red-600" data-testid="payroll-record-totals-tds">
+                {inr(sumTds(allRows))}
+              </td>
+            )}
             <td className="px-3 py-2.5 text-right tabular-nums text-red-600">{inr(totals.deductions)}</td>
             <td className="px-3 py-2.5 text-right tabular-nums text-green-700">{inr(totals.net)}</td>
             <td className="px-3 py-2.5" colSpan={3} />

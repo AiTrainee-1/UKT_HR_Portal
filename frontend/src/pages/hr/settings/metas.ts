@@ -10,6 +10,7 @@ import { ID_CARD_SETTINGS } from "./IdCardTab.meta";
 import { DOCUMENTS_SETTINGS } from "./DocumentsTab.meta";
 import { PAYROLL_SETTINGS } from "./PayrollTab.meta";
 import { PRODUCTION_PAYROLL_SETTINGS } from "./ProductionPayrollTab.meta";
+import { PF_ESI_SETTINGS } from "./PfEsiTab.meta";
 import { SALARY_SLIP_SETTINGS } from "./SalarySlipTab.meta";
 import { SMTP_SETTINGS } from "./SmtpTab.meta";
 import { WHATSAPP_SETTINGS } from "./WhatsAppTab.meta";
@@ -30,6 +31,7 @@ export const ALL_SETTINGS: SettingMeta[] = [
   ...DOCUMENTS_SETTINGS,
   ...PAYROLL_SETTINGS,
   ...PRODUCTION_PAYROLL_SETTINGS,
+  ...PF_ESI_SETTINGS,
   ...SALARY_SLIP_SETTINGS,
   ...SMTP_SETTINGS,
   ...WHATSAPP_SETTINGS,

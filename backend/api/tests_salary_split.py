@@ -632,29 +632,44 @@ class PayrollUnaffectedTests(TestCase):
     def test_payroll_is_identical_with_no_split_the_default_split_and_an_odd_one(self):
         from .tests_payroll_engine import MONTH, WORKING_DAYS, YEAR, _configure, _present_all
 
+        # PF applies to Co Emp employees below 25,000 Basic: whatever the split, its first portion is 50% of the salary and
+        # that is what PF is taken from, so the result is the same with no split, the default split and an uneven one.
         _configure(
-            staff_payroll_rules_enabled=False,
-            pf_rate=D("12"),
-            esi_rate=D("0.75"),
-            esi_applicable_below=D("21000"),
+            staff_pf_rules=[
+                {"id": "p1", "label": "PF", "basis": "basic", "minAmount": 0, "maxAmount": 25000, "ratePercent": 12}
+            ],
             attendance_mode="simple",
             compensation_feature_enabled=True,
         )
-        plain = self._staff("NOSPLIT")
-        default = self._staff("DEFAULT", **{ss.COLUMNS[c]: v for c, v in ss.default_split(D("24000")).items()})
+        plain = self._staff("NOSPLIT", co_emp_enabled=True)
+        default = self._staff(
+            "DEFAULT",
+            co_emp_enabled=True,
+            **{ss.COLUMNS[c]: v for c, v in ss.default_split(D("24000")).items()},
+        )
+        uneven = self._staff(
+            "UNEVEN",
+            co_emp_enabled=True,
+            **{ss.COLUMNS[c]: v for c, v in parts_of(["11000", "500", "500"], ["0", "0", "0", "0", "12000"]).items()},
+        )
+        # a stored split that does not add up to the salary is ignored (the automatic split is used instead)
         odd = self._staff(
             "ODD",
+            co_emp_enabled=True,
             **{ss.COLUMNS[c]: v for c, v in parts_of(["23000", "500", "500"], ["0", "0", "0", "0", "12000"]).items()},
         )
         results = {}
-        for emp in (plain, default, odd):
+        for emp in (plain, default, uneven, odd):
             _present_all(emp, WORKING_DAYS[:20])
             p = _generate_staff_payroll(emp, MONTH, YEAR)["payroll"]
             results[emp.employee_code] = (p.gross_salary, p.deductions, p.final_salary, p.base_salary)
         self.assertEqual(results["NOSPLIT"], results["DEFAULT"])
+        self.assertEqual(results["NOSPLIT"], results["UNEVEN"])
         self.assertEqual(results["NOSPLIT"], results["ODD"])
         self.assertEqual(results["NOSPLIT"][0], D("20000.00"))
-        self.assertEqual(Payroll.objects.count(), 3)
+        # 12% of the first portion (12,000) prorated 20/24 = 10,000 -> 1,200
+        self.assertEqual(results["NOSPLIT"][1], D("1200.00"))
+        self.assertEqual(Payroll.objects.count(), 4)
 
 
 class CorrectedNamesTests(ApiBase):

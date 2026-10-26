@@ -80,7 +80,7 @@ describe("the seven limits", () => {
       otpExpiryMinutes: [1, 15, 5],
       resendCooldownSeconds: [30, 600, 60],
       maxRequestsPerHour: [1, 20, 5],
-      maxAttemptsPerCode: [3, 10, 5],
+      maxAttemptsPerCode: [3, 5, 5],
       maxPerPhonePerHour: [1, 20, 5],
       hourlyCap: [1, 10000, 300],
       dailyCap: [1, 10000, 1500],
@@ -91,7 +91,9 @@ describe("the seven limits", () => {
     for (const rule of LIMIT_RULES) {
       expect(rule.purpose.length, rule.key).toBeGreaterThan(30);
       expect(rule.affects.length, rule.key).toBeGreaterThan(0);
-      expect(rule.example(rule.default), rule.key).not.toBe(rule.example(rule.max));
+      // the default may be the top of the range (wrong tries: 5 of 3-5), then compare with the bottom
+      const other = rule.default === rule.max ? rule.min : rule.max;
+      expect(rule.example(rule.default), rule.key).not.toBe(rule.example(other));
     }
   });
 

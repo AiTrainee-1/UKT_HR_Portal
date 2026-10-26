@@ -127,7 +127,7 @@ def _run(ctx) -> ReportResult:
             else None,
             *_driver_notes(bridge),
             "Amounts are shown to the nearest rupee. Gross pay is salary earned plus overtime, before deductions. Cost per head is gross pay divided by the "
-            "people paid. Deductions are PF, ESI, advance recovery, late deductions and anything else deducted on the "
+            "people paid. Deductions are PF, ESI, TDS, advance recovery, late deductions and anything else deducted on the "
             "slip. Overtime cost is the overtime pay on the slips.",
             CAVEAT_PAYROLL,
             *(summary["notes"] if t else []),

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SalaryStatement } from "@/lib/api-client/custom-hooks";
 import { lockMutatingControls } from "@/lib/view-only-lock";
-import { balaPaid } from "./fixtures";
+import { balaPaid, payroll, person } from "./fixtures";
 import {
   click,
   here,
@@ -260,6 +260,32 @@ describe("the row actions of the statement", () => {
     // the statement is reloaded with the new figures
     await waitFor(() => text(q("statement-row-11")).includes("3,100.00"), "the new net");
     await waitFor(() => !q("adjust-payroll-dialog"), "the dialog to close");
+  });
+
+  it("tells the adjuster that the deductions of a TDS employee include the TDS, and nobody else's do", async () => {
+    await openSalary();
+    click(must("pcp-salary-adjust-11"));
+    expect(q("adjust-tds-note")).toBeNull();
+    expect(text(must("adjust-payroll-dialog"))).toContain("PF and ESI for a Co Emp employee, TDS for a TDS employee");
+    unmountPage();
+    // Asha is on the TDS list now: 10% of her 3,500 earned gross is TDS, part of her 350 deductions
+    world = installWorld(h.fetch, {
+      people: [
+        person(1, "Asha Worker", "PC-W1", {
+          payroll: payroll(11, 1, "Asha Worker", "PC-W1", {
+            deductions: 350,
+            tdsDeduction: 350,
+            tdsPercent: 10,
+            finalSalary: 3150,
+          }),
+        }),
+      ],
+    });
+    await openSalary();
+    click(must("pcp-salary-adjust-11"));
+    expect(text(must("adjust-tds-note"))).toBe(
+      "This payslip includes TDS (10%): ₹350.00. Keep it in the figure if it is still to be deducted.",
+    );
   });
 
   it("marks a pending payslip paid with Pay, and the button goes", async () => {

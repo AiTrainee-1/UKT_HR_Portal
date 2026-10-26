@@ -6,7 +6,7 @@ Seeds the database with 1 month of realistic data:
   - 10 staff employees + 25 production employees
   - Shifts, leave types, leave balances
   - June 2026 attendance logs (all 35 employees)
-  - Payroll run + salary slips for June 2026
+  - Payroll run + salary slips for June 2026 (PF/ESI for the Co Emp employees, TDS for the TDS ones, nothing for the rest)
   - Biweekly payroll for production (W1 + W2)
   - Advances, leave requests, employee requests
   - Audit logs, HR users, roles
@@ -77,6 +77,54 @@ PRODUCTION_EMPLOYEES = [
     {"first": "Subash",   "last": "N",    "gender": "male",   "role": "Machine Operator", "dept": "Sewing",          "salary": 12000, "dob": date(1993, 5, 11)},
     {"first": "Usha",     "last": "L",    "gender": "female", "role": "Checker",          "dept": "Quality Control", "salary": 11000, "dob": date(1996, 12, 25)},
 ]
+
+
+# Who has PF / ESI and who has TDS, by employee code (STF = staff, PRD = production). Only the Co Emp employees have PF and
+# ESI, only the TDS ones have TDS, everybody else has neither -the same rule the payroll engine follows (pf_esi.py).
+CO_EMP_CODES = {
+    "STF002", "STF007", "STF008",
+    "PRD002", "PRD003", "PRD004", "PRD005", "PRD007", "PRD008", "PRD009", "PRD010",
+}
+TDS_EMPLOYEES = {"STF001": Decimal("10"), "STF004": Decimal("10"), "PRD006": Decimal("5")}  # code -> TDS percent
+
+# Flat demo rates for the Co Emp slips. This is a dev convenience, NOT a copy of the engine: PF 12% of the first portion
+# (half of the pay), ESI 0.75% of the same amount while the monthly salary is at most 21,000.
+SEED_PF_PERCENT = Decimal("12")
+SEED_ESI_PERCENT = Decimal("0.75")
+SEED_ESI_SALARY_LIMIT = Decimal("21000")
+
+
+def _money(value) -> Decimal:
+    return Decimal(value).quantize(Decimal("0.01"))
+
+
+def seeded_slip_figures(emp, emp_type, position):
+    """The money of one seeded June slip: earnings, PF / ESI (Co Emp) or TDS (TDS list), advance, totals. `position` is the
+    employee's place in its list (two production employees carry an advance instalment)."""
+    salary = emp.salary_amount or Decimal("12000")
+    divisor = Decimal("2") if emp_type == "production" else Decimal("1")
+    gross = _money(salary / divisor)
+    basic = _money(gross * Decimal("0.50"))
+    hra = _money(gross * Decimal("0.20"))
+    allowances = _money(gross * Decimal("0.20"))
+    bonuses = _money(gross * Decimal("0.10"))
+
+    pf = esi = tds = Decimal("0")
+    tds_percent = None
+    if emp.tds_enabled and emp.tds_percent:
+        tds_percent = Decimal(str(emp.tds_percent))
+        tds = _money(gross * tds_percent / 100)
+    elif emp.co_emp_enabled:
+        pf = _money(basic * SEED_PF_PERCENT / 100)
+        if salary <= SEED_ESI_SALARY_LIMIT:
+            esi = _money(basic * SEED_ESI_PERCENT / 100)
+    adv = Decimal("1000") if emp_type == "production" and position in [2, 11] else Decimal("0")
+    total_ded = pf + esi + tds + adv
+    return {
+        "gross": gross, "basic": basic, "hra": hra, "allowances": allowances, "bonuses": bonuses,
+        "pf": pf, "esi": esi, "tds": tds, "tds_percent": tds_percent, "adv": adv,
+        "total_ded": total_ded, "net": _money(gross - total_ded),
+    }
 
 
 def hash_password(plain: str) -> str:
@@ -328,6 +376,9 @@ class Command(BaseCommand):
                     "branch": branch,
                     "salary_type": "monthly" if emp_type == "staff" else "biweekly",
                     "salary_amount": Decimal(str(data["salary"])),
+                    "co_emp_enabled": code in CO_EMP_CODES,
+                    "tds_enabled": code in TDS_EMPLOYEES,
+                    "tds_percent": TDS_EMPLOYEES.get(code),
                     "status": "active",
                     "join_date": str(date(random.randint(2020, 2024), random.randint(1, 12), random.randint(1, 28))),
                     "address": f"No. {random.randint(1,200)}, Chennai, Tamil Nadu",
@@ -532,18 +583,11 @@ class Command(BaseCommand):
             code = f"PAY-{YEAR}-{MONTH:02d}-W{week}"
             label = f"Production Bi-Weekly W{week} -June 2026"
 
-        # Calculate totals
-        total_gross = sum(
-            (e.salary_amount or Decimal("0")) / (2 if run_type == "biweekly" else 1)
-            for e in employees
-        )
-        pf_rate = Decimal("0.12")
-        esi_rate = Decimal("0.0075")
-        total_deductions = sum(
-            min(e.salary_amount or Decimal("0"), Decimal("21000")) * esi_rate +
-            (e.salary_amount or Decimal("0")) * Decimal("0.50") * pf_rate
-            for e in employees
-        )
+        # Calculate totals (the same figures the slips of the run carry)
+        emp_type = "production" if run_type == "biweekly" else "staff"
+        figures = [seeded_slip_figures(e, emp_type, i) for i, e in enumerate(employees)]
+        total_gross = sum((f["gross"] for f in figures), Decimal("0"))
+        total_deductions = sum((f["total_ded"] for f in figures), Decimal("0"))
         total_net = total_gross - total_deductions
 
         run, _ = PayrollRun.objects.get_or_create(
@@ -572,21 +616,11 @@ class Command(BaseCommand):
 
     def _seed_salary_slips(self, employees, payroll_run, emp_type, week=None):
         count = 0
-        for emp in employees:
-            salary = emp.salary_amount or Decimal("12000")
-            divisor = Decimal("2") if emp_type == "production" else Decimal("1")
-            gross = (salary / divisor).quantize(Decimal("0.01"))
-
-            basic       = (gross * Decimal("0.50")).quantize(Decimal("0.01"))
-            hra         = (gross * Decimal("0.20")).quantize(Decimal("0.01"))
-            allowances  = (gross * Decimal("0.20")).quantize(Decimal("0.01"))
-            bonuses     = (gross * Decimal("0.10")).quantize(Decimal("0.01"))
-
-            pf          = (basic * Decimal("0.12")).quantize(Decimal("0.01"))
-            esi         = (min(gross, Decimal("21000")) * Decimal("0.0075")).quantize(Decimal("0.01"))
-            adv_deduct  = Decimal("1000") if emp_type == "production" and employees.index(emp) in [2, 11] else Decimal("0")
-            total_ded   = pf + esi + adv_deduct
-            net         = (gross - total_ded).quantize(Decimal("0.01"))
+        for position, emp in enumerate(employees):
+            f = seeded_slip_figures(emp, emp_type, position)
+            gross, basic, hra, allowances, bonuses = f["gross"], f["basic"], f["hra"], f["allowances"], f["bonuses"]
+            pf, esi, tds, adv_deduct = f["pf"], f["esi"], f["tds"], f["adv"]
+            total_ded, net = f["total_ded"], f["net"]
 
             present     = Decimal(str(random.randint(23, 26)))
             absent      = Decimal(str(WORKING_DAYS)) - present
@@ -610,6 +644,8 @@ class Command(BaseCommand):
                     "gross_salary": gross,
                     "pf_deduction": pf,
                     "esi_deduction": esi,
+                    "tds_deduction": tds,
+                    "tds_percent": f["tds_percent"],
                     "advance_deduction": adv_deduct,
                     "other_deductions": Decimal("0"),
                     "total_deductions": total_ded,

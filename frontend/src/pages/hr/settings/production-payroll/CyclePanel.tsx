@@ -1,14 +1,12 @@
 import { useState } from "react";
-import { AlertTriangle, CalendarRange, Undo2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { CalendarRange } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
 import { useListProductionPayroll, useProductionNextPeriod, type PayCycle } from "@/lib/api-client/custom-hooks";
 import { PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "../kit/SettingBlock";
 import { CYCLE_SECTIONS, productionText } from "../ProductionPayrollTab.meta";
-import { numberOr, RANGES, saveErrorText, type Draft } from "../payroll/form";
+import { saveErrorText, type Draft } from "../payroll/form";
 import type { Change } from "../payroll/sections";
-import { ConfirmChanges, NumberInput, SelectInput, StickySave } from "../payroll/ui";
+import { ConfirmChanges, SelectInput, StickySave, TextLink } from "../payroll/ui";
 import {
   CYCLE_INFO,
   formatDayLong,
@@ -23,48 +21,30 @@ import {
   WEEK_START_OPTIONS,
   type Day,
 } from "./cycles";
-import { productionLatePenalty } from "./preview";
-import {
-  cycleErrors,
-  deductsFromEveryone,
-  hasCycleErrors,
-  lateKeysChanged,
-  latestGeneratedPeriod,
-  type CycleForm,
-} from "./sections";
-import { cutText, PER_SHIFT, SlabExample, SlabTable } from "./SlabEditor";
+import { cycleErrors, hasCycleErrors, latestGeneratedPeriod, type CycleForm } from "./sections";
 
 const block = (id: string) => ({ id, ...productionText(id) });
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
 /**
  * Settings -> Production Payroll -> Weekly / BiWeekly / Monthly: one pay cycle's period rule (which weekday its weeks
- * start on, which date its periods are counted from) and its own late deductions, saved together with one button that
- * sends only this cycle. The period rule always goes; the late values go only when changed, so saving a period never
- * silently takes the shared late rules away from the cycle.
+ * start on, which date its periods are counted from), saved with one button that sends only this cycle's period keys.
+ * What a late day costs on the cycle is not here: it is on Late Detection -> Production, which saves the cycle's late keys
+ * (the server merges `prodCycles` key by key, so neither save overwrites the other).
  */
 export function CyclePanel({
   cycle,
   draft,
   saved,
-  ownRules,
-  shared,
   branchLogin,
   today,
   readOnly,
   saving,
   busy,
   onSave,
-  onUseShared,
 }: {
   cycle: PayCycle;
   draft: Draft<CycleForm>;
   saved: CycleForm;
-  /** The cycle has late rules of its own (false: it follows the shared production values). */
-  ownRules: boolean;
-  /** The shared production late values, for the words of "Use the shared rules again". */
-  shared: { allowance: number; slabCount: number };
   /** A branch login cannot read the company-wide pointer (the latest generated period). */
   branchLogin: boolean;
   today: Day;
@@ -72,13 +52,12 @@ export function CyclePanel({
   saving: boolean;
   busy: boolean;
   onSave: () => Promise<void>;
-  onUseShared: () => Promise<void>;
 }) {
   const info = CYCLE_INFO[cycle];
   const { form, set } = draft;
-  const errors = cycleErrors(form, saved);
+  const errors = cycleErrors(form);
   const invalid = hasCycleErrors(errors);
-  const [confirming, setConfirming] = useState<"save" | "shared" | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const rule = { weekStart: form.weekStart, anchorDate: form.anchorDate };
 
   // The server's own next period for the SAVED rule, and the latest period generated on this cycle (what the engine
@@ -98,16 +77,6 @@ export function CyclePanel({
   const snapped = typedDate ? snapToWeekStart(typedDate, form.weekStart) : null;
   const dateMissing = info.needsDate && !form.anchorDate.trim();
 
-  const allowance = numberOr(
-    form.lateFreeAllowance,
-    RANGES.lateCount,
-    numberOr(saved.lateFreeAllowance, RANGES.lateCount, 3),
-  );
-  const everyone = deductsFromEveryone(form.lateSlabs);
-  const price = (lates: number) => productionLatePenalty(lates, allowance, form.lateSlabs, PER_SHIFT);
-  const lateChanged = lateKeysChanged(draft.changed);
-  const sharedWords = `${plural(shared.allowance, "free late day")}, ${plural(shared.slabCount, "slab")}`;
-
   const changes: Change[] = [];
   if (draft.changed.includes("weekStart")) {
     changes.push({
@@ -123,18 +92,8 @@ export function CyclePanel({
     };
     changes.push({ label: "First period starts on", from: words(saved.anchorDate), to: words(form.anchorDate) });
   }
-  if (draft.changed.includes("lateFreeAllowance")) {
-    changes.push({ label: "Free late days a period", from: saved.lateFreeAllowance, to: form.lateFreeAllowance });
-  }
-  if (draft.changed.includes("lateSlabs")) {
-    changes.push({
-      label: "Deduction slabs",
-      from: plural(saved.lateSlabs.length, "row"),
-      to: `${plural(form.lateSlabs.length, "row")}, edited`,
-    });
-  }
 
-  const save = () => (lateChanged || overlap ? setConfirming("save") : void onSave());
+  const save = () => (overlap ? setConfirming(true) : void onSave());
   const pageLink = { where: `Production Payroll - ${info.label}`, to: info.path };
 
   return (
@@ -299,124 +258,13 @@ export function CyclePanel({
         </SettingBlock>
       </SettingsSection>
 
-      <SettingsSection
-        icon={AlertTriangle}
-        title={CYCLE_SECTIONS[cycle].late}
-        purpose={`What a late day costs a worker on the ${info.label} cycle, per ${info.days}-day period, priced in shifts of their own Salary Per Shift. The on/off switch and what counts as late are the same for every cycle: they are on the Late Detection sub-tab.`}
-        usedBy={[
-          { label: `Production Payroll - ${info.label}`, to: info.path },
-          { label: "Late Detection sub-tab", to: "/hr/settings?tab=production_payroll#prod-late-switch" },
-        ]}
-        testId={`${cycle}-late-section`}
-      >
-        <div
-          className={cn(
-            "my-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs leading-snug",
-            ownRules ? "border-blue-100 bg-blue-50/70 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-700",
-          )}
-          data-testid={`${cycle}-late-source`}
-        >
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <p className="font-semibold">
-              {ownRules
-                ? `${info.label} has late rules of its own.`
-                : "Using the shared production values until you change them here."}
-            </p>
-            <p className="text-[11px] opacity-80">
-              {ownRules
-                ? `The production-wide values saved before the cycles existed (${sharedWords}) are not used for ${info.label}.`
-                : `Edit the free late days or the slabs below and save to give ${info.label} rules of its own; the other cycles keep theirs.`}
-            </p>
-          </div>
-          {ownRules && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="gap-1.5"
-              disabled={readOnly || busy}
-              onClick={() => setConfirming("shared")}
-            >
-              <Undo2 size={13} /> Use the shared rules again
-            </Button>
-          )}
-        </div>
-
-        <SettingBlock
-          {...block(`${cycle}-late-allowance`)}
-          labelFor={`${cycle}-late-allowance-input`}
-          defaultText="the shared production value (3 a period unless it was changed)"
-          affects={[
-            {
-              ...pageLink,
-              what: "billable lates = late days in the period minus this; only billable lates are priced.",
-            },
-          ]}
-          note={
-            <>
-              Per {info.days}-day period, not per month: a {info.label} worker gets {plural(allowance, "free late day")}{" "}
-              {info.every}.
-              {branchLogin &&
-                " You are signed in to a branch: what you save here applies to your branch's employees only."}
-            </>
-          }
-          preview={
-            <PreviewCard scenario={`Late days in one ${info.label} period.`} testId={`${cycle}-allowance-preview`}>
-              {[2, 4, 7].map((lates) => (
-                <PreviewLine
-                  key={lates}
-                  label={`${lates} late days`}
-                  result={`${Math.min(lates, allowance)} free, ${price(lates).billable} billable`}
-                  tone={price(lates).billable > 0 ? "warn" : "good"}
-                />
-              ))}
-            </PreviewCard>
-          }
-        >
-          <NumberInput
-            id={`${cycle}-late-allowance-input`}
-            value={form.lateFreeAllowance}
-            onChange={(v) => set("lateFreeAllowance", v)}
-            unit="late days a period"
-            error={errors.allowance}
-            hint="0 to 366, a whole number."
-            disabled={readOnly}
-            className="w-24"
-          />
-        </SettingBlock>
-
-        <SettingBlock
-          {...block(`${cycle}-late-slabs`)}
-          defaultText="the shared production rows (none unless they were added: lateness costs nothing)"
-          affects={[
-            {
-              ...pageLink,
-              what: "late penalty = the row's shifts x that worker's own Salary Per Shift, added to the period's deductions.",
-            },
-            {
-              where: "Payslip and breakdown drawer",
-              what: "show the late penalty and the number of billable lates.",
-              to: info.path,
-            },
-          ]}
-          note="No upper limit: a row can take more than a day's pay. A row starting at 0 billable lates charges every worker in the period, including those who were never late."
-          preview={
-            <SlabExample price={price} invalid={invalid} everyone={everyone} testId={`${cycle}-late-worked-example`} />
-          }
-        >
-          <SlabTable
-            slabs={form.lateSlabs}
-            errors={errors.slabs}
-            everyone={everyone}
-            readOnly={readOnly}
-            onChange={(rows) => set("lateSlabs", rows)}
-            testId={`${cycle}-slab-table`}
-          />
-          <p className="text-[11px] text-gray-500">
-            7 late days with the values above: {price(7).billable} billable,{" "}
-            {cutText(price(7).shifts, price(7).penalty)}.
-          </p>
-        </SettingBlock>
-      </SettingsSection>
+      <p className="px-1 text-[12px] leading-snug text-slate-500" data-testid={`${cycle}-late-pointer`}>
+        What a late day costs a {info.label} worker (free late days and deduction slabs) is on{" "}
+        <TextLink to={`/hr/settings?tab=late_detection#${cycle}-late-allowance`}>
+          Late Detection - Production - {info.label}
+        </TextLink>
+        .
+      </p>
 
       <StickySave
         dirty={draft.dirty}
@@ -429,11 +277,11 @@ export function CyclePanel({
       />
 
       <ConfirmChanges
-        open={confirming === "save"}
-        onOpenChange={(open) => !open && setConfirming(null)}
-        title={overlap ? `This ${info.label} rule covers days already generated` : `Save the ${info.label} settings?`}
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={`This ${info.label} rule covers days already generated`}
         changes={changes}
-        confirmLabel={overlap ? "Save anyway" : "Save changes"}
+        confirmLabel="Save anyway"
         onConfirm={() => void onSave()}
       >
         {overlap && !("error" in live) && (
@@ -444,44 +292,7 @@ export function CyclePanel({
             period start on {formatDayLong(overlap.end)} plus one day.
           </p>
         )}
-        {lateChanged && (
-          <p>
-            {info.label} payslips generated from now on use these late rules, backfilled past periods included. Payslips
-            already generated keep their late deduction until their period is generated again.
-          </p>
-        )}
-        {lateChanged && !ownRules && (
-          <p>
-            {info.label} stops following the shared production values ({sharedWords}) and keeps these as its own; the
-            other cycles are not affected.
-          </p>
-        )}
-        {everyone && (
-          <p className="text-red-700">A slab starts at 0: every worker in a period is charged, late or not.</p>
-        )}
-        {branchLogin && <p>You are signed in to a branch: these rules apply to your branch's employees only.</p>}
-      </ConfirmChanges>
-
-      <ConfirmChanges
-        open={confirming === "shared"}
-        onOpenChange={(open) => !open && setConfirming(null)}
-        title={`Use the shared late rules for ${info.label} again?`}
-        changes={[
-          { label: "Free late days a period", from: saved.lateFreeAllowance, to: String(shared.allowance) },
-          {
-            label: "Deduction slabs",
-            from: plural(saved.lateSlabs.length, "row"),
-            to: plural(shared.slabCount, "row"),
-          },
-        ]}
-        confirmLabel="Use the shared rules"
-        onConfirm={() => void onUseShared()}
-      >
-        <p>
-          {info.label} goes back to the production-wide values saved before the cycles existed ({sharedWords}) and
-          follows them from now on. Payslips already generated keep their late deduction; any unsaved edits to these two
-          settings are dropped.
-        </p>
+        {branchLogin && <p>You are signed in to a branch: this applies to your branch's employees only.</p>}
       </ConfirmChanges>
     </div>
   );

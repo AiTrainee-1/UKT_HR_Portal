@@ -180,6 +180,13 @@ export interface Employee {
   locationTrackingEnabled?: boolean | null;
   /** @nullable */
   coEmpEnabled?: boolean | null;
+  /** In TDS (never in PF/ESI). Mutually exclusive with coEmpEnabled; changed only through /api/tds/employees. */
+  tdsEnabled?: boolean | null;
+  /**
+   * The TDS percentage of an employee in TDS, null otherwise.
+   * @nullable
+   */
+  tdsPercent?: number | null;
   createdAt: string;
 }
 

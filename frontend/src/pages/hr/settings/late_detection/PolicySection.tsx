@@ -1,14 +1,17 @@
 import { useState } from "react";
-import { AlertTriangle, Plus, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { AlertTriangle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "../kit/SettingBlock";
 import { EXAMPLE_PAY_LINE, payFor, rupees } from "../attendance/example";
 import { UnitInput } from "../attendance/UnitInput";
+import { LATE_SECTIONS, lateText } from "../LateDetectionTab.meta";
 import { slabsOf, type LateDraft } from "./form";
 import { allowanceProblem, latePool, slabDeduction, slabWarnings, slabsProblem } from "./preview";
+import { SlabEditor } from "./SlabEditor";
+
+const block = (id: string) => ({ id, ...lateText(id) });
 
 const GRID = [0, 2, 4, 6, 9, 12, 15, 20];
 
@@ -24,6 +27,7 @@ export function PolicySection({
   morningOn,
   eveningOn,
   cap,
+  permissionsPriced,
 }: {
   draft: LateDraft;
   update: (patch: Partial<LateDraft>) => void;
@@ -33,6 +37,8 @@ export function PolicySection({
   eveningOn: boolean | undefined;
   /** The monthly permission cap shown on this tab (typed or saved), for the month example. */
   cap: number;
+  /** "Price permissions separately" is on (as typed): the extra permissions are not marks of this pool. */
+  permissionsPriced: boolean;
 }) {
   const allowanceError = allowanceProblem(draft.allowance);
   const slabError = slabsProblem(draft.slabs);
@@ -40,13 +46,6 @@ export function PolicySection({
   const slabs = slabsOf(draft);
   const warnings = slabError ? [] : slabWarnings(slabs);
   const ready = !allowanceError && !slabError;
-
-  const setRow = (i: number, patch: Partial<LateDraft["slabs"][number]>) =>
-    update({ slabs: draft.slabs.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
-  const addRow = () => {
-    const highest = slabs.reduce((max, s) => (Number.isFinite(s.fromLates) ? Math.max(max, s.fromLates) : max), 0);
-    update({ slabs: [...draft.slabs, { fromLates: String(highest + 3), deductionShifts: "0.25" }] });
-  };
 
   const branchNote = branchLogin
     ? "You are signed in for a branch: this is saved for your branch only, and payroll keeps using the company-wide value."
@@ -56,8 +55,8 @@ export function PolicySection({
     <SettingsSection
       id="late-policy-section"
       icon={AlertTriangle}
-      title="Late Detection Policy"
-      purpose="What the month's marks cost a staff member. Production workers are not affected."
+      title={LATE_SECTIONS.policy}
+      purpose="What the month's marks cost a staff member. Production workers are not affected: they have their own page."
       usedBy={[
         { label: "Staff Payroll", to: "/hr/payroll" },
         { label: "Report Log", to: "/hr/attendance/report-log" },
@@ -66,10 +65,8 @@ export function PolicySection({
       testId="late-policy-section"
     >
       <SettingBlock
-        id="free-allowance"
+        {...block("free-allowance")}
         labelFor="late-free-allowance"
-        title="Free allowance (marks a month that cost nothing)"
-        purpose="How many marks (Late, Early Out and permissions beyond the cap, together) each staff member gets free every calendar month before any salary is cut."
         affects={[
           {
             where: "Staff Payroll",
@@ -120,9 +117,7 @@ export function PolicySection({
       </SettingBlock>
 
       <SettingBlock
-        id="deduction-slabs"
-        title="Deduction slabs"
-        purpose="Turns the month's billable marks (those beyond the free allowance) into shifts of salary taken off. The highest row the billable count reaches applies, and the last row holds for anything beyond it. No rows means marks cost nothing."
+        {...block("deduction-slabs")}
         affects={[
           {
             where: "Staff Payroll",
@@ -163,6 +158,7 @@ export function PolicySection({
                   cap={cap}
                   morningOn={morningOn}
                   eveningOn={eveningOn}
+                  permissionsPriced={permissionsPriced}
                 />
               </>
             ) : (
@@ -171,83 +167,19 @@ export function PolicySection({
           </PreviewCard>
         }
       >
-        <div className="space-y-2">
-          {draft.slabs.length === 0 ? (
-            <p className="rounded-lg border border-dashed p-4 text-center text-xs text-gray-500" data-testid="no-slabs">
-              No slabs: marks currently cost nothing. Add a slab to start deducting.
-            </p>
-          ) : (
-            <div className="overflow-x-auto rounded-lg border">
-              <table className="w-full text-sm" data-testid="slab-table">
-                <thead>
-                  <tr className="bg-slate-50 text-left text-xs text-slate-600">
-                    <th className="px-3 py-2 font-semibold">From this many billable marks</th>
-                    <th className="px-3 py-2 font-semibold">Shifts taken off</th>
-                    <th className="px-3 py-2 text-right font-semibold">
-                      <span className="sr-only">Remove</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {draft.slabs.map((slab, i) => (
-                    <tr key={i}>
-                      <td className="px-3 py-1.5">
-                        <Input
-                          type="number"
-                          min={0}
-                          step={1}
-                          aria-label={`Row ${i + 1}: from this many billable marks`}
-                          className="h-8 max-w-[110px]"
-                          value={slab.fromLates}
-                          disabled={!loaded}
-                          onChange={(e) => setRow(i, { fromLates: e.target.value })}
-                        />
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <Input
-                          type="number"
-                          min={0}
-                          step={0.25}
-                          aria-label={`Row ${i + 1}: shifts taken off`}
-                          className="h-8 max-w-[110px]"
-                          value={slab.deductionShifts}
-                          disabled={!loaded}
-                          onChange={(e) => setRow(i, { deductionShifts: e.target.value })}
-                        />
-                      </td>
-                      <td className="px-3 py-1.5 text-right">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          aria-label={`Remove slab ${i + 1}`}
-                          title="Remove slab"
-                          className="h-8 w-8 text-rose-600 hover:text-rose-800"
-                          disabled={!loaded}
-                          onClick={() => update({ slabs: draft.slabs.filter((_, j) => j !== i) })}
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <Button size="sm" variant="outline" className="gap-1.5" onClick={addRow} disabled={!loaded}>
-            <Plus size={13} /> Add Slab
-          </Button>
-          {slabError && (
-            <p role="alert" className="text-xs font-medium text-red-600" data-testid="slab-error">
-              {slabError}
-            </p>
-          )}
-          {warnings.map((w) => (
-            <p key={w} className="rounded-lg bg-red-50 px-2.5 py-1.5 text-xs text-red-800" data-testid="slab-warning">
-              {w}
-            </p>
-          ))}
-        </div>
+        <SlabEditor
+          keyName="fromLates"
+          rows={draft.slabs}
+          onChange={(rows) => update({ slabs: rows })}
+          disabled={!loaded}
+          labels={{ from: "From this many billable marks", shifts: "Shifts taken off" }}
+          emptyText="No slabs: marks currently cost nothing. Add a slab to start deducting."
+          min={0}
+          nextStep={3}
+          error={slabError}
+          warnings={warnings}
+          testId="slab"
+        />
       </SettingBlock>
     </SettingsSection>
   );
@@ -260,12 +192,14 @@ function MonthExample({
   cap,
   morningOn,
   eveningOn,
+  permissionsPriced,
 }: {
   allowance: number;
   slabs: { fromLates: number; deductionShifts: number }[];
   cap: number;
   morningOn: boolean | undefined;
   eveningOn: boolean | undefined;
+  permissionsPriced: boolean;
 }) {
   const [month, setMonth] = useState({ late: "5", early: "1", permissions: "4" });
   const count = (v: string) => (Number.isFinite(Number(v)) ? Math.max(0, Math.trunc(Number(v))) : 0);
@@ -275,6 +209,7 @@ function MonthExample({
     approvedPermissions: count(month.permissions),
     cap,
     allowance,
+    permissionsPriced,
   });
   const shifts = slabDeduction(pool.billable, slabs);
   const box = (key: keyof typeof month, label: string) => (
@@ -301,7 +236,11 @@ function MonthExample({
         {box("permissions", "Approved permissions")}
       </div>
       <PreviewLine
-        label={`Marks: ${pool.lateIn} Late + ${pool.earlyOut} Early Out + ${pool.excess} permission${pool.excess === 1 ? "" : "s"} beyond the cap of ${cap}`}
+        label={
+          permissionsPriced
+            ? `Marks: ${pool.lateIn} Late + ${pool.earlyOut} Early Out (the ${pool.excess} permission${pool.excess === 1 ? "" : "s"} beyond the cap of ${cap} ${pool.excess === 1 ? "is" : "are"} priced separately, below)`
+            : `Marks: ${pool.lateIn} Late + ${pool.earlyOut} Early Out + ${pool.excess} permission${pool.excess === 1 ? "" : "s"} beyond the cap of ${cap}`
+        }
         result={`${pool.total} marks, ${pool.free} free, ${pool.billable} billable`}
         tone="neutral"
       />

@@ -69,15 +69,16 @@ SLIP_MODULES = ("salary_slip", "payroll", "production_payroll")
 SLIP_FULL = ("payroll", "salary_slip")
 
 SLIP_NOTES = [
-    "Total earnings = gross pay + overtime. Other deductions = total deductions less PF, ESI and advance: for staff it is "
-    "the late-detection deduction (printed on the slip as 'Other Deductions').",
+    "Total earnings = gross pay + overtime. Late / other deductions = total deductions less PF, ESI, TDS and advance: for "
+    "staff it is the late-detection deduction (printed on the slip as 'Other Deductions'). TDS is deducted only from "
+    "employees added to TDS (Employees > Co Emp > TDS); it is 0 for everyone else.",
     "Staff paid days count a half-shift day as 0.5; for production, paid days are the shifts worked. Absent days include "
     "days of approved (unpaid) leave. Production employees have one slip per pay period - the Pay period column tells "
     "them apart.",
     "The PDF export prints the existing bulk salary slip layout (two slips per landscape page) unchanged. In that "
     "layout 'Total Earnings' shows gross pay before overtime, 'OT Hours' prints the overtime AMOUNT in rupees and "
-    "'Date of Payment' is the day the PDF is printed; the single-slip PDF also prints DA/CA/EA/PTRL/TDS/LOP rows as "
-    "fixed zeros because payroll stores none of them.",
+    "'Date of Payment' is the day the PDF is printed; the single-slip PDF also prints DA/CA/EA/PTRL/LOP rows as fixed "
+    "zeros because payroll stores none of them, and a TDS line only on the slips of TDS employees.",
 ]
 
 
@@ -107,6 +108,7 @@ def _slip_run(ctx) -> ReportResult:
                 "totalEarnings": d["total_earnings"],
                 "pfDeduction": d["pf"],
                 "esiDeduction": d["esi"],
+                "tdsDeduction": d["tds"],
                 "advanceDeduction": d["advance"],
                 "otherDeductions": d["residual"],
                 "totalDeductions": d["total_deductions"],
@@ -275,6 +277,7 @@ register(
             _cur("totalEarnings", "Total earnings"),
             _cur("pfDeduction", "PF"),
             _cur("esiDeduction", "ESI"),
+            _cur("tdsDeduction", "TDS"),
             _cur("advanceDeduction", "Advance"),
             _cur("otherDeductions", "Late / other deductions"),
             _cur("totalDeductions", "Total deductions"),
@@ -301,6 +304,7 @@ REGISTER_SUM = (
     "totalEarnings",
     "pfDeduction",
     "esiDeduction",
+    "tdsDeduction",
     "advanceDeduction",
     "lateDeduction",
     "totalDeductions",
@@ -341,6 +345,7 @@ def _register_run(ctx) -> ReportResult:
                 "totalEarnings": d["total_earnings"],
                 "pfDeduction": d["pf"],
                 "esiDeduction": d["esi"],
+                "tdsDeduction": d["tds"],
                 "advanceDeduction": d["advance"],
                 "lateDeduction": d["late"],
                 "totalDeductions": d["total_deductions"],
@@ -367,6 +372,7 @@ def _register_run(ctx) -> ReportResult:
             "value": round(col("pfDeduction") + col("esiDeduction"), 2),
             "format": "currency",
         },
+        {"label": "TDS (employee)", "value": col("tdsDeduction"), "format": "currency"},
         {"label": "Advance recovered", "value": col("advanceDeduction"), "format": "currency"},
         {"label": "Late deductions", "value": col("lateDeduction"), "format": "currency"},
         {"label": "Total net pay", "value": col("netPay"), "format": "currency"},
@@ -377,6 +383,9 @@ def _register_run(ctx) -> ReportResult:
         "counts each person once.",
         "Monthly / shift rate is the stored monthly salary for staff and the rate per shift for production. Paid days for "
         "production are shifts worked. Total earnings = gross pay + overtime (overtime is outside PF and ESI wages).",
+        "PF and ESI are deducted only from Co Emp employees. TDS is deducted only from employees added to TDS (a "
+        "percentage of their earned gross, overtime included): the TDS column is 0 for everyone else, so PF + ESI + TDS + "
+        "Advance + Late deduction add up to Total deductions.",
         "Late deduction comes from the slip's late-detection snapshot and is blank for production slips generated with "
         "Production Late Detection switched off. Loss of pay is not a deduction line: it is already reduced from the "
         "pro-rated gross (see the Salary & Wages Statement).",
@@ -429,6 +438,7 @@ register(
             _cur("totalEarnings", "Total earnings", 1.5),
             _cur("pfDeduction", "PF"),
             _cur("esiDeduction", "ESI"),
+            _cur("tdsDeduction", "TDS"),
             _cur("advanceDeduction", "Advance"),
             _cur("lateDeduction", "Late deduction"),
             _cur("totalDeductions", "Total deductions"),
@@ -586,6 +596,7 @@ PRODUCTION_SUM = (
     "grossWages",
     "pfDeduction",
     "esiDeduction",
+    "tdsDeduction",
     "advanceDeduction",
     "lateDeduction",
     "totalDeductions",
@@ -613,7 +624,37 @@ def _extra_shifts(breakdown) -> float | None:
     return round(total, 2)
 
 
+def _percent_text(value) -> str:
+    """12 -> '12', 0.75 -> '0.75', 12.5 -> '12.5' (no trailing zeros)."""
+    return f"{float(value):g}"
+
+
 def _pf_rule_label(d: dict) -> str | None:
+    """What the engine applied, from the slip's stored ``statutory`` block: 'PF: PF below 25,000 (12%); ESI: ... (0.75%)',
+    or why nothing was. A slip stored before the PF / ESI redesign (2026-10-24) has no such block: it names the
+    salary-range rule it recorded, or 'Flat rates', exactly as it always did."""
+    stat = d["statutory"]
+    if stat:
+        parts = []
+        for key, name in (("pfRule", "PF"), ("esiRule", "ESI")):
+            rule = stat.get(key)
+            if isinstance(rule, dict):
+                text = f"{name}: {rule.get('label') or 'Rule'}"
+                if isinstance(rule.get("ratePercent"), (int, float)):
+                    text += f" ({_percent_text(rule['ratePercent'])}%)"
+                parts.append(text)
+        if parts:
+            return "; ".join(parts)
+        if stat.get("category") == "tds":
+            percent = (stat.get("tds") or {}).get("percent")
+            return (
+                f"TDS employee ({_percent_text(percent)}%), no PF / ESI"
+                if isinstance(percent, (int, float))
+                else "TDS employee"
+            )
+        if stat.get("category") == "co_emp":
+            return "Co Emp, no rule matched"
+        return "Not Co Emp"
     rule = d["ded"].get("pfEfRule") if d["ded"] else None
     if isinstance(rule, dict) and rule.get("label"):
         return str(rule["label"])
@@ -661,6 +702,7 @@ def _production_run(ctx) -> ReportResult:
                 "grossWages": d["gross"],
                 "pfDeduction": d["pf"],
                 "esiDeduction": d["esi"],
+                "tdsDeduction": d["tds"],
                 "advanceDeduction": d["advance"],
                 "lateDeduction": d["late"],
                 "totalDeductions": d["total_deductions"],
@@ -694,9 +736,12 @@ def _production_run(ctx) -> ReportResult:
         "rate per shift. Shifts come from the slip's stored day-by-day breakdown (a production day earns up to the highest rule of the shift table: 1.50 before its start date, 3.00 by default after).",
         "Extra shifts = the part of a day's shift value above 1.00 (the production 'extra' shift). It is production's "
         "analogue of overtime and is ALREADY inside total shifts and gross wages - it is not paid separately.",
-        "PF / ESI: the payroll engine picks the salary-range rule (or flat rate) from the period's gross x 2 as the "
-        "monthly equivalent, whatever the period length; the PF/ESI rule column shows what was applied. Advance "
-        "recoveries belong to the month the period ends in.",
+        "PF / ESI / TDS: only Co Emp employees have PF and ESI. The engine scales the period's gross to a month (weekly "
+        "x4, bi-weekly x2, monthly x1), picks the first PF and ESI rule of Settings > PF & ESI whose range holds it and "
+        "takes the rule's percentage from the first-portion share (half) of the period's gross; the PF / ESI rule column "
+        "shows what was applied (slips before 2026-10-24 name the salary-range rule or flat rates then in force). TDS "
+        "employees have their TDS percentage of the period's gross instead and no PF / ESI. Advance recoveries belong to "
+        "the month the period ends in.",
         "Late deduction is blank where Production Late Detection was switched off when the slip was generated.",
         *notes,
     ]
@@ -733,11 +778,12 @@ register(
             _cur("grossWages", "Gross wages"),
             _cur("pfDeduction", "PF"),
             _cur("esiDeduction", "ESI"),
+            _cur("tdsDeduction", "TDS"),
             _cur("advanceDeduction", "Advance"),
             _cur("lateDeduction", "Late deduction"),
             _cur("totalDeductions", "Total deductions"),
             _cur("netPay", "Net pay"),
-            ColumnSpec("pfRule", "PF / ESI rule", TEXT, 1.3),
+            ColumnSpec("pfRule", "PF / ESI rule", TEXT, 1.6),
             ColumnSpec("paymentStatus", "Payment", BADGE, 1.0),
         ),
         run=_production_run,

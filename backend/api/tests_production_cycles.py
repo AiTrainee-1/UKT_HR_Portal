@@ -451,8 +451,8 @@ class CycleDbTestCase(TestCase):
         _settings(
             prod_cycles=ALL_FROM_MON,
             prod_late_detection_enabled=False,
-            prod_payroll_rules_enabled=False,
-            prod_pf_ef_enabled=False,
+            prod_pf_rules=[],
+            prod_esi_rules=[],
         )
         self.admin = _hr()
         self.patches = [p.start() for p in _today()]
@@ -492,12 +492,11 @@ class EngineCycleTests(CycleDbTestCase):
         self.assertEqual(again.pay_cycle, "weekly")
 
     def test_the_monthly_equivalent_follows_the_cycle(self):
-        # 7 shifts x 500 = 3500 gross for the week
+        # 7 shifts x 500 = 3500 gross for the week; the ESI rule covers monthly earnings up to 12,000
         _settings(
-            prod_payroll_rules_enabled=True,
-            prod_esi_rate=Decimal("0.75"),
-            prod_pf_rate=Decimal("0"),
-            prod_esi_applicable_below=Decimal("12000"),
+            prod_esi_rules=[
+                {"id": "e1", "label": "ESI", "basis": "total", "minAmount": 0, "maxAmount": 12000, "ratePercent": 0.75}
+            ],
         )
         for cycle, factor, esi_applies in (
             ("weekly", 4, False),
@@ -505,7 +504,7 @@ class EngineCycleTests(CycleDbTestCase):
             ("monthly", 1, True),
             (None, 2, True),
         ):
-            emp = _worker(f"EM_{cycle}", cycle=cycle)
+            emp = _worker(f"EM_{cycle}", cycle=cycle, co_emp_enabled=True)
             _shifts(emp, MON, date(2026, 2, 8))
             slip = _generate_production_payroll(emp, MON, date(2026, 2, 8), pay_cycle=cycle)["slip"]
             ded = slip.breakdown_details["deductions"]
@@ -513,18 +512,23 @@ class EngineCycleTests(CycleDbTestCase):
             self.assertEqual(ded["monthlyEquivalentFactor"], factor, cycle)
             self.assertEqual(slip.esi_deduction > 0, esi_applies, cycle)
 
-    def test_biweekly_numbers_are_unchanged_from_before_the_cycles_existed(self):
+    def test_a_period_without_a_cycle_is_judged_like_a_biweekly_one(self):
+        # (monthly equivalent x2, as the engine always did before the cycles existed)
         _settings(
-            prod_payroll_rules_enabled=True,
-            prod_esi_rate=Decimal("0.75"),
-            prod_pf_rate=Decimal("12"),
-            prod_esi_applicable_below=Decimal("21000"),
+            prod_pf_rules=[
+                {"id": "p1", "label": "PF", "basis": "total", "minAmount": 0, "maxAmount": 0, "ratePercent": 12}
+            ],
+            prod_esi_rules=[
+                {"id": "e1", "label": "ESI", "basis": "total", "minAmount": 0, "maxAmount": 21000, "ratePercent": 0.75}
+            ],
         )
-        a, b = _worker("EB1", cycle="biweekly"), _worker("EB2", cycle=None)
+        a = _worker("EB1", cycle="biweekly", co_emp_enabled=True)
+        b = _worker("EB2", cycle=None, co_emp_enabled=True)
         for emp in (a, b):
             _shifts(emp, MON, date(2026, 2, 15))
         with_cycle = _generate_production_payroll(a, MON, date(2026, 2, 15), pay_cycle="biweekly")["payroll"]
         without = _generate_production_payroll(b, MON, date(2026, 2, 15))["payroll"]
+        self.assertGreater(with_cycle.deductions, 0)  # the rules did apply
         self.assertEqual(
             (with_cycle.gross_salary, with_cycle.deductions, with_cycle.final_salary),
             (without.gross_salary, without.deductions, without.final_salary),

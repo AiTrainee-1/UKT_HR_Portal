@@ -7,7 +7,8 @@ rows, so the reports are checked against exactly what payroll stored.
 
 February 2026 starts on a Sunday: 24 Mon-Sat working days, 28 calendar days. Salary 24,000 -> daily rate 1,000.
 
-The cast (all Feb 2026, PF 12% of basic, ESI 0.75% while salary <= 21,000, late free allowance 3,
+The cast (all Feb 2026, all Co Emp; staff PF 12% of the first portion (half of pay) for any salary, ESI 1.5% of the
+first portion while the monthly salary is <= 21,000, production PF 24% / ESI 1.5%; late free allowance 3,
 slabs 1 billable -> 0.5 shift and 4 -> 1 shift):
 
   3001 A  salary 20,400  full month, 2 paid OT days (slip OT 1,700), 2 relaxation credits, 1 detected, 1 rejected
@@ -93,6 +94,7 @@ def _headers(user: HRUser) -> dict:
 
 
 def _staff(code, salary, dept, branch, **kw) -> Employee:
+    kw.setdefault("co_emp_enabled", True)
     return Employee.objects.create(
         employee_code=code, first_name=f"E{code}", last_name="Staff", employment_type="staff", status="active",
         salary_type="monthly", salary_amount=Decimal(salary) if salary is not None else None,
@@ -127,11 +129,23 @@ _LATE_SUMMARY = {
 }  # fmt: skip
 
 
+def _statutory_block(category, *, wages, pf_rule=None, esi_rule=None, tds=None):
+    """The `statutory` block the engine stores in a slip's deductions since 2026-10-24 (pf_esi.Statutory.breakdown)."""
+    return {
+        "category": category, "pfWages": float(wages), "firstPortionMonthly": float(wages),
+        "pfRule": pf_rule, "esiRule": esi_rule, "eligibility": {"basic": None, "firstPortion": None, "total": None},
+        "rulesScope": "global", "branchId": None, "tds": tds, "reason": None,
+    }  # fmt: skip
+
+
 def _hand_slip(emp, *, gross="20000", pf="1200", esi="150", adv="0", late="0", ot="0", year=YEAR, month=MONTH,
-               breakdown=True, late_summary=None, period=None, payroll=True, payroll_final=None, ot_days=0):  # fmt: skip
-    """A slip typed by hand (older / seed-shaped data the engine would not produce today)."""
-    gross, pf, esi, adv, late, ot = (Decimal(x) for x in (gross, pf, esi, adv, late, ot))
-    total = pf + esi + adv + late
+               breakdown=True, late_summary=None, period=None, payroll=True, payroll_final=None, ot_days=0,
+               tds="0", tds_percent=None, statutory=None):  # fmt: skip
+    """A slip typed by hand. By default it has the shape of a slip stored BEFORE the PF / ESI / TDS redesign (no
+    `statutory` block, no TDS): older data the engine would not produce today. Pass `statutory` (see _statutory_block)
+    and / or `tds` for a slip of the new shape."""
+    gross, pf, esi, adv, late, ot, tds = (Decimal(x) for x in (gross, pf, esi, adv, late, ot, tds))
+    total = pf + esi + tds + adv + late
     net = gross + ot - total
     prod = period is not None
     bd = None
@@ -150,6 +164,10 @@ def _hand_slip(emp, *, gross="20000", pf="1200", esi="150", adv="0", late="0", o
             "deductions": {"pf": float(pf), "esi": float(esi), "esiApplicableBelow": 21000.0,
                            "lateShiftPenalty": float(late), "lateSummary": late_summary},
         }  # fmt: skip
+        if statutory is not None:
+            bd["deductions"]["statutory"] = statutory
+            bd["deductions"]["tds"] = float(tds)
+            bd["deductions"]["tdsPercent"] = float(tds_percent) if tds_percent is not None else None
     basic = (gross / 2).quantize(Decimal("0.01"))
     hra = (gross / 5).quantize(Decimal("0.01"))
     start, end = period if prod else (None, None)
@@ -157,8 +175,8 @@ def _hand_slip(emp, *, gross="20000", pf="1200", esi="150", adv="0", late="0", o
     slip = SalarySlip.objects.create(
         employee=emp, month=month, year=year, period_start=start, period_end=end, slip_number=number,
         basic=basic, hra=hra, allowances=gross - basic - hra, ot_amount=ot, gross_salary=gross, pf_deduction=pf,
-        esi_deduction=esi, advance_deduction=adv, other_deductions=(late if not prod else Decimal("0")),
-        total_deductions=total, net_salary=net, working_days=10 if prod else 24, present_days=8 if prod else 24,
+        esi_deduction=esi, tds_deduction=tds, tds_percent=tds_percent, advance_deduction=adv,
+        other_deductions=(late if not prod else Decimal("0")), total_deductions=total, net_salary=net, working_days=10 if prod else 24, present_days=8 if prod else 24,
         breakdown_details=bd,
     )  # fmt: skip
     if payroll:
@@ -176,13 +194,23 @@ class _Base(TestCase):
 
     @classmethod
     def setUpTestData(cls):
+        # Rules that give these slips the same PF / ESI amounts as the flat methods this fixture used before the PF / ESI
+        # redesign (PF 12%, ESI 0.75% up to 21,000 salary): the reports under test read slips, so what matters is the
+        # slips' numbers. PF and ESI are now taken from the first portion of pay (half of it), so staff ESI is 1.5%
+        # and production PF / ESI are 24% / 1.5%. Only Co Emp employees are judged by them: the fixture employees are Co Emp.
         ps = PayrollSettings.get()
-        ps.staff_payroll_rules_enabled = True
-        ps.pf_rate, ps.esi_rate, ps.esi_applicable_below = Decimal("12"), Decimal("0.75"), Decimal("21000")
-        ps.prod_payroll_rules_enabled = True
-        ps.prod_pf_rate, ps.prod_esi_rate = Decimal("12"), Decimal("0.75")
-        ps.prod_esi_applicable_below = Decimal("21000")
-        ps.prod_pf_ef_enabled = False
+        ps.staff_pf_rules = [
+            {"id": "p", "label": "PF", "basis": "total", "minAmount": 0, "maxAmount": 0, "ratePercent": 12}
+        ]
+        ps.staff_esi_rules = [
+            {"id": "e", "label": "ESI", "basis": "total", "minAmount": 0, "maxAmount": 21000, "ratePercent": 1.5}
+        ]
+        ps.prod_pf_rules = [
+            {"id": "p", "label": "PF", "basis": "total", "minAmount": 0, "maxAmount": 0, "ratePercent": 24}
+        ]
+        ps.prod_esi_rules = [
+            {"id": "e", "label": "ESI", "basis": "total", "minAmount": 0, "maxAmount": 21000, "ratePercent": 1.5}
+        ]
         ps.prod_late_detection_enabled = False
         ps.late_free_allowance = 3
         ps.late_deduction_slabs = [{"fromLates": 1, "deductionShifts": 0.5}, {"fromLates": 4, "deductionShifts": 1}]
@@ -214,7 +242,7 @@ class _Base(TestCase):
         cls.P1 = Employee.objects.create(
             employee_code="P001", first_name="Prod", last_name="One", employment_type="production", status="active",
             salary_per_shift=Decimal("500"), department=cls.d_stitch, branch=cls.b1, uan_number="100000000009",
-            pf_number="TN/P/9", **bank,
+            pf_number="TN/P/9", co_emp_enabled=True, **bank,
         )  # fmt: skip
 
         # A: full month + overtime (2 pay days paid in the slip, 2 relaxation credits, one detected, one rejected)
@@ -453,13 +481,16 @@ class PfStatementTests(_Base):
         body = self.run_report("pf-statement", **P)
         rows = self.by_code(body)
         self.assertEqual(list(rows), ["3001", "3002", "3003", "3004", "3006", "P001"])  # incl. the employee who left
+        # PF wages are what the percentage was taken from: the first portion (half) of the pay. P001 is production:
+        # half of the 8,250 period wages = 4,125; the fixture's production rule is 24%, so 990 is deducted against a
+        # statutory 12% of 495 (hence the 495 "deducted vs 12%").
         expect = {  # pfWages, epfWages, eeShare, epsShare, erEpfShare, erTotal, eeVariance, remittance, days, ncp, gross
             "3001": (10200, 10200, 1224, 850, 374, 1224, 0, 2448, 28, 0, 22100),
             "3002": (9500, 9500, 1140, 791, 349, 1140, 0, 2280, 23, 5, 19000),
             "3003": (7500, 7500, 900, 625, 275, 900, 0, 1800, 28, 0, 15000),
             "3004": (30000, 15000, 3600, 1250, 550, 1800, 1800, 3600, 28, 0, 60000),
             "3006": (9000, 9000, 1080, 750, 330, 1080, 0, 2160, 28, 0, 18000),
-            "P001": (8250, 8250, 990, 687, 303, 990, 0, 1980, 14, 6, 8250),
+            "P001": (4125, 4125, 990, 344, 151, 495, 495, 990, 14, 6, 8250),
         }
         keys = ("pfWages", "epfWages", "eeShare", "epsShare", "erEpfShare", "erTotal", "eeVariance",
                 "totalRemittance", "daysPaid", "ncpDays", "grossWages")  # fmt: skip
@@ -475,9 +506,9 @@ class PfStatementTests(_Base):
         body = self.run_report("pf-statement", **P)
         self.assertEqual(
             body["totals"],
-            {"grossWages": 142350.0, "pfWages": 74450.0, "epfWages": 59450.0, "epsWages": 59450.0, "eeShare": 8934.0,
-             "epsShare": 4953.0, "erEpfShare": 2181.0, "erTotal": 7134.0, "eeVariance": 1800.0,
-             "totalRemittance": 14268.0},
+            {"grossWages": 142350.0, "pfWages": 70325.0, "epfWages": 55325.0, "epsWages": 55325.0, "eeShare": 8934.0,
+             "epsShare": 4610.0, "erEpfShare": 2029.0, "erTotal": 6639.0, "eeVariance": 2295.0,
+             "totalRemittance": 13278.0},
         )  # fmt: skip
         self.assert_totals(body, ["grossWages", "pfWages", "epfWages", "eeShare", "epsShare", "erEpfShare", "erTotal"])
         s = self.summary(body)
@@ -505,7 +536,7 @@ class PfStatementTests(_Base):
 
     def test_coverage_all_lists_uncovered_without_employer_share(self):
         ps = PayrollSettings.get()
-        ps.staff_payroll_rules_enabled = False
+        ps.staff_pf_rules, ps.staff_esi_rules = [], []  # no rules: no PF / ESI
         ps.save()
         emp = _staff("3010", "20000", self.d_cut, self.b1)
         _present_all(emp)
@@ -531,7 +562,7 @@ class PfStatementTests(_Base):
         body = self.run_report("pf-statement", coverage="all", **P)
         self.assertEqual(self.summary(body)["PF wages"], body["totals"]["pfWages"])
         self.assertEqual(self.summary(body)["EPF wages"], body["totals"]["epfWages"])
-        self.assertEqual(body["totals"]["pfWages"], 74450.0)  # unchanged by the uncovered employee
+        self.assertEqual(body["totals"]["pfWages"], 70325.0)  # unchanged by the uncovered employee
 
     def test_filters_narrow(self):
         def codes(**q):
@@ -549,7 +580,8 @@ class PfStatementTests(_Base):
         rows = self.data_rows(self.run_report("pf-statement", **P))
         self.assertEqual(len([r for r in rows if r["employeeCode"] == "P001"]), 1)
         p = self.by_code(self.run_report("pf-statement", **P))["P001"]
-        self.assertEqual((p["pfWages"], p["eeShare"], p["daysPaid"], p["ncpDays"]), (8250.0, 990.0, 14.0, 6.0))
+        # PF wages: the first portion (half) of the two periods' wages (6,250 + 2,000 = 8,250)
+        self.assertEqual((p["pfWages"], p["eeShare"], p["daysPaid"], p["ncpDays"]), (4125.0, 990.0, 14.0, 6.0))
 
     def test_employee_without_department_or_designation(self):
         emp = _staff("3011", "20000", None, None)
@@ -634,11 +666,13 @@ class EsiStatementTests(_Base):
         body = self.run_report("esi-statement", **P)
         rows = self.by_code(body)
         self.assertEqual(list(rows), ["3001", "3003", "3006", "P001"])
+        # ESI is taken from the same base as PF (the first portion, half of the pay), and the 3.25% employer estimate
+        # is worked on those ESI wages.
         expect = {  # esiWages, eeShare, erShare, total, days
-            "3001": (20400, 153.00, 663.00, 816.00, 28),
-            "3003": (15000, 112.50, 487.50, 600.00, 28),
-            "3006": (18000, 135.00, 585.00, 720.00, 28),
-            "P001": (8250, 61.88, 268.13, 330.01, 14),  # 46.88 + 15.00 ; 3.25% of 8250 = 268.125 -> half up
+            "3001": (10200, 153.00, 331.50, 484.50, 28),
+            "3003": (7500, 112.50, 243.75, 356.25, 28),
+            "3006": (9000, 135.00, 292.50, 427.50, 28),
+            "P001": (4125, 61.88, 134.06, 195.94, 14),  # 46.88 + 15.00 ; 3.25% of 4125 = 134.0625 -> 134.06
         }
         for code, (wages, ee, er, total, days) in expect.items():
             r = rows[code]
@@ -652,14 +686,14 @@ class EsiStatementTests(_Base):
     def test_totals_and_summary(self):
         body = self.run_report("esi-statement", **P)
         self.assertEqual(
-            body["totals"], {"esiWages": 61650.0, "eeShare": 462.38, "erShare": 2003.63, "totalContribution": 2466.01}
+            body["totals"], {"esiWages": 30825.0, "eeShare": 462.38, "erShare": 1001.81, "totalContribution": 1464.19}
         )
         self.assert_totals(body, ["esiWages", "eeShare", "erShare", "totalContribution"])
         s = self.summary(body)
         self.assertEqual(s["ESI covered employees"], 4)
         self.assertEqual(s["Employee contribution"], 462.38)
-        self.assertEqual(s["Total contribution"], 2466.01)
-        self.assertEqual(s["Above ESI ceiling (exempt)"], 2)  # B (24,000) and D (60,000)
+        self.assertEqual(s["Total contribution"], 1464.19)
+        self.assertEqual(s["Co Emp, no ESI rule matched"], 2)  # B (24,000) and D (60,000): over the rule's 21,000
         self.assertEqual(s["Covered, IP number missing"], 2)
         slips = sum(float(x.esi_deduction) for x in SalarySlip.objects.filter(month=MONTH, year=YEAR))
         self.assertEqual(body["totals"]["eeShare"], round(slips, 2))
@@ -669,28 +703,67 @@ class EsiStatementTests(_Base):
         rows = self.by_code(exempt)
         self.assertEqual(list(rows), ["3002", "3004"])
         for r in rows.values():
-            self.assertEqual((r["coverage"], r["eeShare"]), ("Above ceiling", 0.0))
+            self.assertEqual((r["coverage"], r["eeShare"]), ("Co Emp, no rule matched", 0.0))
             self.assertIsNone(r["erShare"])  # nobody contributes: no employer share
         self.assertEqual(rows["3002"]["grossSalary"], 19000.0)  # the salary is still shown ...
         self.assertIsNone(rows["3002"]["esiWages"])  # ... but no ESI wages: nothing is contributed on it
         allrows = self.run_report("esi-statement", coverage="all", **P)
         self.assertEqual(self.codes(allrows), ["3001", "3002", "3003", "3004", "3006", "P001"])
-        self.assertEqual(allrows["totals"]["erShare"], 2003.63)  # only covered rows carry an employer share
+        self.assertEqual(allrows["totals"]["erShare"], 1001.81)  # only covered rows carry an employer share
         # totals row and summary cards describe the same (covered) people whatever the coverage filter shows
-        for cov, wages in (("covered", 61650.0), ("exempt", None), ("all", 61650.0)):
+        for cov, wages in (("covered", 30825.0), ("exempt", None), ("all", 30825.0)):
             body = self.run_report("esi-statement", coverage=cov, **P)
             self.assertEqual(body["totals"]["esiWages"], wages, cov)  # a dash, not a zero, when nobody contributes
             self.assertEqual(self.summary(body)["ESI wages"], wages or 0.0, cov)
 
-    def test_not_covered_when_rules_were_off(self):
+    def test_a_co_emp_employee_with_no_matching_rule_says_so(self):
         ps = PayrollSettings.get()
-        ps.staff_payroll_rules_enabled = False
+        ps.staff_pf_rules, ps.staff_esi_rules = [], []  # no rules: no PF / ESI for anybody
         ps.save()
         emp = _staff("3010", "20000", self.d_cut, self.b1)
         _present_all(emp)
         _generate_staff_payroll(emp, MONTH, YEAR)
-        row = self.by_code(self.run_report("esi-statement", coverage="exempt", **P))["3010"]
-        self.assertEqual(row["coverage"], "Not covered")  # under the ceiling, but nothing was deducted
+        body = self.run_report("esi-statement", coverage="exempt", **P)
+        self.assertEqual(self.by_code(body)["3010"]["coverage"], "Co Emp, no rule matched")
+        self.assertEqual(self.summary(body)["Co Emp, no ESI rule matched"], 3)  # B and D as before, and this one
+
+    def test_coverage_names_why_a_tds_or_a_not_co_emp_employee_has_no_esi(self):
+        tds_emp = _staff("3011", "20000", self.d_cut, self.b1, co_emp_enabled=False, tds_enabled=True,
+                         tds_percent=Decimal("10"))  # fmt: skip
+        plain = _staff("3012", "20000", self.d_cut, self.b1, co_emp_enabled=False)
+        for emp in (tds_emp, plain):
+            _present_all(emp)
+            _generate_staff_payroll(emp, MONTH, YEAR)
+        rows = self.by_code(self.run_report("esi-statement", coverage="exempt", **P))
+        self.assertEqual((rows["3011"]["coverage"], rows["3011"]["eeShare"]), ("TDS employee", 0.0))
+        self.assertEqual((rows["3012"]["coverage"], rows["3012"]["eeShare"]), ("Not Co Emp", 0.0))
+        # neither of them counts as "Co Emp, no ESI rule matched"
+        self.assertEqual(self.summary(self.run_report("esi-statement", coverage="exempt", **P))[
+            "Co Emp, no ESI rule matched"], 2)  # fmt: skip
+
+    def test_a_slip_stored_before_the_redesign_still_reads_the_old_way(self):
+        # no `statutory` block: ESI wages = the slip's gross salary (the old base), and "Not covered" is all it can say
+        old = _staff("3013", "20000", self.d_cut, self.b1, esi_number="9999999999")
+        _hand_slip(old, gross="20000", pf="1200", esi="150")
+        none = _staff("3014", "30000", self.d_cut, self.b1)
+        _hand_slip(none, gross="30000", pf="0", esi="0")
+        rows = self.by_code(self.run_report("esi-statement", coverage="all", **P))
+        self.assertEqual(
+            (rows["3013"]["esiWages"], rows["3013"]["grossSalary"], rows["3013"]["erShare"], rows["3013"]["coverage"]),
+            (20000.0, 20000.0, 650.0, "Covered"),
+        )
+        self.assertEqual((rows["3014"]["coverage"], rows["3014"]["esiWages"]), ("Not covered", None))
+
+    def test_a_slip_of_the_new_shape_reads_the_stored_wages_not_the_gross(self):
+        # the stored pfWages (the first portion the percentage was taken from) wins over the slip's gross salary
+        emp = _staff("3015", "20000", self.d_cut, self.b1, esi_number="8888888888")
+        rule = {"id": "e", "label": "ESI", "basis": "total", "minAmount": 0, "maxAmount": 0, "ratePercent": 1.5,
+                "amountTested": 20000.0}  # fmt: skip
+        _hand_slip(
+            emp, gross="20000", pf="0", esi="150", statutory=_statutory_block("co_emp", wages=10000, esi_rule=rule)
+        )
+        row = self.by_code(self.run_report("esi-statement", **P))["3015"]
+        self.assertEqual((row["esiWages"], row["grossSalary"], row["erShare"]), (10000.0, 20000.0, 325.0))
 
     def test_filters_narrow(self):
         def codes(**q):
@@ -716,7 +789,7 @@ class EsiStatementTests(_Base):
         self.assertEqual(ws["A8"].value, "3001")
         self.assertEqual(ws["C8"].value, "1111111111")
         self.assertEqual(ws["G8"].value, 20400.0)  # gross salary
-        self.assertEqual(ws["H8"].value, 20400.0)  # ESI wages
+        self.assertEqual(ws["H8"].value, 10200.0)  # ESI wages: the first portion
         self.assertEqual(ws["I8"].value, 153.0)  # employee share
         self.assertTrue(self.export("esi-statement", "pdf", **P).content.startswith(b"%PDF"))
 
@@ -734,10 +807,12 @@ class StatutoryCoverageTests(_Base):
         self.assertEqual(list(rows), ["3001", "3002", "3003", "3004", "3007", "3008", "P001"])  # L left: not active
         a = rows["3001"]
         self.assertEqual(
-            (a["pfCovered"], a["esiCovered"], a["salaryBasis"], a["esiCeiling"]), ("Yes", "Yes", 20400.0, 21000.0)
+            (a["pfCovered"], a["esiCovered"], a["salaryBasis"], a["category"], a["tdsPercent"]),
+            ("Yes", "Yes", 20400.0, "Co Emp", None),
         )
+        self.assertNotIn("esiCeiling", a)  # the ESI ceiling is not a concept any more
         self.assertEqual(a["lastSlipPeriod"], "February 2026")
-        self.assertEqual(rows["3002"]["esiCovered"], "Above ceiling")
+        self.assertEqual((rows["3002"]["pfCovered"], rows["3002"]["esiCovered"]), ("Yes", "No"))  # no ESI rule fits
         self.assertEqual(rows["3003"]["idCheck"], "Missing UAN, PF no., ESI no.")
         self.assertEqual((rows["3007"]["pfCovered"], rows["3007"]["esiCovered"]), ("No slip", "No slip"))
         self.assertEqual(rows["3007"]["salaryBasis"], 12000.0)  # the profile salary, even without a slip
@@ -749,9 +824,10 @@ class StatutoryCoverageTests(_Base):
         s = self.summary(body)
         self.assertEqual(
             (s["Employees"], s["PF covered"], s["ESI covered"], s["Covered by neither"], s["No slip yet"],
-             s["Covered, IDs missing"], s["Within 10% of ESI ceiling"]),
-            (7, 5, 3, 0, 2, 2, 1),
+             s["Covered, IDs missing"], s["Co Emp, no PF/ESI on latest slip"], s["TDS employees"]),
+            (7, 5, 3, 0, 2, 2, 0, 0),
         )  # fmt: skip
+        self.assertNotIn("Within 10% of ESI ceiling", s)
 
     def test_coverage_filter(self):
         def codes(cov, **q):
@@ -777,13 +853,47 @@ class StatutoryCoverageTests(_Base):
         )
         self.assertEqual(self.codes(self.run_report("statutory-coverage", employmentType="production")), ["P001"])
 
-    def test_notes_state_the_payroll_rule_switches(self):
-        body = self.run_report("statutory-coverage")
-        self.assertTrue(any("staff PF/ESI rules ON" in n for n in body["notes"]))
-        ps = PayrollSettings.get()
-        ps.staff_payroll_rules_enabled = False
-        ps.save()
-        self.assertTrue(any("staff PF/ESI rules OFF" in n for n in self.run_report("statutory-coverage")["notes"]))
+    def test_notes_explain_co_emp_and_tds_and_no_removed_concept_is_mentioned(self):
+        text = " ".join(self.run_report("statutory-coverage")["notes"])
+        self.assertIn("Only Co Emp employees can have PF and ESI", text)
+        self.assertIn("Settings > PF & ESI", text)
+        self.assertIn("TDS = tax deducted at source", text)
+        for gone in ("switch", "ceiling", "rules on", "rules off"):
+            self.assertNotIn(gone, text.lower(), gone)
+
+    def test_category_is_the_employees_current_setting_and_can_be_filtered(self):
+        tds_emp = _staff("3011", "30000", self.d_cut, self.b1, co_emp_enabled=False, tds_enabled=True,
+                         tds_percent=Decimal("12.5"))  # fmt: skip
+        plain = _staff("3012", "30000", self.d_cut, self.b1, co_emp_enabled=False)
+        for emp in (tds_emp, plain):
+            _present_all(emp)
+            _generate_staff_payroll(emp, MONTH, YEAR)
+        rows = self.by_code(self.run_report("statutory-coverage"))
+        self.assertEqual((rows["3011"]["category"], rows["3011"]["tdsPercent"]), ("TDS", 12.5))
+        self.assertEqual((rows["3012"]["category"], rows["3012"]["tdsPercent"]), ("Not Co Emp", None))
+        self.assertEqual((rows["3001"]["category"], rows["3001"]["tdsPercent"]), ("Co Emp", None))
+        for emp in ("3011", "3012"):  # neither has PF or ESI on its latest slip
+            self.assertEqual((rows[emp]["pfCovered"], rows[emp]["esiCovered"]), ("No", "No"))
+
+        def codes(category, **q):
+            return self.codes(self.run_report("statutory-coverage", category=category, **q))
+
+        self.assertEqual(codes("tds"), ["3011"])
+        self.assertEqual(codes("none"), ["3012"])
+        self.assertEqual(codes("co_emp"), ["3001", "3002", "3003", "3004", "3007", "3008", "P001"])
+        # the summary describes the chosen category only
+        body = self.run_report("statutory-coverage", category="tds")
+        s = self.summary(body)
+        self.assertEqual((s["Employees"], s["TDS employees"], s["PF covered"], s["Covered by neither"]), (1, 1, 0, 1))
+        # "Co Emp, no PF/ESI on latest slip" counts Co Emp employees only: the TDS and the plain employee are not it
+        self.assertEqual(self.summary(self.run_report("statutory-coverage"))["Co Emp, no PF/ESI on latest slip"], 0)
+        self.assertEqual(self.summary(self.run_report("statutory-coverage"))["Covered by neither"], 2)
+
+    def test_a_co_emp_employee_whose_latest_slip_has_no_pf_or_esi_is_counted(self):
+        emp = _staff("3010", "30000", self.d_cut, self.b1)
+        _hand_slip(emp, gross="30000", pf="0", esi="0")
+        s = self.summary(self.run_report("statutory-coverage"))
+        self.assertEqual((s["Covered by neither"], s["Co Emp, no PF/ESI on latest slip"]), (1, 1))
 
     def test_branch_isolation(self):
         body = self.run_report("statutory-coverage", user=self.u_b1)
@@ -1615,7 +1725,7 @@ class PayrollExceptionsTests(_Base):
             adv = Advance.objects.create(employee=emp, advance_type="general", amount=Decimal(advance), status="approved",
                                          total_repaid=Decimal("0"), outstanding=Decimal(advance))  # fmt: skip
             AdvanceRepayment.objects.create(advance=adv, month=MONTH, year=YEAR, amount=Decimal(advance))
-            PayrollSettings.objects.filter(pk=1).update(staff_payroll_rules_enabled=False)
+            PayrollSettings.objects.filter(pk=1).update(staff_pf_rules=[], staff_esi_rules=[])
             _generate_staff_payroll(emp, MONTH, YEAR)
         self.assertEqual(SalarySlip.objects.get(employee__employee_code="3030").net_salary, Decimal("0.00"))
         self.assertEqual(SalarySlip.objects.get(employee__employee_code="3031").net_salary, Decimal("-2000.00"))
@@ -2081,7 +2191,8 @@ class ExportAndAccessTests(_Base):
                        ("late-salary-impact", {"minLates": "2"}), ("attendance-salary-loss", {"impact": "??"}),
                        ("payroll-exceptions", {"exceptionType": "nope"}), ("min-wage-compliance", {"basis": "week"}),
                        ("overtime-register", {"status": "maybe"}), ("compensation-credits", {"earnedIn": "never"}),
-                       ("payroll-slip-reconciliation", {"issue": "other"})):  # fmt: skip
+                       ("payroll-slip-reconciliation", {"issue": "other"}),
+                       ("statutory-coverage", {"category": "other"})):  # fmt: skip
             r = self.client.get(f"/api/reports/run/{rid}", q, **_headers(self.admin))
             self.assertEqual(r.status_code, 400, rid)
             self.assertEqual(r.json()["error"], "invalid_filter")
@@ -2253,3 +2364,317 @@ class StaleSlipAndTotalsTests(_Base):
         self.assertEqual([(r["issue"], r["variance"]) for r in rows], [("Net differs", 500.0), ("Manual edit", None)])
         # the other finding still carries both nets so it can be read on its own
         self.assertEqual((rows[1]["slipNet"], rows[1]["payrollNet"]), (16785.0, 17285.0))
+
+
+# ================================================================================================
+#  The two shapes of slip (stored before / after the PF / ESI / TDS redesign) in the statements and controls
+# ================================================================================================
+class SlipShapeTests(_Base):
+    """A slip stored before 2026-10-24 has no `statutory` block (PF wages = its basic, ESI wages = its gross, no TDS);
+    a newer one records the wages its percentages were taken from. Both must read correctly side by side."""
+
+    def _new_shape(self, code, *, wages, pf, esi, category="co_emp", gross="20000"):
+        emp = _staff(code, "20000", self.d_cut, self.b1, uan_number="1", pf_number="P/1", esi_number="1234567890")
+        rule = {"id": "r", "label": "Rule", "basis": "total", "minAmount": 0, "maxAmount": 0, "ratePercent": 12,
+                "amountTested": 20000.0}  # fmt: skip
+        _hand_slip(emp, gross=gross, pf=pf, esi=esi,
+                   statutory=_statutory_block(category, wages=wages, pf_rule=rule, esi_rule=rule))  # fmt: skip
+        return emp
+
+    def test_pf_wages_are_the_stored_first_portion_on_a_new_slip_and_the_basic_on_an_old_one(self):
+        old = _staff("3013", "20000", self.d_cut, self.b1, uan_number="1", pf_number="P/1")
+        _hand_slip(old, gross="20000", pf="1200")  # old shape: basic = gross / 2 = 10,000
+        self._new_shape("3014", wages=9000, pf="1080", esi="0")  # the slip's basic is 10,000; the stored wages win
+        rows = self.by_code(self.run_report("pf-statement", **P))
+        self.assertEqual((rows["3013"]["pfWages"], rows["3013"]["erTotal"]), (10000.0, 1200.0))
+        self.assertEqual((rows["3014"]["pfWages"], rows["3014"]["epfWages"], rows["3014"]["erTotal"]),
+                         (9000.0, 9000.0, 1080.0))  # fmt: skip
+        self.assertEqual(rows["3014"]["eeVariance"], 0.0)
+
+    def test_esi_wages_are_the_stored_first_portion_on_a_new_slip_and_the_gross_on_an_old_one(self):
+        old = _staff("3013", "20000", self.d_cut, self.b1, esi_number="1234567890")
+        _hand_slip(old, gross="20000", pf="0", esi="150")
+        self._new_shape("3014", wages=10000, pf="0", esi="150")
+        rows = self.by_code(self.run_report("esi-statement", **P))
+        self.assertEqual((rows["3013"]["esiWages"], rows["3013"]["erShare"]), (20000.0, 650.0))
+        self.assertEqual((rows["3014"]["esiWages"], rows["3014"]["erShare"]), (10000.0, 325.0))
+        self.assertEqual((rows["3013"]["grossSalary"], rows["3014"]["grossSalary"]), (20000.0, 20000.0))
+
+    def test_pf_statement_lists_tds_and_not_co_emp_employees_only_in_the_all_view_with_no_pf(self):
+        tds_emp = _staff("3011", "20000", self.d_cut, self.b1, co_emp_enabled=False, tds_enabled=True,
+                         tds_percent=Decimal("10"))  # fmt: skip
+        plain = _staff("3012", "20000", self.d_cut, self.b1, co_emp_enabled=False)
+        for emp in (tds_emp, plain):
+            _present_all(emp)
+            _generate_staff_payroll(emp, MONTH, YEAR)
+        self.assertEqual(SalarySlip.objects.get(employee=tds_emp).pf_deduction, 0)
+        self.assertNotIn("3011", self.codes(self.run_report("pf-statement", **P)))
+        rows = self.by_code(self.run_report("pf-statement", coverage="all", **P))
+        for code in ("3011", "3012"):
+            self.assertEqual(rows[code]["eeShare"], 0.0)
+            self.assertIsNone(rows[code]["pfWages"])
+            self.assertIsNone(rows[code]["idCheck"])  # nothing deducted: no ID is owed
+        self.assertEqual(rows["3011"]["grossWages"], 20000.0)  # the TDS employee's gross is still visible
+
+    def test_reconciliation_counts_tds_as_a_deduction(self):
+        emp = _staff("3013", "20000", self.d_cut, self.b1)
+        _hand_slip(emp, gross="20000", pf="0", esi="0", tds="2000", tds_percent=Decimal("10"),
+                   statutory=_statutory_block("tds", wages=0, tds={"percent": 10, "base": 20000, "amount": 2000}))  # fmt: skip
+        body = self.run_report("payroll-slip-reconciliation", issue="arithmetic", **P)
+        self.assertEqual(body["rows"], [])  # 0 + 0 + 2,000 TDS == total deductions
+        # a slip whose total forgot the TDS does not add up, and the finding names every part
+        SalarySlip.objects.filter(employee=emp).update(total_deductions=Decimal("0"), net_salary=Decimal("20000"))
+        body = self.run_report("payroll-slip-reconciliation", issue="arithmetic", **P)
+        rows = [r for r in self.data_rows(body) if r["employeeCode"] == "3013"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0]["detail"], "Total deductions Rs. 0.00 != PF + ESI + TDS + advance + late (Rs. 2,000.00)."
+        )
+        self.assertTrue(any("PF + ESI + TDS + advance + late" in n for n in body["notes"]))
+
+    def test_a_production_slip_with_no_late_snapshot_does_not_read_tds_as_a_late_penalty(self):
+        emp = Employee.objects.create(employee_code="P003", first_name="Prod", last_name="Three", employment_type="production",
+                                      status="active", salary_per_shift=Decimal("500"), department=self.d_stitch, branch=self.b1,
+                                      tds_enabled=True, tds_percent=Decimal("5"))  # fmt: skip
+        _hand_slip(
+            emp, gross="3000", pf="0", esi="0", tds="150", tds_percent=Decimal("5"), period=PROD1, breakdown=False
+        )
+        rows = self.by_code(self.run_report("late-salary-impact", minLates="all", **P))
+        # no late data at all: unknown (a dash), and certainly not the 150 of TDS
+        self.assertIsNone(rows["P003"]["lateDeductionAmount"])
+
+    def test_the_controls_notes_do_not_mention_a_removed_rule(self):
+        text = " ".join(
+            " ".join(self.run_report(rid, **DATA_PARAMS[rid])["notes"])
+            for rid in ("payroll-exceptions", "payroll-slip-reconciliation", "statutory-coverage", "esi-statement")
+        ).lower()
+        for gone in ("esi ceiling", "above ceiling", "rules switch", "payroll rules"):
+            self.assertNotIn(gone, text, gone)
+
+
+# ================================================================================================
+#  TDS statement
+# ================================================================================================
+class TdsStatementTests(_Base):
+    """Three TDS employees on top of the standard payroll: Tia (staff, 10%, overtime), Tom (staff, Unit 2, 12.5%) and
+    Pia (production, 5%, two periods in the month); plus Nell, who is neither Co Emp nor TDS."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        tds = dict(co_emp_enabled=False, tds_enabled=True)
+        cls.tia = _staff("3101", "24000", cls.d_cut, cls.b1, tds_percent=Decimal("10"), **tds)
+        cls.tom = _staff("3102", "18000", cls.d_sew, cls.b2, tds_percent=Decimal("12.5"), **tds)
+        cls.nell = _staff("3103", "24000", cls.d_cut, cls.b1, co_emp_enabled=False)
+        cls.pia = Employee.objects.create(
+            employee_code="P101", first_name="Prod", last_name="Pia", employment_type="production", status="active",
+            salary_per_shift=Decimal("500"), department=cls.d_stitch, branch=cls.b1, tds_percent=Decimal("5"), **tds,
+        )  # fmt: skip
+        for emp in (cls.tia, cls.tom, cls.nell):
+            _present_all(emp)
+        _ot(cls.tia, date(2026, 2, 2), 120, announced_at=ANNOUNCED)
+        for emp in (cls.tia, cls.tom, cls.nell):
+            _generate_staff_payroll(emp, MONTH, YEAR)
+        for i in range(10):
+            _day(cls.pia, date(2026, 2, 2 + i), shifts="1.50" if i < 5 else "1.00")
+        _generate_production_payroll(cls.pia, *PROD1)
+        for d in range(16, 20):
+            _day(cls.pia, date(2026, 2, d))
+        _generate_production_payroll(cls.pia, *PROD2)
+
+    def test_registered_with_the_payroll_modules_and_a_known_icon(self):
+        spec = registry.get_spec("tds-statement")
+        self.assertEqual([k for k in registry.LOAD_ERRORS if "payroll_statutory" in k], [])
+        self.assertEqual(spec.category, "payroll")
+        for m in spec.modules:
+            self.assertIn(m, all_module_keys())
+        self.assertEqual(
+            spec.modules, registry.get_spec("pf-statement").modules
+        )  # same permissions as the PF statement
+        self.assertEqual(
+            [(c.key, c.label, c.type) for c in spec.columns],
+            [("employeeCode", "Emp Code", "text"), ("employeeName", "Employee", "text"),
+             ("department", "Department", "text"), ("employmentType", "Type", "badge"), ("tdsPercent", "TDS %", "percent"),
+             ("tdsBase", "TDS base (gross + OT)", "currency"), ("tdsDeducted", "TDS deducted", "currency")],
+        )  # fmt: skip
+
+    def test_the_engine_stored_what_the_statement_reads(self):
+        slip = SalarySlip.objects.get(employee=self.tia)
+        self.assertEqual((slip.gross_salary, slip.ot_amount), (Decimal("24000.00"), Decimal("1000.00")))
+        self.assertEqual((slip.tds_deduction, slip.tds_percent), (Decimal("2500.00"), Decimal("10.00")))
+
+    def test_one_row_per_tds_employee_with_percent_base_and_amount(self):
+        body = self.run_report("tds-statement", **P)
+        rows = self.by_code(body)
+        self.assertEqual(list(rows), ["3101", "3102", "P101"])  # nobody else: not Co Emp, Co Emp, ...
+        # earned gross = gross pay + overtime pay; production: the period wages (6,250 + 2,000 over two periods)
+        expect = {
+            "3101": (10.0, 25000.0, 2500.0),
+            "3102": (12.5, 18000.0, 2250.0),
+            "P101": (5.0, 8250.0, 412.5),
+        }
+        for code, (percent, base, amount) in expect.items():
+            self.assertEqual(
+                (rows[code]["tdsPercent"], rows[code]["tdsBase"], rows[code]["tdsDeducted"]),
+                (percent, base, amount),
+                code,
+            )
+        self.assertEqual(
+            (rows["3101"]["department"], rows["3101"]["employmentType"], rows["P101"]["employmentType"]),
+            ("CUTTING", "Staff", "Production"),
+        )
+        self.assertEqual(rows["3101"]["employeeName"], "E3101 Staff")
+        # every figure is the slips' own
+        for emp in (self.tia, self.tom, self.pia):
+            slips = SalarySlip.objects.filter(employee=emp)
+            self.assertEqual(
+                rows[emp.employee_code]["tdsDeducted"], float(sum(s.tds_deduction for s in slips)), emp.employee_code
+            )
+
+    def test_totals_and_summary_equal_the_rows(self):
+        body = self.run_report("tds-statement", **P)
+        self.assertEqual(body["totals"], {"tdsBase": 51250.0, "tdsDeducted": 5162.5})
+        self.assert_totals(body, ["tdsBase", "tdsDeducted"])
+        s = self.summary(body)
+        self.assertEqual(
+            (s["Employees with TDS"], s["TDS base (earned gross)"], s["TDS deducted"], s["Effective TDS rate"]),
+            (3, 51250.0, 5162.5, 10.07),
+        )
+
+    def test_production_slips_of_the_month_are_summed_into_one_row(self):
+        rows = [r for r in self.data_rows(self.run_report("tds-statement", **P)) if r["employeeCode"] == "P101"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(SalarySlip.objects.filter(employee=self.pia, month=MONTH, year=YEAR).count(), 2)
+
+    def test_a_changed_percentage_inside_the_month_shows_the_newest_one_and_says_so(self):
+        newest = SalarySlip.objects.filter(employee=self.pia).latest("id")
+        SalarySlip.objects.filter(pk=newest.pk).update(tds_percent=Decimal("6"))
+        body = self.run_report("tds-statement", **P)
+        self.assertEqual(self.by_code(body)["P101"]["tdsPercent"], 6.0)
+        self.assertTrue(any("different TDS %" in n for n in body["notes"]))
+
+    def test_slips_without_tds_never_appear(self):
+        # an old-shape slip (no TDS) for a Co Emp employee, and an engine slip of a not Co Emp employee
+        _hand_slip(_staff("3013", "20000", self.d_cut, self.b1), gross="20000", pf="1200", esi="150")
+        codes = self.codes(self.run_report("tds-statement", **P))
+        self.assertNotIn("3013", codes)
+        self.assertNotIn("3103", codes)  # Nell: no PF, ESI or TDS
+        for covered in ("3001", "3002", "3003", "3004", "3006", "P001"):
+            self.assertNotIn(covered, codes)
+
+    def test_an_employee_added_to_tds_after_the_slip_was_made_is_not_listed(self):
+        Employee.objects.filter(pk=self.nell.pk).update(tds_enabled=True, tds_percent=Decimal("10"))
+        self.assertNotIn(
+            "3103", self.codes(self.run_report("tds-statement", **P))
+        )  # the slip has no TDS: nothing to say
+
+    def test_a_tds_slip_with_nothing_to_deduct_is_still_listed_with_its_percentage(self):
+        emp = _staff(
+            "3014", "0", self.d_cut, self.b1, co_emp_enabled=False, tds_enabled=True, tds_percent=Decimal("10")
+        )
+        _hand_slip(emp, gross="0", pf="0", esi="0", tds="0", tds_percent=Decimal("10"),
+                   statutory=_statutory_block("tds", wages=0, tds={"percent": 10, "base": 0, "amount": 0}))  # fmt: skip
+        row = self.by_code(self.run_report("tds-statement", **P))["3014"]
+        self.assertEqual((row["tdsPercent"], row["tdsBase"], row["tdsDeducted"]), (10.0, 0.0, 0.0))
+
+    def test_empty_months_say_why(self):
+        no_slips = self.run_report("tds-statement", period="2019-01")
+        self.assertEqual(no_slips["rows"], [])
+        self.assertIn("Generate Payroll", no_slips["notes"][0])
+        # slips exist for this month, but none carries TDS
+        _hand_slip(_staff("3015", "20000", self.d_cut, self.b1), gross="20000", month=3, year=2026)
+        body = self.run_report("tds-statement", period="2026-03")
+        self.assertEqual(body["rows"], [])
+        self.assertIn("carries TDS", body["notes"][0])
+        self.assertEqual(self.summary(body)["Employees with TDS"], 0)
+
+    def test_notes_explain_the_calculation_and_the_missing_pan(self):
+        text = " ".join(self.run_report("tds-statement", **P)["notes"])
+        self.assertIn("Employees > Co Emp > TDS", text)
+        self.assertIn("earned gross", text)
+        self.assertIn("no PAN", text)
+        self.assertIn("no PF or ESI", text)
+
+    def test_filters_narrow(self):
+        def codes(**q):
+            return self.codes(self.run_report("tds-statement", **{**P, **q}))
+
+        self.assertEqual(codes(departmentIds=str(self.d_sew.id)), ["3102"])
+        self.assertEqual(codes(branchIds=str(self.b2.id)), ["3102"])
+        self.assertEqual(codes(employmentType="production"), ["P101"])
+        self.assertEqual(codes(employmentType="staff"), ["3101", "3102"])
+        self.assertEqual(codes(employeeIds=str(self.tia.id)), ["3101"])
+        self.assertEqual(codes(period="2026-01"), [])
+
+    def test_branch_isolation(self):
+        body = self.run_report("tds-statement", user=self.u_b1, **P)
+        self.assertEqual(self.codes(body), ["3101", "P101"])
+        self.assertEqual(body["totals"]["tdsDeducted"], 2912.5)
+        self.assertEqual(self.run_report("tds-statement", user=self.u_b1, branchIds=str(self.b2.id), **P)["rows"], [])
+        self.assertEqual(
+            self.run_report("tds-statement", user=self.u_b1, employeeIds=str(self.tom.id), **P)["rows"], []
+        )
+        self.assertEqual(self.codes(self.run_report("tds-statement", user=self.u_b2, **P)), ["3102"])
+
+    def test_role_without_the_owning_module_is_forbidden(self):
+        r = self.client.get("/api/reports/run/tds-statement", P, **_headers(self.u_reports_only))
+        self.assertEqual((r.status_code, r.json()["error"]), (403, "report_forbidden"))
+        r = self.client.get("/api/reports/export/tds-statement", {"fmt": "xlsx", **P}, **_headers(self.u_reports_only))
+        self.assertEqual(r.status_code, 403)
+
+    def test_a_production_only_role_sees_only_production_rows(self):
+        self.assertEqual(self.codes(self.run_report("tds-statement", user=self.u_prod_only, **P)), ["P101"])
+        self.assertEqual(self.codes(self.run_report("tds-statement", user=self.u_staff_only, **P)), ["3101", "3102"])
+
+    def test_the_catalog_lists_it_only_for_roles_that_can_open_it(self):
+        def ids(user):
+            body = self.client.get("/api/reports/catalog", **_headers(user)).json()
+            return {r["id"] for r in body["reports"]}
+
+        self.assertIn("tds-statement", ids(self.admin))
+        self.assertIn("tds-statement", ids(self.u_prod_only))
+        self.assertNotIn("tds-statement", ids(self.u_reports_only))
+        self.assertNotIn("tds-statement", ids(self.u_comp_only))
+
+    def test_exports(self):
+        r = self.export("tds-statement", "xlsx", **P)
+        self.assertEqual(r.status_code, 200)
+        ws = load_workbook(io.BytesIO(r.content)).active
+        self.assertEqual(
+            [c.value for c in ws[7]],
+            ["Emp Code", "Employee", "Department", "Type", "TDS %", "TDS base (gross + OT)", "TDS deducted"],
+        )
+        first = [c.value for c in ws[8]]
+        self.assertEqual((first[0], first[4], first[5], first[6]), ("3101", 10.0, 25000.0, 2500.0))
+        total = [c.value for c in ws[11]]
+        self.assertEqual((total[0], total[5], total[6]), ("TOTAL", 51250.0, 5162.5))
+        pdf = self.export("tds-statement", "pdf", **P)
+        self.assertEqual(pdf.status_code, 200)
+        self.assertTrue(pdf.content.startswith(b"%PDF"))
+
+    def test_an_empty_result_exports_cleanly(self):
+        params = {"period": "2019-01"}
+        self.assertEqual(self.export("tds-statement", "xlsx", **params).status_code, 200)
+        self.assertTrue(self.export("tds-statement", "pdf", **params).content.startswith(b"%PDF"))
+
+    def test_runs_with_default_filters_and_never_writes(self):
+        for user in (self.admin, self.u_b1):
+            self.assertEqual(self.client.get("/api/reports/run/tds-statement", **_headers(user)).status_code, 200)
+        with CaptureQueriesContext(connection) as ctx:
+            self.run_report("tds-statement", **P)
+        bad = [
+            q["sql"][:120]
+            for q in ctx.captured_queries
+            if q["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+        ]
+        self.assertEqual(bad, [])
+
+    def test_no_n_plus_one(self):
+        def grow():
+            for i in range(12):
+                emp = _staff(str(5200 + i), "20000", self.d_cut, self.b1, co_emp_enabled=False, tds_enabled=True,
+                             tds_percent=Decimal("10"))  # fmt: skip
+                _hand_slip(emp, gross="20000", pf="0", esi="0", tds="2000", tds_percent=Decimal("10"),
+                           statutory=_statutory_block("tds", wages=0, tds={"percent": 10, "base": 20000, "amount": 2000}))  # fmt: skip
+
+        self.assert_flat_queries("tds-statement", grow, params=P)

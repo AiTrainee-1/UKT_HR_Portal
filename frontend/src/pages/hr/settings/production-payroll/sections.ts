@@ -5,82 +5,59 @@ import type {
   ProductionPayrollItem,
   WeekStart,
 } from "@/lib/api-client/custom-hooks";
-import { boxText, parseNumber, RANGES, sameValue } from "../payroll/form";
+import { boxText, parseNumber, RANGES, sameValue, type NumberRule } from "../payroll/form";
+import { formatPaise, toPaise } from "../payroll/preview";
 import { compareDays, CYCLES, normalizeWeekStart, parseIsoDay, type Period } from "./cycles";
 
 /**
- * The Production Payroll tab's saved groups: one per pay cycle ("Save Weekly settings": the cycle's period rule and
- * its own late rules, sent as `prodCycles`) and the global late detection ("Save Production Late Detection": the switch
- * and the attendance mode). Number boxes hold text so a cleared box is an error to fix, not a silent 0.
+ * The Production Payroll tab's saved groups: one per pay cycle ("Save Weekly settings": the cycle's PERIOD rule, sent as
+ * `prodCycles`) and "Pay & Bonus" (the rate suggested for new production employees and the production statutory bonus).
+ * What a late day costs a production worker is not here any more: it is on Settings -> Late Detection -> Production, which
+ * saves other keys of the same `prodCycles` setting, so neither save can overwrite the other. Number boxes hold text so a
+ * cleared box is an error to fix, not a silent 0.
  */
-
-export type SlabRow = { fromLates: string; deductionShifts: string };
 
 export type CycleForm = {
   /** The weekday the cycle's weeks start on. */
   weekStart: WeekStart;
   /** "YYYY-MM-DD" or blank. */
   anchorDate: string;
-  lateFreeAllowance: string;
-  lateSlabs: SlabRow[];
 };
 
-export type LateForm = {
-  mode: string;
-  enabled: boolean;
+export type PayBonusForm = {
+  /** The Salary Per Shift suggested for a new production employee (0 = no suggestion). */
+  defaultSalaryPerShift: string;
+  prodBonusPercent: string;
+  prodBonusWageCeiling: string;
+  prodBonusEligibilityCeiling: string;
 };
 
-export type ProductionForms = { cycles: Record<PayCycle, CycleForm>; late: LateForm };
+export type ProductionForms = { cycles: Record<PayCycle, CycleForm>; payBonus: PayBonusForm };
 
-/** The two keys of a cycle form that are its late rules (sent only when changed; null hands them back to the shared ones). */
-export const CYCLE_LATE_KEYS: readonly (keyof CycleForm)[] = ["lateFreeAllowance", "lateSlabs"];
-
-export const lateKeysChanged = (changed: readonly (keyof CycleForm)[]): boolean =>
-  changed.some((k) => CYCLE_LATE_KEYS.includes(k));
-
-const cell = (value: unknown): string =>
-  typeof value === "number" ? boxText(value) : typeof value === "string" ? value : "";
-
-const slabCells = (rows: { fromLates?: unknown; deductionShifts?: unknown }[] | undefined): SlabRow[] =>
-  (rows ?? []).map((r) => ({ fromLates: cell(r?.fromLates), deductionShifts: cell(r?.deductionShifts) }));
+/** The server reports the production bonus (a backend that predates the split does not, and the page then shows it read-only). */
+export const prodBonusReported = (s: PayrollSettingsItem | undefined): boolean => s?.prodBonusPercent !== undefined;
 
 /**
  * The saved settings as form values. A cycle the server knows nothing about (an older backend, or nothing stored yet)
- * shows Monday weeks, no date and the shared production late rules, which is what the engine uses for it.
+ * shows Monday weeks and no date, which is what the engine uses for it. The production bonus falls back to the staff
+ * values only while the server does not report its own (that is what the split starts every company from).
  */
 export function savedProduction(s: PayrollSettingsItem | undefined): ProductionForms {
   const cycles = {} as Record<PayCycle, CycleForm>;
   for (const cycle of CYCLES) {
     const c = s?.prodCycles?.[cycle];
-    cycles[cycle] = {
-      weekStart: normalizeWeekStart(c?.weekStart),
-      anchorDate: c?.anchorDate ?? "",
-      lateFreeAllowance: boxText(c?.lateFreeAllowance ?? s?.prodLateFreeAllowance ?? 3),
-      lateSlabs: slabCells(c?.lateSlabs ?? s?.prodLateDeductionSlabs),
-    };
+    cycles[cycle] = { weekStart: normalizeWeekStart(c?.weekStart), anchorDate: c?.anchorDate ?? "" };
   }
-  return { cycles, late: { mode: s?.prodAttendanceMode ?? "strict", enabled: s?.prodLateDetectionEnabled ?? false } };
-}
-
-/**
- * The late rules a payslip of the cycle is judged by, from the saved settings: the cycle's own when it has them, else
- * the shared production values (as the engine's cycle_late_rules reads them).
- */
-export function cycleLateRules(
-  s: PayrollSettingsItem | undefined,
-  cycle: PayCycle,
-): { allowance: number; slabs: { fromLates: number; deductionShifts: number }[]; own: boolean } {
-  const c = s?.prodCycles?.[cycle];
   return {
-    allowance: c?.lateFreeAllowance ?? s?.prodLateFreeAllowance ?? 3,
-    slabs: c?.lateSlabs ?? s?.prodLateDeductionSlabs ?? [],
-    own: c?.ownLateRules ?? false,
+    cycles,
+    payBonus: {
+      defaultSalaryPerShift: boxText(s?.defaultSalaryPerShift ?? 0),
+      prodBonusPercent: boxText(s?.prodBonusPercent ?? s?.bonusPercent ?? 8.33),
+      prodBonusWageCeiling: boxText(s?.prodBonusWageCeiling ?? s?.bonusWageCeiling ?? 7000),
+      prodBonusEligibilityCeiling: boxText(s?.prodBonusEligibilityCeiling ?? s?.bonusEligibilityCeiling ?? 21000),
+    },
   };
 }
-
-/** True when the cycle has late rules of its own (false: it uses the shared production values). */
-export const ownLateRules = (s: PayrollSettingsItem | undefined, cycle: PayCycle): boolean =>
-  cycleLateRules(s, cycle).own;
 
 /**
  * The latest period generated on a cycle, from that cycle's Production Payroll list: the row whose period ends last
@@ -105,56 +82,40 @@ export function latestGeneratedPeriod(
 
 // ── what is wrong ──
 
-export type SlabErrors = Partial<Record<keyof SlabRow, string>>[];
+export type CycleErrors = { anchorDate?: string };
 
-export type CycleErrors = { anchorDate?: string; allowance?: string; slabs: SlabErrors };
-
-/** The problem with each slab cell, plus a threshold used twice. */
-function slabErrors(slabs: SlabRow[]): SlabErrors {
-  const counts = new Map<number, number>();
-  for (const s of slabs) {
-    const from = parseNumber(s.fromLates, RANGES.lateCount).value;
-    if (from !== null) counts.set(from, (counts.get(from) ?? 0) + 1);
-  }
-  return slabs.map((s) => {
-    const errors: Partial<Record<keyof SlabRow, string>> = {};
-    const from = parseNumber(s.fromLates, RANGES.lateCount);
-    if (from.error) errors.fromLates = from.error;
-    else if ((counts.get(from.value!) ?? 0) > 1) errors.fromLates = `${from.value} is used by more than one row.`;
-    const shifts = parseNumber(s.deductionShifts, RANGES.slabShifts).error;
-    if (shifts) errors.deductionShifts = shifts;
-    return errors;
-  });
-}
-
-/**
- * What stops a cycle being saved: a first period start that is not a real date in the years the server accepts, and
- * the late values once changed (a value left as saved is never judged, so a cycle can always be saved again).
- */
-export function cycleErrors(f: CycleForm, saved: CycleForm): CycleErrors {
-  const errors: CycleErrors = { slabs: f.lateSlabs.map(() => ({})) };
+/** What stops a cycle being saved: a first period start that is not a real date in the years the server accepts. */
+export function cycleErrors(f: CycleForm): CycleErrors {
+  const errors: CycleErrors = {};
   if (f.anchorDate.trim()) {
     const date = parseIsoDay(f.anchorDate);
     if (!date) errors.anchorDate = "Pick a real date.";
     else if (date.year < 2000 || date.year > 2100) errors.anchorDate = "Pick a date between the years 2000 and 2100.";
   }
-  if (!sameValue(f.lateFreeAllowance, saved.lateFreeAllowance)) {
-    errors.allowance = parseNumber(f.lateFreeAllowance, RANGES.lateCount).error ?? undefined;
-  }
-  if (!sameValue(f.lateSlabs, saved.lateSlabs)) errors.slabs = slabErrors(f.lateSlabs);
   return errors;
 }
 
-export const hasCycleErrors = (e: CycleErrors): boolean =>
-  !!e.anchorDate || !!e.allowance || e.slabs.some((row) => Object.keys(row).length > 0);
+export const hasCycleErrors = (e: CycleErrors): boolean => !!e.anchorDate;
 
-/** A slab that deducts from workers who were never late (threshold 0 with a deduction). */
-export function deductsFromEveryone(slabs: SlabRow[]): boolean {
-  return slabs.some(
-    (s) =>
-      parseNumber(s.fromLates, RANGES.lateCount).value === 0 &&
-      (parseNumber(s.deductionShifts, RANGES.slabShifts).value ?? 0) > 0,
-  );
+const PAY_BONUS_RULES: Record<keyof PayBonusForm, NumberRule> = {
+  defaultSalaryPerShift: RANGES.perShift,
+  prodBonusPercent: RANGES.percent,
+  prodBonusWageCeiling: RANGES.amount,
+  prodBonusEligibilityCeiling: RANGES.amount,
+};
+
+/**
+ * The problem with each changed number box (the same ranges the server enforces). A value left as it was saved is never
+ * judged, so a page can always be saved again even if an older page stored something odd.
+ */
+export function payBonusErrors(f: PayBonusForm, saved: PayBonusForm): Partial<Record<keyof PayBonusForm, string>> {
+  const errors: Partial<Record<keyof PayBonusForm, string>> = {};
+  for (const key of Object.keys(PAY_BONUS_RULES) as (keyof PayBonusForm)[]) {
+    if (sameValue(f[key], saved[key])) continue;
+    const error = parseNumber(f[key], PAY_BONUS_RULES[key]).error;
+    if (error) errors[key] = error;
+  }
+  return errors;
 }
 
 // ── what is sent ──
@@ -165,35 +126,48 @@ export function deductsFromEveryone(slabs: SlabRow[]): boolean {
  */
 export type ProductionPayload = Omit<Partial<PayrollSettingsItem>, "prodCycles"> & { prodCycles?: ProdCyclesPatch };
 
-const slabsToSend = (rows: SlabRow[]) =>
-  rows
-    .map((r) => ({ fromLates: Number(r.fromLates.trim()), deductionShifts: Number(r.deductionShifts.trim()) }))
-    .sort((a, b) => a.fromLates - b.fromLates);
+/**
+ * "Save <Cycle> settings": that cycle's period rule only (week start and first period start), never a late value (those
+ * belong to Late Detection and are merged key by key by the server). A blank date clears the saved one.
+ */
+export function cyclePayload(cycle: PayCycle, f: CycleForm): ProductionPayload {
+  return {
+    prodCycles: { [cycle]: { weekStart: normalizeWeekStart(f.weekStart), anchorDate: f.anchorDate.trim() || null } },
+  };
+}
 
 /**
- * "Save <Cycle> settings": that cycle only. The period rule (week start, first period start) always goes; the late
- * values go only when they were changed, so saving a period never silently gives a cycle the shared late values as its
- * own. A blank date clears the saved one.
+ * "Save Pay & Bonus": only the values that were changed, so saving the suggested rate never writes the bonus values (into
+ * a branch's own settings, for a branch login) and the other way round.
  */
-export function cyclePayload(cycle: PayCycle, f: CycleForm, changed: readonly (keyof CycleForm)[]): ProductionPayload {
-  const patch: NonNullable<ProdCyclesPatch[PayCycle]> = {
-    weekStart: normalizeWeekStart(f.weekStart),
-    anchorDate: f.anchorDate.trim() || null,
-  };
-  if (changed.includes("lateFreeAllowance")) patch.lateFreeAllowance = Number(f.lateFreeAllowance.trim());
-  if (changed.includes("lateSlabs")) patch.lateSlabs = slabsToSend(f.lateSlabs);
-  return { prodCycles: { [cycle]: patch } };
+export function payBonusPayload(f: PayBonusForm, changed: readonly (keyof PayBonusForm)[]): ProductionPayload {
+  const payload: ProductionPayload = {};
+  for (const key of changed) payload[key] = Number(f[key].trim());
+  return payload;
 }
 
-/** "Use the shared rules again": nulls hand the cycle's late rules back to the shared production values. */
-export function sharedLatePayload(cycle: PayCycle): ProductionPayload {
-  return { prodCycles: { [cycle]: { lateFreeAllowance: null, lateSlabs: null } } };
-}
+// ── what a save changes, in words (for the confirm dialogs) ──
 
-/** "Save Production Late Detection": the global switch and the attendance mode it alone uses. */
-export function latePayload(f: LateForm): ProductionPayload {
-  return {
-    prodAttendanceMode: f.mode as PayrollSettingsItem["prodAttendanceMode"],
-    prodLateDetectionEnabled: f.enabled,
+export type PayBonusChange = { label: string; from: string; to: string };
+
+const amount = (text: string) =>
+  Number.isFinite(Number(text)) && text.trim() !== "" ? formatPaise(toPaise(Number(text))) : "(blank)";
+
+/** The changed Pay & Bonus values as "label: from -> to" lines. */
+export function payBonusChanges(
+  changed: readonly (keyof PayBonusForm)[],
+  saved: PayBonusForm,
+  form: PayBonusForm,
+): PayBonusChange[] {
+  const lines: Record<keyof PayBonusForm, [string, (text: string) => string]> = {
+    defaultSalaryPerShift: ["Suggested rate per shift", amount],
+    prodBonusPercent: ["Production bonus rate", (t) => (t.trim() === "" ? "(blank)" : `${Number(t)}%`)],
+    prodBonusWageCeiling: ["Production bonus wage ceiling", amount],
+    prodBonusEligibilityCeiling: ["Production bonus eligibility limit", amount],
   };
+  return changed.map((key) => ({
+    label: lines[key][0],
+    from: lines[key][1](saved[key]),
+    to: lines[key][1](form[key]),
+  }));
 }

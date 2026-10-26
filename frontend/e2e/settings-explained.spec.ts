@@ -15,8 +15,9 @@ const TABS: [id: string, label: string][] = [
   ["late_detection", "Late Detection"],
   ["compensation", "Compensation"],
   ["devices", "Devices"],
-  ["payroll", "Payroll"],
+  ["payroll", "Staff Payroll"],
   ["production_payroll", "Production Payroll"],
+  ["pf_esi", "PF & ESI"],
   ["salary-slip", "Salary Slip"],
   ["documents", "Company Documents"],
   ["idcard", "ID Card"],
@@ -90,7 +91,8 @@ test("every setting on every tab says what it is for, and every searchable setti
       }
     }
     // a tab with settings in its catalogue also lists what changes for at least one of them
-    if (ALL_SETTINGS.some((m) => m.tab === id)) {
+    // (Endpoint Sharing opens on its list of endpoints; its settings only exist inside an endpoint's editor)
+    if (id !== "endpoint_sharing" && ALL_SETTINGS.some((m) => m.tab === id)) {
       await expect(page.getByTestId("setting-affects").first(), `${label}: a 'What changes' list`).toBeVisible();
     }
   }

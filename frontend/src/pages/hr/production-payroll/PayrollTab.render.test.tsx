@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { lockMutatingControls } from "@/lib/view-only-lock";
-import { BALA, ESHA, NO_RATE, balaPaid } from "./fixtures";
+import { BALA, ESHA, NO_RATE, balaPaid, payroll, person } from "./fixtures";
 import {
   click,
   installBrowserStubs,
@@ -450,6 +450,37 @@ describe("the Export menu", () => {
     expect(h.excel.mock.calls[0][0].rows.map((r: { id: number }) => r.id)).toEqual([12]);
   });
 
+  it("adds the TDS columns to the register only when a payslip on screen has TDS", async () => {
+    // Asha is on the TDS list: 10% of her 3,500 earned gross is TDS, and it is part of her 350 deductions
+    world.people = [
+      person(1, "Asha Worker", "PC-W1", {
+        payroll: payroll(11, 1, "Asha Worker", "PC-W1", {
+          deductions: 350,
+          tdsDeduction: 350,
+          tdsPercent: 10,
+          finalSalary: 3150,
+        }),
+      }),
+      world.people[1],
+      world.people[2],
+    ];
+    await openPayroll();
+    await waitFor(() => !!q("payroll-record-11"), "the card");
+    expect(text(q("payroll-record-tds-11"))).toBe("TDS (10%)₹350");
+    await openMenu();
+    click(must("pcp-export-register-xlsx"));
+    await settle();
+    await waitFor(() => h.excel.mock.calls.length === 1, "the export");
+    const labels = h.excel.mock.calls[0][0].columns.map((c: { label: string }) => c.label);
+    expect(labels.slice(labels.indexOf("Bonus"), labels.indexOf("Net payable") + 1)).toEqual([
+      "Bonus",
+      "TDS %",
+      "TDS",
+      "Deductions",
+      "Net payable",
+    ]);
+  });
+
   it("the bank transfer file is a button of its own, for the payslips on screen", async () => {
     await openPayroll();
     await waitFor(() => !!q("payroll-record-11"), "the card");
@@ -540,6 +571,40 @@ describe("Generate Payroll", () => {
     expect(rules).toContain("Late: 2 free, 1 slab");
     const link = dialog.querySelector<HTMLAnchorElement>('a[href="/hr/settings?tab=production_payroll"]');
     expect(text(link)).toBe("Review in Settings");
+  });
+
+  it("says how PF, ESI and TDS apply: Co Emp employees only, by the rules set for Production", async () => {
+    const dialog = await openDialog();
+    await waitFor(() => !q("pcp-generate-rules-loading") && !q("pcp-generate-statutory-loading"), "the rules");
+    expect(text(q("pcp-generate-statutory"))).toBe("PF: 1 rule · ESI: 0 rules");
+    expect(q("pcp-generate-statutory")!.dataset.state).toBe("set");
+    const note = text(q("pcp-generate-statutory-note"));
+    expect(note).toContain("PF and ESI are deducted only from Co Emp employees");
+    expect(note).toContain("Employees on the TDS list have TDS deducted at their own percentage instead");
+    expect(dialog.querySelector('a[href="/hr/settings?tab=pf_esi"]')).not.toBeNull();
+    expect(dialog.querySelector('a[href="/hr/employees"]')).not.toBeNull();
+    // the old description of the old model is gone
+    expect(text(dialog)).not.toContain("with the production rates");
+    expect(q("pcp-generate-statutory-note-none")).toBeNull();
+    expect(world.requests()).toContain("/api/pf-esi-settings");
+  });
+
+  it("says so when no PF or ESI rule is set for Production, and stays silent when the rules cannot be read", async () => {
+    world.pfEsi = { ...world.pfEsi, production: { pfRules: [], esiRules: [] } };
+    await openDialog();
+    await waitFor(() => !!q("pcp-generate-statutory") && !q("pcp-generate-statutory-loading"), "the rules");
+    expect(text(q("pcp-generate-statutory"))).toBe("No PF or ESI rules are set for Production");
+    expect(q("pcp-generate-statutory")!.dataset.state).toBe("none");
+    expect(text(q("pcp-generate-statutory-note-none"))).toContain("nobody will have PF or ESI deducted");
+  });
+
+  it("does not claim the rules are empty when the server would not tell", async () => {
+    world.failing.set("/api/pf-esi-settings", 403);
+    await openDialog();
+    await waitFor(() => !!q("pcp-generate-statutory") && !q("pcp-generate-statutory-loading"), "the rules");
+    expect(q("pcp-generate-statutory")!.dataset.state).toBe("unknown");
+    expect(text(q("pcp-generate-statutory"))).toBe("PF / ESI: Co Emp employees only");
+    expect(q("pcp-generate-statutory-note-none")).toBeNull();
   });
 
   it("follows the week start the Settings page has saved", async () => {

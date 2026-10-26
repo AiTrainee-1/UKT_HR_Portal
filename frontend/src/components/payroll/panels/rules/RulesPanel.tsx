@@ -14,6 +14,8 @@ import { exportTableToCsv, exportTableToExcel } from "@/components/payroll/kit/e
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
 import { fileStem, plural } from "@/components/payroll/kit/format";
 import { Avatar, Chip, EmptyNote, SectionCard, SkeletonRows } from "@/components/payroll/kit/parts";
+import { StatutoryWhoNote } from "@/components/payroll/kit/StatutoryNote";
+import { usePfEsiRulesSlice } from "@/components/payroll/kit/statutory-rules";
 import { Button } from "@/components/ui/button";
 import { DataPagination } from "@/components/ui/DataPagination";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -109,6 +111,7 @@ function Flags({ flags, kind }: { flags: string[]; kind: PayrollKind }) {
 export function RulesPanel({ scope, filters, accent }: RulesPanelProps) {
   const query = usePayrollRules(scope, filters);
   const { data: settings } = usePayrollSettings();
+  const statutoryRules = usePfEsiRulesSlice();
   const data = query.data;
   const switchId = useId();
 
@@ -218,6 +221,13 @@ export function RulesPanel({ scope, filters, accent }: RulesPanelProps) {
             : "What payroll is calculated with. Each rule links to the Settings page where it is changed."
         }
       >
+        <StatutoryWhoNote
+          kind={kind}
+          rules={statutoryRules}
+          linkClassName={accent === "amber" ? "text-amber-700" : "text-indigo-700"}
+          className="mb-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3"
+          testId="rules-statutory-note"
+        />
         {data.settings.length === 0 ? (
           <EmptyNote
             icon={ListChecks}

@@ -96,7 +96,13 @@ describe("the details workbook", () => {
       "Earning",
     ]);
     expect(lines[0][4]).toBe("Information (not added)");
-    expect(lines[4]).toEqual(["Deductions", "Provident fund", "12% of basic ₹13,332.69", 1599.92, "Deduction"]);
+    expect(lines[4]).toEqual([
+      "Deductions",
+      "Provident fund",
+      "12% of Basic + DA + Retaining ₹13,332.69",
+      1599.92,
+      "Deduction",
+    ]);
     expect(lines[8]).toEqual(["Result", "Net payable", "Gross - deductions", 23496.23, "Result"]);
     expect(ws.getCell(5 + 3, 2).font?.bold).toBe(true); // the Gross subtotal
     expect(ws.getCell(5 + 2, 2).font?.bold).toBeFalsy(); // an ordinary line

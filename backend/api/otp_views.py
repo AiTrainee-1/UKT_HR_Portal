@@ -4,9 +4,11 @@ App), delivered by WhatsApp or SMS (the channel HR picks on the SMS Control page
 Public endpoints under /api/auth/ -the employee has no token yet- so
 they are rate limited per IP here, and per employee inside otp_service.
 
-    GET  /api/auth/login-options        which sign-in methods are switched on, and the channel: otpChannel
+    GET  /api/auth/login-options        which sign-in methods are switched on, the channel: otpChannel, and how many
+                                        digits its codes have: codeLength (sms 4, whatsapp 6)
     POST /api/auth/otp/request          {employeeCode, purpose: "login"|"reset"|"activate"}
-                                        -> {message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel}
+                                        -> {message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel,
+                                            codeLength}
     POST /api/auth/otp/login            {employeeCode, otp}
     POST /api/auth/otp/reset-password   {employeeCode, otp, password}
     POST /api/auth/otp/activate         {employeeCode, otp, password}   (first-time password)
@@ -74,7 +76,7 @@ def otp_request(request: Request) -> Response:
         result = otp_service.request_otp(_identifier(data), purpose, _get_ip(request))
     except otp_service.OtpError as exc:
         return _otp_error(exc)
-    # result: message (names the channel), maskedPhone, expiresInSeconds, resendAfterSeconds, channel
+    # result: message (names the channel), maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength
     return Response(result)
 
 

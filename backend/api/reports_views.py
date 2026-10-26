@@ -313,6 +313,8 @@ def payroll_report(request: Request):
             "grossSalary": float(s.gross_salary),
             "pfDeduction": float(s.pf_deduction),
             "esiDeduction": float(s.esi_deduction),
+            "tdsDeduction": float(s.tds_deduction),
+            "tdsPercent": float(s.tds_percent) if s.tds_percent is not None else None,
             "advanceDeduction": float(s.advance_deduction),
             "otherDeductions": float(s.other_deductions),
             "totalDeductions": float(s.total_deductions),
@@ -328,6 +330,7 @@ def payroll_report(request: Request):
         "grossSalary": round(sum(r["grossSalary"] for r in results), 2),
         "pfDeduction": round(sum(r["pfDeduction"] for r in results), 2),
         "esiDeduction": round(sum(r["esiDeduction"] for r in results), 2),
+        "tdsDeduction": round(sum(r["tdsDeduction"] for r in results), 2),
         "totalDeductions": round(sum(r["totalDeductions"] for r in results), 2),
         "netSalary": round(sum(r["netSalary"] for r in results), 2),
     }

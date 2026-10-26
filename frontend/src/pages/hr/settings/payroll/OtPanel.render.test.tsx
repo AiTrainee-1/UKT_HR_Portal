@@ -14,10 +14,6 @@ const SAVED = {
   companyLogo: null,
   compensationFeatureEnabled: true,
   companyWideRulesEditable: true,
-  staffPayrollRulesEnabled: true,
-  pfRate: 12,
-  esiRate: 0.75,
-  esiApplicableBelow: 21000,
   // the old OT values are still stored by the server (they are superseded, never dropped)
   otDetectionEnabled: true,
   otThresholdMinutes: 60,

@@ -4,10 +4,10 @@ import { renderMdPage, type RenderedPage } from "@/pages/md/testing/renderMdPage
 import ProductionPayrollTab from "../ProductionPayrollTab";
 import { PRODUCTION_PAYROLL_SETTINGS } from "../ProductionPayrollTab.meta";
 
-// jsdom render checks of Settings -> Production Payroll with a fake server: the five sub-tabs (one per pay cycle, the
-// global late detection, the read-only Attendance & Shift), the live next-period example of each cycle worked out from
-// what is typed (and the server's answer for the saved rule), the "Not set" warning of a cycle without a first period
-// start, each cycle's own late rules against the shared ones, and each Save sending only its own keys.
+// jsdom render checks of Settings -> Production Payroll with a fake server: the five sub-tabs (the read-only Overview, one per
+// pay cycle, Pay & Bonus), the live next-period example of each cycle worked out from what is typed (and the server's answer for
+// the saved rule), the "Not set" warning of a cycle without a first period start, each cycle's Save sending only its period
+// keys (never a late value, so it can never overwrite what Late Detection saved), and Pay & Bonus sending only what changed.
 
 const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }), toast }));
@@ -25,12 +25,14 @@ const SAVED = {
     { fromLates: 3, deductionShifts: 0.25 },
     { fromLates: 6, deductionShifts: 0.5 },
   ],
-  prodPayrollRulesEnabled: true,
-  prodPfRate: 12,
-  prodEsiRate: 0.75,
-  prodEsiApplicableBelow: 21000,
-  prodPfEfEnabled: false,
-  prodPfEfRules: [],
+  defaultSalaryPerShift: 300,
+  bonusPercent: 8.33,
+  bonusWageCeiling: 7000,
+  bonusEligibilityCeiling: 21000,
+  bonusFyStartMonth: 4,
+  prodBonusPercent: 10,
+  prodBonusWageCeiling: 8000,
+  prodBonusEligibilityCeiling: 25000,
   companyWideRulesEditable: true,
 };
 /** What PayrollSettings.prod_cycles holds: Weekly set up, BiWeekly with a date and its own late rules, Monthly empty. */
@@ -101,6 +103,7 @@ const SHIFTS = [
 
 let page: RenderedPage | undefined;
 let puts: Record<string, unknown>[];
+let stored: Record<string, Stored>;
 
 beforeEach(() => {
   puts = [];
@@ -122,7 +125,7 @@ async function open(
   options: { saved?: Record<string, unknown>; stored?: Record<string, Stored>; readOnly?: boolean } = {},
 ) {
   let base: Record<string, unknown> = { ...SAVED, ...options.saved };
-  const stored: Record<string, Stored> = JSON.parse(JSON.stringify(options.stored ?? STORED));
+  stored = JSON.parse(JSON.stringify(options.stored ?? STORED));
   const respond = () =>
     Object.fromEntries(
       ["weekly", "biweekly", "monthly"].map((cycle) => {
@@ -201,19 +204,20 @@ async function choose(selector: string, value: string) {
   await page!.settle();
 }
 
-const SUB_TABS = ["Weekly", "BiWeekly", "Monthly", "Late Detection", "Attendance & Shift"];
+const SUB_TABS = ["Overview", "Weekly", "BiWeekly", "Monthly", "Pay & Bonus"];
 
 describe("Settings -> Production Payroll", () => {
-  it("opens on Weekly with the five sub-tabs, the chain overview and the live next period of the cycle", async () => {
+  it("opens on the Overview with the five sub-tabs: the chain, each cycle's rule in a line, and nothing to edit", async () => {
     await open();
     expect(SUB_TABS.map((n) => !!tabNamed(n))).toEqual([true, true, true, true, true]);
-    expect(tabNamed("Weekly")?.getAttribute("aria-selected")).toBe("true");
-    expect(page!.text()).toContain("Weekly pay period");
-    expect(page!.text()).toContain("Weekly late deductions");
-    // the overview: the cycle chain, and each cycle's saved rule in one line
+    expect(tabNamed("Late Detection")).toBeUndefined();
+    expect(tabNamed("Attendance & Shift")).toBeUndefined();
+    expect(tabNamed("Overview")?.getAttribute("aria-selected")).toBe("true");
+    // the chain overview, from the saved settings
     const overview = text('[data-testid="production-pay-overview"]');
     expect(overview).toContain("depending on the employee's pay cycle");
     expect(overview).toContain("Late deductions are ON");
+    expect(overview).toContain("Statutory bonus");
     expect(text('[data-testid="production-cycle-summary-biweekly"]')).toContain(
       "Monday weeks counted from Mon 21 Sep 2026",
     );
@@ -222,6 +226,53 @@ describe("Settings -> Production Payroll", () => {
       "Payroll cannot be generated until the date is set.",
     );
     expect(text('[data-testid="production-cycle-summary-weekly"]')).toContain("Late: 3 free, 2 slabs (shared)");
+    // links to where each part is set now
+    const hrefs = [
+      ...document.body.querySelectorAll<HTMLAnchorElement>('[data-testid="production-pay-overview"] a'),
+    ].map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("/hr/settings?tab=production_payroll#default-salary-per-shift");
+    expect(hrefs).toContain("/hr/settings?tab=late_detection#prod-late-switch");
+    expect(hrefs).toContain("/hr/settings?tab=late_detection#weekly-late-allowance");
+    expect(hrefs).toContain("/hr/settings?tab=payroll#fy-start-month");
+    // the read-only content of the old "Attendance & Shift" sub-tab
+    expect(page!.text()).toContain("Shifts earned, pay and PF / ESI");
+    expect(q('[data-testid="production-shifts-elsewhere"] a')?.getAttribute("href")).toBe(
+      "/hr/settings?tab=production_shifts",
+    );
+    expect(q('[data-testid="production-attendance-elsewhere"] a')?.getAttribute("href")).toBe(
+      "/hr/settings?tab=attendance#production-attendance",
+    );
+    expect(q('[data-testid="production-pf-esi-elsewhere"] a')?.getAttribute("href")).toBe(
+      "/hr/settings?tab=pf_esi#prod-pf-rules",
+    );
+    // the same worker on each cycle: 6 shifts a week at ₹600 is an estimate of ₹14,400 on every cycle (x4, x2, x1)
+    const pf = text('[data-testid="production-pf-esi-preview"]');
+    expect(pf).toContain("Weekly: 6 shifts = ₹3,600.00, estimate ₹14,400.00 (x4)rules tested on ₹14,400.00 a month");
+    expect(pf).toContain("BiWeekly: 12 shifts = ₹7,200.00, estimate ₹14,400.00 (x2)rules tested on ₹14,400.00 a month");
+    expect(pf).toContain("Monthly: 24 shifts = ₹14,400.00, estimate ₹14,400.00 (x1)rules tested on ₹14,400.00 a month");
+    expect(text('[data-testid="production-pf-esi-how"]')).toContain("switched ON in Employees - Co Emp");
+    expect(pf).not.toContain("flat rates");
+    // the production shifts, not the staff one
+    expect(text('[data-testid="production-shift-table"]')).toContain("Production A");
+    expect(text('[data-testid="production-shift-table"]')).not.toContain("Office");
+    // nothing is set on the Overview
+    expect(document.body.querySelector('[data-slot="input"], select')).toBeNull();
+    expect(buttonNamed("Save Weekly settings")).toBeUndefined();
+    // only the open cycle's rows and next period are asked for, and none while the Overview is open
+    expect(requestsTo("/api/payroll/production?cycle=")).toHaveLength(0);
+  });
+
+  it("Weekly shows the live next period of the cycle, and no late controls (those are on Late Detection)", async () => {
+    await open();
+    await openSubTab("Weekly");
+    expect(page!.text()).toContain("Weekly pay period");
+    expect(page!.text()).not.toContain("Weekly late deductions");
+    expect(q("#weekly-late-allowance-input")).toBeNull();
+    expect(q('[data-testid="weekly-slab-table"]')).toBeNull();
+    expect(buttonNamed("Use the shared rules again")).toBeUndefined();
+    expect(q('[data-testid="weekly-late-pointer"] a')?.getAttribute("href")).toBe(
+      "/hr/settings?tab=late_detection#weekly-late-allowance",
+    );
     // worked out from the values on screen and the latest WEEKLY period generated (28 Sep - 4 Oct; the later row
     // without a stamped cycle does not count)
     const preview = text('[data-testid="weekly-next-period-preview"]');
@@ -231,8 +282,6 @@ describe("Settings -> Production Payroll", () => {
     expect(preview).toContain("12 Oct - 18 Oct 2026, 19 Oct - 25 Oct 2026");
     expect(preview).toContain("2026-10-05 to 2026-10-11 (ended)");
     expect(text('[data-testid="weekly-today-preview"]')).toContain("Mon 12 Oct 2026 to Sun 18 Oct 2026");
-    expect(text('[data-testid="weekly-late-source"]')).toContain("Using the shared production values");
-    expect(buttonNamed("Use the shared rules again")).toBeUndefined();
     // only the open cycle's rows and next period are asked for
     expect(requestsTo("/api/payroll/production?cycle=weekly&limit=20")).toHaveLength(1);
     expect(requestsTo("/api/payroll/production?cycle=biweekly")).toHaveLength(0);
@@ -240,6 +289,7 @@ describe("Settings -> Production Payroll", () => {
 
   it("warns when a new week start covers days already generated, and the Weekly save sends only that cycle's period rule", async () => {
     await open();
+    await openSubTab("Weekly");
     await choose("#weekly-week-start-input", "sunday");
     expect(text('[data-testid="weekly-today-preview"]')).toContain("Sun 11 Oct 2026 to Sat 17 Oct 2026");
     // Sunday weeks: the period holding Mon 5 Oct is 4-10 Oct, and Sun 4 Oct is already in a Weekly payslip
@@ -260,6 +310,7 @@ describe("Settings -> Production Payroll", () => {
 
   it("offers every weekday as the week start, and the Weekly save sends the one chosen", async () => {
     await open();
+    await openSubTab("Weekly");
     const select = q("#weekly-week-start-input") as HTMLSelectElement;
     expect([...select.options].map((o) => o.value)).toEqual([
       "monday",
@@ -282,6 +333,7 @@ describe("Settings -> Production Payroll", () => {
     await press("Save Weekly settings");
     await press("Save anyway");
     expect(puts).toEqual([{ prodCycles: { weekly: { weekStart: "wednesday", anchorDate: null } } }]);
+    await openSubTab("Overview");
     expect(text('[data-testid="production-cycle-summary-weekly"]')).toContain("Wednesday weeks");
   });
 
@@ -313,107 +365,31 @@ describe("Settings -> Production Payroll", () => {
     expect(q('[role="alertdialog"]')).toBeNull();
     expect(puts).toEqual([{ prodCycles: { monthly: { weekStart: "monday", anchorDate: "2026-10-07" } } }]);
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Monthly settings saved" }));
+    await openSubTab("Overview");
     expect(text('[data-testid="production-cycle-summary-monthly"]')).toContain(
       "Monday weeks counted from Mon 5 Oct 2026",
     );
   });
 
-  it("prices a cycle's late rules from what is typed, sends them only when changed, and can hand them back to the shared ones", async () => {
+  it("a cycle's period save never carries a late value, so it cannot overwrite what Late Detection saved", async () => {
     await open();
-    // 9 lates, allowance 3, slabs 3 -> 0.25 and 6 -> 0.5, ₹600 a shift: 6 billable, half a shift = ₹300
-    expect(text('[data-testid="weekly-late-worked-example"]')).toContain("9 late days-0.5 shift = ₹300.00");
-    expect(text('[data-testid="weekly-allowance-preview"]')).toContain("7 late days3 free, 4 billable");
-    expect(q('[data-testid="weekly-late-worked-example-everyone"]')).toBeNull();
-
-    await page!.type('[aria-label="Row 1: from this many billable lates"]', "0");
-    expect(text('[data-testid="weekly-slab-table-everyone-warning"]')).toContain(
-      "deducts from every production worker",
-    );
-    expect(text('[data-testid="weekly-late-worked-example"]')).toContain("0 late days-0.25 shift = ₹150.00");
-    await page!.type('[aria-label="Row 1: from this many billable lates"]', "6");
-    expect(text('[aria-label="Row 1: from this many billable lates"] ~ p')).toContain(
-      "6 is used by more than one row.",
-    );
-    expect(buttonNamed("Save Weekly settings")?.disabled).toBe(true);
-    await page!.type('[aria-label="Row 1: from this many billable lates"]', "2");
-    await page!.type("#weekly-late-allowance-input", "4");
-    await press("Add Slab");
-    expect(document.body.querySelectorAll('[data-testid="weekly-slab-table"] tbody tr')).toHaveLength(3);
-
-    await press("Save Weekly settings");
-    const dialog = text('[role="alertdialog"]');
-    expect(dialog).toContain("Free late days a period");
-    expect(dialog).toContain("3 -> 4");
-    expect(dialog).toContain("Weekly stops following the shared production values (3 free late days, 2 slabs)");
-    expect(puts).toHaveLength(0);
-    await press("Save changes");
-    expect(puts).toEqual([
-      {
-        prodCycles: {
-          weekly: {
-            weekStart: "monday",
-            anchorDate: null,
-            lateFreeAllowance: 4,
-            lateSlabs: [
-              { fromLates: 2, deductionShifts: 0.25 },
-              { fromLates: 6, deductionShifts: 0.5 },
-              { fromLates: 9, deductionShifts: 0.25 },
-            ],
-          },
-        },
-      },
-    ]);
-    // the cycle now has rules of its own, and can be handed back to the shared ones with nulls
-    expect(text('[data-testid="weekly-late-source"]')).toContain("Weekly has late rules of its own.");
-    await press("Use the shared rules again");
-    expect(text('[role="alertdialog"]')).toContain("Use the shared late rules for Weekly again?");
-    await press("Use the shared rules");
-    expect(puts[1]).toEqual({ prodCycles: { weekly: { lateFreeAllowance: null, lateSlabs: null } } });
-    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Weekly uses the shared late rules again" }));
-    expect(text('[data-testid="weekly-late-source"]')).toContain("Using the shared production values");
-    expect(input("#weekly-late-allowance-input").value).toBe("3");
-    expect(document.body.querySelectorAll('[data-testid="weekly-slab-table"] tbody tr')).toHaveLength(2);
-    expect(q('[data-testid="save-bar"]')?.dataset.dirty).toBe("false");
-  });
-
-  it("the Late Detection sub-tab saves only the switch and the mode, and points to each cycle's own late rules", async () => {
-    await open();
-    await openSubTab("Late Detection");
-    expect(page!.text()).toContain("Production late detection");
-    // the mode example uses the real production shift: on time until 08:10, 08:10:20 is late, 16:49 is early in Strict mode
-    const mode = text('[data-testid="production-mode-preview"]');
-    expect(mode).toContain("Your production shift Production A, 08:00-17:00, grace 10 min");
-    expect(mode).toContain("First punch 08:10on time");
-    expect(mode).toContain("First punch 08:10:20late");
-    expect(mode).toContain("last punch 16:49 (before 16:50)late (left early)");
-    await choose("#prod-attendance-mode-input", "simple");
-    expect(text('[data-testid="production-mode-preview"]')).toContain("not late in Simple mode");
-    // 7 lates on each cycle's saved rules: Weekly shares (3 free, slabs 3/6), BiWeekly has its own (1 free, 1 -> 0.5)
-    const on = text('[data-testid="production-late-switch-preview"]');
-    expect(on).toContain("Switch on, Weekly (3 free days, 2 slabs)4 billable - -0.25 shift = ₹150.00");
-    expect(on).toContain("Switch on, BiWeekly (1 free day, 1 slab)6 billable - -0.5 shift = ₹300.00");
-    expect(text('[data-testid="production-late-cycle-biweekly"]')).toContain(
-      "1 free late day a period, 1 slab - its own rules",
-    );
-    expect(text('[data-testid="production-late-cycle-monthly"]')).toContain(
-      "3 free late days a period, 2 slabs - the shared values",
-    );
-    expect(q('[data-testid="production-late-cycle-biweekly"] a')?.getAttribute("href")).toBe(
-      "/hr/settings?tab=production_payroll#biweekly-late-allowance",
-    );
-    expect(q("#weekly-late-allowance-input")).toBeNull();
-
-    await press("Save Production Late Detection");
-    expect(text('[role="alertdialog"]')).toContain("What counts as late");
-    expect(text('[role="alertdialog"]')).toContain("Strict");
-    expect(puts).toHaveLength(0);
-    await press("Save changes");
-    expect(puts).toEqual([{ prodAttendanceMode: "simple", prodLateDetectionEnabled: true }]);
-    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Production Late Detection saved" }));
+    await openSubTab("BiWeekly");
+    // BiWeekly has late rules of its own (1 free day, one slab): saving its period leaves them exactly as they are
+    expect(q("#biweekly-late-allowance-input")).toBeNull();
+    await choose("#biweekly-week-start-input", "tuesday");
+    await press("Save BiWeekly settings");
+    await press("Save anyway").catch(() => undefined);
+    const sent = puts[0]?.prodCycles as Record<string, Record<string, unknown>>;
+    expect(Object.keys(sent)).toEqual(["biweekly"]);
+    expect(Object.keys(sent.biweekly).sort()).toEqual(["anchorDate", "weekStart"]);
+    expect(stored.biweekly.lateFreeAllowance).toBe(1);
+    expect(stored.biweekly.lateSlabs).toEqual([{ fromLates: 1, deductionShifts: 0.5 }]);
+    expect(stored.biweekly.weekStart).toBe("tuesday");
   });
 
   it("keeps a Weekly edit while Monthly is saved, and says so on the pill row", async () => {
     await open();
+    await openSubTab("Weekly");
     await choose("#weekly-week-start-input", "sunday");
     await openSubTab("Monthly");
     expect(page!.text()).toContain("Not saved yet: Weekly");
@@ -427,36 +403,10 @@ describe("Settings -> Production Payroll", () => {
     expect(page!.text()).not.toContain("Not saved yet");
   });
 
-  it("the Attendance & Shift sub-tab sets nothing: it points to Production Shifts, Attendance and the Payroll tab, and scales a month by the cycle", async () => {
-    await open();
-    await openSubTab("Attendance & Shift");
-    expect(page!.text()).toContain("Shifts earned, pay and PF / ESI");
-    expect(q('[data-testid="production-shifts-elsewhere"] a')?.getAttribute("href")).toBe(
-      "/hr/settings?tab=production_shifts",
-    );
-    expect(q('[data-testid="production-attendance-elsewhere"] a')?.getAttribute("href")).toBe(
-      "/hr/settings?tab=attendance#production-attendance",
-    );
-    expect(q('[data-testid="production-pf-esi-elsewhere"] a')?.getAttribute("href")).toBe(
-      "/hr/settings?tab=payroll#prod-pf-esi-switch",
-    );
-    // the same worker on each cycle, with the saved flat rates: 6 shifts a week at ₹600 is an estimate of ₹14,400 on
-    // every cycle (x4, x2, x1), within the ₹21,000 ceiling, so PF 12% and ESI 0.75% of each period's pay
-    const pf = text('[data-testid="production-pf-esi-preview"]');
-    expect(pf).toContain("Weekly: 6 shifts = ₹3,600.00, estimate ₹14,400.00 (x4)PF ₹432.00, ESI ₹27.00");
-    expect(pf).toContain("BiWeekly: 12 shifts = ₹7,200.00, estimate ₹14,400.00 (x2)PF ₹864.00, ESI ₹54.00");
-    expect(pf).toContain("Monthly: 24 shifts = ₹14,400.00, estimate ₹14,400.00 (x1)PF ₹1,728.00, ESI ₹108.00");
-    expect(pf).toContain("the flat rates (PF 12%, ESI 0.75%)");
-    expect(pf).toContain("₹12,564.00");
-    // the production shifts, not the staff one
-    expect(text('[data-testid="production-shift-table"]')).toContain("Production A");
-    expect(text('[data-testid="production-shift-table"]')).not.toContain("Office");
-    expect(document.body.querySelector('[data-slot="input"], select')).toBeNull();
-  });
-
   it("tells a branch login the latest generated period is not known, and locks nothing by itself", async () => {
     await open({ saved: { companyWideRulesEditable: false } });
     expect(q('[data-testid="settings-branch-notice"]')).not.toBeNull();
+    await openSubTab("Weekly");
     expect(text('[data-testid="weekly-next-period-preview"]')).toContain("could not be read with this login");
     expect(requestsTo("/api/payroll/production?")).toHaveLength(0);
     expect(input("#weekly-week-start-input").disabled).toBe(false);
@@ -464,17 +414,20 @@ describe("Settings -> Production Payroll", () => {
 
   it("view only: every field and every Save button is disabled", async () => {
     await open({ readOnly: true });
+    await openSubTab("Weekly");
     expect(input("#weekly-week-start-input").disabled).toBe(true);
     expect(input("#weekly-first-period-input").disabled).toBe(true);
-    expect(input("#weekly-late-allowance-input").disabled).toBe(true);
-    expect(input('[aria-label="Row 1: from this many billable lates"]').disabled).toBe(true);
-    expect(buttonNamed("Add Slab")?.disabled).toBe(true);
     expect(buttonNamed("Save Weekly settings")?.disabled).toBe(true);
-    await openSubTab("BiWeekly");
-    expect(buttonNamed("Use the shared rules again")?.disabled).toBe(true);
-    await openSubTab("Late Detection");
-    expect(input("#prod-late-enabled").disabled).toBe(true);
-    expect(buttonNamed("Save Production Late Detection")?.disabled).toBe(true);
+    await openSubTab("Pay & Bonus");
+    for (const id of [
+      "#default-salary-per-shift-input",
+      "#prod-bonus-percent-input",
+      "#prod-bonus-wage-ceiling-input",
+      "#prod-bonus-eligibility-ceiling-input",
+    ]) {
+      expect(input(id).disabled, id).toBe(true);
+    }
+    expect(buttonNamed("Save Pay & Bonus settings")?.disabled).toBe(true);
   });
 
   it("an address naming a setting opens the sub-tab that holds it", async () => {
@@ -482,10 +435,124 @@ describe("Settings -> Production Payroll", () => {
     await open();
     expect(tabNamed("BiWeekly")?.getAttribute("aria-selected")).toBe("true");
     expect(q('[data-setting-id="biweekly-first-period"]')).not.toBeNull();
-    expect(text('[data-testid="biweekly-late-source"]')).toContain("BiWeekly has late rules of its own.");
     expect(text('[data-testid="biweekly-next-period-preview"]')).toContain("21 Sep - 4 Oct 2026 (14 days)");
+    page!.unmount();
+    window.history.replaceState(null, "", "/hr/settings?tab=production_payroll#default-salary-per-shift");
+    await open();
+    expect(tabNamed("Pay & Bonus")?.getAttribute("aria-selected")).toBe("true");
+    expect(q('[data-setting-id="default-salary-per-shift"]')).not.toBeNull();
+    page!.unmount();
+    window.history.replaceState(null, "", "/hr/settings?tab=production_payroll#prod-assigned-shifts");
+    await open();
+    expect(tabNamed("Overview")?.getAttribute("aria-selected")).toBe("true");
+    expect(q('[data-setting-id="prod-assigned-shifts"]')).not.toBeNull();
+  });
+});
+
+describe("Settings -> Production Payroll -> Pay & Bonus", () => {
+  it("shows the suggested rate and the production bonus, apart from the staff bonus, with the financial year pointing to Staff Payroll", async () => {
+    await open();
+    await openSubTab("Pay & Bonus");
+    expect(page!.text()).toContain("Rate for new production employees");
+    expect(page!.text()).toContain("Production statutory bonus");
+    expect(input("#default-salary-per-shift-input").value).toBe("300");
+    expect(input("#prod-bonus-percent-input").value).toBe("10");
+    expect(input("#prod-bonus-wage-ceiling-input").value).toBe("8000");
+    expect(input("#prod-bonus-eligibility-ceiling-input").value).toBe("25000");
+    // the example follows the production values (10%, ceiling ₹8,000): BiWeekly, 26 payslips of ₹9,600 -> wage 26 x 8,000 = 208,000
+    expect(text('[data-testid="prod-bonus-wage-preview"]')).toContain(
+      "BiWeekly, 26 payslips of ₹9,600wage ₹2,08,000.00",
+    );
+    expect(text('[data-testid="prod-bonus-eligibility-preview"]')).toContain("latest payslip ₹24,600eligible");
+    // one company-wide value stays on Staff Payroll
+    const pointer = [...document.body.querySelectorAll('[data-testid="prod-bonus-fy-pointer"] a')].map((a) =>
+      a.getAttribute("href"),
+    );
+    expect(pointer).toEqual(["/hr/settings?tab=payroll#bonus-percent", "/hr/settings?tab=payroll#fy-start-month"]);
+    expect(text('[data-testid="prod-bonus-fy-pointer"]')).toContain("now April");
+    // no financial-year control here
+    expect(q("#fy-start-month-input")).toBeNull();
+    expect(buttonNamed("Save Pay & Bonus settings")?.disabled).toBe(true);
   });
 
+  it("saves the suggested rate alone, sending that one key and no bonus value", async () => {
+    await open();
+    await openSubTab("Pay & Bonus");
+    await page!.type("#default-salary-per-shift-input", "350");
+    expect(text('[data-testid="save-bar"]')).toContain("You have changes that are not saved yet.");
+    await press("Save Pay & Bonus settings");
+    // no question: it moves no money
+    expect(q('[role="alertdialog"]')).toBeNull();
+    expect(puts).toEqual([{ defaultSalaryPerShift: 350 }]);
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Pay & Bonus settings saved" }));
+    expect(input("#default-salary-per-shift-input").value).toBe("350");
+    expect(q('[data-testid="save-bar"]')?.dataset.dirty).toBe("false");
+  });
+
+  it("asks before it saves the production bonus, lists the changes, and sends only the changed keys", async () => {
+    await open();
+    await openSubTab("Pay & Bonus");
+    await page!.type("#prod-bonus-percent-input", "12.5");
+    await page!.type("#prod-bonus-eligibility-ceiling-input", "30000");
+    await press("Save Pay & Bonus settings");
+    const dialog = text('[role="alertdialog"]');
+    expect(dialog).toContain("Save the new production bonus rules?");
+    expect(dialog).toContain("Production bonus rate");
+    expect(dialog).toContain("10% -> 12.5%");
+    expect(dialog).toContain("Production bonus eligibility limit");
+    expect(dialog).toContain("Staff are not affected");
+    expect(puts).toHaveLength(0);
+    await press("Save changes");
+    expect(puts).toEqual([{ prodBonusPercent: 12.5, prodBonusEligibilityCeiling: 30000 }]);
+    for (const staff of ["bonusPercent", "bonusWageCeiling", "bonusEligibilityCeiling", "bonusFyStartMonth"]) {
+      expect(Object.keys(puts[0])).not.toContain(staff);
+    }
+  });
+
+  it("warns about a bonus rate outside the Act, refuses a bad number, and does not send anything until it is fixed", async () => {
+    await open();
+    await openSubTab("Pay & Bonus");
+    await page!.type("#prod-bonus-percent-input", "5");
+    expect(text('[data-testid="prod-bonus-act-warning"]')).toContain("outside the Payment of Bonus Act's 8.33% to 20%");
+    expect(buttonNamed("Save Pay & Bonus settings")?.disabled).toBe(false);
+    await page!.type("#prod-bonus-wage-ceiling-input", "-5");
+    expect(buttonNamed("Save Pay & Bonus settings")?.disabled).toBe(true);
+    expect(text('[data-testid="production-pay-bonus"]')).toContain("Fix the values marked in red first.");
+    await page!.type("#prod-bonus-wage-ceiling-input", "8000");
+    await page!.type("#default-salary-per-shift-input", "300.505");
+    expect(buttonNamed("Save Pay & Bonus settings")?.disabled).toBe(true);
+    expect(puts).toHaveLength(0);
+  });
+
+  it("keeps the bonus read-only, and says so, while the server does not report it (an older backend)", async () => {
+    await open({
+      saved: { prodBonusPercent: undefined, prodBonusWageCeiling: undefined, prodBonusEligibilityCeiling: undefined },
+    });
+    await openSubTab("Pay & Bonus");
+    expect(input("#prod-bonus-percent-input").disabled).toBe(true);
+    expect(input("#prod-bonus-wage-ceiling-input").disabled).toBe(true);
+    expect(input("#prod-bonus-eligibility-ceiling-input").disabled).toBe(true);
+    expect(document.body.querySelectorAll('[data-testid="prod-bonus-not-reported"]')).toHaveLength(3);
+    // shown from the staff values, as the split starts from them; the suggested rate is still editable
+    expect(input("#prod-bonus-percent-input").value).toBe("8.33");
+    expect(input("#default-salary-per-shift-input").disabled).toBe(false);
+  });
+
+  it("a Pay & Bonus edit stays while a cycle is saved, and says so on the pill row", async () => {
+    await open();
+    await openSubTab("Pay & Bonus");
+    await page!.type("#prod-bonus-percent-input", "9");
+    await openSubTab("Monthly");
+    expect(page!.text()).toContain("Not saved yet: Pay & Bonus");
+    await page!.type("#monthly-first-period-input", "2026-10-05");
+    await press("Save Monthly settings");
+    expect(Object.keys(puts[0])).toEqual(["prodCycles"]);
+    await openSubTab("Pay & Bonus");
+    expect(input("#prod-bonus-percent-input").value).toBe("9");
+  });
+});
+
+describe("Settings -> Production Payroll: the search catalogue", () => {
   it("has a search entry for every setting it draws, with the same title and words", async () => {
     await open();
     const seen = new Map<string, HTMLElement>();

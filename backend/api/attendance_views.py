@@ -2199,7 +2199,7 @@ def compute_shift_logs(request: Request) -> Response:
         # and this button used calendar days: Sunday/holiday lates entered the pool and the daily
         # rate was salary / calendar days).
         from decimal import Decimal
-        from .payroll_views import staff_working_days
+        from .payroll_views import _d2, staff_working_days
         for emp in emps:
             daily_rate = None
             counted = None
@@ -2207,7 +2207,9 @@ def compute_shift_logs(request: Request) -> Response:
                 working = staff_working_days(emp, m, y)
                 counted = set(working)
                 if emp.salary_amount and working:
-                    daily_rate = Decimal(str(emp.salary_amount)) / len(working)
+                    # Rounded half-up to the paisa exactly like payroll's daily rate: every shift deduction is priced from
+                    # this figure, so an unrounded one made this row differ from the payslip by a paisa or two.
+                    daily_rate = _d2(Decimal(str(emp.salary_amount)) / len(working))
             elif emp.salary_amount:
                 _, dm = cal.monthrange(y, m)
                 daily_rate = Decimal(str(emp.salary_amount)) / dm
@@ -2463,7 +2465,12 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     #    payroll run of the month).
     from .models import EmployeePermission, PayrollSettings
     from .attendance_final import late_pool_summary
-    from .payroll_views import _d2, late_shift_deduction, staff_working_days
+    from .payroll_views import (
+        _d2,
+        late_pool_pricing,
+        permission_summary_json,
+        staff_working_days,
+    )
 
     approved_permissions = EmployeePermission.objects.filter(
         employee=emp, date__year=y, date__month=m, status="approved",
@@ -2473,6 +2480,16 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     free_allowance = max(0, int(ps_late.late_free_allowance or 0))
     permission_cap = max(0, int(ps_late.permission_monthly_cap or 0))
     salary_deduction_amount = _D("0")
+    # Permission Deduction Slabs (staff): the additive block every app may ignore. Production never has one.
+    permission_pricing_json = {
+        "permissionPricingEnabled": False,
+        "permissionFreeAllowance": max(0, int(ps_late.permission_free_allowance or 0)),
+        "permissionPricedCount": 0,
+        "permissionBillableCount": 0,
+        "lateShiftDeductions": None,
+        "permissionShiftDeductions": 0.0,
+        "permissionDeductionAmount": "0",
+    }
 
     if emp.employment_type == "staff":
         # Staff: EXACTLY payroll's late pool -the same working days, the same shared counting
@@ -2489,10 +2506,26 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         permissions_used = pool["free_used"]
         billable_late = pool["billable"]
         permission_overage_count = pool["excess_permissions"]
-        shift_deductions = _D(str(late_shift_deduction(billable_late, ps_late)))
-        if shift_deductions > 0 and emp.salary_amount and working_days_list:
+        daily_rate = None
+        if emp.salary_amount and working_days_list:
             daily_rate = _d2(emp.salary_amount / _D(str(len(working_days_list))))
-            salary_deduction_amount = _d2(shift_deductions * daily_rate)
+        # Payroll's own pricing: the late pool through the late slabs and (switch ON) the excess permissions through
+        # the permission slabs. shiftDeductions / salaryDeductionAmount stay the TOTAL the employee loses, as the
+        # installed apps expect; the parts ride along as additive keys.
+        pricing = late_pool_pricing(pool, ps_late, daily_rate)
+        shift_deductions = _D(str(pricing["shifts"]))
+        salary_deduction_amount = pricing["penalty"]
+        permission_json = permission_summary_json(pool, ps_late, approved_permissions, pricing)
+        permission_pricing_json.update(
+            {
+                "permissionPricingEnabled": permission_json["enabled"],
+                "permissionPricedCount": permission_json["priced"],
+                "permissionBillableCount": permission_json["billable"],
+                "lateShiftDeductions": float(pricing["late_shifts"]),
+                "permissionShiftDeductions": float(pricing["permission_shifts"]),
+                "permissionDeductionAmount": str(pricing["permission_penalty"]),
+            }
+        )
     else:
         # Production keeps its own separate late policy (see payroll_views' production engine);
         # the generic preview below is unchanged for them.
@@ -2516,6 +2549,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         "excessPermissionCount": permission_overage_count,
         "freeAllowance": free_allowance,
         "permissionMonthlyCap": permission_cap,
+        **permission_pricing_json,
     }
 
     return Response({
@@ -2554,6 +2588,13 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "permissionMonthlyCap": permission_cap,
             "freeAllowance": free_allowance,
             "permissionDurationMinutes": 60,
+            # Permission Deduction Slabs (additive: the installed apps ignore these). Staff only; the slab table
+            # itself is company-wide and read-only here.
+            "permissionPricingEnabled": bool(ps_late.permission_pricing_enabled) and emp.employment_type == "staff",
+            "permissionFreeAllowance": max(0, int(ps_late.permission_free_allowance or 0)),
+            "permissionDeductionSlabs": (
+                list(ps_late.permission_deduction_slabs or []) if emp.employment_type == "staff" else []
+            ),
         },
         "dailyLogs": daily,
     })

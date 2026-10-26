@@ -5,19 +5,22 @@ Center's Employer Cost / CTC Statement, calculated in ONE place so the two can n
     Salary split     the employee's 50% + 50% split (salary_split.py): Basic, DA, Retaining Allowance | Other,
                      Petrol, HRA, Special Allowance, CA. An employee with a salary but no recorded split shows the
                      automatic one (`splitRecorded` false) - nothing is written.
-    Employer PF      PF rate x the FIRST portion (Basic + DA + Retaining Allowance, which is what PF wages are made of,
-                     and equal to the 50% base payroll itself uses).
-    Employer ESI     ESI rate x the salary, only while the salary is within the ESI ceiling.
+    Employer PF      the matched PF rule's percentage x the FIRST portion (Basic + DA + Retaining Allowance, which is what
+                     PF wages are made of, and equal to the 50% base payroll itself uses).
+    Employer ESI     the matched ESI rule's percentage x the same first portion.
     Annual CTC       (monthly salary + employer PF + employer ESI) x 12.
 
-Display only: nothing here feeds payroll generation, which keeps its own calculation. The settings (rates, ceilings)
-are passed in already resolved for the employee's branch, so a caller looping over a company reads them once per
-branch rather than once per employee.
+PF and ESI exist only for Co Emp employees (pf_esi.py: the rule lists of Settings -> PF & ESI, Co Emp switch): everybody
+else, TDS employees included, has none.
+
+Display only: nothing here feeds payroll generation, which judges the same rules itself (pf_esi.staff_statutory /
+production_statutory). The settings are passed in already resolved for the employee's branch, so a caller looping over a
+company reads them once per branch rather than once per employee.
 """
 
 from decimal import Decimal
 
-from . import salary_split
+from . import pf_esi, salary_split
 from .models import Employee
 
 ZERO = Decimal("0.00")
@@ -43,13 +46,7 @@ def ctc_figures(emp: Employee, settings) -> dict:
         first = sum((parts[c] for c in salary_split.FIRST_PORTION), ZERO)
         second = sum((parts[c] for c in salary_split.SECOND_PORTION), ZERO)
 
-    is_production = emp.employment_type == Employee.EMPLOYMENT_TYPE_PRODUCTION
-    pf_rate = settings.prod_pf_rate if is_production else settings.pf_rate
-    esi_rate = settings.prod_esi_rate if is_production else settings.esi_rate
-    esi_ceiling = settings.prod_esi_applicable_below if is_production else settings.esi_applicable_below
-
-    employer_pf = _d2(first * pf_rate / 100) if pf_rate and first is not None else ZERO
-    employer_esi = _d2(salary * esi_rate / 100) if esi_rate and salary <= esi_ceiling else ZERO
+    employer_pf, employer_esi = pf_esi.employer_contributions(emp, settings)
     gross_monthly = _d2(salary)
 
     figures.update(

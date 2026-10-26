@@ -596,6 +596,10 @@ class _RulesMixin:
                 "permissionMonthlyCap": 3,
                 "freeAllowance": 3,
                 "permissionDurationMinutes": 60,
+                # Permission Deduction Slabs (additive; the installed apps ignore them): OFF by default
+                "permissionPricingEnabled": False,
+                "permissionFreeAllowance": 0,
+                "permissionDeductionSlabs": [],
             },
         )
 

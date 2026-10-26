@@ -4,14 +4,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route } from "wouter";
 import type { Mock } from "vitest";
 import { ApiError } from "@/lib/api-client/custom-fetch";
-import type { PayrollDetails, PayrollKind } from "@/lib/api-client/custom-hooks";
+import type { PayrollBreakdownResponse, PayrollDetails, PayrollKind } from "@/lib/api-client/custom-hooks";
 import {
+  CO_EMP_STATUTORY,
+  NOT_CO_EMP_STATUTORY,
+  TDS_STATUTORY,
+  breakdownOf,
   cleanDetails,
   legacyDetails,
   noBreakdownDetails,
   noSlipDetails,
   productionDetails,
   staffDetails,
+  tdsDetails,
 } from "./fixtures";
 import ProductionPayrollDetails from "./ProductionPayrollDetails";
 import StaffPayrollDetails from "./StaffPayrollDetails";
@@ -21,10 +26,13 @@ import StaffPayrollDetails from "./StaffPayrollDetails";
 // stay in each test file: vitest only hoists them there.)
 
 type Answer = PayrollDetails | Error;
+type BreakdownAnswer = PayrollBreakdownResponse | Error;
 
 export type World = {
   staff: Map<number, Answer>;
   production: Map<number, Answer>;
+  /** What /api/payroll/<id>/breakdown answers (where PF / ESI / TDS were decided is stored); a missing id is a 404. */
+  breakdowns: Map<number, BreakdownAnswer>;
   /** What /api/payroll-settings answers. */
   settings: { companyName: string };
   /** Answers for this payroll only once the returned function is called (a request that is still on its way). */
@@ -47,10 +55,23 @@ export function installWorld(fetchMock: Mock): World {
       [102, cleanDetails()],
       [103, noSlipDetails({ payrollId: 103, neighbours: { previousId: 102, nextId: null, position: 5, total: 42 } })],
       [105, noBreakdownDetails()],
+      [106, tdsDetails()],
     ]),
     production: new Map<number, Answer>([
       [301, productionDetails()],
       [304, legacyDetails()],
+    ]),
+    breakdowns: new Map<number, BreakdownAnswer>([
+      [101, breakdownOf(101, { pf: 1599.92, pfRate: 12, statutory: CO_EMP_STATUTORY })],
+      [102, breakdownOf(102, { statutory: NOT_CO_EMP_STATUTORY })],
+      // a payroll generated before the PF / ESI redesign: PF and ESI are stored, the `statutory` block is not
+      [103, breakdownOf(103, { pf: 1599.92, pfRate: 12 })],
+      [105, { ...breakdownOf(105, {}), breakdown: null }],
+      [106, breakdownOf(106, { tds: 2950, tdsPercent: 10, statutory: TDS_STATUTORY })],
+      [
+        301,
+        breakdownOf(301, { pf: 351, pfRate: 12, statutory: { ...CO_EMP_STATUTORY, rulesScope: "branch" } }, "shift"),
+      ],
     ]),
     settings: { companyName: "UK Textiles Ltd" },
     hold: (kind, id) => {
@@ -68,6 +89,13 @@ export function installWorld(fetchMock: Mock): World {
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: string) => {
     if (url === "/api/payroll-settings") return world.settings;
+    const stored = /^\/api\/payroll\/(\d+)\/breakdown$/.exec(url);
+    if (stored) {
+      const answer = world.breakdowns.get(Number(stored[1]));
+      if (!answer) throw apiError(404);
+      if (answer instanceof Error) throw answer;
+      return JSON.parse(JSON.stringify(answer));
+    }
     const m = /^\/api\/payroll(\/production)?\/(\d+)\/details$/.exec(url);
     if (!m) throw new Error(`unexpected request ${url}`);
     const kind: PayrollKind = m[1] ? "production" : "staff";

@@ -120,23 +120,31 @@ export function saveErrorText(err: unknown): string | undefined {
 export const addressSetting = (): string =>
   typeof window === "undefined" ? "" : decodeURIComponent(window.location.hash.replace(/^#/, ""));
 
-const ADDRESS_EVENTS = ["popstate", "pushState", "replaceState", "hashchange"];
+/** The window events that announce a change of the page address (wouter announces its own navigations this way). */
+export const ADDRESS_EVENTS = ["popstate", "pushState", "replaceState", "hashchange"];
 
 /**
  * Opens the sub-tab holding the setting the address names, now and every time the address changes: the page's search
  * and links such as `?tab=payroll#fy-start-month` land on a setting that may sit in a sub-tab that is not open. wouter
  * announces its own navigations as "pushState" / "replaceState" window events. The page scrolls to the setting itself
  * after its search (a "replaceState"); a link (a "pushState", or arriving from another tab) is scrolled to here.
+ * `S` is whatever the tab opens: a sub-tab name, or an object naming several pills at once. With `focus: false` the
+ * hook only opens (for a second hook on the same tab, which must not scroll twice).
  */
-export function useSubTabFromAddress<S extends string>(subTabOf: Record<string, S>, open: (subTab: S) => void) {
+export function useSubTabFromAddress<S>(
+  subTabOf: Record<string, S>,
+  open: (subTab: S) => void,
+  options: { focus?: boolean } = {},
+) {
+  const focus = options.focus ?? true;
   useEffect(() => {
     let stop: (() => void) | undefined;
     const follow = (event?: Event) => {
       const id = addressSetting();
-      const subTab = subTabOf[id];
+      const subTab = Object.prototype.hasOwnProperty.call(subTabOf, id) ? subTabOf[id] : undefined;
       if (!subTab) return;
       open(subTab);
-      if (event?.type === "replaceState") return;
+      if (!focus || event?.type === "replaceState") return;
       stop?.();
       stop = focusSetting(id);
     };
@@ -146,5 +154,5 @@ export function useSubTabFromAddress<S extends string>(subTabOf: Record<string, 
       ADDRESS_EVENTS.forEach((e) => window.removeEventListener(e, follow));
       stop?.();
     };
-  }, [subTabOf, open]);
+  }, [subTabOf, open, focus]);
 }

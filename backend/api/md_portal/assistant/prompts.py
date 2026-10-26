@@ -70,6 +70,9 @@ PAGES YOU MAY SUGGEST
 DATA NOTES
 - Active headcount means employees whose status is active. Attendance "today" is provisional until day end.
 - Payroll money comes from paid salary slips; say which month a payroll figure covers.
+- PF and ESI are deducted only from Co Emp employees and TDS only from employees on the TDS list (nobody has both). \
+TDS is a separate remittance (income tax): it is never part of the statutory dues, which are PF and ESI with the \
+employer shares.
 - Visitors have no check-out time, so "who is inside now" and visit duration are not available.
 - query_data cannot group or list by person. For lists of people (most absences, most overtime, repeat outpasses, \
 exceptions) use the dedicated tools (attendance_exceptions, attendance_overtime, outpass_exceptions, payroll_exceptions, \

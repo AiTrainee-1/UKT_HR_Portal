@@ -1,7 +1,7 @@
 import { Calculator, Hourglass, IndianRupee, Landmark, Receipt, Timer, Users, Wallet } from "lucide-react";
 import { inrCompact, num, pct } from "@/lib/md/format";
 import KpiCard from "./KpiCard";
-import { deltaView } from "./logic";
+import { deltaView, hasTds } from "./logic";
 import type { PayrollSummary, PayrollTrend, TrendRow } from "./types";
 
 /**
@@ -67,7 +67,13 @@ export default function KpiStrip({
         testId="md-payroll-kpi-deductions"
         label="Deductions"
         value={money(t?.totalDeductions)}
-        sub={t ? `${pct(t.grossPay ? (t.totalDeductions / t.grossPay) * 100 : null)} of gross pay` : undefined}
+        sub={
+          t
+            ? `${pct(t.grossPay ? (t.totalDeductions / t.grossPay) * 100 : null)} of gross pay${
+                hasTds(t.tdsDeducted) ? ` · includes ${inrCompact(t.tdsDeducted)} TDS` : ""
+              }`
+            : undefined
+        }
         icon={Receipt}
         tone="ink"
         delta={deltaView(change?.totalDeductions, "money", "neutral")}

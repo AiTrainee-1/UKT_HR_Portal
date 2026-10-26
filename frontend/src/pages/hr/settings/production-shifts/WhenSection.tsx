@@ -122,7 +122,7 @@ export function WhenSection({ draft, patch, readOnly, validation, today, legacy 
           },
           {
             where: "Production Payroll",
-            what: "Late days (after the grace) feed the late deductions of Settings, Production Payroll",
+            what: "Late days (after the grace) feed the late deductions of Settings, Late Detection (Production page)",
             to: "/hr/production-payroll",
           },
         ]}

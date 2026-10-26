@@ -13,12 +13,12 @@ The HRMS sends its **one-time codes by SMS through 2Factor.in** instead of Whats
         |   asks for a code (Employee Code + purpose)                                          |                    |
         | ----------------------------->  checks: purpose switched on? 2Factor configured and allowed here?
         |                                 employee active with a valid mobile? resend wait over? hourly allowance left?
-        |                                 makes a 6-digit code (Python `secrets`), stores ONLY a salted HMAC of it
+        |                                 makes a 4-digit code (Python `secrets`), stores ONLY a salted HMAC of it
         |                                 limits: circuit breaker, hourly / daily cap, per-number cap (log row "sent" BEFORE the call)
         |                                 GET https://2factor.in/API/V1/<key>/SMS/+91..../<code>/UKT_HRMS_OTP -->|
         |                                                                                      | -> operator -----> | SMS arrives
         | <-- "We've sent a code by SMS to ••••••3210."                                        |                    |
-        | types the 6 digits --------->   verifies (purpose, expiry, single use, at most 5 wrong tries, constant time)
+        | types the 4 digits --------->   verifies (purpose, expiry, single use, at most 5 wrong tries, constant time)
 ```
 
 - The employee types only the **Employee Code**; the server uses the mobile number HR has on file (answers show the last four digits only).
@@ -52,7 +52,7 @@ The HRMS sends its **one-time codes by SMS through 2Factor.in** instead of Whats
    | Sender ID (header) | `UKTHRM` |
    | Text | `XXXX is your UK Textiles HRMS OTP. Official message from UK Textiles. Do not share it with anyone.` |
 
-   2Factor puts the code we pass in the `XXXX` place. The code is 6 digits; the documentation requires 4 to 6 characters but does not say how `XXXX` is filled for other lengths, so **read the first test SMS** *(confirm)*.
+   2Factor puts the code we pass in the `XXXX` place. The SMS code is **4 digits**, exactly the `XXXX` of the template (the documentation allows 4 to 6 characters, but 6-digit codes were not delivered as SMS through this template). The WhatsApp code keeps its 6 digits; the length lives in one place, `otp_service.CODE_LENGTH` (`sms` 4, `whatsapp` 6). Four digits are only 10 000 combinations, so the SMS channel is held tighter than WhatsApp; see *Why 4 digits are still safe enough* below. Still **read the first test SMS** to confirm the digits appear where `XXXX` is *(confirm)*.
 3. Copy the **API key** (panel -> API / API Docs). **Treat it like a password.** 2Factor's API carries the key in the web address, which is why this system hides it everywhere (see *Security notes*).
 
 ### Step 2 - Put the values on the server (developer)
@@ -76,7 +76,7 @@ The HRMS sends its **one-time codes by SMS through 2Factor.in** instead of Whats
 
 1. Deploy the backend and run `python manage.py migrate` (migrations `0123`, `0124`: two tables, nothing seeded; the channel stays WhatsApp).
 2. **SMS Control -> Overview** should show 2Factor set up: Yes and This machine sends: Allowed. If not, **Setup** lists what is missing.
-3. **SMS Control -> Test**: type your own mobile number and send. The real template goes out with the dummy code `123456`. Read the SMS: the six digits must appear where `XXXX` is. **Messages** shows the row (Sent, number masked). A test costs a real SMS and counts against the caps; 3 tests an hour per HR user.
+3. **SMS Control -> Test**: type your own mobile number and send. The real template goes out with the dummy code `1234`. Read the SMS: the four digits must appear where `XXXX` is. **Messages** shows the row (Sent, number masked). A test costs a real SMS and counts against the caps; 3 tests an hour per HR user.
 4. **SMS Control -> Settings -> Channel -> SMS -> Save**. **The server refuses to select SMS until 2Factor is configured on it** (400 with a sentence listing what is missing; nothing is saved).
 5. Ask one employee of each kind to try it (code sign-in, forgot password, activation for a test employee without password). Watch **Messages** for the first day.
 6. **Keep password login ON** (WhatsApp Control -> Feature Controls; one switch serves both channels). It is the fallback: if SMS cannot send for the moment (a company cap used up, the breaker paused) the system lets password sign-in through by itself even if it was switched off, and `login-options` keeps saying `passwordLogin: true`.
@@ -85,7 +85,7 @@ The HRMS sends its **one-time codes by SMS through 2Factor.in** instead of Whats
 
 ## What employees see
 
-The apps read `otpChannel` from `GET /api/auth/login-options` and `channel` from the request answer and word every screen to match ("Send code by SMS", "Code sent by SMS to ••••••3210. It expires in 5 minutes."). An older server that sends no channel gets neutral wording. An employee without a valid mobile number on file cannot get a code and is told to contact HR. The mobile app needs a new APK and the Employee Web App its own deploy to show the new words; the server change is additive.
+The apps read `otpChannel` and `codeLength` (4 for SMS, 6 for WhatsApp) from `GET /api/auth/login-options`, and `channel` and `codeLength` from the request answer; they size the code box, the "Enter the N-digit code" check and the hint from `codeLength` (an older server sends none: SMS 4, WhatsApp 6, unknown 6), and word every screen to match ("Send code by SMS", "Code sent by SMS to ••••••3210. It expires in 5 minutes."). An older server that sends no channel gets neutral wording. An employee without a valid mobile number on file cannot get a code and is told to contact HR. The mobile app needs a new APK and the Employee Web App its own deploy to show the new words and the 4-digit box; the server change is additive. An app build from before the 4-digit change only knows 6-digit codes: it cannot sign in with an SMS code until it is updated (WhatsApp codes still work in it).
 
 ## SMS Control (HR page)
 
@@ -100,7 +100,8 @@ All apply to SMS only; with the channel on WhatsApp everything is as it was befo
 | Code lifetime | 5 min | 1-15 | the code is "incorrect or expired" |
 | Resend cooldown (employee + purpose) | 60 s | 30-600 | 429 with `retryAfterSeconds` |
 | Codes per employee per hour | 5 | 1-20 | 429 |
-| Wrong tries per code | 5 | 3-10 | the code is dead (429) |
+| Wrong tries per code | 5 | 3-5 (a larger value saved earlier acts as 5) | the code is dead (429) |
+| Codes per employee and purpose in 24 hours | **10** | fixed | 429 "Too many codes requested today" (SMS only: 4-digit codes are easy to guess, see below) |
 | Codes per phone number per hour (across employee records) | 5 | 1-20 | 429, logged **Blocked** |
 | Company hourly cap (rolling hour) | **300** | 1-10000 | 503 "SMS is temporarily unavailable. Please use your password or contact HR."; logged **Blocked** |
 | Company daily cap (IST day) | **1500** | 1-10000 | same, until tomorrow (hourly cannot exceed daily; never 0) |
@@ -113,7 +114,7 @@ The caps and the per-number limit count `sent` rows of the log (a send counts fr
 
 ## API contract
 
-Public endpoints (apps; per-address throttled): `GET /api/auth/login-options` -> `{ otpLogin, otpReset, otpActivate, passwordLogin, otpChannel }`; `POST /api/auth/otp/request` `{ employeeCode, purpose }` -> `{ message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel }`; `POST /api/auth/otp/login`, `/otp/reset-password`, `/otp/activate`. Errors are `{ "error": "<sentence>" }` (plus `retryAfterSeconds` for a cooldown or throttle). Hostile input (a non-text code or password, a NUL byte, a body that is not a JSON object) is a clean 400 and never uses up a code. `POST /api/auth/set-password` stays refused for an unauthenticated first-time call while activation codes are ON and SMS is configured and allowed.
+Public endpoints (apps; per-address throttled): `GET /api/auth/login-options` -> `{ otpLogin, otpReset, otpActivate, passwordLogin, otpChannel, codeLength }`; `POST /api/auth/otp/request` `{ employeeCode, purpose }` -> `{ message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength }`; `POST /api/auth/otp/login`, `/otp/reset-password`, `/otp/activate`. Errors are `{ "error": "<sentence>" }` (plus `retryAfterSeconds` for a cooldown or throttle). Hostile input (a non-text code or password, a NUL byte, a body that is not a JSON object) is a clean 400 and never uses up a code. `POST /api/auth/set-password` stays refused for an unauthenticated first-time call while activation codes are ON and SMS is configured and allowed.
 
 HR endpoints (module `sms_control`: GET view, PUT/POST edit): `GET /api/sms-control/overview` -> `{ provider: "twofactor", channel, configured, sendingAllowed, sendingNote, env: { authKey: bool, senderId, templateName, apiBase }, balance: { available: null, checkedAt: null, error }, today, last7Days, lastSentAt, limits: { hourlyCap, dailyCap, hourUsed, dayUsed }, circuit }`; `GET|PUT /api/sms-control/settings` (all-or-nothing, `expectedVersion` stale guard; selecting `sms` while 2Factor is not configured is `400`); `GET /api/sms-control/messages`; `POST /api/sms-control/test` `{ phone }`. None ever returns the key.
 
@@ -123,7 +124,7 @@ The **custom-OTP** call is used (we generate and verify the code):
 
 ```
 GET {TWOFACTOR_API_BASE}/{api_key}/SMS/+{country code + number}/{otp}/{template_name}
-    e.g. https://2factor.in/API/V1/<api key>/SMS/+919876543210/482913/UKT_HRMS_OTP
+    e.g. https://2factor.in/API/V1/<api key>/SMS/+919876543210/4829/UKT_HRMS_OTP
 ```
 
 - Success: HTTP 200 `{ "Status": "Success", "Details": "<session id>" }` (the session id goes in the log). Refusals: HTTP 400 `{ "Status": "Error", "Details": "Invalid API Key" | "Invalid Phone Number - Length Mismatch(Expected: 10)" | "Invalid OTP Code - Length Mismatch(Expected: 4-6)" }`. The documentation lists no complete error table, so **anything that is not exactly a success is a failure**, classified by words in `Details` (auth, template, balance, number, rate, server error, anything else with 2Factor's own cleaned wording).
@@ -138,6 +139,7 @@ GET {TWOFACTOR_API_BASE}/{api_key}/SMS/+{country code + number}/{otp}/{template_
 - **The API key is in the URL path, so it must never leak.** Exceptions from `requests` / `urllib3` embed the URL: every one is caught and re-raised `from None` with our own sentence. `redact()` removes the key (any letter case) and the `/API/V1/<key>/` path segment from anything stored or shown, and a log filter on the urllib3 / requests loggers redacts the DEBUG line `GET /API/V1/<key>/...`. The key is never in a log line, exception text, `sms_message_log.error`, audit row, HTTP answer or the HR page. Tests scan captured logs, errors, rows and answers for it.
 - **The code is never stored or logged.** Only a salted HMAC is saved; single use, expiring, bound to purpose and employee, dead after the wrong tries. (Changing `DJANGO_SECRET_KEY` invalidates codes in flight.)
 - **A leaked key = rotate it**: generate a new key in the 2Factor panel, update the Railway variable, redeploy, revoke the old one, and look at **Messages** and 2Factor's own report for anything you did not send.
+- **Why 4 digits are still safe enough.** A 4-digit code is only 10 000 combinations, so what limits a guesser is how many guesses fit in a day, not the code's size: **5 wrong tries per code** (the sixth is refused and the code is dead, even for the right number), a code is **single use** and lives **5 minutes**, a new code (a resend) always replaces the old one and starts with fresh tries, and the number of codes one employee can ask for per purpose is **1 a minute (cooldown), 5 an hour and 10 in 24 hours**. So at most 5 x 5 = 25 guesses an hour and 5 x 10 = **50 guesses a day** against one account and purpose: 0.5 % of the code space (per-address throttles and the company SMS caps limit the spread across employees: at the default 300 SMS an hour the whole company is open to at most 1 500 guesses an hour, spread over at least 300 codes). The code row records its length (`EmployeeOtp.code_length`) so a code issued before HR switches the channel still verifies with the length it was issued with. WhatsApp codes keep 6 digits and their old limits.
 - A stranger can ask for a code for any employee code they know; the cooldown, per-number cap, per-address throttle and company caps bound the annoyance and the cost.
 - A development machine never sends; the test suite is blocked from sending.
 

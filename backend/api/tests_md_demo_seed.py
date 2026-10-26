@@ -724,10 +724,184 @@ class DemoDataTests(TestCase):
                     s.basic + s.hra + s.allowances + s.incentives + s.bonuses, s.gross_salary, s.slip_number
                 )
                 self.assertEqual(
-                    s.pf_deduction + s.esi_deduction + s.advance_deduction + s.other_deductions,
+                    s.pf_deduction + s.esi_deduction + s.tds_deduction + s.advance_deduction + s.other_deductions,
                     s.total_deductions,
                     s.slip_number,
                 )
+
+    # --- PF, ESI and TDS: Co Emp employees, the TDS list, and everybody else ---
+
+    def test_a_few_of_each_kind_are_co_emp_or_on_the_tds_list_and_the_rest_are_neither(self):
+        everyone = list(self.people.values())
+        for kind in ("staff", "production"):
+            mine = [e for e in everyone if e.employment_type == kind]
+            co_emp = [e for e in mine if e.co_emp_enabled]
+            tds = [e for e in mine if e.tds_enabled]
+            self.assertGreaterEqual(len(co_emp), 3, kind)
+            self.assertTrue(1 <= len(tds) <= 3, (kind, len(tds)))
+            self.assertEqual([e for e in mine if e.co_emp_enabled and e.tds_enabled], [], "the two never overlap")
+            self.assertLess(len(co_emp) + len(tds), len(mine) / 2, "most people have neither")
+            self.assertTrue(all(e.tds_percent and 0 < e.tds_percent <= 100 for e in tds))
+            self.assertTrue(all(e.tds_percent is None for e in mine if not e.tds_enabled))
+        self.assertEqual(sorted(e.employee_code for e in everyone if e.co_emp_enabled), self.stories["coEmpEmployees"])
+        self.assertEqual(
+            {e.employee_code: float(e.tds_percent) for e in everyone if e.tds_enabled}, self.stories["tdsEmployees"]
+        )
+
+    def test_the_demo_settings_hold_the_pf_and_esi_rule_lists_the_settings_api_accepts(self):
+        from .pf_esi import RULE_FIELDS, clean_rule_list
+
+        ps = PayrollSettings.objects.get(pk=1)
+        for (klass, kind), field in RULE_FIELDS.items():
+            stored = getattr(ps, field)
+            self.assertEqual(stored, org.DEMO_PF_ESI_RULES[field])
+            self.assertEqual(len(stored), 1, field)
+            self.assertEqual(
+                clean_rule_list(stored, klass, kind), stored, f"{field} is a list the settings API accepts"
+            )
+
+    def test_every_slip_carries_pf_esi_and_tds_by_the_category_and_the_rules_the_engine_follows(self):
+        def d2(value):
+            return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        seen = Counter()
+        for slip in SalarySlip.objects.filter(employee__employee_code__startswith="DM-").select_related("employee"):
+            emp, label = slip.employee, slip.slip_number
+            kind = "production" if slip.period_start else "staff"
+            ded = slip.breakdown_details["deductions"]
+            stat = ded["statutory"]
+            # the keys the engine writes today, and none of the retired ones
+            for key in ("pf", "pfRate", "esi", "esiRate", "tds", "tdsPercent", "statutory", "advances", "total"):
+                self.assertIn(key, ded, label)
+            self.assertNotIn("esiApplicableBelow", ded, label)
+            self.assertNotIn("pfEfRule", ded, label)
+            self.assertEqual(ded["pf"], float(slip.pf_deduction), label)
+            self.assertEqual(ded["esi"], float(slip.esi_deduction), label)
+            self.assertEqual(ded["tds"], float(slip.tds_deduction), label)
+            self.assertEqual(ded["total"], float(slip.total_deductions), label)
+            self.assertEqual(
+                slip.pf_deduction
+                + slip.esi_deduction
+                + slip.tds_deduction
+                + slip.advance_deduction
+                + slip.other_deductions,
+                slip.total_deductions,
+                label,
+            )
+            if emp.tds_enabled:
+                seen[kind, "tds"] += 1
+                self.assertEqual(stat["category"], "tds", label)
+                self.assertEqual((slip.pf_deduction, slip.esi_deduction), (0, 0), label)
+                earned = slip.gross_salary - slip.bonuses + slip.ot_amount  # the engine's TDS base: what was earned
+                self.assertEqual(slip.tds_deduction, d2(earned * emp.tds_percent / 100), label)
+                self.assertEqual(slip.tds_percent, emp.tds_percent, label)
+                self.assertEqual(ded["tdsPercent"], float(emp.tds_percent), label)
+                self.assertEqual(
+                    stat["tds"],
+                    {"percent": float(emp.tds_percent), "base": float(earned), "amount": float(slip.tds_deduction)},
+                    label,
+                )
+            elif emp.co_emp_enabled:
+                seen[kind, "co_emp"] += 1
+                self.assertEqual(stat["category"], "co_emp", label)
+                self.assertEqual(slip.tds_deduction, 0, label)
+                self.assertIsNone(slip.tds_percent, label)
+                self.assertIsNone(ded["tdsPercent"], label)
+                self.assertIsNone(stat["tds"], label)
+                wages = Decimal(str(stat["pfWages"]))
+                # PF wages are the first portion of the pay earned in the period (half of it, by the 50% + 50% split)
+                if kind == "staff":
+                    self.assertAlmostEqual(float(wages), float(slip.basic), places=2, msg=label)
+                else:
+                    self.assertAlmostEqual(
+                        float(wages), float(slip.gross_salary - slip.bonuses) / 2, places=2, msg=label
+                    )
+                # the demo rules: PF while the first portion is up to 15,000 a month, ESI while the salary is up to 21,000
+                elig = stat["eligibility"]
+                self.assertEqual(stat["pfRule"] is not None, elig["firstPortion"] <= 15000, label)
+                self.assertEqual(stat["esiRule"] is not None, elig["total"] <= 21000, label)
+                self.assertEqual(
+                    slip.pf_deduction,
+                    d2(wages * Decimal(str(stat["pfRule"]["ratePercent"])) / 100) if stat["pfRule"] else 0,
+                    label,
+                )
+                self.assertEqual(
+                    slip.esi_deduction,
+                    d2(wages * Decimal(str(stat["esiRule"]["ratePercent"])) / 100) if stat["esiRule"] else 0,
+                    label,
+                )
+                if slip.pf_deduction:
+                    seen[kind, "pf"] += 1
+                if slip.esi_deduction:
+                    seen[kind, "esi"] += 1
+                self.assertEqual(ded["pfRate"], stat["pfRule"]["ratePercent"] if stat["pfRule"] else 0, label)
+            else:
+                seen[kind, "none"] += 1
+                self.assertEqual(stat["category"], "none", label)
+                self.assertEqual((slip.pf_deduction, slip.esi_deduction, slip.tds_deduction), (0, 0, 0), label)
+                self.assertIsNone(slip.tds_percent, label)
+        for kind in ("staff", "production"):
+            for what in ("tds", "co_emp", "pf", "none"):
+                self.assertGreater(seen[kind, what], 0, f"{kind} {what} slips exist")
+        # ESI needs a monthly salary up to 21,000: production pay is, the demo's staff salaries mostly are not
+        self.assertGreater(seen["production", "esi"], 0)
+
+    def test_payroll_rows_carry_the_same_tds_as_their_slips(self):
+        from .models import Payroll
+
+        checked = 0
+        for slip in SalarySlip.objects.filter(employee__employee_code__startswith="DM-", tds_deduction__gt=0):
+            if slip.period_start:
+                row = Payroll.objects.get(
+                    employee=slip.employee, period_start=slip.period_start, period_end=slip.period_end
+                )
+            else:
+                row = Payroll.objects.get(
+                    employee=slip.employee, year=slip.year, month=slip.month, period_start__isnull=True
+                )
+            self.assertEqual(row.tds_deduction, slip.tds_deduction, slip.slip_number)
+            self.assertEqual(row.tds_percent, slip.tds_percent, slip.slip_number)
+            self.assertEqual(row.deductions, slip.total_deductions, slip.slip_number)
+            checked += 1
+        self.assertGreater(checked, 10)
+        self.assertEqual(
+            Payroll.objects.filter(employee__employee_code__startswith="DM-", tds_deduction__gt=0).count(), checked
+        )
+        self.assertFalse(
+            Payroll.objects.filter(
+                employee__employee_code__startswith="DM-", tds_deduction=0, tds_percent__isnull=False
+            )
+        )
+
+    def test_the_md_payroll_page_reconciles_on_the_demo_with_tds_apart_from_pf_and_esi(self):
+        md = hr_headers("md_demo")
+        body = self.client.get("/api/md/payroll/components?month=2026-09", **md).json()
+        ded = {d["id"]: d for d in body["deductions"]}
+        slips = SalarySlip.objects.filter(
+            employee__employee_code__startswith="DM-", year=2026, month=9, week_number__isnull=True
+        )
+        tds = sum(s.tds_deduction for s in slips)
+        self.assertGreater(tds, 0)
+        self.assertAlmostEqual(ded["tds"]["amount"], float(tds), places=2)
+        self.assertAlmostEqual(body["tdsDeducted"], float(tds), places=2)
+        self.assertAlmostEqual(ded["pf"]["amount"], float(sum(s.pf_deduction for s in slips)), places=2)
+        self.assertAlmostEqual(
+            body["totalDeductions"]["amount"], float(sum(s.total_deductions for s in slips)), places=2
+        )
+        self.assertAlmostEqual(
+            sum(d["amount"] for d in body["deductions"]), body["totalDeductions"]["amount"], places=2
+        )
+        self.assertEqual(body["netGap"], 0.0)
+        # the staff slips of the month have a late figure of their own and production none, so nothing lands in "other"
+        self.assertNotIn("other-deductions", ded)
+        employer = {e["id"]: e["amount"] for e in body["employer"]}
+        self.assertAlmostEqual(
+            body["statutoryDue"],
+            float(sum(s.pf_deduction + s.esi_deduction for s in slips))
+            + employer["employer-pf"]
+            + employer["employer-esi"],
+            places=2,
+        )
 
     def test_slips_follow_the_engines_working_days_and_the_attendance_of_the_month(self):
         from .payroll_views import _build_working_days
@@ -1078,6 +1252,71 @@ class DemoDataTests(TestCase):
         changed = fingerprint()
         self.assertNotEqual(changed["gross"], first["gross"])
         self.assertNotEqual(changed["statuses"], first["statuses"])
+
+
+# ─── the older dev seed (seed_data): Co Emp / TDS aware slips ─────────────────────────────────────────────────
+
+
+class DevSeedDataTests(TestCase):
+    """``manage.py seed_data`` (35 employees, June 2026 slips) is a dev convenience, not a copy of the payroll engine, but
+    its slips follow the same model: only Co Emp employees have PF and ESI, only the TDS ones have TDS, the rest neither,
+    and a slip's total deductions include TDS."""
+
+    @classmethod
+    def setUpTestData(cls):
+        call_command("seed_data", confirm=True, verbosity=0, stdout=StringIO(), stderr=StringIO())
+        cls.slips = list(SalarySlip.objects.select_related("employee"))
+        cls.runs = list(PayrollRun.objects.all())
+
+    def test_only_co_emp_employees_have_pf_and_esi_and_only_tds_employees_have_tds(self):
+        counts = Counter()
+        for slip in self.slips:
+            emp = slip.employee
+            counts["slips"] += 1
+            if emp.tds_enabled:
+                counts["tds"] += 1
+                self.assertFalse(emp.co_emp_enabled, emp.employee_code)
+                self.assertGreater(slip.tds_deduction, 0, slip.slip_number)
+                self.assertEqual(slip.tds_percent, emp.tds_percent, slip.slip_number)
+                self.assertEqual(
+                    slip.tds_deduction, (slip.gross_salary * emp.tds_percent / 100).quantize(Decimal("0.01"))
+                )
+                self.assertEqual((slip.pf_deduction, slip.esi_deduction), (0, 0), slip.slip_number)
+            elif emp.co_emp_enabled:
+                counts["co_emp"] += 1
+                self.assertEqual(slip.tds_deduction, 0, slip.slip_number)
+                self.assertIsNone(slip.tds_percent, slip.slip_number)
+                self.assertGreater(slip.pf_deduction, 0, slip.slip_number)
+            else:
+                counts["neither"] += 1
+                self.assertEqual(
+                    (slip.pf_deduction, slip.esi_deduction, slip.tds_deduction), (0, 0, 0), slip.slip_number
+                )
+                self.assertIsNone(slip.tds_percent, slip.slip_number)
+        self.assertEqual(counts["slips"], 10 + 25 * 2)
+        self.assertGreaterEqual(counts["co_emp"], 6)
+        self.assertGreaterEqual(counts["tds"], 3)
+        self.assertGreater(counts["neither"], counts["co_emp"] + counts["tds"], "most employees have neither")
+        self.assertGreater(Employee.objects.filter(co_emp_enabled=True, employment_type="staff").count(), 0)
+        self.assertGreater(Employee.objects.filter(tds_enabled=True, employment_type="production").count(), 0)
+
+    def test_total_deductions_include_tds_and_net_pay_follows(self):
+        for slip in self.slips:
+            self.assertEqual(
+                slip.total_deductions,
+                slip.pf_deduction + slip.esi_deduction + slip.tds_deduction + slip.advance_deduction,
+                slip.slip_number,
+            )
+            self.assertEqual(slip.net_salary, slip.gross_salary - slip.total_deductions, slip.slip_number)
+
+    def test_the_pay_runs_total_what_their_slips_carry(self):
+        self.assertTrue(self.runs)
+        for run in self.runs:
+            mine = [s for s in self.slips if s.payroll_run_id == run.id]
+            self.assertTrue(mine, run.run_code)
+            self.assertEqual(sum(s.gross_salary for s in mine), run.total_gross, run.run_code)
+            self.assertEqual(sum(s.total_deductions for s in mine), run.total_deductions, run.run_code)
+            self.assertEqual(sum(s.net_salary for s in mine), run.total_net, run.run_code)
 
 
 # ─── purge ────────────────────────────────────────────────────────────────────────────────────────────────────

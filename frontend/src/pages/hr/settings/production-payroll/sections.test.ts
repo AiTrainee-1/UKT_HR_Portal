@@ -4,14 +4,13 @@ import { WEEK_STARTS } from "./cycles";
 import {
   cycleErrors,
   cyclePayload,
-  deductsFromEveryone,
   hasCycleErrors,
-  lateKeysChanged,
-  latePayload,
   latestGeneratedPeriod,
-  ownLateRules,
+  payBonusChanges,
+  payBonusErrors,
+  payBonusPayload,
+  prodBonusReported,
   savedProduction,
-  sharedLatePayload,
   type CycleForm,
 } from "./sections";
 
@@ -42,48 +41,50 @@ const SETTINGS = {
       ownLateRules: false,
     },
   },
+  defaultSalaryPerShift: 300,
+  bonusPercent: 8.33,
+  bonusWageCeiling: 7000,
+  bonusEligibilityCeiling: 21000,
+  prodBonusPercent: 10,
+  prodBonusWageCeiling: 8000,
+  prodBonusEligibilityCeiling: 25000,
   prodAttendanceMode: "simple",
   prodLateDetectionEnabled: true,
   prodLateFreeAllowance: 3,
   prodLateDeductionSlabs: SHARED_SLABS,
-  pfRate: 12,
 } as unknown as PayrollSettingsItem;
 
 describe("saved values", () => {
-  it("read each cycle's rule and late values (shared ones filled in), and the global switch and mode", () => {
-    const { cycles, late } = savedProduction(SETTINGS);
-    expect(cycles.weekly).toEqual({
-      weekStart: "sunday",
-      anchorDate: "",
-      lateFreeAllowance: "3",
-      lateSlabs: [{ fromLates: "3", deductionShifts: "0.25" }],
+  it("read each cycle's period rule and the Pay & Bonus values, and nothing of late detection", () => {
+    const { cycles, payBonus } = savedProduction(SETTINGS);
+    // a cycle form holds the period rule only: the late values moved to Late Detection -> Production
+    expect(cycles.weekly).toEqual({ weekStart: "sunday", anchorDate: "" });
+    expect(cycles.biweekly).toEqual({ weekStart: "monday", anchorDate: "2026-02-02" });
+    expect(payBonus).toEqual({
+      defaultSalaryPerShift: "300",
+      prodBonusPercent: "10",
+      prodBonusWageCeiling: "8000",
+      prodBonusEligibilityCeiling: "25000",
     });
-    expect(cycles.biweekly).toEqual({
-      weekStart: "monday",
-      anchorDate: "2026-02-02",
-      lateFreeAllowance: "1",
-      lateSlabs: [{ fromLates: "1", deductionShifts: "0.5" }],
-    });
-    expect(late).toEqual({ mode: "simple", enabled: true });
-    expect([ownLateRules(SETTINGS, "weekly"), ownLateRules(SETTINGS, "biweekly")]).toEqual([false, true]);
+    expect(Object.keys(savedProduction(SETTINGS)).sort()).toEqual(["cycles", "payBonus"]);
   });
 
-  it("fall back to Monday weeks, no date and the shared production values when the server sends no cycles", () => {
-    const older = { prodLateFreeAllowance: 2, prodLateDeductionSlabs: SHARED_SLABS } as unknown as PayrollSettingsItem;
-    expect(savedProduction(older).cycles.monthly).toEqual({
-      weekStart: "monday",
-      anchorDate: "",
-      lateFreeAllowance: "2",
-      lateSlabs: [{ fromLates: "3", deductionShifts: "0.25" }],
+  it("fall back to Monday weeks and no date when the server sends no cycles, and to the staff bonus until it reports its own", () => {
+    const older = { bonusPercent: 9, bonusWageCeiling: 7500, bonusEligibilityCeiling: 22000 } as PayrollSettingsItem;
+    expect(savedProduction(older).cycles.monthly).toEqual({ weekStart: "monday", anchorDate: "" });
+    expect(savedProduction(older).payBonus).toEqual({
+      defaultSalaryPerShift: "0",
+      prodBonusPercent: "9",
+      prodBonusWageCeiling: "7500",
+      prodBonusEligibilityCeiling: "22000",
     });
-    expect(ownLateRules(older, "monthly")).toBe(false);
-    expect(savedProduction(undefined).cycles.weekly).toEqual({
-      weekStart: "monday",
-      anchorDate: "",
-      lateFreeAllowance: "3",
-      lateSlabs: [],
-    });
-    expect(savedProduction(undefined).late).toEqual({ mode: "strict", enabled: false });
+    expect(savedProduction(undefined).cycles.weekly).toEqual({ weekStart: "monday", anchorDate: "" });
+    expect(savedProduction(undefined).payBonus.prodBonusPercent).toBe("8.33");
+    expect([prodBonusReported(SETTINGS), prodBonusReported(older), prodBonusReported(undefined)]).toEqual([
+      true,
+      false,
+      false,
+    ]);
   });
 
   it("read any weekday as saved, and the first release's two keys as the weekday they meant", () => {
@@ -121,106 +122,110 @@ describe("the latest generated period of a cycle", () => {
 describe("the cycle save", () => {
   const saved = savedProduction(SETTINGS).cycles;
 
-  it("always sends the period rule for that cycle only, and the late values only when they were changed", () => {
-    expect(cyclePayload("weekly", saved.weekly, [])).toEqual({
+  it("sends the period rule of that cycle only, and never a late value", () => {
+    expect(cyclePayload("weekly", saved.weekly)).toEqual({
       prodCycles: { weekly: { weekStart: "sunday", anchorDate: null } },
     });
     const dated: CycleForm = { ...saved.monthly, weekStart: "monday", anchorDate: " 2026-02-04 " };
-    expect(cyclePayload("monthly", dated, ["anchorDate"])).toEqual({
+    expect(cyclePayload("monthly", dated)).toEqual({
       prodCycles: { monthly: { weekStart: "monday", anchorDate: "2026-02-04" } },
     });
-    const edited: CycleForm = {
-      ...saved.weekly,
-      lateFreeAllowance: " 4",
-      lateSlabs: [
-        { fromLates: "9", deductionShifts: "0.75" },
-        { fromLates: " 6", deductionShifts: "0.5" },
-      ],
-    };
-    expect(cyclePayload("weekly", edited, ["lateFreeAllowance", "lateSlabs"])).toEqual({
-      prodCycles: {
-        weekly: {
-          weekStart: "sunday",
-          anchorDate: null,
-          lateFreeAllowance: 4,
-          lateSlabs: [
-            { fromLates: 6, deductionShifts: 0.5 },
-            { fromLates: 9, deductionShifts: 0.75 },
-          ],
-        },
-      },
-    });
-    expect(cyclePayload("weekly", edited, ["lateSlabs"]).prodCycles?.weekly).not.toHaveProperty("lateFreeAllowance");
+    for (const cycle of ["weekly", "biweekly", "monthly"] as const) {
+      const entry = cyclePayload(cycle, saved[cycle]).prodCycles?.[cycle] ?? {};
+      expect(Object.keys(entry).sort(), cycle).toEqual(["anchorDate", "weekStart"]);
+    }
     expect(
-      cyclePayload("weekly", { ...saved.weekly, weekStart: "odd" as WeekStart }, []).prodCycles?.weekly?.weekStart,
+      cyclePayload("weekly", { ...saved.weekly, weekStart: "odd" as WeekStart }).prodCycles?.weekly?.weekStart,
     ).toBe("monday");
-    expect([lateKeysChanged(["weekStart"]), lateKeysChanged(["anchorDate", "lateSlabs"])]).toEqual([false, true]);
   });
 
   it("sends whichever of the seven weekdays was chosen", () => {
     for (const weekStart of WEEK_STARTS) {
-      expect(cyclePayload("biweekly", { ...saved.biweekly, weekStart }, ["weekStart"]).prodCycles?.biweekly).toEqual({
+      expect(cyclePayload("biweekly", { ...saved.biweekly, weekStart }).prodCycles?.biweekly).toEqual({
         weekStart,
         anchorDate: "2026-02-02",
       });
     }
   });
 
-  it("hands the late rules back to the shared ones with nulls, touching nothing else", () => {
-    expect(sharedLatePayload("biweekly")).toEqual({
-      prodCycles: { biweekly: { lateFreeAllowance: null, lateSlabs: null } },
-    });
-  });
-
-  it("refuses a date that is not real or outside the server's years, and judges the late values once changed", () => {
-    const clean = cycleErrors(saved.weekly, saved.weekly);
-    expect(clean).toEqual({ slabs: [{}] });
+  it("refuses a date that is not real or outside the server's years", () => {
+    const clean = cycleErrors(saved.weekly);
+    expect(clean).toEqual({});
     expect(hasCycleErrors(clean)).toBe(false);
-    expect(cycleErrors({ ...saved.weekly, anchorDate: "2026-02-30" }, saved.weekly).anchorDate).toBe(
-      "Pick a real date.",
-    );
-    expect(cycleErrors({ ...saved.weekly, anchorDate: "1999-12-27" }, saved.weekly).anchorDate).toBe(
+    expect(cycleErrors({ ...saved.weekly, anchorDate: "2026-02-30" }).anchorDate).toBe("Pick a real date.");
+    expect(cycleErrors({ ...saved.weekly, anchorDate: "1999-12-27" }).anchorDate).toBe(
       "Pick a date between the years 2000 and 2100.",
     );
-    expect(cycleErrors({ ...saved.weekly, anchorDate: "" }, saved.weekly).anchorDate).toBeUndefined();
-    const result = cycleErrors(
-      {
-        ...saved.weekly,
-        lateFreeAllowance: "-1",
-        lateSlabs: [
-          { fromLates: "3", deductionShifts: "0.25" },
-          { fromLates: "3", deductionShifts: "x" },
-          { fromLates: "2.5", deductionShifts: "0.333" },
-        ],
-      },
-      saved.weekly,
-    );
-    expect(result).toEqual({
-      allowance: "Must be 0 or more.",
-      slabs: [
-        { fromLates: "3 is used by more than one row." },
-        {
-          fromLates: "3 is used by more than one row.",
-          deductionShifts: "Enter a number, using digits and at most one dot.",
-        },
-        { fromLates: "Use a whole number.", deductionShifts: "Use at most 2 decimals." },
-      ],
-    });
-    expect(hasCycleErrors(result)).toBe(true);
-  });
-
-  it("notices a slab that deducts from workers who were never late", () => {
-    expect(deductsFromEveryone([{ fromLates: "0", deductionShifts: "0.25" }])).toBe(true);
-    expect(deductsFromEveryone([{ fromLates: "0", deductionShifts: "0" }])).toBe(false);
-    expect(deductsFromEveryone([{ fromLates: "3", deductionShifts: "0.25" }])).toBe(false);
+    expect(cycleErrors({ ...saved.weekly, anchorDate: "" }).anchorDate).toBeUndefined();
+    expect(hasCycleErrors(cycleErrors({ ...saved.weekly, anchorDate: "nonsense" }))).toBe(true);
   });
 });
 
-describe("the late detection save", () => {
-  it("sends the switch and the attendance mode, nothing per cycle", () => {
-    expect(latePayload({ mode: "strict", enabled: false })).toEqual({
-      prodAttendanceMode: "strict",
-      prodLateDetectionEnabled: false,
+describe("the Pay & Bonus save", () => {
+  const saved = savedProduction(SETTINGS).payBonus;
+
+  it("sends only the values that were changed, as numbers, and never the staff bonus", () => {
+    expect(payBonusPayload(saved, [])).toEqual({});
+    expect(payBonusPayload({ ...saved, defaultSalaryPerShift: " 350 " }, ["defaultSalaryPerShift"])).toEqual({
+      defaultSalaryPerShift: 350,
     });
+    expect(
+      payBonusPayload({ ...saved, prodBonusPercent: "12.5", prodBonusWageCeiling: "9000" }, [
+        "prodBonusPercent",
+        "prodBonusWageCeiling",
+      ]),
+    ).toEqual({ prodBonusPercent: 12.5, prodBonusWageCeiling: 9000 });
+    const all = payBonusPayload(saved, [
+      "defaultSalaryPerShift",
+      "prodBonusPercent",
+      "prodBonusWageCeiling",
+      "prodBonusEligibilityCeiling",
+    ]);
+    expect(Object.keys(all).sort()).toEqual([
+      "defaultSalaryPerShift",
+      "prodBonusEligibilityCeiling",
+      "prodBonusPercent",
+      "prodBonusWageCeiling",
+    ]);
+    for (const staff of [
+      "bonusPercent",
+      "bonusWageCeiling",
+      "bonusEligibilityCeiling",
+      "bonusFyStartMonth",
+      "payDay",
+    ]) {
+      expect(Object.keys(all)).not.toContain(staff);
+    }
+  });
+
+  it("judges changed boxes against the server's ranges and never a value left as saved", () => {
+    const errors = payBonusErrors(
+      { ...saved, defaultSalaryPerShift: "300.505", prodBonusPercent: "101", prodBonusWageCeiling: "-1" },
+      saved,
+    );
+    expect(errors).toEqual({
+      defaultSalaryPerShift: "Use at most 2 decimals.",
+      prodBonusPercent: "Must be from 0 to 100.",
+      prodBonusWageCeiling: "Must be 0 or more.",
+    });
+    expect(payBonusErrors(saved, saved)).toEqual({});
+    const odd = { ...saved, prodBonusPercent: "150" };
+    expect(payBonusErrors(odd, odd)).toEqual({});
+  });
+
+  it("lists each changed value from -> to, in words", () => {
+    const form = {
+      ...saved,
+      defaultSalaryPerShift: "350",
+      prodBonusPercent: "12.5",
+      prodBonusEligibilityCeiling: "30000",
+    };
+    expect(
+      payBonusChanges(["defaultSalaryPerShift", "prodBonusPercent", "prodBonusEligibilityCeiling"], saved, form),
+    ).toEqual([
+      { label: "Suggested rate per shift", from: "₹300.00", to: "₹350.00" },
+      { label: "Production bonus rate", from: "10%", to: "12.5%" },
+      { label: "Production bonus eligibility limit", from: "₹25,000.00", to: "₹30,000.00" },
+    ]);
   });
 });

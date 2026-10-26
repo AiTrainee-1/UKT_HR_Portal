@@ -149,6 +149,16 @@ describe("the figures", () => {
     expect(text(must("dash-kpi-net"))).toContain("₹18,000 per employee on average");
   });
 
+  it("names the TDS inside the deductions only when an employee on the TDS list has some", () => {
+    mount();
+    expect(text(must("dash-kpi-deductions"))).not.toContain("TDS");
+    act(() => root!.unmount());
+    mount({ runs: [...RUNS, run(4, { deductions: 2500, tdsDeduction: 2500, tdsPercent: 10, finalSalary: 27500 })] });
+    // the total is the whole deduction (the TDS is part of it), the TDS is named beside the share of the gross
+    expect(text(must("dash-kpi-deductions-value"))).toBe("₹8,500");
+    expect(text(must("dash-kpi-deductions"))).toContain("9% of gross · incl. ₹2,500 TDS");
+  });
+
   it("without an expected count it shows how many are in the payroll", () => {
     mount({ expected: undefined });
     expect(text(must("dash-kpi-employees-value"))).toBe("3");

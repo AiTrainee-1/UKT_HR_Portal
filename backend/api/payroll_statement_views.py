@@ -5,7 +5,7 @@ subtotal per department and a grand total), for staff payroll (one month) and pr
     GET /api/payroll/salary-statement?month=&year=[&departmentId=&branchId=&employeeId=&status=paid|pending]
     GET /api/payroll/production/salary-statement?cycle=&periodStart=&periodEnd=[...same filters]
 
-READ-ONLY, and built from what payroll stored: the Payroll row (its money), its SalarySlip (PF / ESI / advance and the
+READ-ONLY, and built from what payroll stored: the Payroll row (its money, TDS included), its SalarySlip (PF / ESI / advance and the
 breakdown's day counts), the employee's profile and recorded salary split, approved Casual Leave and the running advances.
 Nothing is recomputed. Every figure of a row is explained in the response's `notes`, because the printed layout cannot say
 how its columns are worked out. Staff is gated by the `payroll` permission module and production by `production_payroll`
@@ -93,7 +93,7 @@ def staff_columns() -> list[dict]:
         _column("advance", "Advance", "money", 1.1, "deductions"),
         _column("esi", "ESI", "money", 1, "deductions"),
         _column("pf", "PF", "money", 1, "deductions"),
-        _column("tds", "TDS", "money", 1, "deductions", sub="not tracked"),
+        _column("tds", "TDS", "money", 1, "deductions"),
         _column("others", "Others", "money", 1.1, "deductions"),
         _column("lopAmount", "Lop& PSAmt", "money", 1.2, "deductions", sub="information"),
         _column("totalDeduction", "Total Deduction", "money", 1.3, "deductions"),
@@ -118,6 +118,7 @@ def production_columns() -> list[dict]:
         _column("advance", "Advance", "money", 1.1, "deductions"),
         _column("esi", "ESI / EF", "money", 1, "deductions"),
         _column("pf", "PF", "money", 1, "deductions"),
+        _column("tds", "TDS", "money", 1, "deductions"),
         _column("others", "Others", "money", 1.1, "deductions"),
         _column("totalDeduction", "Total Deduction", "money", 1.3, "deductions"),
         _column("net", "NET", "money", 1.3, "result"),
@@ -186,6 +187,7 @@ def _staff_values(payroll: Payroll, slip, bd, cl_dates: set, balance: Decimal, s
     pf = dec(slip.pf_deduction) if slip is not None else Decimal("0")
     esi = dec(slip.esi_deduction) if slip is not None else Decimal("0")
     advance = dec(slip.advance_deduction) if slip is not None else Decimal("0")
+    tds = dec(payroll.tds_deduction)
     total_deduction = dec(payroll.deductions)
     return {
         "code": emp.employee_code,
@@ -205,8 +207,8 @@ def _staff_values(payroll: Payroll, slip, bd, cl_dates: set, balance: Decimal, s
         "advance": money(advance),
         "esi": money(esi),
         "pf": money(pf),
-        "tds": 0.0,
-        "others": money(total_deduction - pf - esi - advance),
+        "tds": money(tds),
+        "others": money(total_deduction - pf - esi - tds - advance),
         "lopAmount": money(max(Decimal("0"), total - gross)),
         "totalDeduction": money(total_deduction),
         "net": money(payroll.final_salary),
@@ -220,6 +222,7 @@ def _production_values(payroll: Payroll, slip, bd, balance: Decimal, start, end)
     pf = dec(slip.pf_deduction) if slip is not None else Decimal("0")
     esi = dec(slip.esi_deduction) if slip is not None else Decimal("0")
     advance = dec(slip.advance_deduction) if slip is not None else Decimal("0")
+    tds = dec(payroll.tds_deduction)
     total_deduction = dec(payroll.deductions)
     if bd is not None:
         summary = bd.get("summary") or {}
@@ -245,7 +248,8 @@ def _production_values(payroll: Payroll, slip, bd, balance: Decimal, start, end)
         "advance": money(advance),
         "esi": money(esi),
         "pf": money(pf),
-        "others": money(total_deduction - pf - esi - advance),
+        "tds": money(tds),
+        "others": money(total_deduction - pf - esi - tds - advance),
         "totalDeduction": money(total_deduction),
         "net": money(payroll.final_salary),
         "remarks": _remarks(emp, start, end),
@@ -328,10 +332,12 @@ def _staff_notes() -> list[str]:
         "without Casual Leave; CL is the approved Casual Leave days; Total Days = Present + CL; "
         "LOP = working days - Total Days; HD is the number of half-shift days.",
         "T.Advance is the advance balance before this month's recovery; Advance is what was recovered this month.",
+        "ESI and PF are deducted only from Co Emp employees (Employees > Co Emp), by the rules of Settings > PF & ESI, from "
+        "Basic + DA + Retaining Allowance. TDS is deducted only from employees on the TDS list: the TDS percentage set for "
+        "them of the pay earned (it is 0 for everybody else).",
         "Others is the late deduction plus any deduction HR added; Total Deduction = ESI + PF + TDS + Advance + Others; "
         "NET = E salary - Total Deduction.",
         "Lop& PSAmt = Total - E salary: the pay lost to LOP. It is shown for information and is not part of Total Deduction.",
-        "TDS is not tracked by the HRMS and is always 0.",
     ]
 
 
@@ -341,8 +347,11 @@ def _production_notes() -> list[str]:
         "1.5); Days worked and Absent count the days of the period; Late counts the days marked late.",
         "E salary is the pay for the shifts earned (Shifts x Rate / shift) plus any HR bonus.",
         "T.Advance is the advance balance before this period's recovery; Advance is what was recovered in this period.",
-        "ESI / EF is the ESI deduction (EF, under a salary band). Others is the late deduction plus any deduction HR added; "
-        "Total Deduction = ESI / EF + PF + Advance + Others; NET = E salary - Total Deduction.",
+        "ESI / EF is the ESI deduction. ESI and PF are deducted only from Co Emp workers (Employees > Co Emp), by the rules "
+        "of Settings > PF & ESI, from the first 50% of the period pay. TDS is deducted only from workers on the TDS list: "
+        "the TDS percentage set for them of the period pay (it is 0 for everybody else).",
+        "Others is the late deduction plus any deduction HR added; Total Deduction = ESI / EF + PF + TDS + Advance + "
+        "Others; NET = E salary - Total Deduction.",
     ]
 
 

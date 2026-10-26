@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useUpdatePayrollRecord } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { inr2 } from "./kit/format";
+import { hasTds, tdsAmount, tdsLabel, type TdsFields } from "./kit/statutory";
 
 // One adjustment dialog for the Salary tabs of both payroll pages: HR can correct the bonus and the total deductions of a
 // payslip. The server recomputes the net as gross + bonus - deductions (PATCH /api/payroll/:id), so the live "Net payable"
@@ -36,7 +37,7 @@ const schema = z.object({
   notes: z.string().optional(),
 });
 
-export type AdjustTarget = {
+export type AdjustTarget = TdsFields & {
   id: number;
   employeeName?: string | null;
   employeeCode?: string | null;
@@ -169,8 +170,17 @@ export function AdjustPayrollDialog({
             </div>
             <p className={cn("flex items-start gap-2 rounded-lg border px-3 py-2 text-xs", colors.note)}>
               <Info size={13} className="mt-0.5 shrink-0" />
-              Deductions is the whole deduction on this payslip (PF, ESI, advance recovery, late deduction and anything
-              you add). Net payable = gross earned + bonus − deductions.
+              <span>
+                Deductions is the whole deduction on this payslip (PF and ESI for a Co Emp employee, TDS for a TDS
+                employee, advance recovery, late deduction and anything you add). Net payable = gross earned + bonus −
+                deductions.
+                {target && hasTds(target) && (
+                  <span className="mt-1 block font-semibold" data-testid="adjust-tds-note">
+                    This payslip includes {tdsLabel(target)}: {inr2(tdsAmount(target))}. Keep it in the figure if it is
+                    still to be deducted.
+                  </span>
+                )}
+              </span>
             </p>
 
             <div

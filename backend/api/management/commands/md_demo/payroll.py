@@ -5,6 +5,11 @@ formulas (``payroll_views._generate_staff_payroll`` for staff, ``_generate_produ
 consistent with that month's attendance, the employee's pay on that date, the late-coming pool, announced overtime and the
 advance repayments due. Nothing is typed in by hand.
 
+PF, ESI and TDS are worked out by the engine's own ``pf_esi`` functions (``staff_statutory`` / ``production_statutory``), on
+the pay of the slip's month, with the company's PF / ESI rules (``world.settings``) and the category each employee was given
+when the people were written (people.py): Co Emp (PF and ESI by the rules), TDS (a percentage of what was earned) or neither.
+The slip carries the same ``deductions`` keys the engine writes, the ``statutory`` block included.
+
 How the cost moves (a nameable reason for every step the MD will see):
 
 * a steady drift from the working-day count, overtime and the people who joined or left;
@@ -20,6 +25,7 @@ from datetime import date, time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+from api import pf_esi
 from api.attendance_final import late_pool_summary
 from api.models import (
     Advance,
@@ -29,14 +35,16 @@ from api.models import (
     Payroll,
     SalarySlip,
 )
-from api.payroll_views import _build_working_days, _d2, late_shift_deduction
+from api.payroll_views import _build_working_days, _d2, late_pool_pricing, permission_summary_json
+from api.production_cycles import DEFAULT_MONTHLY_EQUIVALENT_FACTOR
 from api.production_period import _calendar_month_period
+from api.salary_split import COLUMNS as SPLIT_COLUMNS
+from api.salary_split import default_split
 
-from .common import RUN_CODE_PREFIX, World, at, chance, daterange, month_days
+from .common import RUN_CODE_PREFIX, World, at, chance, daterange, money, month_days
 from .org import hr_name
 from .people import Person, add_months
 
-BONUS_PERCENT = Decimal("8.33")
 ONE = Decimal(1)
 
 
@@ -163,17 +171,46 @@ def advance_deductions(
 # ─── slips ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def _bonus_amount(p: Person) -> Decimal:
-    """Statutory bonus: the year's wages up to the ceiling (min(basic, 7,000) x 12) at 8.33%."""
+def _bonus_rules(world: World, p: Person) -> tuple[Decimal, Decimal, Decimal]:
+    """(rate %, wage ceiling, eligibility ceiling) of this person's class: staff and production have their own bonus
+    settings (the engine's growth_views.bonus_rules_for)."""
+    s = world.settings
+    if p.kind == "production":
+        return s.prod_bonus_percent, s.prod_bonus_wage_ceiling, s.prod_bonus_eligibility_ceiling
+    return s.bonus_percent, s.bonus_wage_ceiling, s.bonus_eligibility_ceiling
+
+
+def _bonus_amount(world: World, p: Person) -> Decimal:
+    """Statutory bonus: the year's wages up to the class's ceiling (min(basic, 7,000) x 12 by default) at 8.33%."""
+    percent, wage_ceiling, _eligibility = _bonus_rules(world, p)
     monthly = p.rate if p.kind == "staff" else p.rate * 26
     basic = monthly / 2
-    return _d2(min(basic, Decimal(7000)) * 12 * BONUS_PERCENT / 100)
+    return _d2(min(basic, wage_ceiling) * 12 * percent / 100)
 
 
 def _bonus_eligible(world: World, p: Person) -> bool:
-    ceiling = world.settings.bonus_eligibility_ceiling
+    ceiling = _bonus_rules(world, p)[2]
     monthly = p.rate if p.kind == "staff" else p.rate * 26
     return p.exit is None and monthly <= ceiling and p.join <= world.plan.today - timedelta(days=200)
+
+
+def _as_judged(p: Person, salary: Decimal) -> SimpleNamespace:
+    """The employee as the PF / ESI / TDS rules see them on a slip: the salary of THAT month (the stored Employee carries
+    today's pay), the automatic split of it, and the category HR put them in. A stand-in with just the attributes
+    ``pf_esi`` reads, so nothing is written and the real row stays as it is."""
+    split = {SPLIT_COLUMNS[c]: v for c, v in default_split(salary).items()}
+    return SimpleNamespace(
+        salary_amount=salary,
+        employment_type=p.kind,
+        co_emp_enabled=p.statutory == "co_emp",
+        tds_enabled=p.statutory == "tds",
+        tds_percent=p.tds_percent,
+        **split,
+    )
+
+
+def _tds_percent(statutory: pf_esi.Statutory) -> float | None:
+    return float(statutory.tds_percent) if statutory.tds_percent is not None else None
 
 
 def _staff_slip(world: World, p: Person, year: int, month: int, extras: dict) -> SlipPlan | None:
@@ -228,23 +265,25 @@ def _staff_slip(world: World, p: Person, year: int, month: int, extras: dict) ->
     hra = _d2(_d2(salary * Decimal("0.20")) * prorate)
     allowances = _d2(base_gross - basic - hra)
 
-    pf = esi = Decimal(0)
-    if settings.staff_payroll_rules_enabled:
-        pf = _d2(basic * settings.pf_rate / 100) if settings.pf_rate > 0 else Decimal(0)
-        if settings.esi_rate > 0 and _d2(salary) <= settings.esi_applicable_below:
-            esi = _d2(base_gross * settings.esi_rate / 100)
-
     ot_days = extras["ot_pay_days"].get((p.idx, year, month), 0) if settings.compensation_feature_enabled else 0
     ot_amount = _d2(daily_rate * ot_days) if ot_days else Decimal(0)
 
+    # PF / ESI (Co Emp only) and TDS (the TDS list only), by the engine's own rules; the TDS base is everything earned
+    statutory = pf_esi.staff_statutory(
+        _as_judged(p, salary), settings, prorate_factor=prorate, earned_gross=_d2(base_gross + ot_amount)
+    )
+    pf, esi, tds = statutory.pf, statutory.esi, statutory.tds
+
     approved_permissions = extras["permissions"].get((p.idx, year, month), 0)
     pool = late_pool_summary(records, approved_permissions, settings, counted_dates=set(working))
-    shift_deductions = late_shift_deduction(pool["billable"], settings)
-    late_penalty = _d2(shift_deductions * daily_rate) if shift_deductions > 0 else Decimal(0)
+    pricing = late_pool_pricing(pool, settings, daily_rate)  # the engine's own pricing (late pool + permission slabs)
+    shift_deductions = pricing["late_shifts"]
+    late_penalty = pricing["late_penalty"]
+    permission_penalty = pricing["permission_penalty"]
 
     advance = extras["advances"].get((p.idx, year, month), Decimal(0))
     bonus = extras["bonus"].get((p.idx, year, month), Decimal(0))
-    total_deductions = _d2(pf + esi + advance + late_penalty)
+    total_deductions = _d2(pf + esi + tds + advance + late_penalty + permission_penalty)
     gross = _d2(base_gross + bonus)
     net = _d2(gross + ot_amount - total_deductions)
     breakdown = {
@@ -278,9 +317,12 @@ def _staff_slip(world: World, p: Person, year: int, month: int, extras: dict) ->
         },
         "deductions": {
             "pf": float(pf),
-            "pfRate": float(settings.pf_rate),
+            "pfRate": float(statutory.pf_rate),
             "esi": float(esi),
-            "esiRate": float(settings.esi_rate),
+            "esiRate": float(statutory.esi_rate),
+            "tds": float(tds),
+            "tdsPercent": _tds_percent(statutory),
+            "statutory": statutory.breakdown(),
             "advances": float(advance),
             "lateShiftPenalty": float(late_penalty),
             "lateSummary": {
@@ -289,6 +331,8 @@ def _staff_slip(world: World, p: Person, year: int, month: int, extras: dict) ->
                 "shiftDeductions": float(shift_deductions),
                 "freeAllowance": settings.late_free_allowance,
             },
+            "permissionPenalty": float(permission_penalty),
+            "permissionSummary": permission_summary_json(pool, settings, approved_permissions, pricing),
             "total": float(total_deductions),
         },
         "netSalary": float(net),
@@ -308,8 +352,10 @@ def _staff_slip(world: World, p: Person, year: int, month: int, extras: dict) ->
         gross_salary=gross,
         pf_deduction=pf,
         esi_deduction=esi,
+        tds_deduction=tds,
+        tds_percent=statutory.tds_percent,
         advance_deduction=advance,
-        other_deductions=late_penalty,
+        other_deductions=_d2(late_penalty + permission_penalty),
         total_deductions=total_deductions,
         net_salary=net,
         working_days=total_days,
@@ -336,6 +382,8 @@ def _staff_slip(world: World, p: Person, year: int, month: int, extras: dict) ->
         base_salary=salary,
         gross_salary=gross,
         deductions=total_deductions,
+        tds_deduction=tds,
+        tds_percent=statutory.tds_percent,
         bonus=bonus,
         final_salary=net,
         status="paid",
@@ -366,14 +414,16 @@ def _production_slip(
         missed += day.status == "absent"
         late += bool(day.is_late)
     gross = _d2(shifts * rate)
-    pf = esi = Decimal(0)
-    if settings.prod_payroll_rules_enabled:
-        pf = _d2(gross * settings.prod_pf_rate / 100) if settings.prod_pf_rate > 0 else Decimal(0)
-        if settings.prod_esi_rate > 0 and _d2(gross * 2) <= settings.prod_esi_applicable_below:
-            esi = _d2(gross * settings.prod_esi_rate / 100)
+    # PF / ESI (Co Emp only) and TDS (the TDS list only), by the engine's own rules: judged on the period's earnings
+    # scaled to a month, taken from the period's gross
+    monthly_factor = DEFAULT_MONTHLY_EQUIVALENT_FACTOR  # these periods are two weeks long (the engine's default cycle)
+    statutory = pf_esi.production_statutory(
+        _as_judged(p, money(rate * 6)), settings, period_gross=gross, monthly_factor=monthly_factor
+    )
+    pf, esi, tds = statutory.pf, statutory.esi, statutory.tds
     advance = extras["advances"].get((p.idx, year, month), Decimal(0)) if first_in_month else Decimal(0)
     bonus = extras["bonus"].get((p.idx, year, month), Decimal(0)) if second_in_month else Decimal(0)
-    total_deductions = _d2(pf + esi + advance)
+    total_deductions = _d2(pf + esi + tds + advance)
     gross_with_bonus = _d2(gross + bonus)
     net = _d2(gross_with_bonus - total_deductions)
     total_days = (end - start).days + 1
@@ -397,9 +447,14 @@ def _production_slip(
         },
         "deductions": {
             "pf": float(pf),
-            "pfRate": float(settings.prod_pf_rate),
+            "pfRate": float(statutory.pf_rate),
             "esi": float(esi),
-            "esiRate": float(settings.prod_esi_rate),
+            "esiRate": float(statutory.esi_rate),
+            "tds": float(tds),
+            "tdsPercent": _tds_percent(statutory),
+            "statutory": statutory.breakdown(),
+            "monthlyEquivalent": float(_d2(gross * monthly_factor)),
+            "monthlyEquivalentFactor": monthly_factor,
             "advances": float(advance),
             "total": float(total_deductions),
         },
@@ -420,6 +475,8 @@ def _production_slip(
         gross_salary=gross_with_bonus,
         pf_deduction=pf,
         esi_deduction=esi,
+        tds_deduction=tds,
+        tds_percent=statutory.tds_percent,
         advance_deduction=advance,
         other_deductions=Decimal(0),
         total_deductions=total_deductions,
@@ -450,6 +507,8 @@ def _production_slip(
         base_salary=gross,
         gross_salary=gross_with_bonus,
         deductions=total_deductions,
+        tds_deduction=tds,
+        tds_percent=statutory.tds_percent,
         bonus=bonus,
         final_salary=net,
         status="paid",
@@ -485,16 +544,17 @@ def create_payroll(world: World) -> None:
     approver = hr_name(world, "payroll_demo")
     for p in sorted(world.people, key=lambda x: x.idx):
         if _bonus_eligible(world, p):
-            amount = _bonus_amount(p)
+            amount = _bonus_amount(world, p)
             bonus_map[(p.idx, latest[0], latest[1])] = amount
             monthly = p.rate if p.kind == "staff" else p.rate * 26
+            percent, wage_ceiling, _eligibility = _bonus_rules(world, p)
             bonus_rows.append(
                 Bonus(
                     employee=p.emp,
                     financial_year=fy_label,
                     records_considered=12,
-                    calculation_base=_d2(min(monthly / 2, Decimal(7000)) * 12),
-                    bonus_percent_applied=BONUS_PERCENT,
+                    calculation_base=_d2(min(monthly / 2, wage_ceiling) * 12),
+                    bonus_percent_applied=percent,
                     bonus_amount=amount,
                     status="paid",
                     notes="Statutory bonus paid with the salary",

@@ -97,10 +97,10 @@ export const LIMIT_RULES: readonly LimitRule[] = [
     label: "Wrong tries per code",
     unit: "tries",
     min: 3,
-    max: 10,
+    max: 5,
     default: 5,
     purpose:
-      "How many wrong codes may be typed before that code is thrown away and the employee has to ask for a new one. It stops guessing.",
+      "How many wrong codes may be typed before that code is thrown away and the employee has to ask for a new one. It stops guessing. SMS codes have only 4 digits, so this is held to 5 at most.",
     affects: [
       { where: "Login screens", what: "after this many wrong tries the code is dead, even if it has not expired" },
     ],
@@ -462,7 +462,7 @@ export const ENV_VARS: readonly EnvVar[] = [
 /** The message the Test tab previews: the template with a made-up code where XXXX is. */
 export const templatePreview = (code: string): string => TWOFACTOR_TEMPLATE_TEXT.replace("XXXX", code);
 
-export const DOCS_FILE = "2factor-sms-otp-integration.md";
+export const DOCS_FILE = "twofactor-sms-otp-integration.md";
 
 /** Whether the server reports an environment value as set (the key as a flag, the sender ID and template name as text). */
 export const isEnvSet = (env: SmsOverview["env"], flag: "authKey" | "senderId" | "templateName"): boolean =>
@@ -735,7 +735,7 @@ export function nextSteps(o: SmsOverview): NextStep[] {
 
 // ── the Test tab ──────────────────────────────────────────────────────────────
 
-export const TEST_CODE = "123456";
+export const TEST_CODE = "1234";
 
 export const MOBILE_HELP = "Enter a 10-digit Indian mobile number, for example 9876543210.";
 

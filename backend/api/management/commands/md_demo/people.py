@@ -70,6 +70,12 @@ NEXT_LEVEL = {
     "production": {"junior": "senior"},
 }
 INCREMENT_PERCENTS = (5, 5.5, 6, 6.5, 7, 7.5, 8, 9, 10)
+#: PF, ESI and TDS: only the employees HR put in the Co Emp category have PF and ESI (a fifth of each class: among staff the
+#: lower-paid), and a couple of each class are on the TDS list instead (tax deducted at source: the better-paid staff, anyone
+#: in production). Everybody else has neither, ever.
+CO_EMP_SHARE = 0.20
+TDS_PERCENTS = (Decimal("5"), Decimal("7.5"), Decimal("10"), Decimal("10"), Decimal("12.5"))
+TDS_STAFF_FLOOR = 30000  # monthly salary from which a staff member is a TDS candidate
 
 
 @dataclass(eq=False)
@@ -98,6 +104,8 @@ class Person:
     promoted_from: Desig | None = None
     promoted_on: date | None = None
     resignation_reason: str | None = None
+    statutory: str = "none"  # co_emp (PF/ESI apply) | tds (tax deducted at source) | none (nothing is deducted)
+    tds_percent: Decimal | None = None
     emp: Employee | None = None
 
     @property
@@ -248,6 +256,7 @@ def plan_people(world: World) -> list[Person]:
     _plan_pay_changes(world, rng, people)
     for p in people:
         _finish_pay(p, today)
+    _assign_statutory(world, people)
 
     # codes follow the joining order, as they do in a real company
     for number, p in enumerate(sorted(people, key=lambda x: (x.join, x.full_name)), start=1):
@@ -401,6 +410,32 @@ def _assign_story_flags(world: World, rng: random.Random, people: list[Person]) 
             p.flags.add("sunday_worker")
 
 
+def _assign_statutory(world: World, people: list[Person]) -> None:
+    """Who is Co Emp (PF and ESI apply), who is on the TDS list and who is neither. Drawn from its own random stream, so the
+    other domains' numbers do not move. Only people still working and employed long enough to appear on every closed
+    payroll month are chosen, so each category is visible on the slips."""
+    today = world.plan.today
+    rng = world.streams("statutory")
+    for kind in ("staff", "production"):
+        pool = [p for p in people if p.kind == kind and p.exit is None and p.join <= today - timedelta(days=240)]
+        if not pool:
+            continue
+        tds_count = min(3, max(1, len(pool) // 6))
+        tds_pool = [p for p in pool if p.rate >= TDS_STAFF_FLOOR] if kind == "staff" else pool
+        if len(tds_pool) < tds_count:
+            tds_pool = pool
+        tds = rng.sample(tds_pool, tds_count)
+        for p in tds:
+            p.statutory = "tds"
+            p.tds_percent = rng.choice(TDS_PERCENTS)
+        rest = [p for p in pool if p.statutory == "none"]
+        co_emp_count = min(len(rest), max(3, round(len(pool) * CO_EMP_SHARE)))
+        # PF / ESI are for the lower-paid: among staff, the lowest-paid few (twice as many as are needed to choose from)
+        co_emp_pool = sorted(rest, key=lambda p: (p.rate, p.idx))[: co_emp_count * 2] if kind == "staff" else rest
+        for p in rng.sample(co_emp_pool, co_emp_count):
+            p.statutory = "co_emp"
+
+
 def _next_level_options(p: Person) -> list[Desig]:
     target = NEXT_LEVEL[p.kind].get(p.desig.level)
     return [
@@ -469,6 +504,8 @@ def _record_story_people(world: World, people: list[Person]) -> None:
 
     world.stories.update(
         {
+            "coEmpEmployees": sorted(p.code for p in people if p.statutory == "co_emp"),
+            "tdsEmployees": {p.code: float(p.tds_percent) for p in people if p.statutory == "tds"},
             "chronicAbsentees": codes("chronic"),
             "habitualLateComers": codes("late"),
             "teaBreakRepeatOffenders": codes("tea_offender"),
@@ -539,6 +576,9 @@ def _employee_row(world: World, p: Person, names: NameFactory, rng: random.Rando
         probation_end_date=probation_end,
         confirmation_date=confirmation,
         blood_group=pick(rng, BLOOD_GROUPS),
+        co_emp_enabled=p.statutory == "co_emp",
+        tds_enabled=p.statutory == "tds",
+        tds_percent=p.tds_percent if p.statutory == "tds" else None,
         initial_salary=money(p.joining_rate * 6) if p.kind == "production" else money(p.joining_rate),
         nationality="Indian",
         workstation=f"Line {rng.randint(1, 12)}"

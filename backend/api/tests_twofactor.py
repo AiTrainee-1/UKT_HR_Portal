@@ -26,6 +26,7 @@ from .tests_sms_otp import (
     NoNetworkMixin,
     captured_logs,
     code_in,
+    log_text,
 )
 
 
@@ -98,7 +99,7 @@ class ClientTests(NoNetworkMixin, SimpleTestCase):
             dict(mobile="+919876543210"),
             dict(mobile="9198765432a0"),
             dict(code="123"),  # 2Factor accepts 4 to 6 characters ...
-            dict(code="1234567"),  # ... (we always send 6 digits)
+            dict(code="1234567"),  # ... (we send 4 digits by SMS, see otp_service.CODE_LENGTH)
             dict(code="12 456"),
             dict(code="12345a"),
         )
@@ -342,12 +343,13 @@ class RequestOtpTests(TwoFactorBase):
                 "expiresInSeconds": 300,
                 "resendAfterSeconds": 60,
                 "channel": "sms",
+                "codeLength": 4,
             },
         )
         whatsapp.assert_not_called()
         get.assert_called_once()
         self.assertEqual(get.call_args.args[0], f"{BASE}/{TF_KEY}/SMS/+918220015110/{code}/UKT_HRMS_OTP")
-        self.assertRegex(code, r"^\d{6}$")
+        self.assertRegex(code, r"^\d{4}$")
         self.assertNotIn(code, r.content.decode())
         self.assertNotIn(TF_KEY, r.content.decode())
         # the code verifies like any other
@@ -362,8 +364,9 @@ class RequestOtpTests(TwoFactorBase):
         )
         self.assertEqual(log.provider_message_id, SESSION)
         dump = " ".join(str(getattr(log, f.attname)) for f in log._meta.concrete_fields)
-        for secret in (TF_KEY, code, "8220015110", "UKT_HRMS_OTP"):
+        for secret in (TF_KEY, "8220015110", "UKT_HRMS_OTP"):
             self.assertNotIn(secret, dump)
+        self.assertNotIn(code, log_text(log))
 
     def test_every_failure_discards_the_code_logs_a_clean_row_and_never_shows_the_key(self):
         quoting = f"HTTPSConnectionPool: Max retries exceeded with url: /API/V1/{TF_KEY}/SMS/+918220015110/000000/UKT_HRMS_OTP"

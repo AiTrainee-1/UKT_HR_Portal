@@ -68,7 +68,8 @@ _STAFF_SLIP = dict(period_start__isnull=True, week_number__isnull=True)
 _OT_PAY_NOTE = (
     "Overtime is paid per announced Pay-type record as its shifts (0.25 / 0.50 / 0.75 / 1) x the daily rate on that "
     "month's slip - a record from before the shift-based rules is one whole day - added to net pay outside gross "
-    "salary, PF and ESI; minutes and hours are informational. Relaxation-type records give time off instead of pay, "
+    "salary, PF and ESI (an employee added to TDS does have TDS on it: TDS is taken from gross pay + overtime pay); "
+    "minutes and hours are informational. Relaxation-type records give time off instead of pay, "
     "and the next-day late-in allowance (status Automatic) is listed for information only: it is never paid."
 )
 _OT_ROWS_NOTE = (

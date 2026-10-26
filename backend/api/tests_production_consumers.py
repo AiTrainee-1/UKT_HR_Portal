@@ -139,9 +139,6 @@ class Base(TestCase):
         _ensure_seed()
         _set_rules(LONG_AGO)
         ps = PayrollSettings.get()
-        ps.prod_payroll_rules_enabled = False
-        ps.prod_pf_ef_enabled = False
-        ps.prod_pf_ef_rules = []
         ps.prod_late_detection_enabled = False
         ps.save()
         self.auth = _hr()

@@ -327,3 +327,13 @@ api/sms_service.py
 api/sms_control_views.py
 api/tests_sms_otp.py
 api/tests_sms_control.py
+api/pf_esi.py
+api/pf_esi_views.py
+api/tds_views.py
+api/tests_pf_esi.py
+api/pf_esi_coverage_export.py
+api/reporting/definitions/pf_esi_coverage.py
+api/tests_pf_esi_outputs.py
+api/tests_permission_slabs.py
+api/tests_prod_bonus.py
+api/tests_permission_slabs_review.py

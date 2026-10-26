@@ -3,6 +3,10 @@
 A value that cannot be right is refused with a 400 and a message (several used to be a 500: a rate of 1000 does not
 fit DECIMAL(5,2)), nothing of the request is saved, every value the Settings page can send still saves, and a value
 already stored is accepted again unchanged, so an older page's leftovers never block a save.
+
+(PF and ESI left this endpoint on 2026-10-24: their rules have their own API, pf_esi_views.py, tested in tests_pf_esi.py.
+The range checks of the old flat PF / ESI rates, ceilings and the production PF/EF bands were removed with them; the NaN,
+too-big-for-the-column and saved-again-unchanged cases below run on the Basic % column instead.)
 """
 
 from decimal import Decimal
@@ -23,8 +27,16 @@ def _hr(username="spay_admin", super_admin=True, role=None, branch=None):
     return {"HTTP_AUTHORIZATION": f"Bearer {sign_token({'role': 'hr', 'hrUserId': user.id})}"}
 
 
-# What the redesigned tab's four Save buttons send (payroll/sections.ts), and the old page's "Save Payroll Settings".
+# What the Payroll tab's Save buttons send (payroll/sections.ts).
 RATES = {
+    "payDay": 5,
+    "bonusFyStartMonth": 4,
+    "defaultSalaryPerShift": 300,
+}
+BONUS = {"bonusPercent": 8.33, "bonusWageCeiling": 7000, "bonusEligibilityCeiling": 21000}
+OT = {"otDetectionEnabled": True, "otThresholdMinutes": 60, "otCompensationType": "pay"}
+# The retired PF / ESI keys an older page (or a script) may still send: ignored, never an error, never stored.
+RETIRED_PF_ESI = {
     "staffPayrollRulesEnabled": True,
     "pfRate": 12,
     "esiRate": 0.75,
@@ -33,20 +45,8 @@ RATES = {
     "prodPfRate": 12,
     "prodEsiRate": 0.75,
     "prodEsiApplicableBelow": 21000,
-    "payDay": 5,
-    "bonusFyStartMonth": 4,
-    "defaultSalaryPerShift": 300,
-}
-BONUS = {"bonusPercent": 8.33, "bonusWageCeiling": 7000, "bonusEligibilityCeiling": 21000}
-OT = {"otDetectionEnabled": True, "otThresholdMinutes": 60, "otCompensationType": "pay"}
-BANDS = [
-    {"label": "Low", "minSalary": 0, "maxSalary": 20000, "pfRate": 12, "efRate": 0.75},
-    {"label": "High", "minSalary": 20001, "maxSalary": 0, "pfRate": 12, "efRate": 0},
-]
-OLD_PAGE_RATES = {
-    **{k: v for k, v in RATES.items() if k != "bonusFyStartMonth"},
     "prodPfEfEnabled": True,
-    "prodPfEfRules": BANDS,
+    "prodPfEfRules": [{"label": "Low", "minSalary": 0, "maxSalary": 20000, "pfRate": 12, "efRate": 0.75}],
 }
 PERIOD = {
     "prodPeriodFrequency": "2weeks",
@@ -67,7 +67,7 @@ class RangeBase(TestCase):
     def setUp(self):
         self.admin = _hr()
         ps = PayrollSettings.get()
-        ps.pf_rate = Decimal("12")
+        ps.basic_percent = Decimal("45")
         ps.pay_day = 5
         ps.company_name = "Before Ltd"
         ps.save()
@@ -83,23 +83,46 @@ class RangeBase(TestCase):
         self.assertEqual(r.status_code, 400, (body, r.content))
         self.assertIn(message_part, r.json()["error"], body)
         ps = self.row()
-        self.assertEqual((ps.company_name, ps.pf_rate, ps.pay_day), ("Before Ltd", Decimal("12.00"), 5), body)
+        self.assertEqual((ps.company_name, ps.basic_percent, ps.pay_day), ("Before Ltd", Decimal("45.00"), 5), body)
 
 
 class AcceptedValuesTests(RangeBase):
     def test_every_save_button_of_both_tabs_still_saves(self):
-        for body in (RATES, BONUS, OT, {"prodPfEfEnabled": True, "prodPfEfRules": BANDS}, OLD_PAGE_RATES, PERIOD, LATE):
+        for body in (RATES, BONUS, OT, PERIOD, LATE):
             r = self.put(body)
             self.assertEqual(r.status_code, 200, (body, r.content))
         ps = self.row()
-        self.assertEqual((ps.pf_rate, ps.esi_rate, ps.pay_day, ps.bonus_fy_start_month), (12, Decimal("0.75"), 5, 4))
-        self.assertEqual(ps.prod_pf_ef_rules, BANDS)
+        self.assertEqual((ps.pay_day, ps.bonus_fy_start_month), (5, 4))
+
+    def test_the_retired_pf_esi_keys_are_ignored_and_no_longer_returned(self):
+        before = self.row()
+        r = self.put({**RETIRED_PF_ESI, "payDay": 7})
+        self.assertEqual(r.status_code, 200, r.content)
+        after = self.row()
+        self.assertEqual(after.pay_day, 7)  # the rest of the request saved
+        for column in (
+            "pf_rate",
+            "esi_rate",
+            "esi_applicable_below",
+            "prod_pf_rate",
+            "prod_esi_rate",
+            "prod_esi_applicable_below",
+            "prod_pf_ef_enabled",
+            "prod_pf_ef_rules",
+            "staff_payroll_rules_enabled",
+            "prod_payroll_rules_enabled",
+        ):
+            self.assertEqual(getattr(after, column), getattr(before, column), column)
+        rules = (after.staff_pf_rules, after.staff_esi_rules, after.prod_pf_rules, after.prod_esi_rules)
+        self.assertEqual(rules, ([], [], [], []))
+        body = self.client.get(SETTINGS, **self.admin).json()
+        for key in RETIRED_PF_ESI:
+            self.assertNotIn(key, body, key)
 
     def test_the_edges_of_each_range_are_accepted(self):
         for key, attr, values in (
-            ("pfRate", "pf_rate", (0, 100, 12.34, "7.5")),
-            ("prodEsiRate", "prod_esi_rate", (0, 100, 3.25)),
-            ("esiApplicableBelow", "esi_applicable_below", (0, 99999999.99, "21000.50")),
+            ("basicPercent", "basic_percent", (0, 100, 12.34, "7.5")),
+            ("hraPercent", "hra_percent", (0, 100, 3.25)),
             ("bonusPercent", "bonus_percent", (0, 8.33, 20, 100)),
             ("bonusWageCeiling", "bonus_wage_ceiling", (0, 99999999.99)),
             ("defaultSalaryPerShift", "default_salary_per_shift", (0, 999999.99)),
@@ -134,14 +157,10 @@ class AcceptedValuesTests(RangeBase):
 class RefusedValuesTests(RangeBase):
     def test_numbers_outside_their_range_are_refused_with_a_message(self):
         for body, message in (
-            ({"pfRate": 100.01}, "Staff PF rate must be between 0 and 100, with at most 2 decimals."),
-            ({"pfRate": -1}, "Staff PF rate must be between 0 and 100"),
-            ({"pfRate": 12.345}, "with at most 2 decimals"),
-            ({"esiRate": 150}, "Staff ESI rate must be between 0 and 100"),
-            ({"prodPfRate": 101}, "Production PF rate"),
-            ({"prodEsiRate": -0.5}, "Production ESI rate"),
-            ({"esiApplicableBelow": -5}, "Staff ESI ceiling must be between 0 and 99999999.99"),
-            ({"prodEsiApplicableBelow": 100000000}, "Production ESI ceiling"),
+            ({"basicPercent": 100.01}, "Basic % must be between 0 and 100, with at most 2 decimals."),
+            ({"basicPercent": -1}, "Basic % must be between 0 and 100"),
+            ({"basicPercent": 12.345}, "with at most 2 decimals"),
+            ({"hraPercent": 150}, "HRA % must be between 0 and 100"),
             ({"bonusPercent": 120}, "Bonus rate must be between 0 and 100"),
             ({"bonusWageCeiling": -1}, "Bonus wage ceiling"),
             ({"bonusEligibilityCeiling": 123456789}, "Bonus eligibility limit"),
@@ -165,9 +184,9 @@ class RefusedValuesTests(RangeBase):
     def test_values_too_big_for_their_column_are_a_400_not_a_500(self):
         # DECIMAL(5,2) holds at most 999.99, DECIMAL(10,2) at most 99,999,999.99, INTEGER about 2.1 billion.
         for body in (
-            {"pfRate": 1000},
+            {"basicPercent": 1000},
             {"bonusPercent": "1e3"},
-            {"esiApplicableBelow": 1e11},
+            {"bonusWageCeiling": 1e11},
             {"payDay": 10**12},
             {"otThresholdMinutes": 2**40},
         ):
@@ -176,7 +195,7 @@ class RefusedValuesTests(RangeBase):
 
     def test_not_a_number_is_refused_rather_than_crashing(self):
         for value in ("NaN", "Infinity", "-Infinity", "sNaN"):
-            self.assert_refused({"pfRate": value}, "Staff PF rate")
+            self.assert_refused({"basicPercent": value}, "Basic %")
         self.assert_refused(
             {"prodLateDeductionSlabs": [{"fromLates": 3, "deductionShifts": "nan"}]},
             "Production Late slab values must be finite numbers",
@@ -210,32 +229,11 @@ class RefusedValuesTests(RangeBase):
         self.assertEqual(self.put({"prodPeriodFrequency": "monthly"}).status_code, 200)
         self.assert_refused({"prodPeriodStyle": "weekday_anchored"}, "Monthly frequency cannot be used")
 
-    def test_pf_ef_rules_are_checked_row_by_row(self):
-        good = BANDS[0]
-        for rows, message in (
-            (["Low band"], "Production PF/EF rule 1: each rule needs a label"),
-            ([good, {**good, "label": 5}], "Production PF/EF rule 2: the label must be text."),
-            ([{**good, "minSalary": "abc"}], "Min Salary must be a number."),
-            ([{**good, "maxSalary": True}], "Max Salary must be a number."),
-            ([{**good, "pfRate": 101}], "PF % must be between 0 and 100, with at most 2 decimals."),
-            ([{**good, "efRate": -1}], "EF % must be between 0 and 100"),
-            ([{**good, "efRate": "NaN"}], "EF % must be a number."),
-            ([{**good, "minSalary": 100000000}], "Min Salary must be between 0 and 99999999.99"),
-            ([{**good, "minSalary": 5000, "maxSalary": 1000}], "Max Salary must be 0 (no upper limit) or at least"),
-        ):
-            self.assert_refused({"prodPfEfEnabled": True, "prodPfEfRules": rows}, message)
-        self.assertEqual(self.row().prod_pf_ef_rules, [])
-
-    def test_blank_band_values_are_read_as_0_like_payroll_does(self):
-        rows = [{"label": None, "minSalary": None, "maxSalary": "", "pfRate": "12", "efRate": 0}]
-        self.assertEqual(self.put({"prodPfEfRules": rows}).status_code, 200)
-        self.assertEqual(self.row().prod_pf_ef_rules, rows)
-
     def test_one_bad_value_saves_nothing_of_the_request(self):
-        r = self.put({**RATES, "pfRate": 10, "payDay": 31})
+        r = self.put({**RATES, "basicPercent": 10, "payDay": 31})
         self.assertEqual(r.status_code, 400)
         ps = self.row()
-        self.assertEqual((ps.pf_rate, ps.pay_day, ps.staff_payroll_rules_enabled), (Decimal("12.00"), 5, False))
+        self.assertEqual((ps.basic_percent, ps.pay_day, ps.default_salary_per_shift), (Decimal("45.00"), 5, 0))
 
 
 class StoredValuesTests(RangeBase):
@@ -243,17 +241,16 @@ class StoredValuesTests(RangeBase):
         # As an older page could have stored them: outside today's ranges, but they are what is there.
         PayrollSettings.objects.filter(pk=1).update(
             pay_day=31,
-            pf_rate=Decimal("150"),
+            basic_percent=Decimal("150"),
             bonus_percent=Decimal("5.555"),
             ot_threshold_minutes=0,
             ot_compensation_type="weird",
             prod_period_style="weekday_anchored",
             prod_period_frequency="monthly",
-            prod_pf_ef_rules=[{"label": 5, "minSalary": "abc"}],
         )
         stored = self.row()
         for body in (
-            {**OLD_PAGE_RATES, "pfRate": 150, "payDay": 31, "prodPfEfRules": stored.prod_pf_ef_rules},
+            {"basicPercent": 150, "payDay": 31},
             {"bonusPercent": float(stored.bonus_percent), "bonusWageCeiling": 7000},
             {"otDetectionEnabled": False, "otThresholdMinutes": 0, "otCompensationType": "weird"},
             {
@@ -265,7 +262,7 @@ class StoredValuesTests(RangeBase):
             r = self.put(body)
             self.assertEqual(r.status_code, 200, (body, r.content))
         ps = self.row()
-        self.assertEqual((ps.pay_day, ps.pf_rate, ps.ot_threshold_minutes), (31, Decimal("150.00"), 0))
+        self.assertEqual((ps.pay_day, ps.basic_percent, ps.ot_threshold_minutes), (31, Decimal("150.00"), 0))
         self.assertFalse(ps.ot_detection_enabled)
 
         # Changing one of them is judged again.
@@ -278,12 +275,12 @@ class StoredValuesTests(RangeBase):
         north = Branch.objects.create(name="North")
         role = Role.objects.create(name="North Payroll", permissions={"settings.payroll": "edit"})
         who = _hr("spay_north", super_admin=False, role=role, branch=north)
-        r = self.put({"payDay": 31, "pfRate": 10}, who)
+        r = self.put({"payDay": 31, "basicPercent": 10}, who)
         self.assertEqual(r.status_code, 400)
         self.assertFalse(BranchSettingsOverride.objects.filter(branch=north).exists())
 
-        r = self.put({"payDay": 10, "pfRate": 10}, who)
+        r = self.put({"payDay": 10, "basicPercent": 10}, who)
         self.assertEqual(r.status_code, 200)
         overrides = BranchSettingsOverride.objects.get(branch=north).overrides
-        self.assertEqual((overrides["pay_day"], Decimal(str(overrides["pf_rate"]))), (10, Decimal("10")))
-        self.assertEqual((self.row().pay_day, self.row().pf_rate), (5, Decimal("12.00")))
+        self.assertEqual((overrides["pay_day"], Decimal(str(overrides["basic_percent"]))), (10, Decimal("10")))
+        self.assertEqual((self.row().pay_day, self.row().basic_percent), (5, Decimal("45.00")))

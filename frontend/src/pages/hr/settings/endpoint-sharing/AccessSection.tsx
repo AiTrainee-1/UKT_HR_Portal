@@ -15,6 +15,12 @@ export function AccessSection({ draft, patch, readOnly, errors, saved, dataset, 
         title="Allowed websites (origins)"
         purpose="The websites whose pages may call this endpoint from a visitor's browser. Without a website on the list a browser is refused, even with a good key. This is a safety net for browsers, not a lock: the API key is the lock."
         note="Write each website as scheme://host or scheme://host:port. No path, no star."
+        affects={[
+          {
+            where: "Browsers calling this endpoint",
+            what: "A page on a website that is not on this list is refused by the browser, even with a valid API key.",
+          },
+        ]}
       >
         <OriginsPanel
           origins={draft.origins}

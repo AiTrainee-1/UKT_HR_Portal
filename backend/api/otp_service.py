@@ -9,12 +9,17 @@ attempt limit, purpose binding- is shared by both channels.
 
 Security properties, each covered by tests_otp.py (WhatsApp) and
 tests_sms_otp.py (SMS):
-  * Codes are 6 random digits from `secrets`, valid for a few minutes
-    (the active channel's expiry setting) and usable exactly once.
+  * Codes are random digits from `secrets` -4 for SMS (the owner's 2Factor template is "XXXX is your ... OTP"; 2Factor
+    does not deliver 6-digit codes through it), 6 for WhatsApp (see CODE_LENGTH)- valid for a few minutes (the active
+    channel's expiry setting) and usable exactly once. The length is stored on the code row, so a code issued
+    on one channel still verifies after HR switches the channel.
   * Only a salted HMAC of the code is stored -never the code- so a database
     read or backup can't be turned into a login. The message logs store the
     text with the code redacted (WhatsApp) or no text at all (SMS).
-  * At most the channel's attempt limit of wrong guesses per code, then it is dead.
+  * At most the channel's attempt limit of wrong guesses per code, then it is dead. Four digits are only 10 000
+    combinations, so the SMS channel is held tighter than WhatsApp (see the SMS_* constants below): at most 5 wrong
+    guesses per code and 10 codes per employee and purpose in any 24 hours, i.e. at most 50 guesses a day
+    (0.5 %) against one account.
   * A new request kills every earlier unused code of the same purpose, so only
     the latest message works -but only once the new code was really sent: a send
     that fails (or is blocked by a limit) deletes the new row and leaves the
@@ -46,13 +51,31 @@ from django.utils import timezone
 from . import sms_service, whatsapp_service
 from .models import Employee, EmployeeOtp, SmsSettings, WhatsAppSettings
 
-OTP_LENGTH = 6
 RESEND_COOLDOWN_SECONDS = 60
 MAX_REQUESTS_PER_HOUR = 5
 MAX_ATTEMPTS = 5
 
 CHANNEL_WHATSAPP = SmsSettings.CHANNEL_WHATSAPP
 CHANNEL_SMS = SmsSettings.CHANNEL_SMS
+
+#: digits in the code, per delivery channel. SMS: the approved DLT template says "XXXX" and 6-digit codes are not
+#: delivered through it. WhatsApp keeps the 6 digits it always had.
+CODE_LENGTH = {CHANNEL_SMS: 4, CHANNEL_WHATSAPP: 6}
+#: EmployeeOtp.code_length's default: every code from before the SMS channel
+DEFAULT_CODE_LENGTH = CODE_LENGTH[CHANNEL_WHATSAPP]
+
+#: 4 digits can be guessed far more easily than 6, so the SMS channel is held to these ceilings whatever the SMS Control
+#: page holds (a row saved earlier with a larger number is clamped): wrong guesses per code, and codes one employee may
+#: ask for per purpose in any 24 hours. Together: at most 5 x 10 = 50 guesses in 24 hours against one account (0.5 %).
+SMS_MAX_ATTEMPTS_CEILING = 5
+SMS_MAX_REQUESTS_PER_DAY = 10
+
+
+def code_length(channel: str | None) -> int:
+    """How many digits a code issued on this channel has (an unknown channel: the 6 of WhatsApp)."""
+    return CODE_LENGTH.get(channel or "", DEFAULT_CODE_LENGTH)
+
+
 _CHANNEL_NAME = {CHANNEL_WHATSAPP: "WhatsApp", CHANNEL_SMS: "SMS"}
 
 _TYPE_FOR_PURPOSE = {
@@ -76,7 +99,13 @@ class OtpConfig:
     resend_cooldown_seconds: int
     max_requests_per_hour: int
     max_attempts_per_code: int
+    max_requests_per_day: int | None  # per employee and purpose, rolling 24 h; None = no daily limit (WhatsApp)
     password_login_enabled: bool  # always WhatsAppSettings.password_login_enabled: one switch for both channels
+
+    @property
+    def code_length(self) -> int:
+        """Digits in a code issued now (the active channel's)."""
+        return code_length(self.channel)
 
     @property
     def name(self) -> str:
@@ -115,7 +144,8 @@ def resolve() -> OtpConfig:
             expiry_minutes=sms.otp_expiry_minutes,
             resend_cooldown_seconds=sms.resend_cooldown_seconds,
             max_requests_per_hour=sms.max_requests_per_hour,
-            max_attempts_per_code=sms.max_attempts_per_code,
+            max_attempts_per_code=min(sms.max_attempts_per_code, SMS_MAX_ATTEMPTS_CEILING),
+            max_requests_per_day=SMS_MAX_REQUESTS_PER_DAY,
             password_login_enabled=wa.password_login_enabled,
         )
     return OtpConfig(
@@ -127,6 +157,7 @@ def resolve() -> OtpConfig:
         resend_cooldown_seconds=RESEND_COOLDOWN_SECONDS,
         max_requests_per_hour=MAX_REQUESTS_PER_HOUR,
         max_attempts_per_code=MAX_ATTEMPTS,
+        max_requests_per_day=None,
         password_login_enabled=wa.password_login_enabled,
     )
 
@@ -165,7 +196,8 @@ def password_login_block_message() -> str | None:
 def login_options() -> dict:
     """Which sign-in methods the apps should offer. A code method is only advertised when it can actually work
     (switched on AND the ACTIVE channel configured and allowed to send on this server); `otpChannel` says which
-    channel that is ('sms' | 'whatsapp') so the apps can name it."""
+    channel that is ('sms' | 'whatsapp') so the apps can name it, `codeLength` how many digits that channel's codes have
+    (4 | 6) so they can size the code field."""
     cfg = resolve()
     login = bool(cfg.login_enabled and cfg.available(EmployeeOtp.PURPOSE_LOGIN))
     return {
@@ -178,6 +210,7 @@ def login_options() -> dict:
         # themselves and a request meanwhile gets the plain "temporarily unavailable" sentence.)
         "passwordLogin": bool(cfg.password_login_enabled or not login or cfg.paused_now()),
         "otpChannel": cfg.channel,
+        "codeLength": cfg.code_length,
     }
 
 
@@ -226,7 +259,7 @@ def find_employee(identifier: str | None) -> Employee:
 
 def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
     """Create a code and send it, by the active channel (WhatsApp or SMS), to the employee's registered number.
-    Returns {message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel}."""
+    Returns {message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength}."""
     if purpose not in _TYPE_FOR_PURPOSE:
         raise OtpError("Unknown purpose.")
     cfg = resolve()
@@ -248,7 +281,8 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
         # refused before anything is created or requested: a landline or a half-typed number
         raise OtpError(sms_service.MSG_BAD_NUMBER, 400)
 
-    code = "".join(secrets.choice("0123456789") for _ in range(OTP_LENGTH))
+    length = cfg.code_length
+    code = "".join(secrets.choice("0123456789") for _ in range(length))
     salt = secrets.token_hex(8)
     minutes = max(1, int(cfg.expiry_minutes))
     with transaction.atomic():
@@ -269,12 +303,18 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
                 )
         if recent.filter(created_at__gte=now - timedelta(hours=1)).count() >= cfg.max_requests_per_hour:
             raise OtpError("Too many codes requested. Please try again in an hour, or contact HR.", 429)
+        if (
+            cfg.max_requests_per_day is not None
+            and recent.filter(created_at__gte=now - timedelta(hours=24)).count() >= cfg.max_requests_per_day
+        ):
+            raise OtpError("Too many codes requested today. Please try again tomorrow, or contact HR.", 429)
         # The new code is only ADDED here. The earlier codes are consumed after the send succeeded (below): consuming
         # them first meant that a send that failed or was blocked killed the employee's still-valid code.
         otp = EmployeeOtp.objects.create(
             employee=employee,
             purpose=purpose,
             code_hash=_hash(code, salt, employee.id, purpose),
+            code_length=length,
             phone_number=phone,
             expires_at=now + timedelta(minutes=minutes),
             requested_ip=ip or "",
@@ -314,6 +354,7 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
         "expiresInSeconds": minutes * 60,
         "resendAfterSeconds": cfg.resend_cooldown_seconds,
         "channel": cfg.channel,
+        "codeLength": length,
     }
 
 
@@ -326,8 +367,10 @@ def verify_otp(identifier: str | None, code: str | None, purpose: str) -> Employ
     generic = OtpError("That code is incorrect or has expired. Please request a new one.", 400)
     # the code is JSON from the client: a number, a list ... is a 400 like any other malformed code, never a 500
     code = code.strip() if isinstance(code, str) else ""
-    if not (code.isascii() and code.isdigit()) or len(code) != OTP_LENGTH:
-        raise OtpError(f"Enter the {OTP_LENGTH}-digit code.")
+    # Which length is right depends on the code row (a code issued before HR switched the channel keeps its length), so
+    # here only the shapes any channel can issue pass; the exact length is checked against the row below.
+    if not (code.isascii() and code.isdigit()) or len(code) not in set(CODE_LENGTH.values()):
+        raise OtpError(f"Enter the {resolve().code_length}-digit code.")
     identifier = (identifier or "").strip()
     if not is_plain_text(identifier):
         raise generic
@@ -352,6 +395,10 @@ def verify_otp(identifier: str | None, code: str | None, purpose: str) -> Employ
                 otp.consumed_at = timezone.now()
                 otp.save(update_fields=["attempts", "consumed_at"])
                 outcome = "locked"
+            elif len(code) != otp.code_length:
+                # Not a guess at this code (a different length can never match): counted like one anyway, and answered
+                # with the same generic sentence, so the length tells a prober nothing about whether a code is live.
+                otp.save(update_fields=["attempts"])
             elif _matches(otp.code_hash, code, employee.id, purpose):
                 otp.consumed_at = timezone.now()
                 otp.save(update_fields=["attempts", "consumed_at"])

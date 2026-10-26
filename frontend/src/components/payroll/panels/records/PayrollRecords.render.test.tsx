@@ -667,3 +667,92 @@ describe("the Cards | Table toggle", () => {
     expect(must("payroll-record-list").dataset.layout).toBe("table");
   });
 });
+
+// ── TDS: shown only where there is some ───────────────────────────────────────
+
+// An employee on the TDS list has TDS (a percentage of the earned gross) inside Deductions. Nobody else ever shows a TDS
+// cell, and the register has a TDS column only while some row of the list has TDS: PF and ESI sit inside Deductions as
+// they always did.
+const KARTHIK = run(9, "Karthik Rajan", "E2E009", {
+  grossSalary: 24000,
+  deductions: 2400,
+  tdsDeduction: 2400,
+  tdsPercent: 10,
+  finalSalary: 21600,
+});
+
+describe("TDS on a payroll record card", () => {
+  it("is a fourth figure on the card of a TDS employee, named with its percentage", () => {
+    card({ run: KARTHIK });
+    const tds = must("payroll-record-tds-9");
+    expect(text(tds)).toBe("TDS (10%)₹2,400");
+    expect(must("payroll-record-9").querySelector("dl")!.className).toContain("grid-cols-4");
+    // Deductions stays the whole deduction (it already includes the TDS)
+    expect(text(must("payroll-record-9"))).toContain("Deductions₹2,400");
+  });
+
+  it("is not on the card of anyone else: three figures, exactly as before", () => {
+    card({ run: { ...ASHA, deductions: 1000, finalSalary: 23000 } });
+    expect(q("payroll-record-tds-1")).toBeNull();
+    expect(must("payroll-record-1").querySelector("dl")!.className).toBe("grid grid-cols-3 gap-2 text-center");
+  });
+
+  it("is there for a TDS employee whose TDS came to nothing (the percentage is what marks them)", () => {
+    card({ run: { ...KARTHIK, tdsDeduction: 0, tdsPercent: 7.5, deductions: 0, finalSalary: 24000 } });
+    expect(text(must("payroll-record-tds-9"))).toBe("TDS (7.5%)₹0");
+  });
+});
+
+describe("TDS in the register", () => {
+  it("has no TDS column while no row has TDS", () => {
+    list({ runs: [ASHA, RAVI] });
+    click(must("payroll-record-layout-table"));
+    expect(text(must("payroll-record-table").querySelector("thead"))).not.toContain("TDS");
+    expect(q("payroll-record-totals-tds")).toBeNull();
+    expect(must("payroll-record-table").querySelector("table")!.className).toBe("w-full min-w-[900px] text-sm");
+    // 10 columns, as before
+    expect(must("payroll-record-table").querySelectorAll("thead th")).toHaveLength(10);
+  });
+
+  it("gets a TDS column when a row has TDS: the amount and percentage on that row, a dash on the others, a total", () => {
+    list({ runs: [ASHA, KARTHIK, RAVI] });
+    click(must("payroll-record-layout-table"));
+    const heads = [...must("payroll-record-table").querySelectorAll("thead th")].map(text);
+    expect(heads).toEqual([
+      "Employee",
+      "Department",
+      "Period",
+      "Attendance",
+      "Gross",
+      "TDS",
+      "Deductions",
+      "Net",
+      "Status",
+      "Issues",
+      "Actions",
+    ]);
+    const cell = must("payroll-record-tds-9");
+    expect(text(cell)).toMatch(/^₹2,400/);
+    expect(text(cell.querySelector("span"))).toBe("10%");
+    expect(text(must("payroll-record-tds-1"))).toBe("—");
+    expect(text(must("payroll-record-tds-2"))).toBe("—");
+    expect(text(must("payroll-record-totals-tds"))).toBe("₹2,400");
+    // the footer still lines up with the header: one cell per column
+    const footer = must("payroll-record-totals");
+    const span = [...footer.children].reduce((n, td) => n + Number(td.getAttribute("colspan") ?? 1), 0);
+    expect(span).toBe(11);
+    // Deductions is the whole deduction, including the TDS
+    expect(text(must("payroll-record-row-9"))).toContain("₹2,400");
+    expect(text(footer)).toContain("₹60,600"); // net: 24,000 + 21,600 + 15,000
+  });
+
+  it("follows the whole list, not the page: a TDS row on page 2 still gives page 1 the column", () => {
+    const rows = [...many(25), { ...KARTHIK, id: 99, employeeId: 9900 }];
+    list({ runs: rows, pageSize: 20 });
+    click(must("payroll-record-layout-table"));
+    expect(q("payroll-record-tds-99")).toBeNull(); // that row is on page 2
+    expect(text(must("payroll-record-tds-1"))).toBe("—");
+    expect([...must("payroll-record-table").querySelectorAll("thead th")].map(text)).toContain("TDS");
+    expect(text(must("payroll-record-totals-tds"))).toBe("₹2,400");
+  });
+});

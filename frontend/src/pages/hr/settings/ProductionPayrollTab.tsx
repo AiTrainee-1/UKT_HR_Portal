@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, CalendarRange, Factory, UserCheck } from "lucide-react";
+import { CalendarDays, CalendarRange, Factory, IndianRupee, LayoutList } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,34 +22,33 @@ import { dayOf } from "./payroll/preview";
 import { BranchNotice } from "./payroll/ui";
 import { CyclePanel } from "./production-payroll/CyclePanel";
 import { CYCLE_INFO, CYCLES } from "./production-payroll/cycles";
-import { LatePanel } from "./production-payroll/LatePanel";
+import { PayBonusPanel } from "./production-payroll/PayBonusPanel";
 import { ProductionOverview } from "./production-payroll/ProductionOverview";
 import { ShiftPanel } from "./production-payroll/ShiftPanel";
 import {
   cyclePayload,
-  latePayload,
-  ownLateRules,
+  payBonusPayload,
   savedProduction,
-  sharedLatePayload,
   type CycleForm,
   type ProductionPayload,
 } from "./production-payroll/sections";
 
 const SUB_TABS: { value: ProductionPayrollSubTab; label: string; icon: ReactNode }[] = [
+  { value: "overview", label: "Overview", icon: <LayoutList size={13} /> },
   { value: "weekly", label: "Weekly", icon: <CalendarDays size={13} /> },
   { value: "biweekly", label: "BiWeekly", icon: <CalendarRange size={13} /> },
   { value: "monthly", label: "Monthly", icon: <Factory size={13} /> },
-  { value: "late", label: "Late Detection", icon: <AlertTriangle size={13} /> },
-  { value: "shift", label: "Attendance & Shift", icon: <UserCheck size={13} /> },
+  { value: "payBonus", label: "Pay & Bonus", icon: <IndianRupee size={13} /> },
 ];
 
-type Saving = PayCycle | "late";
+type Saving = PayCycle | "payBonus";
 
 /**
- * Settings -> Production Payroll. One sub-tab per pay cycle (Weekly, BiWeekly, Monthly: each a saved group with its own
- * Save button sending only that cycle's `prodCycles` entry), the global late detection (its own Save button: the
- * switch and the attendance mode), and a read-only sub-tab that says where shifts earned, pay and PF / ESI really
- * come from. Saving one group never resets another's unsaved edits.
+ * Settings -> Production Payroll. An Overview (read-only: how a production payslip is worked out and where each part is
+ * set), one sub-tab per pay cycle (Weekly, BiWeekly, Monthly: each a saved group with its own Save button sending only that
+ * cycle's PERIOD keys of `prodCycles`) and Pay & Bonus (the rate suggested for new production employees and the
+ * production statutory bonus, saved together, sending only what changed). What a late day costs a production worker is on
+ * Late Detection -> Production. Saving one group never resets another's unsaved edits.
  */
 export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
@@ -62,10 +61,10 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
   const biweekly = useDraft(saved.cycles.biweekly);
   const monthly = useDraft(saved.cycles.monthly);
   const drafts: Record<PayCycle, Draft<CycleForm>> = { weekly, biweekly, monthly };
-  const late = useDraft(saved.late);
+  const payBonus = useDraft(saved.payBonus);
 
   const [subTab, setSubTab] = useState<ProductionPayrollSubTab>(
-    () => PRODUCTION_SUB_TAB_OF[addressSetting()] ?? "weekly",
+    () => PRODUCTION_SUB_TAB_OF[addressSetting()] ?? "overview",
   );
   useSubTabFromAddress(PRODUCTION_SUB_TAB_OF, setSubTab);
 
@@ -96,7 +95,7 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
       const fresh = await update.mutateAsync(payload as Partial<PayrollSettingsItem>);
       keepSaved(fresh);
       done(fresh);
-      if (group !== "late") refreshCycle(group);
+      if (group !== "payBonus") refreshCycle(group);
       toast(ok);
     } catch (err) {
       toast({ title: failTitle, description: saveErrorText(err), variant: "destructive" });
@@ -110,7 +109,7 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
     const label = CYCLE_INFO[cycle].label;
     return runSave(
       cycle,
-      cyclePayload(cycle, draft.form, draft.changed),
+      cyclePayload(cycle, draft.form),
       () => draft.discard(),
       {
         title: `${label} settings saved`,
@@ -120,28 +119,21 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
     );
   };
 
-  /** Hands the cycle's late rules back to the shared ones; the form then shows those (unsaved late edits are dropped). */
-  const revertToSharedRules = (cycle: PayCycle) => {
-    const draft = drafts[cycle];
-    const label = CYCLE_INFO[cycle].label;
-    return runSave(
-      cycle,
-      sharedLatePayload(cycle),
-      (fresh) => {
-        const now = savedProduction(fresh).cycles[cycle];
-        draft.set("lateFreeAllowance", now.lateFreeAllowance);
-        draft.set("lateSlabs", now.lateSlabs);
-      },
+  const branchOnly = branchLogin ? " They apply to your branch's employees only." : "";
+  const savePayBonus = () =>
+    runSave(
+      "payBonus",
+      payBonusPayload(payBonus.form, payBonus.changed),
+      () => payBonus.discard(),
       {
-        title: `${label} uses the shared late rules again`,
-        description: `${label} payslips generated from now on follow the shared production allowance and slabs.`,
+        title: "Pay & Bonus settings saved",
+        description: `New production employees start from the suggested rate at once; the Bonus page's figures for production workers use the bonus values at once, and a bonus register already generated changes only when Generate is run again.${branchOnly}`,
       },
-      `Failed to change the ${label} late rules`,
+      "Failed to save Pay & Bonus settings",
     );
-  };
 
   const dirtyOf = (tab: ProductionPayrollSubTab): boolean =>
-    tab === "late" ? late.dirty : tab === "shift" ? false : drafts[tab].dirty;
+    tab === "overview" ? false : tab === "payBonus" ? payBonus.dirty : drafts[tab].dirty;
   const unsavedElsewhere = SUB_TABS.filter((t) => t.value !== subTab && dirtyOf(t.value)).map((t) => t.label);
 
   return (
@@ -149,9 +141,9 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
       {branchLogin && (
         <BranchNotice>
           You are signed in to a branch. What you save on this tab is kept apart from the company values: each cycle's
-          pay period is used when you generate that cycle's production payroll, and the late rules apply to your
-          branch's employees. The latest generated period that a cycle's next period continues from is company-wide, so
-          it cannot be shown here.
+          pay period is used when you generate that cycle's production payroll, and the suggested rate and the
+          production bonus apply to your branch's employees. The latest generated period that a cycle's next period
+          continues from is company-wide, so it cannot be shown here.
         </BranchNotice>
       )}
 
@@ -184,7 +176,12 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
         </div>
       ) : (
         <>
-          <ProductionOverview settings={settings} />
+          {subTab === "overview" && (
+            <>
+              <ProductionOverview settings={settings} />
+              <ShiftPanel shifts={shifts.data} shiftsLoading={shifts.isLoading} shiftsError={shifts.isError} />
+            </>
+          )}
 
           {CYCLES.map(
             (cycle) =>
@@ -194,54 +191,25 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
                   cycle={cycle}
                   draft={drafts[cycle]}
                   saved={saved.cycles[cycle]}
-                  ownRules={ownLateRules(settings, cycle)}
-                  shared={{
-                    allowance: settings.prodLateFreeAllowance ?? 3,
-                    slabCount: (settings.prodLateDeductionSlabs ?? []).length,
-                  }}
                   branchLogin={branchLogin}
                   today={today}
                   readOnly={readOnly}
                   saving={saving === cycle}
                   busy={saving !== null}
                   onSave={() => saveCycle(cycle)}
-                  onUseShared={() => revertToSharedRules(cycle)}
                 />
               ),
           )}
 
-          {subTab === "late" && (
-            <LatePanel
-              draft={late}
-              saved={saved.late}
+          {subTab === "payBonus" && (
+            <PayBonusPanel
+              draft={payBonus}
+              saved={saved.payBonus}
               settings={settings}
-              shifts={shifts.data}
-              branchLogin={branchLogin}
               readOnly={readOnly}
-              saving={saving === "late"}
+              saving={saving === "payBonus"}
               busy={saving !== null}
-              onSave={() =>
-                runSave(
-                  "late",
-                  latePayload(late.form),
-                  () => late.discard(),
-                  {
-                    title: "Production Late Detection saved",
-                    description:
-                      "Applies the next time a production period is generated on any cycle; payslips already generated keep their late deduction until their period is generated again.",
-                  },
-                  "Failed to save Production Late Detection",
-                )
-              }
-            />
-          )}
-
-          {subTab === "shift" && (
-            <ShiftPanel
-              settings={settings}
-              shifts={shifts.data}
-              shiftsLoading={shifts.isLoading}
-              shiftsError={shifts.isError}
+              onSave={savePayBonus}
             />
           )}
         </>

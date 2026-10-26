@@ -78,8 +78,12 @@ def make_slip(
     bonuses=0,
     pf=0,
     esi=0,
+    tds=0,
+    tds_percent=None,
     adv=0,
     late=0,
+    other=0,
+    statutory=None,
     net=None,
     monthly=None,
     eff=None,
@@ -94,9 +98,12 @@ def make_slip(
     paid_at=None,
 ):
     """A salary slip shaped like the payroll engine's (same columns, same breakdown snapshot keys), with its Payroll row.
-    ``gross`` is the slip's gross_salary (before overtime). A production slip has a ``period`` (start, end) and ``shifts``."""
+    ``gross`` is the slip's gross_salary (before overtime). A production slip has a ``period`` (start, end) and ``shifts``.
+    ``other`` is a deduction no column itemises (it shows as "Other deductions"). Without ``statutory`` the slip is OLD
+    style (written before the Co Emp / TDS rules: no ``tds`` / ``statutory`` keys); with it (the engine's ``statutory``
+    block as a dict) the slip carries the keys the engine writes today."""
     gross, ot = D(gross), D(ot)
-    deductions = D(pf) + D(esi) + D(adv) + D(late)
+    deductions = D(pf) + D(esi) + D(tds) + D(adv) + D(late) + D(other)
     production = period is not None
     if basic is None:
         basic = gross if production else gross / 2
@@ -124,6 +131,14 @@ def make_slip(
         }
         present = D(paid_days)
         working_days = working
+    if statutory is not None:
+        breakdown["deductions"].update(
+            {
+                "tds": float(tds),
+                "tdsPercent": float(tds_percent) if tds_percent is not None else None,
+                "statutory": statutory,
+            }
+        )
     serial = next(_SERIAL)
     slip = SalarySlip.objects.create(
         employee=emp,
@@ -139,6 +154,8 @@ def make_slip(
         gross_salary=gross,
         pf_deduction=D(pf),
         esi_deduction=D(esi),
+        tds_deduction=D(tds),
+        tds_percent=D(tds_percent) if tds_percent is not None else None,
         advance_deduction=D(adv),
         other_deductions=D(late),
         total_deductions=deductions,
@@ -170,7 +187,9 @@ def make_slip(
     return slip
 
 
-def make_employee(code, first, kind, dept, branch, desig=None, salary=None, rate=None, status="active", join_date=None):
+def make_employee(
+    code, first, kind, dept, branch, desig=None, salary=None, rate=None, status="active", join_date=None, **extra
+):
     return Employee.objects.create(
         employee_code=code,
         first_name=first,
@@ -183,6 +202,7 @@ def make_employee(code, first, kind, dept, branch, desig=None, salary=None, rate
         salary_per_shift=D(rate) if rate is not None else None,
         status=status,
         join_date=join_date,
+        **extra,
     )
 
 
@@ -2102,8 +2122,6 @@ class EngineContractTests(PayrollBase):
         patcher.start()
         self.addCleanup(patcher.stop)
         settings = PayrollSettings.get()
-        settings.staff_payroll_rules_enabled = False
-        settings.prod_payroll_rules_enabled = False
         settings.attendance_mode = "simple"
         settings.compensation_feature_enabled = False
         settings.save()
@@ -2158,3 +2176,358 @@ class EngineContractTests(PayrollBase):
         Payroll.objects.filter(employee=self.staff, month=3, year=2026).update(status="paid")
         st = self.api("summary", month="2026-03")["status"]
         self.assertEqual((st["slips"], st["paidSlips"], st["state"]), (2, 1, "part_paid"))
+
+
+def stat_block(category, wages=0, tds=None):
+    """The ``statutory`` block of a new-style slip (the keys that matter here: category, PF wages, TDS)."""
+    return {
+        "category": category,
+        "pfWages": float(wages),
+        "firstPortionMonthly": float(wages),
+        "pfRule": None,
+        "esiRule": None,
+        "eligibility": {"basic": None, "firstPortion": None, "total": None},
+        "rulesScope": "global",
+        "branchId": None,
+        "tds": tds,
+        "reason": None,
+    }
+
+
+class StatutoryDeductionTests(PayrollBase):
+    """PF / ESI (Co Emp employees) and TDS (TDS-list employees) on the slips, in September 2026.
+
+    staff                         what the slip says                                          deductions
+    C1 Stitching  Co Emp          gross 20,000, PF 12% + ESI 0.75% of PF wages 10,000         PF 1,200  ESI 75
+    C2 Cutting    Co Emp          gross 30,000, PF wages 15,000, advance 500, late 200        PF 1,800  500  200
+    T1 Stitching  TDS 10%         gross 50,000 + OT 2,000, TDS 10% of 52,000, 300 unexplained TDS 5,200  other 300
+    N1 Stitching  neither         gross 15,000                                                none
+    O1 Stitching  OLD slip        gross 18,000, no tds / statutory keys, PF on basic 9,000    PF 1,080  ESI 135
+    production
+    P1 Stitching  TDS 5%          12,000 for 24 shifts, TDS 5%                                TDS 600
+    P2 Cutting    Co Emp          8,000 for 16 shifts, PF wages 4,000                         PF 480  ESI 30
+
+    August holds only O1 (the old-style slip) and N1 (an old slip with no calculation snapshot at all).
+    Sep: gross pay 155,000 (153,000 + OT 2,000), deductions 11,600 = PF 4,560 + ESI 240 + TDS 5,800 + advance 500 +
+    late 200 + other 300, net 143,400. Employer PF 12% of PF wages (10,000 + 15,000 + O1's basic 9,000 + 4,000 = 38,000)
+    = 4,560; employer ESI 3.25% of ESI wages (10,000 + O1's gross 18,000 + 4,000 = 32,000) = 1,040.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        e = make_employee
+        cls.c1 = e("C1", "Cora", "staff", cls.stitching, cls.u1, cls.operator, salary=20000, co_emp_enabled=True)
+        cls.c2 = e("C2", "Carl", "staff", cls.cutting, cls.u1, cls.operator, salary=30000, co_emp_enabled=True)
+        cls.t1 = e(
+            "T1", "Tara", "staff", cls.stitching, cls.u1, cls.supervisor, salary=50000, tds_enabled=True, tds_percent=10
+        )
+        cls.n1 = e("N1", "Nila", "staff", cls.stitching, cls.u1, cls.operator, salary=15000)
+        cls.o1 = e("O1", "Olan", "staff", cls.stitching, cls.u1, cls.operator, salary=18000)
+        cls.p1 = e(
+            "PT1", "Pia", "production", cls.stitching, cls.u1, cls.operator, rate=500, tds_enabled=True, tds_percent=5
+        )
+        cls.p2 = e("PC2", "Pran", "production", cls.cutting, cls.u1, cls.operator, rate=500, co_emp_enabled=True)
+
+        aug_gen, sep_gen = at(2026, 9, 2), at(2026, 10, 1)
+        # August: the old-style slips only
+        make_slip(
+            cls.o1, AUG, 18000, basic=9000, pf=1080, esi=135, paid=True, generated=aug_gen, paid_at=at(2026, 9, 6)
+        )
+        make_slip(
+            cls.n1, AUG, 15000, basic=7500, pf=600, snapshot=False, paid=True, generated=aug_gen, paid_at=at(2026, 9, 6)
+        )
+        # September
+        make_slip(
+            cls.c1, SEP, 20000, basic=10000, pf=1200, esi=75, statutory=stat_block("co_emp", 10000), generated=sep_gen
+        )
+        make_slip(
+            cls.c2,
+            SEP,
+            30000,
+            basic=15000,
+            pf=1800,
+            adv=500,
+            late=200,
+            statutory=stat_block("co_emp", 15000),
+            generated=sep_gen,
+        )
+        make_slip(
+            cls.t1,
+            SEP,
+            50000,
+            ot=2000,
+            basic=25000,
+            tds=5200,
+            tds_percent=10,
+            other=300,
+            statutory=stat_block("tds", 0, {"percent": 10.0, "base": 52000.0, "amount": 5200.0}),
+            generated=sep_gen,
+        )
+        make_slip(cls.n1, SEP, 15000, basic=7500, statutory=stat_block("none"), generated=sep_gen)
+        make_slip(cls.o1, SEP, 18000, basic=9000, pf=1080, esi=135, generated=sep_gen)
+        make_slip(
+            cls.p1,
+            SEP,
+            12000,
+            period=(date(2026, 9, 1), date(2026, 9, 15)),
+            shifts=24,
+            rate=500,
+            tds=600,
+            tds_percent=5,
+            statutory=stat_block("tds", 0, {"percent": 5.0, "base": 12000.0, "amount": 600.0}),
+            generated=sep_gen,
+        )
+        make_slip(
+            cls.p2,
+            SEP,
+            8000,
+            period=(date(2026, 9, 1), date(2026, 9, 15)),
+            shifts=16,
+            rate=500,
+            pf=480,
+            esi=30,
+            statutory=stat_block("co_emp", 4000),
+            generated=sep_gen,
+        )
+
+    def deductions(self, month="2026-09"):
+        body = self.api("components", month=month)
+        return body, {d["id"]: d for d in body["deductions"]}
+
+    def test_tds_is_its_own_deduction_line_and_the_lines_add_up_to_the_slips_total(self):
+        body, ded = self.deductions()
+        near(self, ded["pf"]["amount"], 4560.00)
+        near(self, ded["esi"]["amount"], 240.00)
+        near(self, ded["tds"]["amount"], 5800.00)  # T1 5,200 + P1 600
+        near(self, ded["advance"]["amount"], 500.00)
+        near(self, ded["late"]["amount"], 200.00)
+        near(self, body["totalDeductions"]["amount"], 11600.00)
+        near(self, sum(d["amount"] for d in body["deductions"]), 11600.00)
+        self.assertEqual(ded["tds"]["label"], "TDS (tax deducted at source)")
+        near(self, ded["tds"]["previous"], 0.0)  # nobody had TDS in August
+        near(self, body["netPay"]["amount"], 143400.00)
+        self.assertEqual(body["netGap"], 0.0)
+
+    def test_other_deductions_never_include_tds(self):
+        _, ded = self.deductions()
+        near(self, ded["other-deductions"]["amount"], 300.00)  # T1's unexplained 300, not 300 + 5,800 of TDS
+
+    def test_a_month_where_tds_is_all_there_is_has_no_other_deductions(self):
+        SalarySlip.objects.filter(employee=self.t1).update(total_deductions=D(5200), net_salary=D(46800))
+        _, ded = self.deductions()
+        self.assertNotIn("other-deductions", ded)
+        near(self, ded["tds"]["amount"], 5800.00)
+
+    def test_tds_never_counts_as_late_when_the_slip_has_no_late_figure(self):
+        """P1 (production) carries no late figure: the late deduction is then what is left of the slip's total, and TDS is
+        taken out of that first. So does T1 once its calculation snapshot is gone."""
+        _, sep = self.deductions()
+        near(self, sep["late"]["amount"], 200.00)  # C2's own figure only: P1's 600 TDS is not "late"
+        SalarySlip.objects.filter(employee=self.t1).update(breakdown_details=None, total_deductions=D(5200))
+        _, sep = self.deductions()
+        near(self, sep["late"]["amount"], 200.00)  # T1 with no snapshot at all: TDS still is not late
+        self.assertNotIn("other-deductions", sep)
+
+    def test_statutory_dues_are_pf_and_esi_with_their_employer_shares_and_exclude_tds(self):
+        body = self.api("components", month="2026-09")
+        emp = {e["id"]: e for e in body["employer"]}
+        # wages the employer estimates are worked on: the slips' PF wages where they record them, else (older slips) the
+        # basic for PF and the gross for ESI
+        near(self, emp["employer-pf"]["amount"], 4560.00)  # 12% of 10,000 + 15,000 + 9,000 (O1's basic) + 4,000
+        near(self, emp["employer-esi"]["amount"], 1040.00)  # 3.25% of 10,000 + 18,000 (O1's gross) + 4,000
+        near(self, body["statutoryDue"], 4560 + 240 + 4560 + 1040)  # no TDS in it
+        near(self, body["tdsDeducted"], 5800.00)
+        self.assertEqual(body["tdsPeople"], 2)
+        near(self, body["employerCost"]["amount"], 155000 + 5600)
+
+    def test_the_notes_and_provenance_say_that_tds_is_a_separate_remittance(self):
+        body = self.api("components", month="2026-09")
+        self.assertTrue(
+            any("TDS of ₹5,800.00" in n and "separate remittance" in n and "2 employees" in n for n in body["notes"]),
+            body["notes"],
+        )
+        prov = {p["id"]: p for p in body["provenance"]}
+        self.assertTrue(any("TDS is not included" in c for c in prov["statutory-due"]["caveats"]))
+        self.assertIn("tds", prov)
+        text = json.dumps(body["provenance"]).replace("Arrears are not recorded in this system", "")
+        for retired in ("not recorded in this system", "ESI ceiling", "salary band"):
+            self.assertNotIn(retired, text)
+
+    def test_a_month_without_tds_has_no_tds_line_and_no_tds_note(self):
+        body, ded = self.deductions("2026-08")
+        self.assertNotIn("tds", ded)
+        self.assertEqual(body["tdsDeducted"], 0.0)
+        self.assertFalse(any("TDS" in n for n in body["notes"]))
+
+    def test_old_style_slips_still_aggregate_on_their_own_columns(self):
+        """August: O1's slip has no tds / statutory keys, N1's slip has no calculation snapshot at all."""
+        body, ded = self.deductions("2026-08")
+        near(self, ded["pf"]["amount"], 1680.00)  # 1,080 + 600
+        near(self, ded["esi"]["amount"], 135.00)
+        near(self, body["totalDeductions"]["amount"], 1815.00)
+        near(self, sum(d["amount"] for d in body["deductions"]), 1815.00)
+        emp = {e["id"]: e for e in body["employer"]}
+        near(self, emp["employer-pf"]["amount"], 1980.00)  # 12% of the basics 9,000 + 7,500
+        near(self, emp["employer-esi"]["amount"], 585.00)  # 3.25% of O1's gross 18,000
+        self.assertEqual(body["netGap"], 0.0)
+
+    def test_the_summary_totals_by_type_unit_and_department_carry_tds(self):
+        body = self.api("summary", month="2026-09")
+        near(self, body["totals"]["tdsDeducted"], 5800.00)
+        near(self, body["totals"]["totalDeductions"], 11600.00)
+        near(self, body["byType"]["staff"]["tdsDeducted"], 5200.00)
+        near(self, body["byType"]["production"]["tdsDeducted"], 600.00)
+        near(self, body["totals"]["employerStatutory"], 5600.00)
+        departments = self.api("departments", month="2026-09")
+        by_dept = {d["name"]: d for d in departments["departments"]}
+        near(self, by_dept["Stitching"]["tdsDeducted"], 5800.00)
+        near(self, by_dept["Cutting"]["tdsDeducted"], 0.0)
+        near(self, departments["units"][0]["tdsDeducted"], 5800.00)
+        by_type = {t["id"]: t for t in departments["types"]}
+        near(self, by_type["staff"]["tdsDeducted"], 5200.00)
+        near(self, sum(d["tdsDeducted"] for d in departments["departments"]), body["totals"]["tdsDeducted"])
+
+    def test_the_comparison_and_the_trend_carry_tds_too(self):
+        body = self.api("summary", month="2026-09")
+        self.assertEqual(
+            body["change"]["tdsDeducted"], {"abs": 5800.0, "pct": None}
+        )  # nothing to compare a percentage to
+        self.assertEqual(body["previous"]["totals"]["tdsDeducted"], 0.0)
+        trend = {m["month"]: m for m in self.api("trend")["months"] if m["hasData"]}
+        near(self, trend["2026-09"]["tdsDeducted"], 5800.00)
+        near(self, trend["2026-08"]["tdsDeducted"], 0.0)
+
+    def test_the_departments_employer_estimates_add_up_to_the_company_figure(self):
+        body = self.api("summary", month="2026-09")["totals"]
+        departments = self.api("departments", month="2026-09")["departments"]
+        near(self, sum(d["employerCost"] - d["grossPay"] for d in departments), body["employerStatutory"])
+
+    def test_the_assistants_payroll_tools_report_tds(self):
+        with read_only_db():
+            result = registry.all_tools()["payroll_components"].run({"month": "2026-09"})
+        ded = {d["id"]: d for d in result["deductions"]}
+        near(self, ded["tds"]["amount"], 5800.00)
+        near(self, ded["other-deductions"]["amount"], 300.00)
+        description = registry.all_tools()["payroll_components"].description
+        self.assertIn("TDS", description)
+        self.assertNotIn("not recorded", description)
+
+    def test_the_report_centre_agrees_on_deductions_and_tds(self):
+        patcher = mock.patch("api.reporting.filters.ist_today", return_value=TODAY)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        admin = HRUser.objects.create(username="stat_admin", password_hash="x", is_super_admin=True)
+        r = self.client.get("/api/reports/run/department-salary-cost", {"period": "2026-09"}, **md_headers(admin))
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        totals = r.json()["totals"]
+        mine = self.api("summary", month="2026-09")["totals"]
+        near(self, totals["totalDeductions"], mine["totalDeductions"])
+        near(self, totals["netPay"], mine["netPay"])
+        near(self, totals["employerEstimate"], mine["employerStatutory"])
+        near(self, totals["employeeTds"], mine["tdsDeducted"])
+
+
+class EngineStatutoryTests(PayrollBase):
+    """Slips made by the REAL payroll engines for a Co Emp, a TDS and a plain employee of each kind (March 2026, full
+    attendance): the analytics read what the engine stores, TDS stays out of 'other deductions' and the employer
+    estimates are worked on the PF wages the engine records."""
+
+    PF = {"id": "t-pf", "label": "PF", "basis": "first_portion", "minAmount": 0, "maxAmount": 15000, "ratePercent": 12}
+    ESI = {"id": "t-esi", "label": "ESI", "basis": "total", "minAmount": 0, "maxAmount": 21000, "ratePercent": 0.75}
+
+    def setUp(self):
+        super().setUp()
+        from .payroll_views import _build_working_days, _generate_production_payroll, _generate_staff_payroll
+
+        patcher = mock.patch.object(P, "_today", return_value=date(2026, 4, 10))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        settings = PayrollSettings.get()
+        settings.attendance_mode = "simple"
+        settings.compensation_feature_enabled = False
+        settings.staff_pf_rules = settings.prod_pf_rules = [self.PF]
+        settings.staff_esi_rules = settings.prod_esi_rules = [self.ESI]
+        settings.save()
+
+        e = make_employee
+        self.co_staff = e(
+            "G1", "Gopal", "staff", self.stitching, self.u1, self.operator, salary=20000, co_emp_enabled=True
+        )
+        self.tds_staff = e(
+            "G2",
+            "Gita",
+            "staff",
+            self.stitching,
+            self.u1,
+            self.supervisor,
+            salary=40000,
+            tds_enabled=True,
+            tds_percent=10,
+        )
+        self.plain_staff = e("G3", "Gauri", "staff", self.stitching, self.u1, self.operator, salary=18000)
+        self.co_prod = e(
+            "H1", "Hari", "production", self.stitching, self.u1, self.operator, rate=500, co_emp_enabled=True
+        )
+        self.tds_prod = e(
+            "H2",
+            "Hema",
+            "production",
+            self.stitching,
+            self.u1,
+            self.operator,
+            rate=600,
+            tds_enabled=True,
+            tds_percent=5,
+        )
+        for staff in (self.co_staff, self.tds_staff, self.plain_staff):
+            for d in _build_working_days(3, 2026, False, set()):
+                _manual_day(staff, d)
+            _generate_staff_payroll(staff, 3, 2026)
+        for worker in (self.co_prod, self.tds_prod):
+            for day in range(2, 7):
+                _manual_day(worker, date(2026, 3, day))
+            _generate_production_payroll(worker, date(2026, 3, 2), date(2026, 3, 8))
+
+    def slip(self, emp):
+        return SalarySlip.objects.get(employee=emp, year=2026, month=3)
+
+    def test_the_engine_stores_what_the_analytics_expect(self):
+        co, tds, plain = self.slip(self.co_staff), self.slip(self.tds_staff), self.slip(self.plain_staff)
+        self.assertEqual((co.pf_deduction, co.esi_deduction, co.tds_deduction), (D("1200.00"), D("75.00"), D("0.00")))
+        self.assertEqual((tds.pf_deduction, tds.esi_deduction, tds.tds_deduction), (D("0.00"), D("0.00"), D("4000.00")))
+        self.assertEqual((plain.pf_deduction, plain.esi_deduction, plain.tds_deduction), (D("0.00"),) * 3)
+        self.assertEqual(co.breakdown_details["deductions"]["statutory"]["pfWages"], 10000.0)
+        self.assertEqual(tds.breakdown_details["deductions"]["statutory"]["category"], "tds")
+        prod_co, prod_tds = self.slip(self.co_prod), self.slip(self.tds_prod)
+        self.assertEqual((prod_co.pf_deduction, prod_co.esi_deduction), (D("150.00"), D("9.38")))
+        self.assertEqual(prod_tds.tds_deduction, D("150.00"))  # 5% of 5 shifts x 600
+
+    def test_deduction_lines_include_tds_and_the_residual_is_empty(self):
+        body = self.api("components", month="2026-03")
+        ded = {d["id"]: d for d in body["deductions"]}
+        near(self, ded["pf"]["amount"], 1350.00)  # 1,200 + 150
+        near(self, ded["esi"]["amount"], 84.38)  # 75 + 9.38
+        near(self, ded["tds"]["amount"], 4150.00)  # 4,000 + 150
+        self.assertEqual(set(ded), {"pf", "esi", "tds"})  # nothing falls in late / other
+        slips_total = sum(s.total_deductions for s in SalarySlip.objects.filter(year=2026, month=3))
+        near(self, body["totalDeductions"]["amount"], float(slips_total))
+        near(self, sum(d["amount"] for d in body["deductions"]), float(slips_total))
+        self.assertEqual(body["netGap"], 0.0)
+        near(self, body["tdsDeducted"], 4150.00)
+        self.assertEqual(body["tdsPeople"], 2)
+
+    def test_employer_estimates_use_the_pf_wages_the_engine_records(self):
+        body = self.api("components", month="2026-03")
+        emp = {e["id"]: e for e in body["employer"]}
+        # PF wages: 10,000 (Co Emp staff) + 1,250 (half of the Co Emp production worker's 2,500)
+        near(self, emp["employer-pf"]["amount"], 1350.00)  # 12% of 11,250
+        near(self, emp["employer-esi"]["amount"], 365.63)  # 3.25% of 11,250, to the paisa
+        near(self, body["statutoryDue"], 1350.00 + 84.38 + 1350.00 + 365.63)
+
+    def test_the_summary_agrees_with_the_slips(self):
+        totals = self.api("summary", month="2026-03")["totals"]
+        slips = SalarySlip.objects.filter(year=2026, month=3)
+        near(self, totals["totalDeductions"], float(sum(s.total_deductions for s in slips)))
+        near(self, totals["netPay"], float(sum(s.net_salary for s in slips)))
+        near(self, totals["tdsDeducted"], 4150.00)

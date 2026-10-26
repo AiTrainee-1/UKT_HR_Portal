@@ -23,6 +23,7 @@ import type {
 import { inr, plural } from "@/components/payroll/kit/format";
 import { SEVERITY_META, issueIcon } from "@/components/payroll/kit/issue-meta";
 import { KpiTile, SectionCard } from "@/components/payroll/kit/parts";
+import { sumTds } from "@/components/payroll/kit/statutory";
 import { cn } from "@/lib/utils";
 import {
   byDepartment,
@@ -108,6 +109,7 @@ export function PayrollDashboard({
   const p = testIdPrefix;
   const colors = ACCENT[accent];
   const summary = useMemo(() => summarizeRuns(runs), [runs]);
+  const tdsTotal = useMemo(() => sumTds(runs), [runs]);
   const split = useMemo(() => paymentSplit(runs), [runs]);
   const departments = useMemo(() => byDepartment(runs), [runs]);
   const worst = worstSeverity(issues?.bySeverity);
@@ -149,7 +151,15 @@ export function PayrollDashboard({
           className="xl:col-span-3"
           loading={loading}
           value={inr(summary.deductions)}
-          sub={summary.gross > 0 ? `${Math.round((summary.deductions / summary.gross) * 100)}% of gross` : undefined}
+          sub={
+            [
+              summary.gross > 0 ? `${Math.round((summary.deductions / summary.gross) * 100)}% of gross` : null,
+              // TDS is part of the figure above; it is named only when some employee on the TDS list has any
+              tdsTotal > 0 ? `incl. ${inr(tdsTotal)} TDS` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || undefined
+          }
         />
         <KpiTile
           testId={`${p}-kpi-net`}

@@ -205,7 +205,7 @@ class SettingsTests(ControlBase):
             {"otpExpiryMinutes": True}, {"otpExpiryMinutes": None},
             {"resendCooldownSeconds": 29}, {"resendCooldownSeconds": 601},
             {"maxRequestsPerHour": 0}, {"maxRequestsPerHour": 21},
-            {"maxAttemptsPerCode": 2}, {"maxAttemptsPerCode": 11},
+            {"maxAttemptsPerCode": 2}, {"maxAttemptsPerCode": 6},
             {"maxPerPhonePerHour": 0}, {"maxPerPhonePerHour": 21},
             {"hourlyCap": 0}, {"hourlyCap": -1}, {"hourlyCap": 10001},
             {"dailyCap": 0}, {"dailyCap": 10001}, {"dailyCap": float("nan")},
@@ -572,7 +572,9 @@ class MessagesTests(ControlBase):
         self.assertEqual(r.status_code, 200)
         code = code_in(post.call_args)
         text = self.get("messages").content.decode() + self.get("overview").content.decode()
-        self.assertNotIn(code, text)
+        # a 4-digit code is only 10 000 numbers: look for it as a text of its own inside a JSON string, not inside the
+        # ids, timestamps and hashes the pages carry
+        self.assertNotRegex(text, rf'"[^"]*(?<![0-9A-Za-z]){code}(?![0-9A-Za-z])[^"]*"')
         self.assertNotIn("9000000001", text)
         self.assertNotIn(TF_KEY, text)
 
@@ -591,7 +593,7 @@ class TestSendTests(ControlBase):
         self.assertTrue(body["ok"])
         self.assertIn("•" * 8 + "3210", body["message"])
         self.assertNotIn("9876543210", body["message"])
-        self.assertEqual(post.call_args.args, (f"{TF_BASE}/{TF_KEY}/SMS/+919876543210/123456/{TEMPLATE_NAME}",))
+        self.assertEqual(post.call_args.args, (f"{TF_BASE}/{TF_KEY}/SMS/+919876543210/1234/{TEMPLATE_NAME}",))
         log = SmsMessageLog.objects.get()
         self.assertEqual(
             (log.purpose, log.status, log.employee_id, log.phone_masked), ("test", "sent", None, "•" * 8 + "3210")
@@ -605,7 +607,7 @@ class TestSendTests(ControlBase):
         self.assertEqual((log.user_name, log.module), ("Sms Admin", "sms_control"))
         self.assertIn("•" * 8 + "3210", log.record_description)
         self.assertNotIn("9876543210", json.dumps([log.record_description, log.old_values, log.new_values]))
-        self.assertNotIn("123456", log.record_description or "")
+        self.assertNotIn("1234", log.record_description or "")
 
     def test_the_number_is_checked_before_anything_else(self):
         for body in (
@@ -700,13 +702,13 @@ class TestSendTests(ControlBase):
 
     def test_nothing_secret_is_in_the_answer_or_the_logs(self):
         with captured_logs() as lines:
-            r, _ = self.send(response=provider_error(f"Invalid API Key {TF_KEY} for 919876543210 code 123456"))
+            r, _ = self.send(response=provider_error(f"Invalid API Key {TF_KEY} for 919876543210 code 1234"))
         text = (
             r.content.decode()
             + "\n".join(lines)
             + json.dumps(list(SmsMessageLog.objects.values("error", "phone_masked")))
         )
-        for secret in (TF_KEY, "9876543210", "123456"):
+        for secret in (TF_KEY, "9876543210", "1234"):
             self.assertNotIn(secret, text)
 
 

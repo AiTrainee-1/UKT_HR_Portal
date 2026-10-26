@@ -15,6 +15,7 @@ import {
   Mail,
   MessageCircle,
   Palette,
+  Percent,
   Share2,
   Timer,
 } from "lucide-react";
@@ -70,7 +71,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     group: "time",
     icon: Clock,
     purpose:
-      "How a staff day's punches become Full Day, Half Day or Absent, and when a staff member is marked Late or Early Out. Production attendance has its own tab, Production Shifts.",
+      "How a staff day's punches become Full Day, Half Day or Absent, and when a staff member is marked Late or Early Out (the Staff page). The Production page says where production attendance is set: the Production Shifts tab.",
     usedBy: [
       { label: "Staff Attendance", to: "/hr/attendance/staff" },
       { label: "Report Log", to: "/hr/attendance/report-log" },
@@ -84,7 +85,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     group: "time",
     icon: Timer,
     purpose:
-      "Production only: how a production worker's punches become shifts earned. The factory's own timings (Day from 8:30 AM, Night from 9:00 PM, Sunday), what each leaving time earns, the unpaid breaks and a 5-minute grace, all editable. Shifts earned times the salary per shift is the pay. Staff are never affected.",
+      "Production only: how a production worker's punches become shifts earned (the Production page). The factory's own timings (Day from 8:30 AM, Night from 9:00 PM, Sunday), what each leaving time earns, the unpaid breaks and a 5-minute grace, all editable. Shifts earned times the salary per shift is the pay. Staff are never affected: the Staff page only says where staff shifts are set.",
     usedBy: [
       { label: "Production Attendance", to: "/hr/attendance/production" },
       { label: "Production Payroll", to: "/hr/production-payroll" },
@@ -98,9 +99,10 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     group: "time",
     icon: AlertTriangle,
     purpose:
-      "Staff only: how many Late, Early Out and extra-permission marks are free each month, what the rest cost in salary, and how many approved permissions a month protect a day. Production late rules are on Production Payroll.",
+      "Staff page: how many Late, Early Out and extra-permission marks are free each month, what the rest cost in salary, how many approved permissions a month protect a day, and whether extra permissions are priced on their own. Production page: whether late production workers lose pay, what counts as late, and each pay cycle's free late days and deduction slabs.",
     usedBy: [
       { label: "Staff Payroll", to: "/hr/payroll" },
+      { label: "Production Payroll", to: "/hr/production-payroll" },
       { label: "Report Log", to: "/hr/attendance/report-log" },
       { label: "Permissions", to: "/hr/leave" },
       { label: "Employee apps" },
@@ -112,7 +114,7 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     group: "time",
     icon: Hourglass,
     purpose:
-      "Staff only: the rules and switches for OT Detection (the automatic next-day late-in allowance and shift-based compensation, given as Relaxation or Payment) and for Compensation Leave (announced late-in / early-out, work on Sundays and holidays, birthday). Each feature has its own switch; the master switch is on Payroll.",
+      "Staff only: the rules and switches for OT Detection (the automatic next-day late-in allowance and shift-based compensation, given as Relaxation or Payment) and for Compensation Leave (announced late-in / early-out, work on Sundays and holidays, birthday). Each feature has its own switch; the master switch is on Staff Payroll.",
     usedBy: [
       { label: "Compensation", to: "/hr/compensation/ot-detection" },
       { label: "Staff Attendance", to: "/hr/attendance/staff" },
@@ -135,16 +137,15 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
   },
   {
     id: "payroll",
-    label: "Payroll",
+    label: "Staff Payroll",
     group: "pay",
     icon: IndianRupee,
     purpose:
-      "What payslips deduct and add: PF and ESI for staff and for production, statutory bonus and overtime pay, plus the salary day and the financial year.",
+      "What staff payslips add and when: the salary pay day and the financial year (both company-wide, for staff and production alike), staff statutory bonus and the switch for overtime pay. Production has its own tab, Production Payroll; PF and ESI have theirs.",
     usedBy: [
       { label: "Staff Payroll", to: "/hr/payroll" },
-      { label: "Production Payroll", to: "/hr/production-payroll" },
       { label: "Bonus", to: "/hr/bonus" },
-      { label: "Compensation", to: "/hr/compensation/ctc-breakdown" },
+      { label: "MD portal" },
     ],
   },
   {
@@ -153,10 +154,27 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     group: "pay",
     icon: Factory,
     purpose:
-      "How often production workers are paid (the pay period) and what late arrivals cost them. Shifts earned come from the Production Shifts tab; PF and ESI from the Payroll tab.",
+      "How often production workers are paid (the pay period of each cycle), the rate suggested for new production employees and production statutory bonus. What late arrivals cost them is on Late Detection, Production page; shifts earned come from the Production Shifts tab; PF and ESI from the PF & ESI tab.",
     usedBy: [
       { label: "Production Payroll", to: "/hr/production-payroll" },
+      { label: "Bonus", to: "/hr/bonus" },
+      { label: "Add Employee", to: "/hr/employees/new" },
       { label: "Manage Shifts", to: "/hr/shifts" },
+    ],
+  },
+  {
+    id: "pf_esi",
+    label: "PF & ESI",
+    group: "pay",
+    icon: Percent,
+    purpose:
+      "The Provident Fund and ESI rules for staff and for production: each rule is a salary range, what the range is measured on and a percentage. Only employees switched ON in Employees, Co Emp pay them. The Super Admin sets the all-units rules and can give a unit its own; every other login sees the rules for its unit, read-only.",
+    usedBy: [
+      { label: "Staff Payroll", to: "/hr/payroll" },
+      { label: "Production Payroll", to: "/hr/production-payroll" },
+      { label: "Employees - Co Emp", to: "/hr/employees" },
+      { label: "Compensation", to: "/hr/compensation/ctc-breakdown" },
+      { label: "Report Center", to: "/hr/reports" },
     ],
   },
   {
@@ -241,6 +259,7 @@ const loaders: Record<string, () => Promise<{ default: SettingsTabComponent }>> 
   devices: () => import("./DevicesTab"),
   payroll: () => import("./PayrollTab"),
   production_payroll: () => import("./ProductionPayrollTab"),
+  pf_esi: () => import("./PfEsiTab"),
   "salary-slip": () => import("./SalarySlipTab"),
   documents: () => import("./DocumentsTab"),
   idcard: () => import("./IdCardTab"),

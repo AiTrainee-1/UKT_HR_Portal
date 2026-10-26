@@ -277,7 +277,7 @@ describe("how this salary was worked out", () => {
     const pf = must("pd-line-pf");
     expect(pf.dataset.kind).toBe("deduction");
     expect(text(pf)).toContain("₹1,599.92");
-    expect(text(pf)).toContain("12% of basic ₹13,332.69");
+    expect(text(pf)).toContain("12% of Basic + DA + Retaining ₹13,332.69");
     expect(pf.querySelector("p:last-child")!.className).toContain("text-red-700");
     expect(text(q("pd-deductions"))).toContain("Total deductions");
 
@@ -287,15 +287,15 @@ describe("how this salary was worked out", () => {
 
   it("a line points at its rule only when the payroll has that rule", async () => {
     await openStaff();
-    expect(q("pd-line-rule-pf")).not.toBeNull(); // pf_rate is among the rules
+    expect(q("pd-line-rule-pf")).not.toBeNull(); // pf_rules is among the rules
     expect(q("pd-line-rule-late")).not.toBeNull(); // late_slabs is
     expect(q("pd-line-rule-advance")).toBeNull(); // no rule key
     click(q("pd-line-rule-pf"));
     await settle(10);
     // it jumps to the rules and brings that one rule into view
     expect(scrolledTo(scroll)).toContain("pd-rules");
-    expect(scrolledTo(scroll)).toContain("pf_rate");
-    expect(must("pd-rule-pf_rate").className).toContain("ring-2");
+    expect(scrolledTo(scroll)).toContain("pf_rules");
+    expect(must("pd-rule-pf_rules").className).toContain("ring-2");
   });
 
   it("with no lines stored it says so instead of leaving a blank", async () => {
@@ -765,5 +765,115 @@ describe("a Production payroll", () => {
     mountPage("/hr/payroll/details/301", null);
     await waitFor(() => !!q("pd-not-found"), "the not-found state");
     expect(world.requests()).toContain("/api/payroll/301/details");
+  });
+});
+
+describe("PF, ESI and TDS", () => {
+  const open = (id: number, base = "/hr/payroll/details") => openLoaded(`${base}/${id}`, FROM_LIST);
+  const settleCard = () => waitFor(() => !!q("pd-section-statutory"), "the PF / ESI / TDS card");
+
+  it("explains a Co Emp employee's PF from the rule that matched, and says why no ESI was deducted", async () => {
+    await open(101);
+    await settleCard();
+    expect(world.requests()).toContain("/api/payroll/101/breakdown");
+    const card = must("pd-section-statutory");
+    expect(text(card)).toContain("How PF, ESI and TDS were worked out");
+    expect(must("pd-statutory-headline").dataset.category).toBe("co_emp");
+    expect(text(q("pd-statutory-headline"))).toContain(
+      "Co Emp employee: PF and ESI are worked out from the rules for all units",
+    );
+    const pf = must("pd-statutory-line-pf");
+    expect(pf.dataset.applied).toBe("true");
+    expect(text(pf)).toContain("12% of ₹13,332.69");
+    expect(text(pf)).toContain('Rule "PF below 25,000": Basic salary of ₹10,000.00 is in its range (₹0 to ₹25,000).');
+    expect(text(pf)).toContain("− ₹1,599.92");
+    const esi = must("pd-statutory-line-esi");
+    expect(esi.dataset.applied).toBe("false");
+    expect(text(esi)).toContain("No rule matched");
+    expect(text(esi)).toContain("nothing deducted");
+    expect(text(esi)).toContain("covers this employee's Basic salary ₹10,000.00");
+    // the amounts every rule could have been tested on
+    const tested = text(q("pd-statutory-eligibility"));
+    expect(tested).toContain("Basic salary₹10,000.00");
+    expect(tested).toContain("Basic + DA + Retaining Allowance₹14,750.00");
+    expect(tested).toContain("Full monthly salary₹29,500.00");
+    expect(must("pd-statutory-link").getAttribute("href")).toBe("/hr/settings?tab=pf_esi");
+  });
+
+  it("shows a TDS employee's TDS line in the deductions and explains it, with no PF or ESI", async () => {
+    await open(106);
+    await settleCard();
+    const tds = must("pd-line-tds");
+    expect(tds.dataset.kind).toBe("deduction");
+    expect(text(tds)).toContain("TDS (10%)");
+    expect(text(tds)).toContain("− ₹2,950.00");
+    expect(q("pd-line-pf")).toBeNull();
+    expect(text(q("pd-net-callout"))).toContain("Gross ₹29,500.00 - deductions ₹2,950.00");
+    expect(must("pd-statutory-headline").dataset.category).toBe("tds");
+    expect(text(q("pd-statutory-headline"))).toContain("TDS is deducted instead of PF and ESI");
+    const line = must("pd-statutory-line-tds");
+    expect(text(line)).toContain("TDS (10%)");
+    expect(text(line)).toContain("10% of the earned gross ₹29,500.00");
+    expect(text(line)).toContain("− ₹2,950.00");
+    expect(q("pd-statutory-line-pf")).toBeNull();
+    expect(q("pd-statutory-eligibility")).toBeNull();
+    expect(must("pd-statutory-link").getAttribute("href")).toBe("/hr/employees");
+    // the payment checklist stops asking for PF and ESI numbers this employee will never need
+    expect(must("pd-ready-pf").dataset.ok).toBe("true");
+    expect(text(q("pd-ready-pf"))).toContain("Not needed");
+    expect(text(q("pd-ready-pf"))).toContain("TDS employee: no PF is deducted");
+    expect(text(q("pd-ready-esi"))).toContain("TDS employee: no ESI is deducted");
+    // the bank details are still required
+    expect(must("pd-ready-bank").dataset.ok).toBe("true");
+  });
+
+  it("says an employee who is not Co Emp gets neither, in the server's own words", async () => {
+    await open(102);
+    await settleCard();
+    // a PF / ESI number that is on the profile is shown (masked) whatever the category
+    expect(text(q("pd-ready-pf"))).toContain("••••0142");
+    expect(must("pd-statutory-headline").dataset.category).toBe("none");
+    expect(text(q("pd-statutory-headline"))).toBe("Not a Co Emp employee: no PF/ESI");
+    expect(q("pd-statutory-line-pf")).toBeNull();
+    expect(q("pd-statutory-line-tds")).toBeNull();
+  });
+
+  it("has no such card on a payroll generated before the redesign: its deductions are shown as they always were", async () => {
+    await open(103);
+    await waitFor(() => world.requests().includes("/api/payroll/103/breakdown"), "the breakdown request");
+    await settle(20);
+    expect(q("pd-section-statutory")).toBeNull();
+    expect(q("pd-section-overview")).not.toBeNull();
+    expect(q("pd-line-pf")).not.toBeNull();
+  });
+
+  it("has no card for a payroll with no stored breakdown, or when the breakdown cannot be read, and the page is unharmed", async () => {
+    await open(105);
+    await settle(20);
+    expect(q("pd-section-statutory")).toBeNull();
+    expect(q("pd-body")).not.toBeNull();
+    unmountPage();
+    world.breakdowns.set(101, apiError(500));
+    await open(101);
+    await settle(30);
+    expect(q("pd-section-statutory")).toBeNull();
+    expect(q("pd-error")).toBeNull();
+    expect(q("pd-section-overview")).not.toBeNull();
+  });
+
+  it("is on the production page too, saying whose rules were used", async () => {
+    await open(301, "/hr/production-payroll/details");
+    await settleCard();
+    expect(text(q("pd-statutory-headline"))).toContain("this unit's own rules");
+    expect(text(q("pd-statutory-eligibility"))).toContain("Monthly equivalent pay₹29,500.00");
+    expect(text(q("pd-statutory-line-pf"))).toContain("Basic part of the monthly equivalent pay of ₹10,000.00");
+    expect(must("pd-section-statutory").querySelector("a")?.className).toContain("text-amber-700");
+  });
+
+  it("is not asked for an older session-based production payroll, which has no breakdown at all", async () => {
+    await open(304, "/hr/production-payroll/details");
+    await settle(20);
+    expect(world.requests().some((r) => r.includes("/304/breakdown"))).toBe(false);
+    expect(q("pd-section-statutory")).toBeNull();
   });
 });

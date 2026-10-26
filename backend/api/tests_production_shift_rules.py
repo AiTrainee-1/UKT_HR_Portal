@@ -1687,13 +1687,7 @@ class ProductionPayrollWithRulesTests(TestCase):
         _ensure_seed()
         _set_rules(date(2026, 1, 1))
         ps = PayrollSettings.get()
-        for key, value in dict(
-            prod_payroll_rules_enabled=False,
-            prod_pf_ef_enabled=False,
-            prod_pf_ef_rules=[],
-            prod_late_detection_enabled=False,
-        ).items():
-            setattr(ps, key, value)
+        ps.prod_late_detection_enabled = False
         ps.save()
 
     def test_pay_is_the_sum_of_the_days_shifts_times_the_rate(self):

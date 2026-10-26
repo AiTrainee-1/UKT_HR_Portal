@@ -62,7 +62,14 @@ class LoginOptionsTests(OtpBase):
         # otpChannel is additive (SMS channel): the four original keys are unchanged, WhatsApp is the default channel
         self.assertEqual(
             body,
-            {"otpLogin": True, "otpReset": True, "otpActivate": True, "passwordLogin": True, "otpChannel": "whatsapp"},
+            {
+                "otpLogin": True,
+                "otpReset": True,
+                "otpActivate": True,
+                "passwordLogin": True,
+                "otpChannel": "whatsapp",
+                "codeLength": 6,
+            },
         )
 
     def test_otp_is_not_advertised_when_whatsapp_is_not_configured(self):

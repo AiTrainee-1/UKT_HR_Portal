@@ -2,25 +2,22 @@ import type { PayCycle } from "@/lib/api-client/custom-hooks";
 import type { SettingMeta } from "./kit/catalog";
 import { CYCLE_INFO, CYCLES } from "./production-payroll/cycles";
 
-/** The sub-tabs: one per pay cycle, the global late detection, and the read-only Attendance & Shift. */
-export type ProductionPayrollSubTab = PayCycle | "late" | "shift";
+/** The sub-tabs: the read-only Overview, one per pay cycle (its period rule), and Pay & Bonus. */
+export type ProductionPayrollSubTab = "overview" | PayCycle | "payBonus";
 
 type ProductionSettingMeta = Omit<SettingMeta, "tab"> & { subTab: ProductionPayrollSubTab };
 
 /** Section headings, so the blocks and this list cannot drift apart. */
 export const PRODUCTION_SECTIONS = {
   shift: "Shifts earned, pay and PF / ESI",
-  late: "Production late detection",
-  perCycle: "Free late days and slabs are set per cycle",
+  pay: "Rate for new production employees",
+  bonus: "Production statutory bonus",
 } as const;
 
-/** Each cycle's two section headings ("Weekly pay period", "Weekly late deductions"). */
-export const CYCLE_SECTIONS: Record<PayCycle, { period: string; late: string }> = Object.fromEntries(
-  CYCLES.map((cycle) => [
-    cycle,
-    { period: `${CYCLE_INFO[cycle].label} pay period`, late: `${CYCLE_INFO[cycle].label} late deductions` },
-  ]),
-) as Record<PayCycle, { period: string; late: string }>;
+/** Each cycle's section heading ("Weekly pay period"). What a late day costs is on Late Detection -> Production. */
+export const CYCLE_SECTIONS: Record<PayCycle, { period: string }> = Object.fromEntries(
+  CYCLES.map((cycle) => [cycle, { period: `${CYCLE_INFO[cycle].label} pay period` }]),
+) as Record<PayCycle, { period: string }>;
 
 const S = PRODUCTION_SECTIONS;
 
@@ -30,7 +27,7 @@ const CYCLE_WORDS: Record<PayCycle, string[]> = {
   monthly: ["monthly", "four weeks", "4 weeks", "28 days"],
 };
 
-/** The four setting blocks of one cycle's sub-tab: its period rule and its own late rules. */
+/** The two setting blocks of one cycle's sub-tab: its period rule. */
 function cycleBlocks(cycle: PayCycle): ProductionSettingMeta[] {
   const { label, weeks, days, every } = CYCLE_INFO[cycle];
   const length = weeks === 1 ? "one whole week" : `${weeks} whole weeks`;
@@ -68,49 +65,14 @@ function cycleBlocks(cycle: PayCycle): ProductionSettingMeta[] {
           : `The date the ${label} periods are counted from, forwards and backwards: it decides which week a ${weeks}-week period begins on. Any date works, it is moved back to the start weekday. Without it, ${label} payroll cannot be generated.`,
       keywords: [...words, "anchor", "start date", "first period", "counted from"],
     },
-    {
-      id: `${cycle}-late-allowance`,
-      subTab: cycle,
-      section: CYCLE_SECTIONS[cycle].late,
-      title: `Free late days a period (${label})`,
-      purpose: `How many late days a production worker on the ${label} cycle may have in one ${days}-day period before anything is deducted. The shared production value applies until this cycle is given a value of its own.`,
-      keywords: [...words, "free allowance", "late", "per period"],
-    },
-    {
-      id: `${cycle}-late-slabs`,
-      subTab: cycle,
-      section: CYCLE_SECTIONS[cycle].late,
-      title: `Deduction slabs (${label})`,
-      purpose: `How many shifts of pay a worker on the ${label} cycle loses once they reach a number of billable lates (lates beyond the free allowance) in one period. The highest row reached applies, and the last row holds beyond it.`,
-      keywords: [...words, "slab", "deduct shifts", "billable lates", "penalty"],
-    },
   ];
 }
 
 /** Every setting block on the Production Payroll tab: its anchor id, its sub-tab, and the words the block shows. */
 const BLOCKS: ProductionSettingMeta[] = [
-  ...CYCLES.flatMap(cycleBlocks),
-  {
-    id: "prod-late-switch",
-    subTab: "late",
-    section: S.late,
-    title: "Deduct pay for late production workers",
-    purpose:
-      "The on/off switch for production late deductions on every pay cycle. When on, each worker's punches are checked against the start and the grace of their day's group on the Production Shifts tab (days before that tab's rules start use the production shift assigned in Manage Shifts), and late days beyond their cycle's free allowance cost shifts of pay.",
-    keywords: ["late detection", "production", "enable", "deduction", "late", "switch"],
-  },
-  {
-    id: "prod-attendance-mode",
-    subTab: "late",
-    section: S.late,
-    title: "What counts as late (Attendance Mode)",
-    purpose:
-      "Simple: a day is late when the first punch is after the shift start plus grace. Strict: also when the last punch is before the shift end minus grace. A day counts once either way, on every pay cycle.",
-    keywords: ["strict", "simple", "attendance mode", "early out", "grace"],
-  },
   {
     id: "prod-shifts-earned",
-    subTab: "shift",
+    subTab: "overview",
     section: S.shift,
     title: "How a production day earns pay",
     purpose:
@@ -123,25 +85,63 @@ const BLOCKS: ProductionSettingMeta[] = [
       "punch times",
       "salary per shift",
       "attendance",
+      "overview",
     ],
   },
   {
     id: "prod-pf-esi-where",
-    subTab: "shift",
+    subTab: "overview",
     section: S.shift,
     title: "PF and ESI on production payslips",
     purpose:
-      "Production PF and ESI are set on the Payroll tab in two ways: flat rates (one rate each, behind their own switch) and salary bands by estimated monthly pay. A matching band is used first, even while the flat-rate switch is off; otherwise the flat rates when their switch is on; otherwise nothing is deducted.",
-    keywords: ["pf", "esi", "ef", "flat rates", "salary bands", "provident fund", "production", "monthly estimate"],
+      "Production PF and ESI are set on the PF & ESI tab, Production page, as rules: a salary range, what the range is measured on and a percentage. Only workers switched ON in Employees, Co Emp pay them. The first rule that fits the worker applies; with none, nothing is deducted. Here you only see how the pay cycle scales a month.",
+    keywords: ["pf", "esi", "provident fund", "production", "monthly estimate", "co emp", "rules", "pf & esi"],
   },
   {
     id: "prod-assigned-shifts",
-    subTab: "shift",
+    subTab: "overview",
     section: S.shift,
     title: "Assigned production shift rules",
     purpose:
       "Read-only: the production shifts kept in Manage Shifts. Before the Production Shifts rules start, production late detection compares each worker's punches with the start, end and grace of the shift they are assigned on that day, and a worker with no assigned shift is never late. From their start date the day's group on the Production Shifts tab (its start, its departure and the grace there) is used instead.",
     keywords: ["assigned shift", "grace", "shift template", "manage shift", "late"],
+  },
+  ...CYCLES.flatMap(cycleBlocks),
+  {
+    id: "default-salary-per-shift",
+    subTab: "payBonus",
+    section: S.pay,
+    title: "Suggested rate per shift for new production employees",
+    purpose:
+      "The Salary Per Shift filled in for you when you add a new production employee. Pay always uses each employee's own rate, so changing it never changes anyone's pay.",
+    keywords: ["default salary per shift", "rate", "add employee", "production", "new employee"],
+  },
+  {
+    id: "prod-bonus-percent",
+    subTab: "payBonus",
+    section: S.bonus,
+    title: "Production bonus rate",
+    purpose:
+      "The percentage of each eligible production worker's bonus wage for the financial year that is paid as statutory bonus. Staff have their own rate on Staff Payroll. The Payment of Bonus Act sets 8.33% as the minimum and 20% as the maximum.",
+    keywords: ["bonus percent", "8.33", "payment of bonus act", "statutory", "production", "worker"],
+  },
+  {
+    id: "prod-bonus-wage-ceiling",
+    subTab: "payBonus",
+    section: S.bonus,
+    title: "Production bonus wage ceiling",
+    purpose:
+      "The most pay per production payslip that counts towards a worker's bonus. A production payslip's Basic is its whole period pay, and anything above this amount counts as this amount. Staff have their own ceiling on Staff Payroll.",
+    keywords: ["7000", "wage ceiling", "bonus", "cap", "production", "per payslip"],
+  },
+  {
+    id: "prod-bonus-eligibility-ceiling",
+    subTab: "payBonus",
+    section: S.bonus,
+    title: "Production bonus eligibility limit",
+    purpose:
+      "Who gets a bonus at all: production workers whose latest payslip in the year has period pay above this amount get none. Staff have their own limit on Staff Payroll.",
+    keywords: ["eligibility ceiling", "21000", "bonus", "eligible", "production"],
   },
 ];
 

@@ -292,6 +292,14 @@ describe("the month's figures and the list", () => {
     expect(text(must("sp-slip-row-3"))).not.toContain("·"); // no designation or department
   });
 
+  it("marks the slip of a TDS employee with its TDS and percentage, and nobody else's", () => {
+    serve([...SLIPS, slip(5, "Karthik Rajan", "E005", { tdsDeduction: 2500, tdsPercent: 10, totalDeductions: 2500 })]);
+    mount();
+    expect(text(must("sp-slip-tds-5"))).toBe("TDS (10%) ₹2,500");
+    expect(q("sp-slip-tds-1")).toBeNull();
+    expect(q("sp-slip-tds-2")).toBeNull();
+  });
+
   it("a footer counts the slips and their net", () => {
     mount();
     expect(text(must("sp-slips-footer"))).toContain("4 payslips");
@@ -807,6 +815,23 @@ describe("the Payslip register", () => {
     expect(args.subtitle).toBe("Staff - October 2026");
     expect(args.title).toBe("Payslip register");
     expect(h.csv).not.toHaveBeenCalled();
+  });
+
+  it("Excel gets the two TDS columns only while a slip listed has TDS", async () => {
+    serve([...SLIPS, slip(5, "Karthik Rajan", "E005", { tdsDeduction: 2500, tdsPercent: 10, totalDeductions: 2500 })]);
+    mount();
+    openExport();
+    click(must("sp-export-excel"));
+    await settle();
+    const labels = h.excel.mock.calls[0][0].columns.map((c: { label: string }) => c.label);
+    expect(labels).toEqual(expect.arrayContaining(["TDS %", "TDS"]));
+    expect(labels.indexOf("TDS")).toBe(labels.indexOf("Deductions") - 1);
+    // narrowed to a slip without TDS, the register is the plain one again
+    typeInto(must("sp-slips-search"), "ravi");
+    openExport();
+    click(must("sp-export-csv"));
+    await settle();
+    expect(h.csv.mock.calls[0][0].columns).toBe(REGISTER_COLUMNS);
   });
 
   it("CSV writes the same register as plain text", async () => {

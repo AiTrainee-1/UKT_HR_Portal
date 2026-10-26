@@ -228,11 +228,22 @@ SETTINGS: dict[str, SettingRef] = {
     "late_free_allowance": SettingRef("Free late marks a month", "late_detection", "free-allowance"),
     "late_slabs": SettingRef("Late deduction slabs", "late_detection", "deduction-slabs"),
     "permission_cap": SettingRef("Permission monthly cap", "late_detection", "permission-cap"),
+    # Late Detection tab, Staff section: Permission Deduction Slabs (anchors of LateDetectionTab.meta.ts)
+    "permission_pricing": SettingRef("Permission deduction slabs", "late_detection", "permission-pricing"),
+    "permission_free_allowance": SettingRef(
+        "Free excess permissions a month", "late_detection", "permission-free-allowance"
+    ),
+    "permission_slabs": SettingRef("Permission deduction slabs table", "late_detection", "permission-deduction-slabs"),
+    # PF & ESI tab (2026-10-24: the only place PF / ESI are configured; the Super Admin edits it, everyone else reads it). The
+    # anchors are the blocks of frontend/src/pages/hr/settings/PfEsiTab.meta.ts.
+    "pf_esi_scope": SettingRef("Whose PF and ESI rules these are", "pf_esi", "pf-esi-scope"),
+    "staff_pf_esi_how": SettingRef("Who pays staff PF and ESI, and on what", "pf_esi", "staff-pf-esi-how"),
+    "staff_pf_rules": SettingRef("Staff PF rules", "pf_esi", "staff-pf-rules"),
+    "staff_esi_rules": SettingRef("Staff ESI rules", "pf_esi", "staff-esi-rules"),
+    "prod_pf_esi_how": SettingRef("Who pays production PF and ESI, and on what", "pf_esi", "prod-pf-esi-how"),
+    "prod_pf_rules": SettingRef("Production PF rules", "pf_esi", "prod-pf-rules"),
+    "prod_esi_rules": SettingRef("Production ESI rules", "pf_esi", "prod-esi-rules"),
     # Payroll tab
-    "staff_pf_esi_switch": SettingRef("Staff PF and ESI switch", "payroll", "staff-pf-esi-switch"),
-    "staff_pf_rate": SettingRef("Staff PF rate", "payroll", "staff-pf-rate"),
-    "staff_esi_rate": SettingRef("Staff ESI rate", "payroll", "staff-esi-rate"),
-    "staff_esi_ceiling": SettingRef("Staff ESI ceiling", "payroll", "staff-esi-ceiling"),
     "pay_day": SettingRef("Salary pay day", "payroll", "pay-day"),
     "compensation_features": SettingRef("OT & Compensation features", "payroll", "compensation-features"),
     # Settings -> Compensation (the OT rules moved there on 2026-10-14)
@@ -241,24 +252,20 @@ SETTINGS: dict[str, SettingRef] = {
     "ot_shift_threshold": SettingRef("Type 2 starts after", "compensation", "shift-threshold"),
     "ot_shift_ladder": SettingRef("Type 2 shifts by last punch-out", "compensation", "shift-ladder"),
     "ot_shift_pay": SettingRef("Give Type 2 as payment", "compensation", "shift-pay"),
-    "prod_pf_esi_switch": SettingRef("Production flat-rate PF and ESI switch", "payroll", "prod-pf-esi-switch"),
-    "prod_pf_rate": SettingRef("Production PF rate", "payroll", "prod-pf-rate"),
-    "prod_esi_rate": SettingRef("Production ESI rate", "payroll", "prod-esi-rate"),
-    "prod_esi_ceiling": SettingRef("Production ESI ceiling", "payroll", "prod-esi-ceiling"),
-    "pf_ef_switch": SettingRef("Production PF / EF salary bands switch", "payroll", "pf-ef-switch"),
-    "pf_ef_rules": SettingRef("Production PF / EF salary bands", "payroll", "pf-ef-rules"),
-    # Production Payroll tab (the settings that are not per cycle)
-    "prod_late_switch": SettingRef("Production late deductions", "production_payroll", "prod-late-switch"),
-    "prod_attendance_mode": SettingRef("Production late attendance mode", "production_payroll", "prod-attendance-mode"),
+    # Late Detection tab, Production section (what a late production day costs moved there from the Production Payroll tab)
+    "prod_late_switch": SettingRef("Production late deductions", "late_detection", "prod-late-switch"),
+    "prod_attendance_mode": SettingRef("Production late attendance mode", "late_detection", "prod-attendance-mode"),
+    # Production Payroll tab
     "prod_shifts_earned": SettingRef("How a production day earns pay", "production_payroll", "prod-shifts-earned"),
 }
 
-# The four settings every pay cycle has its own copy of: the anchor is `<cycle>-<suffix>`.
+# The four settings every pay cycle has its own copy of: the anchor is `<cycle>-<suffix>`, on the Production Payroll tab (the
+# period rule) or the Late Detection tab (the cycle's own late rules).
 CYCLE_SETTING_SUFFIX = {
-    "week_start": ("Week start", "week-start"),
-    "first_period": ("First period start", "first-period"),
-    "late_allowance": ("Free late days", "late-allowance"),
-    "late_slabs": ("Late deduction slabs", "late-slabs"),
+    "week_start": ("Week start", "week-start", "production_payroll"),
+    "first_period": ("First period start", "first-period", "production_payroll"),
+    "late_allowance": ("Free late days", "late-allowance", "late_detection"),
+    "late_slabs": ("Late deduction slabs", "late-slabs", "late_detection"),
 }
 
 
@@ -266,8 +273,8 @@ def cycle_ref(cycle: str | None, key: str) -> SettingRef | None:
     """The Settings block of one pay cycle (`weekly-late-slabs`); None when the payroll has no cycle."""
     if cycle not in CYCLE_LABELS:
         return None
-    label, suffix = CYCLE_SETTING_SUFFIX[key]
-    return SettingRef(f"{CYCLE_LABELS[cycle]} {label.lower()}", "production_payroll", f"{cycle}-{suffix}")
+    label, suffix, tab = CYCLE_SETTING_SUFFIX[key]
+    return SettingRef(f"{CYCLE_LABELS[cycle]} {label.lower()}", tab, f"{cycle}-{suffix}")
 
 
 def all_setting_refs() -> list[SettingRef]:
@@ -909,6 +916,11 @@ def _staff_period_issues(em: _Emitter, payroll: Payroll, bd: dict) -> None:
 
     summary = ded.get("lateSummary") or {}
     penalty = dec(ded.get("lateShiftPenalty"))
+    # Permission Deduction Slabs: a payslip generated with the switch ON prices the excess permissions on their own, so
+    # its late pool holds late-in + early-out only.
+    perm = ded.get("permissionSummary") if isinstance(ded.get("permissionSummary"), dict) else {}
+    perm_on = bool(perm.get("enabled"))
+    perm_penalty = dec(ded.get("permissionPenalty"))
     if penalty > 0:
         if summary:
             total = int(summary.get("totalLateCount") or 0)
@@ -919,9 +931,11 @@ def _staff_period_issues(em: _Emitter, payroll: Payroll, bd: dict) -> None:
             free = summary.get("freeAllowance")
             free = int(free) if free is not None else max(0, total - billable)
             cut = dec(summary.get("shiftDeductions"))
+            parts = f"{late_in} late-in, {early} early-out" + (
+                "" if perm_on else f", {plural(excess, 'excess permission')}"
+            )
             detail = (
-                f"{plural(total, 'late occurrence')} ({late_in} late-in, {early} early-out, "
-                f"{plural(excess, 'excess permission')}), {free} free, {billable} billable: "
+                f"{plural(total, 'late occurrence')} ({parts}), {free} free, {billable} billable: "
                 f"{shifts_text(cut)} x {inr(daily)} daily rate = {inr(penalty)}"
             )
             facts = {
@@ -941,7 +955,40 @@ def _staff_period_issues(em: _Emitter, payroll: Payroll, bd: dict) -> None:
         em.add("late_penalty", detail, impact=impact, rule=rule_of(SETTINGS["late_slabs"]), facts=facts)
 
     excess = int(summary.get("excessPermissionCount") or 0)
-    if excess > 0:
+    if excess > 0 and perm_on:
+        cap = summary.get("permissionMonthlyCap")
+        of_cap = f" of {cap}" if cap is not None else ""
+        priced = int(perm.get("priced") or 0)
+        absorbed = int(perm.get("absorbedByLate") or 0)
+        free_used = int(perm.get("freeUsed") or 0)
+        billable_perm = int(perm.get("billable") or 0)
+        cut = dec(perm.get("shifts"))
+        said = f"{plural(excess, 'approved permission')} this month went beyond the monthly cap{of_cap}: each one excuses nothing"
+        if absorbed:
+            said += f"; {absorbed} of them {'is' if absorbed == 1 else 'are'} the same incident as a late or early-out day and count once, in the late pool"
+        said += (
+            f"; {plural(priced, 'permission')} {'is' if priced == 1 else 'are'} priced on their own, {free_used} free, "
+            f"{billable_perm} billable"
+        )
+        if perm_penalty > 0:
+            said += f": {shifts_text(cut)} x {inr(daily)} daily rate = {inr(perm_penalty)}"
+        em.add(
+            "excess_permission",
+            said,
+            impact=_impact(shifts=cut, amount=perm_penalty) if perm_penalty > 0 else _impact(label="No deduction"),
+            rule=rule_of(SETTINGS["permission_slabs"]),
+            facts={
+                "excessPermissions": excess,
+                "permissionMonthlyCap": cap,
+                "absorbedByLate": absorbed,
+                "priced": priced,
+                "free": free_used,
+                "billable": billable_perm,
+                "shiftDeductions": money(cut),
+                "dailyRate": money(daily),
+            },
+        )
+    elif excess > 0:
         cap = summary.get("permissionMonthlyCap")
         of_cap = f" of {cap}" if cap is not None else ""
         em.add(
@@ -1235,8 +1282,133 @@ def summarize_issues(issues: list[dict], payrolls, kind: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  PF / ESI / TDS wording (the money lines below and the rules of payroll_insights_rules.py say the same things)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# What a rule's range is measured on, in the words of the Settings page and the payroll screens.
+BASIS_WORDS = {
+    "basic": "Basic salary",
+    "first_portion": "Basic + DA + Retaining Allowance",
+    "total": "the full monthly salary",
+}
+# A production worker has no monthly salary: the rules are tested on the period's pay scaled to a month.
+PRODUCTION_BASIS_WORDS = {
+    "basic": "the Basic part of the monthly equivalent pay",
+    "first_portion": "the first 50% of the monthly equivalent pay",
+    "total": "the monthly equivalent pay",
+}
+WAGES_WORDS = "Basic + DA + Retaining Allowance"  # what a PF / ESI percentage is taken from
+PRODUCTION_WAGES_WORDS = "the first 50% of the period pay"
+
+
+def basis_words(basis, production: bool = False) -> str:
+    return (PRODUCTION_BASIS_WORDS if production else BASIS_WORDS).get(basis or "basic", "the salary")
+
+
+def capital(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def range_words(minimum, maximum) -> str:
+    """'₹0 to ₹25,000' / '₹25,000 and above' (a maximum of 0 means no upper limit)."""
+    if dec(maximum) > 0:
+        return f"{inr(minimum)} to {inr(maximum)}"
+    return f"{inr(minimum)} and above"
+
+
+def rule_words(rule: dict, production: bool = False) -> str:
+    """The rule a payroll was priced with: 'rule "PF": Basic salary ₹5,000 is in ₹0 to ₹25,000'. `rule` is the `pfRule` /
+    `esiRule` of a stored `statutory` block (or a Rule.to_json())."""
+    label = rule.get("label") or "Rule"
+    words = f'rule "{label}"'
+    tested = rule.get("amountTested")
+    if tested is not None:
+        words += (
+            f": {basis_words(rule.get('basis'), production)} {inr(tested)} is in "
+            f"{range_words(rule.get('minAmount'), rule.get('maxAmount'))}"
+        )
+    return words
+
+
+def tds_label(percent) -> str:
+    """'TDS (10%)' for a TDS slip; 'TDS' when the percentage is not known."""
+    return f"TDS ({plain(percent)}%)" if percent is not None and dec(percent) > 0 else "TDS"
+
+
+def no_rule_words(kind: str, eligibility: dict | None, production: bool = False) -> str:
+    """Why a Co Emp employee has no PF / ESI: no rule covers any of the amounts the rules are tested on."""
+    if not eligibility or eligibility.get("basic") is None:
+        return f"Not deducted: no {kind} rule covers this salary"
+    seen = ", ".join(
+        f"{basis_words(basis, production)} {inr(eligibility[key])}"
+        for basis, key in (("basic", "basic"), ("first_portion", "firstPortion"), ("total", "total"))
+        if eligibility.get(key) is not None
+    )
+    return f"Not deducted: no {kind} rule covers this employee ({seen})"
+
+
 def _line(key, label, amount, kind, note=None, rule_key=None) -> dict:
     return {"key": key, "label": label, "note": note, "amount": money(amount), "kind": kind, "ruleKey": rule_key}
+
+
+def _statutory_lines(d: dict, e: dict, earned: Decimal, slip: SalarySlip | None, staff: bool) -> list[dict]:
+    """The PF, ESI and TDS lines of a payroll's deductions, from what the payroll stored (`d` = the breakdown's deductions,
+    `e` its earnings, `earned` the pay earned incl. overtime, the TDS base of a payroll with no stored statutory block).
+
+    PF and ESI exist only for a Co Emp employee: the line says which rule priced it and on what, or, when no rule covers the
+    salary, why nothing was deducted. TDS exists only for a TDS employee ('TDS (10%)'). A payroll from before the PF & ESI
+    redesign has no `statutory` block: its PF / ESI are shown from the stored amounts and rates, with no rule link (the old
+    switches and ceilings no longer exist anywhere), and no TDS line."""
+    production = not staff
+    st = d.get("statutory") if isinstance(d.get("statutory"), dict) else None
+    pf = dec(d["pf"] if "pf" in d else (slip.pf_deduction if slip is not None else 0))
+    esi = dec(d["esi"] if "esi" in d else (slip.esi_deduction if slip is not None else 0))
+    lines: list[dict] = []
+
+    if st is None:  # stored before the redesign: what was deducted, at the rate it was deducted at
+        pf_rate, esi_rate = dec(d.get("pfRate")), dec(d.get("esiRate"))
+        what = "earned pay" if staff else "the period pay"
+        if pf > 0:
+            base = f"Basic {inr(e.get('basic'))}" if staff and e else f"the period pay {inr(earned)}"
+            lines.append(_line("pf", "Provident Fund (PF)", pf, "deduction", f"{plain(pf_rate)}% of {base}"))
+        if esi > 0:
+            lines.append(
+                _line(
+                    "esi",
+                    "ESI" if staff else "ESI / EF",
+                    esi,
+                    "deduction",
+                    f"{plain(esi_rate)}% of {what} {inr(earned)}",
+                )
+            )
+        return lines
+
+    category = st.get("category")
+    wages_words = PRODUCTION_WAGES_WORDS if production else WAGES_WORDS
+    if category == "co_emp":
+        for key, label, kind, rule_field, amount in (
+            ("pf", "Provident Fund (PF)", "PF", "pfRule", pf),
+            ("esi", "ESI", "ESI", "esiRule", esi),
+        ):
+            rule = st.get(rule_field) if isinstance(st.get(rule_field), dict) else None
+            if rule is not None:
+                note = f"{plain(rule.get('ratePercent'))}% of {wages_words} {inr(st.get('pfWages'))} ({rule_words(rule, production)})"
+            else:
+                note = no_rule_words(kind, st.get("eligibility"), production)
+            lines.append(_line(key, label, amount, "deduction", note, f"{key}_rules"))
+    tds_block = st.get("tds") if isinstance(st.get("tds"), dict) else None
+    tds = dec(d["tds"] if "tds" in d else (slip.tds_deduction if slip is not None else 0))
+    percent = d.get("tdsPercent")
+    if percent is None and tds_block:
+        percent = tds_block.get("percent")
+    if percent is None and slip is not None:
+        percent = slip.tds_percent
+    if tds > 0 or percent is not None:
+        base = dec(tds_block.get("base")) if tds_block and tds_block.get("base") is not None else earned
+        note = f"{plain(percent)}% of the pay earned {inr(base)}" if percent is not None else None
+        lines.append(_line("tds", tds_label(percent), tds, "deduction", note, "tds"))
+    return lines
 
 
 def money_lines(payroll: Payroll, slip: SalarySlip | None, bd: dict | None) -> tuple[list[dict], list[dict]]:
@@ -1338,37 +1510,7 @@ def money_lines(payroll: Payroll, slip: SalarySlip | None, bd: dict | None) -> t
     earnings.append(_line("total_earnings", "Total earnings", total_earned, "subtotal"))
 
     # ── deductions ──
-    pf = dec(d["pf"] if "pf" in d else (slip.pf_deduction if slip is not None else 0))
-    esi = dec(d["esi"] if "esi" in d else (slip.esi_deduction if slip is not None else 0))
-    pf_rate, esi_rate = dec(d.get("pfRate")), dec(d.get("esiRate"))
-    band = d.get("pfEfRule")
-    off = "Not deducted: the PF / ESI switch was off when this payroll was generated, or no pay was earned"
-    if pf > 0 or pf_rate > 0:
-        if staff:
-            note = f"{plain(pf_rate)}% of Basic {inr(e.get('basic'))}" if pf > 0 and e else off
-        elif pf > 0 and band:
-            note = f"{plain(band.get('pfRate'))}% of the period pay {inr(gross)} (salary band {band.get('label')})"
-        elif pf > 0:
-            note = f"{plain(pf_rate)}% of the period pay {inr(gross)}"
-        else:
-            note = off
-        deductions.append(
-            _line("pf", "Provident Fund (PF)", pf, "deduction", note, "pf_ef_rule" if band else "pf_rate")
-        )
-    if esi > 0 or esi_rate > 0:
-        ceiling = dec(d.get("esiApplicableBelow"))
-        what = "earned pay" if staff else "the period pay"
-        if esi > 0 and band:
-            note = f"{plain(band.get('efRate'))}% of {what} {inr(gross)} (salary band {band.get('label')})"
-        elif esi > 0:
-            note = f"{plain(esi_rate)}% of {what} {inr(gross)}"
-        elif staff and ceiling and dec(e.get("monthlySalary")) > ceiling:
-            note = f"Not deducted: the monthly salary {inr(e.get('monthlySalary'))} is above the ESI ceiling {inr(ceiling)}"
-        else:
-            note = off
-        deductions.append(
-            _line("esi", "ESI" if staff else "ESI / EF", esi, "deduction", note, "pf_ef_rule" if band else "esi_rate")
-        )
+    deductions.extend(_statutory_lines(d, e, gross + ot, slip, staff))
 
     advances = dec(d["advances"]) if "advances" in d else dec(slip.advance_deduction if slip is not None else 0)
     if advances > 0:
@@ -1396,6 +1538,22 @@ def money_lines(payroll: Payroll, slip: SalarySlip | None, bd: dict | None) -> t
             else None
         )
         deductions.append(_line("late_penalty", "Late deduction", penalty, "deduction", note, "late_slabs"))
+
+    # Permission Deduction Slabs (staff): the excess permissions priced on their own, its own line like the late one
+    permission_penalty = dec(d.get("permissionPenalty")) if staff else Decimal("0")
+    if permission_penalty > 0:
+        perm = d.get("permissionSummary") if isinstance(d.get("permissionSummary"), dict) else {}
+        note = (
+            f"{shifts_text(perm.get('shifts'))} x {inr(dec(e.get('dailyRate')))} daily rate "
+            f"({plural(perm.get('billable'), 'billable excess permission')})"
+            if perm
+            else None
+        )
+        deductions.append(
+            _line(
+                "permission_penalty", "Permission deduction", permission_penalty, "deduction", note, "permission_slabs"
+            )
+        )
 
     generated = dec(slip.total_deductions) if slip is not None else None
     hr_change = dec(payroll.deductions) - generated if generated is not None else Decimal("0")

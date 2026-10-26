@@ -22,6 +22,11 @@ class SelectingAreas(SimpleTestCase):
         self.assertIn("activity", self.areas("Who logged in after hours?"))
         self.assertIn("employees", self.areas("What is our attrition and headcount?"))
 
+    def test_a_question_about_tds_or_tax_is_a_payroll_question(self):
+        self.assertIn("payroll", self.areas("How much TDS was deducted last month?"))
+        self.assertIn("payroll", self.areas("What is the income tax at source on salaries?"))
+        self.assertIn("payroll", self.areas("PF and ESI of the Co Emp employees"))
+
     def test_plurals_and_endings_still_match(self):
         self.assertIn("attendance", self.areas("absenteeism and absences, lateness"))
         self.assertIn("recruitment", self.areas("hiring candidates"))

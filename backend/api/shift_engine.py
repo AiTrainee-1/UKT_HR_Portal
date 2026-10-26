@@ -28,11 +28,14 @@ Monthly deduction -one shared formula, attendance_final.late_pool_summary:
   billable = max(0, pool - PayrollSettings.late_free_allowance)
   shift_deductions = payroll_views.late_shift_deduction(billable)  (HR slab table)
   salary_deduction_amount = shift_deductions * daily_rate
+  With the Permission Deduction Slabs switch ON the excess permissions leave that pool and are priced on their
+  own (payroll_views.late_pool_pricing); the two deductions are added together in the row below.
 
 Full / Half / Absent is NOT decided here: see Half-Day Detection in
 attendance_final.py (identical in Simple and Strict mode).
 """
 
+import copy
 from datetime import date as date_type, time as time_type, timedelta
 from decimal import Decimal
 
@@ -610,11 +613,17 @@ def compute_monthly_shift_summary(emp, year: int, month: int, daily_rate: Decima
     """
     from .models import MonthlyShiftSummary, EmployeePermission, PayrollSettings
     from .attendance_final import compute_month_records, late_pool_summary
-    from .payroll_views import late_shift_deduction
+    from .payroll_views import late_pool_pricing
 
     settings = PayrollSettings.get()
     if records is None:
         records = compute_month_records(emp, year, month, settings)
+    if emp.employment_type != "staff" and settings.permission_pricing_enabled:
+        # Permission Deduction Slabs are a STAFF rule: a production worker's excess permissions are never priced (their
+        # payroll has its own late rules), whatever the switch says. A copy that is never saved, so the stored
+        # settings stay as they are.
+        settings = copy.copy(settings)
+        settings.permission_pricing_enabled = False
 
     total_shifts = sum((r.shifts_earned or Decimal("0")) for r in records) or Decimal("0")
 
@@ -630,11 +639,12 @@ def compute_monthly_shift_summary(emp, year: int, month: int, daily_rate: Decima
     excess_permissions = pool["excess_permissions"]
     permissions_used = pool["free_used"]
     billable_late = pool["billable"]
-    shift_deductions = late_shift_deduction(billable_late, settings)
-
-    salary_deduction = Decimal("0")
-    if daily_rate and shift_deductions > 0:
-        salary_deduction = (shift_deductions * daily_rate).quantize(Decimal("0.01"))
+    # ONE pricing for every caller. `shift_deductions` / `salary_deduction_amount` are what the employee loses in total
+    # (the late pool plus, with Permission Deduction Slabs ON, the excess permissions priced on their own): the installed
+    # My Shift screens only know those two columns. With the switch OFF the permission part is 0, so nothing differs.
+    pricing = late_pool_pricing(pool, settings, daily_rate)
+    shift_deductions = pricing["shifts"]
+    salary_deduction = pricing["penalty"]
 
     summary, _ = MonthlyShiftSummary.objects.update_or_create(
         employee=emp,

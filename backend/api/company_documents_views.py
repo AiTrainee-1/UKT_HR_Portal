@@ -12,6 +12,7 @@ are accepted as optional query params at generation time and are not persisted.
 """
 import io
 from datetime import date
+from decimal import Decimal
 
 from django.http import HttpResponse
 from django.utils import timezone
@@ -470,6 +471,17 @@ def _make_qr_image(payload: str):
         return None
 
 
+def _tds_deduction_row(s: SalarySlip) -> list[str] | None:
+    """The TDS line of a slip's deductions, 'TDS (10%)', or None: only an employee on the TDS list has one (a slip never
+    prints an empty TDS line for anybody else). A slip counts as a TDS slip when it recorded a percentage or an amount."""
+    percent = s.tds_percent
+    amount = s.tds_deduction or 0
+    if percent is None and not amount:
+        return None
+    label = f"TDS ({format(Decimal(str(percent)).normalize(), 'f')}%)" if percent is not None else "TDS"
+    return [label, rupee(amount)]
+
+
 def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     ps = PayrollSettings.get()
     ds = CompanyDocumentSettings.get(CompanyDocumentSettings.DOC_TYPE_SALARY_SLIP)
@@ -568,7 +580,7 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
         ["E.S.I", rupee(s.esi_deduction)],
         ["Advance", rupee(s.advance_deduction)],
         ["T.Advance", rupee(0)],
-        ["TDS", rupee(0)],
+        *([tds_row] if (tds_row := _tds_deduction_row(s)) else []),
         ["LOP", rupee(0)],
         ["Other Deductions", rupee(s.other_deductions)],
         ["Total Deductions", rupee(s.total_deductions)],
@@ -783,6 +795,7 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
         ["P.F", rupee(s.pf_deduction)],
         ["E.S.I", rupee(s.esi_deduction)],
         ["Advance", rupee(s.advance_deduction)],
+        *([tds_row] if (tds_row := _tds_deduction_row(s)) else []),
         ["Other Deductions", rupee(s.other_deductions)],
         ["Total Deductions", rupee(s.total_deductions)],
     ]

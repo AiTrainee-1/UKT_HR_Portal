@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { usePayrollBreakdown, type PayrollRunItem } from "@/lib/api-client";
 import { halfDayWorked, latePoolView } from "@/lib/late-detection";
+import { hasTds, statutoryRateLabel, tdsLabel } from "@/components/payroll/kit/statutory";
 import { CompensationChip, compensationMark } from "@/components/attendance-compensation";
 import {
   IndianRupee,
@@ -378,7 +379,10 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                   <div className="rounded-lg border divide-y text-sm">
                     {(bd.deductions.pf ?? 0) > 0 && (
                       <div className="flex justify-between px-3 py-2">
-                        <span className="text-gray-600">PF (12% of Basic)</span>
+                        <span className="text-gray-600">
+                          {/* a payroll generated before the PF / ESI redesign has no `statutory` block: its fixed wording stays */}
+                          {bd.deductions.statutory ? statutoryRateLabel("pf", bd.deductions) : "PF (12% of Basic)"}
+                        </span>
                         <span className="font-semibold text-red-700">
                           - ₹{bd.deductions.pf?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                         </span>
@@ -386,9 +390,22 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     )}
                     {(bd.deductions.esi ?? 0) > 0 && (
                       <div className="flex justify-between px-3 py-2">
-                        <span className="text-gray-600">ESI (0.75% of Gross)</span>
+                        <span className="text-gray-600">
+                          {bd.deductions.statutory ? statutoryRateLabel("esi", bd.deductions) : "ESI (0.75% of Gross)"}
+                        </span>
                         <span className="font-semibold text-red-700">
                           - ₹{bd.deductions.esi?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    )}
+                    {hasTds({ tdsDeduction: bd.deductions.tds, tdsPercent: bd.deductions.tdsPercent }) && (
+                      <div className="flex justify-between px-3 py-2" data-testid="breakdown-tds">
+                        <span className="text-gray-600">
+                          {tdsLabel({ tdsPercent: bd.deductions.tdsPercent ?? bd.deductions.statutory?.tds?.percent })}{" "}
+                          of gross
+                        </span>
+                        <span className="font-semibold text-red-700">
+                          - ₹{(bd.deductions.tds ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                         </span>
                       </div>
                     )}
@@ -642,7 +659,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     </p>
                     <p>
                       Checked against the employee's assigned Production shift (Manage Shift) start/end time + grace
-                      period, per the Attendance Mode configured in Settings → Production Payroll → Late Detection.
+                      period, per the Attendance Mode configured in Settings → Late Detection → Production.
                     </p>
                     <p>
                       <strong>{bd.deductions.lateSummary.totalLateCount}</strong> late occurrence
@@ -676,6 +693,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
 
                 {((bd.deductions.pf ?? 0) > 0 ||
                   (bd.deductions.esi ?? 0) > 0 ||
+                  (bd.deductions.tds ?? 0) > 0 ||
                   bd.deductions.advances > 0 ||
                   (bd.deductions.lateShiftPenalty ?? 0) > 0) && (
                   <div>
@@ -690,7 +708,11 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                     <div className="rounded-lg border divide-y text-sm">
                       {(bd.deductions.pf ?? 0) > 0 && (
                         <div className="flex justify-between px-3 py-2">
-                          <span className="text-gray-600">PF ({bd.deductions.pfRate}%)</span>
+                          <span className="text-gray-600">
+                            {bd.deductions.statutory
+                              ? statutoryRateLabel("pf", bd.deductions)
+                              : `PF (${bd.deductions.pfRate}%)`}
+                          </span>
                           <span className="font-semibold text-red-700">
                             - ₹{(bd.deductions.pf ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                           </span>
@@ -699,10 +721,25 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       {(bd.deductions.esi ?? 0) > 0 && (
                         <div className="flex justify-between px-3 py-2">
                           <span className="text-gray-600">
-                            {bd.deductions.pfEfRule ? "EF" : "ESI"} ({bd.deductions.esiRate}%)
+                            {bd.deductions.statutory
+                              ? statutoryRateLabel("esi", bd.deductions)
+                              : `${bd.deductions.pfEfRule ? "EF" : "ESI"} (${bd.deductions.esiRate}%)`}
                           </span>
                           <span className="font-semibold text-red-700">
                             - ₹{(bd.deductions.esi ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      )}
+                      {hasTds({ tdsDeduction: bd.deductions.tds, tdsPercent: bd.deductions.tdsPercent }) && (
+                        <div className="flex justify-between px-3 py-2" data-testid="breakdown-tds">
+                          <span className="text-gray-600">
+                            {tdsLabel({
+                              tdsPercent: bd.deductions.tdsPercent ?? bd.deductions.statutory?.tds?.percent,
+                            })}{" "}
+                            of gross
+                          </span>
+                          <span className="font-semibold text-red-700">
+                            - ₹{(bd.deductions.tds ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                           </span>
                         </div>
                       )}

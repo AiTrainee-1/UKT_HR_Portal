@@ -100,7 +100,7 @@ describe("useDraft", () => {
 });
 
 describe("useSubTabFromAddress", () => {
-  const SUB_TAB_OF = { "staff-pf-rate": "rates", "bonus-percent": "bonus" } as const;
+  const SUB_TAB_OF = { "pay-day": "rates", "bonus-percent": "bonus" } as const;
   const opened: string[] = [];
   function Harness() {
     useSubTabFromAddress<string>(SUB_TAB_OF, (s) => opened.push(s));
@@ -111,7 +111,7 @@ describe("useSubTabFromAddress", () => {
     const scrolled = vi.fn();
     Element.prototype.scrollIntoView = scrolled;
     // Outside the React root: rendering replaces whatever the root's container held.
-    const blocks = ["bonus-percent", "staff-pf-rate"].map((id) => {
+    const blocks = ["bonus-percent", "pay-day"].map((id) => {
       const block = document.createElement("section");
       block.dataset.settingId = id;
       document.body.append(block);
@@ -125,7 +125,7 @@ describe("useSubTabFromAddress", () => {
     expect(scrolled).toHaveBeenCalledTimes(1);
 
     // The page's own search navigates with replaceState and scrolls by itself.
-    window.history.replaceState(null, "", "/hr/settings?tab=payroll#staff-pf-rate");
+    window.history.replaceState(null, "", "/hr/settings?tab=payroll#pay-day");
     act(() => {
       window.dispatchEvent(new Event("replaceState"));
     });

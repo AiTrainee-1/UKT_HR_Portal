@@ -21,7 +21,7 @@ from django.db.models import Count
 
 from api.attendance_final import half_period, late_pool_summary
 from api.models import EmployeePermission, LeaveRequest
-from api.payroll_views import _d2, late_shift_deduction
+from api.payroll_views import _d2, late_pool_pricing
 from api.shift_engine import _t2s
 
 from ..common import EMP_COLS_SHORT, emp_cells
@@ -100,6 +100,17 @@ def _slab_text(settings) -> str:
     return "; ".join(f"{a}+ billable = {b.normalize():f} shift" for a, b in rows)
 
 
+def _permission_slab_text(settings) -> str:
+    rows = []
+    for row in settings.permission_deduction_slabs or []:
+        if isinstance(row, dict) and "fromPermissions" in row and "deductionShifts" in row:
+            rows.append((int(row["fromPermissions"]), Decimal(str(row["deductionShifts"]))))
+    if not rows:
+        return "no permission slabs are configured (excess permissions are not priced)"
+    rows.sort()
+    return "; ".join(f"{a}+ billable = {b.normalize():f} shift" for a, b in rows)
+
+
 def _permission_badge(applied: bool, excess: bool) -> str | None:
     if excess:
         return "Excess"
@@ -108,15 +119,17 @@ def _permission_badge(applied: bool, excess: bool) -> str | None:
     return None
 
 
-def _pool_status(rec, emp, roster: Roster, excess_flag: bool) -> str:
-    """Is this flagged day one occurrence of the payroll late pool?"""
+def _pool_status(rec, emp, roster: Roster, excess_flag: bool, priced: bool = False) -> str:
+    """Is this flagged day one occurrence of the payroll late pool? With Permission Deduction Slabs ON (`priced`) a
+    day whose excess permission is on the same edge is an occurrence of the late pool itself (the permission is
+    absorbed by it, not priced again); with the switch off it is merged into the excess permission."""
     if emp.employment_type == "production":
         return "Production (separate)"
     if rec.status not in ("present", "half_shift"):
         return "Not counted (day status)"
     if rec.date not in roster.working_days(emp.id, rec.date.year, rec.date.month):
         return "Non-working day"
-    if excess_flag:
+    if excess_flag and not priced:
         return "Merged with excess permission"
     return "Counted"
 
@@ -253,7 +266,7 @@ def _late_detail_run(ctx):
         late_min = late[2] if late else None
         if min_late and (late_min is None or late_min < min_late):
             continue
-        pool = _pool_status(rec, emp, roster, rec.morning_permission_excess)
+        pool = _pool_status(rec, emp, roster, rec.morning_permission_excess, bool(settings.permission_pricing_enabled))
         if pool_filter == "counted" and pool != "Counted":
             continue
         if pool_filter == "not_counted" and pool == "Counted":
@@ -477,6 +490,7 @@ def _counts_run(ctx):
     pools, settings, roster, people_by_id = _month_pools(ctx, year, month)
     min_pool = int(ctx.params.get("minPool") or 0)
     only_billable = bool(ctx.params.get("onlyBillable"))
+    priced = bool(settings.permission_pricing_enabled)  # Permission Deduction Slabs: excess permissions priced apart
     show_early = bool(settings.evening_early_out_enabled) or any(em.pool and em.pool["early_out"] for em in pools)
     # Night late is a strict-mode (lunch-return) flag: in Simple mode the column would be zeros only.
     show_night = settings.attendance_mode == "strict" or any(em.night for em in pools)
@@ -488,12 +502,20 @@ def _counts_run(ctx):
         pool_total = pool["total"] if pool else None
         if min_pool and (pool_total or 0) < min_pool:
             continue
-        if only_billable and not (pool and pool["billable"] > 0):
+        if only_billable and not (pool and (pool["billable"] > 0 or pool["permission_billable"] > 0)):
             continue
         kept.append(em)
         rows.append(
             {
                 **emp_cells(em.emp),
+                **(
+                    {
+                        "permissionPriced": pool["permission_pool"] if pool else None,
+                        "permissionBillable": pool["permission_billable"] if pool else None,
+                    }
+                    if priced
+                    else {}
+                ),
                 "shift": em.shift_name,
                 "workingDays": len(em.working) if em.working is not None else None,
                 "lateDays": em.flagged,
@@ -526,6 +548,8 @@ def _counts_run(ctx):
         "nightLate",
         "halfDays",
     ]
+    if priced:
+        sum_keys += ["permissionPriced", "permissionBillable"]
     rows, sub_note = subtotals_within_limit(ctx, rows, lambda r: r["department"], sum_keys)
 
     staff = [em for em in kept if em.pool]
@@ -537,7 +561,7 @@ def _counts_run(ctx):
         },
         {
             "label": "Over the free allowance",
-            "value": sum(1 for em in staff if em.pool["billable"] > 0),
+            "value": sum(1 for em in staff if em.pool["billable"] > 0 or em.pool["permission_billable"] > 0),
             "format": "integer",
         },
         {"label": "Pool occurrences", "value": sum(em.pool["total"] for em in staff), "format": "integer"},
@@ -553,11 +577,26 @@ def _counts_run(ctx):
             "format": "integer",
         },
     ]
+    if priced:
+        summary.append(
+            {
+                "label": "Permission free allowance / month",
+                "value": max(0, int(settings.permission_free_allowance or 0)),
+                "format": "integer",
+            }
+        )
     notes = [
         f"Late pool for {month_bounds(year, month)[0]:%B %Y}, computed live from the stored day records with the same "
-        "formula payroll uses: Late-In days + Early-Out days + approved permissions beyond the monthly cap; only "
-        "present / half-day days on payroll working days count; a late day that carries an excess permission on the "
-        "same edge is one occurrence, not two.",
+        + (
+            "formula payroll uses: Late-In days + Early-Out days; only present / half-day days on payroll working days "
+            "count. Permission Deduction Slabs are ON, so approved permissions beyond the monthly cap are NOT in this "
+            "pool: they are priced on their own (Priced separately / Permission billable). A late day that carries an "
+            "excess permission on the same edge stays one occurrence, counted here, and that permission is not priced again."
+            if priced
+            else "formula payroll uses: Late-In days + Early-Out days + approved permissions beyond the monthly cap; only "
+            "present / half-day days on payroll working days count; a late day that carries an excess permission on the "
+            "same edge is one occurrence, not two."
+        ),
         "Late days flagged is the raw number of flagged days (Sundays and other non-working days included), so it can "
         "exceed Late-In (pool). Production employees are not part of the staff pool (their rules are separate); pool "
         "columns show a dash for them.",
@@ -590,6 +629,12 @@ def _counts_run(ctx):
         notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, *month_bounds(year, month)))
     columns = [c for c in _COUNT_COLS if (show_early or c.key != "earlyOut") and (show_night or c.key != "nightLate")]
+    if priced:
+        at = next(i for i, c in enumerate(columns) if c.key == "excessPermissions")
+        columns[at + 1 : at + 1] = [
+            ColumnSpec("permissionPriced", "Priced separately", INTEGER, 1.0, total="sum"),
+            ColumnSpec("permissionBillable", "Permission billable", INTEGER, 1.0, total="sum"),
+        ]
     return ReportResult(rows=rows, summary=summary, notes=notes, columns=columns)
 
 
@@ -633,22 +678,23 @@ def _penalty_run(ctx):
     year, month = ctx.period
     pools, settings, roster, people_by_id = _month_pools(ctx, year, month)
     only_affected = bool(ctx.params.get("onlyAffected"))
+    priced = bool(settings.permission_pricing_enabled)  # Permission Deduction Slabs: excess permissions priced apart
 
     rows = []
     for em in pools:
         if em.emp.employment_type != "staff" or em.pool is None:
             continue  # the pool and its deduction are a staff concept
         pool = em.pool
-        if only_affected and not pool["total"]:
+        if only_affected and not (pool["total"] or pool["permission_pool"]):
             continue
-        shifts = late_shift_deduction(pool["billable"], settings)
         salary = em.emp.salary_amount
         working = len(em.working)
-        if salary and working:
-            daily_rate = _d2(Decimal(salary) / Decimal(str(working)))
-            deduction = _d2(shifts * daily_rate) if shifts > 0 else Decimal("0")
-        else:
-            deduction = None  # payroll skips an employee with no salary: no daily rate, no deduction
+        daily_rate = _d2(Decimal(salary) / Decimal(str(working))) if salary and working else None
+        # payroll's own pricing: the late pool through the late slabs and (switch ON) the excess permissions through the
+        # permission slabs; an employee with no salary has shifts but no rupee figure (payroll skips them)
+        pricing = late_pool_pricing(pool, settings, daily_rate)
+        shifts = pricing["late_shifts"]
+        deduction = pricing["penalty"] if daily_rate is not None else None
         rows.append(
             {
                 **emp_cells(em.emp),
@@ -659,6 +705,15 @@ def _penalty_run(ctx):
                 "freeUsed": pool["free_used"],
                 "billable": pool["billable"],
                 "shiftDeductions": float(shifts),
+                **(
+                    {
+                        "permissionPriced": pool["permission_pool"],
+                        "permissionBillable": pool["permission_billable"],
+                        "permissionShifts": float(pricing["permission_shifts"]),
+                    }
+                    if priced
+                    else {}
+                ),
                 "salaryDeduction": r2(deduction),
             }
         )
@@ -671,18 +726,24 @@ def _penalty_run(ctx):
         "shiftDeductions",
         "salaryDeduction",
     ]
+    if priced:
+        sum_keys += ["permissionPriced", "permissionBillable", "permissionShifts"]
     rows, sub_note = subtotals_within_limit(ctx, rows, lambda r: r["department"], sum_keys)
 
     data = [r for r in rows if r.get("_kind") is None]
     summary = [
         {
             "label": "Employees with a deduction",
-            "value": sum(1 for r in data if (r["shiftDeductions"] or 0) > 0),
+            "value": sum(1 for r in data if (r["shiftDeductions"] or 0) + (r.get("permissionShifts") or 0) > 0),
             "format": "integer",
         },
         {"label": "Pool occurrences", "value": sum(r["poolTotal"] for r in data), "format": "integer"},
         {"label": "Billable occurrences", "value": sum(r["billable"] for r in data), "format": "integer"},
-        {"label": "Shifts deducted", "value": round(sum(r["shiftDeductions"] for r in data), 2), "format": "number"},
+        {
+            "label": "Shifts deducted",
+            "value": round(sum(r["shiftDeductions"] + (r.get("permissionShifts") or 0) for r in data), 2),
+            "format": "number",
+        },
         {
             "label": "Salary deduction",
             "value": round(sum(r["salaryDeduction"] or 0 for r in data), 2),
@@ -695,13 +756,28 @@ def _penalty_run(ctx):
         "is only refreshed by strict-mode payroll runs, so it can lag behind these figures; the finalised, as-paid figures "
         "are in the Late Salary Impact report.",
         f"Free allowance: {max(0, int(settings.late_free_allowance or 0))} per month. Permission cap: "
-        f"{max(0, int(settings.permission_monthly_cap or 0))} approved permissions per month (the rest join the pool). "
-        f"Deduction slabs: {_slab_text(settings)}.",
-        "Late-In + Early-Out excludes days merged into an excess permission; Pool total adds the excess permissions. "
-        "Free used = the free allowance consumed; Billable = pool total minus the free allowance.",
+        f"{max(0, int(settings.permission_monthly_cap or 0))} approved permissions per month "
+        + ("(the rest are priced on their own, see below). " if priced else "(the rest join the pool). ")
+        + f"Deduction slabs: {_slab_text(settings)}.",
+        (
+            "Late-In + Early-Out includes the days whose excess permission is on the same edge (one occurrence, counted "
+            "here); Pool total is Late-In + Early-Out only. Free used = the free allowance consumed; Billable = pool "
+            "total minus the free allowance."
+            if priced
+            else "Late-In + Early-Out excludes days merged into an excess permission; Pool total adds the excess "
+            "permissions. Free used = the free allowance consumed; Billable = pool total minus the free allowance."
+        ),
         "Salary deduction = shifts deducted x daily rate, where daily rate = monthly salary / payroll working days. "
         "Employees with no salary amount show a dash (payroll does not pay them).",
     ]
+    if priced:
+        notes.append(
+            "Permission Deduction Slabs are ON: the excess permissions (approved beyond the cap, not already counted "
+            "as a late day on the same edge) are 'Priced separately'; after the permission free allowance of "
+            f"{max(0, int(settings.permission_free_allowance or 0))} the rest are 'Permission billable' and priced by "
+            f"the permission slabs ({_permission_slab_text(settings)}). Salary deduction is the late-pool deduction plus "
+            "the permission deduction."
+        )
     if not settings.evening_early_out_enabled:
         notes.append("Early-Out detection is switched off, so the pool holds Late-In days and excess permissions only.")
     if sub_note:
@@ -713,6 +789,13 @@ def _penalty_run(ctx):
         ColumnSpec("freeUsed", f"Free ({free})", INTEGER, 0.8, total="sum") if c.key == "freeUsed" else c
         for c in _PENALTY_COLS
     ]
+    if priced:
+        at = next(i for i, c in enumerate(columns) if c.key == "shiftDeductions")
+        columns[at + 1 : at + 1] = [
+            ColumnSpec("permissionPriced", "Priced separately", INTEGER, 1.0, total="sum"),
+            ColumnSpec("permissionBillable", "Permission billable", INTEGER, 1.0, total="sum"),
+            ColumnSpec("permissionShifts", "Permission shifts", NUMBER, 1.0, total="sum"),
+        ]
     return ReportResult(rows=rows, summary=summary, notes=notes, columns=columns)
 
 
@@ -804,7 +887,7 @@ def _early_out_run(ctx):
                     "lastPunch": hm(rec.last_punch),
                     "earlyMinutes": early[2] if early else None,
                     "permission": _permission_badge(rec.evening_permission_applied, rec.evening_permission_excess),
-                    "poolStatus": _pool_status_early(rec, emp, roster),
+                    "poolStatus": _pool_status_early(rec, emp, roster, bool(settings.permission_pricing_enabled)),
                     "status": STATUS_LABELS.get(rec.status, rec.status),
                     "reason": rec.late_reason,
                 },
@@ -847,8 +930,8 @@ def _early_out_run(ctx):
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
-def _pool_status_early(rec, emp, roster: Roster) -> str:
-    return _pool_status(rec, emp, roster, rec.evening_permission_excess)
+def _pool_status_early(rec, emp, roster: Roster, priced: bool = False) -> str:
+    return _pool_status(rec, emp, roster, rec.evening_permission_excess, priced)
 
 
 register(

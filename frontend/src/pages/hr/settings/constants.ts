@@ -26,6 +26,8 @@ export const SETTINGS_TAB_MODULE: Record<string, string> = {
   documents: "settings.documents",
   payroll: "settings.payroll",
   production_payroll: "settings.production_payroll",
+  // PF & ESI is read by every HR login that may see Payroll settings; changing it is the super admin's alone (the API decides)
+  pf_esi: "settings.payroll",
   "salary-slip": "settings.salary_slip",
   smtp: "settings.smtp",
   whatsapp: "settings.whatsapp",

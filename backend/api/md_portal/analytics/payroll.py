@@ -12,6 +12,14 @@ the report of the same name to the paisa:
 * employer cost    = gross pay + employer PF + employer ESI, the two being ESTIMATES with the Report Center's rates
                      (``payroll_core_common.EMPLOYER_PF_RATE`` / ``EMPLOYER_ESI_RATE``): the system stores no employer
                      contribution. Summed department by department, exactly as ``department-salary-cost`` does.
+                     The wages the rates apply to are the slip's PF wages (``deductions.statutory.pfWages``: the first
+                     portion, Basic + DA + Retaining Allowance, prorated by attendance) on slips the engine wrote after
+                     the Co Emp / TDS redesign; older slips carry no such block and use the basic (PF) and the salary
+                     earned (ESI) they were taken from.
+* PF / ESI / TDS   = only Co Emp employees have PF and ESI, only TDS employees have TDS (``SalarySlip.tds_deduction``);
+                     no employee has both. TDS is a separate remittance (income tax): it is its own deduction line and is
+                     NOT part of the "statutory dues" (PF + ESI + the employer shares). "Other deductions" is what is
+                     left of the slip's total after PF, ESI, TDS, advance recovery and late deduction.
 * people paid      = distinct employees with a slip in the month (a production worker with two period slips counts once)
 * slip type        = decided by the slip itself (production = it has a pay period), never by the employee's CURRENT
                      type, so a person who changed type owns slips of both kinds
@@ -230,6 +238,12 @@ def _sum(expr: Any) -> Sum:
     return Sum(expr, output_field=DEC)
 
 
+# What PF and ESI were taken from, as the engine recorded it on slips written after the Co Emp / TDS redesign: the first
+# portion (Basic + DA + Retaining Allowance) of the period, prorated by attendance. NULL on older slips and on slips
+# with no calculation snapshot, which is when the employer-estimate bases below fall back to the slip's own columns.
+_PF_WAGES = Cast(KT("breakdown_details__deductions__statutory__pfWages"), DEC)
+
+
 def _annotated(qs: QuerySet) -> QuerySet:
     """The per-slip expressions the grouped queries sum over."""
     return qs.annotate(stype=SLIP_TYPE_SQL, late_amt=LATE_SQL, eff_days=_EFFECTIVE_DAYS).annotate(lop_days=_LOP_DAYS)
@@ -250,13 +264,29 @@ def _aggs() -> dict[str, Any]:
         "allow": _sum("allowances"),
         "pf": _sum("pf_deduction"),
         "esi": _sum("esi_deduction"),
+        "tds": _sum("tds_deduction"),
         "adv": _sum("advance_deduction"),
         "late": _sum("late_amt"),
         "ded": _sum("total_deductions"),
         "net": _sum("net_salary"),
         "lop_days": _sum("lop_days"),
-        "pf_base": _sum(Case(When(pf_deduction__gt=0, then=F("basic")), default=zero, output_field=DEC)),
-        "esi_base": _sum(Case(When(esi_deduction__gt=0, then=F("gross_salary")), default=zero, output_field=DEC)),
+        "tds_heads": Count("employee_id", distinct=True, filter=Q(tds_deduction__gt=0)),
+        # the wages the employer estimates are worked on: the recorded PF wages, else the older slips' own basis (PF on
+        # the slip's basic, ESI on the salary earned)
+        "pf_base": _sum(
+            Case(
+                When(pf_deduction__gt=0, then=Coalesce(_PF_WAGES, F("basic"), output_field=DEC)),
+                default=zero,
+                output_field=DEC,
+            )
+        ),
+        "esi_base": _sum(
+            Case(
+                When(esi_deduction__gt=0, then=Coalesce(_PF_WAGES, F("gross_salary"), output_field=DEC)),
+                default=zero,
+                output_field=DEC,
+            )
+        ),
     }
 
 
@@ -287,6 +317,8 @@ _SUM_KEYS = (
     "allow",
     "pf",
     "esi",
+    "tds",
+    "tds_heads",
     "adv",
     "late",
     "ded",
@@ -328,6 +360,7 @@ def _figures(t: dict[str, Decimal]) -> dict:
         "totalDeductions": money(t["ded"]),
         "netPay": money(t["net"]),
         "employerStatutory": money(employer),
+        "tdsDeducted": money(t["tds"]),
         "employerCost": money(cost),
         "headcount": heads,
         "slips": int(t["slips"]),
@@ -352,6 +385,7 @@ _CHANGE_KEYS = (
     "salaryEarned",
     "overtimePay",
     "totalDeductions",
+    "tdsDeducted",
     "netPay",
     "employerCost",
     "headcount",
@@ -552,7 +586,7 @@ def _p_source(rows: int | None = None) -> dict:
         ],
         caveats=[
             "Department and unit are each person's CURRENT ones: a slip does not record them.",
-            "Income tax (TDS) and arrears are not recorded in this system, so they cannot be shown.",
+            "Arrears are not recorded in this system, so they cannot be shown.",
         ],
     )
 
@@ -576,7 +610,7 @@ def _p_net() -> dict:
         "Net pay",
         dataset="Salary slips",
         definition="What employees take home: gross pay less everything deducted, as printed on the slip.",
-        formula="net pay = gross pay - PF - ESI - advance recovery - late deduction - other deductions",
+        formula="net pay = gross pay - PF - ESI - TDS - advance recovery - late deduction - other deductions",
     )
 
 
@@ -586,11 +620,15 @@ def _p_deductions() -> dict:
         "Deductions",
         dataset="Salary slips",
         definition=(
-            "PF and ESI deducted from the employee, advance instalments recovered through payroll and late-arrival "
-            "penalties, all as stored on the slip. Late deduction is the slip's own late-detection figure (the Report "
-            "Center's rule); anything else deducted shows as 'Other deductions'."
+            "PF and ESI deducted from Co Emp employees, TDS deducted from employees on the TDS list, advance "
+            "instalments recovered through payroll and late-arrival penalties, all as stored on the slip. Late "
+            "deduction is the slip's own late-detection figure (the Report Center's rule); anything else deducted "
+            "shows as 'Other deductions', which never includes TDS."
         ),
-        caveats=["Income tax (TDS) is not recorded in this system."],
+        caveats=[
+            "Only Co Emp employees have PF and ESI (the rules in Settings, PF & ESI); only employees on the TDS list "
+            "have TDS (their TDS percentage of the pay they earned in the period). Nobody has both.",
+        ],
     )
 
 
@@ -602,14 +640,18 @@ def _p_employer() -> dict:
         definition=(
             "Gross pay plus an ESTIMATE of what the company adds on top: employer PF and employer ESI. The system does "
             "not store employer contributions, so this uses the Report Center's rates on the slips where the "
-            "deduction was made. It is added up department by department, like the report 'Department-wise Salary Cost'."
+            "deduction was made, that is, on Co Emp employees only. It is added up department by department, like "
+            "the report 'Department-wise Salary Cost'."
         ),
         formula=(
-            f"employer PF = {EMPLOYER_PF_RATE}% of basic pay where PF was deducted; employer ESI = {EMPLOYER_ESI_RATE}% "
-            "of salary earned where ESI was deducted"
+            f"employer PF = {EMPLOYER_PF_RATE}% and employer ESI = {EMPLOYER_ESI_RATE}% of the slip's PF wages (the "
+            "first portion: Basic + DA + Retaining Allowance, prorated by attendance), on slips where PF or ESI "
+            "was deducted"
         ),
         caveats=[
-            "No PF wage cap, EDLI or administration charges are included: treat it as an indication, not a filing."
+            "No PF wage cap, EDLI or administration charges are included: treat it as an indication, not a filing.",
+            "Slips generated before the Co Emp / TDS rules took effect do not record their PF wages: for them the "
+            "employer PF is worked on the slip's basic pay and the employer ESI on the salary earned.",
         ],
     )
 
@@ -646,7 +688,7 @@ def _p_overtime() -> dict:
         dataset="Salary slips",
         definition=(
             "Overtime pay on the slips: one day's salary times the shifts (0.25 to 1) HR assigned for each announced "
-            "pay-type overtime day, added outside gross salary, PF and ESI. Staff only; production extra shifts are "
+            "pay-type overtime day, added outside gross salary and PF/ESI wages. Staff only; production extra shifts are "
             "already inside their gross pay. The share is overtime divided by gross pay."
         ),
         formula="overtime share = overtime pay / gross pay x 100",
@@ -875,6 +917,7 @@ def _trend(ctx: _Ctx, months: int) -> dict:
                 "costPerHead": fig["costPerHead"] if fig else None,
                 "overtimePay": fig["overtimePay"] if fig else None,
                 "overtimeSharePct": fig["overtimeSharePct"] if fig else None,
+                "tdsDeducted": fig["tdsDeducted"] if fig else None,
             }
         )
     with_data = [r for r in rows if r["hasData"]]
@@ -1182,6 +1225,7 @@ def _group_line(g: dict, total_gross: Decimal) -> dict | None:
                 "costPerHead",
                 "lopDays",
                 "employerCost",
+                "tdsDeducted",
             )
         },
         "sharePct": pct(float(g["cur"]["salary"] + g["cur"]["ot"]), float(total_gross)),
@@ -1463,13 +1507,15 @@ def _with_derived(t: dict[str, Decimal]) -> dict[str, Decimal]:
     """The raw sums plus the totals and residuals the component lines need."""
     gross = t["salary"] + t["ot"]
     other_earn = t["salary"] - t["basic"] - t["hra"] - t["allow"] - t["oneoff"]
-    other_ded = t["ded"] - t["pf"] - t["esi"] - t["adv"] - t["late"]
+    other_ded = t["ded"] - t["pf"] - t["esi"] - t["tds"] - t["adv"] - t["late"]
     return {
         **t,
         "gross": gross,
         "other_earn": other_earn,
         "other_ded": other_ded,
         "net_calc": gross - t["ded"],
+        # PF + ESI (what is deducted and the employer's estimated share). TDS is a separate remittance (income tax):
+        # it is the "tds" line, never part of this figure.
         "statutory_due": t["pf"] + t["esi"] + t["employer_pf"] + t["employer_esi"],
     }
 
@@ -1512,13 +1558,14 @@ def _p_components() -> list[dict]:
             dataset="Salary slips",
             definition=(
                 "Earnings: basic, HRA, allowances, incentives and bonuses, and overtime, as stored on the slips; "
-                "anything the slip does not itemise shows as 'Not itemised'. Deductions: PF, ESI, advance recovery, "
-                "late deduction and anything else. Each line shows the previous month and its share of the total."
+                "anything the slip does not itemise shows as 'Not itemised'. Deductions: PF, ESI, TDS, advance "
+                "recovery, late deduction and anything else. A deduction that is nil in both months is left out. "
+                "Each line shows the previous month and its share of the total."
             ),
             caveats=[
                 "Production slips store the whole period wage under Basic (there is no HRA or allowance split), so a "
                 "company with production staff shows their wages in Basic.",
-                "Income tax (TDS) and arrears are not recorded in this system.",
+                "Arrears are not recorded in this system.",
             ],
         ),
         _p_deductions(),
@@ -1528,11 +1575,27 @@ def _p_components() -> list[dict]:
             "Statutory dues (estimate)",
             dataset="Salary slips + statutory rates",
             definition=(
-                "What is due to the PF and ESI authorities for the month: the amounts deducted from employees plus the "
-                "employer's estimated share."
+                "What is due to the PF and ESI authorities for the month: the amounts deducted from Co Emp employees "
+                "plus the employer's estimated share."
             ),
             formula="statutory dues = employee PF + employee ESI + employer PF (est.) + employer ESI (est.)",
-            caveats=["The employer shares are estimates: no PF wage cap, EDLI or administration charges."],
+            caveats=[
+                "The employer shares are estimates: no PF wage cap, EDLI or administration charges.",
+                "TDS is not included: it is a separate remittance (income tax) and has its own deduction line.",
+            ],
+        ),
+        prov(
+            "tds",
+            "TDS (tax deducted at source)",
+            dataset="Salary slips",
+            definition=(
+                "Tax deducted at source from employees on the TDS list: the percentage set on the employee's record "
+                "times what they earned in the period (salary earned plus overtime). It is part of the slip's total "
+                "deductions, is paid to the income-tax department apart from PF and ESI, and no employee has both TDS "
+                "and PF/ESI."
+            ),
+            formula="TDS = TDS percentage x (salary earned + overtime pay)",
+            caveats=["Stored on each slip with the percentage used: later changes to the percentage do not alter it."],
         ),
         prov(
             "statutory-bonus",
@@ -1557,6 +1620,7 @@ _EARNING_SPEC = (
 _DEDUCTION_SPEC = (
     ("pf", "Provident fund (PF)", "pf"),
     ("esi", "ESI", "esi"),
+    ("tds", "TDS (tax deducted at source)", "tds"),
     ("advance", "Advance recovery", "adv"),
     ("late", "Late-arrival deduction", "late"),
     ("other-deductions", "Other deductions", "other_ded"),
@@ -1593,6 +1657,12 @@ def _components(ctx: _Ctx) -> dict:
             f"Net pay on the slips differs from gross pay less deductions by ₹{abs(net_gap):,.2f}: see the Report "
             "Center's 'Payroll vs Slip Reconciliation'."
         )
+    if cur["tds"] > 0:
+        notes.append(
+            f"TDS of {_inr(cur['tds'], 2)} was deducted from {_plural(int(cur['tds_heads']), 'employee')} on the TDS "
+            "list. It is a separate remittance to the income-tax department, so it is not part of the statutory dues "
+            "(PF and ESI)."
+        )
     return envelope(
         {
             "hasData": True,
@@ -1620,6 +1690,8 @@ def _components(ctx: _Ctx) -> dict:
                 None,
             ),
             "statutoryDue": money(cur["statutory_due"]),
+            "tdsDeducted": money(cur["tds"]),
+            "tdsPeople": int(cur["tds_heads"]),
             "payable": {"slips": states["unpaidSlips"], "netPay": states["unpaidNet"]},
             "statutoryBonus": _bonus_block(scope, ym),
             "netGap": money(net_gap),
@@ -2571,11 +2643,11 @@ TOOLS = [
     tool(
         "payroll_summary",
         "What the workforce costs for ONE payroll month: gross pay (salary earned plus overtime, before deductions), net "
-        "pay (take-home), total deductions, overtime pay and its share, an estimate of employer cost (gross plus employer "
-        "PF/ESI), people paid, cost per head and loss-of-pay days, each compared with the previous month and the same "
-        "month last year, split staff vs production, with the month's payment status (paid / not paid / provisional). All "
-        "money is in rupees. Use for 'what did payroll cost last month', 'how many people were paid', 'cost per head'. "
-        "The result says which month it describes.",
+        "pay (take-home), total deductions (PF, ESI, TDS, advances, late), TDS deducted, overtime pay and its share, an "
+        "estimate of employer cost (gross plus employer PF/ESI), people paid, cost per head and loss-of-pay days, each "
+        "compared with the previous month and the same month last year, split staff vs production, with the month's "
+        "payment status (paid / not paid / provisional). All money is in rupees. Use for 'what did payroll cost last "
+        "month', 'how many people were paid', 'cost per head'. The result says which month it describes.",
         _tool_summary,
         page="payroll",
         period=None,
@@ -2623,9 +2695,11 @@ TOOLS = [
     tool(
         "payroll_components",
         "What gross pay and deductions are made of for one month, with the previous month: basic, HRA, allowances, "
-        "incentives, overtime; PF, ESI, advance recovery, late deductions; employer PF/ESI estimates; statutory dues; "
-        "net pay payable (slips not yet marked paid) and the year's statutory bonus status. Use for 'how much PF/ESI', "
-        "'how much was deducted for advances', 'what is bonus accrued'. Income tax (TDS) is not recorded in this system.",
+        "incentives, overtime; PF, ESI, TDS, advance recovery, late deductions; employer PF/ESI estimates; statutory "
+        "dues; net pay payable (slips not yet marked paid) and the year's statutory bonus status. Use for 'how much "
+        "PF/ESI', 'how much TDS was deducted', 'how much was deducted for advances', 'what is bonus accrued'. Only Co "
+        "Emp employees have PF and ESI and only employees on the TDS list have TDS; TDS is a separate remittance and "
+        "is not part of the statutory dues (PF + ESI + the employer shares).",
         _tool_components,
         page="payroll",
         period=None,

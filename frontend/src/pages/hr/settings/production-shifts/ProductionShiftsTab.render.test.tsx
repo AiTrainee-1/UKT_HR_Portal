@@ -9,7 +9,11 @@ import type {
   ProductionShiftRulesInput,
 } from "@/lib/api-client/custom-hooks";
 import ProductionShiftsTab from "../ProductionShiftsTab";
-import { PRODUCTION_SHIFT_SECTIONS, PRODUCTION_SHIFT_SETTINGS } from "../ProductionShiftsTab.meta";
+import {
+  PRODUCTION_SHIFT_SECTIONS,
+  PRODUCTION_SHIFT_SETTINGS,
+  PRODUCTION_SHIFT_VIEW_OF,
+} from "../ProductionShiftsTab.meta";
 import { SEEDED } from "./fixtures";
 
 // jsdom render checks of Settings -> Production Shifts with a small in-memory copy of the server: what the tab shows from the
@@ -106,6 +110,7 @@ afterEach(() => {
   page?.unmount();
   page = undefined;
   vi.useRealTimers();
+  window.history.replaceState(null, "", "/");
 });
 
 async function open(initial: ProductionShiftRules = SEEDED, props: { readOnly?: boolean; branch?: boolean } = {}) {
@@ -148,6 +153,17 @@ const changeLines = () =>
 const groupCard = (kind: string) => q(`[data-testid="group-card"][data-kind="${kind}"]`)!;
 const rowsOf = (kind: string) => [...groupCard(kind).querySelectorAll<HTMLElement>('[data-testid="rule-row"]')];
 
+const tabNamed = (name: string) =>
+  [...document.body.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+    (b) => b.querySelector(".ptab-label")?.textContent?.trim() === name,
+  );
+async function openPill(name: string) {
+  const b = tabNamed(name);
+  if (!b) throw new Error(`no pill "${name}"`);
+  await act(async () => b.click());
+  await page!.settle();
+}
+
 async function press(name: string) {
   const b = buttonNamed(name);
   if (!b) throw new Error(`no button "${name}"`);
@@ -179,7 +195,10 @@ describe("Settings -> Production Shifts: what it shows", () => {
     expect(text('[data-testid="production-rules-status"]')).toBe("The production shift rules are ON from 14 Oct 2026");
     expect(text('[data-testid="production-only"]')).toBe("Production employees only");
     expect(text('[data-testid="production-shifts-updated"]')).toContain("Last saved by Asha on 14 Oct 2026");
-    for (const title of Object.values(PRODUCTION_SHIFT_SECTIONS)) expect(page!.text()).toContain(title);
+    // the Production page: every section but the Staff page's
+    for (const [key, title] of Object.entries(PRODUCTION_SHIFT_SECTIONS)) {
+      if (key !== "staff") expect(page!.text()).toContain(title);
+    }
 
     // the switch, the date and the grace as saved
     expect(q("#production-rules-switch")?.getAttribute("aria-checked")).toBe("true");
@@ -1003,6 +1022,12 @@ describe("Settings -> Production Shifts: view-only, branch login, loading and th
     expect(q('[data-testid="production-shifts-load-error"]')).not.toBeNull();
     expect(page.text()).toContain("could not be loaded");
     expect(q('[data-testid="production-shifts-tab"]')).toBeNull();
+    // the pills are still there, and the Staff page needs no rules
+    await openPill("Staff");
+    expect(q('[data-testid="production-shifts-staff-section"]')).not.toBeNull();
+    expect(q('[data-testid="production-shifts-load-error"]')).toBeNull();
+    await openPill("Production");
+    expect(q('[data-testid="production-shifts-load-error"]')).not.toBeNull();
     server.down = false;
     await press("Try again");
     expect(q('[data-testid="production-shifts-load-error"]')).toBeNull();
@@ -1025,23 +1050,84 @@ describe("Settings -> Production Shifts: view-only, branch login, loading and th
     expect(buttons.filter((b) => !b.getAttribute("aria-label") && !b.title)).toEqual([]);
   });
 
-  it("has a search entry for every setting it draws, with the same title, words and section", async () => {
+  it("has a search entry for every setting it draws on each page, with the same title, words and section", async () => {
     await open();
-    const ids = [...page!.container.querySelectorAll("[id]")].map((e) => e.id);
-    expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
-    const blocks = [...page!.container.querySelectorAll<HTMLElement>("[data-setting-id]")];
-    expect(blocks.map((b) => b.dataset.settingId).sort()).toEqual(PRODUCTION_SHIFT_SETTINGS.map((m) => m.id).sort());
-    for (const meta of PRODUCTION_SHIFT_SETTINGS) {
-      expect(meta.tab).toBe("production_shifts");
-      const block = blocks.find((b) => b.dataset.settingId === meta.id)!;
-      expect(block.querySelector("h4")?.textContent?.trim(), meta.id).toBe(meta.title);
-      expect(block.querySelector('[data-testid="setting-purpose"]')?.textContent?.trim(), meta.id).toBe(meta.purpose);
-      expect(block.closest("section:not([data-setting-id])")?.querySelector("h3")?.textContent?.trim(), meta.id).toBe(
-        meta.section,
-      );
-      expect(block.querySelector('[data-testid="setting-affects"]'), meta.id).not.toBeNull();
-      expect(meta.purpose.length, meta.id).toBeGreaterThan(60);
+    const seen = new Set<string>();
+    for (const view of ["production", "staff"] as const) {
+      if (view === "staff") await openPill("Staff");
+      const ids = [...page!.container.querySelectorAll("[id]")].map((e) => e.id);
+      expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
+      const blocks = [...page!.container.querySelectorAll<HTMLElement>("[data-setting-id]")];
+      for (const block of blocks) {
+        const meta = PRODUCTION_SHIFT_SETTINGS.find((m) => m.id === block.dataset.settingId)!;
+        expect(meta, block.dataset.settingId).toBeTruthy();
+        expect(meta.tab).toBe("production_shifts");
+        expect(PRODUCTION_SHIFT_VIEW_OF[meta.id], `${meta.id} is drawn on the ${view} page`).toBe(view);
+        expect(block.querySelector("h4")?.textContent?.trim(), meta.id).toBe(meta.title);
+        expect(block.querySelector('[data-testid="setting-purpose"]')?.textContent?.trim(), meta.id).toBe(meta.purpose);
+        expect(block.closest("section:not([data-setting-id])")?.querySelector("h3")?.textContent?.trim(), meta.id).toBe(
+          meta.section,
+        );
+        expect(block.querySelector('[data-testid="setting-affects"]'), meta.id).not.toBeNull();
+        expect(meta.purpose.length, meta.id).toBeGreaterThan(60);
+        seen.add(meta.id);
+      }
     }
+    expect([...seen].sort()).toEqual(PRODUCTION_SHIFT_SETTINGS.map((m) => m.id).sort());
+  });
+});
+
+describe("Settings -> Production Shifts: the Staff | Production pills", () => {
+  it("opens on Production (the rules), and the Staff page only says where staff shifts and grace are set", async () => {
+    await open();
+    expect([
+      tabNamed("Staff")?.getAttribute("aria-selected"),
+      tabNamed("Production")?.getAttribute("aria-selected"),
+    ]).toEqual(["false", "true"]);
+    expect(q('[data-testid="production-shifts-staff-section"]')).toBeNull();
+    await openPill("Staff");
+    expect(window.location.search).toContain("view=staff");
+    expect(q('[data-testid="production-shifts-staff-section"]')).not.toBeNull();
+    // an explanation page: no rule of the Production page is drawn, nothing can be edited or saved
+    expect(q('[data-testid="production-rules-strip"]')).toBeNull();
+    expect(q("#production-rules-switch")).toBeNull();
+    expect(q('[data-testid="save-bar"]')).toBeNull();
+    expect(saveButton()).toBeUndefined();
+    expect(q('input:not([type="hidden"]), select, [role="switch"]')).toBeNull();
+    const hrefs = (id: string) => q(`[data-testid="${id}"] a`)?.getAttribute("href");
+    expect(hrefs("staff-shifts-manage")).toBe("/hr/shifts");
+    expect(hrefs("staff-shifts-attendance")).toBe("/hr/settings?tab=attendance#attendance-mode");
+    expect(hrefs("staff-shifts-late")).toBe("/hr/settings?tab=late_detection#free-allowance");
+    expect(text('[data-setting-id="staff-shifts-where"]')).toContain("Nothing on this tab changes staff");
+    await openPill("Production");
+    expect(q('[data-testid="production-rules-strip"]')).not.toBeNull();
+  });
+
+  it("keeps what was typed on the Production page while the Staff page is open, and says so", async () => {
+    await open();
+    await page!.type("#production-rules-grace", "3");
+    expect(saveButton().disabled).toBe(false);
+    await openPill("Staff");
+    expect(text('[data-testid="settings-unsaved-chip"]')).toBe("Not saved yet: Production");
+    await openPill("Production");
+    expect(value("#production-rules-grace")).toBe("3");
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it("opens on the page that holds the setting the address names, or the one it asks for", async () => {
+    window.history.replaceState(null, "", "/hr/settings?tab=production_shifts#staff-shifts-where");
+    await open();
+    expect(tabNamed("Staff")?.getAttribute("aria-selected")).toBe("true");
+    expect(q('[data-setting-id="staff-shifts-where"]')).not.toBeNull();
+    page!.unmount();
+    window.history.replaceState(null, "", "/hr/settings?tab=production_shifts&view=staff");
+    await open();
+    expect(tabNamed("Staff")?.getAttribute("aria-selected")).toBe("true");
+    page!.unmount();
+    window.history.replaceState(null, "", "/hr/settings?tab=production_shifts#breaks");
+    await open();
+    expect(tabNamed("Production")?.getAttribute("aria-selected")).toBe("true");
+    expect(q('[data-setting-id="breaks"]')).not.toBeNull();
   });
 });
 

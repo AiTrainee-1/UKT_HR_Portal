@@ -289,8 +289,8 @@ test("the Compensation page's CTC Breakdown shows the split: recorded, automatic
 test("Settings -> Payroll explains the salary split and has no Basic % / HRA % boxes", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/settings");
-  await page.getByRole("tab", { name: "Payroll", exact: true }).click();
-  // The empty "Compensation" sub-tab is gone; its note now sits under Payroll Rules -> Staff PF and ESI.
+  await page.getByRole("tab", { name: "Staff Payroll", exact: true }).click();
+  // The empty "Compensation" sub-tab is gone; its note now sits on Payroll Rules (PF and ESI have their own tab).
   await expect(page.getByRole("tab", { name: "Payroll Rules", exact: true })).toHaveAttribute("aria-selected", "true");
   // Settings has its own top-level "Compensation" tab now (the OT / Compensation rules): exactly that one, none under Payroll.
   await expect(page.getByRole("tab", { name: "Compensation", exact: true })).toHaveCount(1);

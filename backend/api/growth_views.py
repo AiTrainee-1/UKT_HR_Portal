@@ -653,6 +653,12 @@ def increment_dashboard(request: Request) -> Response:
 # calculation_base * bonus_percent / 100, only if the employee's most recent
 # in-year monthly wage is at or below bonus_eligibility_ceiling.
 #
+# Staff and production employees have their OWN rate and ceilings (2026-10-24):
+# bonus_percent / bonus_wage_ceiling / bonus_eligibility_ceiling for staff,
+# prod_bonus_percent / prod_bonus_wage_ceiling / prod_bonus_eligibility_ceiling
+# for production (bonus_rules_for picks by Employee.employment_type). Only the
+# financial-year start month (bonus_fy_start_month) is one company-wide value.
+#
 # Caveat that matters for correctness, not just performance: for STAFF
 # employees, SalarySlip.basic is a genuine Basic-pay component (see
 # _generate_staff_payroll). For PRODUCTION employees, _generate_production_payroll
@@ -684,16 +690,27 @@ def _fy_month_years(financial_year: str, fy_start_month: int) -> set[tuple[int, 
     return pairs
 
 
+def bonus_rules_for(emp: Employee, settings) -> tuple[Decimal, Decimal, Decimal]:
+    """(bonus percent, wage ceiling, eligibility ceiling) that govern this employee's bonus: the STAFF values
+    (bonus_percent / bonus_wage_ceiling / bonus_eligibility_ceiling) for a staff employee, the PRODUCTION ones
+    (prod_bonus_*) for a production employee. THE one place that decides it, so the preview, the generated register and
+    every report agree. The financial-year start month is one company-wide value and is not part of this."""
+    if emp.employment_type == "production":
+        return settings.prod_bonus_percent, settings.prod_bonus_wage_ceiling, settings.prod_bonus_eligibility_ceiling
+    return settings.bonus_percent, settings.bonus_wage_ceiling, settings.bonus_eligibility_ceiling
+
+
 def _calculate_bonus_for_employee(emp: Employee, financial_year: str, settings: PayrollSettings) -> dict:
     fy_start_month = int(settings.bonus_fy_start_month or 4)
     month_years = _fy_month_years(financial_year, fy_start_month)
+    bonus_percent, wage_ceiling, eligibility_ceiling = bonus_rules_for(emp, settings)
 
     fy_slips = sorted(
         (s for s in SalarySlip.objects.filter(employee=emp) if (s.year, s.month) in month_years),
         key=lambda s: (s.year, s.month),
     )
 
-    ceiling = settings.bonus_wage_ceiling
+    ceiling = wage_ceiling
     calculation_base = sum((min(s.basic, ceiling) for s in fy_slips), Decimal("0"))
     records_considered = len(fy_slips)
 
@@ -703,16 +720,16 @@ def _calculate_bonus_for_employee(emp: Employee, financial_year: str, settings: 
         monthly_wage = emp.salary_amount or Decimal("0")
 
     has_data = bool(fy_slips) or bool(emp.salary_amount)
-    eligible = has_data and monthly_wage <= settings.bonus_eligibility_ceiling
+    eligible = has_data and monthly_wage <= eligibility_ceiling
     bonus_amount = (
-        (calculation_base * settings.bonus_percent / 100).quantize(Decimal("0.01"))
+        (calculation_base * bonus_percent / 100).quantize(Decimal("0.01"))
         if eligible else Decimal("0.00")
     )
 
     if not has_data:
         reason = "No salary or payroll data available"
     elif not eligible:
-        reason = f"Monthly wage ₹{monthly_wage:,.2f} exceeds the ₹{settings.bonus_eligibility_ceiling:,.0f} eligibility ceiling"
+        reason = f"Monthly wage ₹{monthly_wage:,.2f} exceeds the ₹{eligibility_ceiling:,.0f} eligibility ceiling"
     else:
         reason = None
 
@@ -727,7 +744,7 @@ def _calculate_bonus_for_employee(emp: Employee, financial_year: str, settings: 
         "reason": reason,
         "recordsConsidered": records_considered,
         "calculationBase": float(calculation_base),
-        "bonusPercent": float(settings.bonus_percent),
+        "bonusPercent": float(bonus_percent),
         "bonusAmount": float(bonus_amount),
     }
 
@@ -759,8 +776,9 @@ def bonus_calculate(request: Request) -> Response:
 
     Settings are resolved PER EMPLOYEE (settings_for_employee), not once for
     the requesting operator -same reasoning as payroll generation: a run
-    spanning several branches must apply each branch's own bonus_percent/
-    ceilings, not whichever branch (or none) the operator happens to be on.
+    spanning several branches must apply each branch's own bonus rate and
+    ceilings (the staff or the production set, by the employee's type), not
+    whichever branch (or none) the operator happens to be on.
     """
     default_settings = settings_for(request)
     fy = request.query_params.get("financialYear") or _fy_label_for_date(
@@ -806,7 +824,7 @@ def bonus_generate(request: Request) -> Response:
             defaults={
                 "records_considered": result["recordsConsidered"],
                 "calculation_base": Decimal(str(result["calculationBase"])),
-                "bonus_percent_applied": emp_settings.bonus_percent,
+                "bonus_percent_applied": bonus_rules_for(emp, emp_settings)[0],
                 "bonus_amount": Decimal(str(result["bonusAmount"])),
                 "computed_by": computed_by,
             },
