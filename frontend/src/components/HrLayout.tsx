@@ -115,6 +115,7 @@ function HrShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div
+      data-ui-shell="root"
       className="flex h-screen print:h-auto print:block"
       style={{
         background: "linear-gradient(135deg, #f0f5fa 0%, #e8f2f8 50%, #eef4fc 100%)",
@@ -123,6 +124,7 @@ function HrShell({ children }: { children: React.ReactNode }) {
     >
       {/* ── Sidebar ── */}
       <aside
+        data-ui-shell="sidebar"
         className={`
           fixed inset-y-0 left-0 z-50 flex flex-col w-64 overflow-hidden shrink-0
           transform transition-[transform,width] duration-300 ease-out
@@ -147,6 +149,7 @@ function HrShell({ children }: { children: React.ReactNode }) {
       {/* ── Mobile overlay ── */}
       {mobileOpen && (
         <div
+          data-ui-shell="overlay"
           className="fixed inset-0 z-40 lg:hidden"
           style={{ background: "rgba(0,60,100,0.2)", backdropFilter: "blur(4px)" }}
           onClick={() => setMobileOpen(false)}
@@ -157,6 +160,7 @@ function HrShell({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden print:overflow-visible print:h-auto print:block">
         {/* Mobile top bar */}
         <header
+          data-ui-shell="topbar"
           className="flex items-center gap-3 px-4 py-3 lg:hidden"
           style={{
             background: "#f6fafe",
@@ -200,10 +204,11 @@ function HrShell({ children }: { children: React.ReactNode }) {
         {/* `relative` keeps absolutely-positioned descendants (e.g. Radix Select's
             hidden native <select>) anchored inside this scroll container -without
             it they anchor to <html> and stretch the whole document. */}
-        <main ref={mainRef} className="relative flex-1 overflow-y-auto p-4 lg:p-6 print:static print:overflow-visible print:h-auto print:p-0">
+        <main ref={mainRef} data-ui-shell="main" className="relative flex-1 overflow-y-auto p-4 lg:p-6 print:static print:overflow-visible print:h-auto print:p-0">
           {pageHasRefresh(location) && <PageRefreshBar />}
           {isViewOnly && (
             <div
+              data-ui-shell="view-only"
               className="flex items-center gap-2 mb-4 px-3.5 py-2.5 rounded-xl text-sm font-semibold"
               style={{
                 background: "rgba(245,158,11,0.08)",

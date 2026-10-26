@@ -13,6 +13,8 @@ export const THEME_LOOK: Record<ThemeId, string> = {
   mono: "White pages, near-black switches and links, no colour at all.",
   "mono-dark": "Black pages, dark grey cards, white switches and links.",
   professional: "Very light slate pages, white cards, slate-blue switches and links.",
+  clean:
+    "Flat and structured: light grey pages, white cards with a thin border, a white menu, one deep blue for buttons, links and tabs. No glass, shadows or gradients.",
 };
 
 /** The six colours the Customize dialog edits (lib/themes.ts CUSTOMIZABLE_TOKENS), and what each really colours. */
@@ -45,3 +47,43 @@ export const TOKEN_TEXT: Record<string, { label: string; colours: string }> = {
     colours: "Hovered and selected items in drop-down lists, menus and pickers.",
   },
 };
+
+/**
+ * What the six colours colour in Clean Professional. Its buttons, menu and tabs are drawn from the colours themselves
+ * (src/themes/clean/), so the "keeps its fixed blue" cautions above do not apply to it.
+ */
+const TOKEN_TEXT_CLEAN: Record<string, { label: string; colours: string }> = {
+  "--primary": {
+    label: "Primary",
+    colours:
+      "The main buttons, links, active tabs, the open page in the left menu, switches, tick boxes, progress bars and the focus ring. Hover and soft shades are worked out from it.",
+  },
+  "--background": {
+    label: "Background",
+    colours: "The page behind every card, on every page of the portal, and the header row of tables.",
+  },
+  "--card": {
+    label: "Card surface",
+    colours:
+      "Cards, panels, tables, dialogs and drop-down menus across the portal, including the employee pages and sign-in screens.",
+  },
+  "--foreground": {
+    label: "Text",
+    colours:
+      "The default text colour of every page: text, headings, inputs and notices that do not set a colour of their own.",
+  },
+  "--sidebar": {
+    label: "Sidebar",
+    colours:
+      "The HR portal's left menu and the menu of the employee pages. Its text colour is kept readable on the colour you pick.",
+  },
+  "--accent": {
+    label: "Accent",
+    colours: "Hovered and selected items in drop-down lists, menus and pickers, and the open page in the left menu.",
+  },
+};
+
+/** The words for one editable colour in one theme: Clean Professional has its own, the others share TOKEN_TEXT. */
+export function tokenText(theme: ThemeId, token: string): { label: string; colours: string } {
+  return (theme === "clean" ? TOKEN_TEXT_CLEAN[token] : undefined) ?? TOKEN_TEXT[token];
+}

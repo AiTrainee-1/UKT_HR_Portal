@@ -12,7 +12,7 @@
  * alpha maths on them (see `hsl(var(--primary) / 0.5)` usage).
  */
 
-export type ThemeId = "default" | "dark" | "premium" | "mono" | "mono-dark" | "professional";
+export type ThemeId = "default" | "dark" | "premium" | "mono" | "mono-dark" | "professional" | "clean";
 
 export type ThemeDef = {
   id: ThemeId;
@@ -65,6 +65,17 @@ export const THEMES: ThemeDef[] = [
     label: "Professional Theme",
     description: "Restrained corporate slate — muted, neutral, and quiet for reporting work.",
     swatches: ["#f8fafc", "#ffffff", "#334155", "#0f172a"],
+    dark: false,
+  },
+  {
+    // Not a colour variation of the others: it also changes the structure (flat bordered surfaces instead of the
+    // glass-and-clay look, solid buttons, tables, underline tabs). Its CSS is src/themes/clean/ and is scoped to
+    // html[data-theme="clean"] outside the MD portal. Not to be confused with "professional" above.
+    id: "clean",
+    label: "Clean Professional",
+    description:
+      "A flat, structured admin look — light grey pages, white bordered cards, one deep blue, no glass, shadows or gradients.",
+    swatches: ["#f4f6f9", "#ffffff", "#1d56b3", "#1f2937"],
     dark: false,
   },
 ];

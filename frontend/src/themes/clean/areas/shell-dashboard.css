@@ -1,0 +1,708 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Clean Professional - area: layout shell, dashboard, employees and organization.
+   Every selector is scoped html[data-theme="clean"]:not([data-md-theme]) (see ../index.css).
+
+   What the foundation (layout.css, tables.css ...) already draws is not repeated here. This file is for what it could not
+   reach from a token alone:
+
+     1. the shell        the collapsed rail's flyout, the page-search palette, the floating progress banners
+     2. the dashboard    icon tiles and count pills the page tints with an inline accent colour, charts in the page's
+                         own blues, the header's capsule buttons
+     3. stat cards       the tinted figure cards (account-management/parts.tsx StatCard) used by Departments,
+                         Designations, Branches, Production Employees, Promotion and Increment
+     4. employees        the dense table, the profile page
+     5. organization     split bars, chips, avatars, hand-rolled toggles
+
+   !important appears only where an inline style (the dashboard tints its tiles with style={{ background: accent + "18" }})
+   has to be replaced; each such line says so.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ═════════════════════════════ 1. the shell ═════════════════════════════════════════════════════════════════════════ */
+
+/* the flyout of a group on the collapsed rail: the open page there is a soft fill, but its label is white (it was white
+   on the old gradient), so it vanished. It reads like the open page in the expanded menu now. */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="popover-panel"] .clay-nav-active {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+  box-shadow: inset 3px 0 0 hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="popover-panel"] .clay-nav-active [class~="text-white"] {
+  color: inherit;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="popover-panel"] .clay-nav-active [class~="bg-white"] {
+  background-color: hsl(var(--primary));
+}
+
+/* the page-search palette (Search pages / Ctrl+K): a floating layer, so it gets the dialog's scrim, a line and the light
+   shadow the remap's inline-shadow rule would otherwise take away */
+html[data-theme="clean"]:not([data-md-theme]) body > [class~="fixed"][class~="inset-0"][class~="z-[60]"] {
+  background: var(--clean-scrim);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  body
+  > [class~="fixed"][class~="inset-0"][class~="z-[60]"]
+  > [class~="relative"][style*="box-shadow"] {
+  border: 1px solid var(--clean-line);
+  box-shadow: var(--clean-shadow-dialog) !important; /* inline style */
+}
+/* its search field is the whole header of the palette: the palette itself is the focus, no second ring inside it */
+html[data-theme="clean"]:not([data-md-theme]) body > [class~="fixed"][class~="inset-0"][class~="z-[60]"] input {
+  outline: none;
+  border: 0;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  body
+  > [class~="fixed"][class~="inset-0"][class~="z-[60]"]
+  :is([class~="bg-[#006496]/[0.07]"]) {
+  background-color: hsl(var(--accent));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  body
+  > [class~="fixed"][class~="inset-0"][class~="z-[60]"]
+  button:is(:hover, :focus-visible) {
+  background-color: var(--clean-hover);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  body
+  > [class~="fixed"][class~="inset-0"][class~="z-[60]"]
+  :is([class~="text-[#006496]/70"], [class~="text-[#006496]/50"]) {
+  color: var(--clean-n-500);
+}
+
+/* the progress banners that follow you around the application (biometric sync, payroll, salary slips, WhatsApp, resume
+   screening): a white panel with a line and the light floating shadow; the bar is the brand colour, not a rainbow */
+html[data-theme="clean"]:not([data-md-theme]) [class~="fixed"][class~="bottom-5"][class~="right-5"][class~="z-[100]"] {
+  background: var(--clean-surface);
+  border: 1px solid var(--clean-line);
+  box-shadow: var(--clean-shadow-float);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [class~="fixed"][class~="bottom-5"][class~="right-5"][class~="z-[100]"]
+  [class*="bg-gradient-to-"] {
+  background-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [class~="fixed"][class~="bottom-5"][class~="right-5"][class~="z-[100]"]
+  [class*="rounded-full"][class*="overflow-hidden"] {
+  background-color: var(--clean-n-200);
+}
+
+/* ═════════════════════════════ 2. the dashboard ═════════════════════════════════════════════════════════════════════ */
+
+/* the running border a card draws while its figure loads: the page gives each card its own accent (amber, purple, red) in an
+   inline custom property; here it is the brand colour at the card's own 8px corner */
+html[data-theme="clean"]:not([data-md-theme]) .ukt-kpi-run[style*="--kpi-accent"] {
+  --kpi-accent: hsl(var(--primary)) !important; /* inline style */
+  --kpi-radius: 8px !important; /* inline style */
+}
+
+/* the page title is one size and weight on every page (foundation: 22px for text-2xl / text-3xl; the dashboard writes xl) */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  h2[class~="text-xl"][class~="font-black"][class~="tracking-tight"] {
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* a small caps section heading ("SALARY COST - LAST 12 MONTHS", "PERSONAL INFORMATION"): 10px is small to read */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  h3[class~="uppercase"]:is([class~="text-[10px]"], [class~="text-[11px]"]) {
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  h3[class~="uppercase"]:is([class~="text-[10px]"], [class~="text-[11px]"])
+  svg {
+  color: hsl(var(--primary));
+}
+
+/* the header's capsule buttons (Auto Sync, Run Payroll, Add Employee): 6px buttons like every other button */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[class*="rounded-full"][class*="text-[11px]"][style] {
+  border-radius: var(--clean-radius);
+  min-height: 32px;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[class*="rounded-full"][class*="text-[11px]"][style*="box-shadow"] {
+  border: 1px solid var(--clean-line-mid);
+  color: var(--clean-n-700) !important; /* inline style */
+  background: var(--clean-surface) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[class*="rounded-full"][class*="text-[11px]"][style*="box-shadow"]:hover:not(:disabled) {
+  background: var(--clean-n-100) !important; /* inline style */
+  border-color: var(--clean-n-400);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[class*="rounded-full"][class*="text-white"][style*="linear-gradient"] {
+  border: 1px solid hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[class*="rounded-full"][class*="text-white"][style*="linear-gradient"]:hover {
+  background: var(--clean-primary-hover) !important; /* inline style */
+  border-color: var(--clean-primary-hover);
+}
+
+/* an icon tile tinted by an inline accent (background: accent + "18", a clay shadow) is one soft brand square with a brand
+   icon: the page's purple, amber, rose and teal accents carried no meaning, and the status colours are kept for statuses */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(div, span)[style*="background: rgba("][style*="box-shadow"]:is(
+    [class*="rounded-lg"],
+    [class*="rounded-xl"]
+  )[class*="justify-center"] {
+  background: var(--clean-primary-soft) !important; /* inline style */
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(div, span)[style*="background: rgba("][style*="box-shadow"]:is(
+    [class*="rounded-lg"],
+    [class*="rounded-xl"]
+  )[class*="justify-center"]
+  > :is(span, svg) {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(div, span)[style*="background: rgba("][style*="box-shadow"]:is(
+    [class*="rounded-lg"],
+    [class*="rounded-xl"]
+  )[class*="justify-center"]
+  > :is(span, svg)[style*="color"] {
+  color: hsl(var(--primary)) !important; /* inline style */
+}
+
+/* the count beside a pending item: the same soft brand, a small label not a capsule */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  span[class*="rounded-full"][class*="font-black"][style*="background: rgba("][style*="color"] {
+  background: var(--clean-primary-soft) !important; /* inline style */
+  color: hsl(var(--primary)) !important; /* inline style */
+  border-radius: var(--clean-radius-sm);
+}
+
+/* the small tinted tiles (Geo attendance, Recruitment & documents): a quiet grey panel with a line */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[class~="text-left"][class~="rounded-xl"][class~="p-3"][style*="background: rgba("] {
+  background: var(--clean-n-50) !important; /* inline style */
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[class~="text-left"][class~="rounded-xl"][class~="p-3"][style*="background: rgba("]:hover {
+  border-color: var(--clean-line-strong);
+  background: var(--clean-surface) !important; /* inline style */
+}
+
+/* the department bars: one brand colour (their eight blues meant nothing), a grey track, the figure in the text colour */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class~="h-2"][class~="rounded-full"][style*="width"][style*="background"] {
+  background: hsl(var(--primary)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  span[class~="font-black"][class~="w-8"][class~="text-right"][style*="color"] {
+  color: var(--clean-n-800) !important; /* inline style */
+}
+/* the legend and the figures under the workforce ring: series colours in the page's cyan have no contrast on white */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(.recharts-legend-item-text, p[class~="text-lg"][class~="font-black"])[style*="color"] {
+  color: var(--clean-n-800) !important; /* inline style */
+}
+
+/* the charts: the page's cyan is the second tone of the brand ramp, grey for "other"; grid and axis in the neutral ramp */
+html[data-theme="clean"]:not([data-md-theme]) :is(circle[stroke="#0096c7"], path[stroke="#0096c7"]) {
+  stroke: var(--clean-b-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(.recharts-sector, .recharts-symbols, .recharts-legend-icon)[fill="#0096c7"] {
+  fill: var(--clean-n-400);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is(circle, .recharts-sector)[stroke="rgba(0,100,150,0.08)"] {
+  stroke: var(--clean-n-200);
+}
+html[data-theme="clean"]:not([data-md-theme]) line[stroke="rgba(0,100,150,0.05)"] {
+  stroke: var(--clean-n-200);
+}
+html[data-theme="clean"]:not([data-md-theme]) text[fill="rgba(0,60,100,0.65)"] {
+  fill: var(--clean-n-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) stop[stop-color="#4FB8F0"] {
+  stop-color: var(--clean-b-600);
+}
+html[data-theme="clean"]:not([data-md-theme]) .recharts-sector[stroke="#fff"] {
+  stroke: var(--clean-surface);
+}
+
+/* an upcoming holiday's "In 14d" is information, not a fault */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  span[class~="text-rose-600"][class~="bg-rose-50"][class~="rounded-full"] {
+  color: var(--clean-n-700);
+  background-color: var(--clean-n-100);
+  border-radius: var(--clean-radius-sm);
+}
+
+/* ═════════════════════════════ 3. stat cards ════════════════════════════════════════════════════════════════════════ */
+
+/* StatCard: a tinted card (green, blue, amber, teal ...) per figure. Here: one white card with a line, the figure in the
+   text colour and the icon in a soft brand square. What the number means is in its label, not in its colour. */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  [class*="rounded-2xl"][class*="items-start"]:has(> [class~="bg-white/60"]) {
+  background: var(--clean-surface);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  [class*="rounded-2xl"][class*="items-start"]
+  > [class~="bg-white/60"] {
+  background: var(--clean-primary-soft);
+  color: hsl(var(--primary));
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  [class*="rounded-2xl"][class*="items-start"]:has(> [class~="bg-white/60"])
+  p[class~="opacity-70"] {
+  color: var(--clean-n-600);
+  opacity: 1;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  [class*="rounded-2xl"][class*="items-start"]:has(> [class~="bg-white/60"])
+  p[class~="opacity-60"] {
+  color: var(--clean-n-500);
+  opacity: 1;
+}
+
+/* ═════════════════════════════ 4. employees ═════════════════════════════════════════════════════════════════════════ */
+
+/* The roster has nine columns and 1060px to put them in. The foundation's cell padding (12px, which also replaces the pl-4 /
+   pr-4 the first and last cells ask for) made the table 76px wider than that, so the actions fell off the right edge: the
+   cells here are 6px from their neighbours (the page was designed for 8) and the two ends keep their 16px. */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  table:has([data-testid^="row-employee-"])
+  :is(th, td)[data-slot] {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  table:has([data-testid^="row-employee-"])
+  :is(th, td)[data-slot]:first-child {
+  padding-left: 16px;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  table:has([data-testid^="row-employee-"])
+  :is(th, td)[data-slot]:last-child {
+  padding-right: 16px;
+}
+/* the four icon buttons of a row are 32px squares (36px put the table 20px past its card) */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  table:has([data-testid^="row-employee-"])
+  td[data-slot]:last-child
+  [data-slot="button"][class*="h-9"] {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  table:has([data-testid^="row-employee-"])
+  td[data-slot]:last-child
+  > div[class~="gap-1"] {
+  gap: 2px;
+}
+
+/* ═════════════════════════════ 3b. stat cards, continued ════════════════════════════════════════════════════════════ */
+
+/* Production Employees: a stat card that is also the way to its tab. The coloured box is the outer element and the
+   pressed card has an inline ring; both become the same white card, and the pressed one has the brand colour's line. */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="rounded-2xl"]:has(> button[aria-pressed] > [class~="bg-white/60"]) {
+  background: var(--clean-surface);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="rounded-2xl"]:has(> button[aria-pressed] > [class~="bg-white/60"])
+  > button[aria-pressed] {
+  background: transparent;
+  border: 0;
+  border-radius: var(--clean-radius-lg);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="rounded-2xl"][data-selected="true"]:has(> button[aria-pressed]) {
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 1px hsl(var(--primary)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="rounded-2xl"]:has(> button[aria-pressed] > [class~="bg-white/60"])
+  p[class~="opacity-70"] {
+  color: var(--clean-n-600);
+  opacity: 1;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="rounded-2xl"]:has(> button[aria-pressed] > [class~="bg-white/60"])
+  p[class~="opacity-60"] {
+  color: var(--clean-n-500);
+  opacity: 1;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="rounded-2xl"]:has(> button[aria-pressed] > [class~="bg-white/60"])
+  > button[aria-pressed]
+  > [class~="bg-white/60"] {
+  background: var(--clean-primary-soft);
+  color: hsl(var(--primary));
+  border-radius: var(--clean-radius);
+}
+
+/* the three small figures in a branch's drawer (staff, production, inactive) */
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-ui-shell="main"], [data-slot="sheet-content"], [data-slot="dialog-content"])
+  div:has(> p[class~="opacity-70"] + p[class~="font-black"])[class*="rounded-xl"] {
+  background: var(--clean-n-50);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-ui-shell="main"], [data-slot="sheet-content"], [data-slot="dialog-content"])
+  div:has(> p[class~="opacity-70"] + p[class~="font-black"])[class*="rounded-xl"]
+  > p[class~="opacity-70"] {
+  color: var(--clean-n-600);
+  opacity: 1;
+}
+
+/* ═════════════════════════════ 5. organization ══════════════════════════════════════════════════════════════════════ */
+
+/* staff is the brand colour, production is grey: the split bar, its legend dots and the counts under it (production was
+   amber, which in this theme means "watch") */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="split-bar"] [class~="bg-amber-500"] {
+  background-color: var(--clean-n-400);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="split-bar"] [class~="bg-blue-500"] {
+  background-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="split-bar"] [role="img"] {
+  background-color: var(--clean-n-200);
+}
+
+/* a person's initials: one soft brand circle (six colours for six people said nothing) */
+html[data-theme="clean"]:not([data-md-theme])
+  div[aria-hidden="true"][class*="rounded-full"][class*="h-9"][class*="w-9"][class*="font-bold"]:not(
+    [class*="bg-gray-100"]
+  ) {
+  background-color: var(--clean-primary-soft-hover);
+  color: var(--clean-b-800);
+}
+
+/* a designation's level (Junior, Mid, Senior, Manager, Executive): a neutral label, the level is in the word */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="level-chip"] > span {
+  background-color: var(--clean-n-100);
+  border-color: var(--clean-line);
+  color: var(--clean-n-700);
+}
+
+/* the pay cycle chips (Weekly, BiWeekly, Monthly): one label, the cycle is in the word. "Not assigned" keeps its amber. */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="pe-cycle-chip"]:not([data-cycle="none"]) > span {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-200);
+  color: var(--clean-b-800);
+}
+
+/* a head office is where the company sits, not a fault: the amber chip belongs to "No location set" only */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  [data-testid^="branch-"]
+  span[class*="rounded-full"][class~="bg-amber-50"]:not([data-testid="geo-chip"] *) {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-200);
+  color: var(--clean-b-800);
+}
+
+/* icon tiles drawn with a gradient (department, designation, branch): the one brand colour, flat */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="bg-gradient-to-"][class*="justify-center"][class*="rounded-xl"] {
+  background-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="justify-center"][class*="rounded-xl"][style*="linear-gradient"] {
+  background: hsl(var(--primary)) !important; /* inline style */
+}
+
+/* hand-rolled toggles (Cards / Table, Head Office only): a 6px control, and the pressed one is the soft brand colour with
+   the brand line, not a black block or an amber capsule */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[aria-pressed]:not([data-slot])[class*="rounded-full"] {
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[aria-pressed="true"]:not([data-slot]):not([class~="clay-btn"]):not(:has(> [class~="bg-white/60"])) {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-300);
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[aria-pressed="false"]:not([data-slot])[class*="rounded-full"] {
+  background-color: var(--clean-surface);
+  border-color: var(--clean-line-mid);
+  color: var(--clean-n-700);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] [role="group"][aria-label="Layout"] {
+  border-radius: var(--clean-radius);
+  border-color: var(--clean-line-mid);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] [role="group"][aria-label="Layout"] > button {
+  border-radius: var(--clean-radius-sm);
+}
+
+/* ═════════════════════════════ 4b. employee bulk upload ═════════════════════════════════════════════════════════════ */
+
+/* The page paints Staff in emerald and Production in amber (cfg.accent in bulk-upload/config.ts): a green card that is not a
+   success and an amber one that is not a warning. Both kinds are the brand colour here; the status colours stay on the
+   statuses (the result tiles, the invalid / duplicate chips, the warnings). */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  button[role="radio"][data-testid^="category-"] {
+  background-color: var(--clean-surface);
+  background-image: none;
+  border-color: var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  button[role="radio"][data-testid^="category-"]:hover {
+  border-color: var(--clean-line-strong);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  button[role="radio"][data-testid^="category-"][aria-checked="true"] {
+  background-color: var(--clean-primary-soft);
+  border-color: hsl(var(--primary));
+  --tw-ring-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  button[role="radio"][data-testid^="category-"]
+  > div:first-child {
+  background-color: var(--clean-primary-soft);
+  color: hsl(var(--primary));
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  button[role="radio"][data-testid^="category-"][aria-checked="true"]
+  > div:first-child {
+  background-color: hsl(var(--primary));
+  color: var(--clean-on-primary);
+}
+/* the round tick in its corner */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  button[role="radio"][data-testid^="category-"][aria-checked="true"]
+  > span[aria-hidden="true"] {
+  border-color: hsl(var(--primary));
+  background-color: var(--clean-surface);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  button[role="radio"][data-testid^="category-"]
+  > span[aria-hidden="true"]
+  > span {
+  background-color: hsl(var(--primary));
+}
+
+/* the same accent, wherever else the page uses it: the numbered steps, the soft icon tiles, the "N active" chips, the small
+   icons and the label beside the tabs */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  :is(span, div)[class*="rounded-full"][class~="text-white"][class*="font-black"]:is([class~="h-7"], [class~="h-5"]) {
+  background-color: hsl(var(--primary));
+  color: var(--clean-on-primary);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  :is(div, span)[class~="rounded-full"]:is([class~="bg-emerald-50"], [class~="bg-amber-50"]),
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  div[class*="rounded-lg"][class~="h-10"][class~="w-10"]:is([class~="bg-emerald-50"], [class~="bg-amber-50"]) {
+  background-color: var(--clean-primary-soft);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  :is(span, svg)[class*="text-emerald-700"],
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  :is(span, svg)[class*="text-amber-700"]:is(svg, [class*="rounded-full"]) {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  p[class~="text-xs"][class~="font-semibold"]:is([class~="text-emerald-700"], [class~="text-amber-700"]) {
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  span[class*="rounded-full"][class*="font-bold"]:is([class~="bg-emerald-100"], [class~="bg-amber-100"]) {
+  background-color: var(--clean-primary-soft-hover);
+  border-color: var(--clean-b-200);
+  color: var(--clean-b-800);
+  border-radius: var(--clean-radius-sm);
+}
+/* the file that was picked (a panel tinted with the accent) */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  div[class*="rounded-xl"][class*="border"][class*="p-3"]:is([class~="bg-emerald-50"], [class~="bg-amber-50"]):has(
+    > [class~="bg-gray-800"],
+    > [class~="bg-green-600"]
+  ) {
+  background-color: var(--clean-n-50);
+  border-color: var(--clean-line);
+}
+/* the dark square that marks the picked file */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]:has([data-testid^="category-"])
+  div[class~="bg-gray-800"][class*="rounded-lg"][class*="justify-center"] {
+  background-color: hsl(var(--primary));
+}
+
+/* a bar that sticks to the bottom of a table or a form (the "Apply updates" bar) is 95% white over the rows beneath it; the
+   blur that made that readable is gone, so it is opaque, with the light floating shadow */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] [class~="sticky"][class*="bg-white/9"] {
+  background-color: var(--clean-surface);
+  box-shadow: var(--clean-shadow-float);
+}
+
+/* Production Employees: the bar that appears when rows are ticked (amber, with a blue, a purple and a green button) and the
+   ticked rows themselves. One soft brand bar, one solid brand button per cycle, the rows in the selected tint. */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="pe-bulk-bar"] {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-200);
+  border-radius: var(--clean-radius-lg);
+  box-shadow: var(--clean-shadow-float);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="pe-selected-count"] {
+  color: var(--clean-n-800);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="pe-selected-count"] > span {
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-testid="pe-bulk-weekly"], [data-testid="pe-bulk-biweekly"], [data-testid="pe-bulk-monthly"]) {
+  background: hsl(var(--primary)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-testid="pe-bulk-weekly"], [data-testid="pe-bulk-biweekly"], [data-testid="pe-bulk-monthly"]):hover:not(
+    :disabled
+  ) {
+  background: var(--clean-primary-hover) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-testid="pe-bulk-weekly"], [data-testid="pe-bulk-biweekly"], [data-testid="pe-bulk-monthly"]):disabled {
+  background: var(--clean-disabled-bg) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] tr[class*="bg-amber-50/40"] {
+  background-color: var(--clean-primary-soft);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class*="rounded-2xl"][class*="border-amber-300"][class*="bg-amber-50/40"] {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-300);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] h2 > svg[class*="text-amber-"] {
+  color: hsl(var(--primary));
+}
+
+/* a field that is flagged (a red border written by the page) keeps the red when it has the keyboard, not the blue ring */
+html[data-theme="clean"]:not([data-md-theme]) :is(input, select, textarea)[class*="border-red-"]:focus-visible {
+  outline-color: hsl(var(--destructive));
+}
+
+/* ═════════════════════════════ 6. the phone ═════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 640px) {
+  /* a row of title-bar buttons (Inactive, Bulk Upload, Add Employee) that is wider than the screen wraps instead of
+     running off its right edge */
+  html[data-theme="clean"]:not([data-md-theme])
+    [data-ui-shell="main"]
+    div[class~="flex"]:has(> [data-slot="button"] ~ [data-slot="button"] ~ [data-slot="button"]) {
+    flex-wrap: wrap;
+  }
+
+  /* a department card: its description is allowed to be shorter than the card, so the edit and delete buttons stay on it */
+  html[data-theme="clean"]:not([data-md-theme])
+    [data-testid="departments-cards"]
+    > div
+    > div[class~="justify-between"]
+    > :first-child {
+    min-width: 0;
+    flex: 1 1 0%;
+  }
+  /* the profile's title row (back, photo, name, Download ID Card): the button goes under the name, not off the edge */
+  html[data-theme="clean"]:not([data-md-theme])
+    [data-ui-shell="main"]
+    div[class~="flex"][class~="items-start"]:has(> [data-testid="button-back"]) {
+    flex-wrap: wrap;
+  }
+
+  /* today's attendance on the dashboard: the ring and its figures sit side by side in half a phone's width and the figures
+     were cut off; the ring goes above them */
+  html[data-theme="clean"]:not([data-md-theme])
+    [data-ui-shell="main"]
+    div[class~="grid-cols-2"][class~="divide-x"]
+    > div[class~="p-5"][class~="items-center"] {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+  }
+}
+
+/* the little coloured label that pops over a row's icon button (blue for view, green, amber, red for delete): one dark label with
+   white writing, like every other tooltip. Its own colour is an inline background-color, and a rule elsewhere that looks for
+   style="...color: rgb(220, 38, 38)" also matches "background-color: rgb(220, 38, 38)" and paints the writing red: the
+   [style] in the selector keeps this rule ahead of those. */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="action-tooltip-label"][style] {
+  background-color: var(--clean-n-800) !important; /* inline style */
+  color: var(--clean-on-primary) !important; /* inline style */
+  border-radius: var(--clean-radius-sm);
+  box-shadow: none;
+  font-weight: 600;
+}

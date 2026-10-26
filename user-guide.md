@@ -1023,6 +1023,27 @@ A live **What employees will see** preview shows your entries before you save. T
 
 ---
 
+#### Themes (the look of the portal)
+
+**What it's for:** Chooses how every page of the portal looks. **Default Theme** is the glass-and-soft-shadow look the portal has always had. **Clean Professional** is a plain, structured look: light grey pages, white cards with a thin border, one deep blue for buttons, links and tabs, a white menu, flat tables and clear forms, with no glass, shadows or gradients. The other themes (Dark, Premium, Black & White ...) only change colours.
+
+**Two ways to use a theme**
+
+| You want | Do this | Who sees it |
+|---|---|---|
+| The theme for **everyone** | Open **Settings -> Themes**, switch the theme on (the **Everyone** switch on its card). It is saved at once. Use **Preview** first to look at it on your own screen without saving. | Every user of the portal, after their next page load. |
+| A theme on **one device only** (for example, Clean Professional on a computer where the default look draws badly) | Press **Use only on this device** on the theme's card. | Only that computer's browser, including its sign-in page. Nothing is saved on the server and nobody else's screen changes. Another browser or computer, or a cleared browser, follows everyone again. |
+
+**Reading the cards.** A card marked **Active for everyone** is the theme saved for all users. A card marked **Active on this device** is the one this browser uses on its own (it wins over the theme for everyone on this computer). **Showing** means it is on your screen right now (a preview counts). The summary under the cards ("Who sees what") names the theme for everyone, the one for this device and the one on your screen.
+
+**Going back.** To drop a device's own choice press **Follow everyone's theme again** (or press the card's **On this device** button once more). To go back to the old look for everybody, switch **Default Theme** on. Nothing is lost by switching: the default look returns exactly as it was.
+
+**Customize** (the six colours: primary, background, card, text, sidebar, accent) works on Clean Professional too, and applies to everyone. The Managing Director's portal keeps its own look in every theme. The mobile apps, PDFs, ID cards and e-mails are not themed.
+
+> A login assigned to one branch or a view-only role cannot change the theme for everyone, but can still preview a theme and use one on its own device.
+
+---
+
 #### Attendance Settings
 
 **Sub-tab: Staff**

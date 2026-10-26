@@ -1,0 +1,169 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Clean Professional: fields. A text input, a select, a textarea and a date field are one thing: white, a 1px grey-blue
+   border (3.1:1 on white), 6px corners, 36px high (the components already are), a blue border and a 2px ring when focused,
+   a flat grey when disabled, a red border when invalid. The label sits above (the pages lay that out) and the helper and
+   error text under it are the neutral and danger colours.
+
+   Heights and padding are the component's own (h-9 ...): a page that asks for a smaller field keeps it. The hand-written
+   <select>, <input> and <textarea> in the pages (no data-slot) get the same colours and corners and nothing else.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* A field with border-0 is part of a composite control (a search box inside a bordered row): it keeps its own look. */
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"], [data-slot="input-group-control"]):not(
+    [class~="border-0"],
+    [class~="border-none"]
+  ) {
+  background-color: var(--clean-surface);
+  background-image: none;
+  color: var(--clean-ink);
+  border: 1px solid var(--clean-line-strong);
+  border-radius: var(--clean-radius);
+  box-shadow: none;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
+    [class~="border-0"],
+    [class~="border-none"]
+  ):hover:not(:disabled):not(:focus) {
+  border-color: var(--clean-n-500);
+  background-color: var(--clean-surface);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
+    [class~="border-0"],
+    [class~="border-none"]
+  ):is(:focus, :focus-visible) {
+  background-color: var(--clean-surface);
+  border-color: var(--clean-focus);
+  box-shadow: none;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
+    [class~="border-0"],
+    [class~="border-none"]
+  ):focus-visible {
+  outline: 2px solid var(--clean-focus);
+  outline-offset: 0;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
+    [class~="border-0"],
+    [class~="border-none"]
+  ):disabled,
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"]):not([class~="border-0"], [class~="border-none"]):read-only:not(
+    [type="date"],
+    [type="time"],
+    [type="file"],
+    [type="range"],
+    [type="color"]
+  ) {
+  background-color: var(--clean-disabled-bg);
+  color: var(--clean-n-600);
+  border-color: var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
+    [class~="border-0"],
+    [class~="border-none"]
+  ):disabled {
+  opacity: 1;
+  color: var(--clean-disabled-ink);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"])[aria-invalid="true"] {
+  border-color: hsl(var(--destructive));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"])[aria-invalid="true"]:focus-visible {
+  outline-color: hsl(var(--destructive));
+}
+
+html[data-theme="clean"]:not([data-md-theme]) :is(input, textarea)::placeholder,
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="select-trigger"][data-placeholder],
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="select-trigger"] [data-placeholder] {
+  color: var(--clean-n-400);
+  opacity: 1;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="select-trigger"] > svg {
+  color: var(--clean-n-500);
+  opacity: 1;
+}
+
+/* a field group (a field with an icon or a button attached): one box */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="input-group"] {
+  border-color: var(--clean-line-strong);
+  border-radius: var(--clean-radius);
+  box-shadow: none;
+  background-color: var(--clean-surface);
+}
+
+/* the old clay field and the hand-written controls in the pages: the same colours and corners */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    select,
+    textarea,
+    input:not(
+      [type="checkbox"],
+      [type="radio"],
+      [type="range"],
+      [type="color"],
+      [type="file"],
+      [type="hidden"],
+      [type="submit"],
+      [type="button"],
+      [type="reset"],
+      [type="image"]
+    )
+  ):not([data-slot]) {
+  border-color: var(--clean-line-strong);
+  background-color: var(--clean-surface);
+  border-radius: var(--clean-radius);
+  box-shadow: none;
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is(select, textarea, input):not([data-slot]):disabled {
+  background-color: var(--clean-disabled-bg);
+  color: var(--clean-disabled-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is(select, textarea, input):not([data-slot]):is(:focus, :focus-visible) {
+  border-color: var(--clean-focus);
+  box-shadow: none;
+}
+
+/* the browser's own date, time and month pickers */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"], input[type="week"]) {
+  color-scheme: light;
+  font-variant-numeric: tabular-nums;
+}
+
+/* a file field: its button is a secondary button */
+html[data-theme="clean"]:not([data-md-theme]) input[type="file"]::file-selector-button {
+  background: var(--clean-n-100);
+  color: var(--clean-n-800);
+  border: 1px solid var(--clean-line-mid);
+  border-radius: var(--clean-radius-sm);
+  padding: 4px 10px;
+  margin-right: 10px;
+  font-weight: 500;
+  cursor: pointer;
+}
+html[data-theme="clean"]:not([data-md-theme]) input[type="file"]::file-selector-button:hover {
+  background: var(--clean-n-200);
+}
+
+/* labels and the small text around a field */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="field-label"] {
+  color: var(--clean-n-700);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="field-description"] {
+  color: var(--clean-muted);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="field-error"] {
+  color: hsl(var(--destructive));
+}

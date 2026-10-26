@@ -1,0 +1,622 @@
+/* Clean Professional - area: payroll. Every selector is scoped html[data-theme="clean"]:not([data-md-theme]) (see ../index.css).
+
+   The pages of this area: Staff Payroll, Production Payroll (Weekly / BiWeekly / Monthly), a payroll's details page,
+   Bonus, Settlement (advances and loans), Promotion and Salary Increment, with their dialogs and the settlement sheet.
+
+   What the foundation already makes clean (cards, tables, fields, tabs, dialogs, the colour families) is not repeated.
+   What is left here is what these pages draw for themselves:
+     - the tinted figure tiles (a pastel box in a different colour each): a white tile, a 1px line, a tinted icon chip;
+     - a green / violet "outline" button for every export or download: one neutral secondary button;
+     - the Records | Issues | Skipped | Rules switch, the Cards | Table switch and the details page's section bar: the
+       underlined tabs (and the solid square) the rest of the theme uses, not capsules;
+     - initials avatars in six colours: one soft brand tint;
+     - the production pages' amber accent (a "Weekly" badge, a period icon, a selected chip): the brand colour.
+       Amber stays where it means "needs a look".
+
+   Rules are scoped to the pages of the area (their test ids, or data-ui-area="payroll": the marker that the four pages
+   without a test id of their own carry on their root; it has no style in any other theme) and, for the portal dialogs and
+   the settlement sheet, to their test ids. */
+
+/* -- page titles: the small icon in front of a title is the brand colour (not pink, amber, indigo) ------------------- */
+
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  :is(h1, h2)
+  > svg {
+  color: hsl(var(--primary));
+}
+
+/* -- figure tiles ---------------------------------------------------------------------------------------------------- */
+
+/* KpiTile (payroll kit), the settlement / promotion / increment StatCard: "flex items-start gap-3 rounded-2xl p-4" with a
+   tone like "bg-green-50 text-green-800" and a "bg-white/60" icon box. The tone colour stays as the text colour (so green
+   still reads as money in, red as money out); the box becomes a white tile. */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  :is(div, button)[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]:has(> [class~="bg-white/60"]) {
+  background-color: var(--clean-surface);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  button[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]:has(> [class~="bg-white/60"]):hover {
+  border-color: var(--clean-line-mid);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  :is(div, button)[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]
+  > [class~="bg-white/60"] {
+  background-color: color-mix(in srgb, currentColor 11%, transparent);
+  border-radius: var(--clean-radius);
+}
+/* the small grey lines in a tile were 70% and 60% of the tone on a pastel: on white they need to stay readable (AA) */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  :is(div, button)[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]:has(> [class~="bg-white/60"])
+  [class~="opacity-70"] {
+  opacity: 0.85;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  :is(div, button)[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]:has(> [class~="bg-white/60"])
+  [class~="opacity-60"] {
+  opacity: 0.8;
+}
+/* the tile's loading bars are black at 10%: a neutral grey */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  :is(div, button)[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]:has(> [class~="bg-white/60"])
+  [data-slot="skeleton"] {
+  background: var(--clean-n-200);
+}
+
+/* Bonus: the three summary cards have a solid blue, green and purple icon square; the info card has four pastel ones */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-slot="card"]
+  [class~="p-1.5"][class~="rounded-lg"][class*="bg-"] {
+  background-color: hsl(var(--primary));
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-slot="card"]
+  [class~="w-9"][class~="h-9"][class~="rounded-xl"][class~="shrink-0"] {
+  background-color: var(--clean-primary-soft);
+  color: hsl(var(--primary));
+  border-radius: var(--clean-radius);
+}
+
+/* an empty state's big icon box and its dashed outline: the quiet grey one, 1px */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [class~="border-2"][class~="border-dashed"] {
+  border-width: 1px;
+}
+
+/* the big icon box of an empty state (Promotion, Increment, Settlement): the page picks emerald, blue or amber for it; here it
+   is the soft brand tile (an error one stays red) */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  div[class~="rounded-2xl"][class~="p-4"]:has(> svg:only-child):not([class~="bg-red-50"]) {
+  background-color: var(--clean-primary-soft-hover);
+  color: hsl(var(--primary));
+  border-radius: var(--clean-radius-lg);
+}
+
+/* -- buttons --------------------------------------------------------------------------------------------------------- */
+
+/* Export, Export bank file, Download PDF, WhatsApp, Review ...: the pages colour each outline button green or violet.
+   Green means "good" in this theme, so a download is the neutral secondary button. (Amber = a warning, red = delete: kept.) */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-slot="button"][data-variant="outline"]:is(
+    [class~="border-emerald-200"],
+    [class~="border-green-200"],
+    [class~="border-purple-200"],
+    [class~="border-violet-200"],
+    [class~="border-blue-200"],
+    [class~="border-indigo-200"]
+  ):not(:disabled) {
+  background-color: var(--clean-surface);
+  border-color: var(--clean-line-mid);
+  color: var(--clean-n-800);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-slot="button"][data-variant="outline"]:is(
+    [class~="border-emerald-200"],
+    [class~="border-green-200"],
+    [class~="border-purple-200"],
+    [class~="border-violet-200"],
+    [class~="border-blue-200"],
+    [class~="border-indigo-200"]
+  ):not(:disabled):hover {
+  background-color: var(--clean-n-100);
+  border-color: var(--clean-n-400);
+  color: var(--clean-n-900);
+}
+
+/* -- avatars --------------------------------------------------------------------------------------------------------- */
+
+/* the initials in a coloured box (kit Avatar, settlement InitialsAvatar): one soft brand tint for everybody */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"],
+    [data-testid="adjust-payroll-dialog"],
+    [data-testid="staff-generate-dialog"],
+    [data-testid="pcp-generate-dialog"],
+    [data-testid="pcp-regenerate-dialog"],
+    [data-testid="decision-dialog"],
+    [data-testid="delete-dialog"],
+    [data-testid="create-advance-dialog"],
+    [data-testid="advance-detail"],
+    [data-testid="promote-confirm"],
+    [data-testid="increment-confirm"]
+  )
+  :is(
+    span[aria-hidden="true"][class~="rounded-xl"][style*="width"],
+    div[aria-hidden="true"][class~="shrink-0"][class~="rounded-full"][class~="font-bold"]
+  ) {
+  background-color: var(--clean-primary-soft-hover);
+  color: var(--clean-b-700);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  span[aria-hidden="true"][class~="rounded-xl"][style*="width"] {
+  border-radius: var(--clean-radius);
+}
+
+/* -- the views of a payroll tab: Records | Issues | Skipped | Rules (ViewSwitch) ------------------------------------------- */
+
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="view-switch"] {
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  gap: 2px;
+  box-shadow: inset 0 -1px 0 var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="view-switch"]
+  > button {
+  background: transparent;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px;
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="view-switch"]
+  > button:hover {
+  background: var(--clean-hover);
+  border-bottom-color: var(--clean-n-300);
+  color: var(--clean-n-900);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="view-switch"]
+  > button[aria-selected="true"] {
+  background: transparent;
+  border-bottom-color: hsl(var(--primary));
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="view-switch"]
+  > button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Cards | Table: a small bordered switch (the pressed side is the soft brand colour: shell-dashboard.css, which styles every
+   hand-rolled pressed button the same way) */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [role="group"][aria-label="Layout of the payroll list"] {
+  border-color: var(--clean-line-mid);
+  border-radius: var(--clean-radius);
+  background: var(--clean-surface);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [role="group"][aria-label="Layout of the payroll list"]
+  > button {
+  border-radius: var(--clean-radius-sm);
+}
+
+/* The issue-type chips of the Issues view: the chosen one is the soft brand colour with the brand line. A selected dark chip
+   ("All types": bg-slate-800 text-white) is made a solid brand block by controls-auth.css while shell-dashboard.css gives every
+   pressed button brand text: together, brand text on a brand block. This rule is more specific than both. */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="issues-types"]
+  > button[data-testid^="issues-type"][aria-pressed="true"]:not([data-slot]) {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-300);
+  color: hsl(var(--primary));
+  box-shadow: none;
+}
+
+/* -- a payroll's details page ---------------------------------------------------------------------------------------- */
+
+/* the strip across the top of the header card: one brand colour (staff: indigo, production: amber) */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="pd-header-bar"] {
+  background: hsl(var(--primary));
+  height: 3px;
+}
+/* the sticky section bar: a solid white band with a line, and underlined tabs inside it */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="pd-nav-bar"] {
+  background: var(--clean-surface);
+  border-bottom-color: var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="pd-nav"] {
+  gap: 2px;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="pd-nav"]
+  > button {
+  height: 36px;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--clean-n-600);
+  font-weight: 600;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="pd-nav"]
+  > button:hover {
+  background: var(--clean-hover);
+  border-bottom-color: var(--clean-n-300);
+  color: var(--clean-n-900);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [data-testid="pd-nav"]
+  > button[aria-current="location"] {
+  background: transparent;
+  border-bottom-color: hsl(var(--primary));
+  color: hsl(var(--primary));
+}
+
+/* a rule's source tag (Settings / Employee / Shift / Cycle) is a label, not a status: one soft brand tag for all four
+   (the "Shift" one was green and the "Cycle" one amber) */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  li[data-rule-key]
+  > div:first-child
+  > span[data-tone] {
+  background: var(--clean-primary-soft-hover);
+  border-color: var(--clean-b-200);
+  color: var(--clean-b-800);
+}
+
+/* the two-button switches of the details page (Calendar | Table, By date | By type) and the group they sit in */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  [role="group"][class~="rounded-xl"][class~="border"][class~="bg-white"] {
+  border-radius: var(--clean-radius);
+  border-color: var(--clean-line-mid);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  button[class~="rounded-[10px]"] {
+  border-radius: var(--clean-radius-sm);
+}
+
+/* Promotion history: the kind of change (Designation / Department / Both) is a label: Designation was green, the others
+   indigo and violet. All three are the soft brand tag. */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-testid="staff-payroll-page"],
+    [data-testid^="production-payroll-"],
+    [data-testid="payroll-details-page"],
+    [data-ui-area="payroll"]
+  )
+  td[data-slot="table-cell"]
+  span[class~="rounded-full"][class~="border-emerald-200"][class~="bg-emerald-50"][class~="text-emerald-700"] {
+  background-color: var(--clean-primary-soft-hover);
+  border-color: var(--clean-b-200);
+  color: var(--clean-b-800);
+}
+
+/* -- production: the accent colour is amber in the code; here it is the brand colour -------------------------------------- */
+
+html[data-theme="clean"]:not([data-md-theme]) [data-testid^="production-payroll-"] [data-testid="pcp-cycle-badge"] {
+  background: var(--clean-primary-soft-hover);
+  color: var(--clean-b-800);
+  border-radius: var(--clean-radius-sm);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="pcp-period-bar"] > div:first-child > span:first-child {
+  background: var(--clean-primary-soft-hover);
+  color: hsl(var(--primary));
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-testid="pcp-dash-kpi-employees"], [data-kind="production"] [data-testid="pd-kpi-net"]) {
+  color: var(--clean-b-800);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-kind="production"] [data-testid="pd-kpi-net"] {
+  --tw-ring-color: var(--clean-b-300);
+}
+/* "Weekly", "BiWeekly", "Monthly" on a payslip card or a details header is a label, not a warning */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid^="production-payroll-"] span[data-tone="caution"],
+html[data-theme="clean"]:not([data-md-theme]) [data-kind="production"] span[data-tone="caution"] {
+  background: var(--clean-primary-soft-hover);
+  border-color: var(--clean-b-200);
+  color: var(--clean-b-800);
+}
+/* the department bars of the dashboard (the issue bars stay amber: that is "needs a look") */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="pcp-dash-card-departments"] [class~="bg-amber-500"] {
+  background-color: var(--clean-b-600);
+}
+
+/* the accent left over on a production payroll's details page and cycle page: links, the soft panels, the solid switches */
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-kind="production"], [data-testid^="production-payroll-"])
+  :is(a, button)[class~="text-amber-700"] {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-kind="production"] p[class~="text-amber-700"] {
+  color: var(--clean-b-700);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-kind="production"]
+  :is([data-testid="pd-net-callout"], [data-testid="pd-statutory-headline"]) {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-200);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-kind="production"] [class~="bg-amber-600"][class~="text-white"] {
+  background-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-kind="production"]
+  [class~="bg-amber-600"][class~="text-white"]:hover {
+  background-color: var(--clean-primary-hover);
+}
+/* the roster's "generate again" icon and the Details button's hover */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="pcp-roster-list"]
+  [data-slot="button"][class~="text-amber-700"] {
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="pcp-roster-list"]
+  [data-slot="button"][class~="text-amber-700"]:hover {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid^="production-payroll-"]
+  [data-slot="button"][class*="hover:border-amber-300"]:hover {
+  border-color: var(--clean-n-400);
+  color: var(--clean-n-900);
+}
+
+/* the Generate dialog of a production cycle: the calculation note, its icons and its links are amber in the code */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="pcp-generate-dialog"] [class~="bg-amber-50/60"] {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-200);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="pcp-generate-dialog"] [class~="bg-amber-50/60"] p {
+  color: var(--clean-b-800);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="pcp-generate-dialog"]
+  :is([data-slot="dialog-title"] svg, svg[class~="text-amber-500"], svg[class~="animate-spin"]) {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="pcp-generate-dialog"]
+  :is(a, button)[class~="text-amber-700"] {
+  color: hsl(var(--primary));
+}
+
+/* -- Settlement: the count bubble on the open menu item ------------------------------------------------------------------ */
+
+/* the foundation colours every span in the open menu row with the row's text colour: the red count bubble keeps white text */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  .clay-nav-active
+  span[style*="linear-gradient"] {
+  color: var(--clean-on-primary);
+}
+
+/* -- Settlement: the table has eight columns and the action buttons. The foundation's 12px cell padding (8px in the old look,
+   which already just fits) would push the last column out of the card at 1366px: 4px between the columns, 12px at the card's
+   left edge, 8px at the right ------------------------------------------------------------------------------------------- */
+
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="advances-table"]
+  th[data-slot="table-head"][class~="px-2"]:not([class*="px-3"], [class*="px-4"]),
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="advances-table"]
+  td[data-slot="table-cell"][class~="p-2"]:not([class*="py-"], [class*="px-"], [class*="pt-"], [class*="pb-"]) {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="advances-table"]
+  th[data-slot="table-head"][class~="px-2"]:first-child,
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="advances-table"]
+  td[data-slot="table-cell"][class~="p-2"]:first-child {
+  padding-left: 12px;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="advances-table"]
+  th[data-slot="table-head"][class~="px-2"]:last-child,
+html[data-theme="clean"]:not([data-md-theme])
+  [data-testid="advances-table"]
+  td[data-slot="table-cell"][class~="p-2"]:last-child {
+  padding-right: 8px;
+}

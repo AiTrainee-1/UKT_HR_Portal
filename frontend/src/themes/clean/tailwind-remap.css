@@ -1,0 +1,581 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   While the theme is on, Tailwind's own colour families are replaced by the theme's few ramps, so every utility already in
+   the code (text-blue-700, bg-slate-50, border-gray-200, bg-emerald-100, ring-violet-500 ...) takes the clean palette with
+   no edit to any page, to the dialogs and menus that render outside the page (the attribute is on <html>), or to anything
+   written later. Tailwind builds those utilities from var(--color-<family>-<shade>), which is what is replaced here.
+
+     slate, gray, zinc, neutral, stone          -> neutral (the slate text and border scale)
+     blue, sky, cyan, teal, indigo,
+       violet, purple, fuchsia                  -> brand   (the one blue, worked out from --primary; also "information")
+     green, emerald, lime                       -> success
+     red, rose, pink                            -> danger
+     amber, yellow, orange                      -> warning
+
+   So in this theme green always means good, amber watch, red bad, and every other accent is the brand blue or a grey.
+   The ramps are in tokens.css. Generated once from the table above (shade for shade) and then edited like any CSS.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) {
+  /* slate -> neutral */
+  --color-slate-50: var(--clean-n-50);
+  --color-slate-100: var(--clean-n-100);
+  --color-slate-200: var(--clean-n-200);
+  --color-slate-300: var(--clean-n-300);
+  --color-slate-400: var(--clean-n-400);
+  --color-slate-500: var(--clean-n-500);
+  --color-slate-600: var(--clean-n-600);
+  --color-slate-700: var(--clean-n-700);
+  --color-slate-800: var(--clean-n-800);
+  --color-slate-900: var(--clean-n-900);
+  --color-slate-950: var(--clean-n-950);
+  /* gray -> neutral */
+  --color-gray-50: var(--clean-n-50);
+  --color-gray-100: var(--clean-n-100);
+  --color-gray-200: var(--clean-n-200);
+  --color-gray-300: var(--clean-n-300);
+  --color-gray-400: var(--clean-n-400);
+  --color-gray-500: var(--clean-n-500);
+  --color-gray-600: var(--clean-n-600);
+  --color-gray-700: var(--clean-n-700);
+  --color-gray-800: var(--clean-n-800);
+  --color-gray-900: var(--clean-n-900);
+  --color-gray-950: var(--clean-n-950);
+  /* zinc -> neutral */
+  --color-zinc-50: var(--clean-n-50);
+  --color-zinc-100: var(--clean-n-100);
+  --color-zinc-200: var(--clean-n-200);
+  --color-zinc-300: var(--clean-n-300);
+  --color-zinc-400: var(--clean-n-400);
+  --color-zinc-500: var(--clean-n-500);
+  --color-zinc-600: var(--clean-n-600);
+  --color-zinc-700: var(--clean-n-700);
+  --color-zinc-800: var(--clean-n-800);
+  --color-zinc-900: var(--clean-n-900);
+  --color-zinc-950: var(--clean-n-950);
+  /* neutral -> neutral */
+  --color-neutral-50: var(--clean-n-50);
+  --color-neutral-100: var(--clean-n-100);
+  --color-neutral-200: var(--clean-n-200);
+  --color-neutral-300: var(--clean-n-300);
+  --color-neutral-400: var(--clean-n-400);
+  --color-neutral-500: var(--clean-n-500);
+  --color-neutral-600: var(--clean-n-600);
+  --color-neutral-700: var(--clean-n-700);
+  --color-neutral-800: var(--clean-n-800);
+  --color-neutral-900: var(--clean-n-900);
+  --color-neutral-950: var(--clean-n-950);
+  /* stone -> neutral */
+  --color-stone-50: var(--clean-n-50);
+  --color-stone-100: var(--clean-n-100);
+  --color-stone-200: var(--clean-n-200);
+  --color-stone-300: var(--clean-n-300);
+  --color-stone-400: var(--clean-n-400);
+  --color-stone-500: var(--clean-n-500);
+  --color-stone-600: var(--clean-n-600);
+  --color-stone-700: var(--clean-n-700);
+  --color-stone-800: var(--clean-n-800);
+  --color-stone-900: var(--clean-n-900);
+  --color-stone-950: var(--clean-n-950);
+  /* blue -> brand */
+  --color-blue-50: var(--clean-b-50);
+  --color-blue-100: var(--clean-b-100);
+  --color-blue-200: var(--clean-b-200);
+  --color-blue-300: var(--clean-b-300);
+  --color-blue-400: var(--clean-b-400);
+  --color-blue-500: var(--clean-b-500);
+  --color-blue-600: var(--clean-b-600);
+  --color-blue-700: var(--clean-b-700);
+  --color-blue-800: var(--clean-b-800);
+  --color-blue-900: var(--clean-b-900);
+  --color-blue-950: var(--clean-b-950);
+  /* sky -> brand */
+  --color-sky-50: var(--clean-b-50);
+  --color-sky-100: var(--clean-b-100);
+  --color-sky-200: var(--clean-b-200);
+  --color-sky-300: var(--clean-b-300);
+  --color-sky-400: var(--clean-b-400);
+  --color-sky-500: var(--clean-b-500);
+  --color-sky-600: var(--clean-b-600);
+  --color-sky-700: var(--clean-b-700);
+  --color-sky-800: var(--clean-b-800);
+  --color-sky-900: var(--clean-b-900);
+  --color-sky-950: var(--clean-b-950);
+  /* cyan -> brand */
+  --color-cyan-50: var(--clean-b-50);
+  --color-cyan-100: var(--clean-b-100);
+  --color-cyan-200: var(--clean-b-200);
+  --color-cyan-300: var(--clean-b-300);
+  --color-cyan-400: var(--clean-b-400);
+  --color-cyan-500: var(--clean-b-500);
+  --color-cyan-600: var(--clean-b-600);
+  --color-cyan-700: var(--clean-b-700);
+  --color-cyan-800: var(--clean-b-800);
+  --color-cyan-900: var(--clean-b-900);
+  --color-cyan-950: var(--clean-b-950);
+  /* teal -> brand */
+  --color-teal-50: var(--clean-b-50);
+  --color-teal-100: var(--clean-b-100);
+  --color-teal-200: var(--clean-b-200);
+  --color-teal-300: var(--clean-b-300);
+  --color-teal-400: var(--clean-b-400);
+  --color-teal-500: var(--clean-b-500);
+  --color-teal-600: var(--clean-b-600);
+  --color-teal-700: var(--clean-b-700);
+  --color-teal-800: var(--clean-b-800);
+  --color-teal-900: var(--clean-b-900);
+  --color-teal-950: var(--clean-b-950);
+  /* indigo -> brand */
+  --color-indigo-50: var(--clean-b-50);
+  --color-indigo-100: var(--clean-b-100);
+  --color-indigo-200: var(--clean-b-200);
+  --color-indigo-300: var(--clean-b-300);
+  --color-indigo-400: var(--clean-b-400);
+  --color-indigo-500: var(--clean-b-500);
+  --color-indigo-600: var(--clean-b-600);
+  --color-indigo-700: var(--clean-b-700);
+  --color-indigo-800: var(--clean-b-800);
+  --color-indigo-900: var(--clean-b-900);
+  --color-indigo-950: var(--clean-b-950);
+  /* violet -> brand */
+  --color-violet-50: var(--clean-b-50);
+  --color-violet-100: var(--clean-b-100);
+  --color-violet-200: var(--clean-b-200);
+  --color-violet-300: var(--clean-b-300);
+  --color-violet-400: var(--clean-b-400);
+  --color-violet-500: var(--clean-b-500);
+  --color-violet-600: var(--clean-b-600);
+  --color-violet-700: var(--clean-b-700);
+  --color-violet-800: var(--clean-b-800);
+  --color-violet-900: var(--clean-b-900);
+  --color-violet-950: var(--clean-b-950);
+  /* purple -> brand */
+  --color-purple-50: var(--clean-b-50);
+  --color-purple-100: var(--clean-b-100);
+  --color-purple-200: var(--clean-b-200);
+  --color-purple-300: var(--clean-b-300);
+  --color-purple-400: var(--clean-b-400);
+  --color-purple-500: var(--clean-b-500);
+  --color-purple-600: var(--clean-b-600);
+  --color-purple-700: var(--clean-b-700);
+  --color-purple-800: var(--clean-b-800);
+  --color-purple-900: var(--clean-b-900);
+  --color-purple-950: var(--clean-b-950);
+  /* fuchsia -> brand */
+  --color-fuchsia-50: var(--clean-b-50);
+  --color-fuchsia-100: var(--clean-b-100);
+  --color-fuchsia-200: var(--clean-b-200);
+  --color-fuchsia-300: var(--clean-b-300);
+  --color-fuchsia-400: var(--clean-b-400);
+  --color-fuchsia-500: var(--clean-b-500);
+  --color-fuchsia-600: var(--clean-b-600);
+  --color-fuchsia-700: var(--clean-b-700);
+  --color-fuchsia-800: var(--clean-b-800);
+  --color-fuchsia-900: var(--clean-b-900);
+  --color-fuchsia-950: var(--clean-b-950);
+  /* green -> success */
+  --color-green-50: var(--clean-s-50);
+  --color-green-100: var(--clean-s-100);
+  --color-green-200: var(--clean-s-200);
+  --color-green-300: var(--clean-s-300);
+  --color-green-400: var(--clean-s-400);
+  --color-green-500: var(--clean-s-500);
+  --color-green-600: var(--clean-s-600);
+  --color-green-700: var(--clean-s-700);
+  --color-green-800: var(--clean-s-800);
+  --color-green-900: var(--clean-s-900);
+  --color-green-950: var(--clean-s-950);
+  /* emerald -> success */
+  --color-emerald-50: var(--clean-s-50);
+  --color-emerald-100: var(--clean-s-100);
+  --color-emerald-200: var(--clean-s-200);
+  --color-emerald-300: var(--clean-s-300);
+  --color-emerald-400: var(--clean-s-400);
+  --color-emerald-500: var(--clean-s-500);
+  --color-emerald-600: var(--clean-s-600);
+  --color-emerald-700: var(--clean-s-700);
+  --color-emerald-800: var(--clean-s-800);
+  --color-emerald-900: var(--clean-s-900);
+  --color-emerald-950: var(--clean-s-950);
+  /* lime -> success */
+  --color-lime-50: var(--clean-s-50);
+  --color-lime-100: var(--clean-s-100);
+  --color-lime-200: var(--clean-s-200);
+  --color-lime-300: var(--clean-s-300);
+  --color-lime-400: var(--clean-s-400);
+  --color-lime-500: var(--clean-s-500);
+  --color-lime-600: var(--clean-s-600);
+  --color-lime-700: var(--clean-s-700);
+  --color-lime-800: var(--clean-s-800);
+  --color-lime-900: var(--clean-s-900);
+  --color-lime-950: var(--clean-s-950);
+  /* red -> danger */
+  --color-red-50: var(--clean-d-50);
+  --color-red-100: var(--clean-d-100);
+  --color-red-200: var(--clean-d-200);
+  --color-red-300: var(--clean-d-300);
+  --color-red-400: var(--clean-d-400);
+  --color-red-500: var(--clean-d-500);
+  --color-red-600: var(--clean-d-600);
+  --color-red-700: var(--clean-d-700);
+  --color-red-800: var(--clean-d-800);
+  --color-red-900: var(--clean-d-900);
+  --color-red-950: var(--clean-d-950);
+  /* rose -> danger */
+  --color-rose-50: var(--clean-d-50);
+  --color-rose-100: var(--clean-d-100);
+  --color-rose-200: var(--clean-d-200);
+  --color-rose-300: var(--clean-d-300);
+  --color-rose-400: var(--clean-d-400);
+  --color-rose-500: var(--clean-d-500);
+  --color-rose-600: var(--clean-d-600);
+  --color-rose-700: var(--clean-d-700);
+  --color-rose-800: var(--clean-d-800);
+  --color-rose-900: var(--clean-d-900);
+  --color-rose-950: var(--clean-d-950);
+  /* pink -> danger */
+  --color-pink-50: var(--clean-d-50);
+  --color-pink-100: var(--clean-d-100);
+  --color-pink-200: var(--clean-d-200);
+  --color-pink-300: var(--clean-d-300);
+  --color-pink-400: var(--clean-d-400);
+  --color-pink-500: var(--clean-d-500);
+  --color-pink-600: var(--clean-d-600);
+  --color-pink-700: var(--clean-d-700);
+  --color-pink-800: var(--clean-d-800);
+  --color-pink-900: var(--clean-d-900);
+  --color-pink-950: var(--clean-d-950);
+  /* amber -> warning */
+  --color-amber-50: var(--clean-w-50);
+  --color-amber-100: var(--clean-w-100);
+  --color-amber-200: var(--clean-w-200);
+  --color-amber-300: var(--clean-w-300);
+  --color-amber-400: var(--clean-w-400);
+  --color-amber-500: var(--clean-w-500);
+  --color-amber-600: var(--clean-w-600);
+  --color-amber-700: var(--clean-w-700);
+  --color-amber-800: var(--clean-w-800);
+  --color-amber-900: var(--clean-w-900);
+  --color-amber-950: var(--clean-w-950);
+  /* yellow -> warning */
+  --color-yellow-50: var(--clean-w-50);
+  --color-yellow-100: var(--clean-w-100);
+  --color-yellow-200: var(--clean-w-200);
+  --color-yellow-300: var(--clean-w-300);
+  --color-yellow-400: var(--clean-w-400);
+  --color-yellow-500: var(--clean-w-500);
+  --color-yellow-600: var(--clean-w-600);
+  --color-yellow-700: var(--clean-w-700);
+  --color-yellow-800: var(--clean-w-800);
+  --color-yellow-900: var(--clean-w-900);
+  --color-yellow-950: var(--clean-w-950);
+  /* orange -> warning */
+  --color-orange-50: var(--clean-w-50);
+  --color-orange-100: var(--clean-w-100);
+  --color-orange-200: var(--clean-w-200);
+  --color-orange-300: var(--clean-w-300);
+  --color-orange-400: var(--clean-w-400);
+  --color-orange-500: var(--clean-w-500);
+  --color-orange-600: var(--clean-w-600);
+  --color-orange-700: var(--clean-w-700);
+  --color-orange-800: var(--clean-w-800);
+  --color-orange-900: var(--clean-w-900);
+  --color-orange-950: var(--clean-w-950);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Decorative utilities, neutralised. The pages draw soft shadows, frosted blur, gradients, glow rings, lifting hovers
+   and pulsing halos with Tailwind classes; the components are not edited, so the look is changed here, by what the
+   classes compute to. Tailwind's utilities are layered and these rules are not, so a rule here beats any utility whatever
+   its specificity.
+
+     shadow-*            every drop shadow is made transparent through the variable Tailwind builds it from
+     backdrop-blur-*     none
+     bg-gradient-to-*    a solid colour: the gradient's first colour (bg-gradient-to-r from-blue-500 ... -> blue-500)
+     rounded-xl          8px (rounded-lg is 6px, rounded-2xl and 3xl 8px through the variables in tokens.css)
+     hover lifts         translate and scale on hover are off
+     animate-ping        the pulsing halo behind a count is off (animate-pulse and the spinners stay: they say "loading")
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]),
+html[data-theme="clean"]:not([data-md-theme]) *,
+html[data-theme="clean"]:not([data-md-theme]) *::before,
+html[data-theme="clean"]:not([data-md-theme]) *::after {
+  --tw-shadow-color: transparent;
+  --tw-drop-shadow-color: transparent;
+}
+
+html[data-theme="clean"]:not([data-md-theme]) [class*="backdrop-blur"],
+html[data-theme="clean"]:not([data-md-theme]) [class*="backdrop-saturate"] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html[data-theme="clean"]:not([data-md-theme])
+  :is([class*="bg-gradient-to-"], [class*="bg-linear-"]):not([class*="bg-clip-text"]) {
+  background-image: none;
+  background-color: var(--tw-gradient-from);
+}
+
+/* gradient text (a heading painted with a gradient) is one plain colour */
+html[data-theme="clean"]:not([data-md-theme]) [class*="bg-clip-text"],
+html[data-theme="clean"]:not([data-md-theme]) .text-ukt-gradient {
+  background-image: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  -webkit-text-fill-color: currentColor;
+  color: hsl(var(--primary));
+}
+
+html[data-theme="clean"]:not([data-md-theme]) .rounded-xl {
+  border-radius: var(--clean-radius-lg);
+}
+
+html[data-theme="clean"]:not([data-md-theme])
+  :is([class*="hover:-translate-y"], [class*="hover:translate-x"], [class*="hover:-translate-x"]):hover {
+  translate: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) [class*="hover:scale-"]:hover,
+html[data-theme="clean"]:not([data-md-theme]) [class*="active:scale-"]:active {
+  scale: none;
+}
+
+html[data-theme="clean"]:not([data-md-theme]) [class*="animate-ping"] {
+  display: none;
+}
+
+/* a decorative blurred blob (an absolutely placed, blurred coloured disc) is not drawn */
+html[data-theme="clean"]:not([data-md-theme])
+  :is([class~="blur-3xl"], [class~="blur-2xl"], [class~="blur-xl"]):not([class~="relative"]) {
+  display: none;
+}
+
+/* ── the brand blue the code writes as a hex ──────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#006496]"], [class~="text-[#004f78]"]) {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/80"] {
+  color: color-mix(in srgb, hsl(var(--primary)) 80%, transparent);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/70"] {
+  color: color-mix(in srgb, hsl(var(--primary)) 70%, transparent);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/60"],
+html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/55"] {
+  color: var(--clean-n-500);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([class~="text-[#006496]/50"], [class~="text-[#006496]/40"], [class~="text-[#006496]/30"]) {
+  color: var(--clean-n-400);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#006496]/25"], [class~="text-[#006496]/20"]) {
+  color: var(--clean-n-400);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([class~="text-[#1a3a4a]"], [class~="text-[#1e4d6b]"], [class~="text-[#0d2a38]"]) {
+  color: var(--clean-n-800);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]"] {
+  background-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/10"],
+html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/[0.08]"],
+html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/5"],
+html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/05"] {
+  background-color: color-mix(in srgb, hsl(var(--primary)) 8%, transparent);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/25"] {
+  background-color: var(--clean-n-300);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="bg-[#f0f4f8]"], [class~="bg-[#eff6fb]"]) {
+  background-color: var(--clean-n-100);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([class~="border-[#006496]"], [class~="border-[#006496]/30"], [class~="border-[#006496]/20"]) {
+  border-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="border-[#006496]/15"], [class~="border-[#006496]/06"]) {
+  border-color: var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="ring-[#006496]"], [class~="ring-[#006496]/40"]) {
+  --tw-ring-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="from-[#006496]"], [class~="to-[#0080bf]"]) {
+  background-color: hsl(var(--primary));
+}
+
+/* the hover and focus forms of the same hex colours */
+html[data-theme="clean"]:not([data-md-theme]) :is([class*="hover:text-[#006496]"]):hover {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([class*="hover:bg-[#006496]"]):hover {
+  background-color: var(--clean-hover);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class*="hover:text-[#c0392b]"]:hover {
+  color: hsl(var(--destructive));
+}
+html[data-theme="clean"]:not([data-md-theme]) [class*="hover:bg-[#c0392b]"]:hover {
+  background-color: color-mix(in srgb, hsl(var(--destructive)) 8%, transparent);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#c0392b]"] {
+  color: hsl(var(--destructive));
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#c0392b]"] {
+  background-color: hsl(var(--destructive));
+}
+
+/* the amber / gold the code writes as a hex is the status colour for "watch" */
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#7a5410]"], [class~="text-[#8a5d00]"]) {
+  color: var(--clean-w-800);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([class~="bg-[#fffaf0]"], [class~="bg-[#fff1cc]"], [class~="bg-[#fbf3dc]"]) {
+  background-color: var(--clean-w-50);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([class~="border-[#e0a83a]/60"], [class~="border-[#e0a83a]/50"], [class~="border-[#e0a83a]/40"]) {
+  border-color: var(--clean-w-300);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#e0a83a]"], [class~="bg-[#e0a83a]"]) {
+  color: var(--clean-w-600);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#e0a83a]"] {
+  background-color: var(--clean-w-500);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Inline styles and SVG attributes. Some pages (the dashboard, the sidebar, the recruitment pages) paint with inline
+   styles in the old UKT blue (#006496 and the blue-grey text colours around it) and with soft clay shadows. An inline
+   style beats any rule without !important, so these rules carry it ("inline style"). Chrome writes a colour into the
+   style attribute as rgb(...) / rgba(...), which is what the selectors match.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* a soft clay shadow or an inset one, set inline: a flat page has none (a floating layer's own shadow is kept) */
+html[data-theme="clean"]:not([data-md-theme])
+  [style*="box-shadow"]:not(
+    [data-slot="popover-panel"],
+    [data-slot="dropdown-content"],
+    [data-slot="select-content"],
+    [data-slot="dialog-content"],
+    [data-slot="alert-dialog-content"],
+    [data-slot="toast"]
+  ) {
+  box-shadow: none !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([style*="backdrop-filter"], [style*="-webkit-backdrop-filter"]) {
+  -webkit-backdrop-filter: none !important; /* inline style */
+  backdrop-filter: none !important; /* inline style */
+}
+
+/* the blue-teal gradient of a banner: the primary colour */
+html[data-theme="clean"]:not([data-md-theme])
+  [style*="linear-gradient"]:is([style*="rgb(0, 100, 150)"], [style*="rgb(0, 150, 199)"], [style*="rgb(0, 128, 191)"]) {
+  background: hsl(var(--primary)) !important; /* inline style */
+}
+/* an amber gradient (a count bubble) is the warning colour, flat */
+html[data-theme="clean"]:not([data-md-theme])
+  [style*="linear-gradient"]:is([style*="rgb(245, 158, 11)"], [style*="rgb(217, 119, 6)"]) {
+  background: var(--clean-w-600) !important; /* inline style */
+}
+
+/* text in the UKT blue family */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [style*="color: rgb(0, 100, 150)"],
+    [style*="color: rgb(0, 150, 199)"],
+    [style*="color: rgb(0, 128, 191)"],
+    [style*="color: rgb(0, 79, 120)"]
+  ) {
+  color: hsl(var(--primary)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([style*="color: rgb(26, 58, 74)"], [style*="color: rgb(13, 42, 56)"], [style*="color: rgb(30, 77, 107)"]) {
+  color: var(--clean-n-800) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([style*="color: rgb(30, 90, 122)"], [style*="color: rgba(0, 80, 120"]) {
+  color: var(--clean-n-600) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([style*="color: rgba(0, 60, 100"], [style*="color: rgba(0, 100, 150"]) {
+  color: var(--clean-n-500) !important; /* inline style */
+}
+/* lines and washes in the same tint */
+html[data-theme="clean"]:not([data-md-theme]) [style*="solid rgba(0, 100, 150"],
+html[data-theme="clean"]:not([data-md-theme]) [style*="solid rgba(0, 60, 100"] {
+  border-color: var(--clean-line) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([style*="border-color: rgba(0, 100, 150"], [style*="border-color: rgba(0, 60, 100"]) {
+  border-color: var(--clean-line) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [style*="background: rgba(0, 100, 150"],
+    [style*="background: rgba(0, 60, 100"],
+    [style*="background: rgb(240, 244, 248)"],
+    [style*="background: rgb(246, 250, 254)"]
+  ) {
+  background: var(--clean-n-100) !important; /* inline style */
+}
+
+/* chart series in the UKT blues become the brand ramp; the status colours become the status ramps */
+html[data-theme="clean"]:not([data-md-theme]) :is([fill="#006496"], [fill="#023e8a"]) {
+  fill: var(--clean-b-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([fill="#0080bf"], [fill="#0096c7"], [fill="#4FB8F0"], [fill="#4fb8f0"]) {
+  fill: var(--clean-b-400);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([fill="#00b4d8"], [fill="#48cae4"], [fill="#90e0ef"]) {
+  fill: var(--clean-b-300);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([stroke="#006496"], [stroke="#023e8a"]) {
+  stroke: var(--clean-b-600);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([fill="#22c55e"], [fill="#10b981"], [fill="#059669"]) {
+  fill: var(--clean-s-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([stroke="#22c55e"], [stroke="#10b981"], [stroke="#059669"]) {
+  stroke: var(--clean-s-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([fill="#ef4444"], [fill="#dc2626"]) {
+  fill: var(--clean-d-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([stroke="#ef4444"], [stroke="#dc2626"]) {
+  stroke: var(--clean-d-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([fill="#f59e0b"], [fill="#d97706"]) {
+  fill: var(--clean-w-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([stroke="#f59e0b"], [stroke="#d97706"]) {
+  stroke: var(--clean-w-500);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([fill="#a855f7"], [fill="#7c3aed"], [fill="#4f46e5"], [fill="#0284c7"]) {
+  fill: var(--clean-b-500);
+}
+
+/* ── the accent used as a brand colour ────────────────────────────────────────────────────────────────────────────────
+   In the app's own themes --accent is a strong colour (UKT blue, orange, gold) and a few pages use it as one: text-accent
+   on a sign-in link or a heading, border-accent on a selected card, bg-accent/10 behind an icon. In this theme the accent
+   is a pale tint for hovered and selected rows, so those uses would vanish: they read the primary colour instead. ── */
+
+html[data-theme="clean"]:not([data-md-theme]) [class~="text-accent"] {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="border-accent"] {
+  border-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="border-accent/30"] {
+  border-color: color-mix(in srgb, hsl(var(--primary)) 30%, transparent);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="hover:border-accent/50"]:hover {
+  border-color: color-mix(in srgb, hsl(var(--primary)) 50%, transparent);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([class~="bg-accent/5"], [class~="bg-accent/10"]) {
+  background-color: color-mix(in srgb, hsl(var(--primary)) 7%, transparent);
+}
+html[data-theme="clean"]:not([data-md-theme]) [class~="hover:bg-accent/5"]:hover {
+  background-color: color-mix(in srgb, hsl(var(--primary)) 7%, transparent);
+}

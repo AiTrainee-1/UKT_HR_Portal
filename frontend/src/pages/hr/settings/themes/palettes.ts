@@ -1,8 +1,8 @@
 import { CUSTOMIZABLE_TOKENS, hslTripleToHex, type ThemeId } from "@/lib/themes";
 import { contrastRatio, READABLE_RATIO } from "../identity/colours";
 
-// The colours each theme really uses, copied from src/index.css (themes.test.ts reads that file and fails if they
-// drift apart), so the theme cards, the drawings and the readability checks show the true palette.
+// The colours each theme really uses, copied from src/index.css (and, for Clean Professional, from
+// src/themes/clean/tokens.css; themes.test.ts reads both files and fails if they drift apart), so the theme cards, the drawings and the readability checks show the true palette.
 
 export type PaletteToken =
   | "--background"
@@ -102,6 +102,21 @@ export const PALETTES: Record<ThemeId, Record<PaletteToken, string>> = {
     "--sidebar-foreground": "215 25% 27%",
     "--muted-foreground": "215 16% 47%",
     "--border": "214 32% 91%",
+  },
+  // Clean Professional: its values live in src/themes/clean/tokens.css (themes.test.ts reads that file for it).
+  clean: {
+    "--background": "216 29.4% 96.7%",
+    "--foreground": "215 27.9% 16.9%",
+    "--card": "0 0% 100%",
+    "--card-foreground": "215 27.9% 16.9%",
+    "--primary": "217.2 72.1% 40.8%",
+    "--primary-foreground": "0 0% 100%",
+    "--accent": "214.7 70.4% 94.7%",
+    "--accent-foreground": "218.4 70.7% 30.8%",
+    "--sidebar": "0 0% 100%",
+    "--sidebar-foreground": "215 25% 27%",
+    "--muted-foreground": "213.3 12.4% 42.5%",
+    "--border": "213.3 16.4% 89.2%",
   },
 };
 

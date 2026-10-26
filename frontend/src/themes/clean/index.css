@@ -1,0 +1,32 @@
+/* Clean Professional - the theme chosen in Settings -> Themes (id "clean", src/lib/themes.ts). Imported once, last, from
+   src/index.css. Everything here is scoped to html[data-theme="clean"]:not([data-md-theme]): it only applies when the theme
+   is on, and never inside the Managing Director's portal (which keeps its own skin in every theme). clean-theme.test.ts
+   fails when a rule is not scoped like that, when a colour is written anywhere but tokens.css, or when !important is
+   used outside the places listed there. The default theme and every other theme are untouched.
+
+     tokens.css          the palette, radii, elevation and type (the only file with colour values)
+     tailwind-remap.css  Tailwind's colour families -> the theme's ramps; shadows, blur, gradients, lifts switched off
+     base.css            page, type, focus ring, scrollbars, motion
+     primitives.css      buttons, cards, tabs, switches, tick boxes, progress, skeletons, loaders, the clay-* classes
+     forms.css           inputs, selects, textareas, date and file fields
+     tables.css          the shadcn Table, hand-written tables, pagination
+     overlays.css        dialogs, sheets, menus, popovers, tooltips, toasts
+     badges.css          badges and chips
+     layout.css          HrLayout, the left menu, the mobile top bar, the page title row
+     areas/              one file per area of the application that needs more than the above (added by the area sweeps)
+
+   See docs/frontend.md, "Clean Professional theme". */
+@import "./tokens.css";
+@import "./tailwind-remap.css";
+@import "./base.css";
+@import "./primitives.css";
+@import "./forms.css";
+@import "./tables.css";
+@import "./overlays.css";
+@import "./badges.css";
+@import "./layout.css";
+@import "./areas/shell-dashboard.css";
+@import "./areas/attendance.css";
+@import "./areas/payroll.css";
+@import "./areas/settings-reports.css";
+@import "./areas/controls-auth.css";

@@ -1,0 +1,343 @@
+/* Clean Professional - area: attendance. Every selector is scoped html[data-theme="clean"]:not([data-md-theme]) (see ../index.css).
+
+   Pages: Staff / Production Attendance, Attendance Search, Punch View, Report Log (Monthly, Daily Leave, Daily Late), Geo
+   Attendance, Missing Punch, Leave & Holiday, Casual Leave, Requests, Manage Shifts, Compensation, Outpass / Visitors / Tea
+   Break. The foundation already makes their cards, tables, fields, dialogs and status chips flat; what is here is what only
+   these pages draw: tab strips that are too long for a phone, hand-made toggle chips and segmented groups, the file-type
+   coloured download buttons, small grey texts that are a shade too pale, the stat tiles' pressed state.
+
+   Colours are the theme's tokens only. Status colours keep their meaning: green = good / present, amber = watch / late,
+   red = bad / absent, blue = information / leave. */
+
+/* ── tab strips ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* The foundation lets the strip scroll inside its own box; its tabs must not shrink to fit, or their labels run into each
+   other (the Requests hub has eleven, Leave & Holiday six, Report Log three). */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="pill-tab"] {
+  flex: none;
+}
+/* the "(12)" after a tab's name: the page fades it with opacity, which is 3.6:1 on white; here it is a solid grey */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="pill-tab"] span[class*="opacity-"] {
+  opacity: 1;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="pill-tab"] .ptab-label > span[class*="opacity-"] {
+  color: var(--clean-n-500);
+}
+
+/* ── small grey texts ───────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* "Updated 6:15 pm", the "(demo)" hints, the date under a name: text-gray-400 is 4.3:1 on the page colour, 4.7:1 on a card;
+   one shade darker reads on both. text-gray-300 is a placeholder dash ("-" for no value) or a decorative icon. */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(
+    [class~="text-gray-400"],
+    [class~="text-slate-400"],
+    [class~="text-zinc-400"],
+    [class~="text-neutral-400"],
+    [class~="text-stone-400"]
+  ) {
+  color: var(--clean-n-500);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(
+    [class~="text-gray-300"],
+    [class~="text-slate-300"],
+    [class~="text-zinc-300"],
+    [class~="text-neutral-300"],
+    [class~="text-stone-300"]
+  ) {
+  color: var(--clean-n-400);
+}
+
+/* ── toggle chips and segmented groups drawn by hand in the pages ───────────────────────────────────────────────────── */
+
+/* a button that is on or off (aria-pressed) and was drawn as a pill: the theme's corner */
+html[data-theme="clean"]:not([data-md-theme]) button[aria-pressed][class~="rounded-full"]:not([data-slot]) {
+  border-radius: var(--clean-radius);
+}
+/* The chosen one of those chips ("Today", "Issues only"): the page paints it near-black. controls-auth.css turns a dark chip
+   into a solid brand block and shell-dashboard.css gives every pressed button brand-coloured writing, which together is brand
+   on brand (unreadable); the chosen chip is the soft brand colour with the brand line, as on the other pages. */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[aria-pressed="true"][class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]:not([data-slot]):is(
+    [class~="bg-gray-900"],
+    [class~="bg-slate-900"],
+    [class~="bg-slate-800"],
+    [class~="bg-zinc-900"]
+  ) {
+  background-color: var(--clean-primary-soft);
+  border-color: var(--clean-b-300);
+  color: hsl(var(--primary));
+}
+
+/* a group of chips in one grey capsule (Staff / Production / All): a flat segmented control, the chosen segment a white tab
+   with a line round it (drawn as an outline, so the segments keep their size) */
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"]):is([class~="bg-gray-100"], [class~="bg-slate-100"])[class~="p-0.5"] {
+  border-radius: var(--clean-radius);
+  background-color: var(--clean-n-100);
+  border: 1px solid var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"])[class~="p-0.5"]
+  > button[aria-pressed] {
+  border-radius: var(--clean-radius-sm);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"])[class~="p-0.5"]
+  > button[aria-pressed="false"] {
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"])[class~="p-0.5"]
+  > button[aria-pressed="false"]:hover {
+  color: var(--clean-n-900);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"])[class~="p-0.5"]
+  > button[aria-pressed="true"] {
+  background-color: var(--clean-surface);
+  border-color: transparent;
+  color: hsl(var(--primary));
+  outline: 1px solid var(--clean-line-mid);
+  outline-offset: -1px;
+}
+
+/* ── downloads (Report Log) ─────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* Excel green, PDF red and Image blue say what the file is, not what is wrong with it; here they are the plain secondary
+   button, and only the icon says which file it is */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="export-bar"] [data-slot="button"] {
+  background-color: var(--clean-surface);
+  border-color: var(--clean-line-mid);
+  color: var(--clean-n-800);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="export-bar"] [data-slot="button"]:hover:not(:disabled) {
+  background-color: var(--clean-n-100);
+  border-color: var(--clean-n-400);
+  color: var(--clean-n-900);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="export-bar"] [data-slot="button"]:disabled {
+  background-color: var(--clean-disabled-bg);
+  border-color: var(--clean-n-200);
+  color: var(--clean-disabled-ink);
+}
+
+/* ── stat tiles ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* a tile that jumps to a list (Leave & Holiday, Requests, Report Log) is "pressed" while its list is shown: the brand border
+   and the faint brand wash, not a heavy ring (the shell sweep draws the tile itself as a white card) */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  button[aria-pressed="true"][class*="rounded-2xl"][class*="items-start"]:has(> [class~="bg-white/60"]) {
+  border-color: hsl(var(--primary));
+  background-color: var(--clean-primary-soft);
+  box-shadow: none;
+}
+
+/* the three counters on the gate pages (Outpass, Visitors, Tea Break) are sky, violet and amber squares: one is the brand
+   colour like the others, amber is a warning and these are not */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  div[class~="grid"][class~="grid-cols-3"]
+  > [data-slot="card"]
+  div[class~="p-1.5"][class~="rounded-lg"]:is([class~="bg-amber-500"], [class~="bg-violet-500"], [class~="bg-sky-500"]) {
+  background-color: hsl(var(--primary));
+}
+
+/* ── text and fills that are a shade too light for AA ───────────────────────────────────────────────────────────────── */
+
+/* text-red-500 on a white or a tinted card is 4.0 to 4.3:1 (the Sunday numbers in the calendars, the small counts); the 600 of
+   the same ramp is 5.5:1. The same for the other ramps' 500, which the pages use for small figures and "(3)" counts. */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is([class~="text-red-500"], [class~="text-rose-500"], [class~="text-pink-500"]) {
+  color: var(--clean-d-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is([class~="text-green-500"], [class~="text-emerald-500"], [class~="text-lime-500"]) {
+  color: var(--clean-s-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is([class~="text-amber-500"], [class~="text-yellow-500"], [class~="text-orange-500"]) {
+  color: var(--clean-w-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(
+    [class~="text-blue-500"],
+    [class~="text-indigo-500"],
+    [class~="text-sky-500"],
+    [class~="text-cyan-500"],
+    [class~="text-teal-500"],
+    [class~="text-violet-500"],
+    [class~="text-purple-500"],
+    [class~="text-fuchsia-500"]
+  ) {
+  color: var(--clean-b-600);
+}
+
+/* white writing on a 500 fill (a count badge, a day cell): amber and green at 500 are 2.7:1 and 3.7:1 with white, at 600
+   5.1:1 and 5.3:1 */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is([class~="bg-amber-500"], [class~="bg-yellow-500"], [class~="bg-orange-500"])[class~="text-white"] {
+  background-color: var(--clean-w-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is([class~="bg-green-500"], [class~="bg-emerald-500"], [class~="bg-lime-500"])[class~="text-white"] {
+  background-color: var(--clean-s-600);
+}
+
+/* a card the page fades (opacity-70: a holiday that is past) is a quiet grey card instead: its text keeps its full colour (a
+   grey text at 0.7 is 3:1) and the card says "past" by its wash */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is([data-slot="card"], .clay-card)[class~="opacity-70"] {
+  opacity: 1;
+  background-color: var(--clean-n-50);
+}
+/* small texts the page fades with an opacity or a /70 alpha (the sync chip's "last punch", a time under a name) */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  span[class~="text-[10px]"][class~="opacity-70"] {
+  opacity: 1;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is([class~="text-muted-foreground/70"], [class~="text-muted-foreground/60"], [class~="text-muted-foreground/50"]) {
+  color: var(--clean-n-500);
+}
+
+/* the initials and shift squares the page paints with a gradient (the foundation makes them flat in the gradient's first colour,
+   amber-400 and emerald-400, which have 2.1:1 and 3.0:1 with the white icon): the 600 of the same ramp */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  [class*="bg-gradient-to-"]:is([class~="from-amber-400"], [class~="from-yellow-400"], [class~="from-orange-400"]) {
+  background-color: var(--clean-w-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  [class*="bg-gradient-to-"]:is([class~="from-emerald-400"], [class~="from-green-400"], [class~="from-lime-400"]) {
+  background-color: var(--clean-s-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  [class*="bg-gradient-to-"]:is(
+    [class~="from-blue-400"],
+    [class~="from-sky-400"],
+    [class~="from-indigo-400"],
+    [class~="from-cyan-400"],
+    [class~="from-teal-400"],
+    [class~="from-violet-400"],
+    [class~="from-purple-400"]
+  ) {
+  background-color: var(--clean-b-600);
+}
+
+/* the box that opens over a cell of the attendance grid (Report Log, Monthly Report): a floating layer, so it has the light
+   shadow; the page draws it with shadow-xl, which the theme switches off */
+html[data-theme="clean"]:not([data-md-theme]) .att-tooltip-content {
+  box-shadow: var(--clean-shadow-float);
+}
+
+/* ── the sheets behind the PDF and the picture ─────────────────────────────────────────────────────────────────────────── */
+
+/* Report Log draws each list once more, off screen (left: -99999px), and the PDF, the picture and the Excel file are taken from
+   that copy: it is a document, not a part of the page, and it must come out the same whichever theme is on. Its cells ask for
+   no font size of their own, so they would take the page's 14px and its tabular figures; they take the 16px they always had. */
+html[data-theme="clean"]:not([data-md-theme]) div[aria-hidden="true"][style*="-99999px"] {
+  font-size: 16px;
+  line-height: 1.5;
+  text-rendering: auto;
+}
+html[data-theme="clean"]:not([data-md-theme]) div[aria-hidden="true"][style*="-99999px"] :is(td, th) {
+  font-variant-numeric: normal;
+}
+
+/* ── Daily Late Report ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the three steps of "late by": 1-10 minutes pale amber, 11-30 stronger amber, 31 and over red. The page gives the two amber
+   steps orange-200 and amber-100, which are one ramp here and only a shade apart; the middle one is a step deeper. */
+html[data-theme="clean"]:not([data-md-theme]) [data-severity="mid"],
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="severity-legend"] > span:nth-child(3) {
+  background-color: var(--clean-w-300);
+  border-color: var(--clean-w-400);
+  color: var(--clean-w-900);
+}
+/* the unit rows of the table (HO, U-1 ...): an indigo wash with indigo writing, set inline; here the brand's own wash */
+html[data-theme="clean"]:not([data-md-theme]) tr[data-testid^="late-group-"]:not([data-testid^="late-group-select"]) {
+  background: var(--clean-primary-soft-hover) !important; /* inline style */
+  border-color: var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme]) tr[data-testid^="late-group-"] > td[style*="color"] {
+  color: var(--clean-b-800) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) tr[data-testid^="late-group-"] > td span[class*="opacity-"] {
+  opacity: 1;
+}
+
+/* ── lists ──────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the page numbers of a list wrap instead of running off the screen (Tea Break has twelve, Geo Attendance's tracking list
+   twenty-three) */
+html[data-theme="clean"]:not([data-md-theme]) nav[data-slot="pagination"] > ul {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ── phones ─────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* a chart box with a fixed height and "aspect-video" takes its width from that height (370px for h-52), and a phone's card
+   has 324px inside it: the box may not be wider than the card */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] [class~="aspect-video"] {
+  max-width: 100%;
+}
+/* the year box above a chart is 64px wide with 12px of padding each side: its four digits and spin arrows need less padding */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  input[type="number"]:is([class~="w-16"], [class~="w-14"], [class~="w-20"]) {
+  padding-left: 8px;
+  padding-right: 4px;
+}
+
+@media (max-width: 1023px) {
+  /* a row of two cards that is "grid lg:grid-cols-2" has ONE automatic column below lg, and a column that size itself by its
+     content lets a chart push the card past the screen (Staff / Production Attendance, the two trend charts): it gets one
+     column that may shrink to the screen */
+  html[data-theme="clean"]:not([data-md-theme])
+    [data-ui-shell="main"]
+    div[class~="grid"][class~="lg:grid-cols-2"]:not([class*=" grid-cols-"], [class^="grid-cols-"]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 767px) {
+  /* Employee Attendance Search: the code box, Search, the month and the year are one row that cannot wrap, and are 506px wide */
+  html[data-theme="clean"]:not([data-md-theme])
+    [data-ui-shell="main"]
+    div[class~="flex"][class~="items-center"]:has(> select + input[type="number"]) {
+    flex-wrap: wrap;
+  }
+
+  /* Staff / Production Attendance: the title block cannot shrink (it is shrink-0), so on a phone the six buttons and the date
+     field were squeezed into the sliver beside it and ran off the right edge. They go under the title instead. */
+  html[data-theme="clean"]:not([data-md-theme])
+    [data-ui-shell="main"]
+    div[class~="items-start"][class~="justify-between"]:has(
+      > div[class~="shrink-0"] + div[class~="flex-wrap"][class~="justify-end"]
+    ) {
+    flex-wrap: wrap;
+  }
+}

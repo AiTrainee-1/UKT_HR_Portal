@@ -1,0 +1,189 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Clean Professional: the design tokens. This is the ONLY file of the theme that contains a colour value; every other
+   file reads a variable from here (the guard test no-hard-coded-colours.test.ts fails on a colour anywhere else).
+
+   1. The app's own tokens (HSL triples, no hsl() wrapper) - the ones the Settings -> Themes Customize panel edits
+      (--primary, --background, --card, --foreground, --sidebar, --accent) and the other shadcn tokens the components
+      read as hsl(var(--x)). The six editable ones are mirrored in src/pages/hr/settings/themes/palettes.ts (clean);
+      themes.test.ts fails when the two drift apart. The rest are written in terms of those six (var(--primary) ...),
+      so a customised colour reaches every place that uses it.
+   2. The neutral ramp and the three status ramps (success, warning, danger), as hex: the slate text scale, borders,
+      and the one meaning each colour has. The brand (info) ramp is NOT fixed: it is worked out from --primary, so it
+      follows a customised primary.
+   3. Radii, elevation and the page's type: one scale for the whole theme.
+
+   Everything is declared on html[data-theme="clean"]:not([data-md-theme]): outside the MD portal, only when the theme is
+   chosen. Nothing else in the application reads a --clean-* variable. Which Tailwind colour family maps to which ramp is
+   written in tailwind-remap.css.
+
+   Contrast (WCAG AA, checked by clean-theme.test.ts): body text 13.6:1 on the page, muted text 5.0:1, white on the primary
+   buttons 6.9:1, the status ramps' 700 on 50 over 4.5:1, input borders 3.1:1 on white.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) {
+  color-scheme: light;
+
+  /* ── 1. the app's tokens ─────────────────────────────────────────────────────────────────────────────────────── */
+  --background: 216 29.4% 96.7%; /* #f4f6f9 the page */
+  --foreground: 215 27.9% 16.9%; /* #1f2937 text */
+  --border: 213.3 16.4% 89.2%; /* #dfe3e8 card and divider lines */
+
+  --card: 0 0% 100%;
+  --card-foreground: 215 27.9% 16.9%;
+  --card-border: var(--border);
+
+  --popover: var(--card);
+  --popover-foreground: var(--card-foreground);
+  --popover-border: var(--border);
+
+  --primary: 217.2 72.1% 40.8%; /* #1d56b3 the one brand colour */
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 214.3 33.3% 95.9%; /* #f1f4f8 */
+  --secondary-foreground: 215 25% 27%;
+
+  --muted: 214.3 33.3% 95.9%;
+  --muted-foreground: 213.3 12.4% 42.5%; /* #5f6b7a */
+
+  --accent: 214.7 70.4% 94.7%; /* #e8f0fb hover / selected tint */
+  --accent-foreground: 218.4 70.7% 30.8%; /* #173f86 */
+
+  --destructive: 4.2 76.5% 40%; /* #b42318 */
+  --destructive-foreground: 0 0% 100%;
+
+  --input: 214.8 14.8% 59%; /* #8794a6 the border of a field: 3.1:1 on white */
+  --ring: var(--primary);
+
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 215 25% 27%; /* #364152 */
+  --sidebar-border: var(--border);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-ring: var(--primary);
+
+  --chart-1: var(--primary);
+  --chart-2: 199 62% 46%;
+  --chart-3: 215 16% 47%;
+  --chart-4: 38 85% 45%;
+  --chart-5: 150 55% 33%;
+
+  /* the borders the shadcn buttons compute from a colour (index.css); a flat theme wants none of the lightness shift */
+  --opaque-button-border-intensity: 0;
+  --button-outline: color-mix(in srgb, hsl(var(--foreground)) 14%, transparent);
+  --badge-outline: color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+  --elevate-1: color-mix(in srgb, hsl(var(--foreground)) 5%, transparent);
+  --elevate-2: color-mix(in srgb, hsl(var(--foreground)) 9%, transparent);
+
+  /* ── 2a. neutrals (Tailwind's slate, gray, zinc, neutral and stone all map here) ───────────────────────────── */
+  --clean-n-50: #f8fafc;
+  --clean-n-100: #f1f4f8;
+  --clean-n-200: #e6ebf1;
+  --clean-n-300: #d3dae3;
+  --clean-n-400: #6c7685; /* 4.7:1 on white: the app's grey meta text ("text-gray-400") stays readable */
+  --clean-n-500: #5f6b7a; /* 5.4:1 */
+  --clean-n-600: #4b5666;
+  --clean-n-700: #364152;
+  --clean-n-800: #1f2937;
+  --clean-n-900: #111827;
+  --clean-n-950: #0b1220;
+
+  /* ── 2b. brand / information: worked out from --primary, so a customised primary recolours every blue ──────── */
+  --clean-b-50: color-mix(in oklab, hsl(var(--primary)) 6%, white);
+  --clean-b-100: color-mix(in oklab, hsl(var(--primary)) 12%, white);
+  --clean-b-200: color-mix(in oklab, hsl(var(--primary)) 22%, white);
+  --clean-b-300: color-mix(in oklab, hsl(var(--primary)) 40%, white);
+  --clean-b-400: color-mix(in oklab, hsl(var(--primary)) 62%, white);
+  --clean-b-500: color-mix(in oklab, hsl(var(--primary)) 82%, white);
+  --clean-b-600: hsl(var(--primary));
+  --clean-b-700: color-mix(in oklab, hsl(var(--primary)) 86%, black);
+  --clean-b-800: color-mix(in oklab, hsl(var(--primary)) 72%, black);
+  --clean-b-900: color-mix(in oklab, hsl(var(--primary)) 56%, black);
+  --clean-b-950: color-mix(in oklab, hsl(var(--primary)) 40%, black);
+
+  /* ── 2c. status: green = good, amber = watch, red = bad. Nothing else is ever green, amber or red ─────────── */
+  --clean-s-50: #eefaf3;
+  --clean-s-100: #d6f1e0;
+  --clean-s-200: #b0e3c5;
+  --clean-s-300: #7fcea4;
+  --clean-s-400: #4cb57f;
+  --clean-s-500: #2a9a62;
+  --clean-s-600: #1f7a4d;
+  --clean-s-700: #1b6a43;
+  --clean-s-800: #185539;
+  --clean-s-900: #144630;
+  --clean-s-950: #0a2a1d;
+
+  --clean-w-50: #fff8e8;
+  --clean-w-100: #feefc6;
+  --clean-w-200: #fcdf92;
+  --clean-w-300: #f9c85a;
+  --clean-w-400: #f1ac22;
+  --clean-w-500: #d88f0c;
+  --clean-w-600: #a86400;
+  --clean-w-700: #8a5000;
+  --clean-w-800: #6f4000;
+  --clean-w-900: #5a3400;
+  --clean-w-950: #321b00;
+
+  --clean-d-50: #fdf1f0;
+  --clean-d-100: #fbdedb;
+  --clean-d-200: #f6bdb8;
+  --clean-d-300: #ee918a;
+  --clean-d-400: #e1625a;
+  --clean-d-500: #cf3f35;
+  --clean-d-600: #b42318;
+  --clean-d-700: #98201a;
+  --clean-d-800: #7d1d18;
+  --clean-d-900: #671c18;
+  --clean-d-950: #390b09;
+
+  /* ── 2d. the roles the primitives use (one place to change what "primary hover" or "a line" is) ───────────── */
+  --clean-primary: hsl(var(--primary));
+  --clean-primary-hover: color-mix(in oklab, hsl(var(--primary)) 86%, black);
+  --clean-primary-active: color-mix(in oklab, hsl(var(--primary)) 74%, black);
+  --clean-primary-soft: color-mix(in oklab, hsl(var(--primary)) 8%, white);
+  --clean-primary-soft-hover: color-mix(in oklab, hsl(var(--primary)) 14%, white);
+  --clean-on-primary: hsl(var(--primary-foreground));
+  --clean-danger-hover: color-mix(in oklab, hsl(var(--destructive)) 86%, black);
+  --clean-line: hsl(var(--border));
+  --clean-line-mid: #c3ccd8; /* the border of a secondary button */
+  --clean-line-strong: hsl(var(--input));
+  --clean-ink: hsl(var(--foreground));
+  --clean-muted: hsl(var(--muted-foreground));
+  --clean-surface: hsl(var(--card));
+  --clean-page: hsl(var(--background));
+  --clean-wash: var(--clean-n-100); /* header rows, a quiet panel inside a card */
+  --clean-hover: color-mix(in srgb, hsl(var(--primary)) 5%, transparent); /* row / item hover tint */
+  --clean-focus: hsl(var(--ring));
+  --clean-scrim: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  --clean-disabled-bg: var(--clean-n-100);
+  --clean-disabled-ink: var(--clean-n-400);
+
+  /* ── 3. radii, elevation, type ───────────────────────────────────────────────────────────────────────────────── */
+  /* Tailwind's rounded-sm/md/lg/xl read --radius, rounded-2xl/3xl their own variable: 6px base, 8px for the big ones */
+  --radius: 6px;
+  --radius-2xl: 8px;
+  --radius-3xl: 8px;
+  --clean-radius-sm: 4px;
+  --clean-radius: 6px;
+  --clean-radius-lg: 8px;
+
+  /* only floating layers (menus, popovers, dialogs, toasts) have a shadow, and a very light one */
+  --clean-shadow-float:
+    0 1px 2px color-mix(in srgb, hsl(var(--foreground)) 10%, transparent),
+    0 2px 8px color-mix(in srgb, hsl(var(--foreground)) 8%, transparent);
+  --clean-shadow-dialog:
+    0 2px 4px color-mix(in srgb, hsl(var(--foreground)) 8%, transparent),
+    0 8px 24px color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+
+  --clean-control-h: 36px;
+  --clean-row-h: 44px;
+  --clean-font-size: 14px;
+  --clean-line-height: 1.5;
+
+  /* Tailwind's heaviest weights are too loud for a quiet page: font-black / font-extrabold draw as bold */
+  --font-weight-extrabold: 700;
+  --font-weight-black: 700;
+}

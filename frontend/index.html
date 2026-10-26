@@ -13,6 +13,34 @@
     <meta name="twitter:title" content="UKTextiles HRMS" />
     <meta name="twitter:description" content="UKTextiles HRMS -enterprise HR &amp; payroll management portal." />
     <link rel="icon" type="image/png" href="/UKT_Company_Logo.png" />
+    <script>
+      /* Puts the saved portal theme on <html> before the first frame (and so on the sign-in pages), so a theme that
+         redraws the page's structure never flashes the default look. It mirrors ThemeContext.tsx: what is shown is the
+         device's own choice (uk_textile_theme_device) or else the org-wide theme (uk_textile_theme), and the org-wide
+         custom colours go with it unless the device uses another theme. The ids are the ones in src/lib/themes.ts
+         (index-html-theme.test.ts keeps the two lists, and this logic, in step). */
+      (function () {
+        try {
+          var ids = ["default", "dark", "premium", "mono", "mono-dark", "professional", "clean"];
+          var org = localStorage.getItem("uk_textile_theme");
+          var dev = localStorage.getItem("uk_textile_theme_device");
+          org = ids.indexOf(org) > -1 ? org : "default";
+          dev = ids.indexOf(dev) > -1 ? dev : null;
+          var theme = dev || org;
+          var root = document.documentElement;
+          root.dataset.theme = theme;
+          if (theme === "dark") root.classList.add("dark");
+          if (!dev || dev === org) {
+            var custom = JSON.parse(localStorage.getItem("uk_textile_theme_custom") || "{}");
+            if (custom && typeof custom === "object") {
+              for (var token in custom) root.style.setProperty(token, custom[token]);
+            }
+          }
+        } catch (e) {
+          /* storage disabled or malformed: the app applies the theme itself once it starts */
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">

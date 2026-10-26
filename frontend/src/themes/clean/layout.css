@@ -1,0 +1,208 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Clean Professional: the shell every HR page sits in - the page background, the left menu, the mobile top bar, the
+   page title row.
+
+   The menu is WHITE (the --sidebar token) with a thin line on its right edge; the open page is marked by the soft accent
+   fill and a 3px bar in the primary colour. Its text is the --sidebar-foreground token, so the Customize panel's Sidebar
+   colour (which also saves a readable text colour) works. The mobile top bar is white too, with the same line under it.
+
+   HrLayout.tsx puts data-ui-shell markers on its own boxes (root, sidebar, topbar, overlay, main, view-only): markers
+   only, they have no style of their own. The menu (components/ui/dashboard-sidebar.tsx) has no markers: it is reached
+   through those and through its own class names (.clay-nav-active, .cursor-pointer, .border-l-2).
+
+   HrLayout and the menu colour themselves with INLINE styles (a gradient on the root, a pale blue border, a glow). An
+   inline style beats any rule without !important, so those rules carry it and say "inline style".
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── the shell ────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="root"] {
+  background: var(--clean-page) !important; /* inline style: a blue-grey gradient */
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] {
+  background: transparent;
+}
+
+/* ── the left menu ────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] {
+  background: hsl(var(--sidebar)) !important; /* inline style */
+  border-right: 1px solid hsl(var(--sidebar-border)) !important; /* inline style */
+  box-shadow: none !important; /* inline style: a blue glow */
+  color: hsl(var(--sidebar-foreground));
+}
+/* the logo, name and collapse toggle row, and the lines between the menu's parts */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:first-child {
+  border-bottom-color: hsl(var(--sidebar-border)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child,
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:nth-child(2) {
+  border-top-color: hsl(var(--sidebar-border)) !important; /* inline style */
+  border-bottom-color: hsl(var(--sidebar-border)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] h1 {
+  color: hsl(var(--sidebar-foreground)) !important; /* inline style */
+  font-weight: 700;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] h1 + p {
+  color: var(--clean-muted) !important; /* inline style */
+  opacity: 1 !important; /* inline style */
+  font-weight: 600;
+}
+
+/* the "Search pages..." box */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="inset"] {
+  background: var(--clean-surface) !important; /* inline style */
+  border: 1px solid var(--clean-line-strong);
+  border-radius: var(--clean-radius);
+  box-shadow: none !important; /* inline style: sunken clay */
+  color: var(--clean-n-500) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="inset"]:hover {
+  border-color: var(--clean-n-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="inset"] > span:last-child {
+  background: var(--clean-n-100) !important; /* inline style */
+  color: var(--clean-n-500) !important; /* inline style */
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-sm);
+}
+
+/* menu rows: a group heading, a page, a sub-page */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav p {
+  color: color-mix(in srgb, hsl(var(--sidebar-foreground)) 62%, transparent) !important; /* inline style */
+  letter-spacing: 0.08em;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cursor-pointer {
+  border-radius: var(--clean-radius);
+  color: hsl(var(--sidebar-foreground));
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cursor-pointer svg {
+  color: color-mix(in srgb, hsl(var(--sidebar-foreground)) 68%, transparent);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  nav
+  .cursor-pointer:hover:not(.clay-nav-active) {
+  background: color-mix(in srgb, hsl(var(--sidebar-foreground)) 8%, transparent);
+  color: hsl(var(--sidebar-foreground));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  nav
+  .cursor-pointer:hover:not(.clay-nav-active)
+  svg {
+  color: hsl(var(--primary));
+}
+/* the open page: the accent fill, the bar, the accent text; its icon and label follow */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active {
+  background: hsl(var(--sidebar-accent));
+  color: hsl(var(--sidebar-accent-foreground));
+  box-shadow: inset 3px 0 0 hsl(var(--sidebar-primary));
+  font-weight: 600;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active :is(span, svg) {
+  color: inherit;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active svg {
+  color: hsl(var(--sidebar-primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active [class~="bg-white"] {
+  background-color: hsl(var(--sidebar-primary));
+}
+/* a group that holds the open page is only marked by its colour: the sub-page carries the bar */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  nav
+  .clay-nav-active:has(.lucide-chevron-right) {
+  background: transparent;
+  box-shadow: none;
+  color: hsl(var(--sidebar-primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  nav
+  .clay-nav-active:has(.lucide-chevron-right)
+  span {
+  color: inherit;
+}
+/* the thin line down the left of an opened group */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .border-l-2 {
+  border-color: hsl(var(--sidebar-border)) !important; /* inline style */
+}
+/* the count bubbles (Requests, Settlement ...): one flat red, no amber gradient, no pulse */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] [style*="linear-gradient"] {
+  background: hsl(var(--destructive)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] [class~="ring-[#f6fafe]"] {
+  --tw-ring-color: hsl(var(--sidebar));
+}
+/* Sign out */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="color: rgba"],
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child button {
+  color: color-mix(in srgb, hsl(var(--sidebar-foreground)) 78%, transparent) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child button:hover {
+  background: color-mix(in srgb, hsl(var(--sidebar-foreground)) 8%, transparent);
+  color: hsl(var(--sidebar-foreground)) !important; /* inline style */
+}
+/* the little close button of the phone drawer */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[class~="lg:hidden"] {
+  color: var(--clean-n-500) !important; /* inline style */
+}
+
+/* the flyout of a group when the menu is collapsed to icons */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="popover-panel"][style*="box-shadow"] {
+  box-shadow: var(--clean-shadow-float) !important; /* inline style */
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+}
+
+/* ── the phone: a white top bar and the drawer's dim ──────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="topbar"] {
+  background: var(--clean-surface) !important; /* inline style */
+  border-bottom: 1px solid var(--clean-line) !important; /* inline style */
+  box-shadow: none !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="topbar"] button {
+  color: hsl(var(--primary)) !important; /* inline style */
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="topbar"] span {
+  color: var(--clean-ink) !important; /* inline style */
+  font-weight: 700;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="overlay"] {
+  background: var(--clean-scrim) !important; /* inline style */
+  -webkit-backdrop-filter: none !important; /* inline style */
+  backdrop-filter: none !important; /* inline style */
+}
+
+/* "View only" notice at the top of a page */
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="view-only"] {
+  background: var(--clean-w-50) !important; /* inline style */
+  color: var(--clean-w-800) !important; /* inline style */
+  border: 1px solid var(--clean-w-200);
+  border-radius: var(--clean-radius);
+  box-shadow: none !important; /* inline style */
+}
+
+/* ── the page title row ───────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the pages write their title as an h1/h2 with text-2xl or text-3xl and font-black: one title size and weight */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(h1, h2):is([class*="text-2xl"], [class*="text-3xl"]):not([class*="text-white"]) {
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="main"]
+  :is(h1, h2):is([class*="text-2xl"], [class*="text-3xl"])
+  + p {
+  color: var(--clean-muted);
+}

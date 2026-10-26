@@ -1,0 +1,686 @@
+/* Clean Professional - area: controls-auth. Every selector is scoped html[data-theme="clean"]:not([data-md-theme]) (see ../index.css).
+
+   What this file covers: the sign-in and public pages (HR sign-in, employee sign-in, set password, job apply, identity check,
+   gate and reception links, the ERP sign-in), the "something is not right" screens (404, server error, database offline, the
+   connection-lost takeover: components/status/status-screen.css), and the control pages (WhatsApp, SMS, Gmail, biometric
+   connectors, accounts, logs, backups) where the foundation leaves something glass, clay or off-palette.
+
+   The status screens and the sign-in pages are dark or gradient by design in the default theme and paint themselves with
+   literal colours and inline styles, so they are redrawn here: a flat light page, a white 1px-bordered card, one brand
+   colour, a status colour for how serious it is. Colours come from the theme's tokens only. */
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   1. Pages that assume a dark left menu colour. In this theme the menu colour (--sidebar) is white, so a page that uses
+      bg-sidebar as a dark backdrop (employee sign-in, set password, job apply) takes the page colour, and the white text
+      it was written with becomes the ink colours.
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="clean"]:not([data-md-theme]) div[class~="min-h-screen"][class~="bg-sidebar"] {
+  background: var(--clean-page);
+  color: var(--clean-ink);
+}
+/* the faint diagonal stripes drawn behind the card */
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][class~="bg-sidebar"]
+  > div[class~="absolute"][style*="repeating-linear-gradient"] {
+  display: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) div[class~="min-h-screen"][class~="bg-sidebar"] h1[class~="text-white"] {
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][class~="bg-sidebar"]
+  :is([class~="text-white/40"], [class~="text-white/50"], [class~="text-white/70"]) {
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][class~="bg-sidebar"]
+  :is([class~="hover:text-white/70"]:hover, [class~="hover:text-white"]:hover) {
+  color: hsl(var(--primary));
+}
+
+/* the "Contact HR" card, drawn for a dark screen (tone="dark"): white text, a faint white fill, light blue buttons */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="support-contact-card"][class~="border-white/10"] {
+  background: var(--clean-surface);
+  border-color: var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="support-contact-card"] [class~="text-white"] {
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="support-contact-card"] [class~="text-white/70"] {
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="support-contact-card"] [class~="text-white/50"] {
+  color: var(--clean-n-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="support-contact-card"] [class~="text-blue-300"] {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="support-contact-card"] [class~="text-blue-200"] {
+  color: hsl(var(--primary));
+  background: var(--clean-primary-soft);
+  border-color: var(--clean-b-200);
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="support-contact-card"] a[class~="text-blue-200"]:hover {
+  background: var(--clean-primary-soft-hover);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   2. HR sign-in (/hr-login): a flat brand panel on the left, a quiet page with one white form card on the right. The big
+      glass orb (WebGL canvas) behind the form is decoration only: not drawn.
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="clean"]:not([data-md-theme]) :is(.orb-container, .prism-container, .light-rays-container) {
+  display: none;
+}
+
+/* the form half: the page colour, not the blue-white gradient */
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][class~="flex"]
+  > div[class~="flex-1"][class~="relative"][style*="linear-gradient"] {
+  background: var(--clean-page) !important; /* inline style: a blue-white gradient */
+}
+/* the form itself sits on a white card */
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][class~="flex"]
+  > div[class~="flex-1"][class~="relative"]
+  > div[class~="max-w-sm"] {
+  background: var(--clean-surface);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+  padding: 24px 20px;
+}
+@media (min-width: 640px) {
+  html[data-theme="clean"]:not([data-md-theme])
+    div[class~="min-h-screen"][class~="flex"]
+    > div[class~="flex-1"][class~="relative"]
+    > div[class~="max-w-sm"] {
+    padding: 32px;
+  }
+}
+/* the sign-in and the field labels */
+html[data-theme="clean"]:not([data-md-theme])
+  form
+  [data-testid="button-submit"][class~="clay-btn"]:hover:not(:disabled) {
+  background: var(--clean-primary-hover) !important; /* inline style: the gradient is replaced above, so is its hover */
+}
+html[data-theme="clean"]:not([data-md-theme]) form [data-testid="button-submit"][class~="clay-btn"] {
+  border-radius: var(--clean-radius);
+  font-weight: 600;
+}
+html[data-theme="clean"]:not([data-md-theme]) form [data-testid="button-submit"][class~="clay-btn"]:disabled {
+  opacity: 1;
+  background: var(--clean-n-400) !important; /* inline style */
+}
+/* the wrong-password box: a plain danger alert */
+html[data-theme="clean"]:not([data-md-theme]) form div[style*="color: rgb(220, 38, 38)"] {
+  background: var(--clean-d-50) !important; /* inline style */
+  color: var(--clean-d-700) !important; /* inline style */
+  border: 1px solid var(--clean-d-200);
+  border-radius: var(--clean-radius);
+}
+
+/* the brand half: flat brand colour (the foundation turns its blue gradient into it); the translucent white texts and
+   the tiles around its feature icons are written with inline gradients and white at low alpha, which reads weakly on blue */
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="lg:w-[46%]"]
+  [class~="shrink-0"][class~="rounded-2xl"][style*="linear-gradient"] {
+  background: color-mix(in srgb, var(--clean-on-primary) 14%, transparent) !important; /* inline style */
+  border: 1px solid color-mix(in srgb, var(--clean-on-primary) 28%, transparent);
+  border-radius: var(--clean-radius-lg);
+}
+html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] [style*="color: rgba(255, 255, 255"] {
+  color: color-mix(in srgb, var(--clean-on-primary) 86%, transparent) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] svg[style*="color: rgb(224, 168, 58)"] {
+  color: var(--clean-on-primary) !important; /* inline style: the gold sparkle */
+}
+html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] [class~="text-[#8fd8ff]"],
+html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] [class~="text-[#e0a83a]"] {
+  color: var(--clean-b-200);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   3. Identity check (/verify/:code), and any full-screen page that paints itself with an inline gradient (the boot and page
+      loaders of App.tsx): the page colour, and the card around the result
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="clean"]:not([data-md-theme]) div[class~="min-h-screen"][style*="linear-gradient"] {
+  background: var(--clean-page) !important; /* inline style: a pale blue gradient */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="linear-gradient"]
+  > div[class~="rounded-3xl"] {
+  border: 1px solid var(--clean-line);
+}
+/* the frame round the photo is written in the old light blue; so is the phone sign-in's "Textiles", which is too pale on white */
+html[data-theme="clean"]:not([data-md-theme]) div[style*="border-color: rgb(79, 184, 240)"] {
+  border-color: hsl(var(--primary)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="lg:hidden"][class~="justify-center"]
+  span[style*="color: rgb(79, 184, 240)"] {
+  color: var(--clean-b-500) !important; /* inline style */
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   4. ERP sign-in (/erp-login): a dark navy gradient with a glass card. A flat light page and a white card instead.
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][class~="overflow-hidden"][style*="rgb(15, 25, 35)"] {
+  background: var(--clean-page) !important; /* inline style: a navy gradient */
+}
+/* the glowing discs and the grid */
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  > div[class~="absolute"][class~="pointer-events-none"] {
+  display: none;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  div[class~="rounded-2xl"][class~="p-8"][style*="rgba(255, 255, 255, 0.04)"] {
+  background: var(--clean-surface) !important; /* inline style: translucent white */
+  border: 1px solid var(--clean-line) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  :is(h2[class~="text-white"], [class~="text-white/70"]) {
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  :is([class~="text-white/40"], [class~="text-white/30"], [class~="hover:text-white/70"]) {
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  :is([class~="hover:text-white/70"]:hover) {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  input[style*="rgba(255, 255, 255, 0.06)"] {
+  background: var(--clean-surface) !important; /* inline style */
+  border: 1px solid var(--clean-line-strong) !important; /* inline style */
+  color: var(--clean-ink) !important; /* inline style: white text */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  button[type="submit"][style*="linear-gradient"] {
+  background: hsl(var(--primary)) !important; /* inline style: a cyan-teal gradient */
+  color: var(--clean-on-primary);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  div[class~="w-12"][class~="rounded-xl"][style*="linear-gradient"] {
+  background: hsl(var(--primary)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  [class~="text-amber-300"] {
+  color: var(--clean-w-800);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  :is(div[style*="rgba(251, 191, 36, 0.1)"], div[style*="rgba(251, 191, 36, 0.08)"]) {
+  background: var(--clean-w-50) !important; /* inline style */
+  border: 1px solid var(--clean-w-200) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="min-h-screen"][style*="rgb(15, 25, 35)"]
+  [class~="text-amber-300/80"] {
+  color: var(--clean-w-800);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   5. The "something is not right" screens: 404, server error, database offline and the connection-lost takeover
+      (components/status/status-screen.css). A midnight canvas, a slow aurora, a frosted card and glowing buttons in the
+      default theme; a flat light page and a white bordered card here. How serious it is stays: danger red, warning amber,
+      information blue, as --ss-accent (the soft fill and the line come from the same ramp).
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="clean"]:not([data-md-theme]) .ss-root {
+  --ss-accent: var(--clean-d-600);
+  --ss-soft: var(--clean-d-50);
+  --ss-edge: var(--clean-d-200);
+  --ss-ink: var(--clean-d-700);
+  background: var(--clean-page);
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-root[data-tone="warning"] {
+  --ss-accent: var(--clean-w-600);
+  --ss-soft: var(--clean-w-50);
+  --ss-edge: var(--clean-w-200);
+  --ss-ink: var(--clean-w-800);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-root[data-tone="info"] {
+  --ss-accent: hsl(var(--primary));
+  --ss-soft: var(--clean-b-50);
+  --ss-edge: var(--clean-b-200);
+  --ss-ink: var(--clean-b-800);
+}
+
+/* the aurora and the grid are decoration */
+html[data-theme="clean"]:not([data-md-theme]) .ss-bg {
+  display: none;
+}
+
+/* the card */
+html[data-theme="clean"]:not([data-md-theme]) .ss-card {
+  background: var(--clean-surface);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  animation: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-card::before {
+  display: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-brand b {
+  color: var(--clean-ink);
+  font-weight: 700;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-brand small {
+  color: var(--clean-muted);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-pill {
+  color: var(--ss-ink);
+  background: var(--ss-soft);
+  border: 1px solid var(--ss-edge);
+  border-radius: var(--clean-radius-sm);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-pill i {
+  background: var(--ss-accent);
+  box-shadow: none;
+  animation: none;
+}
+
+/* the hero: a tile with the icon, or the big number */
+html[data-theme="clean"]:not([data-md-theme]) .ss-icon {
+  color: var(--ss-accent);
+  background: var(--ss-soft);
+  border: 1px solid var(--ss-edge);
+  border-radius: var(--clean-radius-lg);
+  box-shadow: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-icon::before,
+html[data-theme="clean"]:not([data-md-theme]) .ss-icon::after {
+  display: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-icon svg {
+  filter: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-code {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  -webkit-text-fill-color: currentColor;
+  color: var(--ss-accent);
+  filter: none;
+  font-weight: 700;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-title {
+  color: var(--clean-ink);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-text {
+  color: var(--clean-muted);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-text code {
+  color: var(--clean-ink);
+  background: var(--clean-wash);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-sm);
+}
+
+/* the buttons: solid brand, and a white bordered one */
+html[data-theme="clean"]:not([data-md-theme]) .ss-btn {
+  border-radius: var(--clean-radius);
+  font-weight: 600;
+  box-shadow: none;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-btn:hover {
+  transform: none;
+  box-shadow: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-btn[data-variant="primary"] {
+  background: hsl(var(--primary));
+  color: var(--clean-on-primary);
+  border-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-btn[data-variant="primary"]:hover:not(:disabled) {
+  background: var(--clean-primary-hover);
+  border-color: var(--clean-primary-hover);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-btn[data-variant="ghost"] {
+  background: var(--clean-surface);
+  color: var(--clean-ink);
+  border-color: var(--clean-line-mid);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-btn[data-variant="ghost"]:hover:not(:disabled) {
+  background: var(--clean-n-100);
+  border-color: var(--clean-n-400);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-btn:disabled {
+  opacity: 1;
+  background: var(--clean-disabled-bg);
+  border-color: var(--clean-n-200);
+  color: var(--clean-disabled-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-btn:focus-visible {
+  outline: 2px solid var(--clean-focus);
+  outline-offset: 2px;
+}
+
+/* the live-check bar */
+html[data-theme="clean"]:not([data-md-theme]) .ss-check-row {
+  color: var(--clean-muted);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-check-bar {
+  background: var(--clean-n-200);
+  border-radius: var(--clean-radius-sm);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-check-bar i {
+  background: var(--ss-accent);
+  border-radius: inherit;
+}
+
+/* the connection path: device - network - server - database, the failing link drawn broken */
+html[data-theme="clean"]:not([data-md-theme]) .ss-node {
+  color: var(--clean-n-700);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-node small {
+  color: var(--clean-muted);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-node-dot {
+  background: var(--clean-wash);
+  border: 1px solid var(--clean-line-mid);
+  border-radius: var(--clean-radius);
+  box-shadow: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-node[data-state="ok"] .ss-node-dot {
+  color: var(--clean-s-700);
+  background: var(--clean-s-50);
+  border-color: var(--clean-s-200);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-node[data-state="bad"] {
+  color: var(--ss-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-node[data-state="bad"] .ss-node-dot {
+  color: var(--ss-ink);
+  background: var(--ss-soft);
+  border-color: var(--ss-accent);
+  box-shadow: none;
+  animation: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-node[data-state="unknown"] .ss-node-dot {
+  color: var(--clean-n-500);
+  border-style: dashed;
+}
+/* the line between two nodes: solid green, a dashed red/amber line where it is broken, a grey dashed one where it was not reached
+   (a dashed border, not a striped gradient: the line is 2px high either way) */
+html[data-theme="clean"]:not([data-md-theme]) .ss-link {
+  background: var(--clean-s-400);
+  border-radius: 0;
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-link[data-state="bad"] {
+  background: none;
+  height: 0;
+  border-top: 2px dashed var(--ss-accent);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-link[data-state="unknown"] {
+  background: none;
+  height: 0;
+  border-top: 2px dashed var(--clean-n-300);
+}
+
+/* "Technical details" */
+html[data-theme="clean"]:not([data-md-theme]) .ss-details {
+  background: var(--clean-wash);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-details summary {
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-details dl > div {
+  border-top-color: var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-details dt {
+  color: var(--clean-muted);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-details dd {
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-details dd[data-tone="bad"] {
+  color: var(--ss-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-details dd[data-tone="ok"] {
+  color: var(--clean-s-700);
+}
+html[data-theme="clean"]:not([data-md-theme]) .ss-footer {
+  color: var(--clean-muted);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   6. The UKT mark and the loaders. The mark (an inline SVG: a light-blue oval with white letters) is drawn pale by the
+      colour remap on a white page; on the boot screen and the status screens it takes the brand colour, like the sign-in's.
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="clean"]:not([data-md-theme])
+  :is([role="status"][aria-label="Loading"] > svg, .ss-brand svg)
+  ellipse[fill="#4FB8F0"] {
+  fill: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme]) [role="status"][aria-label="Loading"] > svg {
+  opacity: 1;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   7. ERP portal shell (/erp/*): a dark navy-to-green gradient menu with white text and cyan accents. The same white menu
+      as the HR portal here: a line on its right edge, the open page marked by the soft fill and a 3px bar.
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="clean"]:not([data-md-theme]) aside[class~="fixed"][style*="rgb(13, 33, 55)"] {
+  background: hsl(var(--sidebar)) !important; /* inline style: a navy gradient */
+  border-right: 1px solid hsl(var(--sidebar-border)) !important; /* inline style */
+  color: hsl(var(--sidebar-foreground));
+}
+html[data-theme="clean"]:not([data-md-theme]) aside[style*="rgb(13, 33, 55)"] [style*="rgba(255, 255, 255, 0.06)"] {
+  border-color: hsl(var(--sidebar-border)) !important; /* inline style */
+}
+html[data-theme="clean"]:not([data-md-theme]) aside[style*="rgb(13, 33, 55)"] div[style*="rgb(6, 182, 212)"] {
+  background: hsl(var(--primary)) !important; /* inline style: a cyan-teal gradient */
+}
+html[data-theme="clean"]:not([data-md-theme]) aside[style*="rgb(13, 33, 55)"] [class~="text-cyan-400/80"] {
+  color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  aside[style*="rgb(13, 33, 55)"]
+  [class~="text-white"]:not([style*="linear-gradient"]) {
+  color: hsl(var(--sidebar-foreground));
+}
+/* the icon inside the brand tile stays white on the brand colour */
+html[data-theme="clean"]:not([data-md-theme])
+  aside[style*="rgb(13, 33, 55)"]
+  div[style*="rgb(6, 182, 212)"]
+  [class~="text-white"] {
+  color: var(--clean-on-primary);
+}
+html[data-theme="clean"]:not([data-md-theme]) aside[style*="rgb(13, 33, 55)"] [class~="text-white/40"] {
+  color: var(--clean-n-500);
+}
+html[data-theme="clean"]:not([data-md-theme]) aside[style*="rgb(13, 33, 55)"] [class~="text-white/50"] {
+  color: var(--clean-n-700);
+}
+html[data-theme="clean"]:not([data-md-theme]) aside[style*="rgb(13, 33, 55)"] nav div[class~="cursor-pointer"] {
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  aside[style*="rgb(13, 33, 55)"]
+  :is([class~="hover:bg-white/5"], [class~="hover:text-white/80"], [class~="hover:text-white"]):hover {
+  background: color-mix(in srgb, hsl(var(--sidebar-foreground)) 8%, transparent);
+  color: hsl(var(--sidebar-foreground));
+}
+/* the open page */
+html[data-theme="clean"]:not([data-md-theme])
+  aside[style*="rgb(13, 33, 55)"]
+  nav
+  div[class~="bg-white/10"][class~="text-white"] {
+  background: hsl(var(--sidebar-accent));
+  color: hsl(var(--sidebar-accent-foreground));
+  box-shadow: inset 3px 0 0 hsl(var(--sidebar-primary));
+  font-weight: 600;
+}
+html[data-theme="clean"]:not([data-md-theme]) aside[style*="rgb(13, 33, 55)"] nav div[class~="bg-white/10"] svg {
+  color: hsl(var(--sidebar-primary));
+}
+/* the dim behind the phone drawer */
+html[data-theme="clean"]:not([data-md-theme]) div[class~="fixed"][class~="bg-black/60"] {
+  background: var(--clean-scrim);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   8. Control pages: what the foundation leaves.
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* Biometric Device Status: a count of zero is drawn in slate-300 on purpose (nothing to see), which is nearly invisible on a
+   white card; the number stays a quiet grey that can still be read */
+html[data-theme="clean"]:not([data-md-theme]) [data-testid="device-summary"] p[class~="text-slate-300"] {
+  color: var(--clean-n-400);
+}
+
+/* Account Management -> MD profile: the thin gold bar over the card is a flat brand bar */
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="h-1.5"][class~="w-full"][style*="linear-gradient(90deg, rgb(246, 210, 122)"] {
+  background: hsl(var(--primary)) !important; /* inline style: a gold gradient */
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   9. Hand-built controls the foundation's field and tab rules do not reach.
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* A search box drawn by hand: a bordered wrapper (it shows the focus ring through focus-within) around a bare input.
+   The wrapper is a white field like every other, and its input stays transparent: the generic field rule in forms.css
+   would paint it white inside a page-coloured wrapper, a box in a box. */
+html[data-theme="clean"]:not([data-md-theme]) input[class~="bg-transparent"]:not([data-slot]) {
+  background-color: transparent;
+}
+html[data-theme="clean"]:not([data-md-theme]) div[class*="focus-within:ring"][class~="border"] {
+  background-color: var(--clean-surface);
+  border-color: var(--clean-line-strong);
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme]) div[class*="focus-within:ring"][class~="border"]:focus-within {
+  border-color: var(--clean-focus);
+}
+html[data-theme="clean"]:not([data-md-theme]) div[class*="focus-within:ring"][class~="border"] input:focus-visible {
+  outline: none;
+}
+
+/* A segmented switch written by hand (a grey capsule holding rounded buttons: Department users "All / Active / Inactive",
+   Shift assignments "Staff / Production"): a bordered 6px track, the chosen button a white tile with a thin edge */
+html[data-theme="clean"]:not([data-md-theme]) div[role="group"][class~="rounded-full"][class~="bg-gray-100"] {
+  border-radius: var(--clean-radius);
+  background: var(--clean-n-100);
+  border: 1px solid var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme]) div[role="group"][class~="rounded-full"][class~="bg-gray-100"] > button {
+  border-radius: var(--clean-radius-sm);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="group"][class~="rounded-full"][class~="bg-gray-100"]
+  > button:is([aria-pressed="true"], [class~="bg-white"]) {
+  background: var(--clean-surface);
+  box-shadow: inset 0 0 0 1px var(--clean-line-mid);
+}
+
+/* Filter chips written by hand (Activity Logs: "All Actions 34", "Login 19" ...): 6px chips; the chosen one is the brand colour */
+html[data-theme="clean"]:not([data-md-theme])
+  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"] {
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]:is(
+    [class~="bg-slate-800"],
+    [class~="bg-slate-900"],
+    [class~="bg-gray-900"]
+  ) {
+  background-color: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]
+  > span[class~="rounded-full"] {
+  border-radius: var(--clean-radius-sm);
+}
+
+/* Hand-built radio options: a button or card with role="radio" and aria-checked (the module level Hidden / View / Edit in the
+   role editor, the option cards of Bulk Upload, Compensation, Settings ...). primitives.css draws the Radix radio circle with
+   [role="radio"] and gives it a white fill and a grey edge, which wipes the chosen colour (bg-blue-600, bg-amber-100,
+   bg-blue-50 border-blue-500 ...) off these. A Radix radio carries data-state; these do not, so they take their own classes
+   back: revert-layer drops the unlayered declarations and leaves what the utility classes say. */
+html[data-theme="clean"]:not([data-md-theme]) [role="radio"]:not([data-state]) {
+  background: revert-layer;
+  border-color: revert-layer;
+  box-shadow: revert-layer;
+}
+/* the chosen segment of a Hidden / View / Edit group: a thin edge, since the shadow it was drawn with is off */
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="radiogroup"][class~="bg-gray-100"]
+  > button[role="radio"][aria-checked="true"] {
+  box-shadow: inset 0 0 0 1px var(--clean-line-mid);
+}
+
+/* A disabled solid button (default / danger variant) is flat grey, as primitives.css intends: its "solid blue" rule is more
+   specific than the generic :disabled one, so a disabled "Create role" looked exactly like an enabled one */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="button"][data-variant="default"][class~="bg-gradient-to-br"]:disabled,
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="button"][data-variant="destructive"][class~="bg-red-50"]:disabled,
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="button"][data-variant="outline"][class~="border-slate-200"]:disabled {
+  background: var(--clean-disabled-bg);
+  border-color: var(--clean-n-200);
+  color: var(--clean-disabled-ink);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   10. The employee pages' "UK TEXTILE" loader (components/Loader.tsx): nine slices of one text, each painted with a cyan
+       gradient and a glow. The same slices in the brand colour, no gradient and no glow; the underline is a flat brand bar.
+   ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="clean"]:not([data-md-theme]) .loader-wrapper .loader .text span {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: hsl(var(--primary));
+  animation: scrolling 2s cubic-bezier(0.1, 0.6, 0.9, 0.4) infinite;
+}
+html[data-theme="clean"]:not([data-md-theme]) .loader-wrapper .loader .line::before {
+  background: var(--clean-b-300);
+}
+html[data-theme="clean"]:not([data-md-theme]) .loader-wrapper .loader .line::after {
+  background: hsl(var(--primary));
+  box-shadow: none;
+}
+/* the slices are drawn at 128px, so the loader is wider than a phone: it is clipped to its box instead of widening the page */
+html[data-theme="clean"]:not([data-md-theme]) .loader-wrapper {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+/* ...and the box around it (a flex item that will not shrink below the width of what it holds) may shrink to the page */
+html[data-theme="clean"]:not([data-md-theme]) div:has(> .loader-wrapper) {
+  min-width: 0;
+  max-width: 100%;
+}

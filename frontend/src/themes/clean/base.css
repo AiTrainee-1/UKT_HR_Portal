@@ -1,0 +1,164 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Clean Professional: the page itself. The background and text colour, the body type (denser: 14px on a 1.5 line, the
+   weights a step down), links, the focus ring, selection, slim scrollbars and reduced motion. Every colour is a token
+   (tokens.css). The font family is the one the app already loads (Hanken Grotesk, Inter): no new font is downloaded.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) body {
+  background: var(--clean-page);
+  color: var(--clean-ink);
+  font-size: var(--clean-font-size);
+  line-height: var(--clean-line-height);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* headings: a quieter, tighter hierarchy (the pages set sizes with text-* classes and weights with font-*; the weights
+   themselves are one step lighter through tokens.css) */
+html[data-theme="clean"]:not([data-md-theme]) :is(h1, h2, h3, h4, h5, h6) {
+  letter-spacing: -0.005em;
+}
+html[data-theme="clean"]:not([data-md-theme]) :is(h1, h2, h3, h4, h5, h6):not([class*="text-"]) {
+  color: var(--clean-ink);
+}
+
+/* the content: numbers line up in columns everywhere */
+html[data-theme="clean"]:not([data-md-theme]) :is(td, th, [class~="tabular-nums"], [data-slot="table-cell"]) {
+  font-variant-numeric: tabular-nums;
+}
+
+/* links in running text and the "link" button: the brand blue, underlined on hover */
+html[data-theme="clean"]:not([data-md-theme]) a:not([class]) {
+  color: hsl(var(--primary));
+  text-decoration: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) a:not([class]):hover {
+  text-decoration: underline;
+}
+
+html[data-theme="clean"]:not([data-md-theme]) ::selection {
+  background: color-mix(in srgb, hsl(var(--primary)) 22%, transparent);
+  color: inherit;
+}
+
+/* ── focus: a 2px ring with a 2px gap, on everything a keyboard can reach ─────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) :focus-visible {
+  outline: 2px solid var(--clean-focus);
+  outline-offset: 2px;
+}
+/* the components draw their own 1px ring on focus-visible: the outline replaces it, so there is one indicator, not two */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    button,
+    a,
+    [role="tab"],
+    [role="switch"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="combobox"],
+    [role="menuitem"],
+    summary
+  ):focus-visible {
+  box-shadow: none;
+}
+/* a dialog, menu or list that the code focuses itself is not a control: no outline around the whole thing */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [role="dialog"],
+    [role="alertdialog"],
+    [role="menu"],
+    [role="listbox"],
+    [tabindex="-1"]:not([role="tabpanel"])
+  ):focus-visible {
+  outline: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) :is(input, textarea, select):focus-visible {
+  outline-offset: 0;
+  box-shadow: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) :where(input, textarea, select):disabled,
+html[data-theme="clean"]:not([data-md-theme]) [aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* ── scrollbars: slim, quiet ─────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--clean-n-300) transparent;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    main,
+    [data-slot="table-container"],
+    [role="dialog"],
+    [data-slot="select-content"],
+    [data-slot="dropdown-content"],
+    [class*="overflow-y-auto"],
+    [class*="overflow-auto"],
+    [class*="overflow-x-auto"],
+    [class*="overflow-scroll"]
+  ) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--clean-n-300) transparent;
+}
+html[data-theme="clean"]:not([data-md-theme]) ::-webkit-scrollbar,
+html[data-theme="clean"]:not([data-md-theme]) *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+html[data-theme="clean"]:not([data-md-theme]) *::-webkit-scrollbar-track {
+  background: transparent;
+}
+html[data-theme="clean"]:not([data-md-theme]) *::-webkit-scrollbar-thumb {
+  background: var(--clean-n-300);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+html[data-theme="clean"]:not([data-md-theme]) *::-webkit-scrollbar-thumb:hover {
+  background: var(--clean-n-400);
+  background-clip: padding-box;
+}
+/* where the code hides a scrollbar on purpose (the sidebar menu, tab strips) it stays hidden */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(.scrollbar-hide, [class*="[scrollbar-width:none]"], [class*="scrollbar-none"], .clay-tabs-list) {
+  scrollbar-width: none;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    .scrollbar-hide,
+    [class*="[&::-webkit-scrollbar]:hidden"],
+    [class*="scrollbar-none"],
+    .clay-tabs-list
+  )::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── motion: calm, and none when the person asked for none ───────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) :is(.clay-fade-in, .blob-animate) {
+  animation: none;
+}
+
+@keyframes clean-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme="clean"]:not([data-md-theme]) *,
+  html[data-theme="clean"]:not([data-md-theme]) *::before,
+  html[data-theme="clean"]:not([data-md-theme]) *::after {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
+  }
+}

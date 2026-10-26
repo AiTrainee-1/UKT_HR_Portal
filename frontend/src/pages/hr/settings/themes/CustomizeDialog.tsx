@@ -19,7 +19,7 @@ import {
   textCheck,
   type PaletteToken,
 } from "./palettes";
-import { TOKEN_TEXT } from "./text";
+import { tokenText } from "./text";
 
 const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
@@ -122,7 +122,7 @@ export function CustomizeDialog({
         <div className="max-h-[50vh] space-y-3 overflow-y-auto pr-1">
           {EDITABLE.map((token) => {
             const value = valueOf(token);
-            const words = TOKEN_TEXT[token];
+            const words = tokenText(themeId, token);
             const check = textCheck(themeId, token, value);
             const on = TEXT_ON[token];
             const isCustom = value !== own[token as PaletteToken];

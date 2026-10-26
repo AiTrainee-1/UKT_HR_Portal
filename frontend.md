@@ -197,6 +197,50 @@ Both payroll areas are built from the same kit and panels (`components/payroll/`
 ### The MD portal front end
 `/md/*` is a second shell (`MdLayout`) for the one Managing Director account (`AuthContext.isMd`, from `/auth/me`; the route guard in `App.tsx` sends everyone else away). Pages are built from the kit in `components/md/kit/` and read `/api/md/*` through `useMdQuery`. Two rules worth knowing before touching a page: **layout answers to the page's width, not the screen's** (`MdLayout`'s `<main>` is a Tailwind v4 `@container`; use `@3xl:`/`@5xl:` variants, because the assistant panel can take 444 px of the page), and **every figure carries its provenance** ("How is this calculated?") and an Ask-AI question. The assistant panel (`AssistantHost`, mounted once in `App.tsx`) is text + voice (Web Speech API with a server-transcription fallback) and renders the server-built explanation. Full recipe and rules: `md-portal.md` sections 4 and 6.
 
+### Clean Professional theme (`data-theme="clean"`)
+
+An alternative look to the glass-and-clay one, chosen in **Settings -> Themes** (catalogue entry `clean` in `lib/themes.ts`, label "Clean Professional"; not the same as the colour theme `professional`). The default theme and the other five are not changed in any way: this theme only exists when it is picked, and it is **all CSS**, in `src/themes/clean/`, imported once, last, from `src/index.css`.
+
+**The scope rule.** Every selector in `src/themes/clean/` starts with `html[data-theme="clean"]:not([data-md-theme])`. The first half is why nothing else can match it; the `:not([data-md-theme])` is why the Managing Director's portal (`html[data-md-theme]`, including the HR page copies it embeds) keeps its own skin in every theme, and why no MD token is ever read or changed. `src/themes/clean/clean-theme.test.ts` parses every file (`scan.ts`) and fails on any rule outside the scope (the steps of a `@keyframes` are the one exception, they select nothing), on a colour value (hex, `rgb()`, `hsl()` with numbers, a named colour) written anywhere but `tokens.css`, on an unexplained or over-budget `!important`, on a Tailwind colour family that is not remapped, on a palette that fails WCAG AA, and on a CSS file that `index.css` does not import. `e2e/theme-clean.spec.ts` pins the default theme's computed styles to the values it had before this theme existed (read from the old build), checks that Clean Professional differs, and checks the MD portal is identical in both.
+
+**Why it can win without touching a page.** Tailwind's utilities are in `@layer utilities`; these rules are not in a layer, so they beat any utility class whatever its specificity (this is also how `md-theme/` works). They are written against the markers the components already carry (`data-slot`, `data-variant`, Radix `data-state`/`role`), the legacy classes (`.clay-card`, `.clay-btn`, `.clay-tabs-*`, the Marble Switch, the loaders) and, only for `HrLayout`, `data-ui-shell` markers added for this (markers only, no style). Because they beat utilities, a rule sets colours, borders, radii and shadows and leaves heights, padding and font sizes to the component: a page's `h-8` or `px-2` survives. Where a variant's look depends on its base classes (a default Button is `bg-gradient-to-br`, an outline one `border-slate-200`) the rule matches that class, so a page that gave its own colour (`bg-green-600`, `text-red-600 border-red-200`) keeps it.
+
+| File | What it does |
+|---|---|
+| `tokens.css` | The palette (the only file with colours), radii, the two light shadows, type. The app's own tokens (`--background`, `--card`, `--primary`, `--sidebar`, `--accent` ...) are set here, the other shadcn tokens are written in terms of them, and the brand ramp is worked out from `--primary` with `color-mix`, so **the Customize panel's six colours keep working** and recolour every blue. |
+| `tailwind-remap.css` | Every Tailwind colour family replaced by the theme's ramps (slate/gray/zinc/neutral/stone -> neutral; blue/sky/cyan/teal/indigo/violet/purple/fuchsia -> brand; green/emerald/lime -> success; red/rose/pink -> danger; amber/yellow/orange -> warning), so `text-blue-700`, `bg-emerald-100` ... take the palette with no page edit. Also switches off the decorative utilities: shadows (through `--tw-shadow-color`), backdrop blur, gradients (to the gradient's first colour), hover lifts, `animate-ping`; maps the old UKT-blue hexes written in class names (`text-[#006496]`), inline styles and chart `fill`/`stroke` attributes; and `text-accent`/`border-accent` (the accent is a pale tint here) to the primary. |
+| `base.css` | Body (14px / 1.5), tabular figures, links, the 2px focus ring with a 2px gap, slim scrollbars, calm and reduced motion. |
+| `primitives.css` | Buttons, cards, tabs (Radix and PillTabs -> underlined), switches (Radix and Marble), tick boxes, progress, skeletons, loaders, the `.clay-*` classes, the Settings page skin's variables. |
+| `forms.css` | Inputs, selects, textareas, date and file fields: white, 1px border, 6px corners, blue border and ring on focus, flat grey disabled, red invalid. A field with `border-0` (part of a composite control) keeps its own look. |
+| `tables.css` | Shadcn tables (grey header, 1px row lines, no zebra, hover wash, 44px rows, 40px on a phone), light touches for hand-written `<table>`s, pagination. |
+| `overlays.css` | Dialogs, sheets, menus, select lists, popovers, tooltips, toasts: flat, bordered, no blur; the only things with a shadow (very light). |
+| `badges.css` | Badge and status-chip shape; their colours come from the tokens and the remap. |
+| `layout.css` | `HrLayout` shell, the white left menu (open page: soft fill + 3px bar), the mobile top bar, the page title row. |
+| `areas/<area>.css` | One file per area that needs more than the above (added by the area sweeps); listed in `index.css`. |
+
+**`!important`** is used only to beat an inline style (`HrLayout` and the sidebar colour themselves inline, PillTabs takes its colours from props) or a legacy `!important` (`.clay-tabs-*`, `.clay-input`), and every such declaration says so in a trailing comment (`/* inline style */`, `/* legacy !important */`). The test caps the number per file; the cap may only go down.
+
+**Palette** (tokens; contrast checked by the test):
+
+| Role | Token | Value |
+|---|---|---|
+| Page | `--background` | `#f4f6f9` |
+| Card / sidebar / popover | `--card`, `--sidebar`, `--popover` | `#ffffff` |
+| Lines | `--border` | `#dfe3e8` |
+| Field border | `--input` | `#8794a6` (3.1:1 on white) |
+| Text / muted text | `--foreground` / `--muted-foreground` | `#1f2937` (13.6:1) / `#5f6b7a` (5.0:1 on the page) |
+| Brand (buttons, links, tabs, focus) | `--primary` | `#1d56b3` (6.9:1 with white) |
+| Hover / selected tint | `--accent` / `--accent-foreground` | `#e8f0fb` / `#173f86` |
+| Danger | `--destructive` | `#b42318` |
+| Success / warning ramps | `--clean-s-*` / `--clean-w-*` | green `#1f7a4d`, amber `#a86400` at 600 |
+| Radii | `--radius` | 6px (2xl and 3xl also 8px; cards 8px, fields and buttons 6px, small things 4px) |
+
+**Adding an area rule.** Make `src/themes/clean/areas/<area>.css`, add `@import "./areas/<area>.css";` to `src/themes/clean/index.css`, and start every selector with the scope (copy it from `tokens.css`). Find the page by looking at it in the real app (`localStorage.uk_textile_theme_device = "clean"` on your own browser, then reload), prefer a `data-slot`/`role`/`data-testid` hook over a class, take colours from `var(--clean-*)` or `hsl(var(--primary))` (never a literal), and say why in a comment. An area file has its own `!important` budget in the test. Run `npm test -- src/themes` and `e2e/theme-clean.spec.ts` before you stop.
+
+**Where the choice is made.** `contexts/ThemeContext.tsx` applies `data-theme` to `<html>` from, in this order: the live preview, **this device's own choice** (`localStorage.uk_textile_theme_device`, a `ThemeId`, never sent to the server), the org-wide theme (the server's `PayrollSettings.theme_name` through `GET/PUT /api/theme-settings`, cached in `localStorage.uk_textile_theme`). A stored value that is not a `ThemeId` is ignored. The server's answer only ever updates the org-wide theme, so it cannot overwrite the device's choice; the org-wide custom colours are drawn only when the device follows the org-wide theme (or chose the same one). `index.html` carries a small inline script that puts the same theme on `<html>` before the first frame, so the sign-in pages wear it and nothing flashes (`index-html-theme.test.ts` keeps it in step with the catalogue and the context). The Themes tab labels come from separate sources (`themes/status.ts`): "Active for everyone" only after the server has answered (a cached copy may be stale), "Active on this device" only from the device key (a missing key is no choice), "Showing" from what is really on `<html>`.
+
+**Known limits.** The Employee Mobile App, Employee Web App, PDFs, ID cards and e-mails are not themed. The existing colour themes (`dark`, `premium` ...) only change tokens and still sit on the glass-and-clay layer, so they look partly light: unchanged, by design. Print views and the printed-statement sheets are left as designed.
+
 ### SMS Control (`/hr/sms-control`)
 Sign-in, forgot-password and first-time-password codes can go by SMS (through 2Factor.in) or by WhatsApp; this page (sidebar → Administration → SMS Control, permission module `sms_control`, mirrored in `lib/permission-modules.ts`, route `/hr/sms-control/*?` in `App.tsx`) is where HR chooses, limits and watches that. The backend is in `backend.md` Section 4.15 and the account / DLT / server setup in `twofactor-sms-otp-integration.md`. Rules worth knowing before touching it:
 

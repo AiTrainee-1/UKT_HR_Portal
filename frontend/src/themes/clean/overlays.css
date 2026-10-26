@@ -1,0 +1,144 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Clean Professional: everything that floats above a page - dialogs, sheets, menus, select lists, popovers, tooltips,
+   toasts. White, a 1px border, 6-8px corners, no blur and no frosted glass. They are the only things in the theme that
+   have a shadow, and it is the very light one from tokens.css (a floating layer has to read as floating).
+
+   Dialogs and menus render in a portal under <body>, outside the page: the attribute on <html> is what reaches them.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* the dim behind a dialog: a plain scrim, no blur */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-slot="dialog-overlay"],
+    [data-slot="alert-dialog-overlay"],
+    [data-slot="sheet-overlay"],
+    [data-vaul-overlay]
+  ) {
+  background: var(--clean-scrim);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* dialogs and sheets */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-slot="dialog-content"],
+    [data-slot="alert-dialog-content"],
+    [data-slot="sheet-content"],
+    [data-vaul-drawer]
+  ) {
+  background: var(--clean-surface);
+  background-image: none;
+  color: hsl(var(--card-foreground));
+  border: 1px solid var(--clean-line);
+  box-shadow: var(--clean-shadow-dialog);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  border-radius: var(--clean-radius-lg);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dialog-title"], [data-slot="sheet-title"]) {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0;
+  color: var(--clean-ink);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="dialog-description"] {
+  font-size: 13px;
+  color: var(--clean-muted);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="dialog-close"], [data-slot="sheet-close"], [data-slot="toast-close"]) {
+  border-radius: var(--clean-radius-sm);
+  background: transparent;
+  color: var(--clean-n-500);
+  opacity: 1;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="dialog-close"], [data-slot="sheet-close"], [data-slot="toast-close"]):hover {
+  background: var(--clean-n-100);
+  color: var(--clean-n-900);
+}
+
+/* menus, select lists, popovers, hover cards */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [data-slot="popover-panel"],
+    [data-slot="dropdown-content"],
+    [data-slot="select-content"],
+    [data-radix-hover-card-content],
+    [cmdk-root]
+  ) {
+  background: var(--clean-surface);
+  background-image: none;
+  color: hsl(var(--popover-foreground));
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius);
+  box-shadow: var(--clean-shadow-float);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dropdown-item"], [data-slot="select-item"], [cmdk-item]) {
+  border-radius: var(--clean-radius-sm);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is([data-slot="dropdown-item"], [data-slot="select-item"])[data-highlighted],
+html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dropdown-item"], [data-slot="select-item"]):focus {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dropdown-separator"], [data-slot="select-separator"]) {
+  background: var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dropdown-label"], [data-slot="select-label"]) {
+  color: var(--clean-n-600);
+  font-weight: 600;
+}
+
+/* a tooltip: a small dark label */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="tooltip-panel"] {
+  background: var(--clean-n-800);
+  color: var(--clean-on-primary);
+  border-radius: var(--clean-radius-sm);
+  box-shadow: none;
+  font-size: 12px;
+}
+
+/* toasts: white, a coloured bar on the left says which kind it is */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="toast"] {
+  background: var(--clean-surface);
+  color: var(--clean-ink);
+  border: 1px solid var(--clean-line);
+  border-left: 4px solid hsl(var(--primary));
+  border-radius: var(--clean-radius-lg);
+  box-shadow: var(--clean-shadow-float);
+  padding: 14px 32px 14px 16px;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="toast"][data-variant="destructive"] {
+  background: var(--clean-d-50);
+  color: var(--clean-d-800);
+  border-color: var(--clean-d-200);
+  border-left-color: hsl(var(--destructive));
+}
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="toast"][data-variant="destructive"]
+  [data-slot="toast-close"] {
+  color: var(--clean-d-700);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="toast-action"] {
+  border-radius: var(--clean-radius-sm);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-sonner-toast] {
+  background: var(--clean-surface);
+  color: var(--clean-ink);
+  border: 1px solid var(--clean-line);
+  border-radius: var(--clean-radius-lg);
+  box-shadow: var(--clean-shadow-float);
+}
+
+/* the header of a dialog that the code tints with a coloured gradient (emerald, sky, blue ...): one quiet grey wash */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="dialog-header"][class*="bg-gradient-to-"] {
+  background-color: var(--clean-wash);
+}

@@ -13,13 +13,15 @@ import {
   type PaletteToken,
 } from "./palettes";
 
-const css = fs
-  .readFileSync(path.join(import.meta.dirname, "../../../../index.css"), "utf8")
-  .replace(/\/\*[\s\S]*?\*\//g, "");
+const read = (file: string) =>
+  fs.readFileSync(path.join(import.meta.dirname, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const css = read("../../../../index.css");
+// Clean Professional keeps its tokens in its own folder, under its scope selector (see SELECTOR below)
+const cleanTokens = read("../../../../themes/clean/tokens.css");
 
 /** The custom properties declared in the rule whose selector list is exactly `selector`. */
-function block(selector: string): Record<string, string> {
-  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+function block(selector: string, source = css): Record<string, string> {
+  for (const m of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const selectors = m[1].split(",").map((s) => s.trim());
     if (selectors.includes(selector) && m[2].includes("--primary:")) {
       return Object.fromEntries([...m[2].matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((d) => [d[1], d[2].trim()]));
@@ -35,6 +37,7 @@ const SELECTOR: Record<string, string> = {
   mono: '[data-theme="mono"]',
   "mono-dark": '[data-theme="mono-dark"]',
   professional: '[data-theme="professional"]',
+  clean: 'html[data-theme="clean"]:not([data-md-theme])',
 };
 
 describe("theme palettes", () => {
@@ -44,7 +47,7 @@ describe("theme palettes", () => {
 
   for (const theme of THEMES) {
     it(`${theme.id}: matches src/index.css`, () => {
-      const declared = block(SELECTOR[theme.id]);
+      const declared = block(SELECTOR[theme.id], theme.id === "clean" ? cleanTokens : css);
       for (const [token, value] of Object.entries(PALETTES[theme.id]) as [PaletteToken, string][]) {
         expect(declared[token], `${theme.id} ${token}`).toBe(value);
       }

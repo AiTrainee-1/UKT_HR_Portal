@@ -99,7 +99,7 @@ export default function Bonus() {
 
   return (
     <HrLayout>
-      <div className="space-y-5">
+      <div className="space-y-5" data-ui-area="payroll">
         <div className="flex items-start justify-between flex-wrap gap-3">
           <div>
             <h2 className="text-2xl font-black text-gray-900 flex items-center gap-2">

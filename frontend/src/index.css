@@ -1163,3 +1163,10 @@
   .ukt-shield { stroke-dasharray: none; opacity: 0.5; }
   .ukt-scan { opacity: 0; }
 }
+
+/* ─── Clean Professional theme ─────────────────────────────────────────────
+   An alternative to the glass-and-clay look above, chosen in Settings -> Themes.
+   Imported last, and every rule in it is scoped to
+   html[data-theme="clean"]:not([data-md-theme]), so nothing above changes unless
+   that theme is on. See themes/clean/index.css. */
+@import "./themes/clean/index.css";

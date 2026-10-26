@@ -1,0 +1,107 @@
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Clean Professional: tables and data views. A light grey header (sticky when the table scrolls), 1px row lines, no zebra,
+   a faint blue wash under the pointer, numbers in tabular figures, comfortable 44px rows (40px on a phone).
+
+   Two kinds of table exist in the code: the shadcn Table (data-slot="table*"), which gets the whole treatment, and the
+   many hand-written <table>s in the pages (a payslip, the attendance grid, a settings rule list ...), which are dense on
+   purpose: they get only the quiet parts (no zebra, the hover wash, tabular figures from base.css) and keep their own
+   padding, widths and header colours (which the colour remap already makes grey and blue).
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table"] {
+  border-collapse: collapse;
+}
+
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-head"] {
+  background: var(--clean-wash);
+  color: var(--clean-n-600);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--clean-line);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+/* where the header sits at the top of a card, its corners follow the card's */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-header"] tr:first-child > th:first-child {
+  border-top-left-radius: calc(var(--clean-radius-lg) - 1px);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-header"] tr:first-child > th:last-child {
+  border-top-right-radius: calc(var(--clean-radius-lg) - 1px);
+}
+/* the default cell paddings only: a table that asked for its own keeps it */
+html[data-theme="clean"]:not([data-md-theme])
+  th[data-slot="table-head"][class~="px-2"]:not([class*="px-3"], [class*="px-4"]) {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+html[data-theme="clean"]:not([data-md-theme])
+  td[data-slot="table-cell"][class~="p-2"]:not([class*="py-"], [class*="px-"], [class*="pt-"], [class*="pb-"]) {
+  padding: 8px 12px;
+}
+
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-body"] > [data-slot="table-row"] {
+  height: var(--clean-row-h);
+}
+@media (max-width: 640px) {
+  html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-body"] > [data-slot="table-row"] {
+    height: 40px;
+  }
+  html[data-theme="clean"]:not([data-md-theme])
+    th[data-slot="table-head"][class~="px-2"]:not([class*="px-3"], [class*="px-4"]),
+  html[data-theme="clean"]:not([data-md-theme])
+    td[data-slot="table-cell"][class~="p-2"]:not([class*="py-"], [class*="px-"], [class*="pt-"], [class*="pb-"]) {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-row"] {
+  border-bottom: 1px solid var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-footer"] {
+  background: var(--clean-wash);
+  border-top: 1px solid var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-caption"] {
+  color: var(--clean-muted);
+}
+
+/* no zebra: a page that stripes its rows with even:/odd: classes gets plain rows */
+html[data-theme="clean"]:not([data-md-theme]) tr:is([class*="even:bg-"], [class*="odd:bg-"]) {
+  background-color: transparent;
+}
+
+/* the pointer: a faint wash; the chosen row: the accent */
+html[data-theme="clean"]:not([data-md-theme]) tbody > tr:hover {
+  background-color: var(--clean-hover);
+}
+html[data-theme="clean"]:not([data-md-theme]) tbody > tr:is([data-state="selected"], [aria-selected="true"]) {
+  background-color: hsl(var(--accent));
+}
+
+/* a table inside a card that clips nothing: no extra border of its own */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="table-container"] {
+  border-radius: 0;
+}
+
+/* ── pagination (DataPagination): the open page is a solid blue square, the rest quiet ───────────────────────────── */
+
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="page-number"],
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="page-step"] {
+  border-radius: var(--clean-radius);
+  box-shadow: none;
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="page-number"][aria-current="page"] {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  color: var(--clean-on-primary);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="page-number"]:not([aria-current="page"]):hover,
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="page-step"]:not(:disabled):hover {
+  background: var(--clean-n-100);
+  color: var(--clean-n-900);
+}
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="page-info"] {
+  color: var(--clean-muted);
+}

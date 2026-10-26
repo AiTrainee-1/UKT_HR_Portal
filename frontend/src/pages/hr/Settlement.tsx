@@ -130,7 +130,7 @@ export default function Settlement() {
 
   return (
     <HrLayout>
-      <div className="space-y-5">
+      <div className="space-y-5" data-ui-area="payroll">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-gray-900">Settlement</h2>
