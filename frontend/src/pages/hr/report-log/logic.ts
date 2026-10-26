@@ -1,5 +1,6 @@
-// Pure rules behind the Report Log page: the sub-tab an address names, the dates, the unit blocks of the Daily Leave and
-// Daily Late reports (HO, U-1, U-2 ... as in the paper lists), the late and leave row picks, the titles and the file names.
+// Pure rules behind the Report Log page: the sub-tab an address names, the dates, the unit blocks of the paper STAFF LEAVE
+// LIST (HO, U-1, U-2 ...), the late and leave row picks and the leave list's title. (The Daily Late Report's own rules, its
+// minutes, sorting and summary, are in late.ts.)
 // No React and no network here, so every rule has a test (logic.test.ts).
 
 import type { ReportLogDailyRow } from "@/lib/api-client/custom-hooks";
@@ -48,13 +49,6 @@ export function formatDMY(iso: string): string {
   return `${d}.${m}.${y}`;
 }
 
-/** 2026-10-16 -> 16.10.26 (the title of the late list) */
-export function formatDMYShort(iso: string): string {
-  if (!isIsoDate(iso)) return iso;
-  const [y, m, d] = iso.split("-");
-  return `${d}.${m}.${y.slice(2)}`;
-}
-
 /** "09:06" (24 hour, local time) -> "09:06 AM"; "13:05" -> "01:05 PM"; "00:10" -> "12:10 AM". "" for no punch or a bad value. */
 export function formatClock12(time: string | null | undefined): string {
   const match = /^(\d{1,2}):(\d{2})/.exec((time ?? "").trim());
@@ -72,7 +66,6 @@ export function minutesOf(time: string | null | undefined): number {
 }
 
 export const leaveTitle = (iso: string) => `${formatDMY(iso)} STAFF LEAVE LIST`;
-export const lateTitle = (iso: string) => `${formatDMYShort(iso)} STAFF LATE REPORT`;
 
 // ─── Informed / Not informed (the Daily Leave Report's remark) ───
 
@@ -116,7 +109,7 @@ export function filterByInformed(rows: ReportLogDailyRow[], filter: InformedFilt
 }
 
 /** The Daily Late Report: the attendance engine's own late flag (isLate, a Late-zone arrival), so the list agrees with Staff
- *  Attendance. The backend only ever sends staff, production workers are not part of this report. */
+ *  Attendance. The backend only ever sends staff: production workers are not part of this report. */
 export const lateRows = (rows: ReportLogDailyRow[]): ReportLogDailyRow[] => rows.filter((r) => r.isLate === true);
 
 // ─── Unit blocks (HO / U-1 / U-2 / Other) ───
@@ -161,16 +154,6 @@ export function groupByUnit(rows: ReportLogDailyRow[]): UnitBlock[] {
       a.label.localeCompare(b.label, undefined, { numeric: true }),
   );
 }
-
-/** Late arrivals earliest punch first, then by name, so the block reads as a timeline. */
-export function sortLate(rows: ReportLogDailyRow[]): ReportLogDailyRow[] {
-  return [...rows].sort(
-    (a, b) => minutesOf(a.firstPunch) - minutesOf(b.firstPunch) || a.employeeName.localeCompare(b.employeeName),
-  );
-}
-
-/** The late list as unit blocks, ready to show or export. */
-export const lateBlocks = (rows: ReportLogDailyRow[]): UnitBlock[] => groupByUnit(sortLate(lateRows(rows)));
 
 /** "HO 12 · U-1 6 · U-2 1" */
 export const unitCounts = (blocks: UnitBlock[]): string => blocks.map((b) => `${b.label} ${b.rows.length}`).join(" · ");

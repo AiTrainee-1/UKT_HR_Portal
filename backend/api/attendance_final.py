@@ -1277,6 +1277,11 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         )
 
     ot_shift = None  # the REAL shift, for the day's OT measurement (set below when a staff day has punches)
+    # The effective on-time limit of the day's morning arrival (seconds since midnight), exactly what the arrival timeline
+    # below judged the first punch against: the shift's start + grace, moved by a company-announced late-in or a Type 1
+    # allowance when one applied. Not stored: handed to a caller that wants to say HOW late (the Report Log's Daily Late
+    # Report) on the returned record as `arrival_deadline_secs` (None when nothing was judged).
+    arrival_deadline_secs = None
     marks: list = []  # [(kind, minutes, note)] compensation that shaped this day, most important first
 
     # Paid birthday leave (Compensation Leave C): a whole paid day whatever the punches say -no Late / Early-Out /
@@ -1377,6 +1382,9 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                     f"Company-announced late-in: staff may arrive until {win_late.strftime('%H:%M')} today (no grace), "
                     f"so the first punch {arrival_hhmm(first_s)} is judged from there",
                 ))
+
+            if limits is not None:
+                arrival_deadline_secs = limits.on_time_until
 
             notes = _late_basis_notes(
                 shift, comp_day, applied_morning, applied_evening,
@@ -1588,11 +1596,13 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     # this turns the common "nothing changed since last time" case (bulk
     # month-wide reads) into zero write queries instead of one per day.
     if existing is not None and all(getattr(existing, k) == v for k, v in fields.items()):
+        existing.arrival_deadline_secs = arrival_deadline_secs
         return existing
 
     record, _ = AttendanceDayRecord.objects.update_or_create(
         employee=emp, date=d, defaults=fields,
     )
+    record.arrival_deadline_secs = arrival_deadline_secs
     return record
 
 

@@ -7,25 +7,21 @@ import {
   filterByInformed,
   formatClock12,
   formatDMY,
-  formatDMYShort,
   groupByUnit,
   informedColor,
   informedLabel,
   informedValue,
-  lateBlocks,
   lateRows,
-  lateTitle,
   latestArrival,
   leaveTitle,
   localToday,
   minutesOf,
   parseTab,
   searchWithTab,
-  sortLate,
   totalRows,
   unitCounts,
 } from "./logic";
-import { LATE_COLUMNS, LEAVE_COLUMNS, lateSpec, leaveSpec } from "./sheets";
+import { LEAVE_COLUMNS, leaveSpec } from "./sheets";
 
 let nextId = 1;
 const row = (over: Partial<ReportLogDailyRow> = {}): ReportLogDailyRow => ({
@@ -76,12 +72,10 @@ describe("the sub-tab of an address", () => {
 describe("dates and times", () => {
   it("formats the two title dates", () => {
     expect(formatDMY("2026-10-03")).toBe("03.10.2026");
-    expect(formatDMYShort("2026-10-16")).toBe("16.10.26");
     expect(formatDMY("garbage")).toBe("garbage");
   });
-  it("builds the titles of the paper lists", () => {
+  it("builds the title of the paper leave list", () => {
     expect(leaveTitle("2026-10-03")).toBe("03.10.2026 STAFF LEAVE LIST");
-    expect(lateTitle("2026-10-16")).toBe("16.10.26 STAFF LATE REPORT");
   });
   it("turns a 24 hour punch into hh:mm AM/PM", () => {
     expect(formatClock12("09:06")).toBe("09:06 AM");
@@ -176,28 +170,8 @@ describe("unit blocks", () => {
   });
 });
 
-describe("the late list", () => {
-  it("lists only the late, earliest punch first, by unit", () => {
-    const rows = [
-      u1({ employeeName: "Kumar", isLate: true, firstPunch: "09:39" }),
-      ho({ employeeName: "Anand", isLate: true, firstPunch: "09:12" }),
-      ho({ employeeName: "Bala", isLate: true, firstPunch: "09:06" }),
-      ho({ employeeName: "On time", isLate: false, firstPunch: "09:01" }),
-      row({ employeeName: "Loose", isLate: true, firstPunch: "09:50" }),
-    ];
-    const blocks = lateBlocks(rows);
-    expect(blocks.map((b) => [b.label, b.rows.map((r) => r.employeeName)])).toEqual([
-      ["HO", ["Bala", "Anand"]],
-      ["U-1", ["Kumar"]],
-      ["Other", ["Loose"]],
-    ]);
-  });
-  it("sorts a missing punch last and does not change its input", () => {
-    const rows = [row({ employeeName: "B", firstPunch: null }), row({ employeeName: "A", firstPunch: "09:10" })];
-    expect(sortLate(rows).map((r) => r.employeeName)).toEqual(["A", "B"]);
-    expect(rows[0].employeeName).toBe("B");
-  });
-  it("finds the latest arrival", () => {
+describe("the latest arrival", () => {
+  it("finds it", () => {
     expect(latestArrival([])).toBeNull();
     expect(latestArrival([row({ firstPunch: null })])).toBeNull();
     const late = row({ employeeName: "Last", firstPunch: "09:58" });
@@ -225,28 +199,6 @@ describe("the sheets (what Excel, the PDF and the picture all draw)", () => {
     expect(remarks.cell(spec.blocks[0].rows[0], 0)).toEqual({ text: "Informed", fill: "#9bbb59", bold: true });
     expect(remarks.cell(spec.blocks[1].rows[0], 0)).toEqual({ text: "Not informed", fill: "#f79646", bold: true });
     expect(LEAVE_COLUMNS[4].cell(spec.blocks[0].rows[0], 0).text).toBe("—");
-  });
-  it("the late list has the five columns, the first punch on a yellow cell and a red header", () => {
-    expect(LATE_COLUMNS.map((c) => c.header)).toEqual([
-      "S.No",
-      "Ticket No",
-      "Employee Name",
-      "Designation",
-      "Late Hours",
-    ]);
-    expect(LATE_COLUMNS[4].headerColor).toBe("#ff0000");
-    const spec = lateSpec("2026-10-16", [ho({ firstPunch: "09:06" }), ho({ firstPunch: null })]);
-    expect(spec.title).toBe("16.10.26 STAFF LATE REPORT");
-    expect(LATE_COLUMNS[4].cell(spec.blocks[0].rows[0], 0)).toEqual({ text: "09:06 AM", fill: "#ffff00" });
-    expect(LATE_COLUMNS[4].cell(spec.blocks[0].rows[1], 1).text).toBe("—");
-  });
-  it("numbers the rows inside each block from 1", () => {
-    const spec = lateSpec("2026-10-16", [
-      ho({ firstPunch: "09:06" }),
-      ho({ firstPunch: "09:07" }),
-      u1({ firstPunch: "09:40" }),
-    ]);
-    expect(spec.blocks.map((b) => b.rows.map((r, i) => LATE_COLUMNS[0].cell(r, i).text))).toEqual([["1", "2"], ["1"]]);
   });
 });
 

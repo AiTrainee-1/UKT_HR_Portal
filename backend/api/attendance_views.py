@@ -1442,6 +1442,43 @@ def _unit_label(branch) -> str | None:
     return code or (branch.name or "").strip() or None
 
 
+def _late_timing(rec, shift) -> dict:
+    """
+    How late a day's first punch was, for the Report Log's Daily Late Report. `shift` is the employee's own shift for
+    the day (None: no shift, so every figure is null). All times are local "HH:MM" and minutes are whole minutes
+    (a punch counts as the minute it was made in, like every arrival check in the engine).
+
+    * shiftStart / graceMinutes: the shift's own start and grace (also on rows that are not late).
+    * lateDeadline: the effective on-time limit the arrival timeline judged the first punch against: start + grace, moved
+      by a company-announced late-in or an OT allowance when one applied (the engine hands it back as
+      `arrival_deadline_secs`; a manual row or a day with nothing judged falls back to start + grace). An approved in-cap
+      Morning Late-In permission does not move this limit: it excuses the arrival instead, so such a day is never flagged
+      late and carries no minutes.
+    * minutesAfterStart: first punch minus shift start. minutesLate: first punch minus lateDeadline (after the grace),
+      at least 1 for a day the engine flagged late. Both null for a day that is not late, has no punch or has no shift.
+    """
+    empty = {"shiftStart": None, "graceMinutes": None, "lateDeadline": None, "minutesAfterStart": None, "minutesLate": None}
+    if shift is None or getattr(shift, "start_time", None) is None:
+        return empty
+    start_secs = shift.start_time.hour * 3600 + shift.start_time.minute * 60
+    grace = max(0, int(shift.grace_period_minutes or 0))
+    deadline_secs = getattr(rec, "arrival_deadline_secs", None)
+    if deadline_secs is None:
+        deadline_secs = start_secs + grace * 60
+    out = {
+        "shiftStart": f"{start_secs // 3600 % 24:02d}:{start_secs % 3600 // 60:02d}",
+        "graceMinutes": grace,
+        "lateDeadline": f"{deadline_secs // 3600 % 24:02d}:{deadline_secs % 3600 // 60:02d}",
+        "minutesAfterStart": None,
+        "minutesLate": None,
+    }
+    if rec.is_late and rec.first_punch is not None:
+        first_min = rec.first_punch.hour * 60 + rec.first_punch.minute
+        out["minutesAfterStart"] = max(0, first_min - start_secs // 60)
+        out["minutesLate"] = max(1, first_min - deadline_secs // 60)
+    return out
+
+
 def _attendance_report_log_daily(request: Request, date_param: str, department_param, search_param, settings) -> Response:
     """
     Report Log -> Daily Leave / Late Report: one row per active staff employee for a
@@ -1455,6 +1492,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     """
     from .attendance_final import compensation_prefetch_for_day, compute_day_record
     from .models import AttendanceDayRecord, EmployeeShiftAssignment
+    from .shift_engine import _get_shift_for_date
 
     try:
         d = date_type.fromisoformat(date_param)
@@ -1551,6 +1589,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             # of the day as local "HH:MM" (punches are naive Tirupur wall-clock time, so no conversion) and the
             # unit block the employee belongs to.
             "firstPunch": rec.first_punch.strftime("%H:%M") if rec.first_punch else None,
+            **_late_timing(rec, _get_shift_for_date(emp, d, assignments=assignments_by_emp.get(emp.id, []))),
             "branchId": emp.branch_id,
             "branchName": emp.branch.name if emp.branch else None,
             "unitLabel": _unit_label(emp.branch),

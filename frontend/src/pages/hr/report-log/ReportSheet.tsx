@@ -2,10 +2,10 @@ import { forwardRef, type CSSProperties } from "react";
 import { totalRows, unitCounts } from "./logic";
 import { GUTTER_PX, sheetWidth, type SheetSpec } from "./sheets";
 
-// The paper-style list (the Daily Leave Report and the Daily Late Report): a salmon title bar, a header row, and one block per
+// The paper-style list (the Daily Leave Report): a salmon title bar, a header row, and one block per
 // unit with its label (HO, U-1 ...) in the left gutter. It is drawn with inline styles on purpose: the same element is the
 // live preview AND what html2canvas turns into the PDF and the picture, which reads computed styles, so the colours of the
-// paper list (yellow late cells, green / orange remarks) have to be exactly these and never depend on the app's theme.
+// paper list (green / orange remarks) have to be exactly these and never depend on the app's theme.
 
 const FONT = "Calibri, Arial, Helvetica, sans-serif";
 const LINE = "1px solid #000000";
@@ -98,7 +98,7 @@ const ReportSheet = forwardRef<
                   background: "#ffffff",
                   fontWeight: 700,
                   textAlign: "center",
-                  color: c.headerColor ?? "#000000",
+                  color: "#000000",
                 })}
               >
                 {c.header}

@@ -11,6 +11,8 @@ import { Chip, EmptyState, ErrorState, ListSkeleton, ResultLine, StatCard } from
 import DailyFiltersBar, { departmentParam, type DailyFilters } from "./DailyFilters";
 import ExportBar, { useSheetExport } from "./ExportBar";
 import ReportSheet from "./ReportSheet";
+import SelectAllBox from "./SelectAllBox";
+import { pickedRows, selectState, toggleAllInView, toggleId } from "./selection";
 import { absentRows, dash, filterByInformed, formatDMY, informedValue, type InformedFilter } from "./logic";
 import { leaveSpec } from "./sheets";
 import { useCompany } from "./useCompany";
@@ -66,8 +68,7 @@ export default function LeaveTab({
   );
 
   // what gets downloaded: the rows ticked AND still on the list (a row hidden by a filter is not exported)
-  const picked = useMemo(() => shown.filter((r) => selected.has(r.employeeId)), [shown, selected]);
-  const allShownPicked = shown.length > 0 && picked.length === shown.length;
+  const picked = useMemo(() => pickedRows(shown, selected), [shown, selected]);
 
   const spec = useMemo(() => leaveSpec(filters.date, picked), [filters.date, picked]);
   const exporter = useSheetExport(spec, company.excel);
@@ -77,22 +78,8 @@ export default function LeaveTab({
     onFilters(next);
   };
 
-  const toggle = (id: number) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  const toggleAll = () =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const r of shown) {
-        if (allShownPicked) next.delete(r.employeeId);
-        else next.add(r.employeeId);
-      }
-      return next;
-    });
+  const toggle = (id: number) => setSelected((prev) => toggleId(prev, id));
+  const toggleAll = () => setSelected((prev) => toggleAllInView(prev, shown));
 
   const decide = async (row: ReportLogDailyRow, value: "informed" | "not_informed" | "unset") => {
     try {
@@ -219,12 +206,7 @@ export default function LeaveTab({
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10 pl-4">
-                    <Checkbox
-                      checked={allShownPicked}
-                      onCheckedChange={toggleAll}
-                      aria-label="Select all employees shown"
-                      data-testid="select-all"
-                    />
+                    <SelectAllBox state={selectState(shown, selected)} count={shown.length} onToggle={toggleAll} />
                   </TableHead>
                   <TableHead>Ticket No</TableHead>
                   <TableHead>Employee Name</TableHead>

@@ -159,7 +159,7 @@ The most heavily-configurable area -see Section 6 for full mechanics.
 - **Geo Attendance & On-Duty:** geofenced punch-in/out, destination-based field-work sessions with department-head approval and live location tracking.
 - **Missing Punch:** employee-submitted forgotten-punch correction (4 slots), HOD/HR approval (Section 4.13).
 - **Manual Punch Import:** bulk Excel import for device outages/backfill.
-- **Auto Sync Rules, Attendance Search, Report Log, Night Shift Relaxation.** Report Log has three sub-tabs: Monthly Report, Daily Leave Report (absent staff + Informed / Not informed) and Daily Late Report (staff the engine marked late, with their first punch, per unit HO / U-1 / U-2); the daily ones read `GET /api/attendance/report-log?date=`, which carries `firstPunch`, `branchId`, `branchName` and `unitLabel` per row.
+- **Auto Sync Rules, Attendance Search, Report Log, Night Shift Relaxation.** Report Log has three sub-tabs: Monthly Report, Daily Leave Report (absent staff + Informed / Not informed) and Daily Late Report (staff the engine marked late, with shift start, grace, punch-in and minutes late after grace); the daily ones read `GET /api/attendance/report-log?date=`, which carries `firstPunch`, `shiftStart`, `graceMinutes`, `lateDeadline`, `minutesAfterStart`, `minutesLate`, `branchId`, `branchName` and `unitLabel` per row.
 
 ### 4.4 Leave & Holiday
 Configurable leave types, per-employee/year balances with carry-forward, request approval (HR and/or department head as the approval pipeline says, attributed), Permission requests (also feed the Late Detection pool), Holiday calendar, automatic attendance reflection.

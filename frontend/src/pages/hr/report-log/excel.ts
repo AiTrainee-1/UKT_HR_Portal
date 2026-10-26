@@ -38,7 +38,7 @@ export function buildSheetWorkbook(spec: SheetSpec, ctx: ExcelContext): Workbook
     cell.value = col.header;
     styleHeaderCell(cell, {
       fill: "FFFFFFFF",
-      color: col.headerColor ? argb(col.headerColor) : BLACK,
+      color: BLACK,
       border: allBorders("thin", BLACK),
     });
   });

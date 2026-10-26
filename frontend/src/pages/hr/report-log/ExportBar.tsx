@@ -66,23 +66,31 @@ export default function ExportBar({
   onExport,
   disabled,
   disabledHint,
+  formats = ["excel", "pdf", "image"],
+  scope,
 }: {
   busy: ExportFormat | null;
   onExport: (format: ExportFormat) => void;
   disabled: boolean;
   /** Why the buttons are off (a tooltip). */
   disabledHint?: string;
+  /** Which downloads to offer (the Daily Late Report has no picture). */
+  formats?: ExportFormat[];
+  /** What a download contains right now ("Exporting 5 selected"), added to each button's hover text. */
+  scope?: string;
 }) {
   return (
     <div className="flex items-center gap-2" data-view-safe data-testid="export-bar">
-      {FORMATS.map(({ format, label, Icon, tone }) => (
+      {FORMATS.filter((f) => formats.includes(f.format)).map(({ format, label, Icon, tone }) => (
         <Button
           key={format}
           type="button"
           variant="outline"
           className={cn("h-10 gap-1.5 font-semibold", tone)}
           disabled={disabled || busy !== null}
-          title={disabled ? disabledHint : `Download as ${label}`}
+          title={
+            disabled ? disabledHint : scope ? `Download as ${label}: ${scope.toLowerCase()}` : `Download as ${label}`
+          }
           onClick={() => onExport(format)}
           data-view-safe
           data-testid={`export-${format}`}
