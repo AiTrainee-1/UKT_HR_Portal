@@ -4,7 +4,10 @@ import {
   DEFAULT_SORT,
   LATE_COLUMNS,
   SEVERITY_BANDS,
+  bandText,
   cellText,
+  flattenGroups,
+  groupEntriesByUnit,
   explain,
   filterNote,
   firstDir,
@@ -74,9 +77,11 @@ describe("the late entries", () => {
         minutesLate: undefined,
         minutesAfterStart: undefined,
         unitLabel: undefined,
+        branchId: undefined,
+        branchName: undefined,
       }),
     );
-    expect(old).toMatchObject({ shiftStart: null, grace: null, minutesLate: null, unit: null });
+    expect(old).toMatchObject({ shiftStart: null, grace: null, minutesLate: null, unit: "Other", unitKey: "none" });
     expect(cellText(old, "shiftStart")).toBe("—");
     expect(cellText(old, "minutesLate")).toBe("—");
   });
@@ -231,5 +236,81 @@ describe("file helpers", () => {
   it("words the filters of a download", () => {
     expect(filterNote(null, "")).toBe("");
     expect(filterNote("Admin", " kumar ")).toBe("Department: Admin; Search: kumar");
+  });
+});
+
+describe("the late report unit by unit", () => {
+  const ho = (name: string, minutesLate: number | null) =>
+    entry({ employeeName: name, minutesLate, branchId: 1, branchName: "Head Office", unitLabel: "HO" });
+  const u2 = (name: string, minutesLate: number | null) =>
+    entry({ employeeName: name, minutesLate, branchId: 3, branchName: "Unit Two", unitLabel: "U-2" });
+  const u10 = (name: string, minutesLate: number | null) =>
+    entry({ employeeName: name, minutesLate, branchId: 4, branchName: "Unit Ten", unitLabel: "U-10" });
+  const u1 = (name: string, minutesLate: number | null) =>
+    entry({ employeeName: name, minutesLate, branchId: 2, branchName: "Unit One", unitLabel: "U-1" });
+  const other = (name: string, minutesLate: number | null) =>
+    entry({ employeeName: name, minutesLate, branchId: null, branchName: null, unitLabel: null });
+
+  it("gives an entry its unit: the label, and Other when it has no branch", () => {
+    expect(ho("A", 5)).toMatchObject({ unit: "HO", unitKey: "1", branchName: "Head Office" });
+    expect(other("B", 5)).toMatchObject({ unit: "Other", unitKey: "none", branchName: null });
+  });
+
+  it("orders the units HO first, then the others in natural order (U-1, U-2, U-10), then Other", () => {
+    const groups = groupEntriesByUnit([other("o", 3), u10("c", 9), u2("b", 9), ho("a", 9), u1("d", 9)]);
+    expect(groups.map((g) => g.label)).toEqual(["HO", "U-1", "U-2", "U-10", "Other"]);
+  });
+
+  it("orders the rows inside a unit by minutes late, longest first, then by name", () => {
+    const groups = groupEntriesByUnit([
+      ho("Zed", 10),
+      ho("Amy", 10),
+      ho("Long", 54),
+      ho("Short", 1),
+      ho("Unmeasured", null),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].entries.map((e) => e.name)).toEqual(["Long", "Amy", "Zed", "Short", "Unmeasured"]);
+  });
+
+  it("follows another direction inside the units when asked, and keeps the units in their own order", () => {
+    const groups = groupEntriesByUnit([u1("a", 30), ho("b", 5), ho("c", 50), u1("d", 2)], {
+      key: "minutesLate",
+      dir: "asc",
+    });
+    expect(groups.map((g) => [g.label, g.entries.map((e) => e.name)])).toEqual([
+      ["HO", ["b", "c"]],
+      ["U-1", ["d", "a"]],
+    ]);
+  });
+
+  it("leaves out a unit with no entry, so a list of ticked rows only has the units that have one", () => {
+    const everyone = [ho("a", 5), ho("b", 6), u1("c", 7), u2("d", 8)];
+    expect(groupEntriesByUnit([]).length).toBe(0);
+    const ticked = everyone.filter((e) => e.name === "c" || e.name === "d");
+    expect(groupEntriesByUnit(ticked).map((g) => g.label)).toEqual(["U-1", "U-2"]);
+    expect(groupEntriesByUnit(ticked.slice(0, 1)).map((g) => g.label)).toEqual(["U-1"]);
+  });
+
+  it("counts each unit from the entries it holds", () => {
+    const groups = groupEntriesByUnit([ho("a", 5), ho("b", 6), u1("c", 7)]);
+    expect(groups.map(bandText)).toEqual(["HO   2 late", "U-1   1 late"]);
+    expect(flattenGroups(groups).map((e) => e.name)).toEqual(["b", "a", "c"]);
+  });
+
+  it("keeps a unit whose branch has no label under its branch name", () => {
+    const e = entry({ branchId: 9, branchName: "Annexe", unitLabel: null });
+    expect(e.unit).toBe("Annexe");
+    expect(groupEntriesByUnit([e])[0]).toMatchObject({ label: "Annexe", key: "9" });
+  });
+
+  it("sorts a flat list by unit in the same unit order, the longest delay first inside a unit", () => {
+    const list = [u1("a", 5), ho("b", 5), other("c", 50), ho("d", 40), u2("e", 1)];
+    expect(sortEntries(list, { key: "unit", dir: "asc" }).map((e) => e.name)).toEqual(["d", "b", "a", "e", "c"]);
+    expect(sortEntries(list, { key: "unit", dir: "desc" }).map((e) => e.name)).toEqual(["c", "e", "a", "d", "b"]);
+  });
+
+  it("says the Unit column starts in its own direction when first clicked", () => {
+    expect(nextSort(DEFAULT_SORT, "unit")).toEqual({ key: "unit", dir: "asc" });
   });
 });

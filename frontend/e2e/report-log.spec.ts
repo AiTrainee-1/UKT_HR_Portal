@@ -165,6 +165,16 @@ function noExtras(ws: ExcelJS.Worksheet) {
   }
 }
 
+/** The late sheet below its header as a list: "band:<text>" for a unit band, the employee code for a row. */
+function layout(ws: ExcelJS.Worksheet): string[] {
+  const out: string[] = [];
+  for (let r = 7; r <= ws.rowCount; r += 1) {
+    const first = String(ws.getCell(r, 1).value);
+    out.push(first.includes(" late") ? `band:${first}` : String(ws.getCell(r, 2).value));
+  }
+  return out;
+}
+
 /** The hh:mm of an Excel time cell (read back as a date on 1899-12-30, or as the fraction of a day). */
 function clockOf(value: unknown): string {
   const minutes =
@@ -246,11 +256,12 @@ test("the Daily Late Report is a table of the late staff: shift, grace, punch-in
   await expect(page.getByText("STAFF LATE REPORT")).toHaveCount(0);
 
   // the seven columns after the tick column (each header is a sort button; the last also says what it means)
-  await expect(table.getByRole("columnheader")).toHaveCount(8); // the tick column and the seven
+  await expect(table.getByRole("columnheader")).toHaveCount(9); // the tick column, the seven and the Unit column
   for (const header of [
     "Employee Name",
     "Employee Code",
     "Department",
+    "Unit",
     "Shift Start Time",
     "Grace Period (minutes)",
     "Actual Punch-In Time",
@@ -263,12 +274,17 @@ test("the Daily Late Report is a table of the late staff: shift, grace, punch-in
   const cut = await table.evaluate((t) => t.parentElement!.scrollWidth - t.parentElement!.clientWidth);
   expect(cut).toBeLessThanOrEqual(1);
 
-  // longest delay first: Babu 45 min, Pandiyammal 19, Lokesh 6
-  const rows = table.locator("tbody tr");
-  await expect(rows).toHaveCount(3);
-  await expect(rows.nth(0)).toContainText("Babu Latecomer");
-  await expect(rows.nth(1)).toContainText("Pandiyammal Latecomer");
-  await expect(rows.nth(2)).toContainText("Lokesh Latecomer");
+  // unit by unit (the Group by unit switch is on): HO first with its two late, the longest delay first inside it (Pandiyammal
+  // 19 min, Lokesh 6), then the other unit with Babu (45 min)
+  await expect(page.getByTestId("group-by-unit")).toHaveAttribute("aria-checked", "true");
+  await expect(table.locator("tbody tr")).toHaveCount(5); // two unit rows and three employees
+  await expect(table.locator("[data-testid^='late-group-label-']")).toHaveText(["HO", UNIT]);
+  await expect(table.locator("[data-testid^='late-group-count-']")).toHaveText(["2 late", "1 late"]);
+  await expect(page.getByTestId("late-name")).toHaveText([
+    "Pandiyammal Latecomer",
+    "Lokesh Latecomer",
+    "Babu Latecomer",
+  ]);
 
   // Lokesh: shift 09:00 + 15 min grace = 09:15, punched 09:21: 6 min late, 21 min after the shift start
   const lokesh = page.locator("[data-testid^='late-row-']", { hasText: "RL-01" });
@@ -284,6 +300,9 @@ test("the Daily Late Report is a table of the late staff: shift, grace, punch-in
   await expect(babu.locator("[data-testid^='late-by-']")).toHaveAttribute("data-severity", "high");
   await expect(babu.locator("[data-testid^='after-start-']")).toHaveText("60 min after shift start");
   await expect(babu).toContainText(UNIT);
+  // the Unit column names the unit of every row
+  await expect(lokesh.locator("[data-testid^='late-unit-']")).toHaveText("HO");
+  await expect(babu.locator("[data-testid^='late-unit-']")).toHaveText(UNIT);
   const pandi = page.locator("[data-testid^='late-row-']", { hasText: "RL-02" });
   await expect(pandi.locator("[data-testid^='late-by-']")).toHaveAttribute("data-severity", "mid");
 
@@ -305,25 +324,53 @@ test("the Daily Late Report is a table of the late staff: shift, grace, punch-in
   await expect(page.getByTestId("figure-latest-value")).toHaveText("10:00 AM");
 });
 
-test("a column header sorts the late list, a second click flips it", async ({ page }) => {
+test("a column header sorts the late list; grouped by unit only the minutes column sorts, any other gives a flat list", async ({
+  page,
+}) => {
   await openLate(page);
   const order = async () =>
     (await page.getByTestId("late-name").allTextContents()).map((t) => t.replace(" Latecomer", ""));
-  await expect(page.getByTestId("late-table").locator("tbody tr")).toHaveCount(3);
-  expect(await order()).toEqual(["Babu", "Pandiyammal", "Lokesh"]);
+  const groupRows = page.locator("[data-testid^='late-group-label-']");
+  const toggle = page.getByTestId("group-by-unit");
+  await expect(page.locator("[data-testid^='late-row-']")).toHaveCount(3);
 
+  // unit by unit at first: HO (Pandiyammal 19, Lokesh 6), then Babu
+  expect(await order()).toEqual(["Pandiyammal", "Lokesh", "Babu"]);
+  await expect(groupRows).toHaveCount(2);
+
+  // grouped, the minutes column flips the order INSIDE each unit and the sections stay
+  await page.getByTestId("sort-minutesLate").click();
+  expect(await order()).toEqual(["Lokesh", "Pandiyammal", "Babu"]);
+  await expect(groupRows).toHaveCount(2);
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+
+  // any other column: one flat list across the units, the switch goes off, the Unit column tells the units apart
   await page.getByTestId("sort-name").click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await expect(groupRows).toHaveCount(0);
   expect(await order()).toEqual(["Babu", "Lokesh", "Pandiyammal"]);
   await expect(page.getByRole("columnheader", { name: /Employee Name/ })).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.locator("[data-testid^='late-unit-']")).toHaveText([UNIT, "HO", "HO"]);
   await page.getByTestId("sort-name").click();
   expect(await order()).toEqual(["Pandiyammal", "Lokesh", "Babu"]);
-
   await page.getByTestId("sort-punchIn").click();
   expect(await order()).toEqual(["Lokesh", "Pandiyammal", "Babu"]);
-  await page.getByTestId("sort-minutesLate").click();
+  await page.getByTestId("sort-minutesLate").click(); // flat: the longest delay first across all the units
   expect(await order()).toEqual(["Babu", "Pandiyammal", "Lokesh"]);
-  await page.getByTestId("sort-minutesLate").click();
-  expect(await order()).toEqual(["Lokesh", "Pandiyammal", "Babu"]);
+  await page.getByTestId("sort-unit").click(); // flat, by unit: HO first, the longest delay first inside it
+  expect(await order()).toEqual(["Pandiyammal", "Lokesh", "Babu"]);
+  await expect(groupRows).toHaveCount(0);
+
+  // the switch back on returns to the unit sections, the longest delay first
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(groupRows).toHaveCount(2);
+  expect(await order()).toEqual(["Pandiyammal", "Lokesh", "Babu"]);
+
+  // and the switch off gives the flat list again, longest delay first across the units
+  await toggle.click();
+  await expect(groupRows).toHaveCount(0);
+  expect(await order()).toEqual(["Babu", "Pandiyammal", "Lokesh"]);
 });
 
 test("late list: tick rows, then Excel / PDF / Image hold only the ticked rows, or every row when none is ticked", async ({
@@ -349,8 +396,10 @@ test("late list: tick rows, then Excel / PDF / Image hold only the ticked rows, 
   await expect(headerBox).toHaveAttribute("data-state", "unchecked");
   await expect(page.getByTestId("export-excel")).toHaveAttribute("title", /exporting all 3/);
   const everyone = await downloadSheet();
-  expect([7, 8, 9].map((r) => everyone.getCell(r, 2).value)).toEqual(["RL-03", "RL-02", "RL-01"]);
-  expect(everyone.rowCount).toBe(9); // the header and three rows: nothing after the table
+  // unit by unit: the HO band with its two (the longest delay first), then the other unit's band with its one
+  const everyoneLayout = ["band:HO   2 late", "RL-02", "RL-01", `band:${UNIT}   1 late`, "RL-03"];
+  expect(layout(everyone)).toEqual(everyoneLayout);
+  expect(everyone.rowCount).toBe(11); // the header, two bands and three rows: nothing after the table
   expect(everyone.getCell("A5").value).toBeNull(); // nothing narrows this list, so no note line
   noExtras(everyone);
 
@@ -364,23 +413,25 @@ test("late list: tick rows, then Excel / PDF / Image hold only the ticked rows, 
   await expect(lateRows.filter({ hasText: "RL-02" })).not.toHaveAttribute("data-state", "selected");
   await expect(page.getByTestId("export-excel")).toHaveAttribute("title", /exporting 2 selected/);
   const two = await downloadSheet();
-  expect([7, 8].map((r) => two.getCell(r, 2).value)).toEqual(["RL-03", "RL-01"]);
-  expect(two.rowCount).toBe(8); // the header and the two rows: no totals row, no summary
+  // only the units that have a ticked row are in the file, each band counting the rows exported
+  const twoLayout = ["band:HO   1 late", "RL-01", `band:${UNIT}   1 late`, "RL-03"];
+  expect(layout(two)).toEqual(twoLayout);
+  expect(two.rowCount).toBe(10); // the header, two bands and the two rows: no totals row, no summary
   // the one small note says the file is a selection
   expect(two.getCell("A5").value).toBe("Selected: 2 of 3");
   noExtras(two);
 
-  // a tick belongs to the person, not the position: sorting keeps it, and the file follows the order shown
+  // a tick belongs to the person, not the position: sorting (the list goes flat) keeps it, and the file is unit by unit
+  // whatever order the page shows
   await page.getByTestId("sort-name").click();
   await expect(page.getByTestId("late-name").first()).toHaveText("Babu Latecomer");
   await expect(lateRows.filter({ hasText: "RL-03" })).toHaveAttribute("data-state", "selected");
   await expect(lateRows.filter({ hasText: "RL-01" })).toHaveAttribute("data-state", "selected");
   await expect(scope).toHaveText("Exporting 2 selected");
-  const sorted = await downloadSheet();
-  expect([7, 8].map((r) => sorted.getCell(r, 2).value)).toEqual(["RL-03", "RL-01"]);
+  expect(layout(await downloadSheet())).toEqual(twoLayout);
   await page.getByTestId("sort-name").click();
-  expect((await downloadSheet()).getCell("B7").value).toBe("RL-01");
-  await page.getByTestId("sort-minutesLate").click(); // back to the longest delay first
+  expect(layout(await downloadSheet())).toEqual(twoLayout);
+  await page.getByTestId("group-by-unit").click(); // back to the unit sections
 
   // the PDF and the picture download with the selection too
   const [pdf] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-pdf").click()]);
@@ -416,8 +467,19 @@ test("late list: tick rows, then Excel / PDF / Image hold only the ticked rows, 
   await expect(page.getByTestId("late-selected-count")).toHaveText("3");
   await expect(lateRows.locator("[data-testid^='late-select-'][data-state='unchecked']")).toHaveCount(0);
   const all = await downloadSheet();
-  expect([7, 8, 9].map((r) => all.getCell(r, 2).value)).toEqual(["RL-03", "RL-02", "RL-01"]);
+  expect(layout(all)).toEqual(everyoneLayout);
   expect(all.getCell("A5").value).toBe("Selected: 3 of 3");
+
+  // a unit's own box ticks the whole unit: only that unit is exported, and it is the only band
+  await page.getByTestId("late-clear-selection").click();
+  await page.locator("[data-testid^='late-group-select-']").first().click(); // HO
+  await expect(page.getByTestId("late-selected-count")).toHaveText("2");
+  await expect(scope).toHaveText("Exporting 2 selected");
+  expect(layout(await downloadSheet())).toEqual(["band:HO   2 late", "RL-02", "RL-01"]);
+  await page.locator("[data-testid^='late-group-select-']").first().click(); // HO again: unticked
+  await expect(page.getByTestId("late-selected-count")).toHaveText("0");
+  await page.locator("[data-testid^='late-group-select-']").nth(1).click(); // the other unit
+  expect(layout(await downloadSheet())).toEqual([`band:${UNIT}   1 late`, "RL-03"]);
 
   // clearing the selection, and a new date starts with none
   await page.getByTestId("late-clear-selection").click();
@@ -497,9 +559,7 @@ test("the late list narrows by search and department, and says so when nobody wa
   await expect(page.getByTestId("export-image")).toBeDisabled();
 });
 
-test("the Daily Late Report downloads an Excel file, a PDF and an image of the list as sorted on the page", async ({
-  page,
-}) => {
+test("the Daily Late Report downloads an Excel file, a PDF and an image, unit by unit", async ({ page }) => {
   await openLate(page);
   await expect(page.getByTestId("late-table")).toBeVisible();
   await expect(page.getByTestId("export-excel")).toBeEnabled();
@@ -515,7 +575,7 @@ test("the Daily Late Report downloads an Excel file, a PDF and an image of the l
   expect(String(ws.getCell("A4").value)).toContain("Mon, 3 Aug 2026");
   expect(String(ws.getCell("A4").value)).toContain("Generated:");
   noExtras(ws);
-  expect([1, 2, 3, 4, 5, 6, 7].map((c) => ws.getCell(6, c).value)).toEqual([
+  expect([1, 2, 3, 4, 5, 6, 7, 8].map((c) => ws.getCell(6, c).value)).toEqual([
     "Employee Name",
     "Employee Code",
     "Department",
@@ -523,27 +583,35 @@ test("the Daily Late Report downloads an Excel file, a PDF and an image of the l
     "Grace Period (minutes)",
     "Actual Punch-In Time",
     "Total Minutes Late",
+    "Unit",
   ]);
-  // longest delay first, as on the page
-  expect(ws.getCell("A7").value).toBe("Babu Latecomer");
-  expect(ws.getCell("B7").value).toBe("RL-03");
-  expect(ws.getCell("C7").value).toBe("RL Production");
-  expect(clockOf(ws.getCell("D7").value)).toBe("09:00"); // a real Excel time, shown as hh:mm AM/PM
-  expect(ws.getCell("E7").value).toBe(15);
-  expect(clockOf(ws.getCell("F7").value)).toBe("10:00");
-  expect(ws.getCell("G7").value).toBe(45);
+  // unit by unit: the HO band with its two, then the other unit's band with Babu (rows 7-11)
+  expect(layout(ws)).toEqual(["band:HO   2 late", "RL-02", "RL-01", `band:${UNIT}   1 late`, "RL-03"]);
+  expect(ws.getCell("A7").value).toBe("HO   2 late");
+  expect(ws.getCell("A8").value).toBe("Pandiyammal Latecomer"); // the longest delay first inside HO
+  expect(ws.getCell("A9").value).toBe("Lokesh Latecomer");
+  expect(ws.getCell("A10").value).toBe(`${UNIT}   1 late`);
+  expect(ws.getCell("A11").value).toBe("Babu Latecomer");
+  expect(ws.getCell("B11").value).toBe("RL-03");
+  expect(ws.getCell("C11").value).toBe("RL Production");
+  expect(clockOf(ws.getCell("D11").value)).toBe("09:00"); // a real Excel time, shown as hh:mm AM/PM
+  expect(ws.getCell("E11").value).toBe(15);
+  expect(clockOf(ws.getCell("F11").value)).toBe("10:00");
+  expect(ws.getCell("G11").value).toBe(45);
   expect(ws.getCell("G9").value).toBe(6);
-  expect(ws.rowCount).toBe(9);
+  expect(ws.rowCount).toBe(11);
+  // filters keep working: the auto-filter covers the header and every row, and the Unit column says each row's unit
+  expect(ws.getCell("H8").value).toBe("HO");
+  expect(ws.getCell("H11").value).toBe(UNIT);
+  expect(ws.autoFilter).toBe("A6:H11"); // the header row to the last row, all eight columns
   expect(ws.views[0]).toMatchObject({ state: "frozen", ySplit: 6 });
-  expect(ws.autoFilter).toBeTruthy();
 
-  // the file follows the order chosen on the page
+  // the file is unit by unit whatever order the page shows: sort the page by name and download again
   await page.getByTestId("sort-name").click();
   const [byName] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-excel").click()]);
   const wb2 = new ExcelJS.Workbook();
   await wb2.xlsx.load((await readDownload(byName)) as unknown as ArrayBuffer);
-  expect(wb2.getWorksheet("Daily Late Report")!.getCell("A7").value).toBe("Babu Latecomer");
-  expect(wb2.getWorksheet("Daily Late Report")!.getCell("A8").value).toBe("Lokesh Latecomer");
+  expect(layout(wb2.getWorksheet("Daily Late Report")!)).toEqual(layout(ws));
 
   const [pdf] = await Promise.all([page.waitForEvent("download"), page.getByTestId("export-pdf").click()]);
   expect(pdf.suggestedFilename()).toBe("Daily_Late_Report_2026-08-03.pdf");

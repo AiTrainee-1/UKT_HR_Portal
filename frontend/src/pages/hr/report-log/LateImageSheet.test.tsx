@@ -20,12 +20,19 @@ afterEach(() => {
   host = null;
 });
 
-const entry = (id: number, name: string, minutesLate: number | null): LateEntry => ({
+const UNITS: Record<string, { unitKey: string; branchName: string }> = {
+  HO: { unitKey: "1", branchName: "Head Office" },
+  "U-1": { unitKey: "2", branchName: "Unit One" },
+  "U-2": { unitKey: "3", branchName: "Unit Two" },
+};
+
+const entry = (id: number, name: string, minutesLate: number | null, unit = "HO"): LateEntry => ({
   employeeId: id,
   name,
   code: `E${id}`,
   department: "Admin",
-  unit: "HO",
+  unit,
+  ...UNITS[unit],
   shiftStart: "09:00",
   grace: 15,
   lateDeadline: "09:15",
@@ -87,8 +94,8 @@ describe("the Daily Late Report picture", () => {
       "Total Minutes Late",
     ]);
     const rows = Array.from(el.querySelectorAll("tbody tr"));
-    expect(rows).toHaveLength(3);
-    expect(Array.from(rows[0].querySelectorAll("td")).map((td) => td.textContent)).toEqual([
+    expect(rows).toHaveLength(4); // the HO band and its three rows
+    expect(Array.from(rows[1].querySelectorAll("td")).map((td) => td.textContent)).toEqual([
       "Babu",
       "E1",
       "Admin",
@@ -102,7 +109,9 @@ describe("the Daily Late Report picture", () => {
 
   it("tints the minutes by severity and shows the legend, with none of the old paper-sheet styling", () => {
     const el = draw(entries);
-    const chips = Array.from(el.querySelectorAll<HTMLElement>("tbody tr td:last-child span"));
+    const chips = Array.from(el.querySelectorAll<HTMLElement>("tbody tr td:last-child span")).filter((c) =>
+      (c.textContent ?? "").endsWith(" min"),
+    );
     expect(chips.map((c) => c.textContent)).toEqual(["45 min", "19 min", "6 min"]);
     expect(chips.map((c) => c.style.background)).toEqual([
       "rgb(254, 202, 202)",
@@ -122,7 +131,7 @@ describe("the Daily Late Report picture", () => {
       filter: "Department: Admin",
       logoDataUrl: "data:image/png;base64,iVBORw0KGgo=",
     });
-    expect(Array.from(el.querySelectorAll("tbody tr")[0].querySelectorAll("td")).map((td) => td.textContent)).toEqual([
+    expect(Array.from(el.querySelectorAll("tbody tr")[1].querySelectorAll("td")).map((td) => td.textContent)).toEqual([
       "No Shift",
       "E4",
       "Admin",
@@ -138,6 +147,44 @@ describe("the Daily Late Report picture", () => {
   it("is as wide as its seven columns and grows as tall as the list is long", () => {
     expect(IMAGE_WIDTH).toBe(273 * 4 + 56);
     const el = draw(Array.from({ length: 60 }, (_, i) => entry(i + 1, `Person ${i + 1}`, (i % 45) + 1)));
-    expect(el.querySelectorAll("tbody tr")).toHaveLength(60);
+    expect(el.querySelectorAll("tbody tr")).toHaveLength(61); // one band and the 60 rows
+  });
+
+  it("is made unit by unit: a band per unit with its count, HO first, the longest delay first inside a unit", () => {
+    const el = draw([
+      entry(1, "Kumar", 5, "U-1"),
+      entry(2, "Anand", 12),
+      entry(3, "Babu", 40),
+      entry(4, "Mani", 31, "U-1"),
+      entry(5, "Raja", 2, "U-2"),
+    ]);
+    const rows = Array.from(el.querySelectorAll("tbody tr"));
+    const label = (tr: Element) => tr.querySelector("td")?.textContent ?? "";
+    expect(rows.map((tr) => (tr.querySelectorAll("td").length === 1 ? "band" : label(tr)))).toEqual([
+      "band",
+      "Babu",
+      "Anand",
+      "band",
+      "Mani",
+      "Kumar",
+      "band",
+      "Raja",
+    ]);
+    expect(rows.filter((tr) => tr.querySelectorAll("td").length === 1).map((tr) => tr.textContent)).toEqual([
+      "HO2 late",
+      "U-12 late",
+      "U-21 late",
+    ]);
+    // a band is one full-width cell in its own colour
+    const band = rows[0].querySelector("td")!;
+    expect(band.getAttribute("colspan")).toBe("7");
+    expect(band.style.background).toBe("rgb(224, 231, 255)");
+  });
+
+  it("has a band only for the units of the rows it is given", () => {
+    const el = draw([entry(1, "Only", 9, "U-2")]);
+    const bands = Array.from(el.querySelectorAll("tbody tr")).filter((tr) => tr.querySelectorAll("td").length === 1);
+    expect(bands.map((tr) => tr.textContent)).toEqual(["U-21 late"]);
+    expect(el.textContent).not.toContain("HO");
   });
 });

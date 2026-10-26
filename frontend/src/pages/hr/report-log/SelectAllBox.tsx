@@ -12,19 +12,28 @@ export default function SelectAllBox({
   count,
   onToggle,
   testId = "select-all",
+  label,
 }: {
   state: SelectState;
   /** How many rows are in view (what the box would tick). */
   count: number;
   onToggle: () => void;
   testId?: string;
+  /** Names the box for a screen reader when it is not the whole list's ("all 19 in HO"). */
+  label?: string;
 }) {
   return (
     <Checkbox
       checked={state === "all" ? true : state === "some" ? "indeterminate" : false}
       onCheckedChange={onToggle}
       disabled={count === 0}
-      aria-label={state === "all" ? `Deselect all ${count} employees shown` : `Select all ${count} employees shown`}
+      aria-label={
+        label
+          ? `${state === "all" ? "Deselect" : "Select"} ${label}`
+          : state === "all"
+            ? `Deselect all ${count} employees shown`
+            : `Select all ${count} employees shown`
+      }
       className={INDETERMINATE_CLASS}
       data-testid={testId}
     />

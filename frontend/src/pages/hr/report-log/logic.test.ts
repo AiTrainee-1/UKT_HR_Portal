@@ -7,6 +7,7 @@ import {
   filterByInformed,
   formatClock12,
   formatDMY,
+  compareUnits,
   groupByUnit,
   informedColor,
   informedLabel,
@@ -214,5 +215,23 @@ describe("small helpers", () => {
   });
   it("uses u2 in a block of its own", () => {
     expect(groupByUnit([u2()])[0].label).toBe("U-2");
+  });
+});
+
+describe("the order of units", () => {
+  const head = (key: string, label: string, branchName: string | null = null) => ({ key, label, branchName });
+  const sorted = (...units: ReturnType<typeof head>[]) => [...units].sort(compareUnits).map((u) => u.label);
+
+  it("puts HO first, the others in natural order of their label, and Other last", () => {
+    expect(
+      sorted(head("none", "Other"), head("5", "UKT-10"), head("3", "UKT-2"), head("1", "HO"), head("4", "UKT-1")),
+    ).toEqual(["HO", "UKT-1", "UKT-2", "UKT-10", "Other"]);
+  });
+  it("breaks a tie on the label by the branch name, and is the same whichever way round it is asked", () => {
+    const a = head("7", "WB", "Weaving A");
+    const b = head("8", "WB", "Weaving B");
+    expect(compareUnits(a, b)).toBeLessThan(0);
+    expect(compareUnits(b, a)).toBeGreaterThan(0);
+    expect(compareUnits(a, a)).toBe(0);
   });
 });

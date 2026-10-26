@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { AlarmClock, Building2, Clock, Info, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useListDepartments } from "@/lib/api-client";
 import { useAttendanceReportDaily } from "@/lib/api-client/custom-hooks";
@@ -19,9 +20,12 @@ import {
   lateFileStem,
   lateEntries,
   nextSort,
+  flattenGroups,
+  groupEntriesByUnit,
   sortEntries,
   summarize,
   type LateSort,
+  type LateSortKey,
 } from "./late";
 import { downloadLateExcel, type LateReportInput } from "./late-excel";
 import { exportChoice, exportScopeText, pickedRows, toggleAllInView, toggleId } from "./selection";
@@ -49,6 +53,8 @@ export default function LateTab({
   const company = useCompany();
   const { data: departments } = useListDepartments();
   const [sort, setSort] = useState<LateSort>(DEFAULT_SORT);
+  // the report is made unit by unit: on, the table has a section per unit (HO first) with the longest delay first inside it
+  const [grouped, setGrouped] = useState(true);
   const [busy, setBusy] = useState<ExportFormat | null>(null);
   // the ticked rows, by employee id: a sort or a narrower search never loses a tick, a new date starts with none
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -66,7 +72,13 @@ export default function LateTab({
   const wholeDay = useAttendanceReportDaily({ date: filters.date }, narrowed);
   const lateOnTheDay = narrowed ? (wholeDay.data ? lateRows(wholeDay.data.rows).length : null) : null;
 
-  const entries = useMemo(() => sortEntries(lateEntries(query.data?.rows ?? []), sort), [query.data, sort]);
+  const everyone = useMemo(() => lateEntries(query.data?.rows ?? []), [query.data]);
+  const groups = useMemo(() => (grouped ? groupEntriesByUnit(everyone, sort) : null), [grouped, everyone, sort]);
+  // the rows in the order shown (unit after unit when grouped): what the header box ticks
+  const entries = useMemo(
+    () => (groups ? flattenGroups(groups) : sortEntries(everyone, sort)),
+    [groups, everyone, sort],
+  );
   const summary = useMemo(() => summarize(entries), [entries]);
   const latest = useMemo(() => latestArrival(lateRows(query.data?.rows ?? [])), [query.data]);
   // the units that have a late arrival, the head office first (the same order as the paper lists used)
@@ -95,6 +107,18 @@ export default function LateTab({
     logoDataUrl: company.excel.logoDataUrl,
     filter: [filterNote(departmentName, filters.search), selectionNote].filter(Boolean).join("; "),
     now: new Date(),
+  };
+
+  // Grouped, only the minutes column sorts (inside each unit); a click on any other column gives a flat list sorted across all
+  // the units (the Unit column says which unit each row is in) and the toggle goes off. Switching it back on returns to the
+  // unit sections, longest delay first.
+  const onSort = (column: LateSortKey) => {
+    if (grouped && column !== "minutesLate") setGrouped(false);
+    setSort((cur) => nextSort(cur, column));
+  };
+  const onGroupToggle = (on: boolean) => {
+    setGrouped(on);
+    if (on) setSort(DEFAULT_SORT);
   };
 
   const changeFilters = (next: DailyFilters) => {
@@ -228,7 +252,18 @@ export default function LateTab({
                 </p>
               )}
             </div>
-            <SeverityLegend />
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-gray-600">
+                <Switch
+                  checked={grouped}
+                  onCheckedChange={onGroupToggle}
+                  aria-label="Group by unit"
+                  data-testid="group-by-unit"
+                />
+                Group by unit
+              </label>
+              <SeverityLegend />
+            </div>
           </div>
           <p className="flex items-start gap-1.5 text-xs text-gray-500" data-testid="late-note">
             <Info size={14} className="mt-0.5 shrink-0 text-gray-400" />
@@ -254,11 +289,13 @@ export default function LateTab({
           ) : (
             <LateTable
               entries={entries}
+              groups={groups}
               sort={sort}
-              onSort={(column) => setSort((cur) => nextSort(cur, column))}
+              onSort={onSort}
               selected={selected}
               onToggle={(id) => setSelected((cur) => toggleId(cur, id))}
               onToggleAll={() => setSelected((cur) => toggleAllInView(cur, entries))}
+              onToggleGroup={(group) => setSelected((cur) => toggleAllInView(cur, group.entries))}
             />
           )}
         </CardContent>

@@ -8,17 +8,25 @@ import {
   LATE_REPORT_TITLE,
   SEVERITY_BANDS,
   SEVERITY_COLORS,
+  UNIT_BAND_COLORS,
+  bandText,
   cellText,
   generatedStamp,
+  groupEntriesByUnit,
   lateFileStem,
   severityOf,
+  type LateEntry,
+  type LateGroup,
 } from "./late";
 
-// The Daily Late Report as a PDF: A4 landscape, a company header (logo, company, branch) with the title and the date, then the
-// seven columns of the table with a header that repeats on every page, a tint per severity on the minutes, a small colour key
-// under the table and a footer with the moment it was made and "Page x of y". Nothing else: no summary line, no explanation, no
-// totals row (the page has those). Drawn with jsPDF's built-in Helvetica (text is made safe for it with pdfSafe, the same as the
-// Salary Statement PDF) so the text stays selectable. jsPDF is imported on demand, so only a user who exports pays for it.
+// The Daily Late Report as a PDF, made unit by unit: A4 landscape, a company header (logo, company, branch) with the title and the
+// date, then the seven columns of the table with a header that repeats on every page, for each unit a full-width band ("HO   19
+// late") before its rows (the longest delay first), a tint per severity on the minutes, a small colour key under the table and a
+// footer with the moment it was made and "Page x of y". A band never ends a page on its own: it always travels with the unit's
+// first row, and a unit that runs onto the next page starts it with a "(contd.)" band. Nothing else: no summary line, no
+// explanation, no totals row (the page has those). Drawn with jsPDF's built-in Helvetica (text is made safe for it with pdfSafe,
+// the same as the Salary Statement PDF) so the text stays selectable. jsPDF is imported on demand, so only a user who exports
+// pays for it.
 
 /** The colour key goes under the table, on the last page: room kept for it (millimetres). */
 const LEGEND_ROOM = 10;
@@ -52,21 +60,40 @@ const rgb = (hex: string): Rgb => [
   parseInt(hex.slice(5, 7), 16),
 ];
 
-/** How many table rows each page holds: the first page has the header block, the later ones a short one. */
-export function pdfRowsPerPage(count: number): number[] {
+/** One line of the table: a unit's band (`contd`: the unit started on an earlier page) or one employee's row. */
+export type PdfLine =
+  | { kind: "band"; group: LateGroup; contd: boolean }
+  | { kind: "row"; group: LateGroup; entry: LateEntry; indexInGroup: number };
+
+/** The lines each page holds. The first page has the header block, the later ones a short one; a band is never the last line of
+ *  a page (it moves to the next page with its first row), and a page that continues a unit opens with that unit's "(contd.)"
+ *  band. No groups still gives one (empty) page. */
+export function pdfPlan(groups: LateGroup[]): PdfLine[][] {
   const cap = (top: number) => Math.floor((PDF.bottom - top - PDF.headHeight - LEGEND_ROOM) / PDF.rowHeight);
   const first = cap(PDF.firstTop);
   const next = cap(PDF.nextTop);
-  const pages: number[] = [];
-  let left = count;
-  let capacity = first;
-  while (left > 0) {
-    const take = Math.min(left, capacity);
-    pages.push(take);
-    left -= take;
-    capacity = next;
+  const pages: PdfLine[][] = [];
+  let page: PdfLine[] = [];
+  const capacity = () => (pages.length === 0 ? first : next);
+  for (const group of groups) {
+    const lines: PdfLine[] = [
+      { kind: "band", group, contd: false },
+      ...group.entries.map((entry, indexInGroup): PdfLine => ({ kind: "row", group, entry, indexInGroup })),
+    ];
+    for (const line of lines) {
+      // a band needs room for itself and the unit's first row
+      const needed = line.kind === "band" ? 2 : 1;
+      if (page.length > 0 && page.length + needed > capacity()) {
+        pages.push(page);
+        page = [];
+      }
+      if (line.kind === "row" && page.length === 0 && line.indexInGroup > 0)
+        page.push({ kind: "band", group, contd: true });
+      page.push(line);
+    }
   }
-  return pages.length > 0 ? pages : [0];
+  if (page.length > 0 || pages.length === 0) pages.push(page);
+  return pages;
 }
 
 export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
@@ -76,7 +103,7 @@ export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
   const stamp = generatedStamp(now);
   const { width: pageW, margin, headHeight, rowHeight } = PDF;
   const tableW = pageW - 2 * margin;
-  const pages = pdfRowsPerPage(input.entries.length);
+  const pages = pdfPlan(groupEntriesByUnit(input.entries));
   const dateText = pdfSafe(longDate(input.date));
 
   doc.setProperties({
@@ -187,8 +214,7 @@ export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
     doc.text(`Page ${page} of ${pages.length}`, pageW - margin, PDF.footerY, { align: "right" });
   };
 
-  let next = 0;
-  pages.forEach((count, pageIndex) => {
+  pages.forEach((lines, pageIndex) => {
     if (pageIndex > 0) doc.addPage();
     const top = pageIndex === 0 ? PDF.firstTop : PDF.nextTop;
     if (pageIndex === 0) drawFirstHead();
@@ -196,10 +222,22 @@ export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
     drawColumnHeads(top);
     let y = top + headHeight;
 
-    for (let n = 0; n < count; n += 1) {
-      const entry = input.entries[next];
-      next += 1;
-      if (next % 2 === 0) {
+    for (const line of lines) {
+      if (line.kind === "band") {
+        // the unit's band: a full-width filled row
+        fill(rgb(UNIT_BAND_COLORS.bg));
+        doc.rect(margin, y, tableW, rowHeight, "F");
+        stroke(rgb(UNIT_BAND_COLORS.text), 0.2);
+        doc.line(margin, y, margin + tableW, y);
+        font(true, 9.4);
+        ink(rgb(UNIT_BAND_COLORS.text));
+        const text = line.contd ? `${line.group.label} (contd.)` : bandText(line.group);
+        doc.text(fit(pdfSafe(text), tableW - 5), margin + 2.5, baseline(y, rowHeight, 9.4));
+        y += rowHeight;
+        continue;
+      }
+      const entry = line.entry;
+      if (line.indexInGroup % 2 === 1) {
         fill(ZEBRA);
         doc.rect(margin, y, tableW, rowHeight, "F");
       }

@@ -6,14 +6,17 @@ import {
   LATE_REPORT_TITLE,
   SEVERITY_BANDS,
   SEVERITY_COLORS,
+  UNIT_BAND_COLORS,
   cellText,
   generatedStamp,
+  groupEntriesByUnit,
   severityOf,
 } from "./late";
 
 // The Daily Late Report as a picture (the PNG download): the same report as the table on the page, laid out as a clean modern
-// sheet: company block, title and date, the seven columns, a colour step per severity with its small key, and a footer. No
-// summary line, no explanation and no totals row (the page has those). It is the OFF-SCREEN element exportElementToFile (lib/exportUtils) turns into the image, so, like the leave list's
+// sheet, made unit by unit: company block, title and date, the seven columns with a band ("HO  19 late") before each unit's rows,
+// a colour step per severity with its small key, and a footer. No summary line, no explanation and no totals row (the page has
+// those). It is the OFF-SCREEN element exportElementToFile (lib/exportUtils) turns into the image, so, like the leave list's
 // sheet, it is drawn with inline styles that html2canvas reads straight, never depending on the app's theme. The picture is as
 // tall as the list is long, every row fully legible.
 
@@ -45,6 +48,8 @@ const LateImageSheet = forwardRef<HTMLDivElement, { input: LateReportInput; test
   ref,
 ) {
   const now = input.now ?? new Date();
+  // unit by unit: the head office first, then the other units in order, "Other" last; each unit's longest delay first
+  const groups = groupEntriesByUnit(input.entries);
   return (
     <div
       ref={ref}
@@ -119,36 +124,57 @@ const LateImageSheet = forwardRef<HTMLDivElement, { input: LateReportInput; test
           </tr>
         </thead>
         <tbody>
-          {input.entries.map((entry, i) => (
-            <tr key={entry.employeeId} style={{ background: i % 2 === 1 ? "#f8fafc" : "#ffffff" }}>
-              {LATE_COLUMNS.map((c) => {
-                const level = c.key === "minutesLate" ? severityOf(entry.minutesLate) : null;
-                return (
-                  <td key={c.key} style={cell({ textAlign: c.align, fontWeight: c.key === "name" ? 700 : 400 })}>
-                    {level ? (
-                      <span
-                        style={{
-                          display: "inline-block",
-                          minWidth: 78,
-                          padding: "3px 12px",
-                          borderRadius: 999,
-                          background: SEVERITY_COLORS[level].bg,
-                          color: SEVERITY_COLORS[level].text,
-                          fontWeight: 700,
-                          fontSize: 13,
-                          textAlign: "center",
-                        }}
-                      >
-                        {cellText(entry, c.key)}
-                      </span>
-                    ) : (
-                      cellText(entry, c.key)
-                    )}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
+          {groups.map((group) => [
+            <tr key={`band-${group.key}`} data-testid={testId ? `${testId}-band-${group.key}` : undefined}>
+              <td
+                colSpan={LATE_COLUMNS.length}
+                style={cell({
+                  background: UNIT_BAND_COLORS.bg,
+                  color: UNIT_BAND_COLORS.text,
+                  fontWeight: 700,
+                  fontSize: 15,
+                  padding: "8px 12px",
+                  textAlign: "left",
+                  borderTop: `1px solid ${UNIT_BAND_COLORS.text}55`,
+                })}
+              >
+                {group.label}
+                <span style={{ marginLeft: 14, fontWeight: 600, fontSize: 13, opacity: 0.85 }}>
+                  {group.entries.length} late
+                </span>
+              </td>
+            </tr>,
+            ...group.entries.map((entry, i) => (
+              <tr key={entry.employeeId} style={{ background: i % 2 === 1 ? "#f8fafc" : "#ffffff" }}>
+                {LATE_COLUMNS.map((c) => {
+                  const level = c.key === "minutesLate" ? severityOf(entry.minutesLate) : null;
+                  return (
+                    <td key={c.key} style={cell({ textAlign: c.align, fontWeight: c.key === "name" ? 700 : 400 })}>
+                      {level ? (
+                        <span
+                          style={{
+                            display: "inline-block",
+                            minWidth: 78,
+                            padding: "3px 12px",
+                            borderRadius: 999,
+                            background: SEVERITY_COLORS[level].bg,
+                            color: SEVERITY_COLORS[level].text,
+                            fontWeight: 700,
+                            fontSize: 13,
+                            textAlign: "center",
+                          }}
+                        >
+                          {cellText(entry, c.key)}
+                        </span>
+                      ) : (
+                        cellText(entry, c.key)
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            )),
+          ])}
         </tbody>
       </table>
 

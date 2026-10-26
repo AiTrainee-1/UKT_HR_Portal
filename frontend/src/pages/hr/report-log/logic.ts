@@ -126,16 +126,29 @@ export type UnitBlock = {
   rows: ReportLogDailyRow[];
 };
 
-const unitKey = (row: ReportLogDailyRow) => (row.branchId == null ? "none" : String(row.branchId));
-const unitLabelOf = (row: ReportLogDailyRow) =>
+/** What names a unit: enough to order units and to label their section. */
+export type UnitHead = { key: string; label: string; branchName: string | null };
+
+/** The one order of units everywhere (the leave list's blocks, and the late report on the page and in its files): the head
+ *  office (HO) first, then the other units in natural order of their label (U-1, U-2, U-10 ...) and then of their branch
+ *  name, and the employees with no branch last as "Other". */
+export function compareUnits(a: UnitHead, b: UnitHead): number {
+  const rank = (u: UnitHead) => (u.key === "none" ? 2 : u.label === "HO" ? 0 : 1);
+  const natural = (x: string, y: string) => x.localeCompare(y, undefined, { numeric: true, sensitivity: "base" });
+  return rank(a) - rank(b) || natural(a.label, b.label) || natural(a.branchName ?? "", b.branchName ?? "");
+}
+
+/** The key and label of the unit a daily row belongs to. */
+export const unitKeyOf = (row: Pick<ReportLogDailyRow, "branchId">) =>
+  row.branchId == null ? "none" : String(row.branchId);
+export const unitLabelOf = (row: Pick<ReportLogDailyRow, "branchId" | "unitLabel" | "branchName">) =>
   row.branchId == null && !row.unitLabel ? OTHER_UNIT : (row.unitLabel ?? row.branchName ?? OTHER_UNIT);
 
-/** The unit blocks of a list of rows: the head office (HO) first, then the other branches by name (U-1 before U-2, and U-2
- *  before U-10), and the employees with no branch last as "Other". A block's rows keep the order they come in. */
+/** The unit blocks of a list of rows, in the order of compareUnits. A block's rows keep the order they come in. */
 export function groupByUnit(rows: ReportLogDailyRow[]): UnitBlock[] {
   const blocks = new Map<string, UnitBlock>();
   for (const row of rows) {
-    const key = unitKey(row);
+    const key = unitKeyOf(row);
     let block = blocks.get(key);
     if (!block) {
       block = { key, label: unitLabelOf(row), branchName: row.branchName ?? null, rows: [] };
@@ -143,16 +156,7 @@ export function groupByUnit(rows: ReportLogDailyRow[]): UnitBlock[] {
     }
     block.rows.push(row);
   }
-  const rank = (b: UnitBlock) => (b.key === "none" ? 2 : b.label === "HO" ? 0 : 1);
-  return Array.from(blocks.values()).sort(
-    (a, b) =>
-      rank(a) - rank(b) ||
-      (a.branchName ?? a.label).localeCompare(b.branchName ?? b.label, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      }) ||
-      a.label.localeCompare(b.label, undefined, { numeric: true }),
-  );
+  return Array.from(blocks.values()).sort(compareUnits);
 }
 
 /** "HO 12 · U-1 6 · U-2 1" */

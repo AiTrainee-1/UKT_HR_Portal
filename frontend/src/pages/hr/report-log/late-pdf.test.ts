@@ -1,7 +1,7 @@
 import type { jsPDF } from "jspdf";
 import { describe, expect, it } from "vitest";
-import { LATE_COLUMNS, type LateEntry } from "./late";
-import { PDF, buildLatePdf, latePdfName, pdfRowsPerPage } from "./late-pdf";
+import { LATE_COLUMNS, groupEntriesByUnit, type LateEntry } from "./late";
+import { PDF, buildLatePdf, latePdfName, pdfPlan } from "./late-pdf";
 
 const entry = (id: number, over: Partial<LateEntry> = {}): LateEntry => ({
   employeeId: id,
@@ -9,6 +9,8 @@ const entry = (id: number, over: Partial<LateEntry> = {}): LateEntry => ({
   code: `E${id}`,
   department: "Admin",
   unit: "HO",
+  unitKey: "1",
+  branchName: "Head Office",
   shiftStart: "09:00",
   grace: 15,
   lateDeadline: "09:15",
@@ -17,6 +19,10 @@ const entry = (id: number, over: Partial<LateEntry> = {}): LateEntry => ({
   minutesAfterStart: 40,
   ...over,
 });
+const unit1 = (id: number, over: Partial<LateEntry> = {}) =>
+  entry(id, { unit: "U-1", unitKey: "2", branchName: "Unit One", ...over });
+const unit2 = (id: number, over: Partial<LateEntry> = {}) =>
+  entry(id, { unit: "U-2", unitKey: "3", branchName: "Unit Two", ...over });
 
 const base = (entries: LateEntry[]) => ({
   date: "2026-08-03",
@@ -37,21 +43,56 @@ function drawn(doc: jsPDF): string[] {
   return found;
 }
 
+const plan = (entries: LateEntry[]) => pdfPlan(groupEntriesByUnit(entries));
+const kinds = (page: ReturnType<typeof pdfPlan>[number]) => page.map((l) => l.kind);
+const CAP_FIRST = Math.floor((PDF.bottom - PDF.firstTop - PDF.headHeight - 10) / PDF.rowHeight);
+const CAP_NEXT = Math.floor((PDF.bottom - PDF.nextTop - PDF.headHeight - 10) / PDF.rowHeight);
+
 describe("the PDF pages", () => {
-  it("fit one page for a short list and the totals row has room", () => {
-    expect(pdfRowsPerPage(0)).toEqual([0]);
-    expect(pdfRowsPerPage(5)).toEqual([5]);
+  it("fit one page for a short list: a band, then its rows", () => {
+    const pages = plan([entry(1), entry(2), unit1(3)]);
+    expect(pages).toHaveLength(1);
+    expect(kinds(pages[0])).toEqual(["band", "row", "row", "band", "row"]);
   });
-  it("carry a long list over pages, the later ones holding more", () => {
-    const pages = pdfRowsPerPage(60);
+
+  it("give nobody one empty page", () => {
+    expect(plan([])).toEqual([[]]);
+  });
+
+  it("carry a long list over pages, the later ones holding more, and every employee is on exactly one page", () => {
+    const entries = Array.from({ length: 70 }, (_, i) => entry(i + 1, { minutesLate: (i % 45) + 1 }));
+    const pages = plan(entries);
     expect(pages.length).toBeGreaterThan(1);
-    expect(pages.reduce((a, b) => a + b, 0)).toBe(60);
-    expect(pages[1]).toBeGreaterThan(pages[0]);
+    expect(pages[0]).toHaveLength(CAP_FIRST);
+    expect(pages[1].length).toBeGreaterThan(pages[0].length);
+    const rows = pages.flat().filter((l) => l.kind === "row");
+    expect(rows).toHaveLength(70);
+    expect(new Set(rows.map((l) => (l.kind === "row" ? l.entry.employeeId : 0))).size).toBe(70);
   });
-  it("hold the rows of a full page and carry the next one over, with room kept for the colour key", () => {
-    const cap = Math.floor((PDF.bottom - PDF.firstTop - PDF.headHeight - 10) / PDF.rowHeight);
-    expect(pdfRowsPerPage(cap)).toEqual([cap]);
-    expect(pdfRowsPerPage(cap + 1)).toEqual([cap, 1]);
+
+  it("start a page that continues a unit with that unit's (contd.) band", () => {
+    const entries = Array.from({ length: CAP_FIRST + 3 }, (_, i) => entry(i + 1));
+    const pages = plan(entries);
+    expect(pages[1][0]).toMatchObject({ kind: "band", contd: true });
+    expect(pages[0].filter((l) => l.kind === "band")).toHaveLength(1);
+    expect(pages[0][0]).toMatchObject({ kind: "band", contd: false });
+  });
+
+  it("never end a page on a band: a unit's band moves to the next page with its first row", () => {
+    // HO fills the first page except for its last line, so the next unit's band (and its first row) must not fit
+    const ho = Array.from({ length: CAP_FIRST - 2 }, (_, i) => entry(i + 1)); // band + (CAP_FIRST - 2) rows = CAP_FIRST - 1 lines
+    const entries = [...ho, unit1(900), unit1(901)];
+    const pages = plan(entries);
+    expect(pages[0]).toHaveLength(CAP_FIRST - 1);
+    expect(pages[0][pages[0].length - 1].kind).toBe("row");
+    expect(pages[1][0]).toMatchObject({ kind: "band", contd: false });
+    expect(pages[1][0].group.label).toBe("U-1");
+    expect(kinds(pages[1]).slice(0, 2)).toEqual(["band", "row"]);
+    // and in general no page of any plan ends on a band
+    for (const n of [1, 5, CAP_FIRST - 3, CAP_FIRST - 2, CAP_FIRST - 1, CAP_FIRST, CAP_FIRST + CAP_NEXT, 90]) {
+      const mixed = [...Array.from({ length: n }, (_, i) => entry(i + 1)), unit1(1000), unit2(1001), unit2(1002)];
+      for (const page of plan(mixed)) expect(page[page.length - 1].kind).toBe("row");
+    }
   });
 });
 
@@ -67,6 +108,32 @@ describe("the Daily Late Report PDF", () => {
     // a long header wraps onto two lines, so read the headers as running text
     const running = text.join(" ");
     for (const col of LATE_COLUMNS) expect(running).toContain(col.header);
+  });
+
+  it("draws a band per unit with its count, the units in order and the longest delay first inside a unit", async () => {
+    const doc = await buildLatePdf(
+      base([
+        unit1(1, { name: "Kumar", minutesLate: 5 }),
+        entry(2, { name: "Anand", minutesLate: 12 }),
+        entry(3, { name: "Babu", minutesLate: 40 }),
+        unit1(4, { name: "Mani", minutesLate: 31 }),
+      ]),
+    );
+    const text = drawn(doc);
+    expect(text).toContain("HO   2 late");
+    expect(text).toContain("U-1   2 late");
+    const at = (t: string) => text.indexOf(t);
+    expect(at("HO   2 late")).toBeLessThan(at("Babu"));
+    expect(at("Babu")).toBeLessThan(at("Anand"));
+    expect(at("Anand")).toBeLessThan(at("U-1   2 late"));
+    expect(at("U-1   2 late")).toBeLessThan(at("Mani"));
+    expect(at("Mani")).toBeLessThan(at("Kumar"));
+  });
+
+  it("draws only the units of the rows it is given", async () => {
+    const text = drawn(await buildLatePdf(base([unit2(1), unit2(2)])));
+    expect(text).toContain("U-2   2 late");
+    expect(text.some((t) => t.startsWith("HO "))).toBe(false);
   });
 
   it("draws every row and a footer with the moment and the page number, and no summary, explanation or totals", async () => {
@@ -89,14 +156,16 @@ describe("the Daily Late Report PDF", () => {
     expect(text).toContain("Page 1 of 1");
   });
 
-  it("repeats the header and numbers the pages when the list is long", async () => {
+  it("repeats the header, the (contd.) band and the page numbers when the list is long", async () => {
     const entries = Array.from({ length: 70 }, (_, i) => entry(i + 1, { minutesLate: (i % 45) + 1 }));
     const doc = await buildLatePdf(base(entries));
-    const pages = pdfRowsPerPage(70).length;
+    const pages = plan(entries).length;
     expect(doc.getNumberOfPages()).toBe(pages);
     const text = drawn(doc);
     expect(text.filter((t) => t === "Employee Name")).toHaveLength(pages);
     expect(text.filter((t) => t === "Total Minutes Late")).toHaveLength(pages);
+    expect(text.filter((t) => t === "HO (contd.)")).toHaveLength(pages - 1);
+    expect(text).toContain("HO   70 late");
     expect(text).toContain(`Page ${pages} of ${pages}`);
     expect(text).toContain("Person 70");
   });

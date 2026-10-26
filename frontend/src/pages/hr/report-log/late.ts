@@ -8,7 +8,7 @@
 // is the plain minutes from the shift start to the punch.
 
 import type { ReportLogDailyRow } from "@/lib/api-client/custom-hooks";
-import { formatClock12, lateRows, minutesOf } from "./logic";
+import { compareUnits, formatClock12, lateRows, minutesOf, unitKeyOf, unitLabelOf, type UnitHead } from "./logic";
 
 export const LATE_REPORT_TITLE = "Daily Late Report";
 
@@ -18,8 +18,11 @@ export type LateEntry = {
   name: string;
   code: string;
   department: string | null;
-  /** The unit label (HO, U-1 ...), null with no branch. */
-  unit: string | null;
+  /** The unit label (HO, U-1 ...), "Other" with no branch. */
+  unit: string;
+  /** The unit the entry belongs to for ordering and grouping: the branch id as text, "none" with no branch. */
+  unitKey: string;
+  branchName: string | null;
   /** "HH:MM" (24 hour) or null. */
   shiftStart: string | null;
   grace: number | null;
@@ -38,7 +41,9 @@ export function toEntry(row: ReportLogDailyRow): LateEntry {
     name: row.employeeName,
     code: row.employeeCode,
     department: row.department ?? null,
-    unit: row.unitLabel ?? null,
+    unit: unitLabelOf(row),
+    unitKey: unitKeyOf(row),
+    branchName: row.branchName ?? null,
     shiftStart: row.shiftStart ?? null,
     grace: row.graceMinutes ?? null,
     lateDeadline: row.lateDeadline ?? null,
@@ -98,6 +103,9 @@ export const SEVERITY_COLORS: Record<Severity, { bg: string; text: string }> = {
   high: { bg: "#fecaca", text: "#991b1b" },
 };
 
+/** The unit bands of the exports (and the section rows of the table on the page): an indigo wash with its dark text. */
+export const UNIT_BAND_COLORS = { bg: "#e0e7ff", text: "#312e81" } as const;
+
 // ─── Text ───
 
 /** 14 -> "14 min"; an average keeps its one decimal: 23.3 -> "23.3 min". */
@@ -144,16 +152,18 @@ export function explain(entry: LateEntry): string {
 // ─── Sorting ───
 
 export type SortDir = "asc" | "desc";
-export type LateSort = { key: LateColumnKey; dir: SortDir };
+/** The columns of the report, and the Unit column of the page's table. */
+export type LateSortKey = LateColumnKey | "unit";
+export type LateSort = { key: LateSortKey; dir: SortDir };
 
 /** The report opens on the longest delays first. */
 export const DEFAULT_SORT: LateSort = { key: "minutesLate", dir: "desc" };
 
 /** The direction a column starts in when it is first clicked: minutes late and punch-in time show the worst first. */
-export const firstDir = (key: LateColumnKey): SortDir => (key === "minutesLate" ? "desc" : "asc");
+export const firstDir = (key: LateSortKey): SortDir => (key === "minutesLate" ? "desc" : "asc");
 
 /** A click on a column header: the same column flips its direction, another column starts in its own. */
-export function nextSort(current: LateSort, key: LateColumnKey): LateSort {
+export function nextSort(current: LateSort, key: LateSortKey): LateSort {
   if (current.key === key) return { key, dir: current.dir === "asc" ? "desc" : "asc" };
   return { key, dir: firstDir(key) };
 }
@@ -181,9 +191,16 @@ const sortValue = (entry: LateEntry, key: LateColumnKey): number | string | null
  *  broken by name, so the order never jumps about. */
 export function sortEntries(entries: LateEntry[], sort: LateSort = DEFAULT_SORT): LateEntry[] {
   const sign = sort.dir === "asc" ? 1 : -1;
+  const byUnit = sort.key === "unit";
   return [...entries].sort((a, b) => {
-    const x = sortValue(a, sort.key);
-    const y = sortValue(b, sort.key);
+    if (byUnit) {
+      // the unit order of the report (HO first, Other last); within a unit the longest delay first
+      const diff = compareUnits(unitOf(a), unitOf(b));
+      return diff !== 0 ? sign * diff : compareEntries(a, b);
+    }
+    const key = sort.key as LateColumnKey;
+    const x = sortValue(a, key);
+    const y = sortValue(b, key);
     if (x == null && y == null) return a.name.localeCompare(b.name);
     if (x == null) return 1;
     if (y == null) return -1;
@@ -194,6 +211,46 @@ export function sortEntries(entries: LateEntry[], sort: LateSort = DEFAULT_SORT)
     return diff !== 0 ? sign * diff : a.name.localeCompare(b.name);
   });
 }
+
+// ─── Units (the report is made unit by unit) ───
+
+/** The unit an entry belongs to, as a heading. */
+export const unitOf = (entry: LateEntry): UnitHead => ({
+  key: entry.unitKey,
+  label: entry.unit,
+  branchName: entry.branchName,
+});
+
+/** Inside a unit: the longest delay first, then by name. */
+export const compareEntries = (a: LateEntry, b: LateEntry): number =>
+  (b.minutesLate ?? -1) - (a.minutesLate ?? -1) || a.name.localeCompare(b.name);
+
+export type LateGroup = UnitHead & { entries: LateEntry[] };
+
+/** The entries as unit sections: the head office (HO) first, then the other units in natural order (U-1, U-2, U-10), then the
+ *  staff with no branch ("Other"). Inside a unit the entries follow `sort` (the longest delay first by default). A unit with no
+ *  entry is not there at all, so a list of ticked rows only shows the units that have a ticked row. */
+export function groupEntriesByUnit(entries: LateEntry[], sort: LateSort = DEFAULT_SORT): LateGroup[] {
+  const groups = new Map<string, LateGroup>();
+  for (const entry of entries) {
+    let group = groups.get(entry.unitKey);
+    if (!group) {
+      group = { ...unitOf(entry), entries: [] };
+      groups.set(entry.unitKey, group);
+    }
+    group.entries.push(entry);
+  }
+  return Array.from(groups.values())
+    .sort(compareUnits)
+    .map((g) => ({ ...g, entries: sortEntries(g.entries, sort) }));
+}
+
+/** The groups' entries as one list, unit after unit. */
+export const flattenGroups = (groups: LateGroup[]): LateEntry[] => groups.flatMap((g) => g.entries);
+
+/** The heading of a unit section in a text export: "HO   19 late". */
+export const bandText = (group: Pick<LateGroup, "label" | "entries">): string =>
+  `${group.label}   ${group.entries.length} late`;
 
 // ─── Summary ───
 
