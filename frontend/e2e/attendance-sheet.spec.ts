@@ -7,7 +7,7 @@ test("the monthly attendance sheet shows each employee's days and totals", async
   await loginAsHr(page);
   await page.goto("/hr/attendance/report-log");
 
-  await expect(page.getByRole("button", { name: "Monthly Report" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Monthly Report" })).toBeVisible();
   await expect(page.getByText("Asha Kumar")).toBeVisible();
 
   // The sheet opens on the current month; step back to February 2026.

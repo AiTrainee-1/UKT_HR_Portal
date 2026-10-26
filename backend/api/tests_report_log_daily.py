@@ -1,5 +1,5 @@
 """
-Regression tests for Report Log's Daily Report feature: the is_informed
+Regression tests for Report Log's Daily Leave Report feature: the is_informed
 report annotation must persist across a normal attendance recompute (it is
 deliberately excluded from compute_day_record's `fields` dict, so
 update_or_create's defaults=fields never touches it).

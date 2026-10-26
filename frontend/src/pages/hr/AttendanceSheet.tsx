@@ -244,7 +244,7 @@ export function AttendanceSheetContent() {
 
   // ── Excel export -colored cells, Strength row, frozen employee columns.
   // Title block, header styling and download all come from lib/exportUtils,
-  // shared with the Daily Report export in AttendanceReportLog. ───────────
+  // shared with the Daily Leave and Late report exports in AttendanceReportLog. ───────────
   async function exportExcel() {
     if (employees.length === 0 || dates.length === 0) return;
     setExporting("excel");

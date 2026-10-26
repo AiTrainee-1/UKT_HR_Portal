@@ -624,9 +624,9 @@ export const useAttendanceReportDetail = (params: ReportLogDetailParams, enabled
     enabled,
   });
 
-// ── Mode C -Daily Report: one row per employee for a single date ──────────
-// (Report Log page only -Late/Permission/On-Leave filtering, Informed
-// status, Excel/PDF/Image export.)
+// ── Mode C -Daily reports: one row per employee for a single date ─────────
+// (Report Log page only: the Daily Leave Report (absent + Informed status) and
+// the Daily Late Report (late arrivals + first punch), each with Excel/PDF/Image export.)
 
 export type ReportLogDailyRow = DayPermissionFlags & {
   employeeId: number;
@@ -634,6 +634,12 @@ export type ReportLogDailyRow = DayPermissionFlags & {
   employeeName: string;
   department: string | null;
   designation: string | null;
+  /** First punch of the day as local "HH:MM" (null: no punch). Sent by a backend that has the Daily Late Report. */
+  firstPunch?: string | null;
+  /** The unit the employee belongs to: branch id / name and the short block label (HO, U-1, U-2). All null with no branch. */
+  branchId?: number | null;
+  branchName?: string | null;
+  unitLabel?: string | null;
   status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
   isLate: boolean;
   isEarlyOut?: boolean;

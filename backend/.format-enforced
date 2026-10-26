@@ -337,3 +337,4 @@ api/tests_pf_esi_outputs.py
 api/tests_permission_slabs.py
 api/tests_prod_bonus.py
 api/tests_permission_slabs_review.py
+api/tests_report_log_late.py

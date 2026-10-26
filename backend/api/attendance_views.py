@@ -1,4 +1,5 @@
 import calendar
+import re
 import logging
 import threading
 from collections import defaultdict
@@ -1424,9 +1425,26 @@ def _month_summary_row(emp, summary: dict, cl_count: int, perm_count: int) -> di
     }
 
 
+def _unit_label(branch) -> str | None:
+    """
+    Short "unit block" label for the Report Log's Daily Leave / Late reports (HO, U-1, U-2 ...): the head office is
+    always "HO", a branch coded like "Unit1" / "Unit 2" becomes "U-1" / "U-2", any other branch shows its own code
+    (or its name when it has none). None when the employee has no branch.
+    """
+    if branch is None:
+        return None
+    if branch.is_head_office:
+        return "HO"
+    code = (branch.code or "").strip()
+    match = re.fullmatch(r"unit[\s_-]*(\d+)", code, flags=re.IGNORECASE)
+    if match:
+        return f"U-{int(match.group(1))}"
+    return code or (branch.name or "").strip() or None
+
+
 def _attendance_report_log_daily(request: Request, date_param: str, department_param, search_param, settings) -> Response:
     """
-    Report Log -> Daily Report: one row per active staff employee for a
+    Report Log -> Daily Leave / Late Report: one row per active staff employee for a
     single date, for HR to filter (Late/Permission, On Leave, Informed) and
     export. Mirrors attendance_company_summary's bulk-prefetch pattern
     (attendance_views.py) so a ~230-employee roster stays a handful of
@@ -1446,8 +1464,8 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     emps_qs = (
         scope_to_branch(Employee.objects, request)
         .filter(status="active", employment_type="staff")
-        .select_related("department", "designation")
-        # Grouped by department for the Daily Report (unrelated modes on this
+        .select_related("department", "designation", "branch")
+        # Grouped by department for the Daily Leave and Late reports (unrelated modes on this
         # same endpoint keep their own first_name-only ordering); employees
         # with no department set sort last rather than first.
         .order_by(F("department__name").asc(nulls_last=True), "first_name")
@@ -1529,6 +1547,13 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             "employeeName": f"{emp.first_name} {emp.last_name}",
             "department": emp.department.name if emp.department else None,
             "designation": emp.designation.title if emp.designation else None,
+            # Additive fields for the Daily Late Report (old clients ignore them): the engine's own first punch
+            # of the day as local "HH:MM" (punches are naive Tirupur wall-clock time, so no conversion) and the
+            # unit block the employee belongs to.
+            "firstPunch": rec.first_punch.strftime("%H:%M") if rec.first_punch else None,
+            "branchId": emp.branch_id,
+            "branchName": emp.branch.name if emp.branch else None,
+            "unitLabel": _unit_label(emp.branch),
             "status": rec.status,
             "isLate": bool(rec.is_late),
             "isEarlyOut": bool(rec.early_leave),
@@ -1538,7 +1563,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             **permission_flags_json(rec),
             "permissionAfternoon": bool(rec.permission_afternoon),
             "isCompensationDay": bool(rec.is_compensation_day),
-        "isHalfDayLeave": bool(rec.is_half_day_leave),
+            "isHalfDayLeave": bool(rec.is_half_day_leave),
             "isInformed": rec.is_informed,
         })
 
@@ -1580,7 +1605,7 @@ def attendance_report_log(request: Request) -> Response:
     is_strict = settings.attendance_mode != "simple"
 
     # ── Daily mode: every matching employee, one row each, for one date ─────
-    # Report Log's "Daily Report" (Late/Permission/On-Leave + Informed status
+    # Report Log's "Daily Leave Report" and "Daily Late Report" (Late/Permission/On-Leave + Informed status
     # export) -mutually exclusive with the month/year summary/detail modes
     # above. Reuses attendance_company_summary's bulk-prefetch-then-
     # compute_day_record loop (assignments/permissions/manual attendance all
@@ -1847,7 +1872,7 @@ def attendance_report_log_sheet(request: Request) -> Response:
 @require_hr
 def set_day_informed(request: Request) -> Response:
     """
-    Report Log's Daily Report: HR marks/updates whether an on-leave employee
+    Report Log's Daily Leave Report: HR marks/updates whether an on-leave employee
     informed in advance. Body: {employeeId, date, isInformed}. A pure report
     annotation, not an attendance reclassification -deliberately does not
     touch source/status/any other field, so it's invisible to every other

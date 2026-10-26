@@ -200,7 +200,7 @@ class AttendanceDayRecord(models.Model):
     # punch made after midnight (and reattributed to this day) is correctly after the shift end. A plain fact, not
     # gated by any compensation switch: OT detection and the Type 1 allowance read it. db_default: see above.
     ot_extra_minutes = models.IntegerField(default=0, db_default=0, db_column="ot_extra_minutes")
-    # HR-set report annotation for the Report Log page's Daily Report (on-leave
+    # HR-set report annotation for the Report Log page's Daily Leave Report (on-leave
     # employees: did they inform in advance?) -null/blank = never set, True =
     # Informed, False = Not Informed. Set only via PATCH /api/attendance/
     # day-informed (attendance_views.py::set_day_informed), never by any

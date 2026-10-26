@@ -359,6 +359,12 @@ Select a **Month** and **Year** to see the attendance calendar for all employees
 - 🏖️ On Leave (approved)
 - 🔴 Late (present but arrived late)
 
+#### Report Log (Attendance → Report Log)
+Three tabs, remembered in the page address so a refresh keeps you where you were:
+- **Monthly Report** -the colored attendance register for the month (Day / Week / Month), with the **Late-Penalty Breakdown** underneath.
+- **Daily Leave Report** (this was called *Daily Report*) -pick a date; it lists the staff who were absent. Set **Informed** or **Not informed** for each, tick the people to put on the list, then download **Excel / PDF / Image** of the "STAFF LEAVE LIST" (blocks HO, U-1, U-2 ...).
+- **Daily Late Report** -pick a date (today at first); it lists the staff who arrived late, per unit, with the time they first punched in (*Late Hours*, for example 09:06 AM), exactly like the paper "STAFF LATE REPORT". The cards show how many were late in each unit and in total. Download **Excel / PDF / Image** of the whole list. Late means the same as on Staff Attendance; production workers are not part of it.
+
 #### Compensation marks on attendance screens
 When a staff member's day was shaped by a compensation, the attendance screens mark it, so HR can see that the employee used it. Each mark has its own symbol, a two-letter code and words (colour is never the only sign), and a legend lists the marks in view with how many days of each.
 

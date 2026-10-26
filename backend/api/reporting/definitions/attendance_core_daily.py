@@ -1,8 +1,8 @@
-"""Daily Attendance Register and the Daily Absentee / Leave List (Report Log, Daily Report).
+"""Daily Attendance Register and the Daily Absentee / Leave List (Report Log, Daily Leave Report).
 
 * daily-attendance: every employee for a day (or a short range) with first in / last out, hours, status and
-  the late / half-day / permission flags -- the all-status superset of the Report Log's Daily Report.
-* absentee-list-daily: the Report Log's Daily Report itself -- absent staff with an Informed / Not Informed
+  the late / half-day / permission flags -- the all-status superset of the Report Log's Daily Leave Report.
+* absentee-list-daily: the Report Log's Daily Leave Report itself -- absent staff with an Informed / Not Informed
   call per employee, in the legacy order (department, then first name).
 
 Both read the persisted engine verdict (AttendanceDayRecord, including HR's ``is_informed`` note); they never
@@ -256,7 +256,7 @@ register(
 )
 
 
-# ── Daily Absentee / Leave List (Report Log, Daily Report) ──────────────────────
+# ── Daily Absentee / Leave List (Report Log, Daily Leave Report) ──────────────────────
 
 ABSENTEE_COLUMNS = (
     ColumnSpec("sno", "S.No", INTEGER, 0.5),
@@ -322,7 +322,7 @@ def _run_absentee(ctx) -> ReportResult:
             break
 
     notes = [
-        "The Report Log's Daily Report: staff who are absent for the date, with HR's Informed / Not Informed call. "
+        "The Report Log's Daily Leave Report: staff who are absent for the date, with HR's Informed / Not Informed call. "
         "Informed status is set on the Report Log page; this report only reads it.",
         "Employees on approved leave are on leave, not absent; a Saturday-off Saturday and Sundays are weekly offs "
         f"and are not listed ({weekly_off} weekly-off day(s) left out)."
