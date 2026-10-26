@@ -847,7 +847,7 @@ class DepartmentHeadTests(HolidayWorkBase):
 
     def test_the_whatsapp_builder_describes_the_claim(self):
         claim = self.raise_claim(shifts=0.5, reason="Dispatch rush")
-        summary = whatsapp_approvals._BUILDERS["holiday_work"][0](claim)
+        summary = whatsapp_approvals._BUILDERS["holiday_work"](claim)
         self.assertEqual((summary.request_type, summary.ref_id), ("Holiday Work Compensation", claim.id))
         self.assertIn("Sunday work: 0.5 shift", summary.details)
         self.assertIn("Dispatch rush", summary.details)

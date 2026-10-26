@@ -315,9 +315,10 @@ test("approving and rejecting a request WhatsApps the employee, and HR sees it u
   for (const piece of ["Hello Asha Kumar", "Your *Leave* request has been approved", "Family function", "Enjoy"]) {
     expect(approved.message).toContain(piece);
   }
-  // A portal address is configured, so the message carries a link (sent as a link preview).
-  expect(approved.type).toBe("link");
-  expect(approved.url).toBe("https://portal.e2e.test/employee/leave");
+  // No message carries a link to the Employee Web App: it goes out as plain text, with no address and no preview card.
+  expect(approved.type).toBe("text");
+  expect(approved.url).toBeUndefined();
+  expect(approved.message).not.toMatch(/https?:\/\/|View request|portal/i);
 
   // HR changes their mind: the employee hears that too, with the reason.
   await request.patch(`/api/leave-requests/${id}/status`, {

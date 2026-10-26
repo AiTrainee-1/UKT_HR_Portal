@@ -265,9 +265,7 @@ def _config(request: Request) -> dict:
         "publicBaseUrl": base,
         "webhookUrl": f"{base}/api/whatsapp/webhook/",
         "webhookTokenSet": bool(dj_settings.WHATSAPP_WEBHOOK_TOKEN),
-        "employeePortalUrl": dj_settings.EMPLOYEE_PORTAL_URL,
         "backgroundSending": bool(dj_settings.WHATSAPP_ASYNC_SEND),
-        "linkPreview": bool(dj_settings.WHATSAPP_LINK_PREVIEW),
     }
 
 

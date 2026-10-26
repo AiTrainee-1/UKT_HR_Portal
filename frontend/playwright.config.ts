@@ -53,7 +53,6 @@ const backendEnv = {
   // Same for email: a dev-mode backend refuses to send unless told otherwise. Nothing can leave the machine, because
   // the only SMTP account the tests save points at 127.0.0.1:9 (gmail-control.spec.ts); until then SMTP isn't set up.
   EMAIL_ALLOW_SENDING: "true",
-  EMPLOYEE_PORTAL_URL: "https://portal.e2e.test",
   // The MD's AI assistant talks to a local fake of Google's Gemini API (e2e/fake-gemini.mjs): the real assistant runs
   // against the e2e database, but no key, quota or network is involved and nothing leaves the machine.
   GEMINI_API_KEY: "e2e-fake-gemini-key",

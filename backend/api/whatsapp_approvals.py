@@ -10,7 +10,7 @@ The workflow's approve/reject code then makes ONE call:
 
     whatsapp_approvals.notify_decision("leave", leave_request, "approved", approver="Meena", role="hr")
 
-To cover a new approval workflow add a builder with `@register("key", "/portal/path")` here and
+To cover a new approval workflow add a builder with `@register("key")` here and
 the key to `whatsapp_catalog.APPROVAL_MODULES` -nothing else changes (the switches on the
 WhatsApp Control page, the log and the template editor pick it up from the catalog).
 
@@ -25,8 +25,6 @@ message can't block an approval.
 import logging
 from dataclasses import dataclass
 from typing import Callable
-
-from django.conf import settings as dj_settings
 
 from . import whatsapp_service
 from .whatsapp_format import (
@@ -58,15 +56,14 @@ class Summary:
     next_step: str = ""
 
 
-_BUILDERS: dict[str, tuple[Callable, str]] = {}
+_BUILDERS: dict[str, Callable] = {}
 
 
-def register(module: str, portal_path: str = ""):
-    """Register the builder for an approval workflow. `portal_path` is the page of the Employee
-    Web App where the employee can see the request (used for the "View request" link)."""
+def register(module: str):
+    """Register the builder for an approval workflow."""
 
     def wrap(fn):
-        _BUILDERS[module] = (fn, portal_path)
+        _BUILDERS[module] = fn
         return fn
 
     return wrap
@@ -83,15 +80,10 @@ def approver_label(name: str, role: str = "") -> str:
     return name or suffix or "HR"
 
 
-def portal_link(path: str) -> str:
-    base = dj_settings.EMPLOYEE_PORTAL_URL
-    return f"{base}{path}" if base and path else ""
-
-
 # ── builders ───────────────────────────────────────────────────────────────────
 
 
-@register("leave", "/employee/leave")
+@register("leave")
 def _leave(r) -> Summary:
     kind = (r.leave_type_ref.name if r.leave_type_ref_id else (r.type or "leave")).replace("_", " ").title()
     if r.is_half_day:
@@ -111,7 +103,7 @@ def _leave(r) -> Summary:
     )
 
 
-@register("permission", "/employee/permissions")
+@register("permission")
 def _permission(p) -> Summary:
     from .models import EmployeePermission
 
@@ -129,7 +121,7 @@ def _permission(p) -> Summary:
     )
 
 
-@register("casual_leave", "/employee/casual-leave")
+@register("casual_leave")
 def _casual_leave(cl) -> Summary:
     return Summary(
         cl.employee,
@@ -142,7 +134,7 @@ def _casual_leave(cl) -> Summary:
     )
 
 
-@register("missing_punch", "/employee/missing-punch")
+@register("missing_punch")
 def _missing_punch(r) -> Summary:
     slot = dict(r.PUNCH_SLOT_CHOICES).get(r.punch_slot) or ("Check-In" if r.punch_type == "IN" else "Check-Out")
     return Summary(
@@ -157,7 +149,7 @@ def _missing_punch(r) -> Summary:
     )
 
 
-@register("outpass", "/employee/outpass")
+@register("outpass")
 def _outpass(r) -> Summary:
     kind = dict(r.PASS_TYPE_CHOICES).get(r.pass_type, "")
     back = f"Expected back {_time(r.expected_return_at)}" if r.expected_return_at else ""
@@ -174,7 +166,7 @@ def _outpass(r) -> Summary:
     )
 
 
-@register("attendance_correction", "/employee/attendance")
+@register("attendance_correction")
 def _attendance_correction(r) -> Summary:
     status = (r.requested_values or {}).get("status")
     change = f"Change day to {str(status).replace('_', ' ')}" if status else "Attendance correction"
@@ -189,7 +181,7 @@ def _attendance_correction(r) -> Summary:
     )
 
 
-@register("holiday_work", "/employee/compensation")
+@register("holiday_work")
 def _holiday_work(r) -> Summary:
     day = "Sunday" if r.work_date.weekday() == 6 else "Holiday"
     return Summary(
@@ -204,7 +196,7 @@ def _holiday_work(r) -> Summary:
     )
 
 
-@register("resignation", "/employee/resignation")
+@register("resignation")
 def _resignation(r) -> Summary:
     last = f"Last working day: {_date(r.last_working_date)}" if r.last_working_date else ""
     return Summary(
@@ -218,7 +210,7 @@ def _resignation(r) -> Summary:
     )
 
 
-@register("advance", "/employee/salary")
+@register("advance")
 def _advance(a) -> Summary:
     kind = dict(a.ADVANCE_TYPES).get(a.advance_type, "Advance")
     return Summary(
@@ -232,7 +224,7 @@ def _advance(a) -> Summary:
     )
 
 
-@register("request", "/employee/notifications")
+@register("request")
 def _employee_request(r) -> Summary:
     label = dict(r.REQUEST_TYPES).get(r.request_type, "Request")
     return Summary(
@@ -256,11 +248,9 @@ def notify_decision(module: str, obj, decision: str, *, approver: str = "", role
     try:
         if decision not in ("approved", "rejected"):
             return None
-        builder, path = _BUILDERS[module]
-        summary = builder(obj)
+        summary = _BUILDERS[module](obj)
         approved = decision == "approved"
         comment = (comment or "").strip()
-        link = portal_link(path)
         details = _join(summary.details, summary.next_step, sep=". ") if approved else summary.details
         params = {
             "employee_name": _name(summary.employee),
@@ -271,7 +261,6 @@ def notify_decision(module: str, obj, decision: str, *, approver: str = "", role
             "approver": approver_label(approver, role),
             "comment": comment,
             "requested_on": summary.requested_on,
-            "link": link,
             "reason": summary.reason,
         }
         return whatsapp_service.send_notification(
@@ -281,7 +270,6 @@ def notify_decision(module: str, obj, decision: str, *, approver: str = "", role
             dedupe_key=f"approval:{module}:{obj.pk}:{decision}",
             document_ref_id=obj.pk,
             related_module=module,
-            link_url=link,
         )
     except Exception:
         logger.exception("Approval WhatsApp failed for %s %s", module, getattr(obj, "pk", None))

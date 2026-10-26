@@ -86,15 +86,6 @@ export default function ConfigTab() {
               }
             />
             <Check
-              ok={Boolean(c.employeePortalUrl)}
-              label="Approval messages link to the Employee Web App"
-              hint={
-                c.employeePortalUrl
-                  ? `"View request" links open ${c.employeePortalUrl}.`
-                  : 'Optional. Set EMPLOYEE_PORTAL_URL (for example https://employee.uktextiles.in) to add a "View request" link to approval messages.'
-              }
-            />
-            <Check
               ok={c.webhookTokenSet}
               label="Webhook is protected with a token (recommended)"
               hint={
@@ -152,15 +143,11 @@ export default function ConfigTab() {
           <Row label="Public address">
             <code className="text-xs">{c.publicBaseUrl}</code>
           </Row>
-          <Row label="Employee Web App">
-            {c.employeePortalUrl ? <code className="text-xs">{c.employeePortalUrl}</code> : "Not set (no links)"}
-          </Row>
           <Row label="Delivery">
             {c.backgroundSending
               ? "Approvals, visitor and gate messages are sent by a background worker, so nobody waits on WhatsApp. Codes and attendance alerts are sent immediately."
               : "Every message is sent immediately, while the request is being processed."}
           </Row>
-          <Row label="Link previews">{c.linkPreview ? "On (falls back to plain text if refused)" : "Off"}</Row>
         </CardContent>
       </Card>
 

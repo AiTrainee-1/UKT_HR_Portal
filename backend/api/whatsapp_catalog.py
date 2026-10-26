@@ -19,6 +19,10 @@ A line whose placeholders are all empty is dropped when a message is rendered,
 so optional details ("Note: {{comment}}") simply vanish when there is nothing to
 say instead of leaving an empty label behind.
 
+No message carries a link to the Employee Web App (the owner does not want one), and the
+placeholder that used to hold it is gone: see RETIRED_VARIABLES for how wording HR saved
+earlier is kept from ever printing it.
+
 This module deliberately imports nothing from the rest of the app (models import it).
 """
 
@@ -104,6 +108,12 @@ def _add(**kwargs) -> None:
 
 
 SIGN = "UK Textiles HRMS"
+
+# Placeholders no message type offers any more. Wording HR saved before they were retired (migration 0130 removes
+# them from the stored text; this is the second line of defence) can still name one: the editor refuses it as an
+# unknown placeholder, and rendering drops the whole line instead of sending an empty label or a stray address.
+# "link" was the Employee Web App address of the request in the two approval messages.
+RETIRED_VARIABLES = frozenset({"link"})
 
 # ── Documents (the wording is a caption; the file itself is attached) ─────────
 
@@ -370,11 +380,6 @@ _APPROVAL_VARS = (
     V("approver", "Who approved or rejected it", "Meena (HR)"),
     V("comment", "The approver's note or rejection reason, if given", "Get well soon"),
     V("requested_on", "When it was submitted", "24 Sep 2026"),
-    V(
-        "link",
-        "A link to the request in the employee portal, when one is set up",
-        "https://portal.example/employee/leave",
-    ),
     V("reason", "The employee's own reason for the request", "Fever"),
 )
 _add(
@@ -390,8 +395,7 @@ _add(
         "🕐 Time: {{time}}\n"
         "📋 Request: {{details}}\n"
         "👤 Approved by: {{approver}}\n"
-        "💬 Note: {{comment}}\n"
-        "🔗 View request: {{link}}\n\n"
+        "💬 Note: {{comment}}\n\n"
         f"Thank you,\n{SIGN}"
     ),
     variables=_APPROVAL_VARS,
@@ -409,8 +413,7 @@ _add(
         "🕐 Time: {{time}}\n"
         "📋 Request: {{details}}\n"
         "👤 Rejected by: {{approver}}\n"
-        "📝 Reason: {{comment}}\n"
-        "🔗 View request: {{link}}\n\n"
+        "📝 Reason: {{comment}}\n\n"
         f"Please contact HR if you need further clarification.\n{SIGN}"
     ),
     variables=_APPROVAL_VARS,

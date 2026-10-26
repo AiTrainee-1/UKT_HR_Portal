@@ -30,8 +30,6 @@ CONFIG = dict(
     WACLIENT_INSTANCE_ID="INST1234",
     WACLIENT_ACCESS_TOKEN="tok",
     WHATSAPP_DEFAULT_COUNTRY_CODE="91",
-    EMPLOYEE_PORTAL_URL="https://portal.test",
-    WHATSAPP_LINK_PREVIEW=True,
 )
 THU = date(2026, 9, 24)
 
@@ -72,6 +70,15 @@ class ApprovalBase(TestCase):
     def one(self, doc_type):
         return WhatsAppMessageLog.objects.get(document_type=doc_type)
 
+    def assert_plain_text_without_links(self):
+        """Every message sent so far is a plain WAClient text: no preview card, no address, no "View request"."""
+        self.assertTrue(self.payloads())
+        for payload in self.payloads():
+            self.assertEqual(payload["type"], "text")
+            self.assertEqual(sorted(payload), ["access_token", "instance_id", "message", "number", "type"])
+            for banned in ("http", "www.", "portal", "View request", "🔗", "{{"):
+                self.assertNotIn(banned, payload["message"])
+
 
 class EveryWorkflowTests(ApprovalBase):
     """Each approval workflow tells the employee, on WhatsApp, what was decided."""
@@ -82,11 +89,13 @@ class EveryWorkflowTests(ApprovalBase):
         log = self.one("approval_approved")
         self.assertEqual((log.related_module, log.status, log.employee_id), (module, "sent", self.emp.id))
         self.assertEqual(self.payloads()[0]["number"], "918220015110")
+        self.assert_plain_text_without_links()
 
     def check_rejected(self, module, text, *expected):
         for piece in ("❌", "Request Rejected", "Hello Asha Kumar", "Rejected by: Meena (HR)", *expected):
             self.assertIn(piece, text)
         self.assertEqual(self.one("approval_rejected").related_module, module)
+        self.assert_plain_text_without_links()
 
     def test_leave_approved_and_rejected(self):
         leave = LeaveRequest.objects.create(
@@ -104,10 +113,7 @@ class EveryWorkflowTests(ApprovalBase):
             "Sick (2 days)",
             "Fever",
             "Get well soon",
-            "https://portal.test/employee/leave",
         )
-        self.assertEqual(self.payloads()[0]["type"], "link")
-        self.assertEqual(self.payloads()[0]["url"], "https://portal.test/employee/leave")
         # HR changes their mind: the employee is told about that too.
         self.call(
             "patch", f"/api/leave-requests/{leave.id}/status", {"status": "rejected", "hrComment": "Clash with audit"}
@@ -323,17 +329,41 @@ class SwitchesAndSafetyTests(ApprovalBase):
         self.assertEqual(len(self.texts()), 1)
         self.assertEqual(self.one("approval_approved").dedupe_key, f"approval:leave:{leave.id}:approved")
 
-    def test_without_a_portal_address_there_is_no_link_and_it_is_plain_text(self):
-        with override_settings(EMPLOYEE_PORTAL_URL=""):
-            self.approve(self.leave())
-        self.assertEqual(self.payloads()[0]["type"], "text")
-        self.assertNotIn("View request", self.texts()[0])
+    def test_a_decision_is_plain_text_and_never_carries_a_web_app_address(self):
+        # Even a server that still has the retired EMPLOYEE_PORTAL_URL / WHATSAPP_LINK_PREVIEW in its environment.
+        with override_settings(EMPLOYEE_PORTAL_URL="https://portal.test", WHATSAPP_LINK_PREVIEW=True):
+            leave = self.leave()
+            self.approve(leave)
+            self.call("patch", f"/api/leave-requests/{leave.id}/status", {"status": "rejected", "hrComment": "Clash"})
+        self.assertEqual(len(self.texts()), 2)
+        self.assert_plain_text_without_links()
+        self.assertTrue(self.texts()[0].endswith("Thank you,\nUK Textiles HRMS"))
+        self.assertIn("Reason: Clash\n\nPlease contact HR", self.texts()[1])
 
-    def test_a_refused_link_message_is_sent_as_plain_text_instead(self):
-        self.post.side_effect = [_error("link type not supported"), _ok("WA2")]
+    def test_the_text_sender_is_given_only_the_number_and_the_text(self):
+        with mock.patch("api.whatsapp_service.send_text_message", return_value={"status": "success"}) as sender:
+            self.approve(self.leave())
+        sender.assert_called_once()
+        self.assertEqual(len(sender.call_args.args), 2)
+        self.assertEqual(sender.call_args.args[0], "918220015110")
+        self.assertEqual(sender.call_args.kwargs, {})
+
+    def test_a_refused_message_is_not_sent_again_in_another_form(self):
+        self.post.side_effect = [_error("Instance not connected"), _ok("WA2")]
         self.approve(self.leave())
-        self.assertEqual([p["type"] for p in self.payloads()], ["link", "text"])
-        self.assertEqual(self.one("approval_approved").provider_message_id, "WA2")
+        self.assertEqual(len(self.payloads()), 1)
+        self.assertEqual(self.one("approval_approved").status, "failed")
+
+    def test_wording_saved_with_the_old_link_placeholder_never_reaches_the_employee(self):
+        WhatsAppMessageTemplate.objects.create(
+            document_type="approval_approved",
+            message_body=(
+                "Hi {{employee_name}}: {{request_type}} OK\n🔗 View request: {{link}}\nOpen {{ link }} for more\nBye"
+            ),
+        )
+        self.approve(self.leave())
+        self.assertEqual(self.texts(), ["Hi Asha Kumar: Leave OK\nBye"])
+        self.assert_plain_text_without_links()
 
     def test_a_whatsapp_outage_is_logged_and_the_approval_still_happens(self):
         self.post.return_value = _error("Instance not connected")

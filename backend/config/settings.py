@@ -389,12 +389,6 @@ if len(sys.argv) > 1 and sys.argv[1] == "test":
 # Minimum pause between two messages leaving the background worker (a burst of approvals
 # is spread out rather than blasted, which is what gets a linked number flagged).
 WHATSAPP_MIN_SEND_GAP_SECONDS = float(os.environ.get("WHATSAPP_MIN_SEND_GAP_SECONDS", "1") or 0)
-# Where the Employee Web App lives (e.g. https://employee.uktextiles.in). When set, approval
-# messages carry a "View request" link to the right page; blank = no link.
-EMPLOYEE_PORTAL_URL = os.environ.get("EMPLOYEE_PORTAL_URL", "").strip().rstrip("/")
-# Send a message with a link as WAClient's "link" type (a preview card). If that is refused
-# the message is sent as plain text instead, so this can only ever add polish.
-WHATSAPP_LINK_PREVIEW = os.environ.get("WHATSAPP_LINK_PREVIEW", "true").strip().lower() not in ("0", "false", "no")
 
 # Optional override for the public origin WAClient's servers use to fetch a
 # document/image media asset (whatsapp_service._media_url) -only needed if

@@ -246,6 +246,7 @@ api/tests_whatsapp_alerts.py
 api/tests_whatsapp_approvals.py
 api/tests_whatsapp_control.py
 api/tests_whatsapp_events.py
+api/tests_whatsapp_no_link.py
 api/tests_whatsapp_service.py
 api/tests_whatsapp_webhook.py
 api/view_common.py

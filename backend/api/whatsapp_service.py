@@ -17,8 +17,9 @@ Sending goes through WAClient's WhatsApp Web API (linked WhatsApp number), so th
 are no Meta templates to approve: wording is plain text with {{name}} placeholders
 that HR can edit (WhatsAppMessageTemplate.message_body); a type with no saved wording
 uses the catalog default. The API has no native buttons, so "components" are what it
-does offer: formatted text and emojis, a link (sent as a preview card), documents and
-images with a caption, and contact cards (the visitor's tap-to-call card).
+does offer: formatted text and emojis, documents and images with a caption, and
+contact cards (the visitor's tap-to-call card). No message carries a link to the
+Employee Web App, so every text goes out as a plain WAClient "text" message.
 
 Credentials (WACLIENT_INSTANCE_ID / WACLIENT_ACCESS_TOKEN) are .env-only -see
 config/settings.py -never stored in the database or editable from the UI.
@@ -153,11 +154,17 @@ def render_message(body: str, params, order: list[str] | None = None) -> str:
     "{{3}}" to a person, and a line whose placeholders are ALL empty is dropped, so an optional
     detail ("Note: {{comment}}") disappears instead of leaving an empty label."""
     values = _values(params, order)
+    for retired in catalog.RETIRED_VARIABLES:
+        values.pop(retired, None)
     lines = []
     for line in body.split("\n"):
         names = _PLACEHOLDER.findall(line)
         if not names:
             lines.append(line)
+            continue
+        # Wording saved long ago can still name a placeholder that was retired (the Employee Web App link): the
+        # whole line goes, so an employee never gets a label with nothing after it, a raw {{...}} or an address.
+        if any(n in catalog.RETIRED_VARIABLES for n in names):
             continue
         if all(not values.get(n, "").strip() for n in names):
             continue
@@ -301,14 +308,8 @@ def send_document_message(to_phone: str, media_url: str, filename: str, caption:
     return _post_send(payload)
 
 
-def send_text_message(to_phone: str, text: str, link_url: str = "") -> dict:
-    """Plain text, or -when there is a link- WAClient's "link" type, which shows a preview card.
-    If WAClient refuses the link type the text goes out plain, so a link can only add polish."""
-    if link_url and dj_settings.WHATSAPP_LINK_PREVIEW:
-        try:
-            return _post_send({"number": to_phone, "type": "link", "message": text, "url": link_url})
-        except WhatsAppServiceError as exc:
-            logger.warning("WAClient link message refused (%s); sending as plain text", exc)
+def send_text_message(to_phone: str, text: str) -> dict:
+    """A plain text message (WAClient's "text" type)."""
     return _post_send({"number": to_phone, "type": "text", "message": text})
 
 
@@ -551,13 +552,13 @@ def _run_in_background(job) -> None:
     transaction.on_commit(submit)
 
 
-def _deliver(log_id: int, phone: str, text: str, link_url: str, contact: dict | None, on_sent):
+def _deliver(log_id: int, phone: str, text: str, contact: dict | None, on_sent):
     """Send the message a pending log row was reserved for, and record the outcome."""
     from .models import WhatsAppMessageLog
 
     log = WhatsAppMessageLog.objects.select_related("employee").get(pk=log_id)
     try:
-        result = send_text_message(phone, text, link_url=link_url)
+        result = send_text_message(phone, text)
     except WhatsAppServiceError as exc:
         log.status = WhatsAppMessageLog.STATUS_FAILED
         log.error_message = str(exc)
@@ -621,7 +622,6 @@ def send_notification(
     document_ref_id: int | None = None,
     log_params=None,
     related_module: str = "",
-    link_url: str = "",
     contact: dict | None = None,
     on_sent=None,
     asynchronous: bool | None = None,
@@ -632,8 +632,8 @@ def send_notification(
 
     `params` are the template's variables, by name (a dict) or by position (a list).
     `related_module` names the workflow behind a shared message ("leave" for the Approved wording).
-    `link_url` adds a link (sent as a preview card); `contact` follows the message with a contact
-    card (dict of first_name, last_name, phone); `on_sent(log)` runs after a successful send.
+    `contact` follows the message with a contact card (dict of first_name, last_name, phone);
+    `on_sent(log)` runs after a successful send.
 
     None -not a failed row- is returned when: HR has this type (or its module) switched off,
     WhatsApp isn't configured on this server, the type's wording is disabled, or `dedupe_key` was
@@ -687,7 +687,7 @@ def send_notification(
             log.save(update_fields=["status", "error_message", "updated_at"])
             return log
 
-        job = partial(_deliver, log.id, phone, text, link_url, contact, on_sent)
+        job = partial(_deliver, log.id, phone, text, contact, on_sent)
         if dj_settings.WHATSAPP_ASYNC_SEND if asynchronous is None else asynchronous:
             _run_in_background(job)
             return log

@@ -184,10 +184,8 @@ export type WhatsAppConfig = {
   publicBaseUrl: string;
   webhookUrl: string;
   webhookTokenSet: boolean;
-  employeePortalUrl: string;
   /** Approval, visitor and gate messages are delivered by a background worker. */
   backgroundSending: boolean;
-  linkPreview: boolean;
 };
 
 export type WhatsAppMessage = {

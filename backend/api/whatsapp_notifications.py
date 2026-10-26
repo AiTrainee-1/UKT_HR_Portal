@@ -20,7 +20,7 @@ import time as time_module
 from django.utils import timezone
 
 from . import whatsapp_service
-from .whatsapp_approvals import approver_label, portal_link
+from .whatsapp_approvals import approver_label
 from .whatsapp_format import date_str, duration_str, full_name, pretty_phone, stamp_str, time_str
 
 logger = logging.getLogger(__name__)
@@ -188,7 +188,6 @@ def notify_gate_out(req):
         dedupe_key=f"gate:out:{req.id}",
         document_ref_id=req.id,
         related_module="outpass",
-        link_url=portal_link("/employee/outpass"),
     )
 
 
@@ -204,7 +203,6 @@ def notify_gate_in(req):
         dedupe_key=f"gate:in:{req.id}",
         document_ref_id=req.id,
         related_module="outpass",
-        link_url=portal_link("/employee/outpass"),
     )
 
 

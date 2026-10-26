@@ -36,7 +36,7 @@ No module talks to WAClient itself. To add a notification: add one entry to `wha
 | File | Role |
 |---|---|
 | `backend/api/whatsapp_catalog.py` | **Every message type**: label, module, default wording, variables, switch. The single source the rest reads. |
-| `backend/api/whatsapp_service.py` | The notification service (`send_notification()`), switches, wording and rendering, the background worker, the log, and all WAClient calls (text, link preview, documents, contact cards). Documents use `send_document()`. |
+| `backend/api/whatsapp_service.py` | The notification service (`send_notification()`), switches, wording and rendering, the background worker, the log, and all WAClient calls (text, documents, contact cards). Documents use `send_document()`. |
 | `backend/api/whatsapp_approvals.py` | Approve / reject messages for every workflow (`notify_decision()` + one builder per workflow). |
 | `backend/api/whatsapp_format.py` | Shared date / time / duration / phone formatting for the messages. |
 | `backend/api/whatsapp_views.py` | Settings → WhatsApp endpoints (status, message wording), the public media link, and the delivery-status webhook. |
@@ -64,10 +64,8 @@ No module talks to WAClient itself. To add a notification: add one entry to `wha
 | `WHATSAPP_WEBHOOK_TOKEN` | no | If set, the webhook URL must end with `?token=<value>` |
 | `WACLIENT_API_URL` | no | Defaults to `https://api.waclient.com/send` |
 | `WACLIENT_CONTACT_API_URL` | no | Contact cards; defaults to the send URL with `/send_contact` |
-| `EMPLOYEE_PORTAL_URL` | recommended | Where the Employee Web App lives (e.g. `https://employee.uktextiles.in`). Approval messages then carry a "View request" link to the right page; blank = no link |
 | `WHATSAPP_ASYNC_SEND` | no | Default `true`: approval / visitor / gate messages go from a background worker. `false` = inline |
 | `WHATSAPP_MIN_SEND_GAP_SECONDS` | no | Minimum pause between two background messages. Default `1` |
-| `WHATSAPP_LINK_PREVIEW` | no | Default `true`: a message with a link is sent as WAClient's "link" type (preview card), falling back to plain text if refused |
 
 4. Restart the backend. **Settings → WhatsApp** should show *Configured -instance ending in …xxxx*.
 5. Send one salary slip to a test employee (a different phone from the linked number) and confirm it arrives.
@@ -86,7 +84,7 @@ No module talks to WAClient itself. To add a notification: add one entry to `wha
 | Attendance | Late Attendance Alert | First punch inside the Late window: after start + the shift's grace, up to the Late window (60 min by default, Settings → Attendance). An approved Late-In permission excuses it, and a later arrival (quarter-shift or second-half) is not "Late" so gets no late alert | `shift_start`, `first_punch`, `late_by`, `status`, `grace_minutes`, `grace_period` |
 | Attendance | Punch Reminder / On-Duty Punch Reminder | 15 minutes before a punch is expected, and it is still missing | `punch_name`, `punch_number` ("2 of 4"), `expected_time`, `greeting`, `action`, `quote`, `closing`, `minutes_left`, `destination` |
 | Attendance | Missing Punch Alert | A punch is still missing 20 minutes after it was expected | `punch_name`, `expected_time`, `status`, `intro` (plus `recorded`, `missing`) |
-| Approvals | Approval - Approved / Rejected | Any request below is decided | `request_type`, `date`, `time`, `details`, `approver`, `comment`, `link` |
+| Approvals | Approval - Approved / Rejected | Any request below is decided | `request_type`, `date`, `time`, `details`, `approver`, `comment` |
 | Geo Attendance | Geo Attendance Approved / Rejected | The request gets HR's final approval, or is rejected by anyone | `destination`, `requested_on`, `approved_by` / `rejected_by`, `comment`, `punches_note` |
 | Geo Attendance | Geo Punch Approved / Rejected | One captured punch is decided | `punch_name`, `date`, `time`, `location`, `comment` |
 | Visitors | Visitor Notification + Visitor Contact Card | A visitor checks in to meet an employee | `visitor_name`, `visitor_phone`, `company`, `purpose`, `department`, `visit_date`, `visit_time`, `branch` |
@@ -187,7 +185,7 @@ Every approval workflow tells the employee, on WhatsApp and automatically, what 
 | Geo Attendance (On-Duty) request | Department Head then HR | Own wording (below). |
 | Geo punch ("Punch Approval") | HR | Own wording (below). |
 
-The message says the request type, date and time, what was requested, who approved or rejected it and the note or **rejection reason** if one was given, with a "View request" link when `EMPLOYEE_PORTAL_URL` is set. On-Duty / Geo Attendance and Punch Approval are the same two workflows in the HRMS as "On Duty" and "On Duty Punch"; there is one set of messages for each.
+The message says the request type, date and time, what was requested, who approved or rejected it and the note or **rejection reason** if one was given. **No WhatsApp message carries a link to the Employee Web App** (the old "View request" line, its `{{link}}` placeholder, the preview card and the `EMPLOYEE_PORTAL_URL` / `WHATSAPP_LINK_PREVIEW` settings were removed; every text goes out as a plain WAClient "text" message). Wording HR saved earlier that still contained `{{link}}` was cleaned by migration `0130_whatsapp_strip_portal_link`, the editor refuses the placeholder as an unknown one, and if it ever reached the renderer the whole line would be dropped. The only address a message can still show is the map link in the Geo punch messages. On-Duty / Geo Attendance and Punch Approval are the same two workflows in the HRMS as "On Duty" and "On Duty Punch"; there is one set of messages for each.
 
 ### Geo Attendance and punches
 
@@ -211,7 +209,7 @@ Denied scans (expired, already used) send nothing.
 1. Run migrations (`0097_waclient_whatsapp`, `0098_whatsapp_control_otp_alerts`, `0099_whatsapp_otp_activation`, `0100_whatsapp_central_layer`).
 2. The variables in **Setup** must be set on the server that answers (Railway → Variables).
 3. Open **WhatsApp Control → Configuration**: it should say credentials are set. Send yourself a sign-in code from the Employee Web App to prove delivery.
-4. Set `EMPLOYEE_PORTAL_URL` so approval messages link to the Employee Web App. Approval, visitor, gate and document messages are ON by default (approve a test request and check **Messages**); turn on the attendance alerts / punch reminders / Geo switches you want, one at a time, and watch **Messages** for the first run.
+4. Approval, visitor, gate and document messages are ON by default (approve a test request and check **Messages**); turn on the attendance alerts / punch reminders / Geo switches you want, one at a time, and watch **Messages** for the first run.
 5. Set the WAClient webhook to the URL shown in **Configuration** (see *Delivery / read status* below).
 
 ## Delivery / read status (optional webhook)
@@ -242,11 +240,10 @@ WAClient's webhook body format is not publicly documented, so the parser is deli
 | An alert never went out | Its switch (or Attendance alerts (all)) is OFF, the employee is exempt (leave / holiday / On-Duty / no shift), or it already went out today |
 | An approval sent no message | Approval notifications (all), or that workflow's switch, is OFF; or the decision was a Department Head hand-over (only final decisions and rejections are sent); or it was already sent for that decision |
 | A message is stuck on Pending | The server restarted before delivering it; it is marked Failed within 10 minutes |
-| Approval message has no link | `EMPLOYEE_PORTAL_URL` isn't set on the server |
 | No contact card after a visitor message | Contact cards are a separate WAClient call; a failed one shows as its own row ("Visitor Contact Card") with WAClient's reason |
 
 ## Tests
 
-`python manage.py test api.tests_whatsapp_service api.tests_whatsapp_webhook api.tests_otp api.tests_whatsapp_alerts api.tests_whatsapp_control api.tests_whatsapp_approvals api.tests_whatsapp_events` -covers the request shape, wording, variables and rendering, every approval workflow (approve, reject, two-stage hand-overs, switches, background delivery, failures that must not break the workflow), gate and visitor messages, punch reminders, phone handling, every failure path, the settings endpoints, the webhook parser, OTP security (expiry, single use, attempt limits, purpose separation, redaction), each alert rule and its exemptions, and the WhatsApp Control API. WAClient itself is mocked, and credentials are blanked while tests run, so nothing in the suite sends a real message.
+`python manage.py test api.tests_whatsapp_service api.tests_whatsapp_webhook api.tests_otp api.tests_whatsapp_alerts api.tests_whatsapp_control api.tests_whatsapp_approvals api.tests_whatsapp_events api.tests_whatsapp_no_link` -covers the request shape, wording, variables and rendering, every approval workflow (approve, reject, two-stage hand-overs, switches, background delivery, failures that must not break the workflow), gate and visitor messages, punch reminders, phone handling, every failure path, the settings endpoints, that no message or sender carries an Employee Web App link (and that migration 0130 and the renderer clean old wording that did), the webhook parser, OTP security (expiry, single use, attempt limits, purpose separation, redaction), each alert rule and its exemptions, and the WhatsApp Control API. WAClient itself is mocked, and credentials are blanked while tests run, so nothing in the suite sends a real message.
 
 The browser suite (`cd frontend && npx playwright test`) runs the real send path against a **fake WAClient** (`frontend/e2e/fake-waclient.mjs`, port 8190) so `whatsapp-control.spec.ts` can read the code an employee would have received.

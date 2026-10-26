@@ -29,7 +29,6 @@ CONFIG = dict(
     WHATSAPP_DEFAULT_COUNTRY_CODE="91",
     WACLIENT_API_URL="https://api.waclient.test/send",
     WACLIENT_CONTACT_API_URL="https://api.waclient.test/send_contact",
-    EMPLOYEE_PORTAL_URL="https://portal.test",
 )
 
 
@@ -54,6 +53,17 @@ class WhatsAppBase(TestCase):
 
     def sent_to(self, post, suffix):
         return [c for c in post.call_args_list if c.args[0].endswith(suffix)]
+
+    def assert_texts_are_plain(self, post):
+        """Every text that went out is a plain WAClient "text": no preview card, no address, no portal link."""
+        calls = self.sent_to(post, "/send")
+        self.assertTrue(calls)
+        for call in calls:
+            payload = call.kwargs["json"]
+            self.assertEqual(payload["type"], "text")
+            self.assertNotIn("url", payload)
+            for banned in ("http", "portal", "View request", "🔗"):
+                self.assertNotIn(banned, payload["message"])
 
 
 @override_settings(**CONFIG)
@@ -126,6 +136,7 @@ class GateMovementTests(WhatsAppBase):
         self.assertEqual((log.document_type, log.related_module, log.status), ("outpass_gate_out", "outpass", "sent"))
         self.assertEqual(log.dedupe_key, f"gate:out:{self.req.id}")
         self.assertEqual(self.post.call_args.kwargs["json"]["number"], "918220015110")
+        self.assert_texts_are_plain(self.post)
 
     def test_and_again_with_both_times_and_how_long_they_were_out_when_they_return(self):
         resolve_gate_scan(self.gate, self.exit_qr())
@@ -145,6 +156,8 @@ class GateMovementTests(WhatsAppBase):
         ):
             self.assertIn(expected, text)
         self.assertEqual(WhatsAppMessageLog.objects.filter(document_type="outpass_gate_in").count(), 1)
+        self.assertEqual(len(self.texts()), 2)
+        self.assert_texts_are_plain(self.post)
 
     def test_a_denied_scan_sends_nothing(self):
         resolve_gate_scan(self.gate, self.exit_qr())
