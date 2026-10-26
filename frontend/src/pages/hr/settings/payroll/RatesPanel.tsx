@@ -96,9 +96,9 @@ export function RatesPanel({
       >
         <InfoBox testId="calendar-applies-to-everyone">
           <p>
-            <strong>These two apply to everyone.</strong> The pay day and the financial year start month are single
-            company-wide values: staff and production use the same ones, and nothing on Production Payroll sets them
-            again.
+            <strong>These two apply to everyone.</strong> The pay day and the financial year start month are one set of
+            values: staff and production use the same ones, and nothing on Production Payroll sets them again. Set them
+            from the company (admin) login: reports and the MD portal read the company value.
           </p>
         </InfoBox>
 
