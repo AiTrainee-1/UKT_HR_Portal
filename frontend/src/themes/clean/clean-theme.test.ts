@@ -156,7 +156,14 @@ describe("!important is rare and says why", () => {
     "primitives.css": 16,
     "tailwind-remap.css": 12,
   };
-  const AREA_BUDGET = 40; // per file in areas/
+  // the area files, each at the count it has now (an area sweep that needs more adds its line and says why; it only goes down)
+  const AREA_BUDGET: Record<string, number> = {
+    "areas/attendance.css": 2,
+    "areas/controls-auth.css": 26,
+    "areas/payroll.css": 0,
+    "areas/settings-reports.css": 25,
+    "areas/shell-dashboard.css": 23,
+  };
 
   for (const file of CSS_FILES) {
     it(`${file}: every !important is explained, and there are no more than the budget`, () => {
@@ -164,7 +171,7 @@ describe("!important is rare and says why", () => {
       const lines = importantDeclarations(readThemeFile(file));
       const unexplained = lines.filter((l) => !/\/\*\s*(inline style|legacy !important)/.test(l));
       expect(unexplained).toEqual([]);
-      const budget = file.startsWith("areas/") ? AREA_BUDGET : (BUDGET[file] ?? 0);
+      const budget = file.startsWith("areas/") ? (AREA_BUDGET[file] ?? 0) : (BUDGET[file] ?? 0);
       expect(lines.length, `${file} uses ${lines.length} !important`).toBeLessThanOrEqual(budget);
     });
   }
@@ -229,12 +236,49 @@ describe("the colour remap", () => {
   });
 });
 
+describe("no inline-colour rule matches a background colour by accident", () => {
+  // style="background-color: rgb(220, 38, 38); color: white" contains the text "color: rgb(220, 38, 38)" inside
+  // "background-color: rgb(220, 38, 38)", so [style*="color: rgb(220, 38, 38)"] would recolour the TEXT of a red box. The
+  // property has to be matched from the start of the style attribute (^=) or after a space (*=" color: ...").
+  for (const file of CSS_FILES) {
+    it(`${file}: no [style*="color...] selector that can match background-color, border-color or outline-color`, () => {
+      const css = stripComments(readThemeFile(file));
+      const bad = css.match(/\[style\*=["']color[^\]]*\]/g) ?? [];
+      expect(bad).toEqual([]);
+    });
+  }
+
+  it("the guard catches the loose form and lets the anchored one through", () => {
+    const loose = /\[style\*=["']color[^\]]*\]/;
+    expect(loose.test('[style*="color: rgb(220, 38, 38)"]')).toBe(true);
+    expect(loose.test('[style*="color"]')).toBe(true);
+    expect(loose.test('[style^="color: rgb(220, 38, 38)"]')).toBe(false);
+    expect(loose.test('[style*=" color: rgb(220, 38, 38)"]')).toBe(false);
+    expect(loose.test('[style*="border-color: rgba(0, 100, 150"]')).toBe(false);
+  });
+});
+
 describe("the palette is readable (WCAG AA)", () => {
   const tokens = stripComments(readThemeFile("tokens.css"));
   const triple = (name: string) => tokens.match(new RegExp(`${name}:\\s*([\\d.]+ [\\d.]+% [\\d.]+%);`))![1];
   const hex = (name: string) => hslTripleToHex(triple(name));
+  // the page's own --border and --muted-foreground are set a second time below <html> (the stronger line, the darker text):
+  // the last declaration in the file is the one the application uses, the first is the one the Themes card mirrors
+  const lastTriple = (name: string) =>
+    [...tokens.matchAll(new RegExp(`${name}:\\s*([\\d.]+ [\\d.]+% [\\d.]+%);`, "g"))].at(-1)![1];
+  const usedHex = (name: string) => hslTripleToHex(lastTriple(name));
   const ramp = (name: string) => tokens.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6});`))![1];
   const WHITE = "#ffffff";
+  // the page itself is --background mixed 6% towards the text colour (--clean-page in tokens.css): a card stands off it
+  const mixHex = (x: string, y: string, ratioOfX: number) =>
+    "#" +
+    [1, 3, 5]
+      .map((i) =>
+        Math.round(parseInt(x.slice(i, i + 2), 16) * ratioOfX + parseInt(y.slice(i, i + 2), 16) * (1 - ratioOfX)),
+      )
+      .map((v) => v.toString(16).padStart(2, "0"))
+      .join("");
+  const PAGE = mixHex(hslTripleToHex(triple("--background")), hslTripleToHex(triple("--foreground")), 0.94);
 
   it("body text, muted text and the text on the main button", () => {
     expect(contrastRatio(hex("--foreground"), hex("--background"))).toBeGreaterThanOrEqual(7);
@@ -253,9 +297,57 @@ describe("the palette is readable (WCAG AA)", () => {
   });
 
   it("the greys the pages use for secondary text stay readable, including the 'gray-400' ones", () => {
-    expect(contrastRatio(ramp("--clean-n-400"), WHITE)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(ramp("--clean-n-500"), hex("--background"))).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(ramp("--clean-n-600"), ramp("--clean-n-100"))).toBeGreaterThanOrEqual(4.5);
+    // text-gray-400 (the app's meta text) is read on the page colour, on a card and on a header row
+    for (const surface of [PAGE, WHITE, ramp("--clean-n-100")]) {
+      expect(contrastRatio(ramp("--clean-n-400"), surface), `n-400 on ${surface}`).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(ramp("--clean-n-500"), surface), `n-500 on ${surface}`).toBeGreaterThanOrEqual(5.5);
+      expect(contrastRatio(ramp("--clean-n-600"), surface), `n-600 on ${surface}`).toBeGreaterThanOrEqual(6.5);
+    }
+    // secondary text (muted-foreground) is never lighter than the 600 step
+    expect(contrastRatio(usedHex("--muted-foreground"), PAGE)).toBeGreaterThanOrEqual(6.5);
+    expect(contrastRatio(usedHex("--muted-foreground"), ramp("--clean-n-100"))).toBeGreaterThanOrEqual(6.5);
+  });
+
+  it("holds up on a weak display: edges and fills are well clear of the surface they sit on", () => {
+    // a card against the page, the line round a card and under a row, a field's edge, a secondary button's edge
+    expect(contrastRatio(hex("--card"), PAGE)).toBeGreaterThanOrEqual(1.12);
+    expect(contrastRatio(usedHex("--border"), hex("--card"))).toBeGreaterThanOrEqual(1.5);
+    expect(contrastRatio(usedHex("--border"), PAGE)).toBeGreaterThanOrEqual(1.3);
+    expect(contrastRatio(hex("--input"), WHITE)).toBeGreaterThanOrEqual(3.5);
+    expect(contrastRatio(hex("--input"), PAGE)).toBeGreaterThanOrEqual(3.3);
+    expect(contrastRatio(ramp("--clean-line-mid"), WHITE)).toBeGreaterThanOrEqual(2.2);
+    // the hover / selected tint is a visible step from white, and its ink is far over AA
+    expect(contrastRatio(hex("--sidebar-accent"), WHITE)).toBeGreaterThanOrEqual(1.15);
+    expect(contrastRatio(hex("--accent-foreground"), hex("--sidebar-accent"))).toBeGreaterThanOrEqual(7);
+    // the soft brand fills (chosen chip / row, 12 and 20% of the primary over white) with the dark brand ink the theme puts on them
+    const primary = hex("--primary");
+    const mix = (pct: number, base: number) =>
+      "#" +
+      [1, 3, 5]
+        .map((i) => Math.round(parseInt(primary.slice(i, i + 2), 16) * pct + base * (1 - pct)))
+        .map((v) => v.toString(16).padStart(2, "0"))
+        .join("");
+    const ink = mix(0.72, 0); // --clean-b-800: 72% primary, 28% black
+    for (const pct of [0.12, 0.2]) {
+      expect(contrastRatio(ink, mix(pct, 255)), `b-800 on a ${pct * 100}% fill`).toBeGreaterThanOrEqual(7);
+    }
+    // an icon is never lighter than the 500 step (5.5:1 on the page)
+    expect(contrastRatio(ramp("--clean-n-500"), PAGE)).toBeGreaterThanOrEqual(5.5);
+  });
+
+  it("the status and brand colours are readable as text on white, on the page and on their own tints (the text-*-500 darkening)", () => {
+    // tailwind-remap.css gives text-red-500 / green-500 / amber-500 / blue-500 (and the 400s) the 600 of the ramp
+    for (const r of ["s", "w", "d"]) {
+      for (const bg of [WHITE, PAGE, ramp(`--clean-${r}-50`), ramp(`--clean-${r}-100`)]) {
+        expect(contrastRatio(ramp(`--clean-${r}-600`), bg), `${r}-600 on ${bg}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    expect(contrastRatio(hex("--primary"), PAGE)).toBeGreaterThanOrEqual(5.5);
+    expect(contrastRatio(hex("--primary"), WHITE)).toBeGreaterThanOrEqual(6);
+    // an icon in the 500 of a status ramp (a dot, a bar) still needs 3:1 on white
+    for (const r of ["s", "w", "d"]) {
+      expect(contrastRatio(ramp(`--clean-${r}-500`), WHITE), `${r}-500 on white`).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it("each status colour is readable as text on its own soft background (the chip pairs the code writes)", () => {

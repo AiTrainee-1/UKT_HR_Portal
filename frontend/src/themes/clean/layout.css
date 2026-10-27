@@ -101,7 +101,11 @@ html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-na
   box-shadow: inset 3px 0 0 hsl(var(--sidebar-primary));
   font-weight: 600;
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active :is(span, svg) {
+/* (not the count bubble: a span with the inline gradient keeps its own white text on the red disc) */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  .clay-nav-active
+  :is(span, svg):not([style*="linear-gradient"]) {
   color: inherit;
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active svg {
@@ -133,12 +137,15 @@ html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .bor
 /* the count bubbles (Requests, Settlement ...): one flat red, no amber gradient, no pulse */
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] [style*="linear-gradient"] {
   background: hsl(var(--destructive)) !important; /* inline style */
+  color: var(--clean-on-primary);
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] [class~="ring-[#f6fafe]"] {
   --tw-ring-color: hsl(var(--sidebar));
 }
 /* Sign out */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="color: rgba"],
+html[data-theme="clean"]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  button:is([style^="color: rgba"], [style*=" color: rgba"]),
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child button {
   color: color-mix(in srgb, hsl(var(--sidebar-foreground)) 78%, transparent) !important; /* inline style */
 }

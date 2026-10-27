@@ -70,29 +70,6 @@ html[data-theme="clean"]:not([data-md-theme])
   background-color: color-mix(in srgb, currentColor 11%, transparent);
   border-radius: var(--clean-radius);
 }
-/* the small grey lines in a tile were 70% and 60% of the tone on a pastel: on white they need to stay readable (AA) */
-html[data-theme="clean"]:not([data-md-theme])
-  :is(
-    [data-testid="staff-payroll-page"],
-    [data-testid^="production-payroll-"],
-    [data-testid="payroll-details-page"],
-    [data-ui-area="payroll"]
-  )
-  :is(div, button)[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]:has(> [class~="bg-white/60"])
-  [class~="opacity-70"] {
-  opacity: 0.85;
-}
-html[data-theme="clean"]:not([data-md-theme])
-  :is(
-    [data-testid="staff-payroll-page"],
-    [data-testid^="production-payroll-"],
-    [data-testid="payroll-details-page"],
-    [data-ui-area="payroll"]
-  )
-  :is(div, button)[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]:has(> [class~="bg-white/60"])
-  [class~="opacity-60"] {
-  opacity: 0.8;
-}
 /* the tile's loading bars are black at 10%: a neutral grey */
 html[data-theme="clean"]:not([data-md-theme])
   :is(
@@ -336,25 +313,6 @@ html[data-theme="clean"]:not([data-md-theme])
   border-radius: var(--clean-radius-sm);
 }
 
-/* The issue-type chips of the Issues view: the chosen one is the soft brand colour with the brand line. A selected dark chip
-   ("All types": bg-slate-800 text-white) is made a solid brand block by controls-auth.css while shell-dashboard.css gives every
-   pressed button brand text: together, brand text on a brand block. This rule is more specific than both. */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  :is(
-    [data-testid="staff-payroll-page"],
-    [data-testid^="production-payroll-"],
-    [data-testid="payroll-details-page"],
-    [data-ui-area="payroll"]
-  )
-  [data-testid="issues-types"]
-  > button[data-testid^="issues-type"][aria-pressed="true"]:not([data-slot]) {
-  background-color: var(--clean-primary-soft);
-  border-color: var(--clean-b-300);
-  color: hsl(var(--primary));
-  box-shadow: none;
-}
-
 /* -- a payroll's details page ---------------------------------------------------------------------------------------- */
 
 /* the strip across the top of the header card: one brand colour (staff: indigo, production: amber) */
@@ -579,44 +537,4 @@ html[data-theme="clean"]:not([data-md-theme])
   [data-testid="pcp-generate-dialog"]
   :is(a, button)[class~="text-amber-700"] {
   color: hsl(var(--primary));
-}
-
-/* -- Settlement: the count bubble on the open menu item ------------------------------------------------------------------ */
-
-/* the foundation colours every span in the open menu row with the row's text colour: the red count bubble keeps white text */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="sidebar"]
-  .clay-nav-active
-  span[style*="linear-gradient"] {
-  color: var(--clean-on-primary);
-}
-
-/* -- Settlement: the table has eight columns and the action buttons. The foundation's 12px cell padding (8px in the old look,
-   which already just fits) would push the last column out of the card at 1366px: 4px between the columns, 12px at the card's
-   left edge, 8px at the right ------------------------------------------------------------------------------------------- */
-
-html[data-theme="clean"]:not([data-md-theme])
-  [data-testid="advances-table"]
-  th[data-slot="table-head"][class~="px-2"]:not([class*="px-3"], [class*="px-4"]),
-html[data-theme="clean"]:not([data-md-theme])
-  [data-testid="advances-table"]
-  td[data-slot="table-cell"][class~="p-2"]:not([class*="py-"], [class*="px-"], [class*="pt-"], [class*="pb-"]) {
-  padding-left: 4px;
-  padding-right: 4px;
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-testid="advances-table"]
-  th[data-slot="table-head"][class~="px-2"]:first-child,
-html[data-theme="clean"]:not([data-md-theme])
-  [data-testid="advances-table"]
-  td[data-slot="table-cell"][class~="p-2"]:first-child {
-  padding-left: 12px;
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-testid="advances-table"]
-  th[data-slot="table-head"][class~="px-2"]:last-child,
-html[data-theme="clean"]:not([data-md-theme])
-  [data-testid="advances-table"]
-  td[data-slot="table-cell"][class~="p-2"]:last-child {
-  padding-right: 8px;
 }

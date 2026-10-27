@@ -119,12 +119,43 @@ html[data-theme="clean"]:not([data-md-theme])
       [type="reset"],
       [type="image"]
     )
-  ):not([data-slot]) {
+  ):not([data-slot], [class~="bg-transparent"]) {
   border-color: var(--clean-line-strong);
   background-color: var(--clean-surface);
   border-radius: var(--clean-radius);
   box-shadow: none;
   color: var(--clean-ink);
+}
+/* a bare input that asks for no fill (bg-transparent) is the inside of a composite box (a search box with an icon, a
+   bordered wrapper that shows the focus ring): the wrapper is the field, so the input keeps its transparent look */
+html[data-theme="clean"]:not([data-md-theme]) :is(select, textarea, input):not([data-slot])[class~="bg-transparent"] {
+  color: var(--clean-ink);
+}
+
+/* a native <select>: the browser's own arrow is drawn in the operating system's colours (and not at all on some displays), so
+   it is hidden and the theme draws one (--clean-select-chevron, tokens.css). Not for a Radix Select's hidden twin
+   (aria-hidden), a list box (multiple / size), or a select a page has already given its own arrow (appearance-none). */
+html[data-theme="clean"]:not([data-md-theme])
+  select:not([data-slot], [multiple], [size], [aria-hidden="true"], [class~="appearance-none"]) {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: var(--clean-select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 14px 14px;
+  padding-right: 28px;
+}
+
+/* the search row at the top of a popover list (the employee pickers): the row has its own line under it, the input has none */
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="popover-panel"]
+  > div[class~="border-b"]
+  > input[data-slot="input"] {
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  box-shadow: none;
+  outline: none;
 }
 html[data-theme="clean"]:not([data-md-theme]) :is(select, textarea, input):not([data-slot]):disabled {
   background-color: var(--clean-disabled-bg);

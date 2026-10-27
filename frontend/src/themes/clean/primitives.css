@@ -65,8 +65,8 @@ html[data-theme="clean"]:not([data-md-theme]) .clay-input:focus {
   border-color: var(--clean-focus) !important; /* legacy !important */
 }
 html[data-theme="clean"]:not([data-md-theme]) .clay-nav-active {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
+  background: hsl(var(--sidebar-accent));
+  color: hsl(var(--sidebar-accent-foreground));
   box-shadow: inset 3px 0 0 hsl(var(--primary));
 }
 
@@ -94,41 +94,44 @@ html[data-theme="clean"]:not([data-md-theme]) [data-slot="button"]:is(:hover, :a
    class, the rule below no longer matches, and the colour remap gives the page's colour the clean palette. */
 
 /* default: solid blue */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="button"][data-variant="default"][class~="bg-gradient-to-br"] {
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="button"][data-variant="default"][class~="bg-gradient-to-br"]:not(:disabled) {
   background: hsl(var(--primary));
   color: var(--clean-on-primary);
   border: 1px solid hsl(var(--primary));
 }
 html[data-theme="clean"]:not([data-md-theme])
-  [data-slot="button"][data-variant="default"][class~="bg-gradient-to-br"]:hover {
+  [data-slot="button"][data-variant="default"][class~="bg-gradient-to-br"]:not(:disabled):hover {
   background: var(--clean-primary-hover);
   border-color: var(--clean-primary-hover);
 }
 html[data-theme="clean"]:not([data-md-theme])
-  [data-slot="button"][data-variant="default"][class~="bg-gradient-to-br"]:active {
+  [data-slot="button"][data-variant="default"][class~="bg-gradient-to-br"]:not(:disabled):active {
   background: var(--clean-primary-active);
   border-color: var(--clean-primary-active);
 }
 
 /* destructive: solid red */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="button"][data-variant="destructive"][class~="bg-red-50"] {
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="button"][data-variant="destructive"][class~="bg-red-50"]:not(:disabled) {
   background: hsl(var(--destructive));
   color: hsl(var(--destructive-foreground));
   border: 1px solid hsl(var(--destructive));
 }
 html[data-theme="clean"]:not([data-md-theme])
-  [data-slot="button"][data-variant="destructive"][class~="bg-red-50"]:hover {
+  [data-slot="button"][data-variant="destructive"][class~="bg-red-50"]:not(:disabled):hover {
   background: var(--clean-danger-hover);
   border-color: var(--clean-danger-hover);
 }
 
 /* outline: a white button with a visible border (the fill and the text are the neutral ramp through the remap) */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="button"][data-variant="outline"][class~="border-slate-200"] {
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="button"][data-variant="outline"][class~="border-slate-200"]:not(:disabled) {
   background-color: var(--clean-surface);
   border-color: var(--clean-line-mid);
 }
 html[data-theme="clean"]:not([data-md-theme])
-  [data-slot="button"][data-variant="outline"][class~="border-slate-200"]:hover {
+  [data-slot="button"][data-variant="outline"][class~="border-slate-200"]:not(:disabled):hover {
   background-color: var(--clean-n-100);
   border-color: var(--clean-n-400);
 }
@@ -138,8 +141,10 @@ html[data-theme="clean"]:not([data-md-theme]) [data-slot="button"][data-variant=
   background: transparent;
 }
 
-/* disabled: flat grey, never a faded colour */
+/* disabled: flat grey, never a faded colour. (The variant fills above are written for an enabled button, so a disabled
+   one of any variant falls to this rule and cannot look enabled.) */
 html[data-theme="clean"]:not([data-md-theme]) [data-slot="button"]:disabled {
+  cursor: not-allowed;
   opacity: 1;
   background: var(--clean-disabled-bg);
   border-color: var(--clean-n-200);
@@ -221,6 +226,7 @@ html[data-theme="clean"]:not([data-md-theme]) [data-slot="pill-tabs"]::-webkit-s
   display: none;
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-slot="pill-tab"] {
+  flex: none; /* a tab never shrinks inside the scrolling strip: its label would run into the next one */
   border-radius: 0;
   background: transparent;
   height: 36px;
@@ -373,7 +379,11 @@ html[data-theme="clean"]:not([data-md-theme]) [data-slot="checkbox"][data-state=
   border-color: hsl(var(--primary));
   color: var(--clean-on-primary);
 }
-html[data-theme="clean"]:not([data-md-theme]) [role="radio"] {
+/* Only the Radix radio (the little circle: it carries data-state). A radio button or card built by hand (role="radio" with
+   aria-checked, no data-state: the role editor's Hidden / View / Edit, the option cards of Bulk Upload, Compensation, Leave,
+   Settings) paints its chosen and unchosen look itself with colour classes, which the colour remap already gives the
+   theme's palette; a rule here would wipe those colours off. */
+html[data-theme="clean"]:not([data-md-theme]) [role="radio"][data-state] {
   border-color: var(--clean-line-strong);
   background: var(--clean-surface);
   box-shadow: none;
@@ -403,6 +413,112 @@ html[data-theme="clean"]:not([data-md-theme]) [data-slot="skeleton"] {
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-slot="separator"] {
   background: var(--clean-line);
+}
+
+/* ── toggles drawn by hand in the pages: chips and segmented groups ────────────────────────────────────────────────── */
+
+/* ONE decision for every hand-built toggle (aria-pressed buttons, the filter chips, the capsules holding a few of them). The
+   chosen chip is the soft brand fill with dark brand ink and a 1px brand line: it reads as chosen without being a solid block
+   (a solid block hides its own label when the page also colours the text), and the ink on the fill is far over AA. The
+   others are white with a grey line. Every corner is 6px: no capsule. The pages draw the chosen one near-black
+   (bg-slate-800 / bg-gray-900 text-white) or brand-blue; both come out as this. A tile that is also a card (a figure
+   tile with a "bg-white/60" icon box) and a clay button are not chips and keep what the area files give them. */
+html[data-theme="clean"]:not([data-md-theme]) button[aria-pressed]:not([data-slot])[class~="rounded-full"],
+html[data-theme="clean"]:not([data-md-theme])
+  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]:not([data-slot]) {
+  border-radius: var(--clean-radius);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  button[aria-pressed="false"]:not([data-slot])[class~="rounded-full"]:not(:has(> [class~="bg-white/60"])) {
+  background-color: var(--clean-surface);
+  border-color: var(--clean-line-mid);
+  color: var(--clean-n-700);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  button[aria-pressed="false"]:not([data-slot])[class~="rounded-full"]:not(:has(> [class~="bg-white/60"])):hover:not(
+    :disabled
+  ) {
+  background-color: var(--clean-n-100);
+  border-color: var(--clean-n-400);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  button[aria-pressed="true"]:not([data-slot], .clay-btn, .clay-card, [class*="rounded-2xl"]):not(
+    :has(> [class~="bg-white/60"])
+  ),
+html[data-theme="clean"]:not([data-md-theme])
+  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]:not([data-slot]):is(
+    [class~="bg-slate-800"],
+    [class~="bg-slate-900"],
+    [class~="bg-gray-800"],
+    [class~="bg-gray-900"],
+    [class~="bg-zinc-900"]
+  ) {
+  background-color: var(--clean-primary-soft-hover);
+  border-color: hsl(var(--primary));
+  color: var(--clean-b-800);
+}
+/* a card that is a toggle (the count tiles that filter a list): the line of the brand colour round it and a faint brand wash */
+html[data-theme="clean"]:not([data-md-theme])
+  button[aria-pressed="true"]:not([data-slot]):is(.clay-card, [class*="rounded-2xl"]):not(
+    :has(> [class~="bg-white/60"])
+  ) {
+  background-color: var(--clean-b-50);
+  border-color: hsl(var(--primary));
+}
+/* the little count inside a chip ("Login 19") */
+html[data-theme="clean"]:not([data-md-theme])
+  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]:not([data-slot])
+  > span[class~="rounded-full"] {
+  border-radius: var(--clean-radius-sm);
+}
+
+/* a grey capsule holding a few buttons (Staff | Production | All, All | Active | Inactive): a flat segmented control, a 6px
+   track with a line, the chosen segment a white tile with a darker edge and the brand ink */
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"]):is(
+    [class~="bg-gray-100"],
+    [class~="bg-slate-100"]
+  ) {
+  border-radius: var(--clean-radius);
+  background-color: var(--clean-n-100);
+  border: 1px solid var(--clean-line);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"]):is(
+    [class~="bg-gray-100"],
+    [class~="bg-slate-100"]
+  )
+  > button {
+  border-radius: var(--clean-radius-sm);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"]):is(
+    [class~="bg-gray-100"],
+    [class~="bg-slate-100"]
+  )
+  > button:is([aria-pressed="false"], [aria-checked="false"]) {
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--clean-n-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"]):is(
+    [class~="bg-gray-100"],
+    [class~="bg-slate-100"]
+  )
+  > button:is([aria-pressed="false"], [aria-checked="false"]):hover {
+  color: var(--clean-n-900);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"]):is(
+    [class~="bg-gray-100"],
+    [class~="bg-slate-100"]
+  )
+  > button:is([aria-pressed="true"], [aria-checked="true"], [class~="bg-white"]) {
+  background-color: var(--clean-surface);
+  border-color: transparent;
+  color: var(--clean-b-800);
+  box-shadow: inset 0 0 0 1px var(--clean-line-mid);
 }
 
 /* ── loaders: calm. The same shapes, in the theme's colours, without glow ─────────────────────────────────────────── */

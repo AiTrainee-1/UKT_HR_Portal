@@ -5,13 +5,15 @@
    What the foundation (layout.css, tables.css ...) already draws is not repeated here. This file is for what it could not
    reach from a token alone:
 
-     1. the shell        the collapsed rail's flyout, the page-search palette, the floating progress banners
-     2. the dashboard    icon tiles and count pills the page tints with an inline accent colour, charts in the page's
-                         own blues, the header's capsule buttons
-     3. stat cards       the tinted figure cards (account-management/parts.tsx StatCard) used by Departments,
-                         Designations, Branches, Production Employees, Promotion and Increment
-     4. employees        the dense table, the profile page
-     5. organization     split bars, chips, avatars, hand-rolled toggles
+     1. the shell          the collapsed rail's flyout, the page-search palette, the floating progress banners
+     2. the dashboard      icon tiles and count pills the page tints with an inline accent colour, charts in the page's
+                           own blues, the header's capsule buttons, the loading border of a card
+     3. stat cards         the tinted figure cards (account-management/parts.tsx StatCard, production-employees StatButton)
+                           of Departments, Designations, Branches, Production Employees and the branch drawer
+     4. employees          the dense roster, the profile page; 4b. the bulk upload (Staff green / Production amber accents)
+     5. organization       split bars, chips, avatars, gradient icon tiles, hand-rolled toggles, the pay-cycle bulk bar
+     6. the phone          wrapping title bars, the department cards, the dashboard's attendance card
+     (and the row tooltips of the roster, the opaque sticky action bar)
 
    !important appears only where an inline style (the dashboard tints its tiles with style={{ background: accent + "18" }})
    has to be replaced; each such line says so.
@@ -22,8 +24,8 @@
 /* the flyout of a group on the collapsed rail: the open page there is a soft fill, but its label is white (it was white
    on the old gradient), so it vanished. It reads like the open page in the expanded menu now. */
 html[data-theme="clean"]:not([data-md-theme]) [data-slot="popover-panel"] .clay-nav-active {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
+  background: hsl(var(--sidebar-accent));
+  color: hsl(var(--sidebar-accent-foreground));
   box-shadow: inset 3px 0 0 hsl(var(--primary));
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-slot="popover-panel"] .clay-nav-active [class~="text-white"] {
@@ -54,7 +56,7 @@ html[data-theme="clean"]:not([data-md-theme])
   body
   > [class~="fixed"][class~="inset-0"][class~="z-[60]"]
   :is([class~="bg-[#006496]/[0.07]"]) {
-  background-color: hsl(var(--accent));
+  background-color: var(--clean-primary-soft-hover);
 }
 html[data-theme="clean"]:not([data-md-theme])
   body
@@ -181,14 +183,17 @@ html[data-theme="clean"]:not([data-md-theme])
     [class*="rounded-lg"],
     [class*="rounded-xl"]
   )[class*="justify-center"]
-  > :is(span, svg)[style*="color"] {
+  > :is(span, svg):is([style^="color:"], [style*=" color:"]) {
   color: hsl(var(--primary)) !important; /* inline style */
 }
 
 /* the count beside a pending item: the same soft brand, a small label not a capsule */
 html[data-theme="clean"]:not([data-md-theme])
   [data-ui-shell="main"]
-  span[class*="rounded-full"][class*="font-black"][style*="background: rgba("][style*="color"] {
+  span[class*="rounded-full"][class*="font-black"][style*="background: rgba("]:is(
+    [style^="color:"],
+    [style*=" color:"]
+  ) {
   background: var(--clean-primary-soft) !important; /* inline style */
   color: hsl(var(--primary)) !important; /* inline style */
   border-radius: var(--clean-radius-sm);
@@ -217,13 +222,13 @@ html[data-theme="clean"]:not([data-md-theme])
 }
 html[data-theme="clean"]:not([data-md-theme])
   [data-ui-shell="main"]
-  span[class~="font-black"][class~="w-8"][class~="text-right"][style*="color"] {
+  span[class~="font-black"][class~="w-8"][class~="text-right"]:is([style^="color:"], [style*=" color:"]) {
   color: var(--clean-n-800) !important; /* inline style */
 }
 /* the legend and the figures under the workforce ring: series colours in the page's cyan have no contrast on white */
 html[data-theme="clean"]:not([data-md-theme])
   [data-ui-shell="main"]
-  :is(.recharts-legend-item-text, p[class~="text-lg"][class~="font-black"])[style*="color"] {
+  :is(.recharts-legend-item-text, p[class~="text-lg"][class~="font-black"]):is([style^="color:"], [style*=" color:"]) {
   color: var(--clean-n-800) !important; /* inline style */
 }
 
@@ -296,46 +301,6 @@ html[data-theme="clean"]:not([data-md-theme])
 }
 
 /* ═════════════════════════════ 4. employees ═════════════════════════════════════════════════════════════════════════ */
-
-/* The roster has nine columns and 1060px to put them in. The foundation's cell padding (12px, which also replaces the pl-4 /
-   pr-4 the first and last cells ask for) made the table 76px wider than that, so the actions fell off the right edge: the
-   cells here are 6px from their neighbours (the page was designed for 8) and the two ends keep their 16px. */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  table:has([data-testid^="row-employee-"])
-  :is(th, td)[data-slot] {
-  padding-left: 6px;
-  padding-right: 6px;
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  table:has([data-testid^="row-employee-"])
-  :is(th, td)[data-slot]:first-child {
-  padding-left: 16px;
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  table:has([data-testid^="row-employee-"])
-  :is(th, td)[data-slot]:last-child {
-  padding-right: 16px;
-}
-/* the four icon buttons of a row are 32px squares (36px put the table 20px past its card) */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  table:has([data-testid^="row-employee-"])
-  td[data-slot]:last-child
-  [data-slot="button"][class*="h-9"] {
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  table:has([data-testid^="row-employee-"])
-  td[data-slot]:last-child
-  > div[class~="gap-1"] {
-  gap: 2px;
-}
 
 /* ═════════════════════════════ 3b. stat cards, continued ════════════════════════════════════════════════════════════ */
 
@@ -463,27 +428,6 @@ html[data-theme="clean"]:not([data-md-theme])
   background: hsl(var(--primary)) !important; /* inline style */
 }
 
-/* hand-rolled toggles (Cards / Table, Head Office only): a 6px control, and the pressed one is the soft brand colour with
-   the brand line, not a black block or an amber capsule */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  button[aria-pressed]:not([data-slot])[class*="rounded-full"] {
-  border-radius: var(--clean-radius);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  button[aria-pressed="true"]:not([data-slot]):not([class~="clay-btn"]):not(:has(> [class~="bg-white/60"])) {
-  background-color: var(--clean-primary-soft);
-  border-color: var(--clean-b-300);
-  color: hsl(var(--primary));
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  button[aria-pressed="false"]:not([data-slot])[class*="rounded-full"] {
-  background-color: var(--clean-surface);
-  border-color: var(--clean-line-mid);
-  color: var(--clean-n-700);
-}
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] [role="group"][aria-label="Layout"] {
   border-radius: var(--clean-radius);
   border-color: var(--clean-line-mid);
@@ -696,10 +640,8 @@ html[data-theme="clean"]:not([data-md-theme]) :is(input, select, textarea)[class
 }
 
 /* the little coloured label that pops over a row's icon button (blue for view, green, amber, red for delete): one dark label with
-   white writing, like every other tooltip. Its own colour is an inline background-color, and a rule elsewhere that looks for
-   style="...color: rgb(220, 38, 38)" also matches "background-color: rgb(220, 38, 38)" and paints the writing red: the
-   [style] in the selector keeps this rule ahead of those. */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="action-tooltip-label"][style] {
+   white writing, like every other tooltip. Its own colour is an inline background-color. */
+html[data-theme="clean"]:not([data-md-theme]) [data-slot="action-tooltip-label"] {
   background-color: var(--clean-n-800) !important; /* inline style */
   color: var(--clean-on-primary) !important; /* inline style */
   border-radius: var(--clean-radius-sm);

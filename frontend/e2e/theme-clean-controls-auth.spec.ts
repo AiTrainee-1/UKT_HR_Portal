@@ -14,13 +14,20 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 
 const DEVICE_KEY = "uk_textile_theme_device";
 const EMPLOYEE_PASSWORD = "Passw0rd!ctrl1";
-const PAGE_COLOUR = "rgb(244, 246, 249)";
+const PAGE_COLOUR = "oklab(0.931088 -0.00121654 -0.00584666)";
 const BRAND = "rgb(29, 86, 179)";
 const INK = "rgb(31, 41, 55)";
 
 let adminToken = "";
 let employeeToken = "";
 let deviceId: number | null = null;
+let gateId: number | null = null;
+let deskId: number | null = null;
+// the public links and sign-ins of the gate, the reception desk and the QR forms, made in beforeAll
+let gate = { loginToken: "", session: { token: "", gateId: 0, gateName: "" } };
+let desk = { loginToken: "", session: { token: "", deviceId: 0, deskName: "" } };
+let outpassQr = "";
+let visitorQr = "";
 
 async function api(request: APIRequestContext, token: string, method: string, url: string, data?: unknown) {
   const res = await request.fetch(url, { method, headers: { Authorization: `Bearer ${token}` }, data });
@@ -29,14 +36,21 @@ async function api(request: APIRequestContext, token: string, method: string, ur
 }
 
 /** Load a page with the theme (and, when given, the sign-in) already in place: the same as a person who chose it earlier. */
-async function open(page: Page, route: string, theme: "clean" | "default", token?: string) {
+async function open(
+  page: Page,
+  route: string,
+  theme: "clean" | "default",
+  token?: string,
+  extra: Record<string, string> = {},
+) {
   await page.addInitScript(
-    ([key, value, tok]) => {
+    ([key, value, tok, more]) => {
       if (value === "default") localStorage.removeItem(key as string);
       else localStorage.setItem(key as string, value as string);
       if (tok) localStorage.setItem("uk_textile_token", tok as string);
+      for (const [k, v] of Object.entries(more as Record<string, string>)) localStorage.setItem(k, v);
     },
-    [DEVICE_KEY, theme, token ?? ""] as const,
+    [DEVICE_KEY, theme, token ?? "", extra] as const,
   );
   await page.goto(route);
 }
@@ -100,7 +114,10 @@ async function withReload<T>(page: Page, step: () => Promise<T>): Promise<T> {
 
 type PageSpec = {
   name: string;
-  route: string;
+  /** A function where the address is only known once beforeAll has made the link (a QR token, a gate's login token). */
+  route: string | (() => string);
+  /** What the page keeps in this browser (the gate and the reception desk stay signed in on their own device). */
+  storage?: () => Record<string, string>;
   ready: (page: Page) => Promise<void>;
   auth?: "hr" | "employee" | "none";
 };
@@ -144,6 +161,52 @@ const PAGES: PageSpec[] = [
     auth: "none",
   },
   { name: "Gate scanner link", route: "/gate-scanner/nothing", ready: heading("Gate Scanner"), auth: "none" },
+  {
+    name: "Gate scanner sign-in",
+    route: () => `/gate-scanner/${gate.loginToken}`,
+    ready: heading("Gate Scanner"),
+    auth: "none",
+  },
+  {
+    name: "Reception sign-in",
+    route: () => `/reception-login/${desk.loginToken}`,
+    ready: heading("Reception"),
+    auth: "none",
+  },
+  {
+    name: "Gate scanner console",
+    route: "/gate-scanner/console",
+    storage: () => ({
+      gate_device_token: gate.session.token,
+      gate_device_id: String(gate.session.gateId),
+      gate_device_name: gate.session.gateName,
+    }),
+    ready: (p) => expect(p.getByText("Today's Gate-Out Report")).toBeVisible({ timeout: 15_000 }),
+    auth: "none",
+  },
+  {
+    name: "Reception console",
+    route: "/reception/console",
+    storage: () => ({
+      reception_device_token: desk.session.token,
+      reception_device_id: String(desk.session.deviceId),
+      reception_device_name: desk.session.deskName,
+    }),
+    ready: (p) => expect(p.getByText(/Visitors -/).first()).toBeVisible({ timeout: 15_000 }),
+    auth: "none",
+  },
+  {
+    name: "Outpass form (QR link)",
+    route: () => `/gate/outpass/${outpassQr}`,
+    ready: heading("Outpass"),
+    auth: "none",
+  },
+  {
+    name: "Visitor pass (QR link)",
+    route: () => `/gate/visitor/${visitorQr}`,
+    ready: heading("Visitor Pass"),
+    auth: "none",
+  },
   { name: "404", route: "/no/such/page", ready: heading("This page wandered off"), auth: "none" },
   { name: "Server error", route: "/server-error", ready: heading("Something broke on our side"), auth: "none" },
   { name: "Database offline", route: "/db-offline", ready: heading("Database Server Offline"), auth: "none" },
@@ -170,6 +233,47 @@ test.beforeAll(async ({ request }) => {
   expect(device.status, JSON.stringify(device.body)).toBe(201);
   deviceId = device.body.id;
 
+  // a gate kiosk and a reception desk (their sign-in links, and the consoles they show once signed in), and the two QR links
+  // of the head office branch; nothing is left behind (afterAll)
+  for (const list of ["gate-devices", "reception-devices"]) {
+    const old = (await api(request, adminToken, "GET", `/api/${list}`)).body as { id: number; name: string }[];
+    for (const d of old.filter((x) => x.name.startsWith("ctrl_"))) {
+      await api(request, adminToken, "DELETE", `/api/${list}/${d.id}`);
+    }
+  }
+  const branches = (await api(request, adminToken, "GET", "/api/branches")).body as { id: number }[];
+  const branchId = branches[0].id;
+  const gateMade = await api(request, adminToken, "POST", "/api/gate-devices", {
+    name: "ctrl_gate",
+    branchId,
+    username: "ctrl_gate1",
+    password: EMPLOYEE_PASSWORD,
+  });
+  expect(gateMade.status, JSON.stringify(gateMade.body)).toBe(201);
+  gateId = gateMade.body.id;
+  const gateLogin = await request.post("/api/gate-devices/login", {
+    data: { username: "ctrl_gate1", password: EMPLOYEE_PASSWORD },
+  });
+  expect(gateLogin.status()).toBe(200);
+  gate = { loginToken: gateMade.body.loginToken, session: await gateLogin.json() };
+  const deskMade = await api(request, adminToken, "POST", "/api/reception-devices", {
+    name: "ctrl_desk",
+    branchId,
+    username: "ctrl_desk1",
+    password: EMPLOYEE_PASSWORD,
+  });
+  expect(deskMade.status, JSON.stringify(deskMade.body)).toBe(201);
+  deskId = deskMade.body.id;
+  const deskLogin = await request.post("/api/reception-devices/login", {
+    data: { username: "ctrl_desk1", password: EMPLOYEE_PASSWORD },
+  });
+  expect(deskLogin.status()).toBe(200);
+  desk = { loginToken: deskMade.body.loginToken, session: await deskLogin.json() };
+  outpassQr = (await api(request, adminToken, "GET", `/api/outpass/qr?branchId=${branchId}`)).body.token;
+  visitorQr = (await api(request, adminToken, "GET", `/api/visitor/qr?branchId=${branchId}`)).body.token;
+  expect(outpassQr).toBeTruthy();
+  expect(visitorQr).toBeTruthy();
+
   const employees = (await api(request, adminToken, "GET", "/api/employees")).body as {
     id: number;
     employeeCode: string;
@@ -189,6 +293,8 @@ test.beforeAll(async ({ request }) => {
 
 test.afterAll(async ({ request }) => {
   if (deviceId !== null) await api(request, adminToken, "DELETE", `/api/biometric-devices/${deviceId}`);
+  if (gateId !== null) await api(request, adminToken, "DELETE", `/api/gate-devices/${gateId}`);
+  if (deskId !== null) await api(request, adminToken, "DELETE", `/api/reception-devices/${deskId}`);
   const employees = (await api(request, adminToken, "GET", "/api/employees")).body as {
     id: number;
     employeeCode: string;
@@ -207,7 +313,8 @@ for (const width of [1366, 390]) {
       const token = spec.auth === "none" ? undefined : spec.auth === "employee" ? employeeToken : adminToken;
       // the dev server reloads a page when a source file changes under it: such a page is simply loaded again
       const found = await withReload(page, async () => {
-        await open(page, spec.route, "clean", token);
+        const route = typeof spec.route === "function" ? spec.route() : spec.route;
+        await open(page, route, "clean", token, spec.storage?.());
         await spec.ready(page);
         await page.waitForTimeout(700); // fonts, a first answer from the server, animations settling
         expect(await page.evaluate(() => document.documentElement.dataset.theme), `${spec.name}: theme`).toBe("clean");
@@ -268,7 +375,7 @@ test("the sign-in pages wear the theme before anyone has signed in", async ({ pa
       border: getComputedStyle(el).borderTopWidth,
     })),
   ).toEqual({
-    bg: "rgb(253, 241, 240)",
+    bg: "rgb(252, 235, 233)",
     border: "1px",
   });
 });
@@ -277,7 +384,7 @@ test("the employee sign-in is a light page: the Back link and the contact card c
   await open(page, "/employee-login", "clean");
   await expect(page.getByTestId("input-identifier")).toBeVisible();
   expect(await style(page, "div.min-h-screen", ["background-color"])).toEqual({ "background-color": PAGE_COLOUR });
-  expect(await style(page, "button.flex.items-center.gap-2", ["color"])).toEqual({ color: "rgb(75, 86, 102)" });
+  expect(await style(page, "button.flex.items-center.gap-2", ["color"])).toEqual({ color: "rgb(70, 81, 97)" });
   await expect(page.getByTestId("support-contact-card")).toBeVisible();
   expect(await style(page, '[data-testid="support-contact-card"] p', ["color"])).toEqual({ color: INK });
   expect(await style(page, "div.bg-card.rounded-2xl", ["border-top-left-radius", "border-top-width"])).toEqual({
@@ -331,7 +438,7 @@ test("the status screens are a flat light card with the seriousness in one colou
   await open(page, "/server-error", "clean");
   await expect(page.getByRole("heading", { name: "Something broke on our side" })).toBeVisible();
   expect(await style(page, ".ss-code", ["color", "background-image"])).toEqual({
-    color: "rgb(168, 100, 0)",
+    color: "rgb(151, 88, 0)",
     "background-image": "none",
   });
   await open(page, "/no/such/page", "clean");
@@ -387,13 +494,13 @@ test("the ERP shell has the same white menu as the HR portal", async ({ page }) 
   expect(await style(page, "aside", ["background-color", "background-image", "border-right-color"])).toEqual({
     "background-color": "rgb(255, 255, 255)",
     "background-image": "none",
-    "border-right-color": "rgb(223, 227, 232)",
+    "border-right-color": "rgb(195, 204, 216)",
   });
   // the open page: the soft fill and the brand text
   expect(
     await style(page, "aside nav div[class*='bg-white/10']", ["background-color", "color", "background-image"]),
   ).toEqual({
-    "background-color": "rgb(232, 240, 251)",
+    "background-color": "rgb(221, 232, 247)",
     color: "rgb(23, 63, 134)",
     "background-image": "none",
   });
@@ -408,7 +515,7 @@ test("Device Status: a count of zero is a grey that can be read", async ({ page 
   await expect(page.getByTestId("device-summary")).toBeVisible();
   const zero = page.locator('[data-testid="device-summary-connected"] p[class*="text-slate-300"]');
   await expect(zero).toHaveText("0");
-  expect(await zero.evaluate((el) => getComputedStyle(el).color)).toBe("rgb(108, 118, 133)");
+  expect(await zero.evaluate((el) => getComputedStyle(el).color)).toBe("rgb(90, 102, 118)");
 });
 
 test("the role editor: the chosen level shows, a disabled button is grey, a hand-built search box is one white field", async ({
@@ -423,8 +530,8 @@ test("the role editor: the chosen level shows, a disabled button is grey, a hand
   await expect(page.getByTestId("role-save")).toBeVisible();
   // an empty name: the save button is disabled, and looks it
   expect(await style(page, '[data-testid="role-save"]', ["background-color", "color", "opacity"])).toEqual({
-    "background-color": "rgb(241, 244, 248)",
-    color: "rgb(108, 118, 133)",
+    "background-color": "rgb(230, 235, 241)",
+    color: "rgb(90, 102, 118)",
     opacity: "1",
   });
   await page.getByRole("button", { name: "Edit", exact: true }).first().click(); // "Set every module to Edit"
@@ -457,20 +564,19 @@ test("the role editor: the chosen level shows, a disabled button is grey, a hand
   });
 });
 
-test("Activity Logs: the filter chips are 6px chips and the chosen one is the brand colour", async ({ page }) => {
+test("Activity Logs: the filter chips are 6px chips and the chosen one is a soft brand chip", async ({ page }) => {
   await open(page, "/hr/activity-logs", "clean", adminToken);
   const all = page.getByRole("button", { name: /^All Actions/ });
   await expect(all).toBeVisible();
   await page.waitForTimeout(450); // the chips fade between colours
   expect(
     await all.evaluate((el) => ({
-      bg: getComputedStyle(el).backgroundColor,
+      color: getComputedStyle(el).color,
+      line: getComputedStyle(el).borderTopColor,
       r: getComputedStyle(el).borderTopLeftRadius,
+      solid: getComputedStyle(el).backgroundColor === "rgb(29, 86, 179)",
     })),
-  ).toEqual({
-    bg: BRAND,
-    r: "6px",
-  });
+  ).toEqual({ color: "oklab(0.340239 -0.0199436 -0.113069)", line: BRAND, r: "6px", solid: false }); // dark brand ink (--clean-b-800)
   const login = page.getByRole("button", { name: /^Login\b/ }).first();
   expect(
     await login.evaluate((el) => ({

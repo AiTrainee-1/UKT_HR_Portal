@@ -1,16 +1,16 @@
 import { defineConfig } from "@playwright/test";
 import base from "./playwright.config";
 
-// TEMPORARY (area sweep "ctrl" of the Clean Professional theme): the base config's stack on this agent's own ports and
-// throwaway database, so it can run next to other agents' stacks. Deleted when the sweep ends.
-const API_PORT = 8205;
-const WEB_PORT = 5205;
-const FAKE_PORT = 18206;
-const FAKE_TWOFACTOR_PORT = 18207;
-const FAKE_GEMINI_PORT = 18208;
-const FAKE_DEVICE_BASE_PORT = 14471;
-const FAKE_DEVICE_CONTROL_PORT = 14480;
-const DB = "uktex_theme_ctrl_e2e";
+// TEMPORARY (THEME-2 integration of the Clean Professional theme): the base config's stack on its own ports and throwaway
+// database. Deleted when the work ends.
+const API_PORT = 8210;
+const WEB_PORT = 5210;
+const FAKE_PORT = 18216;
+const FAKE_TWOFACTOR_PORT = 18217;
+const FAKE_GEMINI_PORT = 18218;
+const FAKE_DEVICE_BASE_PORT = 14571;
+const FAKE_DEVICE_CONTROL_PORT = 14580;
+const DB = "uktex_theme2_e2e";
 
 const backendEnv = {
   DB_NAME: DB,
@@ -39,7 +39,8 @@ const backendEnv = {
 
 export default defineConfig({
   ...base,
-  outputDir: "test-results/ctrl",
+  outputDir: "test-results/theme2",
+  reporter: [["list"]],
   use: { ...base.use, baseURL: `http://127.0.0.1:${WEB_PORT}` },
   projects: [{ name: "chrome", use: { channel: "chrome" } }],
   webServer: [

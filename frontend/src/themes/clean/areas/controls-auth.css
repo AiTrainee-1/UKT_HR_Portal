@@ -3,7 +3,7 @@
    What this file covers: the sign-in and public pages (HR sign-in, employee sign-in, set password, job apply, identity check,
    gate and reception links, the ERP sign-in), the "something is not right" screens (404, server error, database offline, the
    connection-lost takeover: components/status/status-screen.css), and the control pages (WhatsApp, SMS, Gmail, biometric
-   connectors, accounts, logs, backups) where the foundation leaves something glass, clay or off-palette.
+   connectors, accounts, logs, messages) where the foundation leaves something glass, clay or off-palette.
 
    The status screens and the sign-in pages are dark or gradient by design in the default theme and paint themselves with
    literal colours and inline styles, so they are redrawn here: a flat light page, a white 1px-bordered card, one brand
@@ -100,7 +100,7 @@ html[data-theme="clean"]:not([data-md-theme])
     padding: 32px;
   }
 }
-/* the sign-in and the field labels */
+/* the sign-in button */
 html[data-theme="clean"]:not([data-md-theme])
   form
   [data-testid="button-submit"][class~="clay-btn"]:hover:not(:disabled) {
@@ -115,7 +115,9 @@ html[data-theme="clean"]:not([data-md-theme]) form [data-testid="button-submit"]
   background: var(--clean-n-400) !important; /* inline style */
 }
 /* the wrong-password box: a plain danger alert */
-html[data-theme="clean"]:not([data-md-theme]) form div[style*="color: rgb(220, 38, 38)"] {
+html[data-theme="clean"]:not([data-md-theme])
+  form
+  div:is([style^="color: rgb(220, 38, 38)"], [style*=" color: rgb(220, 38, 38)"]) {
   background: var(--clean-d-50) !important; /* inline style */
   color: var(--clean-d-700) !important; /* inline style */
   border: 1px solid var(--clean-d-200);
@@ -131,10 +133,14 @@ html[data-theme="clean"]:not([data-md-theme])
   border: 1px solid color-mix(in srgb, var(--clean-on-primary) 28%, transparent);
   border-radius: var(--clean-radius-lg);
 }
-html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] [style*="color: rgba(255, 255, 255"] {
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="lg:w-[46%]"]
+  :is([style^="color: rgba(255, 255, 255"], [style*=" color: rgba(255, 255, 255"]) {
   color: color-mix(in srgb, var(--clean-on-primary) 86%, transparent) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] svg[style*="color: rgb(224, 168, 58)"] {
+html[data-theme="clean"]:not([data-md-theme])
+  div[class~="lg:w-[46%]"]
+  svg:is([style^="color: rgb(224, 168, 58)"], [style*=" color: rgb(224, 168, 58)"]) {
   color: var(--clean-on-primary) !important; /* inline style: the gold sparkle */
 }
 html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] [class~="text-[#8fd8ff]"],
@@ -161,7 +167,7 @@ html[data-theme="clean"]:not([data-md-theme]) div[style*="border-color: rgb(79, 
 }
 html[data-theme="clean"]:not([data-md-theme])
   div[class~="lg:hidden"][class~="justify-center"]
-  span[style*="color: rgb(79, 184, 240)"] {
+  span:is([style^="color: rgb(79, 184, 240)"], [style*=" color: rgb(79, 184, 240)"]) {
   color: var(--clean-b-500) !important; /* inline style */
 }
 
@@ -472,15 +478,9 @@ html[data-theme="clean"]:not([data-md-theme]) .ss-footer {
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-   6. The UKT mark and the loaders. The mark (an inline SVG: a light-blue oval with white letters) is drawn pale by the
-      colour remap on a white page; on the boot screen and the status screens it takes the brand colour, like the sign-in's.
+   6. The loaders. The UKT mark on the boot screen is drawn in the brand colour by the colour remap (tailwind-remap.css).
    ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 
-html[data-theme="clean"]:not([data-md-theme])
-  :is([role="status"][aria-label="Loading"] > svg, .ss-brand svg)
-  ellipse[fill="#4FB8F0"] {
-  fill: hsl(var(--primary));
-}
 html[data-theme="clean"]:not([data-md-theme]) [role="status"][aria-label="Loading"] > svg {
   opacity: 1;
 }
@@ -553,12 +553,6 @@ html[data-theme="clean"]:not([data-md-theme]) div[class~="fixed"][class~="bg-bla
    8. Control pages: what the foundation leaves.
    ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 
-/* Biometric Device Status: a count of zero is drawn in slate-300 on purpose (nothing to see), which is nearly invisible on a
-   white card; the number stays a quiet grey that can still be read */
-html[data-theme="clean"]:not([data-md-theme]) [data-testid="device-summary"] p[class~="text-slate-300"] {
-  color: var(--clean-n-400);
-}
-
 /* Account Management -> MD profile: the thin gold bar over the card is a flat brand bar */
 html[data-theme="clean"]:not([data-md-theme])
   div[class~="h-1.5"][class~="w-full"][style*="linear-gradient(90deg, rgb(246, 210, 122)"] {
@@ -569,12 +563,8 @@ html[data-theme="clean"]:not([data-md-theme])
    9. Hand-built controls the foundation's field and tab rules do not reach.
    ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 
-/* A search box drawn by hand: a bordered wrapper (it shows the focus ring through focus-within) around a bare input.
-   The wrapper is a white field like every other, and its input stays transparent: the generic field rule in forms.css
-   would paint it white inside a page-coloured wrapper, a box in a box. */
-html[data-theme="clean"]:not([data-md-theme]) input[class~="bg-transparent"]:not([data-slot]) {
-  background-color: transparent;
-}
+/* A search box drawn by hand: a bordered wrapper (it shows the focus ring through focus-within) around a bare input (the
+   foundation leaves a bg-transparent input transparent). The wrapper is the field. */
 html[data-theme="clean"]:not([data-md-theme]) div[class*="focus-within:ring"][class~="border"] {
   background-color: var(--clean-surface);
   border-color: var(--clean-line-strong);
@@ -587,71 +577,11 @@ html[data-theme="clean"]:not([data-md-theme]) div[class*="focus-within:ring"][cl
   outline: none;
 }
 
-/* A segmented switch written by hand (a grey capsule holding rounded buttons: Department users "All / Active / Inactive",
-   Shift assignments "Staff / Production"): a bordered 6px track, the chosen button a white tile with a thin edge */
-html[data-theme="clean"]:not([data-md-theme]) div[role="group"][class~="rounded-full"][class~="bg-gray-100"] {
-  border-radius: var(--clean-radius);
-  background: var(--clean-n-100);
-  border: 1px solid var(--clean-line);
-}
-html[data-theme="clean"]:not([data-md-theme]) div[role="group"][class~="rounded-full"][class~="bg-gray-100"] > button {
-  border-radius: var(--clean-radius-sm);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  div[role="group"][class~="rounded-full"][class~="bg-gray-100"]
-  > button:is([aria-pressed="true"], [class~="bg-white"]) {
-  background: var(--clean-surface);
-  box-shadow: inset 0 0 0 1px var(--clean-line-mid);
-}
-
-/* Filter chips written by hand (Activity Logs: "All Actions 34", "Login 19" ...): 6px chips; the chosen one is the brand colour */
-html[data-theme="clean"]:not([data-md-theme])
-  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"] {
-  border-radius: var(--clean-radius);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]:is(
-    [class~="bg-slate-800"],
-    [class~="bg-slate-900"],
-    [class~="bg-gray-900"]
-  ) {
-  background-color: hsl(var(--primary));
-  border-color: hsl(var(--primary));
-}
-html[data-theme="clean"]:not([data-md-theme])
-  button[class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]
-  > span[class~="rounded-full"] {
-  border-radius: var(--clean-radius-sm);
-}
-
-/* Hand-built radio options: a button or card with role="radio" and aria-checked (the module level Hidden / View / Edit in the
-   role editor, the option cards of Bulk Upload, Compensation, Settings ...). primitives.css draws the Radix radio circle with
-   [role="radio"] and gives it a white fill and a grey edge, which wipes the chosen colour (bg-blue-600, bg-amber-100,
-   bg-blue-50 border-blue-500 ...) off these. A Radix radio carries data-state; these do not, so they take their own classes
-   back: revert-layer drops the unlayered declarations and leaves what the utility classes say. */
-html[data-theme="clean"]:not([data-md-theme]) [role="radio"]:not([data-state]) {
-  background: revert-layer;
-  border-color: revert-layer;
-  box-shadow: revert-layer;
-}
 /* the chosen segment of a Hidden / View / Edit group: a thin edge, since the shadow it was drawn with is off */
 html[data-theme="clean"]:not([data-md-theme])
   div[role="radiogroup"][class~="bg-gray-100"]
   > button[role="radio"][aria-checked="true"] {
   box-shadow: inset 0 0 0 1px var(--clean-line-mid);
-}
-
-/* A disabled solid button (default / danger variant) is flat grey, as primitives.css intends: its "solid blue" rule is more
-   specific than the generic :disabled one, so a disabled "Create role" looked exactly like an enabled one */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-slot="button"][data-variant="default"][class~="bg-gradient-to-br"]:disabled,
-html[data-theme="clean"]:not([data-md-theme])
-  [data-slot="button"][data-variant="destructive"][class~="bg-red-50"]:disabled,
-html[data-theme="clean"]:not([data-md-theme])
-  [data-slot="button"][data-variant="outline"][class~="border-slate-200"]:disabled {
-  background: var(--clean-disabled-bg);
-  border-color: var(--clean-n-200);
-  color: var(--clean-disabled-ink);
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════

@@ -349,6 +349,280 @@ html[data-theme="clean"]:not([data-md-theme])
   display: none;
 }
 
+/* ── text that is too light to read ───────────────────────────────────────────────────────────────────────────────────────
+   Tailwind's lighter steps of a colour family (text-red-500, text-green-400 ...) are 2 to 4.4:1 on a white or a tinted card, and
+   the pages use them for small figures, counts and icons. Written as TEXT (an icon takes its colour from the text colour too)
+   the 400 and the 500 of a status or brand family take the 600 of the same ramp (5 to 6:1 as text, over 3:1 as an icon); a fill,
+   a border or a dot of the 400 / 500 keeps the lighter colour. A text-*-400 / 500 that has a hover colour of its own
+   (hover:text-red-700) is darkened while it is not hovered, so the page's hover still shows. The greys: text-gray-400 is
+   readable by the ramp itself (--clean-n-400, tokens.css); text-gray-200 / 300 (a "-" for no value, a zero counter, an empty
+   state's big icon) are 1.2 to 1.5:1 and take the 400 (an icon, the 500), except inside a dark box, where the lighter grey is
+   the point. */
+
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-red-400"],
+    [class~="text-red-500"],
+    [class~="text-rose-400"],
+    [class~="text-rose-500"],
+    [class~="text-pink-400"],
+    [class~="text-pink-500"]
+  ):not([class*="hover:text-"]),
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-red-400"],
+    [class~="text-red-500"],
+    [class~="text-rose-400"],
+    [class~="text-rose-500"],
+    [class~="text-pink-400"],
+    [class~="text-pink-500"]
+  )[class*="hover:text-"]:not(:hover) {
+  color: var(--clean-d-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-green-400"],
+    [class~="text-green-500"],
+    [class~="text-emerald-400"],
+    [class~="text-emerald-500"],
+    [class~="text-lime-400"],
+    [class~="text-lime-500"]
+  ):not([class*="hover:text-"]),
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-green-400"],
+    [class~="text-green-500"],
+    [class~="text-emerald-400"],
+    [class~="text-emerald-500"],
+    [class~="text-lime-400"],
+    [class~="text-lime-500"]
+  )[class*="hover:text-"]:not(:hover) {
+  color: var(--clean-s-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-amber-400"],
+    [class~="text-amber-500"],
+    [class~="text-yellow-400"],
+    [class~="text-yellow-500"],
+    [class~="text-orange-400"],
+    [class~="text-orange-500"]
+  ):not([class*="hover:text-"]),
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-amber-400"],
+    [class~="text-amber-500"],
+    [class~="text-yellow-400"],
+    [class~="text-yellow-500"],
+    [class~="text-orange-400"],
+    [class~="text-orange-500"]
+  )[class*="hover:text-"]:not(:hover) {
+  color: var(--clean-w-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-blue-400"],
+    [class~="text-blue-500"],
+    [class~="text-indigo-400"],
+    [class~="text-indigo-500"],
+    [class~="text-sky-400"],
+    [class~="text-sky-500"],
+    [class~="text-cyan-400"],
+    [class~="text-cyan-500"],
+    [class~="text-teal-400"],
+    [class~="text-teal-500"],
+    [class~="text-violet-400"],
+    [class~="text-violet-500"],
+    [class~="text-purple-400"],
+    [class~="text-purple-500"],
+    [class~="text-fuchsia-400"],
+    [class~="text-fuchsia-500"]
+  ):not([class*="hover:text-"]),
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-blue-400"],
+    [class~="text-blue-500"],
+    [class~="text-indigo-400"],
+    [class~="text-indigo-500"],
+    [class~="text-sky-400"],
+    [class~="text-sky-500"],
+    [class~="text-cyan-400"],
+    [class~="text-cyan-500"],
+    [class~="text-teal-400"],
+    [class~="text-teal-500"],
+    [class~="text-violet-400"],
+    [class~="text-violet-500"],
+    [class~="text-purple-400"],
+    [class~="text-purple-500"],
+    [class~="text-fuchsia-400"],
+    [class~="text-fuchsia-500"]
+  )[class*="hover:text-"]:not(:hover) {
+  color: var(--clean-b-600);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-gray-200"],
+    [class~="text-gray-300"],
+    [class~="text-slate-200"],
+    [class~="text-slate-300"],
+    [class~="text-zinc-200"],
+    [class~="text-zinc-300"],
+    [class~="text-neutral-200"],
+    [class~="text-neutral-300"],
+    [class~="text-stone-200"],
+    [class~="text-stone-300"]
+  ):not(
+    [class*="hover:text-"],
+    [class*="bg-gray-8"] *,
+    [class*="bg-gray-9"] *,
+    [class*="bg-slate-8"] *,
+    [class*="bg-slate-9"] *,
+    [class*="bg-zinc-9"] *,
+    [class*="bg-black"] *
+  ),
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-gray-200"],
+    [class~="text-gray-300"],
+    [class~="text-slate-200"],
+    [class~="text-slate-300"],
+    [class~="text-zinc-200"],
+    [class~="text-zinc-300"],
+    [class~="text-neutral-200"],
+    [class~="text-neutral-300"],
+    [class~="text-stone-200"],
+    [class~="text-stone-300"]
+  )[class*="hover:text-"]:not(
+    :hover,
+    [class*="bg-gray-8"] *,
+    [class*="bg-gray-9"] *,
+    [class*="bg-slate-8"] *,
+    [class*="bg-slate-9"] *,
+    [class*="bg-zinc-9"] *,
+    [class*="bg-black"] *
+  ) {
+  color: var(--clean-n-400);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  svg:is(
+    [class~="text-gray-200"],
+    [class~="text-gray-300"],
+    [class~="text-gray-400"],
+    [class~="text-slate-200"],
+    [class~="text-slate-300"],
+    [class~="text-slate-400"],
+    [class~="text-zinc-200"],
+    [class~="text-zinc-300"],
+    [class~="text-zinc-400"],
+    [class~="text-neutral-200"],
+    [class~="text-neutral-300"],
+    [class~="text-neutral-400"],
+    [class~="text-stone-200"],
+    [class~="text-stone-300"],
+    [class~="text-stone-400"]
+  ):not(
+    [class*="hover:text-"],
+    [class*="bg-gray-8"] *,
+    [class*="bg-gray-9"] *,
+    [class*="bg-slate-8"] *,
+    [class*="bg-slate-9"] *,
+    [class*="bg-zinc-9"] *,
+    [class*="bg-black"] *
+  ),
+html[data-theme="clean"]:not([data-md-theme])
+  svg:is(
+    [class~="text-gray-200"],
+    [class~="text-gray-300"],
+    [class~="text-gray-400"],
+    [class~="text-slate-200"],
+    [class~="text-slate-300"],
+    [class~="text-slate-400"],
+    [class~="text-zinc-200"],
+    [class~="text-zinc-300"],
+    [class~="text-zinc-400"],
+    [class~="text-neutral-200"],
+    [class~="text-neutral-300"],
+    [class~="text-neutral-400"],
+    [class~="text-stone-200"],
+    [class~="text-stone-300"],
+    [class~="text-stone-400"]
+  )[class*="hover:text-"]:not(
+    :hover,
+    [class*="bg-gray-8"] *,
+    [class*="bg-gray-9"] *,
+    [class*="bg-slate-8"] *,
+    [class*="bg-slate-9"] *,
+    [class*="bg-zinc-9"] *,
+    [class*="bg-black"] *
+  ) {
+  color: var(--clean-n-500);
+}
+
+/* ── dimmed with opacity ───────────────────────────────────────────────────────────────────────────────────────────────────
+   A page dims a small text, an icon or a past row with opacity-20 ... opacity-80 (the grey line under a figure, an inactive sort
+   arrow, an ineligible row). At 0.6 the text is 3 to 3.8:1, which is not readable on a washed-out display, and the text is
+   grey already. Nothing is dimmed here: the hierarchy is carried by the size and the colour step, and what the dimming said
+   ("ineligible", "past") is also in the words. Not for a thing that is meant to go (a skeleton, an animation, a reveal on
+   hover, a disabled control, an overlay). */
+
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="opacity-20"],
+    [class~="opacity-25"],
+    [class~="opacity-30"],
+    [class~="opacity-40"],
+    [class~="opacity-50"],
+    [class~="opacity-60"],
+    [class~="opacity-70"],
+    [class~="opacity-75"],
+    [class~="opacity-80"]
+  ):not(
+    img,
+    video,
+    canvas,
+    :disabled,
+    [aria-disabled="true"],
+    [class*="animate-"],
+    [class*="hover:opacity"],
+    [class*="focus:opacity"],
+    [class*="group-hover:opacity"],
+    [class*="group-focus"],
+    [class*="pointer-events-none"],
+    [class*="absolute"],
+    [class*="fixed"]
+  ) {
+  opacity: 1;
+}
+
+/* ── white text with an alpha (text-white/60 ...) ──────────────────────────────────────────────────────────────────────── */
+/* A page writes a quiet line on a dark or brand panel as white at 20 to 80%: on the brand blue that is 2.5 to 4:1. It is solid
+   white here (5 to 7:1): the hierarchy is the size and the weight, not the fading. */
+
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class*="text-white/20"],
+    [class*="text-white/30"],
+    [class*="text-white/40"],
+    [class*="text-white/50"],
+    [class*="text-white/60"],
+    [class*="text-white/70"],
+    [class*="text-white/75"],
+    [class*="text-white/80"]
+  ):not([class*="hover:text-"]),
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class*="text-white/20"],
+    [class*="text-white/30"],
+    [class*="text-white/40"],
+    [class*="text-white/50"],
+    [class*="text-white/60"],
+    [class*="text-white/70"],
+    [class*="text-white/75"],
+    [class*="text-white/80"]
+  )[class*="hover:text-"]:not(:hover) {
+  color: var(--clean-on-primary);
+}
+
 /* ── the brand blue the code writes as a hex ──────────────────────────────────────────────────────────────────────── */
 
 html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#006496]"], [class~="text-[#004f78]"]) {
@@ -478,35 +752,52 @@ html[data-theme="clean"]:not([data-md-theme])
   background: var(--clean-w-600) !important; /* inline style */
 }
 
+/* the bright amber (#f59e0b) the pages write for a warning icon or figure: 2.2:1 on white, the warning ramp's 600 is 5:1 */
+html[data-theme="clean"]:not([data-md-theme])
+  :is([style^="color: rgb(245, 158, 11)"], [style*=" color: rgb(245, 158, 11)"]) {
+  color: var(--clean-w-600) !important; /* inline style */
+}
+
 /* text in the UKT blue family */
 html[data-theme="clean"]:not([data-md-theme])
   :is(
-    [style*="color: rgb(0, 100, 150)"],
-    [style*="color: rgb(0, 150, 199)"],
-    [style*="color: rgb(0, 128, 191)"],
-    [style*="color: rgb(0, 79, 120)"]
+    :is([style^="color: rgb(0, 100, 150)"], [style*=" color: rgb(0, 100, 150)"]),
+    :is([style^="color: rgb(0, 150, 199)"], [style*=" color: rgb(0, 150, 199)"]),
+    :is([style^="color: rgb(0, 128, 191)"], [style*=" color: rgb(0, 128, 191)"]),
+    :is([style^="color: rgb(0, 79, 120)"], [style*=" color: rgb(0, 79, 120)"])
   ) {
   color: hsl(var(--primary)) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme])
-  :is([style*="color: rgb(26, 58, 74)"], [style*="color: rgb(13, 42, 56)"], [style*="color: rgb(30, 77, 107)"]) {
+  :is(
+    :is([style^="color: rgb(26, 58, 74)"], [style*=" color: rgb(26, 58, 74)"]),
+    :is([style^="color: rgb(13, 42, 56)"], [style*=" color: rgb(13, 42, 56)"]),
+    :is([style^="color: rgb(30, 77, 107)"], [style*=" color: rgb(30, 77, 107)"])
+  ) {
   color: var(--clean-n-800) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme])
-  :is([style*="color: rgb(30, 90, 122)"], [style*="color: rgba(0, 80, 120"]) {
+  :is(
+    :is([style^="color: rgb(30, 90, 122)"], [style*=" color: rgb(30, 90, 122)"]),
+    :is([style^="color: rgba(0, 80, 120"], [style*=" color: rgba(0, 80, 120"])
+  ) {
   color: var(--clean-n-600) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme])
-  :is([style*="color: rgba(0, 60, 100"], [style*="color: rgba(0, 100, 150"]) {
+  :is(
+    :is([style^="color: rgba(0, 60, 100"], [style*=" color: rgba(0, 60, 100"]),
+    :is([style^="color: rgba(0, 100, 150"], [style*=" color: rgba(0, 100, 150"])
+  ) {
   color: var(--clean-n-500) !important; /* inline style */
 }
 /* lines and washes in the same tint */
-html[data-theme="clean"]:not([data-md-theme]) [style*="solid rgba(0, 100, 150"],
-html[data-theme="clean"]:not([data-md-theme]) [style*="solid rgba(0, 60, 100"] {
-  border-color: var(--clean-line) !important; /* inline style */
-}
 html[data-theme="clean"]:not([data-md-theme])
-  :is([style*="border-color: rgba(0, 100, 150"], [style*="border-color: rgba(0, 60, 100"]) {
+  :is(
+    [style*="solid rgba(0, 100, 150"],
+    [style*="solid rgba(0, 60, 100"],
+    [style*="border-color: rgba(0, 100, 150"],
+    [style*="border-color: rgba(0, 60, 100"]
+  ) {
   border-color: var(--clean-line) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme])
@@ -523,9 +814,13 @@ html[data-theme="clean"]:not([data-md-theme])
 html[data-theme="clean"]:not([data-md-theme]) :is([fill="#006496"], [fill="#023e8a"]) {
   fill: var(--clean-b-600);
 }
-html[data-theme="clean"]:not([data-md-theme])
-  :is([fill="#0080bf"], [fill="#0096c7"], [fill="#4FB8F0"], [fill="#4fb8f0"]) {
+html[data-theme="clean"]:not([data-md-theme]) :is([fill="#0080bf"], [fill="#0096c7"]) {
   fill: var(--clean-b-400);
+}
+/* the light blue of the UKT mark (the oval behind the letters, in the sidebar's logo and the phone top bar): the brand
+   colour itself, not a washed-out tint of it */
+html[data-theme="clean"]:not([data-md-theme]) :is([fill="#4FB8F0"], [fill="#4fb8f0"]) {
+  fill: var(--clean-b-600);
 }
 html[data-theme="clean"]:not([data-md-theme]) :is([fill="#00b4d8"], [fill="#48cae4"], [fill="#90e0ef"]) {
   fill: var(--clean-b-300);

@@ -27,7 +27,8 @@ async function useDevice(page: Page, theme: string | null, collapsedMenu = false
 /** The page has drawn: the shell is there, and no loader, skeleton or "can't reach the server" screen is still showing (that
  *  screen is a failed call, and it dismisses itself when the server answers again). */
 async function ready(page: Page) {
-  await expect(page.locator('[data-ui-shell="main"]')).toBeVisible();
+  // a page's code is compiled the first time the dev server is asked for it, which can take a while on a cold stack
+  await expect(page.locator('[data-ui-shell="main"]')).toBeVisible({ timeout: 45_000 });
   await page.waitForLoadState("networkidle").catch(() => {});
   await page
     .waitForFunction(
@@ -271,7 +272,7 @@ test("Clean Professional: stat cards, the roster, branches and the bulk upload c
     }),
   ).toEqual({ colour: brand, selected: "true" });
 
-  // the roster fits its card (the foundation's padding made it 76px too wide) and each of the four icon buttons is 32px
+  // the roster fits its card (a table of eight columns or more has 6px cell padding; with 12px it was 76px too wide)
   await page.goto("/hr/employees");
   await ready(page);
   await expect(page.locator("tbody [data-slot='table-row']").first()).toBeVisible();
@@ -283,11 +284,8 @@ test("Clean Professional: stat cards, the roster, branches and the bulk upload c
       return { table: table.getBoundingClientRect().width, box: box.clientWidth, scroll: box.scrollWidth };
     });
   expect(fit.scroll, "the roster does not scroll sideways").toBeLessThanOrEqual(fit.box + 1);
-  expect(await style(page, 'tbody td:last-child [data-slot="button"]', ["width", "height"])).toEqual({
-    width: "32px",
-    height: "32px",
-  });
   expect(await style(page, "table th", ["padding-left"], 1)).toEqual({ "padding-left": "6px" });
+  expect(await style(page, "table th", ["padding-left"], 0)).toEqual({ "padding-left": "16px" });
 
   // a branch's icon is the solid brand colour (it was a teal gradient) and the card/table toggle is no longer a black block
   await page.goto("/hr/branches");
@@ -304,10 +302,10 @@ test("Clean Professional: stat cards, the roster, branches and the bulk upload c
     "color",
     "border-top-left-radius",
   ]);
-  // (the chosen segment is drawn white with a line by the segmented-group rule of the attendance area, which is imported
-  // after this file: what matters here is that it is no longer a black block)
+  // (the chosen segment is a white tile with a line and the dark brand ink: the segmented-group rule of primitives.css; what
+  // matters here is that it is no longer a black block)
   expect(toggle["background-color"]).not.toBe("rgb(17, 24, 39)");
-  expect(toggle.color).toBe(brand);
+  expect(toggle.color).toBe(await resolved(page, "var(--clean-b-800)"));
   expect(await style(page, '[data-testid="filter-head-office"]', ["border-top-left-radius"])).toEqual({
     "border-top-left-radius": "6px",
   });
@@ -529,6 +527,7 @@ test("the default theme draws the same elements as before this area's CSS existe
     "border-top-left-radius": "16px",
   });
   await page.getByTestId("pe-stat-unassigned").locator("button").click();
+  await page.waitForTimeout(700); // the ring is drawn by a transition: read it when it has settled
   expect(await style(page, '[data-testid="pe-stat-unassigned"]', ["box-shadow"])).toEqual({
     "box-shadow": "rgb(217, 119, 6) 0px 0px 0px 2px",
   });

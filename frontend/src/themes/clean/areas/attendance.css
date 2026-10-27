@@ -4,111 +4,21 @@
    Attendance, Missing Punch, Leave & Holiday, Casual Leave, Requests, Manage Shifts, Compensation, Outpass / Visitors / Tea
    Break. The foundation already makes their cards, tables, fields, dialogs and status chips flat; what is here is what only
    these pages draw: tab strips that are too long for a phone, hand-made toggle chips and segmented groups, the file-type
-   coloured download buttons, small grey texts that are a shade too pale, the stat tiles' pressed state.
+   coloured download buttons, small texts and white-on-colour fills that are a shade too light for AA, the stat tiles' pressed
+   state, the "late by" steps and unit rows of the Daily Late Report, rows and charts that ran off a phone's edge, and the
+   Report Log's off-screen export sheets (a document: pinned so the PDF and the picture come out the same in every theme).
 
    Colours are the theme's tokens only. Status colours keep their meaning: green = good / present, amber = watch / late,
    red = bad / absent, blue = information / leave. */
 
 /* ── tab strips ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-/* The foundation lets the strip scroll inside its own box; its tabs must not shrink to fit, or their labels run into each
-   other (the Requests hub has eleven, Leave & Holiday six, Report Log three). */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="pill-tab"] {
-  flex: none;
-}
 /* the "(12)" after a tab's name: the page fades it with opacity, which is 3.6:1 on white; here it is a solid grey */
 html[data-theme="clean"]:not([data-md-theme]) [data-slot="pill-tab"] span[class*="opacity-"] {
   opacity: 1;
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-slot="pill-tab"] .ptab-label > span[class*="opacity-"] {
   color: var(--clean-n-500);
-}
-
-/* ── small grey texts ───────────────────────────────────────────────────────────────────────────────────────────────── */
-
-/* "Updated 6:15 pm", the "(demo)" hints, the date under a name: text-gray-400 is 4.3:1 on the page colour, 4.7:1 on a card;
-   one shade darker reads on both. text-gray-300 is a placeholder dash ("-" for no value) or a decorative icon. */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  :is(
-    [class~="text-gray-400"],
-    [class~="text-slate-400"],
-    [class~="text-zinc-400"],
-    [class~="text-neutral-400"],
-    [class~="text-stone-400"]
-  ) {
-  color: var(--clean-n-500);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  :is(
-    [class~="text-gray-300"],
-    [class~="text-slate-300"],
-    [class~="text-zinc-300"],
-    [class~="text-neutral-300"],
-    [class~="text-stone-300"]
-  ) {
-  color: var(--clean-n-400);
-}
-
-/* ── toggle chips and segmented groups drawn by hand in the pages ───────────────────────────────────────────────────── */
-
-/* a button that is on or off (aria-pressed) and was drawn as a pill: the theme's corner */
-html[data-theme="clean"]:not([data-md-theme]) button[aria-pressed][class~="rounded-full"]:not([data-slot]) {
-  border-radius: var(--clean-radius);
-}
-/* The chosen one of those chips ("Today", "Issues only"): the page paints it near-black. controls-auth.css turns a dark chip
-   into a solid brand block and shell-dashboard.css gives every pressed button brand-coloured writing, which together is brand
-   on brand (unreadable); the chosen chip is the soft brand colour with the brand line, as on the other pages. */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  button[aria-pressed="true"][class~="rounded-full"][class~="border"][class*="px-3"][class~="text-xs"]:not([data-slot]):is(
-    [class~="bg-gray-900"],
-    [class~="bg-slate-900"],
-    [class~="bg-slate-800"],
-    [class~="bg-zinc-900"]
-  ) {
-  background-color: var(--clean-primary-soft);
-  border-color: var(--clean-b-300);
-  color: hsl(var(--primary));
-}
-
-/* a group of chips in one grey capsule (Staff / Production / All): a flat segmented control, the chosen segment a white tab
-   with a line round it (drawn as an outline, so the segments keep their size) */
-html[data-theme="clean"]:not([data-md-theme])
-  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"]):is([class~="bg-gray-100"], [class~="bg-slate-100"])[class~="p-0.5"] {
-  border-radius: var(--clean-radius);
-  background-color: var(--clean-n-100);
-  border: 1px solid var(--clean-line);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"])[class~="p-0.5"]
-  > button[aria-pressed] {
-  border-radius: var(--clean-radius-sm);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"])[class~="p-0.5"]
-  > button[aria-pressed="false"] {
-  background-color: transparent;
-  border-color: transparent;
-  color: var(--clean-n-600);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"])[class~="p-0.5"]
-  > button[aria-pressed="false"]:hover {
-  color: var(--clean-n-900);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  div[role="group"]:is([class~="rounded-full"], [class~="rounded-lg"])[class~="p-0.5"]
-  > button[aria-pressed="true"] {
-  background-color: var(--clean-surface);
-  border-color: transparent;
-  color: hsl(var(--primary));
-  outline: 1px solid var(--clean-line-mid);
-  outline-offset: -1px;
 }
 
 /* ── downloads (Report Log) ─────────────────────────────────────────────────────────────────────────────────────────── */
@@ -149,43 +59,15 @@ html[data-theme="clean"]:not([data-md-theme])
   [data-ui-shell="main"]
   div[class~="grid"][class~="grid-cols-3"]
   > [data-slot="card"]
-  div[class~="p-1.5"][class~="rounded-lg"]:is([class~="bg-amber-500"], [class~="bg-violet-500"], [class~="bg-sky-500"]) {
+  div[class~="p-1.5"][class~="rounded-lg"]:is(
+    [class~="bg-amber-500"],
+    [class~="bg-violet-500"],
+    [class~="bg-sky-500"]
+  ) {
   background-color: hsl(var(--primary));
 }
 
 /* ── text and fills that are a shade too light for AA ───────────────────────────────────────────────────────────────── */
-
-/* text-red-500 on a white or a tinted card is 4.0 to 4.3:1 (the Sunday numbers in the calendars, the small counts); the 600 of
-   the same ramp is 5.5:1. The same for the other ramps' 500, which the pages use for small figures and "(3)" counts. */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  :is([class~="text-red-500"], [class~="text-rose-500"], [class~="text-pink-500"]) {
-  color: var(--clean-d-600);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  :is([class~="text-green-500"], [class~="text-emerald-500"], [class~="text-lime-500"]) {
-  color: var(--clean-s-600);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  :is([class~="text-amber-500"], [class~="text-yellow-500"], [class~="text-orange-500"]) {
-  color: var(--clean-w-600);
-}
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  :is(
-    [class~="text-blue-500"],
-    [class~="text-indigo-500"],
-    [class~="text-sky-500"],
-    [class~="text-cyan-500"],
-    [class~="text-teal-500"],
-    [class~="text-violet-500"],
-    [class~="text-purple-500"],
-    [class~="text-fuchsia-500"]
-  ) {
-  color: var(--clean-b-600);
-}
 
 /* white writing on a 500 fill (a count badge, a day cell): amber and green at 500 are 2.7:1 and 3.7:1 with white, at 600
    5.1:1 and 5.3:1 */
@@ -209,9 +91,7 @@ html[data-theme="clean"]:not([data-md-theme])
   background-color: var(--clean-n-50);
 }
 /* small texts the page fades with an opacity or a /70 alpha (the sync chip's "last punch", a time under a name) */
-html[data-theme="clean"]:not([data-md-theme])
-  [data-ui-shell="main"]
-  span[class~="text-[10px]"][class~="opacity-70"] {
+html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] span[class~="text-[10px]"][class~="opacity-70"] {
   opacity: 1;
 }
 html[data-theme="clean"]:not([data-md-theme])
@@ -277,11 +157,13 @@ html[data-theme="clean"]:not([data-md-theme]) [data-testid="severity-legend"] > 
   color: var(--clean-w-900);
 }
 /* the unit rows of the table (HO, U-1 ...): an indigo wash with indigo writing, set inline; here the brand's own wash */
-html[data-theme="clean"]:not([data-md-theme]) tr[data-testid^="late-group-"]:not([data-testid^="late-group-select"]) {
+html[data-theme="clean"]:not([data-md-theme]) tr[data-testid^="late-group-"] {
   background: var(--clean-primary-soft-hover) !important; /* inline style */
   border-color: var(--clean-line);
 }
-html[data-theme="clean"]:not([data-md-theme]) tr[data-testid^="late-group-"] > td[style*="color"] {
+html[data-theme="clean"]:not([data-md-theme])
+  tr[data-testid^="late-group-"]
+  > td:is([style^="color:"], [style*=" color:"]) {
   color: var(--clean-b-800) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme]) tr[data-testid^="late-group-"] > td span[class*="opacity-"] {

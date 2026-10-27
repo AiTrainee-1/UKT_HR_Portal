@@ -24,9 +24,9 @@ html[data-theme="clean"]:not([data-md-theme]) {
   color-scheme: light;
 
   /* ── 1. the app's tokens ─────────────────────────────────────────────────────────────────────────────────────── */
-  --background: 216 29.4% 96.7%; /* #f4f6f9 the page */
+  --background: 216 29.4% 96.7%; /* #f4f6f9 the page's colour as the Customize panel sees it (the page itself is a step darker: --clean-page) */
   --foreground: 215 27.9% 16.9%; /* #1f2937 text */
-  --border: 213.3 16.4% 89.2%; /* #dfe3e8 card and divider lines */
+  --border: 213.3 16.4% 89.2%; /* #dfe3e8 as the Themes card draws it (the page itself uses the stronger line set below <html>) */
 
   --card: 0 0% 100%;
   --card-foreground: 215 27.9% 16.9%;
@@ -43,7 +43,7 @@ html[data-theme="clean"]:not([data-md-theme]) {
   --secondary-foreground: 215 25% 27%;
 
   --muted: 214.3 33.3% 95.9%;
-  --muted-foreground: 213.3 12.4% 42.5%; /* #5f6b7a */
+  --muted-foreground: 213.3 12.4% 42.5%; /* #5f6b7a as the Themes card draws it (the page uses the darker text set below <html>) */
 
   --accent: 214.7 70.4% 94.7%; /* #e8f0fb hover / selected tint */
   --accent-foreground: 218.4 70.7% 30.8%; /* #173f86 */
@@ -51,7 +51,7 @@ html[data-theme="clean"]:not([data-md-theme]) {
   --destructive: 4.2 76.5% 40%; /* #b42318 */
   --destructive-foreground: 0 0% 100%;
 
-  --input: 214.8 14.8% 59%; /* #8794a6 the border of a field: 3.1:1 on white */
+  --input: 216.7 14.6% 51.8%; /* #728096 the border of a field: 4.0:1 on white, 3.4:1 on the page */
   --ring: var(--primary);
 
   --sidebar: 0 0% 100%;
@@ -59,7 +59,7 @@ html[data-theme="clean"]:not([data-md-theme]) {
   --sidebar-border: var(--border);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
-  --sidebar-accent: var(--accent);
+  --sidebar-accent: 215.9 62.5% 91.8%; /* #dbe7f8 the open row of the menu: a clear step from white (8:1 with its ink) */
   --sidebar-accent-foreground: var(--accent-foreground);
   --sidebar-ring: var(--primary);
 
@@ -78,21 +78,21 @@ html[data-theme="clean"]:not([data-md-theme]) {
 
   /* ── 2a. neutrals (Tailwind's slate, gray, zinc, neutral and stone all map here) ───────────────────────────── */
   --clean-n-50: #f8fafc;
-  --clean-n-100: #f1f4f8;
-  --clean-n-200: #e6ebf1;
-  --clean-n-300: #d3dae3;
-  --clean-n-400: #6c7685; /* 4.7:1 on white: the app's grey meta text ("text-gray-400") stays readable */
-  --clean-n-500: #5f6b7a; /* 5.4:1 */
-  --clean-n-600: #4b5666;
+  --clean-n-100: #e6ebf1;
+  --clean-n-200: #dce2ea;
+  --clean-n-300: #c5cdd8;
+  --clean-n-400: #5a6676; /* 5.0:1 on the page, 5.8:1 on white: the app's grey meta text ("text-gray-400"), placeholders */
+  --clean-n-500: #525d6d; /* 5.7:1 on the page: icons are never lighter than this */
+  --clean-n-600: #465161;
   --clean-n-700: #364152;
   --clean-n-800: #1f2937;
   --clean-n-900: #111827;
   --clean-n-950: #0b1220;
 
   /* ── 2b. brand / information: worked out from --primary, so a customised primary recolours every blue ──────── */
-  --clean-b-50: color-mix(in oklab, hsl(var(--primary)) 6%, white);
-  --clean-b-100: color-mix(in oklab, hsl(var(--primary)) 12%, white);
-  --clean-b-200: color-mix(in oklab, hsl(var(--primary)) 22%, white);
+  --clean-b-50: color-mix(in oklab, hsl(var(--primary)) 9%, white);
+  --clean-b-100: color-mix(in oklab, hsl(var(--primary)) 16%, white);
+  --clean-b-200: color-mix(in oklab, hsl(var(--primary)) 28%, white);
   --clean-b-300: color-mix(in oklab, hsl(var(--primary)) 40%, white);
   --clean-b-400: color-mix(in oklab, hsl(var(--primary)) 62%, white);
   --clean-b-500: color-mix(in oklab, hsl(var(--primary)) 82%, white);
@@ -103,32 +103,32 @@ html[data-theme="clean"]:not([data-md-theme]) {
   --clean-b-950: color-mix(in oklab, hsl(var(--primary)) 40%, black);
 
   /* ── 2c. status: green = good, amber = watch, red = bad. Nothing else is ever green, amber or red ─────────── */
-  --clean-s-50: #eefaf3;
-  --clean-s-100: #d6f1e0;
+  --clean-s-50: #e7f6ee;
+  --clean-s-100: #cfeedd;
   --clean-s-200: #b0e3c5;
   --clean-s-300: #7fcea4;
   --clean-s-400: #4cb57f;
   --clean-s-500: #2a9a62;
-  --clean-s-600: #1f7a4d;
+  --clean-s-600: #1c7249; /* 5.5:1 on s-50, 4.9:1 on s-100: green text on a tinted card */
   --clean-s-700: #1b6a43;
   --clean-s-800: #185539;
   --clean-s-900: #144630;
   --clean-s-950: #0a2a1d;
 
-  --clean-w-50: #fff8e8;
-  --clean-w-100: #feefc6;
+  --clean-w-50: #fff3d9;
+  --clean-w-100: #fde9b8;
   --clean-w-200: #fcdf92;
   --clean-w-300: #f9c85a;
   --clean-w-400: #f1ac22;
-  --clean-w-500: #d88f0c;
-  --clean-w-600: #a86400;
+  --clean-w-500: #c98200;
+  --clean-w-600: #975800; /* 5.3:1 on w-50, 4.8:1 on w-100: amber text on a tinted card */
   --clean-w-700: #8a5000;
   --clean-w-800: #6f4000;
   --clean-w-900: #5a3400;
   --clean-w-950: #321b00;
 
-  --clean-d-50: #fdf1f0;
-  --clean-d-100: #fbdedb;
+  --clean-d-50: #fcebe9;
+  --clean-d-100: #f9d9d6;
   --clean-d-200: #f6bdb8;
   --clean-d-300: #ee918a;
   --clean-d-400: #e1625a;
@@ -143,19 +143,23 @@ html[data-theme="clean"]:not([data-md-theme]) {
   --clean-primary: hsl(var(--primary));
   --clean-primary-hover: color-mix(in oklab, hsl(var(--primary)) 86%, black);
   --clean-primary-active: color-mix(in oklab, hsl(var(--primary)) 74%, black);
-  --clean-primary-soft: color-mix(in oklab, hsl(var(--primary)) 8%, white);
-  --clean-primary-soft-hover: color-mix(in oklab, hsl(var(--primary)) 14%, white);
+  --clean-primary-soft: color-mix(in oklab, hsl(var(--primary)) 12%, white);
+  --clean-primary-soft-hover: color-mix(in oklab, hsl(var(--primary)) 20%, white);
   --clean-on-primary: hsl(var(--primary-foreground));
   --clean-danger-hover: color-mix(in oklab, hsl(var(--destructive)) 86%, black);
   --clean-line: hsl(var(--border));
-  --clean-line-mid: #c3ccd8; /* the border of a secondary button */
+  --clean-line-mid: #9eaaba; /* the border of a secondary button: 2.4:1 on white, so a button reads as a button */
   --clean-line-strong: hsl(var(--input));
   --clean-ink: hsl(var(--foreground));
   --clean-muted: hsl(var(--muted-foreground));
   --clean-surface: hsl(var(--card));
-  --clean-page: hsl(var(--background));
+  --clean-page: color-mix(
+    in oklab,
+    hsl(var(--background)) 94%,
+    hsl(var(--foreground))
+  ); /* #eaeef3: a clear step darker than the white cards, so a card stands off the page on any display */
   --clean-wash: var(--clean-n-100); /* header rows, a quiet panel inside a card */
-  --clean-hover: color-mix(in srgb, hsl(var(--primary)) 5%, transparent); /* row / item hover tint */
+  --clean-hover: color-mix(in srgb, hsl(var(--primary)) 9%, transparent); /* row / item hover tint */
   --clean-focus: hsl(var(--ring));
   --clean-scrim: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
   --clean-disabled-bg: var(--clean-n-100);
@@ -178,6 +182,9 @@ html[data-theme="clean"]:not([data-md-theme]) {
     0 2px 4px color-mix(in srgb, hsl(var(--foreground)) 8%, transparent),
     0 8px 24px color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
 
+  /* the arrow of a native <select> (forms.css): a neutral-500 chevron, as an image because a select has no pseudo-element */
+  --clean-select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23525d6d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 6l4.5 4.5L12.5 6'/%3E%3C/svg%3E");
+
   --clean-control-h: 36px;
   --clean-row-h: 44px;
   --clean-font-size: 14px;
@@ -186,4 +193,56 @@ html[data-theme="clean"]:not([data-md-theme]) {
   /* Tailwind's heaviest weights are too loud for a quiet page: font-black / font-extrabold draw as bold */
   --font-weight-extrabold: 700;
   --font-weight-black: 700;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   The stronger line and the darker secondary text. The Settings -> Themes card and the Customize panel draw a theme from the
+   values in the block above (palettes.ts mirrors --border and --muted-foreground from it, and a test keeps the two together).
+   On a washed-out or low-contrast display those two are too pale to see, so below <html> (the whole application, dialogs and
+   menus in their portals included) the page uses a stronger line (#bfc8d6, 1.7:1 on white) and secondary text in the 600 step
+   of the greys (#465161, 8:1 on white). Everything that reads --border (the default border of every element, hsl(var(--border)))
+   or --muted-foreground (text-muted-foreground) takes them, and so do the roles worked out from them.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+html[data-theme="clean"]:not([data-md-theme]) body {
+  --border: 213.6 20.6% 80.5%; /* #bfc8d6 */
+  --muted-foreground: 215.6 16.2% 32.7%; /* #465161 */
+  --card-border: var(--border);
+  --popover-border: var(--border);
+  --sidebar-border: var(--border);
+  --clean-line: hsl(var(--border));
+  --clean-muted: hsl(var(--muted-foreground));
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   A browser that cannot mix colours (color-mix(), before 2023: an older Chrome or Edge on a factory PC) would drop every
+   token above that is worked out from --primary, and a page would lose its soft fills and its hover washes. For those, the
+   same tokens as fixed colours for the default primary (#1d56b3). A customised primary is only followed by browsers that can mix.
+   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+@supports not (color: color-mix(in oklab, red 10%, white)) {
+  html[data-theme="clean"]:not([data-md-theme]) {
+    --button-outline: #1f293724;
+    --badge-outline: #1f29371f;
+    --elevate-1: #1f29370d;
+    --elevate-2: #1f293717;
+    --clean-b-50: #ebf0f8;
+    --clean-b-100: #dbe4f3;
+    --clean-b-200: #c0d0ea;
+    --clean-b-300: #a5bbe1;
+    --clean-b-400: #7396d0;
+    --clean-b-500: #4674c1;
+    --clean-b-700: #194a9a;
+    --clean-b-800: #153e81;
+    --clean-b-900: #103064;
+    --clean-b-950: #0c2248;
+    --clean-primary-hover: #194a9a;
+    --clean-primary-active: #154084;
+    --clean-primary-soft: #e4ebf6;
+    --clean-primary-soft-hover: #d2ddf0;
+    --clean-danger-hover: #9b1e15;
+    --clean-page: #eaeef3;
+    --clean-hover: #1d56b317;
+    --clean-scrim: #1f293773;
+    --clean-shadow-float: 0 1px 2px #1f29371a, 0 2px 8px #1f293714;
+    --clean-shadow-dialog: 0 2px 4px #1f293714, 0 8px 24px #1f29371f;
+  }
 }

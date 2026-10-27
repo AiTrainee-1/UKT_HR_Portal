@@ -229,7 +229,7 @@ test("Clean Professional draws a flat, bordered, solid look instead", async ({ p
   await openEmployees(page);
 
   expect(await style(page, "body", ["background-color", "color", "font-size"])).toEqual({
-    "background-color": "rgb(244, 246, 249)",
+    "background-color": "oklab(0.931088 -0.00121654 -0.00584666)",
     color: "rgb(31, 41, 55)",
     "font-size": "14px",
   });
@@ -259,7 +259,7 @@ test("Clean Professional draws a flat, bordered, solid look instead", async ({ p
     await style(page, '[data-testid="button-bulk-upload"]', ["background-color", "border-top-color", "box-shadow"]),
   ).toEqual({
     "background-color": "rgb(255, 255, 255)",
-    "border-top-color": "rgb(195, 204, 216)",
+    "border-top-color": "rgb(158, 170, 186)",
     "box-shadow": "none",
   });
   expect(
@@ -271,12 +271,12 @@ test("Clean Professional draws a flat, bordered, solid look instead", async ({ p
     ]),
   ).toEqual({
     "background-color": "rgb(255, 255, 255)",
-    "border-top-color": "rgb(135, 148, 166)",
+    "border-top-color": "rgb(114, 128, 150)",
     "border-top-left-radius": "6px",
     height: "36px",
   });
   expect(await style(page, 'th[data-slot="table-head"]', ["background-color", "font-size", "font-weight"])).toEqual({
-    "background-color": "rgb(241, 244, 248)",
+    "background-color": "rgb(230, 235, 241)",
     "font-size": "12px",
     "font-weight": "600",
   });
@@ -306,7 +306,7 @@ test("Clean Professional draws a flat, bordered, solid look instead", async ({ p
   // a white menu with a line on its right edge, the open page marked by a soft fill and a bar
   expect(await style(page, "aside", ["background-color", "border-right-color", "box-shadow"])).toEqual({
     "background-color": "rgb(255, 255, 255)",
-    "border-right-color": "rgb(223, 227, 232)",
+    "border-right-color": "rgb(195, 204, 216)",
     "box-shadow": "none",
   });
   expect(await style(page, "aside .clay-nav-active", ["background-image"])).toEqual({ "background-image": "none" });

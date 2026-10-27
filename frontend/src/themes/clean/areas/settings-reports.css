@@ -63,20 +63,12 @@ html[data-theme="clean"]:not([data-md-theme]) .settings-skin button[role="radio"
   background-color: var(--clean-primary-soft);
 }
 
-/* A hand-built radio option (the PF and ESI scope picker, the attendance modes): it carries no data-state, so it keeps what its own
-   classes say (see controls-auth.css), and the classes that name the old UKT blue as a hex would stay that blue. The chosen one is
-   the brand colour on its soft wash. */
-html[data-theme="clean"]:not([data-md-theme]) [role="radio"]:not([data-state])[class~="border-[#006496]"] {
-  border-color: hsl(var(--primary));
-  background-color: var(--clean-primary-soft);
-}
-
 /* the drop-down list opened from the page: the same highlighted row as everywhere else in the theme */
 html[data-theme="clean"]:not([data-md-theme]).settings-skin-on
   :is([data-slot="select-content"], [data-slot="dropdown-content"])
   :is([role="option"], [role="menuitem"])[data-highlighted] {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
+  background: var(--clean-primary-soft-hover);
+  color: var(--clean-b-800);
 }
 
 /* ── 2. inline colours -> the theme's ramps ───────────────────────────────────────────────────────────────────────────
@@ -88,29 +80,36 @@ html[data-theme="clean"]:not([data-md-theme]).settings-skin-on
 /* text and icons */
 html[data-theme="clean"]:not([data-md-theme])
   :is(
-    [style*="color: rgb(8, 145, 178)"],
-    [style*="color: rgb(124, 58, 237)"],
-    [style*="color: rgb(29, 78, 216)"],
-    [style*="color: rgb(37, 99, 235)"]
+    :is([style^="color: rgb(8, 145, 178)"], [style*=" color: rgb(8, 145, 178)"]),
+    :is([style^="color: rgb(124, 58, 237)"], [style*=" color: rgb(124, 58, 237)"]),
+    :is([style^="color: rgb(29, 78, 216)"], [style*=" color: rgb(29, 78, 216)"]),
+    :is([style^="color: rgb(37, 99, 235)"], [style*=" color: rgb(37, 99, 235)"])
   ) {
   color: hsl(var(--primary)) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme]) [style*="color: rgb(5, 150, 105)"] {
+html[data-theme="clean"]:not([data-md-theme])
+  :is([style^="color: rgb(5, 150, 105)"], [style*=" color: rgb(5, 150, 105)"]) {
   color: var(--clean-s-600) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme])
-  :is([style*="color: rgb(217, 119, 6)"], [style*="color: rgb(234, 88, 12)"]) {
+  :is(
+    :is([style^="color: rgb(217, 119, 6)"], [style*=" color: rgb(217, 119, 6)"]),
+    :is([style^="color: rgb(234, 88, 12)"], [style*=" color: rgb(234, 88, 12)"])
+  ) {
   color: var(--clean-w-600) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme])
-  :is([style*="color: rgb(220, 38, 38)"], [style*="color: rgb(239, 68, 68)"]) {
+  :is(
+    :is([style^="color: rgb(220, 38, 38)"], [style*=" color: rgb(220, 38, 38)"]),
+    :is([style^="color: rgb(239, 68, 68)"], [style*=" color: rgb(239, 68, 68)"])
+  ) {
   color: var(--clean-d-600) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme])
   :is(
-    [style*="color: rgb(148, 163, 184)"],
-    [style*="color: rgb(203, 213, 225)"],
-    [style*="color: rgb(100, 116, 139)"]
+    :is([style^="color: rgb(148, 163, 184)"], [style*=" color: rgb(148, 163, 184)"]),
+    :is([style^="color: rgb(203, 213, 225)"], [style*=" color: rgb(203, 213, 225)"]),
+    :is([style^="color: rgb(100, 116, 139)"], [style*=" color: rgb(100, 116, 139)"])
   ) {
   color: var(--clean-n-500) !important; /* inline style */
 }
@@ -262,24 +261,6 @@ html[data-theme="clean"]:not([data-md-theme]) a[href^="#cat-"][class~="rounded-f
   background-color: var(--clean-n-100);
 }
 
-/* The quick date ranges (Today, This week ...): hand-made capsules with a near-black chosen one. A small bordered
-   button with the theme's corner, and the chosen one in the brand colour. */
-html[data-theme="clean"]:not([data-md-theme]) button[aria-pressed][class~="rounded-full"][class~="h-7"] {
-  border-radius: var(--clean-radius-sm);
-  border-color: var(--clean-line-mid);
-  background-color: var(--clean-surface);
-  color: var(--clean-n-700);
-}
-html[data-theme="clean"]:not([data-md-theme]) button[aria-pressed][class~="rounded-full"][class~="h-7"]:hover {
-  background-color: var(--clean-n-100);
-  border-color: var(--clean-n-400);
-}
-html[data-theme="clean"]:not([data-md-theme]) button[aria-pressed="true"][class~="rounded-full"][class~="h-7"] {
-  background-color: hsl(var(--primary));
-  border-color: hsl(var(--primary));
-  color: var(--clean-on-primary);
-}
-
 /* Download PDF / Download Excel: one secondary button each (red and green tints said "bad" and "good" about a file type) */
 html[data-theme="clean"]:not([data-md-theme])
   :is([data-testid="report-download-pdf"], [data-testid="report-download-xlsx"]):not(:disabled) {
@@ -295,7 +276,8 @@ html[data-theme="clean"]:not([data-md-theme])
 
 /* the searchable drop-downs of the filter bar are outline Buttons with role=combobox: they are fields, so they wear the
    field's border (the Select next to them does) */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="button"][data-variant="outline"][role="combobox"] {
+html[data-theme="clean"]:not([data-md-theme])
+  [data-slot="button"][data-variant="outline"][role="combobox"]:not(:disabled) {
   background-color: var(--clean-surface);
   border-color: var(--clean-line-strong);
   color: var(--clean-ink);

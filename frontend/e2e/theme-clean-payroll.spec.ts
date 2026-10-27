@@ -75,7 +75,8 @@ async function open(page: Page, theme: "clean" | "default", path: string, width:
     [DEVICE_KEY, theme, token] as const,
   );
   await page.goto(path);
-  await page.waitForLoadState("networkidle").catch(() => undefined);
+  // some pages poll, so "idle" may never come: wait a few seconds at most
+  await page.waitForLoadState("networkidle", { timeout: 4000 }).catch(() => undefined);
   await page.waitForTimeout(900);
 }
 
@@ -110,8 +111,8 @@ const isGreen = ([r, g, b]: number[]) => g > r + 20 && g > b;
 const isWhite = ([r, g, b, a]: number[]) => r === 255 && g === 255 && b === 255 && a === 1;
 
 /** What a flat page may not have: sideways overflow, a blur, a drop shadow outside a floating layer, a gradient fill. */
-async function flatnessOf(page: Page) {
-  return page.evaluate(() => {
+async function flatnessOf(page: Page, allowShadowWithin = "") {
+  return page.evaluate((allowed) => {
     // floating layers keep the one light shadow; so does a bar that sticks over a list (the payslips' bulk-actions bar)
     const FLOATING =
       '[data-slot="popover-panel"],[data-slot="dropdown-content"],[data-slot="select-content"],[data-slot="dialog-content"],[data-slot="alert-dialog-content"],[data-slot="sheet-content"],[data-slot="toast"],[role="tooltip"],[data-radix-popper-content-wrapper],.recharts-tooltip-wrapper,[class~="sticky"]';
@@ -139,7 +140,8 @@ async function flatnessOf(page: Page) {
       if (r.width === 0 || r.height === 0) continue;
       const cs = getComputedStyle(el);
       if (cs.backdropFilter !== "none") blurred.push(name(el));
-      if (hasDropShadow(cs.boxShadow) && !el.closest(FLOATING)) shadowed.push(`${name(el)} => ${cs.boxShadow}`);
+      if (hasDropShadow(cs.boxShadow) && !el.closest(FLOATING) && !(allowed && el.closest(allowed)))
+        shadowed.push(`${name(el)} => ${cs.boxShadow}`);
       if (cs.backgroundImage.includes("gradient") && !el.closest("svg")) gradient.push(name(el));
     }
     return {
@@ -148,10 +150,10 @@ async function flatnessOf(page: Page) {
       shadowed,
       gradient,
     };
-  });
+  }, allowShadowWithin);
 }
 
-type PageSpec = { name: string; path: () => string; ready: string; click?: string };
+type PageSpec = { name: string; path: () => string; ready: string; click?: string; allowShadow?: string };
 const PAGES: PageSpec[] = [
   { name: "staff payroll: records", path: () => FEB, ready: '[data-testid="staff-dash-kpis"]' },
   { name: "staff payroll: issues", path: () => `${FEB}&view=issues`, ready: '[data-testid="issues-panel"]' },
@@ -167,6 +169,15 @@ const PAGES: PageSpec[] = [
     name: "staff payroll: salary statement",
     path: () => `${FEB}&tab=salary`,
     ready: '[data-testid="statement-toolbar"]',
+  },
+  {
+    // the one allowance: the paper preview of the printed-format statement is a document on a desk, so its sheet keeps the
+    // paper shadow it was designed with; everything around it is checked like any other page
+    name: "staff payroll: statement paper preview",
+    path: () => `${FEB}&tab=salary`,
+    ready: '[data-testid="statement-toolbar"]',
+    click: '[data-slot="pill-tab"]:has-text("Pages")',
+    allowShadow: '[data-testid="statement-pages"]',
   },
   { name: "staff payroll: payslips", path: () => `${FEB}&tab=payslip`, ready: '[data-testid="staff-payroll-page"]' },
   { name: "payroll details", path: () => `/hr/payroll/details/${ashaPayrollId}`, ready: '[data-testid="pd-header"]' },
@@ -187,13 +198,15 @@ for (const width of WIDTHS) {
   test(`every payroll page is flat at ${width}px: no overflow, no blur, no drop shadow, no gradient`, async ({
     page,
   }) => {
+    // fourteen pages, each loaded and measured
+    test.setTimeout(300_000);
     for (const spec of PAGES) {
       await open(page, "clean", spec.path(), width);
       expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("clean");
-      await expect(page.locator(spec.ready).first(), spec.name).toBeVisible();
+      await expect(page.locator(spec.ready).first(), spec.name).toBeVisible({ timeout: 40_000 });
       if (spec.click) await page.locator(spec.click).click();
       await page.waitForTimeout(300);
-      const flat = await flatnessOf(page);
+      const flat = await flatnessOf(page, spec.allowShadow);
       expect(flat.overflow, `${spec.name} sticks out sideways`).toBeLessThanOrEqual(1);
       expect(flat.blurred, `${spec.name} has a backdrop blur`).toEqual([]);
       expect(flat.shadowed, `${spec.name} has a drop shadow`).toEqual([]);
@@ -240,14 +253,18 @@ test("the figure tiles are white tiles with a 1px line and a tinted icon chip, n
 
 test("Export and the other downloads are neutral secondary buttons, not green", async ({ page }) => {
   await open(page, "clean", FEB);
-  for (const id of ["staff-export", "staff-export-bank"]) {
-    const button = `[data-testid="${id}"]`;
-    expect(await styleOf(page, button, ["background-color", "border-top-color", "color"]), id).toEqual({
-      "background-color": "rgb(255, 255, 255)",
-      "border-top-color": "rgb(195, 204, 216)",
-      color: "rgb(31, 41, 55)",
-    });
-  }
+  expect(
+    await styleOf(page, '[data-testid="staff-export"]', ["background-color", "border-top-color", "color"]),
+  ).toEqual({
+    "background-color": "rgb(255, 255, 255)",
+    "border-top-color": "rgb(158, 170, 186)",
+    color: "rgb(31, 41, 55)",
+  });
+  // the bank file is neutral when it can be made, and a flat grey (never green) when no payslip has bank details yet
+  const bank = '[data-testid="staff-export-bank"]';
+  expect(isGreen(await colourOf(page, bank, "color"))).toBe(false);
+  expect(isGreen(await colourOf(page, bank, "border-top-color"))).toBe(false);
+  expect(isGreen(await colourOf(page, bank, "background-color"))).toBe(false);
   await open(page, "clean", `${FEB}&tab=payslip`);
   const download = 'button[data-testid$="-download"]';
   await expect(page.locator(download).first()).toBeVisible();
@@ -332,7 +349,7 @@ test("the settlement table is no wider than it was, and its dialogs and sheet ar
   await open(page, "default", "/hr/settlement");
   const before = await overflowOf();
   await open(page, "clean", "/hr/settlement");
-  // the foundation's 12px cell padding would add about 100px to this eight-column table; the area file takes it back
+  // 12px cell padding would add about 100px to this eight-column table; a table that wide has 6px (tables.css)
   expect(await overflowOf()).toBeLessThanOrEqual(before);
 
   await page.getByRole("button", { name: "New Advance" }).click();

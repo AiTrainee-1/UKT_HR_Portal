@@ -86,8 +86,8 @@ html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dropdown-item"], [
 html[data-theme="clean"]:not([data-md-theme])
   :is([data-slot="dropdown-item"], [data-slot="select-item"])[data-highlighted],
 html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dropdown-item"], [data-slot="select-item"]):focus {
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
+  background: var(--clean-primary-soft-hover);
+  color: var(--clean-b-800);
 }
 html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="dropdown-separator"], [data-slot="select-separator"]) {
   background: var(--clean-line);

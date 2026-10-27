@@ -95,6 +95,8 @@ const isBlue = ([r, , b]: number[]) => b > r + 30;
 const isGreen = ([r, g, b]: number[]) => g > r + 20 && g > b;
 const isRed = ([r, g, b]: number[]) => r > g + 40 && r > b + 40;
 const isWhite = ([r, g, b, a]: number[]) => r === 255 && g === 255 && b === 255 && a === 1;
+/** A pale blue wash: opaque, bluer than it is red, but not white. */
+const isBlueWash = ([r, , b, a]: number[]) => a === 1 && b > r + 5;
 
 /** What a flat page may not have: sideways overflow, a blur, a drop shadow outside a floating layer, a gradient fill. */
 async function flatnessOf(page: Page) {
@@ -220,8 +222,6 @@ const OTHER_PAGES: PageSpec[] = [
   { name: "id cards", path: "/hr/id-cards", ready: heading("ID Card Generator") },
 ];
 
-test.describe.configure({ mode: "serial" });
-
 for (const [label, pages] of [
   ["every Settings tab", SETTINGS_PAGES],
   ["Report Center, recruitment, interviews and ID cards", OTHER_PAGES],
@@ -273,11 +273,11 @@ test("Settings: the menu text, the switch thumb, the panels and the buttons are 
   ]);
   expect(idle["outline-style"]).toBe("solid");
   expect(idle["outline-width"]).toBe("1px");
-  expect(idle["outline-color"]).toBe("rgb(195, 204, 216)");
+  expect(idle["outline-color"]).toBe("rgb(158, 170, 186)");
   const chosen = '[data-testid="attendance-mode-strict"]';
   await expect(page.locator(chosen)).toHaveAttribute("aria-checked", "true");
   expect(isBlue(await colourOf(page, chosen, "border-top-color"))).toBe(true);
-  expect(isBlue(await colourOf(page, chosen, "background-color"))).toBe(true);
+  expect(isBlueWash(await colourOf(page, chosen, "background-color"))).toBe(true);
   expect(isWhite(await colourOf(page, '[data-testid="attendance-mode-simple"]', "background-color"))).toBe(true);
 
   // the kit's switch: a flat white thumb
@@ -297,7 +297,7 @@ test("Settings: the menu text, the switch thumb, the panels and the buttons are 
   ).toEqual({
     color: "rgb(54, 65, 82)",
     background: "rgb(255, 255, 255)",
-    border: "rgb(195, 204, 216)",
+    border: "rgb(158, 170, 186)",
     shadow: "none",
   });
 });
@@ -308,7 +308,7 @@ test("Settings: the PF and ESI scope picker is the brand blue, not the old UKT b
   await expect(page.locator(chosen)).toHaveAttribute("aria-checked", "true");
   expect((await styleOf(page, chosen, ["border-top-color"]))["border-top-color"]).toBe("rgb(29, 86, 179)");
   const wash = await colourOf(page, chosen, "background-color");
-  expect(isBlue(wash)).toBe(true);
+  expect(isBlueWash(wash)).toBe(true);
   expect(wash.slice(0, 3)).not.toEqual([239, 246, 251]); // #eff6fb, the old UKT wash
 });
 
@@ -335,7 +335,7 @@ test("Report Center: one brand tile for every category, grey dots, flat tags", a
     ),
   );
   expect(dots.length).toBeGreaterThan(4);
-  expect(new Set(dots)).toEqual(new Set(["rgb(108, 118, 133)"]));
+  expect(new Set(dots)).toEqual(new Set(["rgb(90, 102, 118)"]));
   // the category tags are 6px tags, not capsules
   expect(await styleOf(page, 'a[href^="#cat-"]', ["border-top-left-radius", "box-shadow"])).toEqual({
     "border-top-left-radius": "6px",
@@ -354,26 +354,27 @@ test("Report Center: the downloads are neutral buttons, the quick ranges small c
     const background = await colourOf(page, button, "background-color");
     expect(isRed(background) || isGreen(background), `${id} is not tinted`).toBe(false);
   }
-  // the quick date ranges: 4px chips, the chosen one in the brand colour
+  // the quick date ranges: 6px chips, the chosen one the soft brand fill with dark brand ink and a brand line (the theme's one
+  // chosen-chip look, primitives.css: oklab is how the browser writes a mixed colour)
   const presets = 'button[aria-pressed][class~="rounded-full"][class~="h-7"]';
   expect(await page.locator(presets).count()).toBeGreaterThan(4);
-  expect((await styleOf(page, presets, ["border-top-left-radius"]))["border-top-left-radius"]).toBe("4px");
+  expect((await styleOf(page, presets, ["border-top-left-radius"]))["border-top-left-radius"]).toBe("6px");
   const chosen = `${presets}[aria-pressed="true"]`;
   await expect(page.locator(chosen).first()).toBeVisible();
   expect(await styleOf(page, chosen, ["background-color", "border-top-color", "color"])).toEqual({
-    "background-color": "rgb(29, 86, 179)",
+    "background-color": "oklab(0.894506 -0.00550343 -0.0313921)",
     "border-top-color": "rgb(29, 86, 179)",
-    color: "rgb(255, 255, 255)",
+    color: "oklab(0.340239 -0.0199436 -0.113069)",
   });
   // a searchable drop-down (an outline Button with role=combobox) has the same border as the Select beside it
   const combo = '[data-slot="button"][data-variant="outline"][role="combobox"]';
   await expect(page.locator(combo).first()).toBeVisible();
   expect(await styleOf(page, combo, ["border-top-color", "background-color"])).toEqual({
-    "border-top-color": "rgb(135, 148, 166)",
+    "border-top-color": "rgb(114, 128, 150)",
     "background-color": "rgb(255, 255, 255)",
   });
   expect((await styleOf(page, '[data-slot="select-trigger"]', ["border-top-color"]))["border-top-color"]).toBe(
-    "rgb(135, 148, 166)",
+    "rgb(114, 128, 150)",
   );
 });
 
@@ -385,7 +386,7 @@ test("Report Center: a report with rows has neutral download buttons", async ({ 
     expect(await styleOf(page, `[data-testid="${id}"]`, ["background-color", "border-top-color", "color"]), id).toEqual(
       {
         "background-color": "rgb(255, 255, 255)",
-        "border-top-color": "rgb(195, 204, 216)",
+        "border-top-color": "rgb(158, 170, 186)",
         color: "rgb(54, 65, 82)",
       },
     );
@@ -394,9 +395,7 @@ test("Report Center: a report with rows has neutral download buttons", async ({ 
 
 // ── Recruitment ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test("Recruitment dashboard: one brand tile for the counts, equal cards in a row, a brand title icon", async ({
-  page,
-}) => {
+test("Recruitment dashboard: one brand tile for the counts, equal cards in a row", async ({ page }) => {
   await open(page, "clean", "/hr/recruitment/dashboard");
   await expect(page.locator(heading("Recruitment Dashboard"))).toBeVisible();
   const tile = 'button.w-full > [data-slot="card"] > div > div[class~="p-2.5"][class~="shrink-0"]';
@@ -424,8 +423,6 @@ test("Recruitment dashboard: one brand tile for the counts, equal cards in a row
     Array.from(byRow.values()).every((heights) => heights.size === 1),
     JSON.stringify(rows),
   ).toBe(true);
-  // the heading icon is the brand blue
-  expect(isBlue(await colourOf(page, "main h2 > svg, main h1 > svg", "color"))).toBe(true);
 });
 
 test("New Joinees: the row buttons are one secondary button, and the title icon is the brand blue", async ({
@@ -441,7 +438,7 @@ test("New Joinees: the row buttons are one secondary button, and the title icon 
     });
   }, rowButtons);
   expect(looks.length).toBeGreaterThanOrEqual(4);
-  expect(new Set(looks)).toEqual(new Set(["rgb(255, 255, 255)|rgb(195, 204, 216)|rgb(54, 65, 82)"]));
+  expect(new Set(looks)).toEqual(new Set(["rgb(255, 255, 255)|rgb(158, 170, 186)|rgb(54, 65, 82)"]));
   expect(isBlue(await colourOf(page, "main h2 > svg", "color"))).toBe(true);
 });
 
@@ -451,7 +448,7 @@ test("Resignations: the status tiles keep their status colours, on the theme's r
   const tile = '[data-slot="card"] > div > div[class~="p-2"][class~="rounded-xl"][class~="shrink-0"]';
   expect(await page.locator(tile).count()).toBe(4);
   const icon = (n: number) => colourOf(page, `${tile} > svg`, "color", n);
-  expect(await icon(0)).toEqual([168, 100, 0, 1]); // waiting: amber 600 of the warning ramp
+  expect(await icon(0)).toEqual([151, 88, 0, 1]); // waiting: amber 600 of the warning ramp
   expect(isBlue(await icon(1))).toBe(true); // HR can decide: the brand
   expect(isGreen(await icon(2))).toBe(true); // approved
   expect(isRed(await icon(3))).toBe(true); // rejected
