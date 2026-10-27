@@ -60,8 +60,16 @@ test.beforeAll(async ({ browser }) => {
     return r.body.id as number;
   };
   const head = ((await api(shared, "GET", "/api/branches")).body as any[]).find((b) => b.isHeadOffice);
-  const unitNo = 100 + Math.floor(Math.random() * 899);
-  const unit = await make("/api/branches", { name: "CC Unit", code: `Unit${unitNo}` });
+  // a deleted branch keeps its code for good, so a re-run in the same database picks another one
+  let unit = 0;
+  for (let attempt = 0; attempt < 8 && !unit; attempt++) {
+    const tried = await api(shared, "POST", "/api/branches", {
+      name: "CC Unit",
+      code: `Unit${100 + Math.floor(Math.random() * 899)}`,
+    });
+    if (tried.status === 201) unit = tried.body.id as number;
+  }
+  expect(unit, "a unit was made").toBeGreaterThan(0);
   const dept = await make("/api/departments", { name: "CC Admin", branchId: head.id });
   const deptUnit = await make("/api/departments", { name: "CC Floor", branchId: unit });
   const des = await make("/api/designations", { title: "CC Clerk", departmentId: dept });

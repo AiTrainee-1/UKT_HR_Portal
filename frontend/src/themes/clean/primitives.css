@@ -462,8 +462,11 @@ html[data-theme="clean"]:not([data-md-theme])
   button[aria-pressed="true"]:not([data-slot]):is(.clay-card, [class*="rounded-2xl"]):not(
     :has(> [class~="bg-white/60"])
   ) {
-  background-color: var(--clean-b-50);
+  background-color: var(--clean-surface);
   border-color: hsl(var(--primary));
+  /* the faint wash is painted over the card's own white (an inset shadow): a tint that was the whole background would show the
+     page through it */
+  box-shadow: inset 0 0 0 999px var(--clean-b-50);
 }
 /* the little count inside a chip ("Login 19") */
 html[data-theme="clean"]:not([data-md-theme])

@@ -14,7 +14,7 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 
 const DEVICE_KEY = "uk_textile_theme_device";
 const EMPLOYEE_PASSWORD = "Passw0rd!ctrl1";
-const PAGE_COLOUR = "oklab(0.931088 -0.00121654 -0.00584666)";
+const PAGE_COLOUR = "rgb(234, 238, 243)";
 const BRAND = "rgb(29, 86, 179)";
 const INK = "rgb(31, 41, 55)";
 
@@ -576,7 +576,7 @@ test("Activity Logs: the filter chips are 6px chips and the chosen one is a soft
       r: getComputedStyle(el).borderTopLeftRadius,
       solid: getComputedStyle(el).backgroundColor === "rgb(29, 86, 179)",
     })),
-  ).toEqual({ color: "oklab(0.340239 -0.0199436 -0.113069)", line: BRAND, r: "6px", solid: false }); // dark brand ink (--clean-b-800)
+  ).toEqual({ color: "rgb(18, 55, 111)", line: BRAND, r: "6px", solid: false }); // dark brand ink (--clean-b-800)
   const login = page.getByRole("button", { name: /^Login\b/ }).first();
   expect(
     await login.evaluate((el) => ({

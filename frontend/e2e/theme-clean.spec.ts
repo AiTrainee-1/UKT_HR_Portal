@@ -229,7 +229,7 @@ test("Clean Professional draws a flat, bordered, solid look instead", async ({ p
   await openEmployees(page);
 
   expect(await style(page, "body", ["background-color", "color", "font-size"])).toEqual({
-    "background-color": "oklab(0.931088 -0.00121654 -0.00584666)",
+    "background-color": "rgb(234, 238, 243)",
     color: "rgb(31, 41, 55)",
     "font-size": "14px",
   });

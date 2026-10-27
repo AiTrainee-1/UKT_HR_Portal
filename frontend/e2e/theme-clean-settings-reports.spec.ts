@@ -95,8 +95,8 @@ const isBlue = ([r, , b]: number[]) => b > r + 30;
 const isGreen = ([r, g, b]: number[]) => g > r + 20 && g > b;
 const isRed = ([r, g, b]: number[]) => r > g + 40 && r > b + 40;
 const isWhite = ([r, g, b, a]: number[]) => r === 255 && g === 255 && b === 255 && a === 1;
-/** A pale blue wash: opaque, bluer than it is red, but not white. */
-const isBlueWash = ([r, , b, a]: number[]) => a === 1 && b > r + 5;
+/** A blue wash: the primary at a low opacity (the tints are not mixed with white), bluer than it is red. */
+const isBlueWash = ([r, , b, a]: number[]) => a > 0.05 && b > r + 5;
 
 /** What a flat page may not have: sideways overflow, a blur, a drop shadow outside a floating layer, a gradient fill. */
 async function flatnessOf(page: Page) {
@@ -355,16 +355,16 @@ test("Report Center: the downloads are neutral buttons, the quick ranges small c
     expect(isRed(background) || isGreen(background), `${id} is not tinted`).toBe(false);
   }
   // the quick date ranges: 6px chips, the chosen one the soft brand fill with dark brand ink and a brand line (the theme's one
-  // chosen-chip look, primitives.css: oklab is how the browser writes a mixed colour)
+  // chosen-chip look, primitives.css: the primary at 20%, and the dark brand ink)
   const presets = 'button[aria-pressed][class~="rounded-full"][class~="h-7"]';
   expect(await page.locator(presets).count()).toBeGreaterThan(4);
   expect((await styleOf(page, presets, ["border-top-left-radius"]))["border-top-left-radius"]).toBe("6px");
   const chosen = `${presets}[aria-pressed="true"]`;
   await expect(page.locator(chosen).first()).toBeVisible();
   expect(await styleOf(page, chosen, ["background-color", "border-top-color", "color"])).toEqual({
-    "background-color": "oklab(0.894506 -0.00550343 -0.0313921)",
+    "background-color": "rgba(29, 86, 179, 0.2)",
     "border-top-color": "rgb(29, 86, 179)",
-    color: "oklab(0.340239 -0.0199436 -0.113069)",
+    color: "rgb(18, 55, 111)",
   });
   // a searchable drop-down (an outline Button with role=combobox) has the same border as the Select beside it
   const combo = '[data-slot="button"][data-variant="outline"][role="combobox"]';

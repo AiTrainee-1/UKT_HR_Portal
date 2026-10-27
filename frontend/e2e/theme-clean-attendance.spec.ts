@@ -416,10 +416,12 @@ test("Attendance Search: the chips are 6px controls and the chosen one is a read
   }
   const on = '[aria-label="Quick ranges"] button[aria-pressed="true"]';
   await expect(page.locator(on)).toHaveCount(1);
-  const background = await colourOf(page, on, "background-color");
+  const wash = await colourOf(page, on, "background-color");
   const writing = await colourOf(page, on, "color");
   // a brand wash (a fifth of the brand colour: visible on a weak display) with dark brand writing (the page paints it
-  // near-black with white writing)
+  // near-black with white writing); the wash is the primary at 20%, so it is laid over the white page of the chip to compare
+  const background = wash.slice(0, 3).map((v) => v * wash[3] + 255 * (1 - wash[3]));
+  expect(wash[3]).toBeGreaterThan(0.1);
   expect(lum(background)).toBeGreaterThan(0.6);
   expect(background[2]).toBeGreaterThan(background[0]);
   expect(contrast(writing, background), "the chosen chip's writing").toBeGreaterThanOrEqual(7);

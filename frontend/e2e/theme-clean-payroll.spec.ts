@@ -303,7 +303,7 @@ test("the views of a tab are underlined tabs and the two-way switch is a 6px con
     colourOf(page, `${group} > button[aria-pressed="true"]`, "color"),
     colourOf(page, `${group} > button[aria-pressed="true"]`, "background-color"),
   ]);
-  expect(contrast(text, fill)).toBeGreaterThanOrEqual(4.5);
+  expect(contrast(text, over(fill, [255, 255, 255]))).toBeGreaterThanOrEqual(4.5); // the fill is the primary at a low opacity
 });
 
 test("the chosen issue-type chip is readable (brand text on a soft brand fill)", async ({ page }) => {

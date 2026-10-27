@@ -108,8 +108,16 @@ test.beforeAll(async ({ browser }) => {
     return r.body.id as number;
   };
   const head = ((await api(seedPage, "GET", "/api/branches")).body as any[]).find((b) => b.isHeadOffice);
-  const unitNo = 100 + Math.floor(Math.random() * 899);
-  const unit = await make("/api/branches", { name: "OB Unit", code: `Unit${unitNo}` });
+  // a deleted branch keeps its code for good, so a re-run in the same database picks another one
+  let unit = 0;
+  for (let attempt = 0; attempt < 8 && !unit; attempt++) {
+    const tried = await api(seedPage, "POST", "/api/branches", {
+      name: "OB Unit",
+      code: `Unit${100 + Math.floor(Math.random() * 899)}`,
+    });
+    if (tried.status === 201) unit = tried.body.id as number;
+  }
+  expect(unit, "a unit was made").toBeGreaterThan(0);
   const dept = await make("/api/departments", { name: "OB Admin", branchId: head.id });
   const deptUnit = await make("/api/departments", { name: "OB Floor", branchId: unit });
   const des = await make("/api/designations", { title: "OB Clerk", departmentId: dept });
@@ -398,3 +406,37 @@ for (const mode of MODES) {
     });
   });
 }
+
+// Windows High Contrast ("forced colours"): the browser replaces every fill with the system's colours, so a switch that is on
+// only by its blue fill was an empty capsule and the open menu item lost its marker.
+test.describe("forced colours (Windows High Contrast)", () => {
+  test.use({ forcedColors: "active" });
+
+  test("a checked switch is filled with the system's highlight colour and the open menu item keeps its bar", async ({
+    context,
+    page,
+  }) => {
+    await oldBrowser(context, page, "rename");
+    await signIn(page);
+    await page.goto("/hr/attendance/report-log?tab=late");
+    await ready(page);
+    await page.getByLabel("Group by unit").check();
+    expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
+    const sw = page.locator('[data-slot="switch"][data-state="checked"]').first();
+    await expect(sw).toBeVisible();
+    const looks = await sw.evaluate((el) => {
+      const probe = document.createElement("div");
+      probe.style.backgroundColor = "Canvas";
+      document.body.appendChild(probe);
+      const canvas = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return { bg: getComputedStyle(el).backgroundColor, canvas };
+    });
+    expect(looks.bg, "the checked switch is not drawn in the page colour").not.toBe(looks.canvas);
+    const bar = await page
+      .locator('[data-ui-shell="sidebar"] .clay-nav-active:not(:has(.lucide-chevron-right))')
+      .first()
+      .evaluate((el) => getComputedStyle(el).borderLeftWidth);
+    expect(bar).toBe("3px");
+  });
+});
