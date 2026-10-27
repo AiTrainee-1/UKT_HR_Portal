@@ -1025,7 +1025,7 @@ A live **What employees will see** preview shows your entries before you save. T
 
 #### Themes (the look of the portal)
 
-**What it's for:** Chooses how every page of the portal looks. **Default Theme** is the glass-and-soft-shadow look the portal has always had. **Clean Professional** is a plain, structured look: light grey pages, white cards with a thin border, one deep blue for buttons, links and tabs, a white menu, flat tables and clear forms, with no glass, shadows or gradients. The other themes (Dark, Premium, Black & White ...) only change colours.
+**What it's for:** Chooses how every page of the portal looks. **Default Theme** is the glass-and-soft-shadow look the portal has always had. **Clean Professional** is a plain, structured look: light grey pages, white cards with a thin border, one deep blue for buttons, links and tabs, a white menu, flat tables and clear forms, with no glass, shadows or gradients. It is also the theme to use on an older or washed-out monitor: its lines, icons and text are drawn stronger than the default look, so nothing disappears on a weak display. The other themes (Dark, Premium, Black & White ...) only change colours.
 
 **Two ways to use a theme**
 

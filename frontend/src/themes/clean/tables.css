@@ -73,6 +73,7 @@ html[data-theme="clean"]:not([data-md-theme])
   ) {
   padding-left: 6px;
   padding-right: 6px;
+  letter-spacing: 0;
 }
 html[data-theme="clean"]:not([data-md-theme])
   table:has(> thead th:nth-child(8))
@@ -146,11 +147,11 @@ html[data-theme="clean"]:not([data-md-theme]) tbody > tr:hover {
   background-color: var(--clean-hover);
 }
 html[data-theme="clean"]:not([data-md-theme]) tbody > tr:is([data-state="selected"], [aria-selected="true"]) {
-  background-color: var(--clean-primary-soft-hover);
+  background-color: var(--clean-primary-soft);
 }
 /* a row that is both hovered and chosen keeps the chosen fill (the hover wash is fainter than it, so it must not replace it) */
 html[data-theme="clean"]:not([data-md-theme]) tbody > tr:is([data-state="selected"], [aria-selected="true"]):hover {
-  background-color: var(--clean-primary-soft-hover);
+  background-color: var(--clean-primary-soft);
 }
 
 /* a table inside a card that clips nothing: no extra border of its own */

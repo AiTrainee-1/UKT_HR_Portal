@@ -236,6 +236,64 @@ describe("the colour remap", () => {
   });
 });
 
+describe("the shared rules the area files used to repeat", () => {
+  const selectorsOf = (file: string) => styleRules(readThemeFile(file)).flatMap((r) => splitSelectors(r.prelude));
+
+  it("a Radix radio is styled by its data-state; a radio button built by hand (role=radio, aria-checked) keeps its own classes", () => {
+    for (const file of CSS_FILES) {
+      if (file === "tokens.css") continue;
+      for (const selector of selectorsOf(file).filter((x) => x.includes('[role="radio"]'))) {
+        // a hand-built option card is matched only where its test id or state is named, never by the bare role
+        const bare = !/\[data-state|\[aria-checked|\[data-testid|\.settings-|:focus-visible/.test(selector);
+        expect(bare, `${file}: ${selector}`).toBe(false);
+      }
+    }
+  });
+
+  it("the solid button variants are written for an enabled button, so a disabled one falls to the grey disabled rule", () => {
+    const variants = selectorsOf("primitives.css").filter((x) =>
+      /\[data-variant="(default|destructive|outline)"\]\[class~="(bg-gradient-to-br|bg-red-50|border-slate-200)"\]/.test(
+        x,
+      ),
+    );
+    expect(variants.length).toBeGreaterThanOrEqual(6);
+    for (const selector of variants) expect(selector, selector).toContain(":not(:disabled)");
+    expect(selectorsOf("primitives.css").some((x) => x.endsWith('[data-slot="button"]:disabled'))).toBe(true);
+  });
+
+  it("a tab never shrinks inside the scrolling strip (flex: none is in the foundation, not repeated in an area)", () => {
+    const rule = styleRules(readThemeFile("primitives.css")).find((r) => r.prelude.endsWith('[data-slot="pill-tab"]'));
+    expect(rule?.body).toMatch(/flex:\s*none/);
+  });
+
+  it("a table of eight columns or more has its own, tighter padding (and a code does not wrap at its hyphen)", () => {
+    const tables = stripComments(readThemeFile("tables.css"));
+    expect(tables).toMatch(/table:has\(> thead th:nth-child\(8\)\)/);
+    expect(tables).toMatch(/\[class~="font-mono"\][^{]*\{[^}]*white-space: nowrap/);
+    // a cell's own pl-4 / pr-4 is respected, and the component's "[&:has([role=checkbox])]:pr-0" is not mistaken for one
+    expect(tables).toContain('[class^="pl-"]');
+    expect(tables).not.toContain('[class*="pr-"]');
+  });
+
+  it("the chosen chip is decided once, in primitives.css: no area file repeats the pressed / dark-chip rules", () => {
+    expect(stripComments(readThemeFile("primitives.css"))).toContain('button[aria-pressed="true"]:not([data-slot]');
+    for (const file of CSS_FILES.filter((f) => f.startsWith("areas/"))) {
+      const css = stripComments(readThemeFile(file));
+      expect(css, `${file}: a dark chip rule`).not.toMatch(/button[^{]*\[class~="bg-(slate|gray|zinc)-(800|900)"\]/);
+      expect(css, `${file}: a segmented capsule rule`).not.toMatch(/div\[role="group"\][^{]*bg-gray-100/);
+    }
+  });
+
+  it("the open menu row recolours its spans, but not a count bubble (white text on the red disc)", () => {
+    const layout = selectorsOf("layout.css").filter(
+      (x) => x.includes(".clay-nav-active") && x.includes(":is(span, svg)"),
+    );
+    expect(layout.length).toBeGreaterThan(0);
+    for (const selector of layout.filter((x) => !x.includes(":has(")))
+      expect(selector).toContain('[style*="linear-gradient"]');
+  });
+});
+
 describe("no inline-colour rule matches a background colour by accident", () => {
   // style="background-color: rgb(220, 38, 38); color: white" contains the text "color: rgb(220, 38, 38)" inside
   // "background-color: rgb(220, 38, 38)", so [style*="color: rgb(220, 38, 38)"] would recolour the TEXT of a red box. The
