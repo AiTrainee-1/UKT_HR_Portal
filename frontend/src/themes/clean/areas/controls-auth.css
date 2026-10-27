@@ -129,14 +129,14 @@ html[data-theme="clean"]:not([data-md-theme])
 html[data-theme="clean"]:not([data-md-theme])
   div[class~="lg:w-[46%]"]
   [class~="shrink-0"][class~="rounded-2xl"][style*="linear-gradient"] {
-  background: color-mix(in srgb, var(--clean-on-primary) 14%, transparent) !important; /* inline style */
-  border: 1px solid color-mix(in srgb, var(--clean-on-primary) 28%, transparent);
+  background: rgb(var(--clean-white) / 14%) !important; /* inline style */
+  border: 1px solid rgb(var(--clean-white) / 28%);
   border-radius: var(--clean-radius-lg);
 }
 html[data-theme="clean"]:not([data-md-theme])
   div[class~="lg:w-[46%]"]
   :is([style^="color: rgba(255, 255, 255"], [style*=" color: rgba(255, 255, 255"]) {
-  color: color-mix(in srgb, var(--clean-on-primary) 86%, transparent) !important; /* inline style */
+  color: rgb(var(--clean-white) / 86%) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme])
   div[class~="lg:w-[46%]"]
@@ -145,7 +145,7 @@ html[data-theme="clean"]:not([data-md-theme])
 }
 html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] [class~="text-[#8fd8ff]"],
 html[data-theme="clean"]:not([data-md-theme]) div[class~="lg:w-[46%]"] [class~="text-[#e0a83a]"] {
-  color: var(--clean-b-200);
+  color: var(--clean-on-brand-200);
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -528,7 +528,7 @@ html[data-theme="clean"]:not([data-md-theme]) aside[style*="rgb(13, 33, 55)"] na
 html[data-theme="clean"]:not([data-md-theme])
   aside[style*="rgb(13, 33, 55)"]
   :is([class~="hover:bg-white/5"], [class~="hover:text-white/80"], [class~="hover:text-white"]):hover {
-  background: color-mix(in srgb, hsl(var(--sidebar-foreground)) 8%, transparent);
+  background: hsl(var(--sidebar-foreground) / 8%);
   color: hsl(var(--sidebar-foreground));
 }
 /* the open page */

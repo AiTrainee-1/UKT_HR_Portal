@@ -581,7 +581,7 @@ html[data-theme="clean"]:not([data-md-theme]) .settings-skin {
   --st-accent: hsl(var(--primary));
   --st-accent-strong: var(--clean-primary-hover);
   --st-accent-wash: var(--clean-primary-soft);
-  --st-ring: color-mix(in srgb, hsl(var(--primary)) 22%, transparent);
+  --st-ring: hsl(var(--primary) / 22%);
 }
 html[data-theme="clean"]:not([data-md-theme])
   .settings-skin
@@ -601,4 +601,43 @@ html[data-theme="clean"]:not([data-md-theme]) .settings-skin .settings-dock {
 html[data-theme="clean"]:not([data-md-theme]) .recharts-default-tooltip {
   border-radius: var(--clean-radius) !important; /* inline style */
   box-shadow: var(--clean-shadow-float) !important; /* inline style */
+}
+
+/* ── Windows High Contrast / forced colours ────────────────────────────────────────────────────────────────────────────────
+   The browser then replaces every fill with the system's own colours, so a switch that is "on" only by its blue fill is an empty
+   capsule. A checked switch keeps a Highlight fill with a HighlightText thumb (system colours, which the user chose and the
+   browser keeps), an unchecked one a ButtonText line. */
+@media (forced-colors: active) {
+  html[data-theme="clean"]:not([data-md-theme]) [data-slot="switch"] {
+    forced-color-adjust: none;
+    border: 1px solid ButtonText;
+    background-color: Canvas;
+  }
+  html[data-theme="clean"]:not([data-md-theme]) [data-slot="switch"][data-state="checked"] {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+  html[data-theme="clean"]:not([data-md-theme]) [data-slot="switch-thumb"] {
+    forced-color-adjust: none;
+    background-color: ButtonText;
+  }
+  html[data-theme="clean"]:not([data-md-theme]) [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] {
+    background-color: HighlightText;
+  }
+  html[data-theme="clean"]:not([data-md-theme]) .ukt-switch-label {
+    forced-color-adjust: none;
+    background-color: Canvas;
+    border: 1px solid ButtonText;
+  }
+  html[data-theme="clean"]:not([data-md-theme]) .ukt-switch-label::after {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+  html[data-theme="clean"]:not([data-md-theme]) .ukt-switch-input:checked + .ukt-switch-label {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+  html[data-theme="clean"]:not([data-md-theme]) .ukt-switch-input:checked + .ukt-switch-label::after {
+    background: HighlightText;
+  }
 }

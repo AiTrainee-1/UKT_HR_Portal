@@ -558,6 +558,48 @@ html[data-theme="clean"]:not([data-md-theme])
   color: var(--clean-n-500);
 }
 
+/* text-blue-100 / 200 / 300 (and the other brand families) is a light blue written on a dark or brand panel: opaque light colours,
+   not the tints (which are the primary at an opacity, and are the panel's own colour on the panel). */
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-blue-100"],
+    [class~="text-indigo-100"],
+    [class~="text-sky-100"],
+    [class~="text-cyan-100"],
+    [class~="text-teal-100"],
+    [class~="text-violet-100"],
+    [class~="text-purple-100"],
+    [class~="text-fuchsia-100"]
+  ):not([class*="hover:text-"]) {
+  color: var(--clean-on-brand-100);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-blue-200"],
+    [class~="text-indigo-200"],
+    [class~="text-sky-200"],
+    [class~="text-cyan-200"],
+    [class~="text-teal-200"],
+    [class~="text-violet-200"],
+    [class~="text-purple-200"],
+    [class~="text-fuchsia-200"]
+  ):not([class*="hover:text-"]) {
+  color: var(--clean-on-brand-200);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :is(
+    [class~="text-blue-300"],
+    [class~="text-indigo-300"],
+    [class~="text-sky-300"],
+    [class~="text-cyan-300"],
+    [class~="text-teal-300"],
+    [class~="text-violet-300"],
+    [class~="text-purple-300"],
+    [class~="text-fuchsia-300"]
+  ):not([class*="hover:text-"]) {
+  color: var(--clean-on-brand-300);
+}
+
 /* ── dimmed with opacity ───────────────────────────────────────────────────────────────────────────────────────────────────
    A page dims a small text, an icon or a past row with opacity-20 ... opacity-80 (the grey line under a figure, an inactive sort
    arrow, an ineligible row). At 0.6 the text is 3 to 3.8:1, which is not readable on a washed-out display, and the text is
@@ -623,16 +665,214 @@ html[data-theme="clean"]:not([data-md-theme])
   color: var(--clean-on-primary);
 }
 
+/* ── Tailwind's opacity utilities on the theme's tokens ─────────────────────────────────────────────────────────────────────
+   bg-primary/10, bg-muted/40, hover:bg-accent/50, ring-primary/15, bg-white/60 ... Tailwind writes them as a colour mix and, for a
+   colour that is a variable (the app's tokens), puts the SOLID colour first and the mix inside an @supports: a browser that
+   cannot mix colours (Chrome / Edge 110 and older, Windows 7 and 8.1) or has no CSS nesting (Chrome 111 to 119 on the Vite dev
+   server) keeps only the solid colour, so bg-primary/10 was the full brand blue and hid its own text. Each utility the code uses
+   is written out here as a plain colour at its opacity (hsl(var(--token) / N%), rgb(var(--clean-white) / N%)), which every
+   browser can draw. A utility not listed here is not used by the code; the guard test and the old-browser spec find a new one. Each selector is
+   wrapped in :where(), so it has no specificity of its own: every other rule of the theme (the table's hover wash, a field's
+   border) still wins over it, exactly as it won over the utility. */
+
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-primary/5"]),
+html[data-theme="clean"]:not([data-md-theme])
+  :where([class~="has-data-[state=checked]:bg-primary/5"]:has([data-state="checked"])) {
+  background-color: hsl(var(--primary) / 5%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-primary/10"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-primary/10"]:hover) {
+  background-color: hsl(var(--primary) / 10%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-primary/20"]) {
+  background-color: hsl(var(--primary) / 20%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/20"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-muted/20"]:hover) {
+  background-color: hsl(var(--muted) / 20%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/30"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-muted/30"]:hover) {
+  background-color: hsl(var(--muted) / 30%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/40"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-muted/40"]:hover) {
+  background-color: hsl(var(--muted) / 40%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/50"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-muted/50"]:hover) {
+  background-color: hsl(var(--muted) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/60"]) {
+  background-color: hsl(var(--muted) / 60%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-accent/50"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="data-[state=open]:bg-accent/50"][data-state="open"]),
+html[data-theme="clean"]:not([data-md-theme]) :where(a[class~="[a]:hover:bg-accent/50"]:hover) {
+  background-color: hsl(var(--accent) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted-foreground/40"]) {
+  background-color: hsl(var(--muted-foreground) / 40%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-sidebar-foreground/50"]) {
+  color: hsl(var(--sidebar-foreground) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-sidebar-foreground/60"]) {
+  color: hsl(var(--sidebar-foreground) / 60%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-sidebar-foreground/70"]) {
+  color: hsl(var(--sidebar-foreground) / 70%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-muted-foreground/30"]) {
+  color: hsl(var(--muted-foreground) / 30%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-muted-foreground/70"]) {
+  color: hsl(var(--muted-foreground) / 70%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-foreground/50"]) {
+  color: hsl(var(--foreground) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-foreground/70"]) {
+  color: hsl(var(--foreground) / 70%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-primary/40"]) {
+  border-color: hsl(var(--primary) / 40%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-primary/50"]) {
+  border-color: hsl(var(--primary) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-destructive/50"]) {
+  border-color: hsl(var(--destructive) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-border/50"]) {
+  border-color: hsl(var(--border) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="ring-primary/30"]) {
+  --tw-ring-color: hsl(var(--primary) / 30%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/5"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-white/5"]:hover) {
+  background-color: rgb(var(--clean-white) / 5%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/10"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-white/10"]:hover) {
+  background-color: rgb(var(--clean-white) / 10%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/15"]) {
+  background-color: rgb(var(--clean-white) / 15%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/20"]) {
+  background-color: rgb(var(--clean-white) / 20%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/50"]) {
+  background-color: rgb(var(--clean-white) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/60"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-white/60"]:hover) {
+  background-color: rgb(var(--clean-white) / 60%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/70"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-white/70"]:hover) {
+  background-color: rgb(var(--clean-white) / 70%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/75"]) {
+  background-color: rgb(var(--clean-white) / 75%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/80"]) {
+  background-color: rgb(var(--clean-white) / 80%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/85"]) {
+  background-color: rgb(var(--clean-white) / 85%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/90"]) {
+  background-color: rgb(var(--clean-white) / 90%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/95"]) {
+  background-color: rgb(var(--clean-white) / 95%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/5"]),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-black/5"]:hover) {
+  background-color: rgb(var(--clean-black) / 5%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/10"]) {
+  background-color: rgb(var(--clean-black) / 10%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/50"]) {
+  background-color: rgb(var(--clean-black) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/60"]) {
+  background-color: rgb(var(--clean-black) / 60%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/80"]) {
+  background-color: rgb(var(--clean-black) / 80%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-white/10"]) {
+  border-color: rgb(var(--clean-white) / 10%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-white/60"]) {
+  border-color: rgb(var(--clean-white) / 60%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="ring-white/60"]) {
+  --tw-ring-color: rgb(var(--clean-white) / 60%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="ring-white/70"]) {
+  --tw-ring-color: rgb(var(--clean-white) / 70%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="ring-black/10"]) {
+  --tw-ring-color: rgb(var(--clean-black) / 10%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-sidebar-accent/50"]:hover) {
+  background-color: hsl(var(--sidebar-accent) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-destructive/90"]:hover) {
+  background-color: hsl(var(--destructive) / 90%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:text-destructive/80"]:hover) {
+  color: hsl(var(--destructive) / 80%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:ring-black/30"]:hover) {
+  --tw-ring-color: rgb(var(--clean-black) / 30%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="focus-within:border-primary/60"]:focus-within) {
+  border-color: hsl(var(--primary) / 60%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="focus-within:ring-primary/15"]:focus-within) {
+  --tw-ring-color: hsl(var(--primary) / 15%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="focus-visible:ring-ring/50"]:focus-visible),
+html[data-theme="clean"]:not([data-md-theme]) :where([class~="has-focus:ring-ring/50"]:has(:focus)) {
+  --tw-ring-color: hsl(var(--ring) / 50%);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :where([class~="data-[state=indeterminate]:bg-primary/60"][data-state="indeterminate"]) {
+  background-color: hsl(var(--primary) / 60%);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :where([class~="has-[[data-slot][aria-invalid=true]]:ring-destructive/20"]:has([data-slot][aria-invalid="true"])) {
+  --tw-ring-color: hsl(var(--destructive) / 20%);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :where([data-slot="tooltip-content"] [class~="[[data-slot=tooltip-content]_&]:bg-background/20"]) {
+  background-color: hsl(var(--background) / 20%);
+}
+html[data-theme="clean"]:not([data-md-theme]) :where(.destructive [class~="group-[.destructive]:border-muted/40"]) {
+  border-color: hsl(var(--muted) / 40%);
+}
+html[data-theme="clean"]:not([data-md-theme])
+  :where(.destructive [class~="group-[.destructive]:hover:border-destructive/30"]:hover) {
+  border-color: hsl(var(--destructive) / 30%);
+}
+
 /* ── the brand blue the code writes as a hex ──────────────────────────────────────────────────────────────────────── */
 
 html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#006496]"], [class~="text-[#004f78]"]) {
   color: hsl(var(--primary));
 }
 html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/80"] {
-  color: color-mix(in srgb, hsl(var(--primary)) 80%, transparent);
+  color: hsl(var(--primary) / 80%);
 }
 html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/70"] {
-  color: color-mix(in srgb, hsl(var(--primary)) 70%, transparent);
+  color: hsl(var(--primary) / 70%);
 }
 html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/60"],
 html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/55"] {
@@ -656,7 +896,7 @@ html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/10"],
 html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/[0.08]"],
 html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/5"],
 html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/05"] {
-  background-color: color-mix(in srgb, hsl(var(--primary)) 8%, transparent);
+  background-color: hsl(var(--primary) / 8%);
 }
 html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/25"] {
   background-color: var(--clean-n-300);
@@ -689,7 +929,7 @@ html[data-theme="clean"]:not([data-md-theme]) [class*="hover:text-[#c0392b]"]:ho
   color: hsl(var(--destructive));
 }
 html[data-theme="clean"]:not([data-md-theme]) [class*="hover:bg-[#c0392b]"]:hover {
-  background-color: color-mix(in srgb, hsl(var(--destructive)) 8%, transparent);
+  background-color: hsl(var(--destructive) / 8%);
 }
 html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#c0392b]"] {
   color: hsl(var(--destructive));
@@ -863,14 +1103,14 @@ html[data-theme="clean"]:not([data-md-theme]) [class~="border-accent"] {
   border-color: hsl(var(--primary));
 }
 html[data-theme="clean"]:not([data-md-theme]) [class~="border-accent/30"] {
-  border-color: color-mix(in srgb, hsl(var(--primary)) 30%, transparent);
+  border-color: hsl(var(--primary) / 30%);
 }
 html[data-theme="clean"]:not([data-md-theme]) [class~="hover:border-accent/50"]:hover {
-  border-color: color-mix(in srgb, hsl(var(--primary)) 50%, transparent);
+  border-color: hsl(var(--primary) / 50%);
 }
 html[data-theme="clean"]:not([data-md-theme]) :is([class~="bg-accent/5"], [class~="bg-accent/10"]) {
-  background-color: color-mix(in srgb, hsl(var(--primary)) 7%, transparent);
+  background-color: hsl(var(--primary) / 7%);
 }
 html[data-theme="clean"]:not([data-md-theme]) [class~="hover:bg-accent/5"]:hover {
-  background-color: color-mix(in srgb, hsl(var(--primary)) 7%, transparent);
+  background-color: hsl(var(--primary) / 7%);
 }

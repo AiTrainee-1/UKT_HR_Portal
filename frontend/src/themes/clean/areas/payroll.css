@@ -67,7 +67,7 @@ html[data-theme="clean"]:not([data-md-theme])
   )
   :is(div, button)[class~="rounded-2xl"][class~="items-start"][class~="gap-3"]
   > [class~="bg-white/60"] {
-  background-color: color-mix(in srgb, currentColor 11%, transparent);
+  background-color: var(--clean-n-100);
   border-radius: var(--clean-radius);
 }
 /* the tile's loading bars are black at 10%: a neutral grey */

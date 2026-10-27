@@ -37,7 +37,7 @@ html[data-theme="clean"]:not([data-md-theme]) a:not([class]):hover {
 }
 
 html[data-theme="clean"]:not([data-md-theme]) ::selection {
-  background: color-mix(in srgb, hsl(var(--primary)) 22%, transparent);
+  background: hsl(var(--primary) / 22%);
   color: inherit;
 }
 

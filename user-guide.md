@@ -1038,7 +1038,7 @@ A live **What employees will see** preview shows your entries before you save. T
 
 **Going back.** To drop a device's own choice press **Follow everyone's theme again** (or press the card's **On this device** button once more). To go back to the old look for everybody, switch **Default Theme** on. Nothing is lost by switching: the default look returns exactly as it was.
 
-**Customize** (the six colours: primary, background, card, text, sidebar, accent) works on Clean Professional too, and applies to everyone. The Managing Director's portal keeps its own look in every theme. The mobile apps, PDFs, ID cards and e-mails are not themed.
+**Customize** (the six colours: primary, background, card, text, sidebar, accent) works on Clean Professional too, and applies to everyone; on this theme the page itself keeps its own light grey (it is set a step darker than the cards on purpose, so the cards stand out on any monitor), and the "Background" colour recolours only what is drawn in the background colour. The Managing Director's portal keeps its own look in every theme. The mobile apps, PDFs, ID cards and e-mails are not themed.
 
 > A login assigned to one branch or a view-only role cannot change the theme for everyone, but can still preview a theme and use one on its own device.
 

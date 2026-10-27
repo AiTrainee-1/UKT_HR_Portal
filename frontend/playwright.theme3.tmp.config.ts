@@ -1,16 +1,16 @@
 import { defineConfig } from "@playwright/test";
 import base from "./playwright.config";
 
-// TEMPORARY (THEME-2 integration of the Clean Professional theme): the base config's stack on its own ports and throwaway
+// TEMPORARY (THEME-3 integration of the Clean Professional theme): the base config's stack on its own ports and throwaway
 // database. Deleted when the work ends.
-const API_PORT = 8210;
-const WEB_PORT = 5210;
-const FAKE_PORT = 18216;
-const FAKE_TWOFACTOR_PORT = 18217;
-const FAKE_GEMINI_PORT = 18218;
-const FAKE_DEVICE_BASE_PORT = 14571;
-const FAKE_DEVICE_CONTROL_PORT = 14580;
-const DB = "uktex_theme2_e2e";
+const API_PORT = 8230;
+const WEB_PORT = 5230;
+const FAKE_PORT = 18236;
+const FAKE_TWOFACTOR_PORT = 18237;
+const FAKE_GEMINI_PORT = 18238;
+const FAKE_DEVICE_BASE_PORT = 14671;
+const FAKE_DEVICE_CONTROL_PORT = 14680;
+const DB = "uktex_theme3_e2e";
 
 const backendEnv = {
   DB_NAME: DB,
@@ -39,7 +39,7 @@ const backendEnv = {
 
 export default defineConfig({
   ...base,
-  outputDir: "test-results/theme2",
+  outputDir: "test-results/theme3",
   reporter: [["list"]],
   use: { ...base.use, baseURL: `http://127.0.0.1:${WEB_PORT}` },
   projects: [{ name: "chrome", use: { channel: "chrome" } }],

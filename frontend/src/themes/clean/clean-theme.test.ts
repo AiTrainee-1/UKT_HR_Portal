@@ -294,6 +294,139 @@ describe("the shared rules the area files used to repeat", () => {
   });
 });
 
+describe("plain colours only: nothing the oldest browser cannot draw", () => {
+  // Chrome / Edge 110 and older (Windows 7 and 8.1 stop at Chrome 109) do not know color-mix(), oklch(), oklab(), lab(),
+  // lch() or relative colours, and a browser that does not support CSS nesting (Chrome 111 to 119 on the Vite dev server) drops
+  // what Tailwind nests inside a rule. Tailwind writes every colour mix as "the solid colour first, the mix in a nested
+  // @supports", so the owner's old monitor drew each tint as the solid brand blue and the text on it vanished. The theme
+  // therefore uses hsl() / rgb() / hex only: a tint is the primary at an opacity, hsl(var(--primary) / 12%).
+  const FUNCTIONS = /\b(?:color-mix|oklch|oklab|lab|lch|color|light-dark)\(|\b(?:hsl|hsla|rgb|rgba|hwb)\(\s*from\b/;
+
+  for (const file of FILES.filter((f) => f.endsWith(".css"))) {
+    it(`${file}: no colour function that is newer than 2022, no relative colour`, () => {
+      const css = stripComments(readThemeFile(file));
+      const found = css
+        .split(/[;{}]/)
+        .map((d) => d.trim())
+        .filter((d) => FUNCTIONS.test(d));
+      expect(found).toEqual([]);
+    });
+
+    it(`${file}: no CSS nesting (a rule inside a rule, a & selector, an @supports inside a rule)`, () => {
+      const css = stripComments(readThemeFile(file));
+      const stack: ("style" | "at")[] = [];
+      let statement = "";
+      const nested: string[] = [];
+      for (const ch of css) {
+        if (ch === "{") {
+          const kind = statement.trim().startsWith("@") ? "at" : "style";
+          if (stack[stack.length - 1] === "style") nested.push(statement.trim().slice(0, 60));
+          stack.push(kind);
+          statement = "";
+        } else if (ch === "}") {
+          stack.pop();
+          statement = "";
+        } else if (ch === ";") statement = "";
+        else statement += ch;
+      }
+      expect(nested).toEqual([]);
+      const selectors = styleRules(readThemeFile(file)).flatMap((r) => splitSelectors(r.prelude));
+      expect(selectors.filter((s) => /(^|[\s,(>+~])&/.test(s))).toEqual([]);
+    });
+  }
+
+  it("the guards catch a colour mix, a relative colour and a nested rule", () => {
+    expect(FUNCTIONS.test("background: color-mix(in srgb, red 10%, white)")).toBe(true);
+    expect(FUNCTIONS.test("color: oklch(0.5 0.1 200)")).toBe(true);
+    expect(FUNCTIONS.test("color: hsl(from var(--x) h s l)")).toBe(true);
+    expect(FUNCTIONS.test("background: hsl(var(--primary) / 12%)")).toBe(false);
+    expect(FUNCTIONS.test("background: rgb(var(--clean-white) / 60%)")).toBe(false);
+  });
+
+  it("the tints are the primary at an opacity and the dark steps are fixed colours", () => {
+    const tokens = stripComments(readThemeFile("tokens.css"));
+    for (const [step, pct] of [
+      ["50", 9],
+      ["100", 16],
+      ["200", 28],
+      ["300", 40],
+      ["400", 62],
+      ["500", 82],
+    ] as const) {
+      expect(tokens, `--clean-b-${step}`).toContain(`--clean-b-${step}: hsl(var(--primary) / ${pct}%);`);
+    }
+    expect(tokens).toContain("--clean-primary-soft: hsl(var(--primary) / 12%);");
+    expect(tokens).toContain("--clean-primary-soft-hover: hsl(var(--primary) / 20%);");
+    expect(tokens).toContain("--clean-hover: hsl(var(--primary) / 9%);");
+    for (const [name, value] of [
+      ["--clean-b-700", "#194a9a"],
+      ["--clean-b-800", "#12376f"],
+      ["--clean-b-900", "#103064"],
+      ["--clean-b-950", "#0c2248"],
+      ["--clean-primary-hover", "#194a9a"],
+      ["--clean-primary-active", "#154084"],
+      ["--clean-danger-hover", "#9b1e15"],
+      ["--clean-page", "#eaeef3"],
+    ] as const) {
+      expect(tokens, name).toContain(`${name}: ${value};`);
+    }
+  });
+});
+
+describe("Tailwind's opacity utilities are written out as plain colours", () => {
+  // bg-primary/10 and friends compile to the solid colour with the mix in a nested @supports; an old browser keeps the solid
+  // one. tailwind-remap.css writes each utility the code uses as hsl(var(--token) / N%) inside :where() (no specificity of its
+  // own, so every other rule of the theme still wins). A utility that the code starts to use and the file does not know fails
+  // here: add it to the list in tailwind-remap.css.
+  const remap = stripComments(readThemeFile("tailwind-remap.css"));
+  const SRC = path.join(import.meta.dirname, "../..");
+  const SKIP_DIRS = new Set(["md-theme", "md", "node_modules", "themes"]);
+  const walk = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) return SKIP_DIRS.has(e.name) ? [] : walk(full);
+      return /\.tsx$/.test(e.name) && !/\.test\./.test(e.name) ? [full] : [];
+    });
+  const TOKENS =
+    "primary|accent|muted|destructive|sidebar-accent|sidebar-primary|sidebar-foreground|sidebar|background|card|foreground|secondary|popover|border|input|ring|muted-foreground|accent-foreground|primary-foreground|white|black";
+  const CLASS = new RegExp(
+    `(?<![\\w-])((?:[\\w\\[\\]=.&>*():/-]+:)?(?:bg|text|border|ring)-(?:${TOKENS})/\\d+)(?![\\w.])`,
+    "g",
+  );
+
+  // a class that is not drawn as a solid fallback that matters, or is dealt with by another rule of the theme
+  const HANDLED = [
+    /^dark:/, // the theme is light
+    /^focus:bg-muted\/100$/, // 100% is the solid colour itself
+    /^text-white\//, // text-white/20 ... 80 is solid white (the readability section of tailwind-remap.css)
+    /^hover:text-white\//,
+    /^(bg|text|border)-accent\/(5|10|30)$/, // the accent as a brand colour (the accent section of tailwind-remap.css)
+    /^hover:(bg|border)-accent\/(5|50)$/,
+    /^group-data-/, // a calendar day's focus ring, inside a group
+  ];
+
+  it("lists every opacity utility on a token that the application's pages use", () => {
+    const used = new Set<string>();
+    for (const file of walk(SRC)) {
+      const text = fs.readFileSync(file, "utf8");
+      for (const m of text.matchAll(CLASS)) used.add(m[1]);
+    }
+    expect(used.size, "the scan found the utilities").toBeGreaterThan(40);
+    const missing = [...used].filter((c) => !HANDLED.some((h) => h.test(c))).filter((c) => !remap.includes(`"${c}"`));
+    expect(missing).toEqual([]);
+  });
+
+  it("every one of those rules is wrapped in :where() and written with hsl()/rgb() at an opacity", () => {
+    const rules = styleRules(readThemeFile("tailwind-remap.css")).filter(
+      (r) => /\/\d+"\]/.test(r.prelude) && /:where\(/.test(r.prelude),
+    );
+    expect(rules.length).toBeGreaterThan(40);
+    for (const rule of rules) {
+      expect(rule.body, rule.prelude.slice(0, 80)).toMatch(/(?:hsl|rgb)\(var\(--[a-z-]+\) \/ \d+%\)/);
+    }
+  });
+});
+
 describe("no inline-colour rule matches a background colour by accident", () => {
   // style="background-color: rgb(220, 38, 38); color: white" contains the text "color: rgb(220, 38, 38)" inside
   // "background-color: rgb(220, 38, 38)", so [style*="color: rgb(220, 38, 38)"] would recolour the TEXT of a red box. The
@@ -327,16 +460,8 @@ describe("the palette is readable (WCAG AA)", () => {
   const usedHex = (name: string) => hslTripleToHex(lastTriple(name));
   const ramp = (name: string) => tokens.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6});`))![1];
   const WHITE = "#ffffff";
-  // the page itself is --background mixed 6% towards the text colour (--clean-page in tokens.css): a card stands off it
-  const mixHex = (x: string, y: string, ratioOfX: number) =>
-    "#" +
-    [1, 3, 5]
-      .map((i) =>
-        Math.round(parseInt(x.slice(i, i + 2), 16) * ratioOfX + parseInt(y.slice(i, i + 2), 16) * (1 - ratioOfX)),
-      )
-      .map((v) => v.toString(16).padStart(2, "0"))
-      .join("");
-  const PAGE = mixHex(hslTripleToHex(triple("--background")), hslTripleToHex(triple("--foreground")), 0.94);
+  // the page itself is a fixed colour a step darker than the white cards (--clean-page in tokens.css)
+  const PAGE = tokens.match(/--clean-page:\s*(#[0-9a-fA-F]{6});/)![1];
 
   it("body text, muted text and the text on the main button", () => {
     expect(contrastRatio(hex("--foreground"), hex("--background"))).toBeGreaterThanOrEqual(7);
@@ -377,18 +502,29 @@ describe("the palette is readable (WCAG AA)", () => {
     // the hover / selected tint is a visible step from white, and its ink is far over AA
     expect(contrastRatio(hex("--sidebar-accent"), WHITE)).toBeGreaterThanOrEqual(1.15);
     expect(contrastRatio(hex("--accent-foreground"), hex("--sidebar-accent"))).toBeGreaterThanOrEqual(7);
-    // the soft brand fills (chosen chip / row, 12 and 20% of the primary over white) with the dark brand ink the theme puts on them
+    // the soft brand fills (the primary at 12 and 20% over white, over the page and over the other fill: a chosen chip, a row, a
+    // band) with the dark brand ink the theme puts on them (--clean-b-800, a fixed colour)
     const primary = hex("--primary");
-    const mix = (pct: number, base: number) =>
+    const over = (pct: number, base: string) =>
       "#" +
       [1, 3, 5]
-        .map((i) => Math.round(parseInt(primary.slice(i, i + 2), 16) * pct + base * (1 - pct)))
+        .map((i) =>
+          Math.round(parseInt(primary.slice(i, i + 2), 16) * pct + parseInt(base.slice(i, i + 2), 16) * (1 - pct)),
+        )
         .map((v) => v.toString(16).padStart(2, "0"))
         .join("");
-    const ink = mix(0.72, 0); // --clean-b-800: 72% primary, 28% black
-    for (const pct of [0.12, 0.2]) {
-      expect(contrastRatio(ink, mix(pct, 255)), `b-800 on a ${pct * 100}% fill`).toBeGreaterThanOrEqual(7);
+    const ink = ramp("--clean-b-800");
+    for (const surface of [WHITE, PAGE, over(0.12, WHITE)]) {
+      for (const pct of [0.12, 0.2]) {
+        expect(
+          contrastRatio(ink, over(pct, surface)),
+          `b-800 on ${pct * 100}% of the primary over ${surface}`,
+        ).toBeGreaterThanOrEqual(7);
+      }
     }
+    // the dark brand text steps on the light tints they are written on (a badge: b-700 on b-50 / b-100)
+    expect(contrastRatio(ramp("--clean-b-700"), over(0.09, WHITE))).toBeGreaterThanOrEqual(7);
+    expect(contrastRatio(ramp("--clean-b-700"), over(0.16, PAGE))).toBeGreaterThanOrEqual(5.5);
     // an icon is never lighter than the 500 step (5.5:1 on the page)
     expect(contrastRatio(ramp("--clean-n-500"), PAGE)).toBeGreaterThanOrEqual(5.5);
   });
@@ -467,7 +603,7 @@ describe("the guards themselves catch what they are for", () => {
   it("the colour guard catches a hex, rgb()/hsl() with numbers and a named colour, and lets a token read through", () => {
     const bad = `${SCOPE} .a { color: #fff; background: rgba(0, 0, 0, 0.5); border-color: hsl(210 20% 40%); outline-color: red; box-shadow: 0 1px 2px black }`;
     expect(colourDeclarations(bad)).toHaveLength(5);
-    const fine = `${SCOPE} .a { color: hsl(var(--primary)); background: var(--clean-n-100); border: 1px solid transparent; box-shadow: 0 1px color-mix(in srgb, hsl(var(--foreground)) 10%, transparent) }`;
+    const fine = `${SCOPE} .a { color: hsl(var(--primary)); background: var(--clean-n-100); border: 1px solid transparent; box-shadow: 0 1px hsl(var(--foreground) / 10%) }`;
     expect(colourDeclarations(fine)).toEqual([]);
     // a selector that names an old colour is not a declaration
     expect(colourDeclarations(`${SCOPE} [fill="#006496"] { fill: var(--clean-b-600) }`)).toEqual([]);

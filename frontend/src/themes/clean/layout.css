@@ -70,7 +70,7 @@ html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[s
 
 /* menu rows: a group heading, a page, a sub-page */
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav p {
-  color: color-mix(in srgb, hsl(var(--sidebar-foreground)) 62%, transparent) !important; /* inline style */
+  color: hsl(var(--sidebar-foreground) / 62%) !important; /* inline style */
   letter-spacing: 0.08em;
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cursor-pointer {
@@ -78,13 +78,13 @@ html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cur
   color: hsl(var(--sidebar-foreground));
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cursor-pointer svg {
-  color: color-mix(in srgb, hsl(var(--sidebar-foreground)) 68%, transparent);
+  color: hsl(var(--sidebar-foreground) / 68%);
 }
 html[data-theme="clean"]:not([data-md-theme])
   [data-ui-shell="sidebar"]
   nav
   .cursor-pointer:hover:not(.clay-nav-active) {
-  background: color-mix(in srgb, hsl(var(--sidebar-foreground)) 8%, transparent);
+  background: hsl(var(--sidebar-foreground) / 8%);
   color: hsl(var(--sidebar-foreground));
 }
 html[data-theme="clean"]:not([data-md-theme])
@@ -147,10 +147,10 @@ html[data-theme="clean"]:not([data-md-theme])
   [data-ui-shell="sidebar"]
   button:is([style^="color: rgba"], [style*=" color: rgba"]),
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child button {
-  color: color-mix(in srgb, hsl(var(--sidebar-foreground)) 78%, transparent) !important; /* inline style */
+  color: hsl(var(--sidebar-foreground) / 78%) !important; /* inline style */
 }
 html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child button:hover {
-  background: color-mix(in srgb, hsl(var(--sidebar-foreground)) 8%, transparent);
+  background: hsl(var(--sidebar-foreground) / 8%);
   color: hsl(var(--sidebar-foreground)) !important; /* inline style */
 }
 /* the little close button of the phone drawer */
@@ -212,4 +212,11 @@ html[data-theme="clean"]:not([data-md-theme])
   :is(h1, h2):is([class*="text-2xl"], [class*="text-3xl"])
   + p {
   color: var(--clean-muted);
+}
+
+/* ── Windows High Contrast / forced colours: the open page keeps its marker (the fill is replaced by the system's colours) ── */
+@media (forced-colors: active) {
+  html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active {
+    border-left: 3px solid Highlight;
+  }
 }

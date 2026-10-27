@@ -16,8 +16,9 @@
    chosen. Nothing else in the application reads a --clean-* variable. Which Tailwind colour family maps to which ramp is
    written in tailwind-remap.css.
 
-   Contrast (WCAG AA, checked by clean-theme.test.ts): body text 13.6:1 on the page, muted text 5.0:1, white on the primary
-   buttons 6.9:1, the status ramps' 700 on 50 over 4.5:1, input borders 3.1:1 on white.
+   Contrast (WCAG AA and a margin for weak displays, checked by clean-theme.test.ts): body text 13.6:1 on the page, secondary
+   text 6.5:1 and more, the greys 400 / 500 / 600 at 4.5 / 5.5 / 6.5:1 on the page, white on the primary buttons 6.9:1, the
+   status ramps' 600 on their 50 tints and 700 on 50 over 4.5:1, input borders 4.0:1 on white, cards 1.2:1 off the page.
    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
 html[data-theme="clean"]:not([data-md-theme]) {
@@ -71,10 +72,10 @@ html[data-theme="clean"]:not([data-md-theme]) {
 
   /* the borders the shadcn buttons compute from a colour (index.css); a flat theme wants none of the lightness shift */
   --opaque-button-border-intensity: 0;
-  --button-outline: color-mix(in srgb, hsl(var(--foreground)) 14%, transparent);
-  --badge-outline: color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
-  --elevate-1: color-mix(in srgb, hsl(var(--foreground)) 5%, transparent);
-  --elevate-2: color-mix(in srgb, hsl(var(--foreground)) 9%, transparent);
+  --button-outline: hsl(var(--foreground) / 14%);
+  --badge-outline: hsl(var(--foreground) / 12%);
+  --elevate-1: hsl(var(--foreground) / 5%);
+  --elevate-2: hsl(var(--foreground) / 9%);
 
   /* ── 2a. neutrals (Tailwind's slate, gray, zinc, neutral and stone all map here) ───────────────────────────── */
   --clean-n-50: #f8fafc;
@@ -89,18 +90,26 @@ html[data-theme="clean"]:not([data-md-theme]) {
   --clean-n-900: #111827;
   --clean-n-950: #0b1220;
 
-  /* ── 2b. brand / information: worked out from --primary, so a customised primary recolours every blue ──────── */
-  --clean-b-50: color-mix(in oklab, hsl(var(--primary)) 9%, white);
-  --clean-b-100: color-mix(in oklab, hsl(var(--primary)) 16%, white);
-  --clean-b-200: color-mix(in oklab, hsl(var(--primary)) 28%, white);
-  --clean-b-300: color-mix(in oklab, hsl(var(--primary)) 40%, white);
-  --clean-b-400: color-mix(in oklab, hsl(var(--primary)) 62%, white);
-  --clean-b-500: color-mix(in oklab, hsl(var(--primary)) 82%, white);
+  /* ── 2b. brand / information. The light steps are the primary at an opacity (so a customised primary still tints every
+     blue, over whatever surface they sit on: white, the page, a row), the dark steps are fixed colours (they are text and
+     lines, and need a known contrast). No colour-mixing function and no relative colour is used anywhere in the theme:
+     a browser older than 2023 does not know them, and drew every tint as the solid primary. ────────────────────────────── */
+  --clean-b-50: hsl(var(--primary) / 9%);
+  --clean-b-100: hsl(var(--primary) / 16%);
+  --clean-b-200: hsl(var(--primary) / 28%);
+  --clean-b-300: hsl(var(--primary) / 40%);
+  --clean-b-400: hsl(var(--primary) / 62%);
+  --clean-b-500: hsl(var(--primary) / 82%);
   --clean-b-600: hsl(var(--primary));
-  --clean-b-700: color-mix(in oklab, hsl(var(--primary)) 86%, black);
-  --clean-b-800: color-mix(in oklab, hsl(var(--primary)) 72%, black);
-  --clean-b-900: color-mix(in oklab, hsl(var(--primary)) 56%, black);
-  --clean-b-950: color-mix(in oklab, hsl(var(--primary)) 40%, black);
+  /* the light blues of a text written on a dark or brand panel (text-blue-200 on the sign-in's brand half): opaque, because the
+     tints above are the primary at an opacity and would be the panel's own colour on the panel */
+  --clean-on-brand-100: #e3ebf7;
+  --clean-on-brand-200: #c0d0ea;
+  --clean-on-brand-300: #a5bbe1;
+  --clean-b-700: #194a9a;
+  --clean-b-800: #12376f;
+  --clean-b-900: #103064;
+  --clean-b-950: #0c2248;
 
   /* ── 2c. status: green = good, amber = watch, red = bad. Nothing else is ever green, amber or red ─────────── */
   --clean-s-50: #e7f6ee;
@@ -141,27 +150,25 @@ html[data-theme="clean"]:not([data-md-theme]) {
 
   /* ── 2d. the roles the primitives use (one place to change what "primary hover" or "a line" is) ───────────── */
   --clean-primary: hsl(var(--primary));
-  --clean-primary-hover: color-mix(in oklab, hsl(var(--primary)) 86%, black);
-  --clean-primary-active: color-mix(in oklab, hsl(var(--primary)) 74%, black);
-  --clean-primary-soft: color-mix(in oklab, hsl(var(--primary)) 12%, white);
-  --clean-primary-soft-hover: color-mix(in oklab, hsl(var(--primary)) 20%, white);
+  --clean-primary-hover: #194a9a;
+  --clean-primary-active: #154084;
+  --clean-primary-soft: hsl(var(--primary) / 12%);
+  --clean-primary-soft-hover: hsl(var(--primary) / 20%);
   --clean-on-primary: hsl(var(--primary-foreground));
-  --clean-danger-hover: color-mix(in oklab, hsl(var(--destructive)) 86%, black);
+  --clean-white: 255 255 255; /* triples, to write a white or a black at an opacity: rgb(var(--clean-white) / 60%) */
+  --clean-black: 0 0 0;
+  --clean-danger-hover: #9b1e15;
   --clean-line: hsl(var(--border));
   --clean-line-mid: #9eaaba; /* the border of a secondary button: 2.4:1 on white, so a button reads as a button */
   --clean-line-strong: hsl(var(--input));
   --clean-ink: hsl(var(--foreground));
   --clean-muted: hsl(var(--muted-foreground));
   --clean-surface: hsl(var(--card));
-  --clean-page: color-mix(
-    in oklab,
-    hsl(var(--background)) 94%,
-    hsl(var(--foreground))
-  ); /* #eaeef3: a clear step darker than the white cards, so a card stands off the page on any display */
+  --clean-page: #eaeef3; /* a clear step darker than the white cards (1.2:1), so a card stands off the page on any display */
   --clean-wash: var(--clean-n-100); /* header rows, a quiet panel inside a card */
-  --clean-hover: color-mix(in srgb, hsl(var(--primary)) 9%, transparent); /* row / item hover tint */
+  --clean-hover: hsl(var(--primary) / 9%); /* row / item hover tint */
   --clean-focus: hsl(var(--ring));
-  --clean-scrim: color-mix(in srgb, hsl(var(--foreground)) 45%, transparent);
+  --clean-scrim: hsl(var(--foreground) / 45%);
   --clean-disabled-bg: var(--clean-n-100);
   --clean-disabled-ink: var(--clean-n-400);
 
@@ -175,12 +182,8 @@ html[data-theme="clean"]:not([data-md-theme]) {
   --clean-radius-lg: 8px;
 
   /* only floating layers (menus, popovers, dialogs, toasts) have a shadow, and a very light one */
-  --clean-shadow-float:
-    0 1px 2px color-mix(in srgb, hsl(var(--foreground)) 10%, transparent),
-    0 2px 8px color-mix(in srgb, hsl(var(--foreground)) 8%, transparent);
-  --clean-shadow-dialog:
-    0 2px 4px color-mix(in srgb, hsl(var(--foreground)) 8%, transparent),
-    0 8px 24px color-mix(in srgb, hsl(var(--foreground)) 12%, transparent);
+  --clean-shadow-float: 0 1px 2px hsl(var(--foreground) / 10%), 0 2px 8px hsl(var(--foreground) / 8%);
+  --clean-shadow-dialog: 0 2px 4px hsl(var(--foreground) / 8%), 0 8px 24px hsl(var(--foreground) / 12%);
 
   /* the arrow of a native <select> (forms.css): a neutral-500 chevron, as an image because a select has no pseudo-element */
   --clean-select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23525d6d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 6l4.5 4.5L12.5 6'/%3E%3C/svg%3E");
@@ -211,38 +214,4 @@ html[data-theme="clean"]:not([data-md-theme]) body {
   --sidebar-border: var(--border);
   --clean-line: hsl(var(--border));
   --clean-muted: hsl(var(--muted-foreground));
-}
-
-/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   A browser that cannot mix colours (color-mix(), before 2023: an older Chrome or Edge on a factory PC) would drop every
-   token above that is worked out from --primary, and a page would lose its soft fills and its hover washes. For those, the
-   same tokens as fixed colours for the default primary (#1d56b3). A customised primary is only followed by browsers that can mix.
-   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
-@supports not (color: color-mix(in oklab, red 10%, white)) {
-  html[data-theme="clean"]:not([data-md-theme]) {
-    --button-outline: #1f293724;
-    --badge-outline: #1f29371f;
-    --elevate-1: #1f29370d;
-    --elevate-2: #1f293717;
-    --clean-b-50: #ebf0f8;
-    --clean-b-100: #dbe4f3;
-    --clean-b-200: #c0d0ea;
-    --clean-b-300: #a5bbe1;
-    --clean-b-400: #7396d0;
-    --clean-b-500: #4674c1;
-    --clean-b-700: #194a9a;
-    --clean-b-800: #153e81;
-    --clean-b-900: #103064;
-    --clean-b-950: #0c2248;
-    --clean-primary-hover: #194a9a;
-    --clean-primary-active: #154084;
-    --clean-primary-soft: #e4ebf6;
-    --clean-primary-soft-hover: #d2ddf0;
-    --clean-danger-hover: #9b1e15;
-    --clean-page: #eaeef3;
-    --clean-hover: #1d56b317;
-    --clean-scrim: #1f293773;
-    --clean-shadow-float: 0 1px 2px #1f29371a, 0 2px 8px #1f293714;
-    --clean-shadow-dialog: 0 2px 4px #1f293714, 0 8px 24px #1f29371f;
-  }
 }
