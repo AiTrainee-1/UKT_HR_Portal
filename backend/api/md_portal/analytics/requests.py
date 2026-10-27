@@ -60,7 +60,7 @@ from django.db.models.functions import Cast, Coalesce
 from django.utils import timezone
 
 from ... import approval_workflow as approval
-from ...clock import FACTORY_TZ, ist_now, ist_today
+from ...clock import FACTORY_TZ, ist_today
 from ...models import (
     Advance,
     AttendanceOverrideRequest,

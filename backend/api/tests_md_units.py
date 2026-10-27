@@ -50,7 +50,7 @@ from .md_portal.analytics import employees as E
 from .md_portal.analytics import payroll as P
 from .md_portal.analytics import units as U
 from .md_portal.assistant import registry
-from .md_portal.common import MdParamError, Period, Scope, period_for_preset, read_only_db, resolve_period, resolve_scope
+from .md_portal.common import MdParamError, Scope, period_for_preset, read_only_db, resolve_period, resolve_scope
 from .models import (
     AttendanceDayRecord,
     Branch,
