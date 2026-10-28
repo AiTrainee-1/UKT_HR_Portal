@@ -9,7 +9,12 @@ what is declared here can ever leave the system:
   is not shared (a password hash, a bank account) is not even read from the database for the page;
 * filters are declared per dataset with a type, an allowed range and (for enums) the allowed values; every value is
   parsed by a strict ASCII reader and reaches the database as a query parameter, never as SQL text;
-* every dataset has a maximum page size, and the date-range datasets REQUIRE a range of at most N days.
+* every dataset has a maximum page size, and the date-range datasets REQUIRE a range of at most N days;
+* every dataset declares how a key's DATA CATEGORY (staff | production, Employee.employment_type) is enforced on it: either
+  `category_scope` (a function that narrows the queryset to the rows of that kind of employee) or `category_neutral=True`
+  (the dataset holds no employee data: the holiday calendar). A dataset that declares neither is a start-up error, so a
+  future dataset cannot be added unscoped by accident. See `apply_category`: the public call applies it to the queryset
+  BEFORE counting and paging, after the caller's filters, so no query parameter, locked filter or page number can widen it.
 
 The catalog is verified when this module is imported: a field or column whose name contains a hard-excluded word
 (password, token, otp, aadhaar, pan, bank, uan, pf, esi, photo, secret ...) is a start-up error, not a silent leak.
@@ -28,7 +33,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
-from django.db.models import QuerySet
+from django.db.models import Exists, OuterRef, QuerySet
 
 from .clock import FACTORY_TZ, ist_today
 
@@ -200,6 +205,11 @@ class Dataset:
     max_page_size: int
     #: (from filter key, to filter key, longest allowed range in days, inclusive)
     date_range: tuple[str, str, int] | None = None
+    #: narrows the queryset to the rows that belong to employees of the given category ("staff" | "production"). EVERY
+    #: dataset declares exactly one of category_scope / category_neutral (checked at start-up and by a test).
+    category_scope: Callable[[QuerySet, str], QuerySet] | None = None
+    #: True = the dataset holds no employee data (the company holiday calendar): every key sees all of it
+    category_neutral: bool = False
 
 
 def _f(key, label, type_, sensitivity, description, columns, get, sample=None) -> Field:
@@ -240,6 +250,33 @@ def _models():
     from . import models
 
     return models
+
+
+#: the data categories a key can be limited to: the values of Employee.employment_type
+CATEGORIES = ("staff", "production")
+
+
+def _scope_employee(qs: QuerySet, category: str) -> QuerySet:
+    """Employee rows: their own employment type."""
+    return qs.filter(employment_type=category)
+
+
+def _scope_via_employee(qs: QuerySet, category: str) -> QuerySet:
+    """Rows that belong to an employee (attendance, leave, payroll): the type of THAT employee. The join is an inner join,
+    so a row without an employee can never match a category."""
+    return qs.filter(employee__employment_type=category)
+
+
+def _scope_org_unit(employee_column: str) -> Callable[[QuerySet, str], QuerySet]:
+    """Organisation rows (departments, branches, designations): only those that have at least one employee of the category,
+    whatever that employee's status (so every departmentId / branchId in the category's employee rows resolves). An EXISTS
+    subquery: a row is never duplicated by several employees, so ordering, paging and `total` stay exact."""
+
+    def scope(qs: QuerySet, category: str) -> QuerySet:
+        members = _models().Employee.objects.filter(**{employee_column: OuterRef("pk")}, employment_type=category)
+        return qs.filter(Exists(members))
+
+    return scope
 
 
 # fmt: off
@@ -305,6 +342,7 @@ EMPLOYEES = Dataset(
     ),
     ordering=("employee_code", "id"),
     max_page_size=500,
+    category_scope=_scope_employee,
 )
 
 DEPARTMENTS = Dataset(
@@ -320,6 +358,7 @@ DEPARTMENTS = Dataset(
     filters=(),
     ordering=("name", "id"),
     max_page_size=500,
+    category_scope=_scope_org_unit("department_id"),
 )
 
 BRANCHES = Dataset(
@@ -335,6 +374,7 @@ BRANCHES = Dataset(
     filters=(),
     ordering=("name", "id"),
     max_page_size=500,
+    category_scope=_scope_org_unit("branch_id"),
 )
 
 DESIGNATIONS = Dataset(
@@ -351,6 +391,7 @@ DESIGNATIONS = Dataset(
     filters=(),
     ordering=("title", "id"),
     max_page_size=500,
+    category_scope=_scope_org_unit("designation_id"),
 )
 
 # attendance-days ----------------------------------------------------------
@@ -387,6 +428,7 @@ ATTENDANCE_DAYS = Dataset(
     ordering=("date", "employee_id", "id"),
     max_page_size=1000,
     date_range=("dateFrom", "dateTo", 31),
+    category_scope=_scope_via_employee,
 )
 
 # attendance-punches -------------------------------------------------------
@@ -411,6 +453,7 @@ ATTENDANCE_PUNCHES = Dataset(
     ordering=("date", "punch_time", "id"),
     max_page_size=1000,
     date_range=("dateFrom", "dateTo", 7),
+    category_scope=_scope_via_employee,
 )
 
 # leave-requests -----------------------------------------------------------
@@ -442,6 +485,7 @@ LEAVE_REQUESTS = Dataset(
     ordering=("-start_date", "-id"),
     max_page_size=500,
     date_range=("dateFrom", "dateTo", 366),
+    category_scope=_scope_via_employee,
 )
 
 # holidays -----------------------------------------------------------------
@@ -458,6 +502,8 @@ HOLIDAYS = Dataset(
     filters=(Filter("year", "Year", "year", "Only holidays of this year (for example 2026).", apply=lambda q, v: q.filter(date__year=v)),),
     ordering=("date", "id"),
     max_page_size=500,
+    # the company calendar is not employee data: a staff key and a production key both see every holiday
+    category_neutral=True,
 )
 
 # payroll-summary ----------------------------------------------------------
@@ -485,6 +531,7 @@ PAYROLL_SUMMARY = Dataset(
     ),
     ordering=("employee_id", "period_start", "id"),
     max_page_size=500,
+    category_scope=_scope_via_employee,
 )
 
 # fmt: on
@@ -552,11 +599,22 @@ def excluded_names_in(dataset: Dataset) -> list[str]:
     return bad
 
 
+def category_problems(ds: Dataset) -> list[str]:
+    """What is wrong with how the dataset declares its data-category enforcement (must be empty): exactly ONE of
+    `category_scope` and `category_neutral` is required, so a new dataset can never be shared unscoped by accident."""
+    if ds.category_neutral and ds.category_scope is not None:
+        return [f"{ds.key}: declares both category_scope and category_neutral"]
+    if not ds.category_neutral and ds.category_scope is None:
+        return [f"{ds.key}: declares neither category_scope nor category_neutral"]
+    return []
+
+
 def _verify_catalog() -> None:
     problems: list[str] = []
     for key, ds in DATASETS.items():
         if key != ds.key:
             problems.append(f"{key}: registered under a different key")
+        problems.extend(category_problems(ds))
         keys = [f.key for f in ds.fields]
         if len(keys) != len(set(keys)):
             problems.append(f"{key}: duplicate field key")
@@ -748,6 +806,29 @@ def build_queryset(dataset: Dataset, values: Mapping[str, Any], field_keys: list
     return qs.order_by(*dataset.ordering)
 
 
+def apply_category(dataset: Dataset, qs: QuerySet, category: str | None) -> QuerySet:
+    """`qs` restricted to the data of one category ("staff" | "production"): the one place where a key's category is enforced.
+
+    Called by the public call (and the admin preview) on the queryset that build_queryset returned, BEFORE it is counted
+    or paged, and as one more `.filter()` - so it can only narrow: a query parameter such as employmentType=production on
+    a staff key is ANDed with it (zero rows), a locked filter cannot override it, and `meta.total` never counts the other
+    category's rows.
+
+      * "" / None   a key made before categories existed (or a preview without one): unscoped, exactly as before;
+      * a category  the dataset's `category_scope`, or everything for a `category_neutral` dataset;
+      * anything else (a corrupted value, a dataset that somehow declares nothing): NOTHING is returned. It fails closed,
+        never open."""
+    if category is None or category == "":
+        return qs
+    if category not in CATEGORIES:
+        return qs.none()
+    if dataset.category_neutral:
+        return qs
+    if dataset.category_scope is None:
+        return qs.none()
+    return dataset.category_scope(qs, category)
+
+
 def shape_rows(dataset: Dataset, field_keys: list[str], objects) -> list[dict[str, Any]]:
     """Plain dicts of the selected fields only, built from the catalog getters (never from the model's own fields)."""
     known = field_map(dataset)
@@ -789,6 +870,9 @@ def dataset_json(ds: Dataset) -> dict[str, Any]:
         "filters": [filter_json(f) for f in ds.filters],
         "defaultOrdering": list(ds.ordering),
         "maxPageSize": ds.max_page_size,
+        # how a key's category applies: "employee" = only the rows of that kind of employee (or, for departments,
+        # branches and designations, only those that have such an employee); "neutral" = no employee data, all of it
+        "categoryScope": "neutral" if ds.category_neutral else "employee",
         "dateRange": (
             {"from": ds.date_range[0], "to": ds.date_range[1], "maxDays": ds.date_range[2]} if ds.date_range else None
         ),

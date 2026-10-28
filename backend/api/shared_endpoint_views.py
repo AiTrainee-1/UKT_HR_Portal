@@ -22,7 +22,19 @@ access log):
   4  rate limit per key                          429 rate_limited + Retry-After
   5  filters validated against the dataset (+ the endpoint's locked filters); unknown parameter = 400 invalid_parameter
   6  page / pageSize                             pageSize is capped at the endpoint's maximum
-  7  data
+  7  data                                        the key's CATEGORY (staff | production) is applied to the queryset
+                                                before it is counted or paged (see below)
+
+Data categories (strictly enforced)
+  A key carries the category of employee it may read: "staff" or "production" (Employee.employment_type). After the key is
+  accepted, shared_datasets.apply_category narrows the dataset's queryset to that category as one more `.filter()`, BEFORE
+  `meta.total` is counted and before the page is cut. Nothing the caller or the endpoint's settings send can widen it: a
+  query parameter such as employmentType=production on a staff key is ANDed with it (zero rows), a locked filter cannot
+  override it, page / pageSize only move inside the already-restricted rows. Datasets about employees (employees,
+  attendance, leave, payroll) are cut by the employee's type; departments, branches and designations list only the rows that
+  have at least one employee of the category; the holiday calendar holds no employee data and is the same for both. A key
+  made before categories existed has category "" and stays unscoped (exactly as it always was). `meta.category` says which
+  one applied ("staff" | "production" | null for such an older key). An unrecognised stored category returns no rows.
 
 Security properties
   * the key is stored only as SHA-256; lookup is by the 8-character prefix inside THIS endpoint, then hmac.compare_digest;
@@ -373,8 +385,8 @@ def _handle(request: HttpRequest, slug: str, call: _Call) -> HttpResponse:
     except sd.FilterError as exc:
         return _fail(call, 400, "invalid_parameter", exc.message, parameter=exc.param)
 
-    # 7  data
-    queryset = sd.build_queryset(dataset, values, fields)
+    # 7  data: the caller's filters first, then the key's category (the last word: it can only narrow what was asked for)
+    queryset = sd.apply_category(dataset, sd.build_queryset(dataset, values, fields), key.category)
     total = queryset.count()
     offset = (page - 1) * page_size
     rows = sd.shape_rows(dataset, fields, queryset[offset : offset + page_size]) if total > offset else []
@@ -384,6 +396,7 @@ def _handle(request: HttpRequest, slug: str, call: _Call) -> HttpResponse:
         "meta": {
             "endpoint": endpoint.slug,
             "dataset": dataset.key,
+            "category": key.category or None,
             "fields": fields,
             "page": page,
             "pageSize": page_size,

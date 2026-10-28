@@ -114,7 +114,7 @@ class CatalogTests(SimpleTestCase):
 
     def test_a_bad_definition_is_a_start_up_error(self):
         bad_field = sd.Field("bankAccount", "x", "string", sd.BASIC, "x", ("bank_account",), lambda o: o.bank_account)
-        bad = sd.Dataset("bad", "Bad", "x", lambda: None, (bad_field,), (), ("id",), 10)
+        bad = sd.Dataset("bad", "Bad", "x", lambda: None, (bad_field,), (), ("id",), 10, category_neutral=True)
         self.assertTrue(sd.excluded_names_in(bad))
         original = dict(sd.DATASETS)
         sd.DATASETS["bad"] = bad
@@ -219,6 +219,7 @@ class CatalogTests(SimpleTestCase):
             (sd.Filter("flag", "Flag", "boolean", "x", values=("yes", "no"), apply=lambda q, v: q),),
             ("id",),
             10,
+            category_neutral=True,
         )
         original = dict(sd.DATASETS)
         sd.DATASETS["bad"] = bad
@@ -243,6 +244,8 @@ class CatalogTests(SimpleTestCase):
             for flt in d["filters"]:
                 self.assertEqual(set(flt), {"key", "label", "type", "required", "description", "values", "default"})
         self.assertEqual(set(body["sensitivityLevels"]), {"basic", "personal", "financial"})
+        for d in body["datasets"]:
+            self.assertEqual(d["categoryScope"], "neutral" if d["key"] == "holidays" else "employee", d["key"])
 
     def test_sensitivity_of_the_spec_fields(self):
         emp = sd.field_map(sd.EMPLOYEES)

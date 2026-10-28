@@ -15,8 +15,10 @@ paths (there is deliberately NO permission module for this feature): the decorat
   DELETE /api/shared-endpoints/<id>                   delete it, its keys and origins (the access log is kept)
   GET    /api/shared-endpoints/<id>/keys              {"keys": [...]} (never a key or a hash)
   POST   /api/shared-endpoints/<id>/keys              create a key (201): the ONLY time the plaintext is returned
+                                                      body {label, category, permanent | expiresAt}, see "Keys" below
   DELETE /api/shared-endpoints/<id>/keys/<kid>        revoke a key (immediate; repeating it is a no-op)
-  POST   /api/shared-endpoints/<id>/preview           the first rows exactly as the public call shapes them (no key, no log)
+  POST   /api/shared-endpoints/<id>/preview           the first rows exactly as the public call shapes them (no key, no log);
+                                                      an optional body `category` shows what a key of that category sees
   GET    /api/shared-endpoints/<id>/activity          its access log {"items": [...], "page", "pageSize", "total", "hasMore"}
   GET    /api/shared-endpoints/activity               the same across endpoints (optional ?endpointId=)
   GET    /api/shared-endpoints/<id>/guide             the generated integration guide (data only: the page renders it)
@@ -35,8 +37,22 @@ code "sensitive_confirmation_required" with the field names otherwise) and `expe
 PUT keeps its stored value. Any problem is a 400 {"error": "<one sentence>"} and nothing is saved; a save that changes
 nothing writes nothing (no audit row).
 
+Keys (POST .../keys body, GET .../keys items)
+  {"label": "Website", "category": "staff" | "production", "permanent": true}          a key that never expires
+  {"label": "Website", "category": "production", "expiresAt": "2027-03-31"}           ... or one that stops working
+  * `category` is REQUIRED and is exactly "staff" or "production": the key can only ever read that kind of employee's data
+    (shared_datasets.apply_category, enforced on every public call). Refused (400) when it contradicts the endpoint's locked
+    employmentType filter (such a key would read nothing).
+  * the expiry is EXPLICIT: exactly one of `permanent: true` (a real boolean; stored as expires_at NULL) or `expiresAt` - a
+    date YYYY-MM-DD (the end of that day, factory time) or an ISO date-time (a naive one is factory time) - must be sent;
+    neither or both is a 400. The expiry must be in the future and at most MAX_KEY_LIFETIME_DAYS away.
+  * a key item is {id, label, prefix, category: "staff" | "production" | null, permanent, createdBy, createdAt, expiresAt,
+    revokedAt, lastUsedAt, lastUsedIp, status}. category null = a key made before categories existed: it stays unscoped (sees
+    both kinds) until it is revoked and recreated; new keys can no longer be made without a category.
+
 Audit rows (module `shared_endpoints`; actions create / update / delete / key_create / key_revoke) carry old and new
-values (fields added and removed, origins, limits), the sensitive fields a save added, and NEVER a key or a hash.
+values (fields added and removed, origins, limits), the sensitive fields a save added, the category and permanence of a new
+key, and NEVER a key or a hash.
 """
 
 from __future__ import annotations
@@ -430,6 +446,10 @@ def _key_json(key: SharedEndpointKey) -> dict:
         "id": key.id,
         "label": key.label,
         "prefix": key.prefix,
+        # None = a key made before categories existed: unscoped (sees both kinds of data)
+        "category": key.category or None,
+        # True = never expires (expires_at is NULL)
+        "permanent": key.expires_at is None,
         "createdBy": key.created_by,
         "createdAt": _iso(key.created_at),
         "expiresAt": _iso(key.expires_at),
@@ -720,9 +740,13 @@ def _delete(request: Request, pk: int) -> Response:
 # ── keys ────────────────────────────────────────────────────────────────────
 
 
-def _parse_expiry(raw) -> datetime | None:
-    if raw is None or raw == "":
-        return None
+KEY_EXPIRY_CHOICE = "Choose when the key expires, or make it a permanent key."
+KEY_CATEGORY_CHOICE = "Choose which data this key may read: Staff or Production."
+
+
+def _parse_expiry(raw) -> datetime:
+    """The moment a key stops working, from `expiresAt`: a date YYYY-MM-DD (the END of that day, factory time) or an ISO
+    date-time (with an offset, or naive = factory time). In the future and at most MAX_KEY_LIFETIME_DAYS away."""
     if not isinstance(raw, str):
         raise ManageError("The expiry must be a date or date and time, for example 2027-03-31.")
     text = raw.strip()
@@ -733,7 +757,7 @@ def _parse_expiry(raw) -> datetime | None:
             when = datetime.fromisoformat(text)
             if when.tzinfo is None:
                 when = when.replace(tzinfo=FACTORY_TZ)
-    except ValueError:
+    except (ValueError, OverflowError):
         raise ManageError("The expiry must be a date or date and time, for example 2027-03-31.") from None
     now = timezone.now()
     if when <= now:
@@ -741,6 +765,43 @@ def _parse_expiry(raw) -> datetime | None:
     if when > now + timedelta(days=MAX_KEY_LIFETIME_DAYS):
         raise ManageError("The expiry cannot be more than 10 years away.")
     return when
+
+
+def _key_category(data) -> str:
+    """The category of a new key: exactly "staff" or "production" (nothing else, not even "" or "all": every new key is
+    limited to one kind of data)."""
+    raw = data.get("category")
+    if not isinstance(raw, str) or raw not in sd.CATEGORIES:
+        raise ManageError(KEY_CATEGORY_CHOICE)
+    return raw
+
+
+def _key_expiry(data) -> datetime | None:
+    """When a new key expires: None means PERMANENT. The choice must be explicit: exactly one of `permanent: true` or
+    `expiresAt` (a missing, null or empty `expiresAt` counts as not sent; `permanent` must be a real boolean, null = not
+    sent, so a permanent key is only ever made by an explicit `true`)."""
+    permanent = data.get("permanent")
+    if permanent is not None and not isinstance(permanent, bool):
+        raise ManageError("The permanent switch must be true or false.")
+    raw = data.get("expiresAt")
+    dated = raw is not None and raw != ""
+    if permanent is True:
+        if dated:
+            raise ManageError("Choose either an expiry date or a permanent key, not both.")
+        return None
+    if not dated:
+        raise ManageError(KEY_EXPIRY_CHOICE)
+    return _parse_expiry(raw)
+
+
+def _check_category_fits_endpoint(ep: SharedEndpoint, category: str) -> None:
+    """An endpoint locked to one employment type can only be read by a key of that type: the other would see nothing."""
+    locked = (ep.locked_filters or {}).get("employmentType")
+    if locked in sd.CATEGORIES and locked != category:
+        raise ManageError(
+            f"This endpoint is fixed to {locked} data (its locked employment type), so a {category} key would read "
+            f"nothing: make a {locked} key, or change the endpoint's locked filters first."
+        )
 
 
 @management_view("GET", "POST")
@@ -755,11 +816,13 @@ def endpoint_keys(request: Request, pk: int) -> Response:
         return refusal
     try:
         label = _text(data, "label", "The key label", MAX_LABEL, required=True)
-        expires_at = _parse_expiry(data.get("expiresAt"))
+        category = _key_category(data)
+        expires_at = _key_expiry(data)  # None = a permanent key
         with transaction.atomic():
             ep = SharedEndpoint.objects.select_for_update().filter(pk=pk).first()  # serialises concurrent creates
             if ep is None:
                 return _not_found()
+            _check_category_fits_endpoint(ep, category)
             if SharedEndpointKey.objects.filter(endpoint=ep).filter(_live_key_q()).count() >= MAX_LIVE_KEYS:
                 raise ManageError(
                     f"An endpoint can have at most {MAX_LIVE_KEYS} live keys: revoke one you no longer use."
@@ -771,6 +834,7 @@ def endpoint_keys(request: Request, pk: int) -> Response:
                 prefix=prefix,
                 key_hash=digest,
                 created_by=_actor(request),
+                category=category,
                 expires_at=expires_at,
             )
     except ManageError as exc:
@@ -780,8 +844,16 @@ def endpoint_keys(request: Request, pk: int) -> Response:
         "key_create",
         AUDIT_MODULE,
         record_id=ep.id,
-        description=f"Created API key '{label}' ({prefix}...) for shared endpoint '{ep.slug}'",
-        new_values={"endpoint": ep.slug, "label": label, "prefix": prefix, "expiresAt": _iso(expires_at)},
+        description=f"Created API key '{label}' ({prefix}...) for shared endpoint '{ep.slug}': {category} data, "
+        + ("permanent" if expires_at is None else f"expires {_iso(expires_at)}"),
+        new_values={
+            "endpoint": ep.slug,
+            "label": label,
+            "prefix": prefix,
+            "category": category,
+            "permanent": expires_at is None,
+            "expiresAt": _iso(expires_at),
+        },
     )
     response = Response({**_key_json(key), "key": plaintext}, status=201)
     response["Cache-Control"] = "no-store"
@@ -822,7 +894,9 @@ def endpoint_key_detail(request: Request, pk: int, kid: int) -> Response:
 def endpoint_preview(request: Request, pk: int) -> Response:
     """The first rows exactly as the public call would shape them (selected fields only, locked filters applied). No key,
     no access-log row, no CORS. The REQUIRED filters nobody gave are filled with a recent window so the page has something
-    to show; `meta.filters` says what was used."""
+    to show; `meta.filters` says what was used. An optional `category` ("staff" | "production") restricts the rows exactly
+    as a key of that category is restricted on the public call (`meta.category` echoes it); without it the preview shows
+    the endpoint unscoped, as before."""
     ep = SharedEndpoint.objects.filter(pk=pk).first()
     if ep is None:
         return _not_found()
@@ -834,6 +908,9 @@ def endpoint_preview(request: Request, pk: int) -> Response:
         return _bad(ManageError("This endpoint uses a data set that no longer exists."))
     try:
         limit = _int(data, "limit", "The limit", 1, 5) or 5
+        category = data.get("category")  # None = not sent: unscoped
+        if category is not None and (not isinstance(category, str) or category not in sd.CATEGORIES):
+            raise ManageError("The preview category must be staff or production.")
         raw = data.get("filters")
         if raw is None:
             raw = {}
@@ -852,7 +929,7 @@ def endpoint_preview(request: Request, pk: int) -> Response:
     except sd.FilterError as exc:
         return Response({"error": exc.message, "parameter": exc.param}, status=400)
     fields = sd.effective_fields(dataset, ep.fields)
-    queryset = sd.build_queryset(dataset, values, fields)
+    queryset = sd.apply_category(dataset, sd.build_queryset(dataset, values, fields), category)
     total = queryset.count()
     rows = sd.shape_rows(dataset, fields, queryset[:limit])
     cap, _default = paging_limits(ep, dataset)
@@ -862,6 +939,7 @@ def endpoint_preview(request: Request, pk: int) -> Response:
             "meta": {
                 "endpoint": ep.slug,
                 "dataset": dataset.key,
+                "category": category,
                 "fields": fields,
                 "page": 1,
                 "pageSize": limit,
@@ -1037,6 +1115,7 @@ def _guide(request: Request, ep: SharedEndpoint) -> dict:
         "meta": {
             "endpoint": ep.slug,
             "dataset": dataset.key,
+            "category": "staff",
             "fields": fields,
             "page": 1,
             "pageSize": default,
@@ -1148,6 +1227,8 @@ def _guide(request: Request, ep: SharedEndpoint) -> dict:
             "origins": sorted(ep.origins.values_list("origin", flat=True)),
             "allowNoOrigin": ep.allow_no_origin,
             "notes": [
+                "Every API key is limited to ONE category of data, Staff or Production, chosen when the key is made (meta.category says which). The key only ever returns that category's rows, whatever parameters are sent: asking for the other category returns nothing, and meta.total counts only the key's own category. Departments, branches and designations list only those that have employees of the category; the holiday calendar is the same for both. An older key made before categories existed returns both (meta.category is null): revoke it and make a new one to limit it.",
+                "A key either has an expiry date and time, after which it stops working (401), or is permanent and works until it is revoked.",
                 "Origins protect browsers only: a script outside a browser can send any Origin header. The API key is what protects the data.",
                 "Never put the key in a web page's source: anyone can read it. Call from your own server and pass the data on.",
             ],

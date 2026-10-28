@@ -110,10 +110,22 @@ def make_endpoint(slug="hr-people", dataset="employees", fields=None, origins=()
     return ep
 
 
-def make_key(ep, label="Website", **kw) -> tuple[str, SharedEndpointKey]:
+def make_key(ep, label="Website", category="", **kw) -> tuple[str, SharedEndpointKey]:
+    """A key row made directly. category="" (the default) is a LEGACY key, made before categories existed: unscoped."""
     plaintext, prefix, digest = pub.generate_key()
-    row = SharedEndpointKey.objects.create(endpoint=ep, label=label, prefix=prefix, key_hash=digest, **kw)
+    row = SharedEndpointKey.objects.create(
+        endpoint=ep, label=label, prefix=prefix, key_hash=digest, category=category, **kw
+    )
     return plaintext, row
+
+
+def key_body(label="Website", category="staff", **extra) -> dict:
+    """A VALID body for POST /api/shared-endpoints/<id>/keys: a permanent key of `category`, unless the call names its own
+    expiry (expiresAt=...) or its own `permanent` value."""
+    body = {"label": label, "category": category, **extra}
+    if "expiresAt" not in extra and "permanent" not in extra:
+        body["permanent"] = True
+    return body
 
 
 def key_headers(key: str, origin: str | None = None) -> dict:
@@ -177,8 +189,9 @@ class EndpointLookupTests(PublicBase):
         self.assertEqual(set(body), {"data", "meta"})
         self.assertEqual(
             set(body["meta"]),
-            {"endpoint", "dataset", "fields", "page", "pageSize", "total", "hasMore", "generatedAt"},
+            {"endpoint", "dataset", "category", "fields", "page", "pageSize", "total", "hasMore", "generatedAt"},
         )
+        self.assertIsNone(body["meta"]["category"])  # the fixture key is a legacy one: no category
         self.assertEqual(body["meta"]["endpoint"], "hr-people")
         self.assertEqual(body["meta"]["dataset"], "employees")
         self.assertEqual(body["meta"]["fields"], ["employeeCode", "firstName", "lastName"])
@@ -1249,7 +1262,7 @@ ALL_ROUTES = (
     ("PUT", "/api/shared-endpoints/{id}", {"name": "hacked"}),
     ("DELETE", "/api/shared-endpoints/{id}", None),
     ("GET", "/api/shared-endpoints/{id}/keys", None),
-    ("POST", "/api/shared-endpoints/{id}/keys", {"label": "intruder"}),
+    ("POST", "/api/shared-endpoints/{id}/keys", key_body("intruder")),
     ("DELETE", "/api/shared-endpoints/{id}/keys/{kid}", None),
     ("POST", "/api/shared-endpoints/{id}/preview", {}),
     ("GET", "/api/shared-endpoints/{id}/activity", None),
@@ -1363,6 +1376,8 @@ class CatalogApiTests(ManageBase):
         self.assertEqual(body["limits"]["maxOriginsPerEndpoint"], 20)
         emp = next(d for d in body["datasets"] if d["key"] == "employees")
         self.assertEqual(emp["maxPageSize"], 500)
+        self.assertEqual({d["key"]: d["categoryScope"] for d in body["datasets"]}["holidays"], "neutral")
+        self.assertEqual(emp["categoryScope"], "employee")
         salary = next(f for f in emp["fields"] if f["key"] == "salaryAmount")
         self.assertEqual(salary["sensitivity"], "financial")
         raw = json.dumps(body).lower()
@@ -1810,7 +1825,7 @@ class CreateAndUpdateTests(ManageBase):
             ("GET", "/api/shared-endpoints/999999/guide"),
         ):
             with self.subTest(route=f"{method} {path}"):
-                body = {"label": "x"} if path.endswith("/keys") else {}
+                body = key_body("x") if path.endswith("/keys") else {}
                 self.assertEqual(self.call(method, path, body).status_code, 404)
 
     def test_absurd_ids_are_404_not_a_server_error(self):
@@ -1848,7 +1863,7 @@ class CreateAndUpdateTests(ManageBase):
 
     def test_disabling_takes_effect_on_the_public_route_at_once(self):
         ep = self.make()
-        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", {"label": "k"}).json()["key"]
+        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", key_body("k")).json()["key"]
         self.assertEqual(self.client.get("/api/shared/hr-people", **key_headers(key)).status_code, 200)
         self.put(ep, enabled=False)
         self.assertEqual(self.client.get("/api/shared/hr-people", **key_headers(key)).status_code, 404)
@@ -1857,7 +1872,7 @@ class CreateAndUpdateTests(ManageBase):
 
     def test_deleting_removes_keys_and_origins_but_keeps_the_log(self):
         ep = self.make(origins=[APP])
-        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", {"label": "k"}).json()["key"]
+        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", key_body("k")).json()["key"]
         self.client.get("/api/shared/hr-people", **key_headers(key))
         r = self.call("DELETE", f"/api/shared-endpoints/{ep['id']}")
         self.assertEqual(r.json(), {"deleted": True, "id": ep["id"]})
@@ -1880,13 +1895,13 @@ class KeyApiTests(ManageBase):
         self.ep = self.make()
         self.keys_url = f"/api/shared-endpoints/{self.ep['id']}/keys"
 
-    def new_key(self, label="Website", **extra):
-        r = self.call("POST", self.keys_url, {"label": label, **extra})
+    def new_key(self, label="Website", category="staff", **extra):
+        r = self.call("POST", self.keys_url, key_body(label, category, **extra))
         self.assertEqual(r.status_code, 201, r.content[:300])
         return r.json()
 
     def test_the_plaintext_is_returned_once_and_stored_only_as_a_hash(self):
-        r = self.call("POST", self.keys_url, {"label": "  Intranet   site "})
+        r = self.call("POST", self.keys_url, key_body("  Intranet   site "))
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r["Cache-Control"], "no-store")
         body = r.json()
@@ -1897,6 +1912,7 @@ class KeyApiTests(ManageBase):
         self.assertEqual(
             (body["status"], body["revokedAt"], body["expiresAt"], body["lastUsedAt"]), ("active", None, None, None)
         )
+        self.assertEqual((body["category"], body["permanent"]), ("staff", True))
         row = SharedEndpointKey.objects.get(pk=body["id"])
         self.assertEqual(row.key_hash, hashlib.sha256(key.encode()).hexdigest())
         self.assertEqual(row.prefix, key[4:12])
@@ -1963,7 +1979,7 @@ class KeyApiTests(ManageBase):
 
     def test_a_key_of_another_endpoint_cannot_be_revoked_through_this_one(self):
         other = self.make(slug="other-one")
-        other_key = self.call("POST", f"/api/shared-endpoints/{other['id']}/keys", {"label": "x"}).json()
+        other_key = self.call("POST", f"/api/shared-endpoints/{other['id']}/keys", key_body("x")).json()
         r = self.call("DELETE", f"{self.keys_url}/{other_key['id']}")
         self.assertEqual(r.status_code, 404)
         self.assertIsNone(SharedEndpointKey.objects.get(pk=other_key["id"]).revoked_at)
@@ -1972,7 +1988,7 @@ class KeyApiTests(ManageBase):
     def test_the_label_is_required_and_bounded(self):
         for label in (None, "", "   ", 5, "x" * 101, "a\x00b"):
             with self.subTest(label=label):
-                self.assertEqual(self.call("POST", self.keys_url, {"label": label}).status_code, 400)
+                self.assertEqual(self.call("POST", self.keys_url, key_body(label)).status_code, 400)
         self.assertEqual(self.call("POST", self.keys_url, {}).status_code, 400)
         self.assertEqual(SharedEndpointKey.objects.count(), 0)
 
@@ -1980,11 +1996,10 @@ class KeyApiTests(ManageBase):
         tomorrow = (timezone.now() + timedelta(days=30)).date().isoformat()
         body = self.new_key("Dated", expiresAt=tomorrow)
         self.assertTrue(body["expiresAt"].endswith("23:59:59+05:30"), body["expiresAt"])
+        self.assertFalse(body["permanent"])
         body = self.new_key("Timed", expiresAt=(timezone.now() + timedelta(hours=2)).isoformat())
         self.assertEqual(body["status"], "active")
         self.new_key("Zulu", expiresAt=(timezone.now() + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        self.new_key("Blank", expiresAt="")
-        self.new_key("Null", expiresAt=None)
         for bad in (
             "2020-01-01",
             (timezone.now() - timedelta(minutes=1)).isoformat(),
@@ -1996,7 +2011,7 @@ class KeyApiTests(ManageBase):
             "٢٠٣٠-٠١-٠١",
         ):
             with self.subTest(expires=bad):
-                r = self.call("POST", self.keys_url, {"label": "bad", "expiresAt": bad})
+                r = self.call("POST", self.keys_url, key_body("bad", expiresAt=bad))
                 self.assertEqual(r.status_code, 400, r.content[:200])
                 self.assertTrue(r.json()["error"].endswith("."))
 
@@ -2008,7 +2023,7 @@ class KeyApiTests(ManageBase):
 
     def test_ten_live_keys_are_the_limit_and_revoked_or_expired_ones_do_not_count(self):
         bodies = [self.new_key(f"K{i}") for i in range(10)]
-        r = self.call("POST", self.keys_url, {"label": "eleventh"})
+        r = self.call("POST", self.keys_url, key_body("eleventh"))
         self.assertEqual(r.status_code, 400)
         self.assertIn("10", r.json()["error"])
         self.assertEqual(SharedEndpointKey.objects.count(), 10)
@@ -2016,11 +2031,9 @@ class KeyApiTests(ManageBase):
         self.new_key("replacement")
         SharedEndpointKey.objects.filter(pk=bodies[1]["id"]).update(expires_at=timezone.now() - timedelta(seconds=1))
         self.new_key("another")
-        self.assertEqual(self.call("POST", self.keys_url, {"label": "again"}).status_code, 400)
+        self.assertEqual(self.call("POST", self.keys_url, key_body("again")).status_code, 400)
         other = self.make(slug="other-one")
-        self.assertEqual(
-            self.call("POST", f"/api/shared-endpoints/{other['id']}/keys", {"label": "x"}).status_code, 201
-        )
+        self.assertEqual(self.call("POST", f"/api/shared-endpoints/{other['id']}/keys", key_body("x")).status_code, 201)
 
     def test_the_list_is_newest_first_with_status_and_never_a_secret(self):
         a = self.new_key("A")
@@ -2034,6 +2047,8 @@ class KeyApiTests(ManageBase):
                 "id",
                 "label",
                 "prefix",
+                "category",
+                "permanent",
                 "createdBy",
                 "createdAt",
                 "expiresAt",
@@ -2071,7 +2086,7 @@ class PreviewApiTests(ManageBase):
         self.assertTrue(body["meta"]["preview"])
         self.assertEqual(body["meta"]["total"], 1)
         self.assertNotIn("CANARY", r.content.decode())
-        key = self.call("POST", f"/api/shared-endpoints/{self.ep['id']}/keys", {"label": "k"}).json()["key"]
+        key = self.call("POST", f"/api/shared-endpoints/{self.ep['id']}/keys", key_body("k")).json()["key"]
         public = self.client.get("/api/shared/hr-people", **key_headers(key)).json()
         self.assertEqual(public["data"], body["data"])
 
@@ -2138,9 +2153,9 @@ class ActivityApiTests(ManageBase):
         super().setUp()
         self.ep = self.make(origins=[APP])
         self.other = self.make(slug="other-one", fields=["employeeCode"])
-        body = self.call("POST", f"/api/shared-endpoints/{self.ep['id']}/keys", {"label": "Site"}).json()
+        body = self.call("POST", f"/api/shared-endpoints/{self.ep['id']}/keys", key_body("Site")).json()
         self.key, self.prefix = body["key"], body["prefix"]
-        okey = self.call("POST", f"/api/shared-endpoints/{self.other['id']}/keys", {"label": "Other"}).json()["key"]
+        okey = self.call("POST", f"/api/shared-endpoints/{self.other['id']}/keys", key_body("Other")).json()["key"]
         self.client.get("/api/shared/hr-people", **key_headers(self.key, APP))
         self.client.get("/api/shared/hr-people", **key_headers("uks_abcdefgh_" + "A" * 43))
         self.client.get("/api/shared/hr-people?bogus=1", **key_headers(self.key))
@@ -2215,7 +2230,7 @@ class GuideApiTests(ManageBase):
             origins=[APP],
             acknowledgeSensitive=True,
         )
-        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", {"label": "k"}).json()["key"]
+        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", key_body("k")).json()["key"]
         r = self.call("GET", f"/api/shared-endpoints/{ep['id']}/guide")
         self.assertEqual(r.status_code, 200)
         g = r.json()
@@ -2274,7 +2289,7 @@ class GuideApiTests(ManageBase):
         self.assertIn("dateFrom=", g["examples"]["curl"])
         self.assertIn("dateTo=", g["examples"]["javascript"])
         # the example the guide gives is itself a valid call
-        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", {"label": "k"}).json()["key"]
+        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", key_body("k")).json()["key"]
         url = re.search(r'"(http://testserver[^"]+)"', g["examples"]["curl"]).group(1)
         r = self.client.get(url.replace("http://testserver", ""), **key_headers(key))
         self.assertEqual(r.status_code, 200, r.content[:200])
@@ -2291,10 +2306,10 @@ class ListAndAuditTests(ManageBase):
     def test_the_list_carries_counts(self):
         a = self.make(origins=[APP, "http://localhost:5173"])
         b = self.make(slug="other-one", fields=["employeeCode"])
-        key = self.call("POST", f"/api/shared-endpoints/{a['id']}/keys", {"label": "k"}).json()
-        self.call("POST", f"/api/shared-endpoints/{a['id']}/keys", {"label": "k2"})
+        key = self.call("POST", f"/api/shared-endpoints/{a['id']}/keys", key_body("k")).json()
+        self.call("POST", f"/api/shared-endpoints/{a['id']}/keys", key_body("k2"))
         self.call("DELETE", f"/api/shared-endpoints/{a['id']}/keys/{key['id']}")
-        k3 = self.call("POST", f"/api/shared-endpoints/{a['id']}/keys", {"label": "k3"}).json()["key"]
+        k3 = self.call("POST", f"/api/shared-endpoints/{a['id']}/keys", key_body("k3")).json()["key"]
         self.client.get("/api/shared/hr-people", **key_headers(k3))
         self.client.get("/api/shared/hr-people", **key_headers(k3))
         body = self.call("GET", "/api/shared-endpoints").json()
@@ -2319,7 +2334,7 @@ class ListAndAuditTests(ManageBase):
             self.call("GET", "/api/shared-endpoints")
         for i in range(14):
             ep = self.make(slug=f"bulk-{i:02d}", fields=["employeeCode"], origins=[APP])
-            self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", {"label": "k"})
+            self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", key_body("k"))
         with CaptureQueriesContext(connection) as many:
             self.assertEqual(len(self.call("GET", "/api/shared-endpoints").json()["endpoints"]), 15)
         self.assertEqual(len(few), len(many))
@@ -2329,7 +2344,7 @@ class ListAndAuditTests(ManageBase):
         for action in ("create", "update", "delete", "key_create", "key_revoke"):
             self.assertIn(action, dict(AUDIT_ACTIONS))
         ep = self.make()
-        k = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", {"label": "k"}).json()
+        k = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", key_body("k")).json()
         self.put(ep, name="Renamed")
         self.call("DELETE", f"/api/shared-endpoints/{ep['id']}/keys/{k['id']}")
         self.call("DELETE", f"/api/shared-endpoints/{ep['id']}")
@@ -2346,7 +2361,7 @@ class ListAndAuditTests(ManageBase):
 
     def test_audit_rows_never_contain_a_key_or_a_hash(self):
         ep = self.make(origins=[APP])
-        k = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", {"label": "k"}).json()
+        k = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", key_body("k")).json()
         self.call("DELETE", f"/api/shared-endpoints/{ep['id']}/keys/{k['id']}")
         digest = hashlib.sha256(k["key"].encode()).hexdigest()
         for log in self.audits():
@@ -2371,7 +2386,7 @@ class EndToEndTests(ManageBase):
             acknowledgeSensitive=True,
             pageSizeDefault=10,
         )
-        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", {"label": "Intranet"}).json()
+        key = self.call("POST", f"/api/shared-endpoints/{ep['id']}/keys", key_body("Intranet")).json()
         url = "/api/shared/people-feed"
         self.assertEqual(self.client.get(url).status_code, 401)  # no key
         r = self.client.get(url, **key_headers(key["key"], "https://intranet.example.com"))
@@ -2430,7 +2445,7 @@ class ConcurrencyTests(TransactionTestCase):
         for i in range(8):
             make_key(self.ep, f"K{i}")
         url = f"/api/shared-endpoints/{self.ep.id}/keys"
-        body = json.dumps({"label": "race"})
+        body = json.dumps(key_body("race"))
         results = self.run_threads(
             [
                 lambda: Client().post(url, body, content_type="application/json", **self.admin).status_code

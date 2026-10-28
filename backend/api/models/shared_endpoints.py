@@ -4,7 +4,9 @@ Four tables (all new, nothing existing is touched):
   SharedEndpoint            one public address /api/shared/<slug>, the dataset it serves, the exact field list, locked
                             filters and limits
   SharedEndpointOrigin      the browser origins allowed to call it
-  SharedEndpointKey         its API keys: ONLY the SHA-256 of a key is stored, the key itself never is
+  SharedEndpointKey         its API keys: ONLY the SHA-256 of a key is stored, the key itself never is. A key carries a
+                            data CATEGORY (staff | production) that every call is restricted to, and either an expiry
+                            moment or none (a permanent key)
   SharedEndpointAccessLog   one row per call (90 days), the audit trail of what left the system
 
 The behaviour lives in api/shared_endpoint_views.py (public call), api/shared_endpoint_admin_views.py (management) and
@@ -64,6 +66,12 @@ class SharedEndpointKey(models.Model):
     key_hash = models.CharField(max_length=64, unique=True)
     created_by = models.CharField(max_length=150, blank=True, default="")
     created_at = models.DateTimeField(default=timezone.now)
+    #: the kind of employee this key may read: "staff" or "production" (Employee.employment_type), ENFORCED on every call
+    #: (shared_datasets.apply_category). "" = a key made before categories existed: it stays unscoped (sees both) so no
+    #: running integration breaks, and HR is told to revoke and recreate it. New keys always carry one of the two.
+    #: db_default so the previous release (which does not know the column) can still insert a key during a rolling deploy.
+    category = models.CharField(max_length=12, blank=True, default="", db_default="")
+    #: NULL = a permanent key (never expires, until revoked); otherwise the moment it stops working
     expires_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
     last_used_at = models.DateTimeField(null=True, blank=True)

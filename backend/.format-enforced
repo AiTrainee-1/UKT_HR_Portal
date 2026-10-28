@@ -319,6 +319,7 @@ api/shared_endpoint_views.py
 api/shared_endpoint_admin_views.py
 api/tests_shared_endpoints.py
 api/tests_shared_datasets.py
+api/tests_shared_categories.py
 api/models/sms.py
 api/twofactor_client.py
 api/tests_twofactor.py
