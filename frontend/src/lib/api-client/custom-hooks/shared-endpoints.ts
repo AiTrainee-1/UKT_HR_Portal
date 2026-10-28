@@ -118,6 +118,9 @@ export type SharedEndpointInput = {
 
 export type SharedKeyStatus = "active" | "revoked" | "expired";
 
+/** Which employees' data a key may read. A key made before categories existed has none (`null`): it reads everything. */
+export type SharedKeyCategory = "staff" | "production";
+
 export type SharedKey = {
   id: number;
   label: string;
@@ -126,6 +129,10 @@ export type SharedKey = {
   createdAt: string | null;
   createdBy: string | null;
   expiresAt: string | null;
+  /** True for a key that never expires (it works until it is revoked). */
+  permanent: boolean;
+  /** The data the key is limited to, or null for an older key that reads both categories. */
+  category: SharedKeyCategory | null;
   revokedAt: string | null;
   lastUsedAt: string | null;
   lastUsedIp: string | null;
@@ -376,7 +383,8 @@ export function readKey(raw: unknown): SharedKey {
     lastUsedAt: strOrNull(r.lastUsedAt),
     lastUsedIp: strOrNull(r.lastUsedIp),
   };
-  return { ...base, status: keyStatus(base) };
+  const category = r.category === "staff" || r.category === "production" ? r.category : null;
+  return { ...base, permanent: base.expiresAt === null, category, status: keyStatus(base) };
 }
 
 export function readPreview(raw: unknown): SharedPreview {
@@ -614,7 +622,13 @@ export const useCreateSharedKey = (id: number) => {
   const queryClient = useQueryClient();
   const refresh = useRefresh();
   return useMutation({
-    mutationFn: async (body: { label: string; expiresAt?: string | null }): Promise<SharedKeyCreated> => {
+    // `category` is required; exactly one of `permanent: true` and `expiresAt` (a date and time) says when the key stops
+    mutationFn: async (body: {
+      label: string;
+      category: SharedKeyCategory;
+      permanent?: boolean;
+      expiresAt?: string;
+    }): Promise<SharedKeyCreated> => {
       const raw = await customFetch<unknown>(`${PATH}/${id}/keys`, { method: "POST", body: JSON.stringify(body) });
       const r = isObj(raw) ? (isObj(raw.apiKey) ? raw.apiKey : raw) : {};
       const secret = str(first(isObj(raw) ? raw.key : undefined, r.key, r.secret));
@@ -646,7 +660,7 @@ export const useRevokeSharedKey = (id: number) => {
 /** The first rows exactly as the public call would send them (saved fields and locked filters). Reads, never writes. */
 export const usePreviewSharedEndpoint = (id: number) =>
   useMutation({
-    mutationFn: async (body: { limit: number; filters?: Record<string, string> }) =>
+    mutationFn: async (body: { limit: number; filters?: Record<string, string>; category?: SharedKeyCategory }) =>
       readPreview(await customFetch<unknown>(`${PATH}/${id}/preview`, { method: "POST", body: JSON.stringify(body) })),
   });
 

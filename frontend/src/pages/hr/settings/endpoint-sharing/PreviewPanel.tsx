@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { Loader2, Table2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { usePreviewSharedEndpoint, type SharedDataset, type SharedEndpoint } from "@/lib/api-client/custom-hooks";
+import {
+  usePreviewSharedEndpoint,
+  type SharedDataset,
+  type SharedEndpoint,
+  type SharedKeyCategory,
+} from "@/lib/api-client/custom-hooks";
 import { saveErrorText } from "../payroll/form";
 import { FilterValueBox } from "./LockedFilters";
 import { Notice, ScrollTable, TD, TH } from "./ui";
@@ -27,6 +32,8 @@ export function PreviewPanel({
 }) {
   const preview = usePreviewSharedEndpoint(saved?.id ?? 0);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  // "" = the endpoint as it is saved; a category = what a key of that category would be given
+  const [asCategory, setAsCategory] = useState<SharedKeyCategory | "">("");
 
   if (!saved) {
     return (
@@ -46,7 +53,11 @@ export function PreviewPanel({
       const text = (filters[f.key] ?? "").trim();
       if (text !== "") chosen[f.key] = text;
     }
-    preview.mutate({ limit: 5, ...(Object.keys(chosen).length > 0 ? { filters: chosen } : {}) });
+    preview.mutate({
+      limit: 5,
+      ...(Object.keys(chosen).length > 0 ? { filters: chosen } : {}),
+      ...(asCategory !== "" ? { category: asCategory } : {}),
+    });
   };
 
   const error = preview.isError ? (saveErrorText(preview.error) ?? "The preview could not be loaded.") : null;
@@ -59,6 +70,25 @@ export function PreviewPanel({
           The preview shows the saved endpoint. Save your changes to see them here.
         </Notice>
       )}
+      <div className="space-y-1">
+        <label htmlFor="es-preview-category" className="text-xs font-semibold text-gray-700">
+          Preview as
+        </label>
+        <select
+          id="es-preview-category"
+          value={asCategory}
+          onChange={(e) => setAsCategory(e.target.value as SharedKeyCategory | "")}
+          className="h-9 w-full rounded-md border border-input bg-white px-3 text-sm sm:max-w-xs"
+          data-testid="preview-category"
+        >
+          <option value="">The endpoint as saved (no key limit)</option>
+          <option value="staff">A Staff key (staff employees only)</option>
+          <option value="production">A Production key (production employees only)</option>
+        </select>
+        <p className="text-xs text-slate-500">
+          A key only ever reads the category it was made for. Pick one to see exactly what that key would receive.
+        </p>
+      </div>
       {open.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2">
           {open.map((f) => (

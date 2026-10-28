@@ -107,6 +107,8 @@ test("the super admin makes an endpoint, a key and a public call that returns on
 
     // 5. a key: the whole key is shown once
     await page.locator("#es-key-label").fill("E2E key");
+    await page.getByTestId("key-category-staff").check();
+    await page.getByTestId("key-expiry-permanent").check();
     await page.getByTestId("key-create").click();
     await expect(page.getByTestId("key-reveal")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("key-reveal")).toContainText("it is never shown again");
@@ -283,5 +285,130 @@ test("the tab fits a 390 px screen without sideways scrolling", async ({ page })
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(overflow, `${sub}: the page does not scroll sideways`).toBeLessThanOrEqual(1);
+  }
+});
+
+test("a key reads only its own category, and a permanent key and a dated key are told apart", async ({ page }) => {
+  test.setTimeout(180_000);
+  const token = await ready(page);
+  const slug = `e2e-categories-${stamp()}`;
+  let endpointId: number | null = null;
+  try {
+    // the e2e database holds staff employees only, so a Staff key sees them and a Production key sees nobody
+    const made = await api(
+      page,
+      "POST",
+      "/api/shared-endpoints",
+      {
+        name: "E2E categories",
+        slug,
+        dataset: "employees",
+        fields: ["employeeCode", "employmentType"],
+        allowNoOrigin: true,
+        lockedFilters: { status: "all" },
+      },
+      token,
+    );
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    endpointId = Number((made.body as { id: number }).id);
+    const keysUrl = `/api/shared-endpoints/${endpointId}/keys`;
+
+    // a key needs a category and an explicit expiry mode
+    expect((await api(page, "POST", keysUrl, { label: "none" }, token)).status).toBe(400);
+    expect((await api(page, "POST", keysUrl, { label: "x", category: "all", permanent: true }, token)).status).toBe(
+      400,
+    );
+    expect((await api(page, "POST", keysUrl, { label: "x", category: "staff" }, token)).status).toBe(400);
+    const both = { label: "x", category: "staff", permanent: true, expiresAt: `${new Date().getFullYear() + 1}-01-01` };
+    expect((await api(page, "POST", keysUrl, both, token)).status).toBe(400);
+
+    const staff = await api(page, "POST", keysUrl, { label: "Staff app", category: "staff", permanent: true }, token);
+    const year = new Date().getFullYear() + 1;
+    const dated = { label: "Production app", category: "production", expiresAt: `${year}-03-31T14:30` };
+    const production = await api(page, "POST", keysUrl, dated, token);
+    expect(staff.status).toBe(201);
+    expect(production.status).toBe(201);
+    expect(staff.body).toMatchObject({ category: "staff", permanent: true, expiresAt: null });
+    expect(production.body).toMatchObject({ category: "production", permanent: false });
+    expect(String((production.body as { expiresAt: string }).expiresAt)).toContain(`${year}-03-31T14:30`);
+
+    const call = async (key: string, query = "") =>
+      page.request.get(`/api/shared/${slug}${query}`, { headers: { Authorization: `Bearer ${key}` } });
+    type Reply = { data: { employmentType: string }[]; meta: { category: string; total: number } };
+
+    const asStaff = await call((staff.body as { key: string }).key);
+    expect(asStaff.status()).toBe(200);
+    const staffBody = (await asStaff.json()) as Reply;
+    expect(staffBody.meta.category).toBe("staff");
+    expect(staffBody.meta.total).toBeGreaterThan(0);
+    for (const row of staffBody.data) expect(row.employmentType).toBe("staff");
+
+    const asProduction = await call((production.body as { key: string }).key);
+    expect(asProduction.status()).toBe(200);
+    const productionBody = (await asProduction.json()) as Reply;
+    expect(productionBody.meta.category).toBe("production");
+    expect(productionBody.meta.total).toBe(0);
+    expect(productionBody.data).toEqual([]);
+
+    // asking for the other category in the query string never widens a key
+    const widened = await call((production.body as { key: string }).key, "?employmentType=staff");
+    expect(((await widened.json()) as Reply).meta.total).toBe(0);
+
+    // the list says which is which, and a preview as a category follows the same rule
+    const listed = (await api(page, "GET", keysUrl, undefined, token)).body as {
+      keys: { label: string; category: string; permanent: boolean }[];
+    };
+    expect(listed.keys.find((k) => k.label === "Staff app")).toMatchObject({ category: "staff", permanent: true });
+    expect(listed.keys.find((k) => k.label === "Production app")).toMatchObject({
+      category: "production",
+      permanent: false,
+    });
+    const previewUrl = `/api/shared-endpoints/${endpointId}/preview`;
+    const asProductionPreview = await api(page, "POST", previewUrl, { limit: 5, category: "production" }, token);
+    expect(asProductionPreview.status).toBe(200);
+    expect(JSON.stringify(asProductionPreview.body)).not.toContain('"staff"');
+    expect((await api(page, "POST", previewUrl, { limit: 5, category: "all" }, token)).status).toBe(400);
+  } finally {
+    if (endpointId !== null) await api(page, "DELETE", `/api/shared-endpoints/${endpointId}`, undefined, token);
+  }
+});
+
+test("the key form asks for the data category and for when the key stops, and shows both on the key", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const token = await ready(page);
+  const slug = `e2e-keyform-${stamp()}`;
+  let endpointId: number | null = null;
+  try {
+    const made = await api(
+      page,
+      "POST",
+      "/api/shared-endpoints",
+      { name: "E2E key form", slug, dataset: "departments", fields: ["name"] },
+      token,
+    );
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    endpointId = Number((made.body as { id: number }).id);
+    await page.goto(`/hr/settings/endpoint_sharing?sub=endpoints&endpoint=${endpointId}&section=access`);
+    await expect(page.getByTestId("key-form")).toBeVisible({ timeout: 30_000 });
+
+    await page.locator("#es-key-label").fill("Form key");
+    await page.getByTestId("key-create").click();
+    await expect(page.getByTestId("key-error")).toContainText("Choose which data the key may read");
+    await page.getByTestId("key-category-production").check();
+    await page.getByTestId("key-create").click();
+    await expect(page.getByTestId("key-error")).toContainText("Choose the date and time");
+
+    await page.getByTestId("key-expiry-permanent").check();
+    await expect(page.locator("#es-key-expires")).toBeDisabled();
+    await page.getByTestId("key-create").click();
+    await expect(page.getByTestId("key-reveal")).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("key-hide").click();
+    const row = page.getByTestId("key-row");
+    await expect(row).toContainText("Production data only");
+    await expect(row).toContainText("Permanent (never expires)");
+  } finally {
+    if (endpointId !== null) await api(page, "DELETE", `/api/shared-endpoints/${endpointId}`, undefined, token);
   }
 });

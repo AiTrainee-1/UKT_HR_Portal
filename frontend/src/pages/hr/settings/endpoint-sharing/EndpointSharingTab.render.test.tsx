@@ -460,6 +460,15 @@ describe("Data", () => {
     expect(q("preview-saved-note")).not.toBeNull();
   });
 
+  it("previews what a key of one category would receive, and sends nothing extra when none is chosen", async () => {
+    await openEndpoint(3, "data");
+    expect((q("preview-category") as HTMLSelectElement).value).toBe("");
+    await choose("#es-preview-category", "production");
+    await clickId("preview-run");
+    await waitFor(() => world.previews.length === 1, "the preview request");
+    expect(world.previews[0]).toEqual({ limit: 5, category: "production" });
+  });
+
   it("sends the filters of the preview that nobody locked", async () => {
     await openEndpoint(4, "data");
     // status is locked, so only the department box is offered
@@ -754,7 +763,7 @@ describe("Access: API keys", () => {
     expect(text(row)).toContain("Intranet server");
     expect(text(row)).toContain("uks_abcd1234...");
     expect(text(row)).toContain("Active");
-    expect(text(row)).toContain("Never"); // expiry
+    expect(text(row)).toContain("Permanent (never expires)"); // expiry
     expect(text(q("keys-table"))).not.toContain(SECRET_KEY);
     expect(text(q("keys-immediate"))).toContain("do not wait for Save");
     expect(text(q("keys-panel"))).toContain("1 of 10 live keys");
@@ -802,13 +811,23 @@ describe("Access: API keys", () => {
     expect(world.writes).toEqual([]);
 
     await typeAt("#es-key-label", "Payroll tool");
+    // nothing is chosen for the person: the data the key reads (Staff or Production) and when it stops are asked for
+    await clickId("key-create");
+    expect(text(q("key-error"))).toContain("Choose which data the key may read");
+    expect(world.writes).toEqual([]);
+    await clickId("key-category-staff");
+    await clickId("key-create");
+    expect(text(q("key-error"))).toContain("Choose the date and time the key expires");
+    expect(world.writes).toEqual([]);
+    await clickId("key-expiry-permanent");
     await clickId("key-create");
     await waitFor(() => q("key-reveal") !== null, "the key box");
     expect(lastWrite()).toMatchObject({
       method: "POST",
       url: "/api/shared-endpoints/3/keys",
-      body: { label: "Payroll tool", expiresAt: null },
+      body: { label: "Payroll tool", category: "staff", permanent: true },
     });
+    expect(lastWrite().body).not.toHaveProperty("expiresAt");
     const box = q("key-reveal")!;
     expect(text(box)).toContain("copy it now, it is never shown again");
     expect(text(box)).toContain("Never put it in a web page");
@@ -818,7 +837,12 @@ describe("Access: API keys", () => {
     await waitFor(() => all("key-row").length === 2, "the new key in the list");
     expect(text(all("key-row")[0])).toContain("Payroll tool");
     expect(text(all("key-row")[0])).toContain("uks_wxyz9876...");
+    expect(text(all("key-row")[0])).toContain("Staff data only");
+    expect(text(all("key-row")[0])).toContain("Permanent (never expires)");
     expect((css("#es-key-label") as HTMLInputElement).value).toBe("");
+    // the form is reset: nothing is chosen again
+    expect((q("key-category-staff") as HTMLInputElement).checked).toBe(false);
+    expect((q("key-expiry-date") as HTMLInputElement).checked).toBe(true);
 
     // "I have copied it" hides it for good
     await clickId("key-hide");
@@ -836,6 +860,8 @@ describe("Access: API keys", () => {
   it("drops the secret when the person leaves the section without hiding it", async () => {
     await openEndpoint(3, "access");
     await typeAt("#es-key-label", "Temp");
+    await clickId("key-category-production");
+    await clickId("key-expiry-permanent");
     await clickId("key-create");
     await waitFor(() => q("key-reveal") !== null, "the key box");
     await section("guide");
@@ -845,18 +871,30 @@ describe("Access: API keys", () => {
     expect(document.body.textContent).not.toContain(SECRET_KEY);
   });
 
-  it("checks an expiry, sends a date, and stops at ten live keys", async () => {
+  it("checks an expiry, sends a date and time, and stops at ten live keys", async () => {
     await openEndpoint(3, "access");
     await waitFor(() => q("keys-table") !== null, "the keys");
     await typeAt("#es-key-label", "Short lived");
-    await typeAt("#es-key-expires", "2020-01-01");
+    await clickId("key-category-production");
+    await typeAt("#es-key-expires", "2020-01-01T10:00");
     await clickId("key-create");
-    expect(text(q("key-error"))).toContain("after today");
+    expect(text(q("key-error"))).toContain("in the future");
     expect(world.writes).toEqual([]);
-    await typeAt("#es-key-expires", "2027-03-31");
+    await typeAt("#es-key-expires", "2099-03-31T14:30");
+    await clickId("key-create");
+    expect(text(q("key-error"))).toContain("more than 10 years away");
+    expect(world.writes).toEqual([]);
+    const next = `${new Date().getFullYear() + 1}-03-31T14:30`;
+    await typeAt("#es-key-expires", next);
     await clickId("key-create");
     await waitFor(() => q("key-reveal") !== null, "the key box");
-    expect(lastWrite().body).toEqual({ label: "Short lived", expiresAt: "2027-03-31" });
+    expect(lastWrite().body).toEqual({
+      label: "Short lived",
+      category: "production",
+      expiresAt: `${next}:00`,
+    });
+    await waitFor(() => all("key-row").length === 2, "the new key in the list");
+    expect(text(all("key-row")[0])).toContain("Production data only");
     unmount();
 
     world.keys[3] = Array.from({ length: 10 }, (_, i) => ({ ...world.keys[3][0], id: 100 + i, label: `K${i}` }));
@@ -864,6 +902,28 @@ describe("Access: API keys", () => {
     await waitFor(() => q("keys-table") !== null, "the keys");
     expect((q("key-create") as HTMLButtonElement).disabled).toBe(true);
     expect(text(q("keys-panel"))).toContain("10 of 10 live keys. Revoke one before making another.");
+  });
+
+  it("flags a key made before categories as reading all data, and says when a key is permanent", async () => {
+    await openEndpoint(3, "access");
+    await waitFor(() => q("keys-table") !== null, "the keys");
+    const row = all("key-row")[0];
+    expect(text(row)).toContain("All data (older key)");
+    expect(text(row)).toContain("Permanent (never expires)");
+    expect(text(q("key-category-pill"))).toContain("All data (older key)");
+  });
+
+  it("keeps the expiry box for the date choice only, and never sends a date for a permanent key", async () => {
+    await openEndpoint(3, "access");
+    await waitFor(() => q("keys-table") !== null, "the keys");
+    expect((css("#es-key-expires") as HTMLInputElement).disabled).toBe(false);
+    await clickId("key-expiry-permanent");
+    expect((css("#es-key-expires") as HTMLInputElement).disabled).toBe(true);
+    await typeAt("#es-key-label", "Server");
+    await clickId("key-category-production");
+    await clickId("key-create");
+    await waitFor(() => q("key-reveal") !== null, "the key box");
+    expect(lastWrite().body).toEqual({ label: "Server", category: "production", permanent: true });
   });
 
   it("revokes a key only after the question, and the key shows as revoked", async () => {
@@ -911,6 +971,8 @@ describe("Access: API keys", () => {
     });
     await openEndpoint(3, "access");
     await typeAt("#es-key-label", "One");
+    await clickId("key-category-staff");
+    await clickId("key-expiry-permanent");
     await act(async () => {
       must("key-create").click();
     });

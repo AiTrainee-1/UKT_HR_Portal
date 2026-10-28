@@ -38,7 +38,7 @@ export function SettingsNav({
   return (
     <nav
       aria-label="Settings sections"
-      className="settings-glass settings-rail max-lg:sticky max-lg:top-2 max-lg:z-20 lg:sticky lg:top-4 lg:self-start"
+      className="settings-glass settings-rail max-lg:sticky max-lg:top-2 max-lg:z-20 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-3.5rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-width:thin]"
     >
       <div
         role="tablist"

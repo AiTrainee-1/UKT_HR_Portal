@@ -1374,7 +1374,14 @@ Shows the WhatsApp Cloud API connection status (configured entirely via server `
 
 **Allow the websites that may call it.** In the **Access** section, add each website as `https://app.example.com` (no path, no star). You only need this when a web page in a visitor's browser will call the endpoint. If a program on your own server calls it, leave **Calls from your own servers** on and add nothing.
 
-**Create a key.** In **Access → API keys**, give the key a label (the name of the program that will use it) and, if you like, an expiry date. The whole key is shown **once**. Copy it at once and give it to the developer. You cannot see it again; if it is lost, make a new one. Make one key for each program. An endpoint can have up to 10 live keys.
+**Create a key.** In **Access → API keys**, press **New key** and choose three things:
+1. **A label**: the name of the program that will use it.
+2. **Which data it may read: Production or Staff.** This is required. A **Production** key can only read Production employees' data. A **Staff** key can only read Staff employees' data. The two are never mixed: whatever the other program asks for, a Staff key never receives a Production employee's row (and the other way round), and the totals it sees count only its own category. If a program needs both, give it one key of each category. Two details: the lists of **Departments, Branches and Designations** show only the ones that have at least one employee of that category, and the **Holidays** calendar is shared with both, because it is not employee data.
+3. **When it stops working: Expires on a date and time, or Permanent.** An expiring key stops working at the date and time you set (a date alone means the end of that day, factory time; at most 10 years ahead). A **Permanent** key never expires: it works until you revoke it. Use Permanent only for a program you trust and keep running for a long time; otherwise prefer an expiry date.
+
+The whole key is shown **once**. Copy it at once and give it to the developer. You cannot see it again; if it is lost, make a new one. Make one key for each program. An endpoint can have up to 10 live keys. If the endpoint has a locked filter on one kind of employee (for example "only Production employees"), you can only make a key of that same kind.
+
+**Older keys.** Keys made before this feature show **All data (older key)**. They keep working exactly as before and can read both Production and Staff data. They cannot be changed: to limit one, **revoke** it and make a new key with a category.
 
 **Revoke a key.** Press **Revoke** next to it. The key stops working immediately, and this cannot be undone. Make a new key if the program still needs access.
 
@@ -1382,7 +1389,7 @@ Shows the WhatsApp Cloud API connection status (configured entirely via server `
 
 **Read the activity log.** The **Activity** part lists every call: when, the result, which key, which website and which address it came from. It is kept for 90 days. What the results mean:
 - **200** answered.
-- **401** the key was refused (wrong, revoked or expired).
+- **401** the key was refused (wrong, revoked or expired). A Staff key asking for Production data does not get a 401: it gets an empty list.
 - **403** the website is not on the allowed list.
 - **404** the address does not exist, or the endpoint is switched off.
 - **429** too many calls in a minute (the limit is 60 a minute for each key unless you change it).
@@ -1394,7 +1401,7 @@ Many 401 or 403 results you do not recognise mean someone is trying to get in. R
 **The honest security notes**
 - **A key is like a password.** Anyone who has it can read that endpoint's data. Keep it on a server, in a secret setting. Never put it in a web page, a mobile app, an email or a chat.
 - **The list of allowed websites protects browsers only. It is not a password.** A program that is not a browser can pretend to be any website. The key is what protects the data.
-- Share the fewest fields you can. Prefer calls from your own servers. Set an expiry date on keys. Revoke keys you no longer use.
+- Share the fewest fields you can. Prefer calls from your own servers. Choose the category (Production or Staff) the program really needs. Set an expiry date on keys unless a Permanent key is truly needed. Revoke keys you no longer use.
 - **Integration guide.** A developer can read how to call an endpoint (address, key, parameters, answers, errors and example code in six languages) in the **Integration guide** part, and in each endpoint's **Guide** section.
 
 ---

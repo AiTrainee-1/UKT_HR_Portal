@@ -210,6 +210,8 @@ export type ServerKey = {
   createdBy: string;
   createdAt: string;
   expiresAt: string | null;
+  permanent: boolean;
+  category: "staff" | "production" | null;
   revokedAt: string | null;
   lastUsedAt: string | null;
   lastUsedIp: string | null;
@@ -223,6 +225,8 @@ export const KEY_ROW: ServerKey = {
   createdBy: "Asha",
   createdAt: "2026-10-12T10:00:00+05:30",
   expiresAt: null,
+  permanent: true,
+  category: null, // made before categories existed: reads everything
   revokedAt: null,
   lastUsedAt: "2026-10-16T09:00:00+05:30",
   lastUsedIp: "10.0.0.5",
@@ -459,7 +463,9 @@ export function installWorld(fetchMock: Mock): World {
         id: world.nextKeyId++,
         label: String(body.label),
         prefix: "wxyz9876",
-        expiresAt: typeof body.expiresAt === "string" ? `${body.expiresAt}T23:59:59+05:30` : null,
+        expiresAt: typeof body.expiresAt === "string" ? `${body.expiresAt}+05:30` : null,
+        permanent: body.permanent === true,
+        category: body.category === "staff" || body.category === "production" ? body.category : null,
         lastUsedAt: null,
         lastUsedIp: null,
       };

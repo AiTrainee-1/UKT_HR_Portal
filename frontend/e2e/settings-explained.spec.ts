@@ -23,11 +23,13 @@ const TABS: [id: string, label: string][] = [
   ["idcard", "ID Card"],
   ["smtp", "SMTP / Email"],
   ["whatsapp", "WhatsApp"],
-  // Endpoint Sharing is for the super admin only: the e2e admin is one, so it is in this list (and hidden for everybody else,
-  // see endpoint-sharing.spec.ts)
-  ["endpoint_sharing", "Endpoint Sharing"],
+  // Endpoint Sharing is for the super admin only and is NOT listed in the menu: it opens only from its address (the e2e admin is
+  // a super admin, so the panel test below reaches it; see ENDPOINT_SHARING and endpoint-sharing.spec.ts)
   ["backup", "Backup"],
 ];
+
+// Not in the menu and not in the search: it opens only from its address
+const ENDPOINT_SHARING: [string, string] = ["endpoint_sharing", "Endpoint Sharing"];
 
 async function openSettingsTab(page: Page, id: string) {
   await page.goto(`/hr/settings?tab=${id}`);
@@ -44,6 +46,7 @@ test("the navigation has every tab, in the five groups, each a real tab", async 
   await expect(page.getByRole("tab", { name: "Company", exact: true })).toBeVisible();
   const names = await page.getByRole("tab").evaluateAll((els) => els.map((el) => (el.textContent ?? "").trim()));
   expect(names).toEqual(TABS.map(([, label]) => label));
+  expect(names).not.toContain("Endpoint Sharing");
   for (const heading of ["Organisation", "Attendance & time", "Pay", "Documents & cards", "Messages & data"]) {
     await expect(page.getByTestId("settings-nav").getByText(heading, { exact: true })).toBeVisible();
   }
@@ -56,7 +59,7 @@ test("the navigation has every tab, in the five groups, each a real tab", async 
 test("every setting on every tab says what it is for, and every searchable setting is on its tab", async ({ page }) => {
   test.setTimeout(240_000);
   await loginAsHr(page);
-  for (const [id, label] of TABS) {
+  for (const [id, label] of [...TABS, ENDPOINT_SHARING]) {
     await openSettingsTab(page, id);
     const blocks = await page.locator("[data-setting-id]").evaluateAll((els) =>
       els.map((el) => ({
@@ -95,6 +98,23 @@ test("every setting on every tab says what it is for, and every searchable setti
     if (id !== "endpoint_sharing" && ALL_SETTINGS.some((m) => m.tab === id)) {
       await expect(page.getByTestId("setting-affects").first(), `${label}: a 'What changes' list`).toBeVisible();
     }
+  }
+});
+
+test("Endpoint Sharing is not in the menu or the search, and both of its addresses open it", async ({ page }) => {
+  await loginAsHr(page);
+  await page.goto("/hr/settings");
+  await expect(page.getByRole("tab", { name: "Company", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Endpoint Sharing" })).toHaveCount(0);
+  const search = page.getByRole("combobox", { name: "Find a setting" });
+  await search.fill("endpoint");
+  await expect(page.locator('[data-testid^="settings-search-hit-endpoint_sharing"]')).toHaveCount(0);
+
+  for (const address of ["/hr/settings?tab=endpoint_sharing", "/hr/settings/endpoint_sharing"]) {
+    await page.goto(address);
+    await expect(page.getByTestId("settings-panel-endpoint_sharing"), address).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("endpoint-sharing-tab"), address).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("tab", { name: "Endpoint Sharing" })).toHaveCount(0);
   }
 });
 

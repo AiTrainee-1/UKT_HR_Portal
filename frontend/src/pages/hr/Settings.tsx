@@ -1,11 +1,12 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useSearch } from "wouter";
+import { Link, useLocation, useRoute, useSearch } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/contexts/AuthContext";
 import { lockMutatingControls } from "@/lib/view-only-lock";
 import "./settings/settings-skin.css";
 import { settingsTabLevel } from "./settings/access";
+import { UNLISTED_TABS } from "./settings/constants";
 import { SETTINGS_TABS, SETTINGS_TAB_COMPONENTS } from "./settings/tabs";
 import { ALL_SETTINGS } from "./settings/metas";
 import { SettingsNav } from "./settings/kit/SettingsNav";
@@ -26,9 +27,15 @@ export default function Settings() {
 
   const tabLevel = useCallback((tab: string) => settingsTabLevel(user, tab), [user]);
   const visibleTabs = useMemo(() => SETTINGS_TABS.filter((t) => tabLevel(t.id) !== "hidden"), [tabLevel]);
+  // What the menu and the search offer: the tabs this login may open, minus the ones that open only from their address.
+  const listedTabs = useMemo(() => visibleTabs.filter((t) => !UNLISTED_TABS.has(t.id)), [visibleTabs]);
 
   // The tab (and the setting) come from the address, so a link such as /hr/settings?tab=attendance#late-window works.
+  // /hr/settings/<tab> is the same address as /hr/settings?tab=<tab> (the path wins when both are given).
+  const [, pathParams] = useRoute<{ tab: string }>("/hr/settings/:tab");
+  const askedInPath = pathParams?.tab ? decodeURIComponent(pathParams.tab) : null;
   const asked = parseSettingsAddress(search, typeof window === "undefined" ? "" : window.location.hash);
+  if (askedInPath) asked.tab = askedInPath;
   const [settingsTab, setSettingsTabState] = useState<string>(isTab(asked.tab) ? asked.tab : FIRST_TAB);
   const settingsTabRef = useRef(settingsTab);
   settingsTabRef.current = settingsTab;
@@ -46,8 +53,9 @@ export default function Settings() {
   // Follow the address when it changes from outside (a link on another page, the back button).
   useEffect(() => {
     const next = parseSettingsAddress(search, window.location.hash);
+    if (askedInPath) next.tab = askedInPath;
     if (isTab(next.tab)) setSettingsTabState(next.tab);
-  }, [search]);
+  }, [search, askedInPath]);
 
   // Land on the first tab this role can actually see if the one asked for is hidden for them. (Until the login is known
   // nothing is hidden or shown yet: a super-admin-only tab asked for in the address must survive the sign-in check.)
@@ -112,11 +120,11 @@ export default function Settings() {
               it.
             </p>
           </div>
-          <SettingsSearch metas={ALL_SETTINGS} tabs={visibleTabs} onPick={pick} />
+          <SettingsSearch metas={ALL_SETTINGS} tabs={listedTabs} onPick={pick} />
         </div>
 
         <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <SettingsNav tabs={visibleTabs} value={tab.id} onChange={(id) => setSettingsTab(id)} />
+          <SettingsNav tabs={listedTabs} value={tab.id} onChange={(id) => setSettingsTab(id)} />
 
           <div
             id="settings-panel"

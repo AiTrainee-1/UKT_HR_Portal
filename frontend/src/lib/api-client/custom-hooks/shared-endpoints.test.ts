@@ -124,6 +124,17 @@ describe("keys", () => {
     expect(k).not.toHaveProperty("key");
     expect(readKey({ id: 2, revokedAt: "2026-01-01T00:00:00+05:30" }).status).toBe("revoked");
     expect(readKey({ id: 3 }).status).toBe("active");
+    // the category and the permanent flag come from the server's words, and anything else is an older (unscoped) key
+    expect(readKey({ id: 4, category: "staff", expiresAt: null })).toMatchObject({
+      category: "staff",
+      permanent: true,
+    });
+    expect(readKey({ id: 5, category: "production", expiresAt: "2999-01-01T00:00:00Z" })).toMatchObject({
+      category: "production",
+      permanent: false,
+    });
+    expect(readKey({ id: 6, category: "all" }).category).toBeNull();
+    expect(readKey({ id: 7 }).category).toBeNull();
     expect(keyStatus({ revokedAt: null, expiresAt: "2999-01-01T00:00:00Z" })).toBe("active");
   });
 });
@@ -265,7 +276,7 @@ describe("creating and revoking a key refreshes everything that shows the number
       key: "uks_abcd1234_secret",
     });
     await act(async () => {
-      await view.hooks.create!.mutateAsync({ label: "Website" });
+      await view.hooks.create!.mutateAsync({ label: "Website", category: "staff", permanent: true });
     });
     for (const key of view.keys) expect(view.stale(key), JSON.stringify(key)).toBe(true);
     expect(view.stale(view.other)).toBe(false); // another endpoint is untouched
@@ -297,7 +308,9 @@ describe("creating and revoking a key refreshes everything that shows the number
     const view = mount();
     vi.mocked(customFetch).mockRejectedValue(new Error("boom"));
     await act(async () => {
-      await view.hooks.create!.mutateAsync({ label: "x" }).catch(() => undefined);
+      await view.hooks
+        .create!.mutateAsync({ label: "x", category: "production", permanent: true })
+        .catch(() => undefined);
       await view.hooks.revoke!.mutateAsync(3).catch(() => undefined);
     });
     for (const key of view.keys) expect(view.stale(key), JSON.stringify(key)).toBe(false);

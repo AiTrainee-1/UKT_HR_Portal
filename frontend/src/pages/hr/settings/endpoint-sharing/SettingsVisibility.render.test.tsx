@@ -20,8 +20,9 @@ import {
   type World,
 } from "./testing";
 
-// The Settings page draws Endpoint Sharing for the super admin ONLY: not in the navigation, not in the search, and a direct
-// address (?tab=endpoint_sharing) falls back to the first tab for everybody else, without the tab's content ever being drawn.
+// The Settings page draws Endpoint Sharing for the super admin ONLY, and even for them it is UNLISTED: not in the navigation
+// and not in the search, it opens only from its address (?tab=endpoint_sharing or /hr/settings/endpoint_sharing). For
+// everybody else a direct address falls back to the first tab, without the tab's content ever being drawn.
 
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -89,26 +90,44 @@ describe("the super admin", () => {
     h.user.current = SUPER;
   });
 
-  it("has Endpoint Sharing in the navigation, with the integrations (after WhatsApp, before Backup)", async () => {
+  it("does not list Endpoint Sharing in the navigation: every other tab is still there, in order", async () => {
     mount("/hr/settings", Settings);
     await settle();
     const labels = navLabels();
-    expect(labels).toContain("Endpoint Sharing");
-    expect(labels.indexOf("Endpoint Sharing")).toBe(labels.indexOf("WhatsApp") + 1);
-    expect(labels.indexOf("Backup")).toBe(labels.indexOf("Endpoint Sharing") + 1);
-    expect(labels).toHaveLength(SETTINGS_TABS.length);
+    expect(labels).not.toContain("Endpoint Sharing");
+    expect(labels.indexOf("Backup")).toBe(labels.indexOf("WhatsApp") + 1);
+    expect(labels).toHaveLength(SETTINGS_TABS.length - 1);
     expect(selected()).toEqual(["Company"]);
   });
 
-  it("opens the tab by its address, with its heading and the subtabs", async () => {
+  it("opens the tab by its address, with its heading and the subtabs (no menu item is highlighted: it is not listed)", async () => {
     mount("/hr/settings?tab=endpoint_sharing", Settings);
     await waitFor(() => q("endpoint-sharing-tab") !== null, "the tab");
-    expect(selected()).toEqual(["Endpoint Sharing"]);
+    expect(navLabels()).not.toContain("Endpoint Sharing");
+    expect(selected()).toEqual([]);
     expect(q("settings-panel-endpoint_sharing")).not.toBeNull();
     expect(text(css("#settings-panel h3"))).toBe("Endpoint Sharing");
     expect(text(css("#settings-panel header p"))).toContain("Super admin only");
     expect(q("settings-view-only")).toBeNull();
     await waitFor(() => all("endpoint-card").length === 2, "the list");
+  });
+
+  it("opens the same tab from the path /hr/settings/endpoint_sharing", async () => {
+    mount("/hr/settings/endpoint_sharing", Settings);
+    await waitFor(() => q("endpoint-sharing-tab") !== null, "the tab");
+    expect(q("settings-panel-endpoint_sharing")).not.toBeNull();
+    expect(navLabels()).not.toContain("Endpoint Sharing");
+    await waitFor(() => all("endpoint-card").length === 2, "the list");
+  });
+
+  it("opens the path address of a listed tab too, and an unknown tab falls back to the first one", async () => {
+    mount("/hr/settings/backup", Settings);
+    await settle();
+    expect(selected()).toEqual(["Backup"]);
+    unmount();
+    mount("/hr/settings/nonsense", Settings);
+    await settle();
+    expect(selected()).toEqual(["Company"]);
   });
 
   it("keeps the subtab and the open endpoint in the address, and a click on another Settings tab leaves", async () => {
@@ -122,15 +141,20 @@ describe("the super admin", () => {
     await waitFor(() => q("endpoint-sharing-tab") === null, "the other tab replacing it");
   });
 
-  it("finds its guide sections through the page's search, and the address of one opens the Integration guide", async () => {
+  it("does not offer its guide sections in the page's search, and the address of the guide still opens it", async () => {
     mount("/hr/settings", Settings);
     await settle();
-    await typeAt('[data-testid="settings-search"] input', "allowed origins");
-    expect(q("settings-search-hit-endpoint_sharing-guide-cors")).not.toBeNull();
-    await click(q("settings-search-hit-endpoint_sharing-guide-cors"));
+    for (const query of ["allowed origins", "api key", "endpoint", "cors"]) {
+      await typeAt('[data-testid="settings-search"] input', query);
+      expect(
+        [...document.body.querySelectorAll('[data-testid^="settings-search-hit-endpoint_sharing"]')],
+        query,
+      ).toHaveLength(0);
+    }
+    unmount();
+    mount("/hr/settings?tab=endpoint_sharing&sub=guide", Settings);
     await waitFor(() => q("integration-guide") !== null, "the Integration guide");
     expect(params()).toMatchObject({ tab: "endpoint_sharing", sub: "guide" });
-    expect(selected()).toEqual(["Endpoint Sharing"]);
   });
 
   it("asks before another tab replaces an endpoint with unsaved changes, and goes when told to", async () => {
@@ -141,7 +165,7 @@ describe("the super admin", () => {
     await click(document.body.querySelector("#settings-tab-backup"));
     expect(ask).toHaveBeenCalledTimes(1);
     expect(ask.mock.calls[0][0]).toContain("changes that are not saved");
-    expect(selected()).toEqual(["Endpoint Sharing"]);
+    expect(selected()).toEqual([]);
     expect(q("endpoint-editor")).not.toBeNull();
     ask.mockReturnValue(true);
     await click(document.body.querySelector("#settings-tab-backup"));
@@ -205,6 +229,18 @@ describe("everybody else", () => {
     expect(navLabels()).toEqual(["Backup"]);
     expect(selected()).toEqual(["Backup"]);
     expect(q("endpoint-sharing-tab")).toBeNull();
+  });
+
+  it("falls back to the first tab for the path address too, without drawing the tab", async () => {
+    h.user.current = EVERYTHING;
+    const watch = watchForTheTab();
+    mount("/hr/settings/endpoint_sharing", Settings);
+    expect(q("settings-panel-company")).not.toBeNull();
+    await settle();
+    watch.stop();
+    expect(selected()).toEqual(["Company"]);
+    expect(watch.seen).toEqual({ tab: false, panel: false });
+    expect(world.requests).toEqual([]);
   });
 
   it("an employee login is not offered it either", async () => {

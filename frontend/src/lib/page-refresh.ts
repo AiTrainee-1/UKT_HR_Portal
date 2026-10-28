@@ -11,7 +11,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   /^\/hr\/employees\/[^/]+\/edit$/,
   "/hr/employees/bulk-upload",
   "/hr/attendance/manual-import",
-  "/hr/settings",
+  // Settings, and its tabs that open from a path (/hr/settings/endpoint_sharing)
+  /^\/hr\/settings(\/|$)/,
   // The report builder has its own full-height layout, and chat is live already.
   "/hr/reports",
   "/hr/chat",

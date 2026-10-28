@@ -588,15 +588,15 @@ Settings → Endpoint Sharing: the **super administrator** publishes chosen HR d
 
 **Public call (no HR login, no auth decorator by design; `shared/` is exempt from the permission middleware and `/api/shared/` from the global CORS)**
 
-- **GET `/api/shared/<slug>`** (and the browser preflight **OPTIONS**) — read-only JSON. Auth: `Authorization: Bearer <key>` or `X-API-Key: <key>` (never the query string); a key belongs to exactly one endpoint. Checks in order: endpoint exists and is enabled (404 `not_found`), `Origin` (403 `origin_not_allowed` / `origin_required`), key (401 `invalid_key`), per-key rate limit (429 `rate_limited` + `Retry-After`), parameters (400 `invalid_parameter`, with `parameter`). Query: the dataset's declared filters (an unknown or repeated name is a 400), `page`, `pageSize`. 200: `{ data: [ {selected fields only} ], meta: { endpoint, dataset, fields, page, pageSize, total, hasMore, generatedAt } }` with `Cache-Control: no-store`. An allowed origin gets `Access-Control-Allow-Origin: <that origin>` on every response (never `*`, never credentials). Other methods: 405.
+- **GET `/api/shared/<slug>`** (and the browser preflight **OPTIONS**) — read-only JSON. Auth: `Authorization: Bearer <key>` or `X-API-Key: <key>` (never the query string); a key belongs to exactly one endpoint. Checks in order: endpoint exists and is enabled (404 `not_found`), `Origin` (403 `origin_not_allowed` / `origin_required`), key (401 `invalid_key`), per-key rate limit (429 `rate_limited` + `Retry-After`), parameters (400 `invalid_parameter`, with `parameter`). Query: the dataset's declared filters (an unknown or repeated name is a 400), `page`, `pageSize`. The key's **data category** (`staff` | `production`) is applied to the dataset before it is counted and paged, so only that category's rows are ever returned and `meta.total` counts only them (see the category table below). 200: `{ data: [ {selected fields only} ], meta: { endpoint, dataset, category, fields, page, pageSize, total, hasMore, generatedAt } }` (`meta.category` is `"staff"`, `"production"` or `null` for an older key) with `Cache-Control: no-store`. An allowed origin gets `Access-Control-Allow-Origin: <that origin>` on every response (never `*`, never credentials). Other methods: 405.
 
 **Management (`require_company_super_admin`: an active super administrator not tied to a branch; everyone else 403, no token 401; audited, module `shared_endpoints`)**
 
-- **GET `/api/shared-endpoints/catalog`** — the datasets with their fields (`key`, `label`, `type`, `sensitivity`, `description`) and filters, the plain-text list of what can never be shared, the sensitivity levels and the limits.
+- **GET `/api/shared-endpoints/catalog`** — the datasets with their fields (`key`, `label`, `type`, `sensitivity`, `description`), filters and `categoryScope` (`"employee"` = the key's category cuts the rows; `"neutral"` = holidays, the same for both), the plain-text list of what can never be shared, the sensitivity levels and the limits.
 - **GET, POST `/api/shared-endpoints`** — list (`{ endpoints, limits }`, each with live keys, calls in the last 24 h, last call, `sensitiveFields`) and create (`slug`, `dataset`, `name`, `description`, `fields`, `lockedFilters`, `origins`, `allowNoOrigin`, `pageSizeDefault`, `pageSizeMax`, `rateLimitPerMinute`, `enabled`; 201). Selecting a personal or financial field needs `acknowledgeSensitive: true` (else 400 code `sensitive_confirmation_required`).
 - **GET, PUT, DELETE `/api/shared-endpoints/<id>`** — one endpoint; `PUT` replaces its settings all-or-nothing (the slug and dataset can never change; `expectedVersion` stale guard, 400 code `stale_settings`; a save that changes nothing writes nothing); `DELETE` removes it with its keys and origins (the access log is kept).
-- **GET, POST `/api/shared-endpoints/<id>/keys`** and **DELETE `/api/shared-endpoints/<id>/keys/<kid>`** — list keys (never a key or hash), create one (`{ label, expiresAt? }`, 201: the plaintext key is returned **once**, at most 10 live keys), revoke (immediate; repeating it is a no-op).
-- **POST `/api/shared-endpoints/<id>/preview`** — `{ limit ≤ 5, filters? }`: the first rows exactly as the public call would shape them; no key, no log row.
+- **GET, POST `/api/shared-endpoints/<id>/keys`** and **DELETE `/api/shared-endpoints/<id>/keys/<kid>`** — list keys (never a key or hash; each `{ id, label, prefix, category, permanent, createdBy, createdAt, expiresAt, revokedAt, lastUsedAt, lastUsedIp, status }`, `category` = `"staff"` / `"production"` / `null` for an older key, `permanent` = no expiry), create one (`{ label, category, permanent | expiresAt }`, 201: the plaintext key is returned **once**, at most 10 live keys; `category` is required and exactly `"staff"` or `"production"`; exactly one of `permanent: true` (a real boolean, stored as `expires_at` NULL) or `expiresAt` (a date = the end of that day in factory time, or an ISO date-time, naive = IST; in the future, at most 10 years); a category that contradicts the endpoint's locked `employmentType` is a 400), revoke (immediate; repeating it is a no-op).
+- **POST `/api/shared-endpoints/<id>/preview`** — `{ limit ≤ 5, filters?, category? }`: the first rows exactly as the public call would shape them; no key, no log row. `category` (`"staff"` | `"production"`, anything else 400) shows what a key of that category sees (`meta.category` echoes it); without it the preview is unscoped.
 - **GET `/api/shared-endpoints/<id>/activity`** and **GET `/api/shared-endpoints/activity`** — the access log (`page`, `pageSize` ≤ 200, `status` = `ok` | `error` | an HTTP code; the second form takes `endpointId`).
 - **GET `/api/shared-endpoints/<id>/guide`** — the generated integration guide data for that endpoint (address, headers, parameters, response schema, error table, example code in six languages).
 
@@ -611,6 +611,17 @@ Settings → Endpoint Sharing: the **super administrator** publishes chosen HR d
 | `leave-requests` | employeeCode, employeeName (basic); leaveType, startDate, endDate, days, status, reason (personal) | dateFrom, dateTo (at most 366 days), status, employeeCode |
 | `holidays` | date, name, type (basic) | year |
 | `payroll-summary` | employeeCode, employeeName, month, year, periodStart, periodEnd (basic); paidDays, grossPay, totalDeductions, netPay (financial) | **month (YYYY-MM) required**, employmentType |
+
+**How a key's category applies** (strict, enforced by `shared_datasets.apply_category` on every call; every dataset must declare one of the two ways, a start-up error otherwise):
+
+| Dataset | Staff key / Production key sees |
+|---|---|
+| `employees` | only employees whose `employment_type` is the key's category |
+| `attendance-days`, `attendance-punches`, `leave-requests`, `payroll-summary` | only rows of employees of that category (`employee__employment_type`) |
+| `departments`, `branches`, `designations` | only rows that have at least one employee of that category (any status) |
+| `holidays` | everything: the company calendar is not employee data, identical for both keys |
+
+A parameter such as `employmentType=production` sent with a staff key returns no rows (it is ANDed, never widens). A key made before categories existed (`category` null) sees both kinds, as it always did.
 
 Never shareable: password hashes, tokens, OTPs, device secrets and API keys; Aadhaar, PAN and any government ID; bank names, account numbers and IFSC; PF / ESI / UAN numbers; photographs; biometric and device ids; HR user accounts, roles and sessions; any column not in the catalog. Money is rupees as a number with two decimals, dates `YYYY-MM-DD`, times `HH:MM:SS`, date-times ISO 8601 with the +05:30 offset.
 ## Themes (theme_views.py)
@@ -1750,7 +1761,7 @@ One row per SMS attempt, written as `sent` before the call and corrected to `fai
 - `provider_message_id` (2Factor's session id), `error` (one plain sentence, at most 300 characters), `error_code` (`ip`, `auth`, `template`, `balance`, `number`, `timeout`, `hourly_cap`, `daily_cap`, `phone_cap`, `paused` ...), `requested_ip`, `created_at`
 - Indexes on `(status, created_at)`, `(phone_hash, created_at)` and `(created_at)`; ordering `["-created_at", "-id"]`
 
-## Endpoint Sharing (api/models/shared_endpoints.py; migration 0122)
+## Endpoint Sharing (api/models/shared_endpoints.py; migrations 0122, 0131)
 
 Four new tables behind Settings → Endpoint Sharing (super administrator only). What an endpoint may serve is the code catalog in `shared_datasets.py`; these tables hold the owner's choices. See `backend.md` Section 4.16.
 
@@ -1769,7 +1780,7 @@ Four new tables behind Settings → Endpoint Sharing (super administrator only).
 **Table name:** `shared_endpoint_origins` — `endpoint` ForeignKey (CASCADE), `origin` (lower-case `scheme://host[:port]`, http only for localhost); unique `(endpoint, origin)`; at most 20 per endpoint.
 
 ### SharedEndpointKey
-**Table name:** `shared_endpoint_keys` — `endpoint` ForeignKey (CASCADE), `label`, `prefix` (the 8 characters after `uks_`; not secret), `key_hash` (unique SHA-256 of the full key; **the key itself is never stored**), `created_by`, `created_at`, `expires_at`, `revoked_at`, `last_used_at`, `last_used_ip`; at most 10 live keys per endpoint.
+**Table name:** `shared_endpoint_keys` — `endpoint` ForeignKey (CASCADE), `label`, `prefix` (the 8 characters after `uks_`; not secret), `key_hash` (unique SHA-256 of the full key; **the key itself is never stored**), `created_by`, `created_at`, `category` (`CharField(12)`, default and `db_default` `''`, migration 0131: `'staff'` or `'production'` for every key made since; `''` = a key made before categories existed, unscoped, shown as `category: null`; the public call restricts every dataset to it), `expires_at` (NULL = a **permanent** key, never expires until revoked; shown as `permanent: true`), `revoked_at`, `last_used_at`, `last_used_ip`; at most 10 live keys per endpoint.
 
 ### SharedEndpointAccessLog
 **Table name:** `shared_endpoint_access_logs` — `endpoint` ForeignKey (`SET_NULL`, so deleting an endpoint keeps its history), `endpoint_slug`, `key` ForeignKey (`SET_NULL`), `at`, `status` (HTTP code), `rows`, `origin`, `ip`, `duration_ms`, `error` (a short code such as `invalid_key`, `origin_not_allowed`, `rate_limited`). Kept 90 days. Indexes on `(endpoint, at)`, `(key, at)` and `(at)`.

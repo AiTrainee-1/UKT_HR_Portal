@@ -460,6 +460,7 @@ function Router() {
           {() => <ProtectedRoute component={SmsControl} allowedRoles={["hr"]} />}
         </Route>
         <Route path="/hr/settings">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/settings/:tab">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/salary-slip">{() => <Redirect to="/hr/payroll" />}</Route>
         <Route path="/hr/notifications">
           {() => <ProtectedRoute component={HrNotifications} allowedRoles={["hr"]} />}

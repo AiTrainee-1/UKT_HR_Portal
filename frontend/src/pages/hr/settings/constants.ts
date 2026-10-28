@@ -39,3 +39,8 @@ export const SETTINGS_TAB_MODULE: Record<string, string> = {
 // login, the search and the address alike, and their API refuses everybody else). They have no entry in SETTINGS_TAB_MODULE
 // and no module in Account Management.
 export const SUPER_ADMIN_ONLY_TABS: ReadonlySet<string> = new Set(["endpoint_sharing"]);
+
+// Tabs that exist but are NOT offered anywhere in the page: not in the menu on the left and not in the page's search. They
+// open only from their address (/hr/settings?tab=endpoint_sharing or /hr/settings/endpoint_sharing), which the person who
+// needs one types in. The role rules above still decide who may open them.
+export const UNLISTED_TABS: ReadonlySet<string> = new Set(["endpoint_sharing"]);
