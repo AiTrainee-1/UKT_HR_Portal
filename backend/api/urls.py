@@ -221,7 +221,7 @@ from .punch_views import (
 )
 from .device_status_views import biometric_status, biometric_status_check, biometric_status_history
 from .device_control_views import (
-    device_control_delete_users, device_control_employee_photo, device_control_employee_punch_devices,
+    device_control_delete_users, device_control_employee_photo, device_control_employee_links, device_control_links,
     device_control_fetch_run,
     device_control_fetch_runs, device_control_fetch_start, device_control_overview, device_control_people,
     device_control_push_users, device_control_refresh_users, device_control_update_users,
@@ -433,7 +433,8 @@ urlpatterns = [
     path("attendance/device-control/users/update", device_control_update_users),
     path("attendance/device-control/users/delete", device_control_delete_users),
     path("attendance/device-control/employees/<int:pk>/photo", device_control_employee_photo),
-    path("attendance/device-control/employees/<int:pk>/punch-devices", device_control_employee_punch_devices),
+    path("attendance/device-control/employees/<int:pk>/links", device_control_employee_links),
+    path("attendance/device-control/links", device_control_links),
     path("attendance/device-control/fetch/start", device_control_fetch_start),
     path("attendance/device-control/fetch/runs", device_control_fetch_runs),
     path("attendance/device-control/fetch/runs/<int:pk>", device_control_fetch_run),

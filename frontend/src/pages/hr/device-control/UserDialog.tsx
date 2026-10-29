@@ -19,7 +19,6 @@ import {
   useDevicePeople,
   usePushDeviceUsers,
   useSaveEmployeePhoto,
-  useSetEmployeePunchDevices,
   useUpdateDeviceUsers,
   type DeviceControlDevice,
   type PersonRow,
@@ -74,7 +73,6 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
   const push = usePushDeviceUsers();
   const update = useUpdateDeviceUsers();
   const savePhoto = useSaveEmployeePhoto();
-  const savePunchDevices = useSetEmployeePunchDevices();
 
   const editing = mode === "edit";
   const nameRef = useRef<HTMLInputElement>(null);
@@ -102,23 +100,6 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
     !editing && source === "hrms" && !picked && search.length >= 2,
   );
   const candidates = (results.data?.items ?? []).filter((p) => p.employee && !p.restricted);
-
-  // Which devices may give this employee's punches (for two people who share a code on devices in different units): nothing
-  // chosen = any device. Seeded from what is saved whenever the employee (or what is saved) changes.
-  const savedPunch = useMemo(() => [...(employee?.punchDevices ?? [])].sort((a, b) => a - b), [employee?.punchDevices]);
-  const savedPunchKey = `${employee?.id ?? ""}:${savedPunch.join(",")}`;
-  const [punchOnly, setPunchOnly] = useState(false);
-  const [punchPick, setPunchPick] = useState<Set<number>>(new Set());
-  const punchSeed = useRef("");
-  useEffect(() => {
-    if (punchSeed.current === savedPunchKey) return;
-    punchSeed.current = savedPunchKey;
-    setPunchOnly(savedPunch.length > 0);
-    setPunchPick(new Set(savedPunch));
-  }, [savedPunchKey, savedPunch]);
-  const wantedPunch = punchOnly ? [...punchPick].sort((a, b) => a - b) : [];
-  const punchChanged = !!employee && wantedPunch.join(",") !== savedPunch.join(",");
-  const punchInvalid = punchOnly && punchPick.size === 0;
 
   const hasOn = (deviceId: number) => !!subject?.presence.some((p) => p.deviceId === deviceId);
   const reachable = (d: DeviceControlDevice) => d.isActive && d.connection.state === "connected";
@@ -166,10 +147,9 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
   });
   const diff = editing ? changedFields(initial, form) : null;
   const effectiveDiff = editing && clearPassword ? { ...(diff ?? { userId: form.userId }), password: "" } : diff;
-  const nothingToDo = editing && !effectiveDiff && !photo && !punchChanged;
-  const noDevices = selected.size === 0 && !(editing && !effectiveDiff && (photo || punchChanged));
-  const blocked =
-    Object.keys(errors).length > 0 || nothingToDo || noDevices || punchInvalid || (!editing && !form.userId.trim());
+  const nothingToDo = editing && !effectiveDiff && !photo;
+  const noDevices = selected.size === 0 && !(editing && !effectiveDiff && photo);
+  const blocked = Object.keys(errors).length > 0 || nothingToDo || noDevices || (!editing && !form.userId.trim());
 
   const submit = async () => {
     setSubmitting(true);
@@ -189,20 +169,6 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
           extra.push(`Photo saved to ${employee.name}'s HRMS profile.`);
         } catch (e) {
           extra.push(`The photo could not be saved: ${e instanceof Error ? e.message : "unknown error"}`);
-        }
-      }
-      if (punchChanged && employee && !punchInvalid) {
-        try {
-          await savePunchDevices.mutateAsync({ employeeId: employee.id, deviceIds: wantedPunch });
-          extra.push(
-            wantedPunch.length === 0
-              ? `${employee.name}'s punches are taken from any device.`
-              : `${employee.name}'s punches are taken only from ${wantedPunch
-                  .map((id) => devices.find((d) => d.id === id)?.name ?? `device ${id}`)
-                  .join(", ")}.`,
-          );
-        } catch (e) {
-          extra.push(`The punch devices could not be saved: ${e instanceof Error ? e.message : "unknown error"}`);
         }
       }
       onClose();
@@ -537,74 +503,6 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
                 </p>
               </div>
               <CameraCapture value={photo} onChange={setPhoto} disabled={!employee || !canEditEmployees} />
-            </section>
-          )}
-
-          {/* ── which devices may give this employee's punches ── */}
-          {(editing || source === "manual" || picked) && employee && (
-            <section className="space-y-2 border-t pt-4" data-testid="user-punch-devices">
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">Take punches from</h4>
-                <p className="text-xs leading-snug text-slate-500">
-                  Use this when another person has the same Employee Code on a device in another unit: punches with this
-                  code from any other device are ignored for {employee.name}. It applies from now on; punches already
-                  recorded are not changed.
-                </p>
-              </div>
-              <div className="flex gap-1.5 rounded-xl bg-slate-100 p-1 text-xs font-semibold">
-                {(
-                  [
-                    [false, "Any device", "user-punch-any"],
-                    [true, "Only these devices", "user-punch-only"],
-                  ] as const
-                ).map(([only, label, testId]) => (
-                  <button
-                    key={testId}
-                    type="button"
-                    aria-pressed={punchOnly === only}
-                    data-testid={testId}
-                    onClick={() => setPunchOnly(only)}
-                    className={cn(
-                      "flex-1 rounded-lg px-3 py-1.5 transition-colors",
-                      punchOnly === only ? "bg-white text-[#006496] shadow-sm" : "text-slate-500 hover:text-slate-700",
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {punchOnly && (
-                <div className="divide-y rounded-xl border" data-testid="user-punch-device-list">
-                  {devices.length === 0 && <p className="p-3 text-xs text-slate-500">No device is set up.</p>}
-                  {devices.map((d) => (
-                    <label
-                      key={d.id}
-                      className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50"
-                    >
-                      <Checkbox
-                        checked={punchPick.has(d.id)}
-                        onCheckedChange={(c) =>
-                          setPunchPick((prev) => {
-                            const next = new Set(prev);
-                            if (c === true) next.add(d.id);
-                            else next.delete(d.id);
-                            return next;
-                          })
-                        }
-                        data-testid={`user-punch-device-${d.id}`}
-                        aria-label={`Take punches from ${d.name}`}
-                      />
-                      <span className="min-w-0 flex-1 font-semibold text-slate-800">{d.name}</span>
-                      {!d.isActive && <span className="text-xs text-slate-400">switched off</span>}
-                    </label>
-                  ))}
-                </div>
-              )}
-              {punchInvalid && (
-                <p className="text-xs text-red-600" data-testid="user-punch-error">
-                  Choose at least one device, or switch back to Any device.
-                </p>
-              )}
             </section>
           )}
 

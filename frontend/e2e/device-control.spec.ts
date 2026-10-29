@@ -725,42 +725,56 @@ test("when the devices cannot be loaded, Data Push and Data Fetch say so instead
   await expect(page.getByTestId("fetch-tab")).toBeVisible();
 });
 
-test("an employee can be limited to chosen devices for their punches, and set back to any device", async ({
+test("Link / Unlink: every device is linked by default, one can be unlinked and linked again, and the list remembers", async ({
   page,
   request,
 }) => {
-  await open(page, adminToken, `${PAGE}/push`);
-  await page.getByTestId("push-edit-DC1001").click();
-  // the default: any device, nothing limited
-  await expect(page.getByTestId("user-punch-any")).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("user-punch-device-list")).toHaveCount(0);
+  await open(page, adminToken, `${PAGE}/link-unlink`);
+  await expect(page.getByTestId("link-tab")).toBeVisible();
+  // nobody has a device unlinked yet
+  await expect(page.getByTestId("link-empty")).toContainText("Every employee is linked to every device");
 
-  // "only these devices" with none chosen is refused
-  await page.getByTestId("user-punch-only").click();
-  await expect(page.getByTestId("user-punch-error")).toBeVisible();
-  await expect(page.getByTestId("user-submit")).toBeDisabled();
+  // search by Employee Code: all devices are linked to start with
+  await page.getByTestId("link-search").fill("DC1001");
+  const card = page.getByTestId("link-card-DC1001");
+  await expect(card).toBeVisible();
+  await expect(page.getByTestId("link-summary-DC1001")).toContainText("All 4 devices linked");
+  await expect(page.getByTestId(`link-state-DC1001-${devices.a}`)).toHaveText("Linked");
 
-  // choose the first device and save: nothing about the person on the devices changed, only where punches come from
-  await page.getByTestId(`user-punch-device-${devices.a}`).click();
-  await expect(page.getByTestId("user-punch-error")).toHaveCount(0);
-  await page.getByTestId("user-submit").click();
-  await expect(page.getByTestId("user-dialog")).toHaveCount(0);
-  const people = (await admin(request, "GET", "/api/attendance/device-control/people?search=DC1001")).body as {
-    items: { userId: string; employee: { punchDevices: number[] } | null }[];
+  // unlink the second device: it is saved at once
+  await page.getByTestId(`link-DC1001-${devices.b}`).click();
+  await expect(page.getByTestId(`link-state-DC1001-${devices.b}`)).toHaveText("Unlinked");
+  await expect(page.getByTestId("link-summary-DC1001")).toContainText("3 of 4 devices linked");
+  const found = (await admin(request, "GET", "/api/attendance/device-control/links?search=DC1001")).body as {
+    items: { code: string; unlinked: number[] }[];
   };
-  expect(people.items.find((p) => p.userId === "DC1001")?.employee?.punchDevices).toEqual([devices.a]);
-  await expect(page.getByTestId("push-punch-limit-DC1001")).toContainText("dc_a");
+  expect(found.items.find((i) => i.code === "DC1001")?.unlinked).toEqual([devices.b]);
 
-  // back to any device
-  await page.getByTestId("push-edit-DC1001").click();
-  await expect(page.getByTestId("user-punch-only")).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId(`user-punch-device-${devices.a}`)).toBeChecked();
-  await page.getByTestId("user-punch-any").click();
-  await page.getByTestId("user-submit").click();
-  await expect(page.getByTestId("user-dialog")).toHaveCount(0);
-  await expect(page.getByTestId("push-punch-limit-DC1001")).toHaveCount(0);
-  const after = (await admin(request, "GET", "/api/attendance/device-control/people?search=DC1001")).body as {
-    items: { userId: string; employee: { punchDevices: number[] } | null }[];
+  // with no search the list shows who has something unlinked
+  await page.getByLabel("Clear search").click();
+  await expect(page.getByTestId("link-heading")).toContainText("Employees with a device unlinked");
+  await expect(page.getByTestId("link-card-DC1001")).toBeVisible();
+
+  // link all again
+  await page.getByTestId("link-all-DC1001").click();
+  await expect(page.getByTestId("link-empty")).toContainText("Every employee is linked to every device");
+  const after = (await admin(request, "GET", "/api/attendance/device-control/links?search=DC1001")).body as {
+    items: { code: string; unlinked: number[] }[];
   };
-  expect(after.items.find((p) => p.userId === "DC1001")?.employee?.punchDevices).toEqual([]);
+  expect(after.items.find((i) => i.code === "DC1001")?.unlinked).toEqual([]);
+
+  // a search that finds nobody says so
+  await page.getByTestId("link-search").fill("NOSUCHPERSON");
+  await expect(page.getByTestId("link-empty")).toContainText("No employee matches");
+});
+
+test("Link / Unlink is a tab of Device Control and Data Push is unchanged", async ({ page }) => {
+  await open(page, adminToken, PAGE);
+  await page.getByRole("tab", { name: "Link / Unlink" }).click();
+  await expect(page).toHaveURL(/DeviceControl\/link-unlink$/);
+  await expect(page.getByTestId("link-tab")).toBeVisible();
+  await page.getByRole("tab", { name: "Data Push" }).click();
+  await page.getByTestId("push-edit-DC1001").click();
+  await expect(page.getByTestId("user-dialog")).toBeVisible();
+  await expect(page.getByTestId("user-punch-devices")).toHaveCount(0); // no punch-device section in the edit form
 });

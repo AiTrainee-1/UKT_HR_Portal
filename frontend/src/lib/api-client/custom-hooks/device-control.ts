@@ -136,8 +136,6 @@ export type PersonEmployee = {
   designation: string | null;
   branch: string | null;
   photoUrl: string | null;
-  /** The devices this employee's punches are taken from; empty = punches from any device. */
-  punchDevices?: number[];
 };
 
 export type PersonRow = {
@@ -493,21 +491,47 @@ export const useSaveEmployeePhoto = () => {
   });
 };
 
-/** Limit an employee's punches to some devices (an empty list = take them from any device again). */
-export const useSetEmployeePunchDevices = () => {
+// ── Link / Unlink ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+export type DeviceLinkRow = {
+  employeeId: number;
+  code: string;
+  name: string;
+  status: string;
+  department: string | null;
+  branch: string | null;
+  /** Devices that hold a user with this employee's code (as of the last read of the devices). */
+  onDevices: number[];
+  /** Devices UNLINKED from this employee: their punches carrying this code are ignored. Empty = every device is linked. */
+  unlinked: number[];
+};
+export type DeviceLinksPayload = { mode: "search" | "restricted"; items: DeviceLinkRow[] };
+
+export const DEVICE_LINKS_KEY = ["/api/attendance/device-control/links"] as const;
+
+/** The employees matching a search (Employee Code or name), or - with no search - those who have a device unlinked. */
+export const useDeviceLinks = (search: string) =>
+  useQuery<DeviceLinksPayload>({
+    queryKey: [...DEVICE_LINKS_KEY, search],
+    queryFn: () => customFetch<DeviceLinksPayload>(`${BASE}/links?search=${encodeURIComponent(search)}`),
+    placeholderData: (previous) => previous,
+  });
+
+/** Set the devices unlinked from one employee (an empty list links every device again). */
+export const useSetEmployeeDeviceLinks = () => {
   const queryClient = useQueryClient();
   return useMutation<
-    { employeeId: number; punchDevices: number[] },
+    { employeeId: number; unlinked: number[]; linkedCount: number },
     Error,
-    { employeeId: number; deviceIds: number[] }
+    { employeeId: number; unlinkedDeviceIds: number[] }
   >({
-    mutationFn: ({ employeeId, deviceIds }) =>
-      customFetch(`${BASE}/employees/${employeeId}/punch-devices`, {
+    mutationFn: ({ employeeId, unlinkedDeviceIds }) =>
+      customFetch(`${BASE}/employees/${employeeId}/links`, {
         method: "POST",
-        body: JSON.stringify({ deviceIds }),
+        body: JSON.stringify({ unlinkedDeviceIds }),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: DEVICE_CONTROL_PEOPLE_KEY });
+      queryClient.invalidateQueries({ queryKey: DEVICE_LINKS_KEY });
     },
   });
 };

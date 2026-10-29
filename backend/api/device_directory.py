@@ -507,11 +507,6 @@ def load_people(request) -> tuple[list[Person], list[BiometricDevice]]:
             person.restricted = True
             continue
         person.employee = emp
-    # who is limited to which devices (one query; an employee who is not limited has no row)
-    rules = device_rules([p.employee.pk for p in people.values() if p.employee is not None])
-    for p in people.values():
-        if p.employee is not None:
-            p.employee.punch_device_ids = sorted(rules.get(p.employee.pk, ()))
     return list(people.values()), devices
 
 
@@ -545,8 +540,6 @@ def serialize_person(p: Person) -> dict:
                 "designation": emp.designation.title if emp.designation_id else None,
                 "branch": emp.branch.name if emp.branch_id else None,
                 "photoUrl": _photo_url(emp),
-                # the devices this employee's punches are taken from; empty = any device
-                "punchDevices": getattr(emp, "punch_device_ids", []),
             }
             if emp is not None
             else None
@@ -1350,11 +1343,63 @@ def save_employee_photo(request, employee_id: int, data_url: str) -> dict:
     return {"employeeId": emp.pk, "photoUrl": f"/api/employees/{emp.pk}/photo"}
 
 
-def set_employee_punch_devices(request, employee_id: int, device_ids: list[int]) -> dict:
-    """Limit an employee's punches to some devices (or, with no devices, take them from any device again).
+LINK_SEARCH_LIMIT = 25
+LINK_RESTRICTED_LIMIT = 200
 
-    Only punches that arrive from now on are affected: nothing already recorded is changed or removed. The ID of every device
-    must belong to a configured device (a switched-off one may be chosen: it may be back on later)."""
+
+def _link_row(emp: Employee, unlinked: dict[int, frozenset[int]], on_devices: dict[str, list[int]]) -> dict:
+    code = str(emp.employee_code).strip()
+    return {
+        "employeeId": emp.pk,
+        "code": emp.employee_code,
+        "name": employee_name(emp),
+        "status": emp.status,
+        "department": emp.department.name if emp.department_id else None,
+        "branch": emp.branch.name if emp.branch_id else None,
+        # devices that hold a user with this employee's code (from the last read of the devices), to see where a code lives
+        "onDevices": on_devices.get(code, []),
+        "unlinked": sorted(unlinked.get(emp.pk, ())),
+    }
+
+
+def list_device_links(request, search: str) -> dict:
+    """Employees with the devices unlinked from each. With a search (Employee Code or name) the matching employees; with
+    none, the employees who have a device unlinked (what has been restricted so far). Branch-limited callers see their own
+    branch only. Reading only."""
+    scope = get_branch_scope(request)
+    qs = Employee.objects.select_related("department", "branch")
+    if scope is not None:
+        qs = qs.filter(branch_id=scope)
+    search = (search or "").strip()
+    if search:
+        from django.db.models import Q
+
+        words = search.split()
+        cond = Q()
+        for w in words:
+            cond &= Q(employee_code__icontains=w) | Q(first_name__icontains=w) | Q(last_name__icontains=w)
+        exact = qs.filter(employee_code=search)
+        rows = list(exact) or list(qs.filter(cond).order_by("employee_code")[:LINK_SEARCH_LIMIT])
+        mode = "search"
+    else:
+        ids = list(
+            Employee.unlinked_devices.through.objects.values_list("employee_id", flat=True).distinct()
+        )
+        rows = list(qs.filter(pk__in=ids).order_by("employee_code")[:LINK_RESTRICTED_LIMIT])
+        mode = "restricted"
+    unlinked = device_rules([e.pk for e in rows])
+    on_devices: dict[str, list[int]] = {}
+    codes = [str(e.employee_code).strip() for e in rows]
+    for user_id, device_id in BiometricDeviceUser.objects.filter(user_id__in=codes).values_list("user_id", "device_id"):
+        on_devices.setdefault(user_id, []).append(device_id)
+    return {"mode": mode, "items": [_link_row(e, unlinked, on_devices) for e in rows]}
+
+
+def set_employee_device_links(request, employee_id: int, unlinked_ids: list[int]) -> dict:
+    """Set which devices are unlinked from an employee (an empty list links every device again).
+
+    Only punches that arrive from now on are affected: nothing already recorded is changed or removed. Every id must be a
+    configured device (a switched-off one may be unlinked: it may be back on later)."""
     scope = get_branch_scope(request)
     qs = Employee.objects.filter(pk=employee_id)
     if scope is not None:
@@ -1362,14 +1407,13 @@ def set_employee_punch_devices(request, employee_id: int, device_ids: list[int])
     emp = qs.first()
     if emp is None:
         raise LookupError("Employee not found.")
-    wanted = sorted(set(device_ids))
-    known = {d.pk: d.name for d in BiometricDevice.objects.filter(pk__in=wanted)}
-    unknown = [i for i in wanted if i not in known]
+    wanted = sorted(set(unlinked_ids))
+    names = dict(BiometricDevice.objects.values_list("pk", "name"))
+    unknown = [i for i in wanted if i not in names]
     if unknown:
         raise ValueError(f"No device with id {', '.join(str(i) for i in unknown)}.")
-    before = sorted(emp.punch_devices.values_list("pk", flat=True))
-    names = dict(BiometricDevice.objects.values_list("pk", "name"))
-    emp.punch_devices.set(wanted)
+    before = sorted(emp.unlinked_devices.values_list("pk", flat=True))
+    emp.unlinked_devices.set(wanted)
     if before != wanted:
         log_action(
             request,
@@ -1377,11 +1421,11 @@ def set_employee_punch_devices(request, employee_id: int, device_ids: list[int])
             "attendance",
             record_id=emp.pk,
             description=(
-                f"Punches of {emp.employee_code} -{employee_name(emp)} are taken "
-                + (f"only from {', '.join(known[i] for i in wanted)}" if wanted else "from any device")
+                f"Device links of {emp.employee_code} -{employee_name(emp)}: "
+                + (f"unlinked from {', '.join(names[i] for i in wanted)}" if wanted else "linked to every device")
                 + " (Device Control)"
             ),
-            old_values={"punchDevices": [names.get(i, str(i)) for i in before]},
-            new_values={"punchDevices": [known[i] for i in wanted]},
+            old_values={"unlinked": [names.get(i, str(i)) for i in before]},
+            new_values={"unlinked": [names[i] for i in wanted]},
         )
-    return {"employeeId": emp.pk, "punchDevices": wanted}
+    return {"employeeId": emp.pk, "unlinked": wanted, "linkedCount": len(names) - len(wanted)}

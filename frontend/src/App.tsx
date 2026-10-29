@@ -353,6 +353,9 @@ function Router() {
         <Route path="/hr/Biometric-Connectors/DeviceControl/push">
           {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
         </Route>
+        <Route path="/hr/Biometric-Connectors/DeviceControl/link-unlink">
+          {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
+        </Route>
         <Route path="/hr/Biometric-Connectors/DeviceControl/connectors">
           {() => <ProtectedRoute component={DeviceControl} allowedRoles={["hr"]} />}
         </Route>

@@ -72,9 +72,8 @@ function HrmsCell({ p }: { p: PersonRow }) {
   );
 }
 
-function PersonCell({ p, devices }: { p: PersonRow; devices: DeviceControlDevice[] }) {
+function PersonCell({ p }: { p: PersonRow }) {
   const e = p.employee;
-  const limited = e?.punchDevices ?? [];
   const differsText = describeDiffers(p.differs);
   const deviceName = p.presence.find((x) => x.name)?.name;
   return (
@@ -97,11 +96,6 @@ function PersonCell({ p, devices }: { p: PersonRow; devices: DeviceControlDevice
             ? ` · on device as “${deviceName}”`
             : ""}
         </p>
-        {limited.length > 0 && (
-          <p className="text-[11px] font-medium text-[#006496]" data-testid={`push-punch-limit-${p.userId}`}>
-            Punches only from {limited.map((id) => devices.find((d) => d.id === id)?.name ?? `device ${id}`).join(", ")}
-          </p>
-        )}
         {differsText && (
           <p className={cn("text-[11px] font-medium", TONE_CLASSES.warn.text)} data-testid={`push-differs-${p.userId}`}>
             {differsText} on devices
@@ -234,7 +228,7 @@ export default function PeopleTable({
                   />
                 </TableCell>
                 <TableCell>
-                  <PersonCell p={p} devices={devices} />
+                  <PersonCell p={p} />
                 </TableCell>
                 <TableCell>
                   <HrmsCell p={p} />
@@ -281,7 +275,7 @@ export default function PeopleTable({
               aria-label={`Select ${p.name || p.userId}`}
             />
             <div className="min-w-0 flex-1">
-              <PersonCell p={p} devices={devices} />
+              <PersonCell p={p} />
             </div>
           </div>
           <HrmsCell p={p} />

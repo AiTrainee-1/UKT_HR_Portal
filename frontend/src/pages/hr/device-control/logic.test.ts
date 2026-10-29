@@ -961,6 +961,7 @@ describe("site connectors", () => {
   it("finds the connectors tab from the address", () => {
     expect(tabFromPath("/hr/Biometric-Connectors/DeviceControl/connectors")).toBe("connectors");
     expect(tabFromPath("/hr/Biometric-Connectors/DeviceControl/push")).toBe("push");
+    expect(tabFromPath("/hr/Biometric-Connectors/DeviceControl/link-unlink")).toBe("link-unlink");
     expect(tabFromPath("/hr/Biometric-Connectors/DeviceControl")).toBe("overview");
   });
 

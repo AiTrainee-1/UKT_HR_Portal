@@ -133,7 +133,7 @@ export default function FetchResults({ run }: { run: FetchRun }) {
         >
           <Info size={14} className="mt-0.5 shrink-0" />
           {n(s.restricted)} punch{s.restricted === 1 ? " was" : "es were"} ignored: the employee they carry the code of
-          takes punches only from other devices (Data Push, edit the person, Take punches from).
+          has this device unlinked (Link / Unlink tab).
         </p>
       )}
 

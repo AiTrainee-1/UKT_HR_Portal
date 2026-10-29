@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { Cable, CloudDownload, Cpu, Loader2, RefreshCw, UsersRound } from "lucide-react";
+import { Cable, CloudDownload, Cpu, Link2, Loader2, RefreshCw, UsersRound } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import { useDeviceControlOverview, useRecheckDevices, useRefreshDeviceUsers } fr
 import { relativeTime } from "./device-status/logic";
 import ConnectorsTab from "./device-control/ConnectorsTab";
 import FetchTab from "./device-control/FetchTab";
+import LinkTab from "./device-control/LinkTab";
 import OverviewTab from "./device-control/OverviewTab";
 import PushTab from "./device-control/PushTab";
 import { pathForTab, tabFromPath, type DeviceControlTab } from "./device-control/logic";
@@ -21,6 +22,7 @@ import { pathForTab, tabFromPath, type DeviceControlTab } from "./device-control
  *   Overview    how many devices there are, how many this server can reach right now, and each one's health
  *   Data Fetch  pull punches off the devices by hand and update the HRMS (preview first)
  *   Data Push   see everyone on every device, who they are in the HRMS, and add, change and delete them from here
+ *   Link / Unlink  which devices give an employee's punches (all linked by default; unlink one to ignore its punches)
  *
  * It talks to the devices directly, the way the Sync Biometric button does, so it works wherever this server can reach
  * them (the HRMS on a factory computer; on the cloud only through a forwarded port). It does not change how attendance
@@ -120,6 +122,7 @@ export default function DeviceControl() {
               { value: "overview", label: "Overview", icon: <Cpu size={14} /> },
               { value: "fetch", label: "Data Fetch", icon: <CloudDownload size={14} /> },
               { value: "push", label: "Data Push", icon: <UsersRound size={14} /> },
+              { value: "link-unlink", label: "Link / Unlink", icon: <Link2 size={14} /> },
               { value: "connectors", label: "Site connectors", icon: <Cable size={14} /> },
             ]}
             value={tab}
@@ -156,6 +159,7 @@ export default function DeviceControl() {
           <>
             {tab === "fetch" && <FetchTab overview={data} loading={overview.isLoading} />}
             {tab === "push" && <PushTab overview={data} loading={overview.isLoading} />}
+            {tab === "link-unlink" && <LinkTab overview={data} loading={overview.isLoading} />}
           </>
         )}
       </div>

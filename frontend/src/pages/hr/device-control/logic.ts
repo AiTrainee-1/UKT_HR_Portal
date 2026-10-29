@@ -587,11 +587,12 @@ export const pushLink = (patch: Partial<PushFilters>): string =>
 export const fetchLink = (deviceId?: number): string =>
   `${DEVICE_CONTROL_PATH}/fetch${deviceId ? `?device=${deviceId}` : ""}`;
 
-export type DeviceControlTab = "overview" | "fetch" | "push" | "connectors";
+export type DeviceControlTab = "overview" | "fetch" | "push" | "link-unlink" | "connectors";
 
 export function tabFromPath(path: string): DeviceControlTab {
   if (path.endsWith("/fetch")) return "fetch";
   if (path.endsWith("/push")) return "push";
+  if (path.endsWith("/link-unlink")) return "link-unlink";
   if (path.endsWith("/connectors")) return "connectors";
   return "overview";
 }

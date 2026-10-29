@@ -8,7 +8,8 @@ Device Control endpoints (Attendance → Device Control): the overview, Data Fet
   POST /api/attendance/device-control/users/update             change users on the devices they are on
   POST /api/attendance/device-control/users/delete             delete users from devices; optionally make the employees Inactive
   POST /api/attendance/device-control/employees/<id>/photo     keep a captured photo as the employee's profile photo
-  POST /api/attendance/device-control/employees/<id>/punch-devices  which devices may give the employee's punches (none = any)
+  GET  /api/attendance/device-control/links                    employees and the devices unlinked from them (search by code or name)
+  POST /api/attendance/device-control/employees/<id>/links     link / unlink devices for one employee
   POST /api/attendance/device-control/fetch/start              preview or run a manual fetch of punches
   GET  /api/attendance/device-control/fetch/runs               the history, newest first
   GET  /api/attendance/device-control/fetch/runs/<id>          one run (the page polls this while it runs)
@@ -42,7 +43,8 @@ from .device_directory import (
     load_people,
     probe_devices,
     save_employee_photo,
-    set_employee_punch_devices,
+    list_device_links,
+    set_employee_device_links,
     start_refresh,
 )
 from .branch_scope import get_branch_scope
@@ -232,15 +234,23 @@ def device_control_employee_photo(request: Request, pk: int) -> Response:
         return _bad(str(exc))
 
 
+@api_view(["GET"])
+@require_hr
+def device_control_links(request: Request) -> Response:
+    """Employees and the devices unlinked from them: the matches of ?search= (Employee Code or name), or, without a
+    search, the employees who have a device unlinked."""
+    return Response(list_device_links(request, (request.query_params.get("search") or "").strip()[:80]))
+
+
 @api_view(["POST"])
 @require_hr
-def device_control_employee_punch_devices(request: Request, pk: int) -> Response:
-    """Which devices may give this employee's punches. Body {"deviceIds": [..]}; an empty list = any device."""
-    ids = _int_list(request.data.get("deviceIds"))
+def device_control_employee_links(request: Request, pk: int) -> Response:
+    """Which devices are unlinked from this employee. Body {"unlinkedDeviceIds": [..]}; an empty list links every device."""
+    ids = _int_list(request.data.get("unlinkedDeviceIds"))
     if ids is None:
-        return _bad("deviceIds must be a list of device ids")
+        return _bad("unlinkedDeviceIds must be a list of device ids")
     try:
-        return Response(set_employee_punch_devices(request, pk, ids))
+        return Response(set_employee_device_links(request, pk, ids))
     except LookupError as exc:
         return _bad(str(exc), 404)
     except ValueError as exc:
