@@ -223,6 +223,7 @@ def build_pdf(out: RunOutput) -> bytes:
             ]
         ],
         colWidths=[avail],
+        hAlign="LEFT",
     )
     title.setStyle(
         TableStyle(
@@ -237,7 +238,7 @@ def build_pdf(out: RunOutput) -> bytes:
     story.append(title)
 
     filt = "   |   ".join(f"<b>{escape(k)}:</b> {escape(v)}" for k, v in out.filters) or "All records"
-    fbox = Table([[Paragraph(filt, style("f", fontSize=8, leading=11))]], colWidths=[avail])
+    fbox = Table([[Paragraph(filt, style("f", fontSize=8, leading=11))]], colWidths=[avail], hAlign="LEFT")
     fbox.setStyle(
         TableStyle(
             [
@@ -265,11 +266,14 @@ def build_pdf(out: RunOutput) -> bytes:
                     ),
                 ]
             )
-        per_row = min(len(cards), 6)
+        # At most 6 cards to a line; the cards are shared out evenly over the lines (7 -> 4 + 3, not 6 + 1) and each
+        # line fills the whole width, so the strip lines up with the title bar above it.
+        lines = -(-len(cards) // 6)
+        per_row = -(-len(cards) // lines)
         rows_ = [cards[i : i + per_row] for i in range(0, len(cards), per_row)]
         for chunk in rows_:
             cells = [[c[0], c[1]] for c in chunk]
-            kt = Table([[cell for cell in cells]], colWidths=[avail / per_row] * len(cells))
+            kt = Table([[cell for cell in cells]], colWidths=[avail / len(cells)] * len(cells), hAlign="LEFT")
             kt.setStyle(
                 TableStyle(
                     [
