@@ -1,8 +1,6 @@
 import type { PayrollRunItem } from "@/lib/api-client";
 import type { PayrollScope } from "@/lib/api-client/custom-hooks";
 import { monthYear } from "@/components/payroll/kit/format";
-import { payStatusLabel } from "@/components/payroll/kit/pay-status";
-import type { TableColumn } from "@/components/payroll/kit/export-table";
 import { STATEMENT_URL_DEFAULTS } from "@/components/payroll/kit/statement-url";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
 import { DEFAULT_ISSUE_FILTERS, sanitizeFilters, type IssueFilterState } from "@/components/payroll/panels/issues";
@@ -131,23 +129,3 @@ export function statementQuery(p: { month: number; year: number }, status: strin
   if (status === "paid" || status === "pending") query.set("paymentStatus", status);
   return query;
 }
-
-// ── Payroll register (the Export menu on the Payroll tab) ─────────────────────
-
-export const REGISTER_COLUMNS: TableColumn<PayrollRunItem>[] = [
-  { key: "employeeCode", label: "Employee code", width: 14 },
-  { key: "employeeName", label: "Employee", width: 28 },
-  { key: "departmentName", label: "Department", width: 22 },
-  { key: "period", label: "Period", width: 14, value: (r) => `${r.month}/${r.year}` },
-  { key: "totalWorkingDays", label: "Working days", width: 13, type: "int" },
-  { key: "presentDays", label: "Present days", width: 13, type: "money" },
-  { key: "absentDays", label: "Absent days", width: 13, type: "money" },
-  { key: "baseSalary", label: "Monthly salary", width: 15, type: "money" },
-  { key: "otAmount", label: "Overtime", width: 13, type: "money" },
-  { key: "grossSalary", label: "Gross earned", width: 15, type: "money" },
-  { key: "bonus", label: "Bonus", width: 12, type: "money" },
-  { key: "deductions", label: "Deductions", width: 14, type: "money" },
-  { key: "finalSalary", label: "Net payable", width: 15, type: "money" },
-  { key: "status", label: "Status", width: 11, value: (r) => payStatusLabel(r.status) },
-  { key: "notes", label: "Notes", width: 50 },
-];

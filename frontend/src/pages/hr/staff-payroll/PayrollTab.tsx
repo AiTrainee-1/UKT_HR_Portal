@@ -17,11 +17,9 @@ import { useLocation } from "wouter";
 import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import { Button } from "@/components/ui/button";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
-import { dateTime, fileStem, plural } from "@/components/payroll/kit/format";
-import { exportTableToExcel } from "@/components/payroll/kit/export-table";
+import { dateTime, plural } from "@/components/payroll/kit/format";
 import { addSkipped } from "@/components/payroll/kit/issue-summary";
 import { EmptyNote } from "@/components/payroll/kit/parts";
-import { withTdsColumns } from "@/components/payroll/kit/statutory";
 import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { ViewSwitch, type ViewOption } from "@/components/payroll/kit/ViewSwitch";
@@ -50,18 +48,12 @@ import { SkippedPanel, type SkippedItem } from "@/components/payroll/panels/skip
 import { MONTH_NAMES } from "@/components/payroll/BreakdownDrawer";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useListDepartments, useListPayrollRuns } from "@/lib/api-client";
-import {
-  usePayrollIssues,
-  usePayrollRules,
-  usePayrollSettings,
-  usePayrollSkipCheck,
-} from "@/lib/api-client/custom-hooks";
+import { usePayrollIssues, usePayrollRules, usePayrollSkipCheck } from "@/lib/api-client/custom-hooks";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import { downloadReportFile } from "@/lib/report-download";
 import { GenerateDialog } from "./GenerateDialog";
 import { SessionConfigPanel } from "./SessionConfigPanel";
 import {
-  REGISTER_COLUMNS,
   STATEMENT_REPORT_ID,
   isStaffView,
   issueFiltersFromUrl,
@@ -107,7 +99,6 @@ export function PayrollTab({
 
   const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
   const departments = useListDepartments();
-  const settings = usePayrollSettings();
   const runsQuery = useListPayrollRuns({ month, year });
   // Staff payroll only: Production payroll has its own pages.
   const runs = useMemo(() => onlyStaff(runsQuery.data), [runsQuery.data]);
@@ -151,45 +142,23 @@ export function PayrollTab({
   const setView = (next: StaffView) => setUrl({ view: next });
   const resetFilters = () => setUrl(filtersToUrl(DEFAULT_FILTERS) as Record<string, string>);
 
-  const company = settings.data?.companyName ?? "UK Textiles";
-  const stem = fileStem("Staff_Payroll", MONTH_NAMES[month - 1], year);
-  // the register gets its two TDS columns only when some employee on screen has TDS
-  const registerColumns = withTdsColumns(REGISTER_COLUMNS, shown);
-  const exportItems: ExportItem[] = [
-    {
-      key: "register-xlsx",
-      label: "Payroll register (Excel)",
-      hint: `${shown.length} record${shown.length === 1 ? "" : "s"} in all departments, with days, earnings and deductions`,
-      icon: FileSpreadsheet,
-      disabled: shown.length === 0,
-      run: () =>
-        exportTableToExcel({
-          rows: shown,
-          columns: registerColumns,
-          filename: `${stem}_Register`,
-          sheetName: "Payroll register",
-          company,
-          subtitle: "Staff payroll",
-          title: `Payroll register · ${periodLabel}`,
-        }),
+  // Both files are the Report Center's Salary Statement (Reports > HR Reports), so the two can never differ.
+  const statementItem = (format: "xlsx" | "pdf"): ExportItem => ({
+    key: `statement-${format}`,
+    label: `Salary Payroll Statement (${format === "pdf" ? "PDF" : "Excel"})`,
+    hint: `The printed statement for ${periodLabel}: every department, with sub totals and a grand total`,
+    icon: format === "pdf" ? FileText : FileSpreadsheet,
+    disabled: runs.length === 0,
+    run: async () => {
+      await downloadReportFile({
+        reportId: STATEMENT_REPORT_ID,
+        title: `Salary Statement ${periodLabel}`,
+        format,
+        query: statementQuery({ month, year }, filters.status),
+      });
     },
-    {
-      key: "statement-pdf",
-      label: "Salary Payroll Statement (PDF)",
-      hint: `The printed statement for ${periodLabel}: every department, with sub totals and a grand total`,
-      icon: FileText,
-      disabled: runs.length === 0,
-      // the same file as Reports > HR Reports > Salary Statement, so the two can never differ
-      run: async () => {
-        await downloadReportFile({
-          reportId: STATEMENT_REPORT_ID,
-          title: `Salary Statement ${periodLabel}`,
-          format: "pdf",
-          query: statementQuery({ month, year }, filters.status),
-        });
-      },
-    },
-  ];
+  });
+  const exportItems: ExportItem[] = [statementItem("xlsx"), statementItem("pdf")];
 
   const options: ViewOption<StaffView>[] = [
     { value: "records", label: "Records", icon: ListChecks, count: runsQuery.isLoading ? null : runs.length },

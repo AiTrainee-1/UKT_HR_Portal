@@ -78,10 +78,18 @@ test("the Payroll tab lists a table, one department at a time, and exports the S
     await expect(page).toHaveURL(/layout=cards/);
     await page.getByTestId("payroll-record-layout-table").click();
 
-    // the Export menu: the Excel register and the statement PDF, no CSV
+    // the Export menu: the Salary Payroll Statement as Excel and as PDF; the old register and the CSV are gone
     await page.getByTestId("staff-export").click();
-    await expect(page.getByTestId("staff-export-register-xlsx")).toBeVisible();
+    await expect(page.getByTestId("staff-export-statement-xlsx")).toContainText("Salary Payroll Statement (Excel)");
+    await expect(page.getByTestId("staff-export-register-xlsx")).toHaveCount(0);
     await expect(page.getByTestId("staff-export-register-csv")).toHaveCount(0);
+    const [excel] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByTestId("staff-export-statement-xlsx").click(),
+    ]);
+    expect(excel.suggestedFilename()).toMatch(/\.xlsx$/i);
+    await expect(page.getByTestId("staff-export-statement-xlsx")).toHaveCount(0); // the menu closes once the file is saved
+    await page.getByTestId("staff-export").click();
     await expect(page.getByTestId("staff-export-statement-pdf")).toContainText("Salary Payroll Statement (PDF)");
     const [download] = await Promise.all([
       page.waitForEvent("download"),
