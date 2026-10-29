@@ -1,4 +1,13 @@
-import { AlertTriangle, CalendarCheck, Factory, MinusCircle, ShieldCheck, TrendingUp, Wallet } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarCheck,
+  Coins,
+  Factory,
+  MinusCircle,
+  ShieldCheck,
+  TrendingUp,
+  Wallet,
+} from "lucide-react";
 import { KpiTile } from "@/components/payroll/kit/parts";
 import { inr, inr2 } from "@/components/payroll/kit/format";
 import type { PayrollDetails, PayrollKind } from "@/lib/api-client/custom-hooks";
@@ -28,6 +37,8 @@ export function KpiStrip({
   const counts = severityCounts(details.issues);
   const total = details.issues.length;
   const work = workTile(details, kind);
+  // What one day (staff) or one shift (production) pays: the salary the month was worked out from, shown on its own
+  const perDay = perDayTile(details, kind, work.outOf);
   const deductionShare = money.gross > 0 ? Math.round((money.deductions / money.gross) * 1000) / 10 : 0;
 
   const issuesTone = degraded
@@ -50,7 +61,10 @@ export function KpiStrip({
           .join(" · ");
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5" data-testid="pd-kpis">
+    <div
+      className={cn("grid grid-cols-2 gap-3 sm:grid-cols-3", perDay ? "xl:grid-cols-6" : "xl:grid-cols-5")}
+      data-testid="pd-kpis"
+    >
       <KpiTile
         label="Gross"
         value={inr(money.gross)}
@@ -65,6 +79,16 @@ export function KpiStrip({
         tone="bg-blue-50 text-blue-800"
         testId="pd-kpi-gross"
       />
+      {perDay && (
+        <KpiTile
+          label={perDay.label}
+          value={perDay.value}
+          sub={perDay.sub}
+          icon={Coins}
+          tone="bg-violet-50 text-violet-800"
+          testId="pd-kpi-perday"
+        />
+      )}
       <KpiTile
         label="Deductions"
         value={inr(money.deductions)}
@@ -105,11 +129,38 @@ export function KpiStrip({
         icon={total === 0 && !degraded ? ShieldCheck : AlertTriangle}
         tone={issuesTone}
         onClick={() => onJump("issues")}
-        className="col-span-2 xl:col-span-1"
+        className={perDay ? "col-span-2 sm:col-span-1" : "col-span-2 xl:col-span-1"}
         testId="pd-kpi-issues"
       />
     </div>
   );
+}
+
+/**
+ * The "per day salary" card: a staff payroll's daily rate (the monthly salary over the month's working days, which is what
+ * every paid day is worth) or a production payroll's salary per shift. Null when the payroll has no such rate (an old one).
+ */
+export function perDayTile(
+  details: PayrollDetails,
+  kind: PayrollKind,
+  workingDays: string | null,
+): { label: string; value: string; sub: string | undefined } | null {
+  if (kind === "production") {
+    const rate = details.employee.salaryPerShift;
+    return rate ? { label: "Salary per shift", value: inr2(rate), sub: "paid for each shift worked" } : null;
+  }
+  const { monthlySalary, dailyRate } = details.money;
+  const rate =
+    dailyRate ?? (monthlySalary && workingDays && Number(workingDays) > 0 ? monthlySalary / Number(workingDays) : null);
+  if (!rate) return null;
+  return {
+    label: "Per day salary",
+    value: inr2(rate),
+    sub:
+      monthlySalary && workingDays
+        ? `${inr(monthlySalary)} over ${workingDays} working days`
+        : "paid for each day worked",
+  };
 }
 
 /** Gross -> Deductions -> Net as one bar: how much of the gross went on deductions, and what is left to pay. */

@@ -211,6 +211,9 @@ describe("the dashboard", () => {
     await openStaff();
     expect(text(q("pd-kpi-gross"))).toContain("₹26,663");
     expect(text(q("pd-kpi-gross"))).toContain("of a ₹29,500 monthly salary");
+    expect(text(q("pd-kpi-perday"))).toContain("Per day salary");
+    expect(text(q("pd-kpi-perday"))).toContain("₹1,134.62");
+    expect(text(q("pd-kpi-perday"))).toContain("₹29,500 over 26 working days");
     expect(text(q("pd-kpi-deductions"))).toContain("₹3,167");
     expect(text(q("pd-kpi-deductions"))).toContain("11.9% of gross");
     expect(text(q("pd-kpi-net-value"))).toBe("₹23,496");
