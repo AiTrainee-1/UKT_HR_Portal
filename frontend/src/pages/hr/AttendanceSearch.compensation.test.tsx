@@ -11,7 +11,7 @@ const month = vi.hoisted(() => ({ data: null as unknown }));
 
 vi.mock("@/lib/api-client/custom-hooks", () => ({
   useEmployeeMonthlyAttendance: () => ({ data: month.data, isLoading: false, isError: false }),
-  useAttendanceOverride: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSetPunchDayStatus: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useAttendanceOverrideRequests: () => ({ data: [] }),
   usePayrollSettings: () => ({ data: { halfDayFirstHalfEndTime: "13:30", halfDaySecondHalfStartTime: "14:30" } }),
 }));

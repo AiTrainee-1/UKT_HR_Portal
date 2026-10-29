@@ -435,10 +435,30 @@ class DayStatusTests(SyncBase):
         self.assertEqual(req.status, AttendanceOverrideRequest.STATUS_REJECTED)
 
     def test_a_bad_request_is_refused(self):
-        self.post({"code": "188", "date": str(D1), "status": "on_leave", "note": "nope nope"}, expect=400)
+        self.post({"code": "188", "date": str(D1), "status": "bogus", "note": "nope nope"}, expect=400)
         self.post({"code": "NOBODY", "date": str(D1), "status": "absent", "note": "nope nope"}, expect=404)
         self.post({"code": "188", "date": "2999-01-01", "status": "absent", "note": "nope nope"}, expect=400)
         self.post({"code": "188", "date": "not a date", "status": "absent", "note": "nope nope"}, expect=400)
+
+    def test_leave_and_holiday_and_the_late_mark_and_the_times_can_be_set_too(self):
+        out = self.post({"employeeId": self.e1.pk, "date": str(D1), "status": "on_leave", "note": "approved leave"})
+        self.assertEqual((out["day"]["status"], out["day"]["shifts"]), ("on_leave", "0.00"))
+        out = self.post({"code": "188", "date": str(D1), "status": "holiday", "note": "factory holiday"})
+        self.assertEqual(out["day"]["status"], "holiday")
+        self.post(
+            {"code": "188", "date": str(D1), "status": "present", "note": "device missed it", "isLate": True,
+             "firstPunch": "09:40", "lastPunch": "18:10"}
+        )  # fmt: skip
+        rec = AttendanceDayRecord.objects.get(employee=self.e1, date=D1)
+        self.assertEqual(
+            (rec.status, rec.is_late, rec.first_punch, rec.last_punch), ("present", True, time(9, 40), time(18, 10))
+        )
+        last = PunchViewHistory.objects.filter(action="status_set").latest("id")
+        self.assertTrue(last.details["after"]["late"])
+        self.assertEqual((last.details["after"]["first"], last.details["after"]["last"]), ("09:40", "18:10"))
+        self.post({"code": "188", "date": str(D1), "status": "absent", "note": "no show"})
+        rec.refresh_from_db()
+        self.assertFalse(rec.is_late)  # an absent day carries no late mark
 
     def test_reading_a_day_gives_its_status_and_who_set_it(self):
         self.post({"code": "188", "date": str(D1), "status": "half_shift", "note": "left early"})

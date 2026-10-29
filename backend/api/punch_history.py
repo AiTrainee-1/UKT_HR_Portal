@@ -28,7 +28,7 @@ from .branch_scope import scope_to_branch
 from .models import AttendanceDayRecord, AttendanceLog, AttendanceOverrideRequest, Employee, PunchViewHistory
 from .view_common import error_response as _error
 
-SETTABLE = ("present", "half_shift", "absent")
+SETTABLE = ("present", "half_shift", "absent", "on_leave", "holiday")
 STATUS_LABEL = {
     "present": "Present",
     "half_shift": "Half Day",
@@ -57,7 +57,15 @@ def day_state(pairs, record_by_pair: dict | None = None) -> dict:
     days = {d for _e, d in pairs}
     out = {}
     for r in AttendanceDayRecord.objects.filter(employee_id__in=emp_ids, date__gte=min(days), date__lte=max(days)).only(
-        "employee_id", "date", "status", "source", "shifts_earned", "override_by", "override_note"
+        "employee_id",
+        "date",
+        "status",
+        "source",
+        "shifts_earned",
+        "is_late",
+        "early_leave",
+        "first_punch",
+        "last_punch",
     ):
         if (r.employee_id, r.date) in pairs:
             out[(r.employee_id, r.date)] = _state_of(r)
@@ -75,6 +83,10 @@ def _state_of(record: AttendanceDayRecord | None) -> dict | None:
         "status": record.status,
         "source": record.source,
         "shifts": _shifts(record),
+        "late": bool(record.is_late),
+        "earlyOut": bool(record.early_leave),
+        "first": record.first_punch.strftime("%H:%M") if record.first_punch else None,
+        "last": record.last_punch.strftime("%H:%M") if record.last_punch else None,
     }
 
 
@@ -196,7 +208,7 @@ def punch_day_status(request: Request) -> Response:
     status = str(request.data.get("status") or "").strip()
     note = str(request.data.get("note") or "").strip()
     if status not in SETTABLE + ("auto",):
-        return _error("status must be present, half_shift, absent or auto")
+        return _error("status must be present, half_shift, absent, on_leave, holiday or auto")
     if status != "auto" and len(note) < 3:
         return _error("Give a reason (a few words): it is kept in the History.")
     before = _state_of(record)
@@ -205,23 +217,32 @@ def punch_day_status(request: Request) -> Response:
         # an Attendance Search edit still waiting for approval for this day is overtaken by this decision
         AttendanceOverrideRequest.objects.filter(
             employee=emp, date=d, status=AttendanceOverrideRequest.STATUS_PENDING
-        ).update(status=AttendanceOverrideRequest.STATUS_REJECTED, review_comment="Superseded by Punch View")
+        ).update(
+            status=AttendanceOverrideRequest.STATUS_REJECTED,
+            review_comment="Superseded by a direct update (Punch View history)",
+        )
         if status == "auto":
             AttendanceDayRecord.objects.filter(employee=emp, date=d).delete()
             record = compute_day_record(emp, d)
             action = PunchViewHistory.ACTION_STATUS_RESET
         else:
-            resolved = _resolve_override_fields(
-                record,
-                emp,
-                {
-                    "status": status,
-                    "isLate": False,
-                    "isEarlyOut": False,
-                    "isHalfShift": status == "half_shift",
-                    "note": note,
-                },
-            )
+            # the optional details of the Attendance page's edit form: the Late / Early Out marks and the first and last
+            # punch a day is shown with (a flag not sent is cleared, as the day is being set by hand)
+            req = request.data
+            values = {
+                "status": status,
+                "isLate": bool(req.get("isLate", False)),
+                "isEarlyOut": bool(req.get("isEarlyOut", False)),
+                "isHalfShift": status == "half_shift",
+                "note": note,
+            }
+            for key in ("firstPunch", "lastPunch"):
+                if key in req:
+                    values[key] = req.get(key)
+            try:
+                resolved = _resolve_override_fields(record, emp, values)
+            except ValueError as exc:
+                return _error(str(exc))
             record = apply_override_values(record, resolved, get_hr_display_name(request))
             action = PunchViewHistory.ACTION_STATUS_SET
         save_entries([entry(request, action, emp, d, before=before, after=_state_of(record), note=note)])

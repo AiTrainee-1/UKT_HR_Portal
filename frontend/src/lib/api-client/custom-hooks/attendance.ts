@@ -1214,12 +1214,19 @@ export const usePunchDayStatus = (code: string, date: string) =>
   });
 
 export type SetDayStatusRequest = {
-  code: string;
+  /** The Employee Code, or the employee's id. */
+  code?: string;
+  employeeId?: number;
   date: string;
-  /** present / half_shift / absent, or auto to put the day back to what the punches say. */
-  status: "present" | "half_shift" | "absent" | "auto";
+  /** present / half_shift / absent / on_leave / holiday, or auto to put the day back to what the punches say. */
+  status: "present" | "half_shift" | "absent" | "on_leave" | "holiday" | "auto";
   /** The reason (a few words): needed for every status but auto. */
   note?: string;
+  /** The Late / Early Out marks and the first and last punch of a present day, as the Attendance page's edit form sets them. */
+  isLate?: boolean;
+  isEarlyOut?: boolean;
+  firstPunch?: string | null;
+  lastPunch?: string | null;
 };
 
 export const useSetPunchDayStatus = () => {
