@@ -724,3 +724,43 @@ test("when the devices cannot be loaded, Data Push and Data Fetch say so instead
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByTestId("fetch-tab")).toBeVisible();
 });
+
+test("an employee can be limited to chosen devices for their punches, and set back to any device", async ({
+  page,
+  request,
+}) => {
+  await open(page, adminToken, `${PAGE}/push`);
+  await page.getByTestId("push-edit-DC1001").click();
+  // the default: any device, nothing limited
+  await expect(page.getByTestId("user-punch-any")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("user-punch-device-list")).toHaveCount(0);
+
+  // "only these devices" with none chosen is refused
+  await page.getByTestId("user-punch-only").click();
+  await expect(page.getByTestId("user-punch-error")).toBeVisible();
+  await expect(page.getByTestId("user-submit")).toBeDisabled();
+
+  // choose the first device and save: nothing about the person on the devices changed, only where punches come from
+  await page.getByTestId(`user-punch-device-${devices.a}`).click();
+  await expect(page.getByTestId("user-punch-error")).toHaveCount(0);
+  await page.getByTestId("user-submit").click();
+  await expect(page.getByTestId("user-dialog")).toHaveCount(0);
+  const people = (await admin(request, "GET", "/api/attendance/device-control/people?search=DC1001")).body as {
+    items: { userId: string; employee: { punchDevices: number[] } | null }[];
+  };
+  expect(people.items.find((p) => p.userId === "DC1001")?.employee?.punchDevices).toEqual([devices.a]);
+  await expect(page.getByTestId("push-punch-limit-DC1001")).toContainText("dc_a");
+
+  // back to any device
+  await page.getByTestId("push-edit-DC1001").click();
+  await expect(page.getByTestId("user-punch-only")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId(`user-punch-device-${devices.a}`)).toBeChecked();
+  await page.getByTestId("user-punch-any").click();
+  await page.getByTestId("user-submit").click();
+  await expect(page.getByTestId("user-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("push-punch-limit-DC1001")).toHaveCount(0);
+  const after = (await admin(request, "GET", "/api/attendance/device-control/people?search=DC1001")).body as {
+    items: { userId: string; employee: { punchDevices: number[] } | null }[];
+  };
+  expect(after.items.find((p) => p.userId === "DC1001")?.employee?.punchDevices).toEqual([]);
+});

@@ -49,6 +49,7 @@ from .device_client import (
 from . import device_remote
 from .device_health import connection_state, last_contact
 from .device_probe import is_private_host
+from .device_punch_rules import device_rules
 from .models import BiometricDevice, BiometricDeviceUser, Employee
 
 logger = logging.getLogger(__name__)
@@ -506,6 +507,11 @@ def load_people(request) -> tuple[list[Person], list[BiometricDevice]]:
             person.restricted = True
             continue
         person.employee = emp
+    # who is limited to which devices (one query; an employee who is not limited has no row)
+    rules = device_rules([p.employee.pk for p in people.values() if p.employee is not None])
+    for p in people.values():
+        if p.employee is not None:
+            p.employee.punch_device_ids = sorted(rules.get(p.employee.pk, ()))
     return list(people.values()), devices
 
 
@@ -539,6 +545,8 @@ def serialize_person(p: Person) -> dict:
                 "designation": emp.designation.title if emp.designation_id else None,
                 "branch": emp.branch.name if emp.branch_id else None,
                 "photoUrl": _photo_url(emp),
+                # the devices this employee's punches are taken from; empty = any device
+                "punchDevices": getattr(emp, "punch_device_ids", []),
             }
             if emp is not None
             else None
@@ -1340,3 +1348,40 @@ def save_employee_photo(request, employee_id: int, data_url: str) -> dict:
         description=f"Updated the photo of {emp.employee_code} -{employee_name(emp)} (Device Control)",
     )
     return {"employeeId": emp.pk, "photoUrl": f"/api/employees/{emp.pk}/photo"}
+
+
+def set_employee_punch_devices(request, employee_id: int, device_ids: list[int]) -> dict:
+    """Limit an employee's punches to some devices (or, with no devices, take them from any device again).
+
+    Only punches that arrive from now on are affected: nothing already recorded is changed or removed. The ID of every device
+    must belong to a configured device (a switched-off one may be chosen: it may be back on later)."""
+    scope = get_branch_scope(request)
+    qs = Employee.objects.filter(pk=employee_id)
+    if scope is not None:
+        qs = qs.filter(branch_id=scope)
+    emp = qs.first()
+    if emp is None:
+        raise LookupError("Employee not found.")
+    wanted = sorted(set(device_ids))
+    known = {d.pk: d.name for d in BiometricDevice.objects.filter(pk__in=wanted)}
+    unknown = [i for i in wanted if i not in known]
+    if unknown:
+        raise ValueError(f"No device with id {', '.join(str(i) for i in unknown)}.")
+    before = sorted(emp.punch_devices.values_list("pk", flat=True))
+    names = dict(BiometricDevice.objects.values_list("pk", "name"))
+    emp.punch_devices.set(wanted)
+    if before != wanted:
+        log_action(
+            request,
+            "update",
+            "attendance",
+            record_id=emp.pk,
+            description=(
+                f"Punches of {emp.employee_code} -{employee_name(emp)} are taken "
+                + (f"only from {', '.join(known[i] for i in wanted)}" if wanted else "from any device")
+                + " (Device Control)"
+            ),
+            old_values={"punchDevices": [names.get(i, str(i)) for i in before]},
+            new_values={"punchDevices": [known[i] for i in wanted]},
+        )
+    return {"employeeId": emp.pk, "punchDevices": wanted}

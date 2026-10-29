@@ -136,6 +136,8 @@ export type PersonEmployee = {
   designation: string | null;
   branch: string | null;
   photoUrl: string | null;
+  /** The devices this employee's punches are taken from; empty = punches from any device. */
+  punchDevices?: number[];
 };
 
 export type PersonRow = {
@@ -491,6 +493,25 @@ export const useSaveEmployeePhoto = () => {
   });
 };
 
+/** Limit an employee's punches to some devices (an empty list = take them from any device again). */
+export const useSetEmployeePunchDevices = () => {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { employeeId: number; punchDevices: number[] },
+    Error,
+    { employeeId: number; deviceIds: number[] }
+  >({
+    mutationFn: ({ employeeId, deviceIds }) =>
+      customFetch(`${BASE}/employees/${employeeId}/punch-devices`, {
+        method: "POST",
+        body: JSON.stringify({ deviceIds }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DEVICE_CONTROL_PEOPLE_KEY });
+    },
+  });
+};
+
 // ── Data Fetch ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type FetchPreset = "today" | "yesterday" | "last7" | "this_month" | "last_month" | "all" | "custom";
@@ -515,6 +536,8 @@ export type FetchDeviceResult = {
   created?: number;
   unmatchedPunches?: number;
   unmatchedIds?: number;
+  /** Punches ignored because their employee is limited to other devices. */
+  restricted?: number;
   unmatched?: FetchUnmatched[];
   invalidRecords?: number;
   samples?: FetchSample[];
@@ -542,6 +565,7 @@ export type FetchRun = {
     new: number;
     created: number;
     unmatchedPunches: number;
+    restricted?: number;
     unmatched: FetchUnmatched[];
     suspiciousDays: SuspiciousDay[];
   } | null;

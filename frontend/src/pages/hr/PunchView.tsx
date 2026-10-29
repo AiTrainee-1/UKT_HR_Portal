@@ -7,6 +7,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   usePunchList, downloadPunchesExcel, useImportPunches,
@@ -14,10 +23,14 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import {
   ArrowLeft, Download, UploadCloud, Search, Fingerprint, Info,
-  CheckCircle2, AlertTriangle, X, ChevronLeft, ChevronRight,
+  CheckCircle2, AlertTriangle, X, ChevronLeft, ChevronRight, Trash2, Loader2,
 } from "lucide-react";
 
 const PAGE_SIZE = 100;
+
+/** From this many deletions on, the confirmation asks for the word DELETE to be typed (and always when the file has none of the
+ *  punches its download listed). */
+const TYPED_CONFIRM_FROM = 25;
 
 /** YYYY-MM-DD from the viewer's LOCAL calendar date.
  *
@@ -99,6 +112,9 @@ export default function PunchView() {
   const [searchInput, setSearchInput] = useState("");
   const [exporting, setExporting] = useState(false);
   const [importResult, setImportResult] = useState<PunchImportResult | null>(null);
+  // The checked file waiting for a yes: what it would change, and the file to send again with "delete" switched on.
+  const [pending, setPending] = useState<{ file: File; check: PunchImportResult } | null>(null);
+  const [confirmText, setConfirmText] = useState("");
 
   const query: PunchFilters = { ...filters, limit: PAGE_SIZE, offset: page * PAGE_SIZE };
   const { data, isLoading } = usePunchList(query);
@@ -167,25 +183,57 @@ export default function PunchView() {
     }
   };
 
+  const announce = (res: PunchImportResult) => {
+    const parts = [`${res.updated} updated`, `${res.created} added`];
+    if (res.deleted > 0) parts.push(`${res.deleted} deleted`);
+    toast({
+      title: parts.join(", "),
+      description: res.errorCount > 0
+        ? `${res.errorCount} row${res.errorCount === 1 ? "" : "s"} rejected -see details below.`
+        : "All rows applied.",
+      variant: res.errorCount > 0 ? "destructive" : "default",
+    });
+  };
+
+  const apply = (file: File) => {
+    importer.mutate(
+      { file, deleteMissing: true },
+      {
+        onSuccess: (res) => {
+          setPending(null);
+          setConfirmText("");
+          setImportResult(res);
+          announce(res);
+        },
+        onError: (e: any) => toast({ title: "Import failed", description: e?.message, variant: "destructive" }),
+      },
+    );
+  };
+
+  /** The file is checked first (nothing changes). With nothing to delete it is applied at once; with punches
+   *  removed from the sheet, a confirmation says exactly how many and which, and only a yes deletes them. */
   const handleFile = (file: File | null) => {
     if (!file) return;
     setImportResult(null);
-    importer.mutate(file, {
-      onSuccess: (res) => {
-        setImportResult(res);
-        toast({
-          title: `${res.updated} updated, ${res.created} added`,
-          description: res.errorCount > 0
-            ? `${res.errorCount} row${res.errorCount === 1 ? "" : "s"} rejected -see details below.`
-            : "All rows applied.",
-          variant: res.errorCount > 0 ? "destructive" : "default",
-        });
+    importer.mutate(
+      { file, preview: true },
+      {
+        onSuccess: (check) => {
+          if (check.canDelete && check.toDelete > 0) {
+            setConfirmText("");
+            setPending({ file, check });
+          } else {
+            apply(file);
+          }
+        },
+        onError: (e: any) => toast({ title: "Import failed", description: e?.message, variant: "destructive" }),
       },
-      onError: (e: any) =>
-        toast({ title: "Import failed", description: e?.message, variant: "destructive" }),
-    });
+    );
     if (fileRef.current) fileRef.current.value = "";
   };
+
+  const needsTyping = !!pending && (pending.check.toDelete >= TYPED_CONFIRM_FROM || pending.check.deleteAll);
+  const confirmReady = !needsTyping || confirmText.trim().toUpperCase() === "DELETE";
 
   return (
     <HrLayout>
@@ -206,9 +254,12 @@ export default function PunchView() {
           <Info size={14} className="text-blue-600 shrink-0 mt-0.5" />
           <p className="text-xs text-blue-800">
             Reads only what's already in the database, so it never depends on reaching a device.
-            On re-upload, rows keep their <b>Punch ID</b> and are <b>updated</b> — re-uploading the
-            same file changes nothing. Leave Punch ID blank to add a new punch.
-            Deleting a row from the sheet does <b>not</b> delete the punch.
+            Uploading the edited file makes the system match it: rows keep their <b>Punch ID</b> and are{" "}
+            <b>updated</b>, a row with the Punch ID blank <b>adds</b> a new punch, and a row you{" "}
+            <b>delete</b> from the sheet <b>deletes</b> that punch (you are asked to confirm first). Only punches
+            that were in the file you downloaded can be deleted. Re-uploading the same file changes nothing.
+            Employee Name, Department and Source may be removed from the sheet; removing a column never removes
+            it from the system.
           </p>
         </div>
 
@@ -325,7 +376,7 @@ export default function PunchView() {
                 disabled={importer.isPending}
               >
                 <UploadCloud size={14} />
-                {importer.isPending ? "Importing…" : "Upload edited file"}
+                {importer.isPending ? "Checking…" : "Upload edited file"}
               </Button>
             </div>
           </CardContent>
@@ -349,6 +400,7 @@ export default function PunchView() {
               <p className="text-xs text-muted-foreground">
                 <b className="text-green-700">{importResult.updated}</b> updated ·{" "}
                 <b className="text-blue-700">{importResult.created}</b> added ·{" "}
+                <b className="text-red-700">{importResult.deleted}</b> deleted ·{" "}
                 <b>{importResult.unchanged}</b> unchanged
                 {importResult.errorCount > 0 && (
                   <> · <b className="text-red-600">{importResult.errorCount}</b> rejected</>
@@ -364,6 +416,77 @@ export default function PunchView() {
             </CardContent>
           </Card>
         )}
+
+        {/* ── Confirm the deletions ── */}
+        <AlertDialog open={!!pending} onOpenChange={(open) => { if (!open && !importer.isPending) setPending(null); }}>
+          <AlertDialogContent data-testid="punch-delete-confirm">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <Trash2 size={18} className="text-red-600" />
+                Delete {pending?.check.toDelete} punch{pending?.check.toDelete === 1 ? "" : "es"}?
+              </AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-3 text-sm">
+                  <p>
+                    {pending?.check.toDelete === 1 ? "This punch was" : "These punches were"} in the file you
+                    downloaded and {pending?.check.toDelete === 1 ? "is" : "are"} no longer in the file you
+                    uploaded. Applying the file <b>permanently deletes</b> {pending?.check.toDelete === 1 ? "it" : "them"}
+                    {" "}from the system.
+                  </p>
+                  {pending?.check.deleteAll && (
+                    <p className="rounded-md bg-red-50 border border-red-200 p-2 text-red-700 text-xs">
+                      Not one of the punches in the downloaded file is left in this upload. Check that you chose the
+                      right file.
+                    </p>
+                  )}
+                  <div className="max-h-44 overflow-y-auto rounded-md border bg-slate-50 divide-y text-xs">
+                    {pending?.check.deleteSample.map((d) => (
+                      <div key={d.id} className="px-2 py-1 flex gap-2">
+                        <span className="font-mono text-gray-500">{d.employeeCode}</span>
+                        <span className="font-semibold">{d.employeeName}</span>
+                        <span className="ml-auto font-mono">{d.date} {d.punchTime} {d.punchType}</span>
+                      </div>
+                    ))}
+                    {pending && pending.check.toDelete > pending.check.deleteSample.length && (
+                      <div className="px-2 py-1 text-muted-foreground">
+                        and {pending.check.toDelete - pending.check.deleteSample.length} more
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    The same upload also updates {pending?.check.updated} and adds {pending?.check.created} punch
+                    {pending?.check.updated === 1 && pending?.check.created === 0 ? "" : "es"}.
+                    Attendance days already worked out are not redone by this page.
+                  </p>
+                  {needsTyping && (
+                    <div className="space-y-1">
+                      <Label className="text-xs">Type DELETE to confirm</Label>
+                      <Input
+                        value={confirmText}
+                        onChange={(e) => setConfirmText(e.target.value)}
+                        className="h-9 text-sm"
+                        data-testid="punch-delete-confirm-text"
+                        autoFocus
+                      />
+                    </div>
+                  )}
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={importer.isPending}>Cancel</AlertDialogCancel>
+              <Button
+                variant="destructive"
+                disabled={!confirmReady || importer.isPending}
+                onClick={() => pending && apply(pending.file)}
+                data-testid="punch-delete-confirm-apply"
+              >
+                {importer.isPending ? <Loader2 size={14} className="animate-spin mr-1.5" /> : <Trash2 size={14} className="mr-1.5" />}
+                Delete {pending?.check.toDelete} and apply the file
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* ── Table ── */}
         <Card className="border-0 shadow-sm overflow-hidden">

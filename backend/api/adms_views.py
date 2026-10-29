@@ -145,7 +145,12 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
     skipped_unparsable = 0
     skipped_no_employee = 0
     duplicates = 0
+    skipped_restricted = 0  # a punch of an employee who is limited to other devices (Device Control)
     newest_punch = None  # the latest punch in this push (the device's wall clock), for the status page
+    from .device_punch_rules import accepts, device_id_for_serial, device_rules
+
+    rules = device_rules()
+    device_id = device_id_for_serial(sn) if rules else None
 
     for line in body.splitlines():
         if not line.strip():
@@ -172,6 +177,12 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
             )
             continue
 
+        if not accepts(rules, emp.pk, device_id):
+            # this employee takes punches only from the devices chosen for them: the same code on another unit's device
+            # is somebody else
+            skipped_restricted += 1
+            continue
+
         punch_type = _STATUS_MAP.get(parsed["status"], AttendanceLog.PUNCH_IN)
         _log, created = AttendanceLog.objects.get_or_create(
             employee=emp,
@@ -194,8 +205,9 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
             duplicates += 1
 
     logger.warning(
-        "ADMS ATTLOG result: SN=%s processed=%d duplicates=%d skipped_unparsable=%d skipped_no_employee=%d",
-        sn, processed, duplicates, skipped_unparsable, skipped_no_employee,
+        "ADMS ATTLOG result: SN=%s processed=%d duplicates=%d skipped_unparsable=%d skipped_no_employee=%d "
+        "skipped_restricted=%d",
+        sn, processed, duplicates, skipped_unparsable, skipped_no_employee, skipped_restricted,
     )
     record_attlog_result(sn, processed=processed, last_punch_dt=newest_punch, unparsable=skipped_unparsable)
     return _ok()

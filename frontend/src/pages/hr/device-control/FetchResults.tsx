@@ -1,5 +1,5 @@
 import { useLocation } from "wouter";
-import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, Info, Loader2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -124,6 +124,17 @@ export default function FetchResults({ run }: { run: FetchRun }) {
             tone={s.unmatchedPunches ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}
           />
         </div>
+      )}
+
+      {s && (s.restricted ?? 0) > 0 && (
+        <p
+          className="flex items-start gap-2 rounded-xl bg-sky-50 px-4 py-2.5 text-xs text-sky-900"
+          data-testid="fetch-restricted"
+        >
+          <Info size={14} className="mt-0.5 shrink-0" />
+          {n(s.restricted)} punch{s.restricted === 1 ? " was" : "es were"} ignored: the employee they carry the code of
+          takes punches only from other devices (Data Push, edit the person, Take punches from).
+        </p>
       )}
 
       <Card className="overflow-hidden rounded-2xl">

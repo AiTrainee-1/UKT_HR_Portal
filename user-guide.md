@@ -336,6 +336,13 @@ This is a background process that automatically fetches raw punch records from t
 - **Add to more devices** (arrow) copies a person to other devices with the details the devices already hold; tick several rows to do it for many.
 - **Delete** (bin) removes the person from the devices you tick. By default it also makes the employee **Inactive** in the HRMS; they are never deleted, so their record is there if they join again. The dialog says exactly what will happen first.
 
+**Take punches from (same Employee Code on devices in different units).** In the edit form of a person (pencil), the section **Take punches from** says which devices may give that employee's punches:
+- **Any device** (the default, and what every employee has now): nothing changes.
+- **Only these devices**: tick the devices (for example only Head Office). From then on a punch carrying this employee's code is recorded **only** when it comes from one of those devices; the same code on any other device, or on a device the HRMS does not know, is ignored, so another unit's person with the same code can no longer get punches written onto this employee. Choose at least one device, or switch back to Any device.
+- It applies to punches that arrive from now on (device push, Sync Biometric, Data Fetch and the Site Connector, and the generic device push). **Punches already recorded are never changed or removed**, and punches that do not come from a device (Excel import, manual entry, geo / On-Duty punches) are never limited.
+- The list shows "Punches only from ..." under the name of a limited person, and a Data Fetch result says how many punches were ignored for this reason.
+- The change is in the audit log. It does not need a device connection: it is saved in the HRMS.
+
 > These machines enrol faces on the device itself: a user added here has no face until the person enrols at the machine, and a photo taken here cannot be put on the machine. Device Control talks to the machines directly, so it needs the HRMS to be running where it can reach them (a computer in the factory); on the cloud server it says so instead of failing.
 
 #### Site connectors

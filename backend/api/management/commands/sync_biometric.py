@@ -65,7 +65,10 @@ class Command(BaseCommand):
                 continue
             self.stdout.write(self.style.MIGRATE_HEADING(f"\nConnecting to {t['label']} at {t['host']}:{t['port']} ..."))
             try:
-                result = pull_from_device(t["host"], t["port"], t["password"], date_from, device_label=t["label"])
+                result = pull_from_device(
+                    t["host"], t["port"], t["password"], date_from, device_label=t["label"],
+                    device_id=t["device"].pk if t.get("device") is not None else None,
+                )
             except BiometricSyncError as exc:
                 failures.append(f"{t['label']}: {exc}")
                 self.stdout.write(self.style.ERROR(f"  ✗ {exc}"))

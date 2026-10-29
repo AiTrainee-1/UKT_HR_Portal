@@ -991,6 +991,12 @@ def biometric_punch(request: Request) -> Response:
         logger.warning("biometric_punch: unparsable time %r -raw body: %r", punch_time_raw, request.data)
         return Response({"error": "Invalid time format. Use ISO-8601 or Unix timestamp."}, status=400)
 
+    from .device_punch_rules import accepts, device_id_for_serial, device_rules
+
+    if not accepts(device_rules([emp.pk]), emp.pk, device_id_for_serial(str(device_sn))):
+        # limited to other devices (Device Control): the same code on another unit's device is somebody else
+        return Response({"ok": True, "ignored": "device_not_allowed_for_employee"}, status=200)
+
     punch_date = dt.date()
     punch_time = dt.time().replace(microsecond=0)
     punch_type = (
@@ -1204,7 +1210,10 @@ def run_biometric_sync(mode: str = "day", device_id=None) -> dict:
             continue
         sync_progress.mark(t["label"], "syncing")
         try:
-            result = pull_from_device(t["host"], t["port"], t["password"], date_from, device_label=t["label"])
+            result = pull_from_device(
+                t["host"], t["port"], t["password"], date_from, device_label=t["label"],
+                device_id=t["device"].pk if t.get("device") is not None else None,
+            )
             total_created += result["created"]
             not_found_ids |= result["notFound"]
             suspicious_days.extend(result.get("suspiciousDays", []))

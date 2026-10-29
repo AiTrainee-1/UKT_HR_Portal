@@ -176,6 +176,12 @@ class Employee(models.Model):
     probation_end_date = models.DateField(null=True, blank=True, db_column="probation_end_date")
     confirmation_date = models.DateField(null=True, blank=True, db_column="confirmation_date")
     biometric_device_id = models.TextField(null=True, blank=True, db_column="biometric_device_id")
+    # The biometric devices that may give this employee's punches (Device Control -> Data Push -> edit a person). Empty (the
+    # default, and what every existing employee has) = punches from any device are accepted. Chosen = only these devices:
+    # for two people who share an Employee Code on devices in different units. See device_punch_rules.py.
+    punch_devices = models.ManyToManyField(
+        "BiometricDevice", blank=True, related_name="punch_employees", db_table="employee_punch_devices"
+    )
     blood_group = models.TextField(null=True, blank=True, db_column="blood_group")
     initial_salary = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True, db_column="initial_salary",

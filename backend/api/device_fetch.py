@@ -35,6 +35,7 @@ from django.utils import timezone
 from . import device_remote
 from .audit_utils import log_action
 from .biometric_sync import _STATUS_MAP, _active_employee_lookup, _ingest_punches
+from .device_punch_rules import accepts, device_rules
 from .clock import ist_today
 from .device_client import LOG_READ_DEADLINE_SECONDS, DeviceUnavailable, Punch, open_session
 from .device_directory import employee_name, password_of
@@ -223,8 +224,13 @@ def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict,
 
     matched = []
     unmatched: dict[str, dict] = {}
+    restricted = 0  # punches of employees limited to other devices (Device Control): not theirs, so not counted anywhere else
+    rules = device_rules()
     for p in punches:
         emp = by_code.get(p.user_id.strip())
+        if emp is not None and not accepts(rules, emp.pk, device.pk):
+            restricted += 1
+            continue
         if emp is None:
             row = unmatched.setdefault(p.user_id.strip(), {"userId": p.user_id.strip(), "punches": 0, "lastDate": None})
             row["punches"] += 1
@@ -267,6 +273,7 @@ def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict,
         "new": len(new),
         "unmatchedPunches": sum(r["punches"] for r in unmatched.values()),
         "unmatchedIds": len(unmatched),
+        "restricted": restricted,
         "unmatched": sorted(unmatched.values(), key=lambda r: -r["punches"])[:UNMATCHED_SHOWN],
         "invalidRecords": data["invalid"],
         "samples": [
@@ -389,6 +396,7 @@ def execute_run(run_id: int) -> None:
         "new": sum(r["new"] for r in done),
         "created": sum(r["created"] for r in done),
         "unmatchedPunches": sum(r["unmatchedPunches"] for r in done),
+        "restricted": sum(r.get("restricted", 0) for r in done),
         "unmatched": _merge_unmatched(done),
         "suspiciousDays": [d for r in done for d in r["suspiciousDays"]],
     }
@@ -492,7 +500,7 @@ def ingest_from_connector(
         record_unmatched_punch(row["userId"], device.serial_number or "", when)
     now = timezone.now()
     BiometricDevice.objects.filter(pk=device.pk).update(last_synced_at=now, last_reachable_at=now, last_sync_error="")
-    keep = ("inRange", "matched", "alreadyInHrms", "new", "created", "unmatchedPunches", "unmatchedIds")
+    keep = ("inRange", "matched", "alreadyInHrms", "new", "created", "unmatchedPunches", "unmatchedIds", "restricted")
     return {k: result[k] for k in keep}
 
 

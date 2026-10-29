@@ -16,6 +16,7 @@ import os
 import socket
 from datetime import date as date_type, time as time_type
 
+from .device_punch_rules import NOT_A_DEVICE, accepts, device_rules
 from .models import Attendance, AttendanceLog, Employee
 
 # Seconds to wait on a plain TCP probe before giving up on a device. Kept
@@ -265,7 +266,8 @@ def _active_employee_lookup() -> dict:
 
 
 def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
-                     date_from: date_type | None, source_tag: str) -> dict:
+                     date_from: date_type | None, source_tag: str,
+                     device_id=NOT_A_DEVICE) -> dict:
     """
     Write already-resolved punches to AttendanceLog + Attendance. Each punch
     is (uid, punch_date, punch_time, punch_type) -punch_type must already be
@@ -277,15 +279,21 @@ def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
     uid is matched against Employee Code ONLY -see _active_employee_lookup
     for why no other identifier is ever consulted.
 
+    `device_id` is the device the punches were read from (None = a device the HRMS cannot name; the default says they did
+    not come from a device at all: Excel import, geo). An employee limited to certain devices (device_punch_rules) has a
+    punch from any other device ignored: it is counted in "restricted", not written, and not reported as "not found".
+
     Returns {"created": int, "skipped": int, "notFound": set[str],
     "suspiciousDays": list[dict]} -"total" is the caller's responsibility
     since it means something different for a device pull (raw record count)
     vs an Excel import (uploaded row count).
     """
     by_code = _active_employee_lookup()
+    rules = device_rules() if device_id is not NOT_A_DEVICE else {}
 
     created = 0
     skipped = 0
+    restricted = 0
     not_found: set[str] = set()
     daily_punch_counts: dict[tuple[int, date_type], int] = {}
 
@@ -310,6 +318,11 @@ def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
                 device_serial="",
                 punch_dt=_dt.combine(punch_date, punch_time),
             )
+            continue
+
+        if not accepts(rules, emp.pk, device_id):
+            restricted += 1
+            skipped += 1
             continue
 
         try:
@@ -348,13 +361,13 @@ def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
     ]
 
     return {
-        "created": created, "skipped": skipped,
+        "created": created, "skipped": skipped, "restricted": restricted,
         "notFound": not_found, "suspiciousDays": suspicious,
     }
 
 
 def pull_from_device(host: str, port: int, password: int, date_from: date_type | None,
-                      device_label: str = "") -> dict:
+                      device_label: str = "", device_id=None) -> dict:
     """
     Connect to one device, pull attendance, write logs. Returns a summary dict:
     {"created": int, "skipped": int, "notFound": set[str], "total": int,
@@ -374,7 +387,7 @@ def pull_from_device(host: str, port: int, password: int, date_from: date_type |
         for rec in raw_records
     ]
 
-    result = _ingest_punches(punches, date_from, source_tag)
+    result = _ingest_punches(punches, date_from, source_tag, device_id=device_id)
     result["total"] = len(raw_records)
     return result
 

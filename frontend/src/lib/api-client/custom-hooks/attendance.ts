@@ -509,21 +509,52 @@ export async function downloadPunchesExcel(filters: PunchFilters): Promise<void>
   URL.revokeObjectURL(url);
 }
 
+export type PunchDeleteSample = {
+  id: number;
+  employeeCode: string;
+  employeeName: string;
+  date: string;
+  punchTime: string;
+  punchType: "IN" | "OUT";
+};
+
 export type PunchImportResult = {
   ok: boolean;
+  /** True for a check that changed nothing (`preview`). */
+  preview: boolean;
   updated: number;
   created: number;
   unchanged: number;
   errors: string[];
   errorCount: number;
+  /** False for a file with no record of what its download listed: it can add and update, never delete. */
+  canDelete: boolean;
+  exportedCount: number;
+  /** Punches the download listed that the file no longer has. */
+  toDelete: number;
+  deleteSample: PunchDeleteSample[];
+  /** Every punch the download listed is gone from the file. */
+  deleteAll: boolean;
+  deleted: number;
+  skippedDeletes?: number;
+};
+
+export type PunchImportRequest = {
+  file: File;
+  /** Work everything out and change nothing. */
+  preview?: boolean;
+  /** Delete the punches removed from the sheet (otherwise they are only counted). */
+  deleteMissing?: boolean;
 };
 
 export const useImportPunches = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async ({ file, preview = false, deleteMissing = false }: PunchImportRequest) => {
       const form = new FormData();
       form.append("file", file);
+      if (preview) form.append("preview", "1");
+      if (deleteMissing) form.append("deleteMissing", "1");
       const token = typeof localStorage !== "undefined" ? localStorage.getItem("uk_textile_token") : null;
       const response = await fetch(`${getApiOrigin()}/api/attendance/punches/import`, {
         method: "POST",
@@ -534,7 +565,8 @@ export const useImportPunches = () => {
       if (!response.ok) throw new Error(body.error ?? "Import failed");
       return body as PunchImportResult;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.preview) return; // a check changes nothing
       queryClient.invalidateQueries({ queryKey: ["/api/attendance/punches"] });
       queryClient.invalidateQueries({
         predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/attendance"),

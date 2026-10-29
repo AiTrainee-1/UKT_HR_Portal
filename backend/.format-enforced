@@ -135,6 +135,7 @@ api/reporting/definitions/gate_visitor_tea_common.py
 api/reporting/definitions/gate_visitor_tea_overview.py
 api/reporting/definitions/gate_visitor_tea_tea.py
 api/reporting/definitions/gate_visitor_tea_visitors.py
+api/device_punch_rules.py
 api/reporting/definitions/hr_reports.py
 api/reporting/definitions/hr_reports_punches.py
 api/reporting/definitions/hr_reports_salary_statement.py
@@ -241,6 +242,8 @@ api/tests_reporting_hr_reports.py
 api/tests_reporting_hr_salary_statement.py
 api/tests_reporting_hr_strength.py
 api/tests_reporting_hr_time_card.py
+api/tests_device_punch_rules.py
+api/tests_punch_view_sync.py
 api/tests_reporting_payroll_core.py
 api/tests_reporting_payroll_statutory.py
 api/tests_reporting_requests_leave.py
