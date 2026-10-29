@@ -1,6 +1,7 @@
 import type ExcelJS from "exceljs";
 import { dateTime, fileStem } from "@/components/payroll/kit/format";
 import { issueLabel } from "@/components/payroll/kit/issue-meta";
+import { payStatusLabel } from "@/components/payroll/kit/pay-status";
 import type { PayrollDetails } from "@/lib/api-client/custom-hooks";
 import {
   addTitleBlock,
@@ -131,7 +132,7 @@ export async function exportDetailsWorkbook(details: PayrollDetails, company: st
   at += 1;
   section("Payroll");
   field("Period", period.label);
-  field("Payroll status", statusLabel(details.status));
+  field("Payroll status", payStatusLabel(details.status));
   field("Payslip number", details.slipNumber);
   field("Last computed", details.generatedAt ? dateTime(details.generatedAt) : null);
   field("First generated", details.firstGeneratedAt ? dateTime(details.firstGeneratedAt) : null);

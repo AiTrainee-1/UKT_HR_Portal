@@ -273,7 +273,7 @@ describe("the Production Employees page", () => {
     expect(selvi.querySelector<HTMLElement>('[data-testid="pe-cycle-chip"]')?.dataset.cycle).toBe("biweekly");
     expect(text(selvi)).toContain("2 Feb - 15 Feb 2026");
     expect(text(selvi)).toContain("Pending");
-    expect(text(must("pe-row-P004"))).toContain("Paid");
+    expect(text(must("pe-row-P004"))).toContain("Cleared");
   });
 
   it("ticks people and assigns them in bulk, then clears the selection", async () => {

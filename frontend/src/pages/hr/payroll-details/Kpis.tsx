@@ -76,7 +76,7 @@ export function KpiStrip({
       <KpiTile
         label="Net payable"
         value={inr(money.net)}
-        sub={details.status === "paid" ? "Paid" : "To be paid"}
+        sub={details.status === "paid" ? "Cleared" : "Pending"}
         icon={Wallet}
         tone={cn(accent.kpi, accent.tileRing)}
         className="order-first col-span-2 sm:order-none sm:col-span-1 [&_[data-testid=pd-kpi-net-value]]:text-3xl sm:[&_[data-testid=pd-kpi-net-value]]:text-2xl"

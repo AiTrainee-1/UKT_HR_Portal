@@ -451,7 +451,7 @@ test("the Rules view shows the rules of the cycle and the rules each employee is
   await expect(page.getByTestId("rules-row-PC-W2")).toContainText("Bala Worker");
 });
 
-test("a paid payslip is never recomputed, a pending one only when asked", async ({ page }) => {
+test("a cleared payslip is never recomputed, a pending one only when asked", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
   await pageTab(page, "Employees").click();
@@ -466,7 +466,7 @@ test("a paid payslip is never recomputed, a pending one only when asked", async 
   // mark one paid on the Payroll tab
   await pageTab(page, "Payroll").click();
   await card(page, "Bala Worker")
-    .getByRole("button", { name: /mark paid/i })
+    .getByRole("button", { name: /mark as cleared/i })
     .click();
   await expect
     .poll(async () => (await payrollRows(page, "weekly")).find((r) => r.employeeCode === "PC-W2")?.status)
@@ -475,7 +475,7 @@ test("a paid payslip is never recomputed, a pending one only when asked", async 
 
   // paid: no "Generate again" any more, and the API refuses to recompute it
   await pageTab(page, "Employees").click();
-  await expect(page.getByTestId("pcp-roster-state-PC-W2")).toHaveText("Paid");
+  await expect(page.getByTestId("pcp-roster-state-PC-W2")).toHaveText("Cleared");
   await expect(page.getByTestId("pcp-regenerate-PC-W2")).toHaveCount(0);
   const employee = (await testEmployees(page)).find((e) => e.employeeCode === "PC-W2")!;
   const again = await api(page, "POST", "/api/payroll/production/generate", {
@@ -732,9 +732,9 @@ test("a read-only login can look but not generate or assign", async ({ page }) =
     await expect(page.getByTestId("view-issues")).toBeEnabled();
     await expect(page.getByTestId("pcp-export")).toBeEnabled();
     await expect(card(page, "Asha Worker").getByRole("button", { name: /^details/i })).toBeEnabled();
-    // ... writing is: the bank transfer file and Mark Paid
+    // ... writing is: the bank transfer file and Mark as Cleared
     await expect(page.getByTestId("pcp-export-bank")).toBeDisabled();
-    await expect(card(page, "Asha Worker").getByRole("button", { name: /mark paid/i })).toBeDisabled();
+    await expect(card(page, "Asha Worker").getByRole("button", { name: /mark as cleared/i })).toBeDisabled();
     await page.goto("/hr/employees/productionEmployee");
     await peTab(page, "Weekly").click();
     await expect(page.getByTestId("pe-row-assign-PC-W1")).toBeDisabled();

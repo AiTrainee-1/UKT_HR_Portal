@@ -345,13 +345,13 @@ function PaymentCard({
 }) {
   const both = split.paid.share > 0 && split.pending.share > 0;
   const rows = [
-    { status: "paid" as const, label: "Paid", dot: "bg-emerald-500", bucket: split.paid },
+    { status: "paid" as const, label: "Cleared", dot: "bg-emerald-500", bucket: split.paid },
     { status: "pending" as const, label: "Pending", dot: "bg-amber-500", bucket: split.pending },
   ];
   return (
     <SectionCard
       title="Payment status"
-      description="How much of the net payable has been released"
+      description="How much of the net payable has been cleared"
       icon={Wallet}
       testId={testId}
     >
@@ -367,13 +367,13 @@ function PaymentCard({
           testId={`${testId}-empty`}
           icon={Wallet}
           title="No payroll yet"
-          hint={`Generate payroll for ${periodLabel} to see what is paid and what is pending.`}
+          hint={`Generate payroll for ${periodLabel} to see what is cleared and what is pending.`}
         />
       ) : (
         <div className="space-y-3">
           <div>
             <p className="text-3xl font-black leading-none text-gray-900" data-testid={`${testId}-percent`}>
-              {split.paidPercent}% <span className="text-sm font-semibold text-muted-foreground">paid</span>
+              {split.paidPercent}% <span className="text-sm font-semibold text-muted-foreground">cleared</span>
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               {inr(split.paid.net)} of {inr(split.net)} net payable
@@ -381,7 +381,7 @@ function PaymentCard({
           </div>
           <div
             role="img"
-            aria-label={`${split.paidPercent}% of the net payable is paid: ${inr(split.paid.net)} paid, ${inr(split.pending.net)} pending`}
+            aria-label={`${split.paidPercent}% of the net payable is cleared: ${inr(split.paid.net)} cleared, ${inr(split.pending.net)} pending`}
             className="flex h-3 w-full gap-0.5"
             data-testid={`${testId}-bar`}
           >
@@ -389,7 +389,7 @@ function PaymentCard({
               <div
                 className={cn("bg-emerald-500", both ? "rounded-l-[4px]" : "rounded-[4px]")}
                 style={{ flex: `${split.paid.share} 1 0%`, minWidth: 6 }}
-                title={`Paid: ${plural(split.paid.employees, "employee")}, ${inr(split.paid.net)}`}
+                title={`Cleared: ${plural(split.paid.employees, "employee")}, ${inr(split.paid.net)}`}
                 data-segment="paid"
               />
             )}

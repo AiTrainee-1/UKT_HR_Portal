@@ -187,11 +187,11 @@ export function GenerateDialog({
                 <p className="font-semibold">
                   Payroll already exists for {monthYear(month, year)}: {found.total} record
                   {found.total === 1 ? "" : "s"}
-                  {found.paid > 0 ? ` (${found.paid} paid, ${found.pending} pending)` : ""}.
+                  {found.paid > 0 ? ` (${found.paid} cleared, ${found.pending} pending)` : ""}.
                 </p>
                 <p>
                   Generating again recomputes every active staff employee
-                  {found.paid > 0 ? " and puts the records marked Paid back to Pending" : ""}.
+                  {found.paid > 0 ? " and puts the records marked Cleared back to Pending" : ""}.
                 </p>
                 {needsConfirm && (
                   <label className="mt-1 flex cursor-pointer items-center gap-2 font-semibold">

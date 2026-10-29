@@ -37,7 +37,7 @@ export type SalaryStatementViewProps = {
   accent: StatementAccent;
   /** Called with the row when its name is clicked: the page opens that payroll's details. */
   onOpenDetails?: (row: StatementRow) => void;
-  /** An extra last column ("Actions") with whatever the page wants on each row (Mark Paid, Adjust ...). */
+  /** An extra last column ("Actions") with whatever the page wants on each row (Mark as Cleared, Adjust ...). */
   renderRowActions?: (row: StatementRow) => ReactNode;
   /** "scroll": one continuous table. "pages": the A4 landscape sheets as they print, one at a time. */
   view?: StatementView;
@@ -187,7 +187,7 @@ function CountChips({ statement }: { statement: SalaryStatement }) {
         <span data-testid="statement-chip-departments">{plural(departments, "department")}</span>
       </Chip>
       <Chip tone="success" icon={CheckCircle2}>
-        <span data-testid="statement-chip-paid">{paid} paid</span>
+        <span data-testid="statement-chip-paid">{paid} cleared</span>
       </Chip>
       <Chip tone="warning" icon={Clock}>
         <span data-testid="statement-chip-pending">{pending} pending</span>

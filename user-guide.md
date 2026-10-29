@@ -608,7 +608,7 @@ For each pending punch verification:
 1. **Not Generated** — Month not yet processed
 2. **Generated / Draft** — Payroll run, available for review
 3. **Published / Finalized** — Locked and sent to employees
-4. **Paid** — Marked as payment complete
+4. **Cleared** — Marked as cleared (the company does not record who was paid: a salary is either **Cleared** or still **Pending**)
 
 **What affects the salary calculation:**
 - Basic salary + configured allowances (HRA, transport, etc.)
@@ -629,7 +629,7 @@ For each pending punch verification:
 5. **Review the draft:** Check each employee's computed salary. You can see present days, LOP days, deductions, and final net pay.
 6. If any corrections are needed, go back to Attendance and fix them, then **Re-generate**.
 7. Once satisfied, click **Publish / Finalize** to lock the payroll.
-8. After payment is made, mark the payroll as **Paid**.
+8. When the salary is cleared, press **Mark as Cleared** (a record is either **Cleared** or **Pending**).
 
 #### Salary Slips
 - After finalizing, salary slips can be **downloaded** as PDF for each employee. An employee on the TDS list has a **`TDS (10%)`** line (their own percentage) in the deductions; nobody else has a TDS line.
@@ -643,7 +643,7 @@ The page is about **one month** at a time. Use the arrows or the Month / Year bo
 
 **Payroll tab**
 - **Four views**, right under the top row: **Records**, **Issues**, **Skipped** and **Rules**, each with a live count. (The Staff Payroll page has no dashboard of the month any more; the Production Payroll pages still have theirs.)
-- **Records:** one card per employee with the net pay, days, what payroll flagged and the rules that apply to that person (shift, late rules, PF / ESI), a Cards / Table switch, and filters for name or code, department, payment status, issue type and severity ("only with issues"). **Details** opens the payroll on its own page; **Mark Paid** releases it.
+- **Records:** one card per employee with the net pay, days, what payroll flagged and the rules that apply to that person (shift, late rules, PF / ESI), a Cards / Table switch, and filters for name or code, department, payment status (Cleared / Pending), issue type and severity ("only with issues"). **Details** opens the payroll on its own page; **Mark as Cleared** clears it.
 - **Issues:** every detection of the month: absent days, late arrivals, early leaving, half days, quarter-day cuts, missing punches, no shift assigned, late deduction, excess permission, advance recovery, overtime pay, manual adjustments and missing bank / PF / ESI details. Each shows the **date it was detected** ("Detected on Mon, 16 Feb 2026"; an issue about the whole month says "Whole period" and when payroll flagged it), the specific detail with the real numbers, what it cost (days and ₹), the rule behind it with a link to the Settings page where that rule is changed, and **Open details**. Filter by text, severity, type, department and detection dates; group by date, employee or type; **Export** what is shown (Excel or CSV). An absence is "Needs a look"; **Critical** is kept for what stops a person being paid (for example an employee skipped at generation).
 - **Skipped:** the employees payroll skipped (no salary amount, no working days ...), the reason and how to fix it (a link to the profile or settings). **Re-check** asks again; looking never writes anything.
 - **Rules:** the rules configured on the Settings page that payroll uses (attendance and late detection, half day and permissions, PF / ESI, how a day's pay is worked out ...), each with an **Edit in Settings** link, and **the rules assigned to each employee**.
@@ -855,7 +855,7 @@ On the page of a cycle (Weekly, BiWeekly or Monthly):
 2. Pick the **pay period** (the next one due is selected; an older one can be opened by typing a date inside it). A period can be generated once it has ended.
 3. **Payroll** tab → **Generate Payroll** pays everyone assigned to the cycle who has no payroll for the period yet. **Skipped Employees** shows who would be skipped and why (no salary per shift, or the dates overlap payroll already paid), without writing anything.
 4. **Employees** tab → generate **one employee** (or a few selected ones) on their own; a pending payslip can be generated again after correcting attendance (this replaces the payslip: bonus / deduction adjustments on it are lost).
-5. Review each payslip's breakdown, **Mark Paid**, then use the **Salary** and **Payslip** tabs (all limited to this cycle).
+5. Review each payslip's breakdown, **Mark as Cleared**, then use the **Salary** and **Payslip** tabs (all limited to this cycle).
 
 Generating is safe to repeat: employees who already have payroll for the period are left as they are, a paid payslip is never recomputed, and a period that overlaps days already paid for an employee is refused for them.
 

@@ -65,7 +65,7 @@ export type SalaryStatementPanelProps = {
 
 const STATUS_OPTIONS = [
   { value: ALL, label: "All statuses" },
-  { value: "paid", label: "Paid" },
+  { value: "paid", label: "Cleared" },
   { value: "pending", label: "Pending" },
 ];
 

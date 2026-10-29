@@ -35,9 +35,9 @@ export type PayrollRecordCardProps = {
   onOpenDetails: (run: PayrollRunItem) => void;
   /** Opens the details page at its issues section. Without it the issue badges are plain text. */
   onOpenIssues?: (run: PayrollRunItem) => void;
-  /** Without it a pending row has no "Mark Paid". */
+  /** Without it a pending row has no "Mark as Cleared". */
   onMarkPaid?: (run: PayrollRunItem) => void;
-  /** This row's "Mark Paid" is running: the button spins and waits. */
+  /** This row's "Mark as Cleared" is running: the button spins and waits. */
   marking?: boolean;
   testId?: string;
 };
@@ -245,7 +245,7 @@ function PayrollRecordCardImpl({
                 title={markPaidTitle(run)}
                 data-testid={`payroll-record-markpaid-${run.id}`}
               >
-                <BusyIcon busy={marking} icon={CheckCircle2} size={13} /> Mark Paid
+                <BusyIcon busy={marking} icon={CheckCircle2} size={13} /> Mark as Cleared
               </Button>
             )}
           </div>

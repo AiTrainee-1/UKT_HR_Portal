@@ -76,6 +76,6 @@ export const STATUS_ACCENT: Record<string, string> = {
 };
 
 export const STATUS_TEXT: Record<string, string> = {
-  paid: "Paid",
+  paid: "Cleared",
   pending: "Pending",
 };

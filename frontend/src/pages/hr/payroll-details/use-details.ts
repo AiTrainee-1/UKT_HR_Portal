@@ -46,7 +46,7 @@ export function useMarkPaid() {
       setBusy(true);
       try {
         await mutateAsync({ id: payrollId, data: { status: "paid" } });
-        toast({ title: `${employeeName || "Employee"}'s salary marked as paid` });
+        toast({ title: `${employeeName || "Employee"}'s salary marked as cleared` });
         await queryClient.invalidateQueries({ predicate: (q) => isPayrollQuery(q.queryKey) });
       } catch (err) {
         toast({

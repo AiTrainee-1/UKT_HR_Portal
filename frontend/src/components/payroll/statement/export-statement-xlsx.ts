@@ -214,7 +214,7 @@ export function buildStatementWorkbook(
   }
   const { employees, departments, paid, pending } = statement.counts;
   note(
-    `${employees} employees  -  ${departments} departments  -  ${paid} paid  -  ${pending} pending  -  Generated ${formatStamp(statement.generatedAt)}`,
+    `${employees} employees  -  ${departments} departments  -  ${paid} cleared  -  ${pending} pending  -  Generated ${formatStamp(statement.generatedAt)}`,
   );
 
   // Printing: A4 landscape, one page wide, the title and header repeated on every page, "Page 1 of 9" in the footer.

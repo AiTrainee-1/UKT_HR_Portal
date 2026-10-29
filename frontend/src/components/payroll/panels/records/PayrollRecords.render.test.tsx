@@ -9,7 +9,7 @@ import { PayrollRecordList, type PayrollRecordListProps, type RecordRules } from
 
 // The payroll record card and list in jsdom: what a card says (who, which period, the figures, the issue badges, the
 // rule chips), its two actions and their loaders, the paged list with its Cards | Table toggle, and the one thing the
-// e2e suite relies on: the innermost element holding an employee's name and "Mark Paid" also holds their figures.
+// e2e suite relies on: the innermost element holding an employee's name and "Mark as Cleared" also holds their figures.
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -172,12 +172,12 @@ describe("a payroll record card", () => {
     expect(text(must("payroll-record-1"))).not.toContain("OT ₹");
   });
 
-  it("a paid row is marked as paid and offers no Mark Paid", () => {
+  it("a paid row is marked as cleared and offers no Mark as Cleared", () => {
     card({ run: { ...ASHA, status: "paid" } });
     const el = must("payroll-record-1");
-    expect(text(el)).toContain("Paid");
+    expect(text(el)).toContain("Cleared");
     expect(el.dataset.status).toBe("paid");
-    expect(buttonNamed(el, "Mark Paid")).toBeUndefined();
+    expect(buttonNamed(el, "Mark as Cleared")).toBeUndefined();
     expect(buttonNamed(el, "Details")).toBeDefined();
   });
 });
@@ -266,27 +266,27 @@ describe("the card's rule chips", () => {
 });
 
 describe("the card's actions", () => {
-  it("Details opens the payroll, Mark Paid pays it", () => {
+  it("Details opens the payroll, Mark as Cleared pays it", () => {
     const fns = card();
     const el = must("payroll-record-1");
     click(buttonNamed(el, "Details")!);
     expect(fns.onOpenDetails).toHaveBeenCalledWith(ASHA);
-    click(buttonNamed(el, "Mark Paid")!);
+    click(buttonNamed(el, "Mark as Cleared")!);
     expect(fns.onMarkPaid).toHaveBeenCalledWith(ASHA);
   });
 
-  it("Details is an outline button with an arrow; Mark Paid is a normal button", () => {
+  it("Details is an outline button with an arrow; Mark as Cleared is a normal button", () => {
     card();
     const details = must("payroll-record-details-1");
     expect(details.dataset.variant).toBe("outline");
     expect(details.querySelector("svg")).not.toBeNull();
     expect(text(details)).toBe("Details");
     const pay = must("payroll-record-markpaid-1");
-    expect(text(pay)).toBe("Mark Paid");
+    expect(text(pay)).toBe("Mark as Cleared");
     expect(pay.closest("[data-view-safe]")).toBeNull();
   });
 
-  it("while it is marking, Mark Paid spins and cannot be pressed again", () => {
+  it("while it is marking, Mark as Cleared spins and cannot be pressed again", () => {
     const fns = card({ marking: true });
     const pay = must("payroll-record-markpaid-1") as HTMLButtonElement;
     expect(pay.disabled).toBe(true);
@@ -296,12 +296,12 @@ describe("the card's actions", () => {
     expect((must("payroll-record-details-1") as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("without a handler a pending row has no Mark Paid", () => {
+  it("without a handler a pending row has no Mark as Cleared", () => {
     card({ onMarkPaid: undefined });
     expect(q("payroll-record-markpaid-1")).toBeNull();
   });
 
-  it("for a View Only role: Mark Paid is locked, Details and the issues stay open", () => {
+  it("for a View Only role: Mark as Cleared is locked, Details and the issues stay open", () => {
     card({ issueSummary: SUMMARY });
     lockMutatingControls(document.body);
     expect((must("payroll-record-markpaid-1") as HTMLButtonElement).disabled).toBe(true);
@@ -310,12 +310,14 @@ describe("the card's actions", () => {
   });
 });
 
-// The e2e suite finds a payroll entry as "the innermost div that holds the employee's name and Mark Paid"
-// (page.locator("div").filter({ hasText: name }).filter({ hasText: "Mark Paid" }).last()) and reads the figures from it.
+// The e2e suite finds a payroll entry as "the innermost div that holds the employee's name and Mark as Cleared"
+// (page.locator("div").filter({ hasText: name }).filter({ hasText: "Mark as Cleared" }).last()) and reads the figures from it.
 describe("finding a card the way the e2e suite does", () => {
   const innermost = (name: string) =>
     [...host!.querySelectorAll("div")]
-      .filter((d) => text(d).toLowerCase().includes(name.toLowerCase()) && text(d).toLowerCase().includes("mark paid"))
+      .filter(
+        (d) => text(d).toLowerCase().includes(name.toLowerCase()) && text(d).toLowerCase().includes("mark as cleared"),
+      )
       .at(-1);
 
   const asList = () =>
@@ -346,16 +348,16 @@ describe("finding a card the way the e2e suite does", () => {
     expect(text(ravi)).not.toContain("Asha Kumar");
   });
 
-  it("has its Mark Paid button inside, found by its name", () => {
+  it("has its Mark as Cleared button inside, found by its name", () => {
     asList();
-    const button = buttonNamed(innermost("Ravi Nair")!, "Mark Paid");
+    const button = buttonNamed(innermost("Ravi Nair")!, "Mark as Cleared");
     expect(button).toBeDefined();
-    expect(buttons(innermost("Ravi Nair")!).filter((b) => /mark paid/i.test(text(b)))).toHaveLength(1);
+    expect(buttons(innermost("Ravi Nair")!).filter((b) => /mark as cleared/i.test(text(b)))).toHaveLength(1);
   });
 
   it("keeps the name out of the actions, so no smaller div holds the name and the button but not the figures", () => {
     asList();
-    const actions = buttonNamed(must("payroll-record-1"), "Mark Paid")!.parentElement!;
+    const actions = buttonNamed(must("payroll-record-1"), "Mark as Cleared")!.parentElement!;
     expect(text(actions)).not.toContain("Asha Kumar");
   });
 });
@@ -567,7 +569,7 @@ describe("the Cards | Table toggle", () => {
     expect(cards()).toHaveLength(3);
   });
 
-  it("the table has the same data on one line, and a Details link and Mark Paid per row", () => {
+  it("the table has the same data on one line, and a Details link and Mark as Cleared per row", () => {
     const fns = list({
       runs: [
         ASHA,
@@ -586,7 +588,7 @@ describe("the Cards | Table toggle", () => {
     expect(text(row)).toContain("₹24,000");
     expect(text(row)).toContain("Pending");
     expect(text(must("payroll-record-row-2"))).toContain("₹500");
-    expect(text(must("payroll-record-row-3"))).toContain("Paid");
+    expect(text(must("payroll-record-row-3"))).toContain("Cleared");
     expect(text(must("payroll-record-row-3"))).toContain("—"); // no department
     // the actions
     click(must("payroll-record-details-2"));
@@ -641,7 +643,7 @@ describe("the Cards | Table toggle", () => {
     expect(must("payroll-record-row-1").querySelector('[data-slot="skeleton"]')).not.toBeNull();
   });
 
-  it("in the register Mark Paid is locked for a View Only role, Details is not", () => {
+  it("in the register Mark as Cleared is locked for a View Only role, Details is not", () => {
     list({ runs: [ASHA] });
     click(must("payroll-record-layout-table"));
     lockMutatingControls(document.body);

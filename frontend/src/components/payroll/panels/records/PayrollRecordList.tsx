@@ -37,7 +37,7 @@ export type PayrollRecordListProps = {
   /** Opens the details page at its issues section. */
   onOpenIssues?: (run: PayrollRunItem) => void;
   onMarkPaid: (run: PayrollRunItem) => void;
-  /** The row whose "Mark Paid" is running. */
+  /** The row whose "Mark as Cleared" is running. */
   markingId?: number | null;
   /** Shown instead of the list when there are no rows (the page knows whether a filter or no payroll is the reason). */
   empty: ReactNode;

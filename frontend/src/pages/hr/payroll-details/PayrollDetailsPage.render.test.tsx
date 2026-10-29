@@ -24,7 +24,7 @@ import {
 
 // The details page of one payroll in jsdom, with a fake server behind customFetch: what it shows while loading, when
 // the payroll is missing or the server fails, the header, the dashboard figures, how the salary was worked out, the
-// section bar, and what the buttons do (Back, Previous / Next, Mark as paid, the payslip, Export).
+// section bar, and what the buttons do (Back, Previous / Next, Mark as Cleared, the payslip, Export).
 
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -200,7 +200,7 @@ describe("the header", () => {
       staffDetails({ status: "paid", employee: { ...staffDetails().employee, status: "inactive" } }),
     );
     await openStaff();
-    expect(text(q("pd-status"))).toBe("Paid");
+    expect(text(q("pd-status"))).toBe("Cleared");
     expect(text(q("pd-chips"))).toContain("Inactive employee");
     expect(q("pd-mark-paid")).toBeNull();
   });
@@ -214,7 +214,7 @@ describe("the dashboard", () => {
     expect(text(q("pd-kpi-deductions"))).toContain("₹3,167");
     expect(text(q("pd-kpi-deductions"))).toContain("11.9% of gross");
     expect(text(q("pd-kpi-net-value"))).toBe("₹23,496");
-    expect(text(q("pd-kpi-net"))).toContain("To be paid");
+    expect(text(q("pd-kpi-net"))).toContain("Pending");
     expect(text(q("pd-kpi-days"))).toContain("Days worked");
     expect(text(q("pd-kpi-days-value"))).toBe("23.5 / 26");
     expect(text(q("pd-kpi-days"))).toContain("21 present · 2 paid leave · 1 half · 2 LOP");
@@ -476,11 +476,11 @@ describe("Previous and Next", () => {
   });
 });
 
-describe("Mark as paid", () => {
+describe("Mark as Cleared", () => {
   it("is offered while the payroll is pending, as a normal button the view-only lock can disable", async () => {
     await openStaff();
     const button = must("pd-mark-paid") as HTMLButtonElement;
-    expect(text(button)).toBe("Mark as paid");
+    expect(text(button)).toBe("Mark as Cleared");
     expect(isMutatingControl(button)).toBe(true);
   });
 
@@ -495,10 +495,10 @@ describe("Mark as paid", () => {
     await waitFor(() => !q("pd-mark-paid"), "the payroll to show as paid");
     expect(h.mutateAsync).toHaveBeenCalledWith({ id: 101, data: { status: "paid" } });
     expect(h.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Meena Subramanian's salary marked as paid" }),
+      expect.objectContaining({ title: "Meena Subramanian's salary marked as cleared" }),
     );
-    expect(text(q("pd-status"))).toBe("Paid");
-    expect(text(q("pd-kpi-net"))).toContain("Paid");
+    expect(text(q("pd-status"))).toBe("Cleared");
+    expect(text(q("pd-kpi-net"))).toContain("Cleared");
     const predicate = invalidate.mock.calls[0][0]!.predicate!;
     expect(predicate({ queryKey: ["/api/payroll/insights/details", "staff", 101] } as never)).toBe(true);
     expect(predicate({ queryKey: ["/api/payroll", { month: 10, year: 2026 }] } as never)).toBe(true);
@@ -613,7 +613,7 @@ describe("Export", () => {
     expect(must("pd-actions").className).toContain("print:hidden");
   });
 
-  it("is not locked for a View Only role: the lock's only target on this page is Mark as paid", async () => {
+  it("is not locked for a View Only role: the lock's only target on this page is Mark as Cleared", async () => {
     await openStaff();
     openMenu("export-menu");
     const locked = [...document.body.querySelectorAll("button")].filter((b) => isMutatingControl(b));
@@ -706,7 +706,7 @@ describe("a Production payroll", () => {
     expect(must("pd-next").hasAttribute("disabled")).toBe(false);
   });
 
-  it("asks the production endpoint, and Mark as paid is the same update", async () => {
+  it("asks the production endpoint, and Mark as Cleared is the same update", async () => {
     await openProduction();
     expect(world.requests()).toContain("/api/payroll/production/301/details");
     click(q("pd-mark-paid"));

@@ -180,7 +180,7 @@ describe("the paper", () => {
     const { el } = mount({ statement });
     expect(text(q(el, "statement-chip-employees"))).toBe("15 employees");
     expect(text(q(el, "statement-chip-departments"))).toBe("2 departments");
-    expect(text(q(el, "statement-chip-paid"))).toBe("11 paid");
+    expect(text(q(el, "statement-chip-paid"))).toBe("11 cleared");
     expect(text(q(el, "statement-chip-pending"))).toBe("4 pending");
     expect(text(q(el, "statement-chips"))).not.toContain("Weekly");
     act(() => root!.unmount());
@@ -367,7 +367,7 @@ describe("departments, rows, subtotals and the grand total", () => {
     // the number, then the status in words for a screen reader
     const expected = Array.from(
       { length: 15 },
-      (_, i) => `${i + 1} ${[3, 6, 8, 11].includes(i + 1) ? "Pending" : "Paid"}`,
+      (_, i) => `${i + 1} ${[3, 6, 8, 11].includes(i + 1) ? "Pending" : "Cleared"}`,
     );
     expect(rows.map((r) => text(qa(r, "td")[0]))).toEqual(expected);
     for (const r of rows) expect(qa(r, "td")).toHaveLength(24);
@@ -399,16 +399,16 @@ describe("departments, rows, subtotals and the grand total", () => {
     expect(text(qa(q(el, "statement-row-1008")!, "td")[6])).toBe("24.50");
   });
 
-  it("marks the row's status as a small left accent with its words: green paid, amber pending", () => {
+  it("marks the row's status as a small left accent with its words: green cleared, amber pending", () => {
     const { el } = mount({ statement });
     const paid = qa(q(el, "statement-row-1001")!, "td")[0];
     const pending = qa(q(el, "statement-row-1003")!, "td")[0];
     expect(cls(paid)).toEqual(expect.arrayContaining(["border-l-4", "border-l-emerald-500"]));
     expect(cls(pending)).toEqual(expect.arrayContaining(["border-l-4", "border-l-amber-400"]));
-    expect(paid.getAttribute("title")).toBe("Payroll paid");
+    expect(paid.getAttribute("title")).toBe("Payroll cleared");
     expect(pending.getAttribute("title")).toBe("Payroll pending");
     // not colour alone: the words are there for a screen reader
-    expect(text(paid.querySelector(".sr-only"))).toBe("Paid");
+    expect(text(paid.querySelector(".sr-only"))).toBe("Cleared");
     expect(text(pending.querySelector(".sr-only"))).toBe("Pending");
   });
 

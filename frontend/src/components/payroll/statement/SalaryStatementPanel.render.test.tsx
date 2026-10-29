@@ -137,7 +137,7 @@ describe("loading the statement", () => {
     expect(q(el, "statement-table")).not.toBeNull();
     expect(rowIds(el)).toHaveLength(15);
     expect(text(q(el, "statement-count"))).toBe("15 employees in 2 departments");
-    expect(text(q(el, "statement-chip-paid"))).toBe("11 paid");
+    expect(text(q(el, "statement-chip-paid"))).toBe("11 cleared");
     expect((q(el, "statement-export") as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -244,12 +244,12 @@ describe("search, department and status", () => {
     const { el } = await mount();
     press(q(el, "statement-status"), "Enter");
     const options = qa(document.body, '[role="option"]');
-    expect(options.map((o) => text(o))).toEqual(["All statuses", "Paid", "Pending"]);
+    expect(options.map((o) => text(o))).toEqual(["All statuses", "Cleared", "Pending"]);
     press(options[2], "Enter");
     expect(rowIds(el)).toEqual([1003, 1006, 1008, 1011]);
     expect(text(q(el, "statement-total"))).toContain("1,43,699.00");
     expect(text(q(el, "statement-chip-pending"))).toBe("4 pending");
-    expect(text(q(el, "statement-chip-paid"))).toBe("0 paid");
+    expect(text(q(el, "statement-chip-paid"))).toBe("0 cleared");
   });
 
   it("the filters work together", async () => {

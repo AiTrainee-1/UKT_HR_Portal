@@ -161,7 +161,7 @@ describe("the workbook: layout", () => {
     expect(String(at(ws, "A28").value)).toMatch(/^Basic is the first salary-split portion/);
     expect(at(ws, "A34").value).toBe("TDS is not tracked by the HRMS and is always 0.");
     expect(String(at(ws, "A35").value)).toMatch(
-      /^15 employees {2}- {2}2 departments {2}- {2}11 paid {2}- {2}4 pending {2}- {2}Generated \d{2}-\d{2}-\d{4} \d{2}:\d{2}$/,
+      /^15 employees {2}- {2}2 departments {2}- {2}11 cleared {2}- {2}4 pending {2}- {2}Generated \d{2}-\d{2}-\d{4} \d{2}:\d{2}$/,
     );
     expect(ws.model.merges).toEqual(expect.arrayContaining(["A27:X27", "A28:X28", "A34:X34", "A35:X35"]));
     // a long note gets a taller row so the wrapped text shows

@@ -303,7 +303,7 @@ describe("a row's cells", () => {
   });
 
   it("colours a payslip's status", () => {
-    expect(payrollStatus("paid")).toEqual({ label: "Paid", tone: "success" });
+    expect(payrollStatus("paid")).toEqual({ label: "Cleared", tone: "success" });
     expect(payrollStatus("pending")).toEqual({ label: "Pending", tone: "warning" });
     expect(payrollStatus("on_hold")).toEqual({ label: "On_hold", tone: "neutral" });
     expect(payrollStatus("")).toEqual({ label: "Unknown", tone: "neutral" });

@@ -128,7 +128,7 @@ describe("the Salary Statement", () => {
     expect(text(q("statement-total"))).toContain("GRAND TOTAL");
     expect(text(q("statement-total"))).toContain("5,800.00");
     expect(text(q("statement-chip-employees"))).toBe("2 employees");
-    expect(text(q("statement-chip-paid"))).toBe("1 paid");
+    expect(text(q("statement-chip-paid"))).toBe("1 cleared");
     expect(text(q("statement-chip-pending"))).toBe("1 pending");
     expect(text(q("statement-chips"))).toContain("Weekly");
   });
@@ -290,12 +290,12 @@ describe("the row actions of the statement", () => {
 
   it("marks a pending payslip paid with Pay, and the button goes", async () => {
     await openSalary();
-    expect(text(q("pcp-salary-pay-11"))).toBe("Pay");
+    expect(text(q("pcp-salary-pay-11"))).toBe("Mark as Cleared");
     click(must("pcp-salary-pay-11"));
     await waitFor(() => world.writes.length === 1, "the update");
     expect(world.writes[0]).toMatchObject({ method: "PATCH", url: "/api/payroll/11", body: { status: "paid" } });
     await waitFor(() => !q("pcp-salary-pay-11"), "the button to go");
-    expect(text(q("statement-chip-paid"))).toBe("1 paid");
+    expect(text(q("statement-chip-paid"))).toBe("1 cleared");
   });
 
   it("offers Pay only while a payslip is pending, and Adjust always", async () => {

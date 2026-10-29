@@ -28,7 +28,7 @@ import { useElementWidth } from "./use-element-width";
 // Sticky offsets: the first header row is 28px (h-7) tall and the second sticks at top-7 = 28px, so the two add up; a sticky
 // column's `left` is the sum of the widths of the columns before it (the same widths the <col>s are given).
 
-/** The Actions column the pages may add (Mark Paid, Adjust ...). */
+/** The Actions column the pages may add (Mark as Cleared, Adjust ...). */
 const ACTIONS_PX = 132;
 /** Below this width the table scrolls as a whole: three sticky columns would leave no room for the figures. */
 export const STICKY_MIN_WIDTH = 720;
@@ -136,7 +136,7 @@ export function StatementScrollTable({
     } else {
       content = figureCell(col, row, false);
     }
-    // the first column carries the status accent: green = paid, amber = pending, with its words for everyone
+    // the first column carries the status accent: green = cleared, amber = pending, with its words for everyone
     const accentOn = i === 0;
     const label = accentOn && row.status ? (STATUS_TEXT[row.status] ?? row.status) : "";
     return (

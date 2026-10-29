@@ -207,7 +207,7 @@ export function PayrollRecordTable({
                         title={markPaidTitle(run)}
                         data-testid={`payroll-record-markpaid-${run.id}`}
                       >
-                        <BusyIcon busy={markingId === run.id} icon={CheckCircle2} size={12} /> Mark Paid
+                        <BusyIcon busy={markingId === run.id} icon={CheckCircle2} size={12} /> Mark as Cleared
                       </Button>
                     )}
                   </div>

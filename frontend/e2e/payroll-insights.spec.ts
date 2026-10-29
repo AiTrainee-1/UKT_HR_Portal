@@ -419,7 +419,7 @@ test.describe("Who may see what", () => {
     await expect(card(page, "Ravi Nair")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("staff-generate-open")).toBeDisabled();
     await expect(page.getByTestId("staff-export-bank")).toBeDisabled();
-    await expect(card(page, "Ravi Nair").getByRole("button", { name: /Mark Paid/ })).toBeDisabled();
+    await expect(card(page, "Ravi Nair").getByRole("button", { name: /Mark as Cleared/ })).toBeDisabled();
     // reading is untouched: filters, views, the export menu, the details link
     await page.getByTestId("staff-pf-search").fill("Ravi");
     await expect(card(page, "Asha Kumar")).toHaveCount(0);
@@ -706,7 +706,7 @@ test.describe("Details page", () => {
     );
   });
 
-  test("Mark as paid from the details page updates the status; generating again restores the month", async ({
+  test("Mark as Cleared from the details page updates the status; generating again restores the month", async ({
     page,
     request,
   }) => {
@@ -714,7 +714,7 @@ test.describe("Details page", () => {
     await openAs(page, adminToken, detailsPath(asha));
     await expect(page.getByTestId("pd-status")).toContainText("Pending", { timeout: 30_000 });
     await page.getByTestId("pd-mark-paid").click();
-    await expect(page.getByTestId("pd-status")).toContainText("Paid", { timeout: 30_000 });
+    await expect(page.getByTestId("pd-status")).toContainText("Cleared", { timeout: 30_000 });
     await expect(page.getByTestId("pd-mark-paid")).toHaveCount(0);
     const list = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body;
     expect(list.find((r: { id: number }) => r.id === asha).status).toBe("paid");
@@ -736,7 +736,10 @@ test.describe("Details page", () => {
     expect((await api(request, productionOnlyToken, "GET", `/api/payroll/${ravi}/details`)).status).toBe(403);
   });
 
-  test("a view-only role can read the details page, export it, and cannot mark paid", async ({ page, request }) => {
+  test("a view-only role can read the details page, export it, and cannot mark as cleared", async ({
+    page,
+    request,
+  }) => {
     const ravi = await idOf(request, "E2E002");
     await openAs(page, viewerToken, detailsPath(ravi));
     await expect(page.getByTestId("pd-kpis")).toBeVisible({ timeout: 30_000 });

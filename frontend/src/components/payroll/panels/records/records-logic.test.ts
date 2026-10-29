@@ -124,12 +124,12 @@ describe("the period and the pay cycle", () => {
   });
 });
 
-describe("the Mark Paid tooltip", () => {
+describe("the Mark as Cleared tooltip", () => {
   it("names the employee, and puts the button under the view-only lock", () => {
-    expect(markPaidTitle(run())).toBe("Update the status of Asha Kumar's payroll to Paid");
+    expect(markPaidTitle(run())).toBe("Update the status of Asha Kumar's payroll to Cleared");
     const button = document.createElement("button");
-    button.textContent = "Mark Paid";
-    // without the title the words "Mark Paid" are not on the lock's list, so a View Only role would see it enabled
+    button.textContent = "Mark as Cleared";
+    // without the title the words "Mark as Cleared" are not on the lock's list, so a View Only role would see it enabled
     expect(isMutatingControl(button)).toBe(false);
     button.title = markPaidTitle(run());
     expect(isMutatingControl(button)).toBe(true);

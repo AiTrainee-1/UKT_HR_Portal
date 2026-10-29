@@ -40,7 +40,7 @@ export function useIsRefreshingPayroll(): boolean {
 }
 
 /**
- * "Mark Paid" on one payroll record, shared by the record lists and the Salary tabs. `markingId` is the record whose update
+ * "Mark as Cleared" on one payroll record, shared by the record lists and the Salary tabs. `markingId` is the record whose update
  * is running (its button spins and waits); a success reloads the payroll figures (not the skipped-employees check).
  */
 export function useMarkPaid() {
@@ -54,7 +54,7 @@ export function useMarkPaid() {
       setMarkingId(run.id);
       try {
         await updateRecord({ id: run.id, data: { status: "paid" } });
-        toast({ title: `${run.employeeName ?? "Employee"}'s salary marked as paid` });
+        toast({ title: `${run.employeeName ?? "Employee"}'s salary marked as cleared` });
         await refresh({ skipCheck: false });
       } catch {
         toast({ title: "Failed to update status", variant: "destructive" });

@@ -102,14 +102,14 @@ export function SalaryTab({
                   variant="ghost"
                   size="sm"
                   className="h-7 gap-1 px-2 text-xs text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
-                  aria-label={`Update the status of ${name}'s payroll to Paid`}
-                  title="Update the status to Paid"
+                  aria-label={`Update the status of ${name}'s payroll to Cleared`}
+                  title="Update the status to Cleared"
                   disabled={markingId === run.id}
                   onClick={() => void markPaid(run)}
                   data-testid={`staff-salary-pay-${run.id}`}
                 >
                   {markingId === run.id ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                  Pay
+                  Mark as Cleared
                 </Button>
               )}
             </>

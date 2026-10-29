@@ -6,6 +6,7 @@
 
 import type { TableColumn } from "@/components/payroll/kit/export-table";
 import { STATEMENT_URL_DEFAULTS } from "@/components/payroll/kit/statement-url";
+import { payStatusLabel } from "@/components/payroll/kit/pay-status";
 import { parsePeriodParam } from "@/components/payroll/kit/url-state";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
 import { DEFAULT_ISSUE_FILTERS, sanitizeFilters, type IssueFilterState } from "@/components/payroll/panels/issues";
@@ -86,7 +87,7 @@ export function rosterState(employee: PeriodEmployee): RosterState {
 export const ROSTER_STATE_LABEL: Record<RosterState, string> = {
   ready: "Not generated",
   pending: "Generated - pending",
-  paid: "Paid",
+  paid: "Cleared",
   blocked: "Cannot be generated",
 };
 
@@ -287,6 +288,6 @@ export const PRODUCTION_REGISTER_COLUMNS: TableColumn<PayrollRunItem>[] = [
   { key: "bonus", label: "Bonus", width: 12, type: "money" },
   { key: "deductions", label: "Deductions", width: 14, type: "money" },
   { key: "finalSalary", label: "Net payable", width: 15, type: "money" },
-  { key: "status", label: "Status", width: 11 },
+  { key: "status", label: "Status", width: 11, value: (r) => payStatusLabel(r.status) },
   { key: "notes", label: "Notes", width: 50 },
 ];

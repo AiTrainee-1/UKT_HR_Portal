@@ -41,7 +41,7 @@ export const DEFAULT_FILTERS: Readonly<PayrollFilterState> = Object.freeze({
 export const STATUS_OPTIONS: readonly { value: PayStatusFilter; label: string }[] = [
   { value: "all", label: "All payments" },
   { value: "pending", label: "Pending" },
-  { value: "paid", label: "Paid" },
+  { value: "paid", label: "Cleared" },
 ];
 
 export const SORT_OPTIONS: readonly { value: PayrollSort; label: string }[] = [

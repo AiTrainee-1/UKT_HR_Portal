@@ -21,7 +21,7 @@ import {
 import { PRODUCTION_REGISTER_COLUMNS } from "./logic";
 
 // The Payroll tab of a Production Payroll cycle page in jsdom, with a fake server behind customFetch: the dashboard of the
-// period, the four views (Records, Issues, Skipped, Rules), the filters, the Export menu, Mark Paid, the loaders and the
+// period, the four views (Records, Issues, Skipped, Rules), the filters, the Export menu, Mark as Cleared, the loaders and the
 // empty and error states, what a View Only role may touch, and the Generate Payroll dialog.
 
 const h = vi.hoisted(() => ({
@@ -243,7 +243,7 @@ describe("the Records view", () => {
     click(must("payroll-record-markpaid-11"));
     await waitFor(() => world.writes.length === 1, "the update");
     expect(world.writes[0]).toMatchObject({ method: "PATCH", url: "/api/payroll/11", body: { status: "paid" } });
-    expect(h.toast).toHaveBeenCalledWith({ title: "Asha Worker's salary marked as paid" });
+    expect(h.toast).toHaveBeenCalledWith({ title: "Asha Worker's salary marked as cleared" });
     await waitFor(() => !q("payroll-record-markpaid-11"), "the button to go");
     expect(q("payroll-record-11")!.getAttribute("data-status")).toBe("paid");
     await waitFor(() => text(q("pcp-dash-kpi-pending")).includes("Everything is released"), "the dashboard");

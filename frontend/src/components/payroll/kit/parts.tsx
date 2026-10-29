@@ -6,6 +6,7 @@ import type { IssueSeverity } from "@/lib/api-client/custom-hooks";
 import { TONE, type Tone } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { initials } from "./format";
+import { payStatusLabel } from "./pay-status";
 import { SEVERITY_META, issueIcon, issueLabel } from "./issue-meta";
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
@@ -198,7 +199,7 @@ const STATUS_TONE: Record<string, Tone> = {
 
 export function PayStatusChip({ status }: { status: string }) {
   const tone = STATUS_TONE[status] ?? "neutral";
-  return <Chip tone={tone}>{status.charAt(0).toUpperCase() + status.slice(1)}</Chip>;
+  return <Chip tone={tone}>{payStatusLabel(status)}</Chip>;
 }
 
 const AVATAR_TONES = [

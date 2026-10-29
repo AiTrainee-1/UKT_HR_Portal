@@ -47,7 +47,7 @@ export const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Au
 
 export const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   pending: { label: "Pending", cls: TONE.warning },
-  paid: { label: "Paid", cls: TONE.success },
+  paid: { label: "Cleared", cls: TONE.success },
   draft: { label: "Draft", cls: TONE.neutral },
   approved: { label: "Approved", cls: TONE.info },
   locked: { label: "Locked", cls: TONE.accent },
@@ -1101,12 +1101,12 @@ export function PayrollRow({
             className="h-7 text-xs gap-1 bg-green-700 hover:bg-green-800"
             onClick={() => onMarkPaid(run)}
           >
-            <CheckCircle2 size={11} /> Mark Paid
+            <CheckCircle2 size={11} /> Mark as Cleared
           </Button>
         )}
         {run.status === "paid" && (
           <span className="text-xs text-green-600 flex items-center gap-1">
-            <Lock size={11} /> Paid
+            <Lock size={11} /> Cleared
           </span>
         )}
       </div>

@@ -51,9 +51,9 @@ export function cycleLabelOf(run: Pick<PayrollRunItem, "payCycle">): string | nu
 }
 
 /** The button's tooltip. It says "Update ..." on purpose: the view-only lock reads a button's title, and that is what
- *  turns this one off for a View Only role (the words "Mark Paid" alone are not on its list). */
+ *  turns this one off for a View Only role (the words "Mark as Cleared" alone are not on its list). */
 export const markPaidTitle = (run: Parameters<typeof displayName>[0]): string =>
-  `Update the status of ${displayName(run)}'s payroll to Paid`;
+  `Update the status of ${displayName(run)}'s payroll to Cleared`;
 
 // ── Issue badges ──────────────────────────────────────────────────────────────
 

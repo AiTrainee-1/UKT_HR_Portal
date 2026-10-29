@@ -278,20 +278,20 @@ describe("the tiles that open something", () => {
 describe("the payment status card", () => {
   it("shows the share paid, as a bar with its numbers beside it", () => {
     mount();
-    expect(text(must("dash-card-payment-percent"))).toBe("50% paid");
+    expect(text(must("dash-card-payment-percent"))).toBe("50% cleared");
     expect(text(must("dash-card-payment"))).toContain("₹27,000 of ₹54,000 net payable");
     const bar = must("dash-card-payment-bar");
     expect(bar.getAttribute("role")).toBe("img");
-    expect(bar.getAttribute("aria-label")).toBe("50% of the net payable is paid: ₹27,000 paid, ₹27,000 pending");
+    expect(bar.getAttribute("aria-label")).toBe("50% of the net payable is cleared: ₹27,000 cleared, ₹27,000 pending");
     expect(bar.querySelector('[data-segment="paid"]')).not.toBeNull();
     expect(bar.querySelector('[data-segment="pending"]')).not.toBeNull();
-    expect(text(must("dash-card-payment-paid"))).toBe("Paid 1 employee ₹27,000 50%");
+    expect(text(must("dash-card-payment-paid"))).toBe("Cleared 1 employee ₹27,000 50%");
     expect(text(must("dash-card-payment-pending"))).toBe("Pending 2 employees ₹27,000 50%");
   });
 
   it("has no pending segment once everything is paid", () => {
     mount({ runs: RUNS.map((r) => ({ ...r, status: "paid" })) });
-    expect(text(must("dash-card-payment-percent"))).toBe("100% paid");
+    expect(text(must("dash-card-payment-percent"))).toBe("100% cleared");
     const bar = must("dash-card-payment-bar");
     expect(bar.querySelector('[data-segment="pending"]')).toBeNull();
     expect(bar.querySelector('[data-segment="paid"]')?.className).toContain("rounded-[4px]");

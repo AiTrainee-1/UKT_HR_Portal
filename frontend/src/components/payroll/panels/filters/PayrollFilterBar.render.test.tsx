@@ -252,7 +252,7 @@ describe("the search box", () => {
   it("a text still waiting joins a filter changed meanwhile instead of overwriting it", async () => {
     const h = mount();
     typeInto(must("pf-search"), "ravi");
-    choose("pf-status", "Paid");
+    choose("pf-status", "Cleared");
     expect(lastChange(h)).toEqual({ ...DEFAULT_FILTERS, status: "paid" });
     await settle(320);
     expect(lastChange(h)).toEqual({ ...DEFAULT_FILTERS, status: "paid", q: "ravi" });
@@ -275,7 +275,7 @@ describe("the other controls", () => {
     const h = mount();
     choose("pf-status", "Pending");
     expect(lastChange(h).status).toBe("pending");
-    choose("pf-status", "Paid");
+    choose("pf-status", "Cleared");
     expect(lastChange(h).status).toBe("paid");
     choose("pf-status", "All payments");
     expect(lastChange(h).status).toBe("all");

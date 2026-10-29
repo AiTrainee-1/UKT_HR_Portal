@@ -1,6 +1,7 @@
 import type { PayrollRunItem } from "@/lib/api-client";
 import type { PayrollScope } from "@/lib/api-client/custom-hooks";
 import { monthYear } from "@/components/payroll/kit/format";
+import { payStatusLabel } from "@/components/payroll/kit/pay-status";
 import type { TableColumn } from "@/components/payroll/kit/export-table";
 import { STATEMENT_URL_DEFAULTS } from "@/components/payroll/kit/statement-url";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
@@ -130,6 +131,6 @@ export const REGISTER_COLUMNS: TableColumn<PayrollRunItem>[] = [
   { key: "bonus", label: "Bonus", width: 12, type: "money" },
   { key: "deductions", label: "Deductions", width: 14, type: "money" },
   { key: "finalSalary", label: "Net payable", width: 15, type: "money" },
-  { key: "status", label: "Status", width: 11 },
+  { key: "status", label: "Status", width: 11, value: (r) => payStatusLabel(r.status) },
   { key: "notes", label: "Notes", width: 50 },
 ];

@@ -196,7 +196,7 @@ describe("searching and filtering the roster", () => {
     expect(text(q("pcp-roster-filter-all"))).toBe("All 3");
     expect(text(q("pcp-roster-filter-ready"))).toBe("Not generated 1");
     expect(text(q("pcp-roster-filter-pending"))).toBe("Generated - pending 1");
-    expect(text(q("pcp-roster-filter-paid"))).toBe("Paid 0");
+    expect(text(q("pcp-roster-filter-paid"))).toBe("Cleared 0");
     expect(text(q("pcp-roster-filter-blocked"))).toBe("Cannot be generated 1");
     click(must("pcp-roster-filter-blocked"));
     expect(params().estate).toBe("blocked");
@@ -293,7 +293,7 @@ describe("generating from the roster", () => {
       person(1, "Asha Worker", "PC-W1", { payroll: payroll(11, 1, "Asha Worker", "PC-W1", { status: "paid" }) }),
     ];
     await openRoster();
-    expect(text(q("pcp-roster-state-PC-W1"))).toBe("Paid");
+    expect(text(q("pcp-roster-state-PC-W1"))).toBe("Cleared");
     expect(q("pcp-regenerate-PC-W1")).toBeNull();
     expect(q("pcp-generate-PC-W1")).toBeNull();
     expect(q("pcp-roster-details-PC-W1")).not.toBeNull();

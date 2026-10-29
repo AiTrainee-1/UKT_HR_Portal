@@ -201,10 +201,10 @@ export function DetailsHeader({
               className="h-9 gap-2 bg-emerald-600 bg-none text-white hover:bg-emerald-700"
               disabled={switching || markingPaid}
               onClick={onMarkPaid}
-              title="Update this payroll's status to Paid"
+              title="Update this payroll's status to Cleared"
               data-testid="pd-mark-paid"
             >
-              <BusyIcon busy={markingPaid} icon={CheckCircle2} /> Mark as paid
+              <BusyIcon busy={markingPaid} icon={CheckCircle2} /> Mark as Cleared
             </Button>
           )}
           <PayslipMenu details={details} disabled={switching} />

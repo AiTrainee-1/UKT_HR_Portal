@@ -315,7 +315,7 @@ export function formatPeriod(start: string, end: string): string {
 /** A payslip's status as a label and a colour. */
 export function payrollStatus(status: string): { label: string; tone: Tone } {
   const s = status.trim().toLowerCase();
-  if (s === "paid") return { label: "Paid", tone: "success" };
+  if (s === "paid") return { label: "Cleared", tone: "success" };
   if (s === "pending") return { label: "Pending", tone: "warning" };
   return { label: s ? s.charAt(0).toUpperCase() + s.slice(1) : "Unknown", tone: "neutral" };
 }
