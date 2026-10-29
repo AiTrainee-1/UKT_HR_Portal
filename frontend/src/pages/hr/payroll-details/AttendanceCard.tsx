@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { CalendarDays, CalendarRange, ListFilter, Table2, X } from "lucide-react";
 import {
   CompensationChip,
@@ -9,9 +9,9 @@ import {
 } from "@/components/attendance-compensation";
 import { Button } from "@/components/ui/button";
 import { dateLong, dayMonth, dateShort, weekdayShort } from "@/components/payroll/kit/format";
-import { ISSUE_META, SEVERITY_META, issueLabel } from "@/components/payroll/kit/issue-meta";
+import { ISSUE_META, issueLabel } from "@/components/payroll/kit/issue-meta";
 import { EmptyNote, IssueChip, SectionCard } from "@/components/payroll/kit/parts";
-import type { PayrollDay, PayrollDetails, PayrollIssue, PayrollKind } from "@/lib/api-client/custom-hooks";
+import type { DayMark, PayrollDay, PayrollDetails, PayrollIssue, PayrollKind } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import type { Accent } from "./accent";
 import { FilterSelect, SegmentedToggle, ToggleChip } from "./parts";
@@ -19,10 +19,16 @@ import {
   CALENDAR_HEADERS,
   DAY_KINDS,
   DAY_KIND_META,
+  MARK_KEYS,
+  MARK_META,
   buildCalendar,
   dayKind,
+  fillKindCounts,
+  fillMark,
   filterDays,
   kindCounts,
+  markCounts,
+  marksOf,
   sectionDomId,
   statusLabel,
   trimNumber,
@@ -42,15 +48,11 @@ function punchText(day: Pick<PayrollDay, "firstIn" | "lastOut">): string {
   return "";
 }
 
-const flagDot = (code: string): string => {
-  const severity = ISSUE_META[code as keyof typeof ISSUE_META]?.severity;
-  return severity ? SEVERITY_META[severity].dot : "bg-slate-400";
-};
-
 /**
- * The days of the payroll's period: a calendar (a coloured cell per day, with the punches and a dot for every flag) or
- * a table. The legend doubles as a filter, "Flagged only" narrows to days something was flagged on, and choosing a day
- * shows what happened on it and narrows the Issues list to it.
+ * The days of the payroll's period: a calendar (a cell per day, filled in the colour of what the day was counted as, with the
+ * punches and a solid coloured tag for each of the six attendance categories: late, permission, excess permission, On-Duty,
+ * On-Duty punch, missed punch) or a table. Both legends double as filters, "Flagged only" narrows to days something was flagged
+ * on, and choosing a day shows what happened on it and narrows the Issues list to it.
  */
 export function AttendanceCard({
   details,
@@ -69,10 +71,15 @@ export function AttendanceCard({
 }) {
   const [view, setView] = useState<View>("calendar");
   const [kindFilter, setKindFilter] = useState<DayKind | "all">("all");
+  const [markFilter, setMarkFilter] = useState<DayMark | "all">("all");
   const [flaggedOnly, setFlaggedOnly] = useState(false);
 
   const { days, period } = details;
-  const counts = useMemo(() => kindCounts(days), [days]);
+  // the table counts every day of a status; the calendar counts the days whose cell shows that status
+  const tableCounts = useMemo(() => kindCounts(days), [days]);
+  const cellCounts = useMemo(() => fillKindCounts(days), [days]);
+  const counts = view === "calendar" ? cellCounts : tableCounts;
+  const markTotals = useMemo(() => markCounts(days), [days]);
   const flaggedCount = useMemo(() => days.filter((d) => (d.flags ?? []).length > 0).length, [days]);
   const weeks = useMemo(() => buildCalendar(days, period.start, period.end), [days, period.start, period.end]);
   // days of the period with no record: staff payroll only lists the working days, so a weekly off or a holiday is one
@@ -80,9 +87,14 @@ export function AttendanceCard({
     () => weeks.flat().filter((cell) => cell.type === "day" && cell.day === null).length,
     [weeks],
   );
-  const rows = useMemo(() => filterDays(days, { kind: kindFilter, flaggedOnly }), [days, kindFilter, flaggedOnly]);
+  // the table keeps its own filters (status and Flagged only); the category legend belongs to the calendar
+  const activeMark = view === "calendar" ? markFilter : "all";
+  const rows = useMemo(
+    () => filterDays(days, { kind: kindFilter, flaggedOnly, mark: activeMark, plainOnly: view === "calendar" }),
+    [days, kindFilter, flaggedOnly, activeMark, view],
+  );
   const visible = useMemo(() => new Set(rows.map((d) => d.date)), [rows]);
-  const filtering = kindFilter !== "all" || flaggedOnly;
+  const filtering = kindFilter !== "all" || flaggedOnly || activeMark !== "all";
   const monthsShown = useMemo(() => new Set(days.map((d) => d.date.slice(0, 7))).size, [days]);
 
   const day = selectedDay ? (days.find((d) => d.date === selectedDay) ?? null) : null;
@@ -98,13 +110,18 @@ export function AttendanceCard({
       className="scroll-mt-16"
       icon={CalendarRange}
       title={payrollKind === "production" ? "Shifts in this period" : "Attendance this month"}
-      description={`${period.label}: what each day was counted as, with the first and last punch and anything flagged on it.`}
+      description={`${period.label}: what each day was counted as, with the first and last punch and the late, permission, On-Duty and missed-punch days marked.`}
       actions={
         days.length > 0 && (
           <SegmentedToggle<View>
             label="Show the days as"
             value={view}
-            onChange={setView}
+            onChange={(next) => {
+              setView(next);
+              // the two views count the days differently, so a choice made in one does not carry over
+              setKindFilter("all");
+              setMarkFilter("all");
+            }}
             activeClass={accent.solid}
             className="print:hidden"
             testId="pd-attendance-view"
@@ -141,74 +158,94 @@ export function AttendanceCard({
         />
       ) : (
         <>
-          <div className="mb-4 flex flex-wrap items-center gap-2 print:hidden" data-testid="pd-attendance-toolbar">
-            {view === "calendar" ? (
-              <div
-                className="flex flex-wrap items-center gap-1.5"
-                role="group"
-                aria-label="Legend: choose a kind of day to focus on"
-              >
-                {DAY_KINDS.filter((k) => counts[k] > 0).map((k) => (
-                  <ToggleChip
-                    key={k}
-                    pressed={kindFilter === k}
-                    onClick={() => setKindFilter(kindFilter === k ? "all" : k)}
-                    testId={`pd-legend-${k}`}
-                  >
-                    <span className={cn("h-2.5 w-2.5 rounded-sm", DAY_KIND_META[k].swatch)} />
-                    {DAY_KIND_META[k].label}
-                    <span className="tabular-nums opacity-70">{counts[k]}</span>
-                  </ToggleChip>
-                ))}
-                {noRecord > 0 && (
-                  <span
-                    className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-500"
-                    title="Days of the period payroll has no record for: a weekly off, a holiday, or a day it did not count"
-                    data-testid="pd-legend-norecord"
-                  >
-                    <span className="h-2.5 w-2.5 rounded-sm border border-dashed border-slate-400" />
-                    Not a working day
-                    <span className="tabular-nums opacity-70">{noRecord}</span>
-                  </span>
-                )}
-              </div>
-            ) : (
-              <FilterSelect
-                value={kindFilter}
-                onChange={(v) => setKindFilter(v as DayKind | "all")}
-                label="Filter the days by status"
-                testId="pd-status-filter"
-                className="w-full sm:w-56"
-              >
-                <option value="all">All statuses ({days.length})</option>
-                {DAY_KINDS.filter((k) => counts[k] > 0).map((k) => (
-                  <option key={k} value={k}>
-                    {DAY_KIND_META[k].label} ({counts[k]})
-                  </option>
-                ))}
-              </FilterSelect>
+          <div className="mb-4 space-y-3 print:hidden" data-testid="pd-attendance-toolbar">
+            {view === "calendar" && (
+              <>
+                <LegendRow title="Day status" testId="pd-status-legend">
+                  {DAY_KINDS.filter((k) => counts[k] > 0).map((k) => (
+                    <ToggleChip
+                      key={k}
+                      pressed={kindFilter === k}
+                      onClick={() => setKindFilter(kindFilter === k ? "all" : k)}
+                      testId={`pd-legend-${k}`}
+                    >
+                      <span className={cn("h-2.5 w-2.5 rounded-sm", DAY_KIND_META[k].swatch)} />
+                      {DAY_KIND_META[k].label}
+                      <span className="tabular-nums opacity-70">{counts[k]}</span>
+                    </ToggleChip>
+                  ))}
+                  {noRecord > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-500"
+                      title="Days of the period payroll has no record for: a weekly off, a holiday, or a day it did not count"
+                      data-testid="pd-legend-norecord"
+                    >
+                      <span className="h-2.5 w-2.5 rounded-sm border border-dashed border-slate-400" />
+                      Not a working day
+                      <span className="tabular-nums opacity-70">{noRecord}</span>
+                    </span>
+                  )}
+                </LegendRow>
+                <LegendRow title="Attendance types" testId="pd-mark-legend">
+                  {MARK_KEYS.map((k) => (
+                    <ToggleChip
+                      key={k}
+                      pressed={markFilter === k}
+                      onClick={() => setMarkFilter(markFilter === k ? "all" : k)}
+                      disabled={markTotals[k] === 0 && markFilter !== k}
+                      title={MARK_META[k].hint}
+                      testId={`pd-mark-legend-${k}`}
+                    >
+                      <span
+                        className={cn("h-3 w-3 rounded-sm border border-l-[3px]", MARK_META[k].cell, MARK_META[k].bar)}
+                      />
+                      {MARK_META[k].label}
+                      <span className="tabular-nums opacity-70">{markTotals[k]}</span>
+                    </ToggleChip>
+                  ))}
+                </LegendRow>
+              </>
             )}
-            <ToggleChip
-              pressed={flaggedOnly}
-              onClick={() => setFlaggedOnly((v) => !v)}
-              testId="pd-flagged-only"
-              disabled={flaggedCount === 0 && !flaggedOnly}
-            >
-              <ListFilter size={12} /> Flagged only <span className="tabular-nums opacity-70">{flaggedCount}</span>
-            </ToggleChip>
-            {filtering && (
-              <button
-                type="button"
-                onClick={() => {
-                  setKindFilter("all");
-                  setFlaggedOnly(false);
-                }}
-                className="text-xs font-semibold text-slate-500 underline-offset-2 hover:underline"
-                data-testid="pd-days-clear"
+            <div className="flex flex-wrap items-center gap-2">
+              {view === "table" && (
+                <FilterSelect
+                  value={kindFilter}
+                  onChange={(v) => setKindFilter(v as DayKind | "all")}
+                  label="Filter the days by status"
+                  testId="pd-status-filter"
+                  className="w-full sm:w-56"
+                >
+                  <option value="all">All statuses ({days.length})</option>
+                  {DAY_KINDS.filter((k) => counts[k] > 0).map((k) => (
+                    <option key={k} value={k}>
+                      {DAY_KIND_META[k].label} ({counts[k]})
+                    </option>
+                  ))}
+                </FilterSelect>
+              )}
+              <ToggleChip
+                pressed={flaggedOnly}
+                onClick={() => setFlaggedOnly((v) => !v)}
+                testId="pd-flagged-only"
+                disabled={flaggedCount === 0 && !flaggedOnly}
               >
-                Clear
-              </button>
-            )}
+                <ListFilter size={12} /> Flagged only <span className="tabular-nums opacity-70">{flaggedCount}</span>
+              </ToggleChip>
+              {filtering && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setKindFilter("all");
+                    setMarkFilter("all");
+                    setFlaggedOnly(false);
+                  }}
+                  className="text-xs font-semibold text-slate-500 underline-offset-2 hover:underline"
+                  data-testid="pd-days-clear"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Days the employee used a compensation (only when the details endpoint sends the marker) */}
@@ -287,6 +324,18 @@ export function AttendanceCard({
   );
 }
 
+/** One line of the calendar's key: its name, then the choices (each is also a filter). */
+function LegendRow({ title, testId, children }: { title: string; testId: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5" data-testid={testId}>
+      <span className="w-28 shrink-0 text-[11px] font-bold uppercase tracking-wide text-slate-500">{title}</span>
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={`Legend: ${title.toLowerCase()}`}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function CalendarDay({
   cell,
   selected,
@@ -322,6 +371,9 @@ function CalendarDay({
   const { day, kind } = cell;
   const meta = DAY_KIND_META[kind];
   const flags = day.flags ?? [];
+  const marks = marksOf(day);
+  // a day with a late, permission, On-Duty or missed-punch category is filled in that category's colour (with a solid edge)
+  const fill = fillMark(day);
   const punches = punchText(day);
   const compensation = compensationMark(day);
   const aria = [
@@ -331,6 +383,7 @@ function CalendarDay({
     [day.firstIn ? `first in ${timeText(day.firstIn)}` : "", day.lastOut ? `last out ${timeText(day.lastOut)}` : ""]
       .filter(Boolean)
       .join(", "),
+    marks.length > 0 ? marks.map((m) => MARK_META[m].label).join(", ") : "",
     flags.length > 0 ? `flagged: ${flags.map(issueLabel).join(", ")}` : "",
   ]
     .filter(Boolean)
@@ -344,10 +397,11 @@ function CalendarDay({
       title={aria}
       data-testid={`pd-day-${cell.date}`}
       data-kind={kind}
+      data-fill={fill ?? undefined}
       data-selected={selected ? "true" : "false"}
       className={cn(
         "flex min-h-[3rem] flex-col rounded-xl border p-1 text-left transition sm:min-h-[5.25rem] sm:p-2",
-        meta.cell,
+        fill ? cn(MARK_META[fill].cell, "border-l-4", MARK_META[fill].bar) : meta.cell,
         selected && cn("ring-2 ring-offset-1", accent.ring),
         dimmed && "opacity-30",
         "hover:brightness-95",
@@ -367,12 +421,21 @@ function CalendarDay({
           {trimNumber(day.shifts)} {day.shifts === 1 ? "shift" : "shifts"}
         </span>
       )}
-      <span className="mt-auto flex flex-wrap items-center gap-0.5 pt-1">
+      <span className="mt-auto flex flex-wrap items-center gap-0.5 pt-1" data-testid={`pd-marks-${cell.date}`}>
         {compensation && <CompensationSymbol day={day} decorative className="mr-0.5" />}
-        {flags.slice(0, 4).map((code, i) => (
-          <span key={`${code}-${i}`} className={cn("h-1.5 w-1.5 rounded-full", flagDot(code))} />
+        {marks.map((mark) => (
+          <span key={mark} data-mark={mark} title={MARK_META[mark].label}>
+            <span
+              className={cn(
+                "hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-4 sm:inline-block",
+                MARK_META[mark].pill,
+              )}
+            >
+              {MARK_META[mark].short}
+            </span>
+            <span className={cn("inline-block h-2 w-2 rounded-full sm:hidden", MARK_META[mark].swatch)} />
+          </span>
         ))}
-        {flags.length > 4 && <span className="text-[9px] font-bold leading-none">+{flags.length - 4}</span>}
       </span>
     </button>
   );
@@ -393,6 +456,7 @@ function DayPanel({
 }) {
   const kind = dayKind(day);
   const meta = DAY_KIND_META[kind];
+  const marks = marksOf(day);
   return (
     <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4" data-testid="pd-day-panel">
       <div className="flex items-start justify-between gap-3">
@@ -420,6 +484,20 @@ function DayPanel({
         </Button>
       </div>
       {day.note && <p className="mt-2 text-xs text-slate-600">{day.note}</p>}
+      {marks.length > 0 && (
+        <ul className="mt-3 space-y-1.5" data-testid="pd-day-marks">
+          {marks.map((mark) => (
+            <li key={mark} className="flex items-start gap-2 text-xs text-slate-700" data-mark={mark}>
+              <span
+                className={cn("mt-0.5 shrink-0 rounded px-1.5 text-[10px] font-bold leading-4", MARK_META[mark].pill)}
+              >
+                {MARK_META[mark].label}
+              </span>
+              <span className="leading-snug">{MARK_META[mark].hint}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {compensationMark(day) && (
         <div className="mt-2">
           <CompensationChip day={day} withNote />

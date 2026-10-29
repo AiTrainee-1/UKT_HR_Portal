@@ -117,17 +117,12 @@ test.describe("Issues: every detection, with the day it was detected", () => {
     await expect(skipped).toContainText("No Salary Amount");
     await expect(skipped.getByTestId("issue-fix")).toContainText("monthly salary");
     await expect(skipped).toHaveAttribute("data-severity", "critical");
-    // the dashboard counts it too
-    await page.getByTestId("view-records").click();
-    await expect(page.getByTestId("staff-dash-kpi-issues")).toContainText("1 critical");
+    // the Issues view's count includes it too
     await expect(page.getByTestId("view-issues-count")).toHaveText("17");
   });
 
-  test("a type chip filters the list, and the dashboard's issue card opens the view on that type", async ({ page }) => {
-    await openAs(page, adminToken, FEB);
-    await page.getByTestId("staff-dash-card-issues-row-absent").click();
-    await expect(page).toHaveURL(/view=issues/);
-    await expect(page).toHaveURL(/icode=absent/);
+  test("an address can open the Issues view on one type, and it lists only that type", async ({ page }) => {
+    await openAs(page, adminToken, `${FEB}&view=issues&icode=absent`);
     await expect(issueRows(page, "absent")).toHaveCount(12);
     await expect(issueRows(page, "bank_missing")).toHaveCount(0);
   });
@@ -448,7 +443,7 @@ test.describe("Who may see what", () => {
     await expect(page.getByRole("tab", { name: /^Payslip\b/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /^Payroll\b/ })).toHaveCount(0);
     await expect(page.getByRole("tab", { name: /^Salary\b/ })).toHaveCount(0);
-    await expect(page.getByTestId("staff-dash-root")).toHaveCount(0);
+    await expect(page.getByTestId("staff-payroll-tab")).toHaveCount(0);
     for (const url of [
       "/api/payroll/issues?month=2&year=2026",
       "/api/payroll/rules?month=2&year=2026",
@@ -576,10 +571,10 @@ test.describe("Details page", () => {
     await expect(page.getByTestId("pd-employee-name")).toHaveText("Ravi Nair");
     await page.getByTestId("pd-back").click();
     await expect(page).toHaveURL(/\/hr\/payroll\?month=2&year=2026/);
-    await expect(page.getByTestId("staff-dash-root")).toBeVisible();
+    await expect(page.getByTestId("staff-payroll-tab")).toBeVisible();
   });
 
-  test("explains the payroll: the figures, the rules, every issue with its date, the days, the pay and the employee", async ({
+  test("explains the payroll: the figures, the days with their attendance categories, every issue with its date and the pay", async ({
     page,
     request,
   }) => {
@@ -593,17 +588,24 @@ test.describe("Details page", () => {
     await expect(page.getByTestId("pd-status")).toContainText("Pending");
     await expect(page.getByTestId("pd-net-bridge")).toBeVisible();
 
-    // Overview: how the salary was worked out
-    await expect(page.getByTestId("pd-formula")).toContainText("₹30,000");
-    await expect(page.getByTestId("pd-formula")).toContainText("₹1,250.00");
+    // a simple page: the days first, then the issues, then the pay; no Overview, Rules, Employee or History
+    await expect(page.getByTestId("pd-nav").getByRole("button")).toHaveText([
+      /^Attendance$/,
+      /^Issues/,
+      /^Pay & deductions$/,
+    ]);
+    for (const gone of ["overview", "rules", "employee", "history"]) {
+      await expect(page.getByTestId(`pd-nav-${gone}`)).toHaveCount(0);
+      await expect(page.getByTestId(`pd-section-${gone}`)).toHaveCount(0);
+    }
+    const attendance = await page.getByTestId("pd-section-attendance").boundingBox();
+    const issues = await page.getByTestId("pd-section-issues").boundingBox();
+    expect(attendance!.y).toBeLessThan(issues!.y);
 
-    // Rules: what was assigned and what Settings says, each with where to change it
-    await page.getByTestId("pd-nav-rules").click();
-    await expect(page.locator('[data-testid^="pd-rule-"]').first()).toBeVisible();
-    await expect(page.getByRole("link", { name: /Open in Settings/ }).first()).toHaveAttribute(
-      "href",
-      /\/hr\/settings\?tab=/,
-    );
+    // Attendance: the key names all six attendance types
+    for (const kind of ["late", "permission", "excess_permission", "on_duty", "on_duty_punch", "missed_punch"]) {
+      await expect(page.getByTestId(`pd-mark-legend-${kind}`)).toBeVisible();
+    }
 
     // Issues: one per absent day, each on its own date
     await page.getByTestId("pd-nav-issues").click();
@@ -622,13 +624,9 @@ test.describe("Details page", () => {
       "2026-02-16".split("-").reverse().join("-").slice(0, 2),
     );
 
-    // Pay, Employee, History are there too
+    // the pay and deductions are the last section
     await page.getByTestId("pd-nav-pay").click();
-    await expect(page.getByTestId("pd-nav-pay")).toBeVisible();
-    await page.getByTestId("pd-nav-employee").click();
-    await expect(page.getByTestId("pd-ready-bank")).toHaveAttribute("data-ok", "false");
-    await page.getByTestId("pd-nav-history").click();
-    await expect(page.getByTestId("pd-nav-history")).toBeVisible();
+    await expect(page.getByTestId("pd-section-pay")).toBeVisible();
   });
 
   test("?section= opens the page on that section", async ({ page, request }) => {

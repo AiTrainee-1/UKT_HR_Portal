@@ -25,7 +25,6 @@ import { withTdsColumns } from "@/components/payroll/kit/statutory";
 import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { ViewSwitch, type ViewOption } from "@/components/payroll/kit/ViewSwitch";
-import { PayrollDashboard } from "@/components/payroll/panels/dashboard";
 import {
   DEFAULT_FILTERS,
   PayrollFilterBar,
@@ -66,8 +65,9 @@ import {
 type UrlSetter = (patch: Record<string, string>) => void;
 
 /**
- * Payroll tab of the Staff Payroll page: the actions (Generate, Skipped, Export), the dashboard of the month and its four
- * views - Records, Issues, Skipped and Rules - all about the one month the page header chose.
+ * Payroll tab of the Staff Payroll page: the actions (Generate, Skipped, Export) and its four views - Records, Issues,
+ * Skipped and Rules - all about the one month the page header chose. (It has no dashboard of the month: the counts are on
+ * the view switch.)
  */
 export function PayrollTab({
   month,
@@ -106,7 +106,7 @@ export function PayrollTab({
   const skipQuery = usePayrollSkipCheck({ month, year, runType: "monthly" });
 
   const issues = issuesQuery.data;
-  // what the dashboard tile and the view's count say: the issues plus the employees skipped at generation, as the view lists them
+  // what the Issues view's count says: the issues plus the employees skipped at generation, as the view lists them
   const dashIssues = useMemo(
     () => addSkipped(issues?.summary, skipQuery.data?.skippedCount ?? 0),
     [issues, skipQuery.data?.skippedCount],
@@ -260,25 +260,6 @@ export function PayrollTab({
 
       <PayrollGenerationPipeline active={showPipeline} data={progress} onDismiss={dismissPipeline} />
       {showSessionConfig && <SessionConfigPanel />}
-
-      <PayrollDashboard
-        kind="staff"
-        accent="indigo"
-        periodLabel={periodLabel}
-        runs={runs}
-        loading={runsQuery.isLoading}
-        expected={skipQuery.data ? { count: skipQuery.data.totalChecked, label: "active staff" } : undefined}
-        issues={dashIssues}
-        issuesLoading={issuesQuery.isLoading}
-        skipped={
-          skipQuery.data ? { count: skipQuery.data.skippedCount, total: skipQuery.data.totalChecked } : undefined
-        }
-        skippedLoading={skipQuery.isLoading}
-        onOpenIssues={(code) => setUrl({ view: "issues", ...(code ? { icode: code } : {}) })}
-        onOpenSkipped={() => setView("skipped")}
-        onFilterStatus={(status) => setUrl({ view: "records", status })}
-        testIdPrefix="staff-dash"
-      />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ViewSwitch options={options} value={view} onChange={setView} accent="indigo" />

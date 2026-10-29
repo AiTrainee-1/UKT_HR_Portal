@@ -13,16 +13,13 @@ import {
 import { cn } from "@/lib/utils";
 import { ACCENT, type Accent } from "./accent";
 import { AttendanceCard } from "./AttendanceCard";
-import { EmployeeCard } from "./EmployeeCard";
 import { detailsExportItems } from "./exports";
 import { DetailsHeader } from "./Header";
-import { HistoryCard } from "./HistoryCard";
 import { IssuesCard } from "./IssuesCard";
 import { KpiStrip, NetBridge } from "./Kpis";
 import {
   SECTION_IDS,
   backLabelFor,
-  changedRules,
   fallbackListPath,
   isDegraded,
   normalizeDetails,
@@ -30,11 +27,9 @@ import {
   parseSectionParam,
   severityCounts,
 } from "./logic";
-import { OverviewCard } from "./OverviewCard";
 import { DegradedNotice, ErrorState, NotFoundState, PageSkeleton, StaleBar, SwitchingChip } from "./PageStates";
 import { PayExtrasCard } from "./PayExtrasCard";
 import { PRINT_CSS } from "./print";
-import { RulesCard, type RuleFocus } from "./RulesCard";
 import { scrollPageToTop, useSectionSpy } from "./scroll";
 import { SectionNav } from "./SectionNav";
 import { StatutoryCard } from "./StatutoryCard";
@@ -42,10 +37,11 @@ import { useIssueFilters } from "./use-issue-filters";
 import { isMissingError, useMarkPaid, usePayrollDetailsView } from "./use-details";
 
 /**
- * One payroll, broken down: its dashboard, the rules behind it, every issue payroll detected (with the day each was
- * detected), the days, the extras on the pay, the employee and their earlier payrolls. A page of its own (not a
- * dialog): the way back is a Back button that returns to the list exactly as it was left, and Previous / Next walk
- * the payrolls of the same period. It only ever reads what payroll already stored; it never recomputes anything.
+ * One payroll, broken down: its dashboard, then the days (the calendar with the late, permission, On-Duty and missed-punch
+ * days marked), every issue payroll detected (with the day each was detected) and the pay and deductions. A page of its
+ * own (not a dialog): the way back is a Back button that returns to the list exactly as it was left, and Previous /
+ * Next walk the payrolls of the same period. It only ever reads what payroll already stored; it never recomputes
+ * anything.
  */
 export function PayrollDetailsPage({ kind }: { kind: PayrollKind }) {
   const params = useParams<{ id: string }>();
@@ -167,7 +163,6 @@ function DetailsBody({
 }) {
   const filters = useIssueFilters();
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [ruleFocus, setRuleFocus] = useState<RuleFocus>(null);
   const degraded = isDegraded(details);
   const { markPaid, busy } = useMarkPaid();
   const settings = usePayrollSettings();
@@ -175,8 +170,6 @@ function DetailsBody({
   const { active, jump } = useSectionSpy(SECTION_IDS);
 
   const counts = useMemo(() => severityCounts(details.issues), [details.issues]);
-  const changed = useMemo(() => changedRules(details.rules).length, [details.rules]);
-  const ruleKeys = useMemo(() => new Set(details.rules.flatMap((g) => g.items.map((i) => i.key))), [details.rules]);
   const exportItems = useMemo(() => detailsExportItems({ details, company }), [details, company]);
   // How PF / ESI / TDS were decided is stored in the payslip's breakdown, not in the details: read it from there (a payroll
   // with no breakdown, a legacy one, or a failed request simply has no such card).
@@ -211,13 +204,6 @@ function DetailsBody({
       setDay(date);
     },
     [setDay],
-  );
-  const showRule = useCallback(
-    (key: string) => {
-      jump("rules");
-      setRuleFocus({ key, nonce: Date.now() });
-    },
-    [jump],
   );
 
   return (
@@ -264,14 +250,9 @@ function DetailsBody({
         accent={accent}
         issues={details.issues.length}
         criticalIssues={counts.critical}
-        changedRules={changed}
         who={`${details.employee.name} · ${details.employee.code}`}
       />
 
-      <OverviewCard details={details} kind={kind} accent={accent} ruleKeys={ruleKeys} onShowRule={showRule} />
-      {statutory && <StatutoryCard view={statutory} accent={accent} />}
-      <RulesCard groups={details.rules} accent={accent} focus={ruleFocus} />
-      <IssuesCard details={details} accent={accent} state={filters} company={company} degraded={degraded} />
       <AttendanceCard
         details={details}
         kind={kind}
@@ -280,9 +261,9 @@ function DetailsBody({
         onSelectDay={selectDay}
         onShowIssues={() => jump("issues")}
       />
+      <IssuesCard details={details} accent={accent} state={filters} company={company} degraded={degraded} />
       <PayExtrasCard details={details} accent={accent} />
-      <EmployeeCard details={details} kind={kind} accent={accent} statutoryCategory={statutory?.category} />
-      <HistoryCard details={details} kind={kind} accent={accent} />
+      {statutory && <StatutoryCard view={statutory} accent={accent} />}
     </div>
   );
 }

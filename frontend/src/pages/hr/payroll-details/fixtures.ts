@@ -97,8 +97,19 @@ const OCT_DAYS: PayrollDay[] = Array.from({ length: 31 }, (_, i) => "2026-10-" +
           date,
           firstIn: "09:25",
           flags: ["late_in"],
+          marks: ["late", "permission"],
           note: "Morning late-in: first punch 09:25 is after the 09:10 deadline",
         });
+      // the attendance categories the server marks (payroll_day_marks.py): a permission, an On-Duty day with an approved
+      // geo-punch, a permission beyond the cap, an On-Duty day
+      case "2026-10-15":
+        return day({ date, marks: ["permission"] });
+      case "2026-10-16":
+        return day({ date, marks: ["on_duty", "on_duty_punch"] });
+      case "2026-10-19":
+        return day({ date, marks: ["excess_permission"] });
+      case "2026-10-21":
+        return day({ date, marks: ["on_duty"] });
       case "2026-10-20":
         return day({
           date,
@@ -107,7 +118,14 @@ const OCT_DAYS: PayrollDay[] = Array.from({ length: 31 }, (_, i) => "2026-10-" +
           note: "Evening early-out: last punch 16:40 is before the 17:50 limit",
         });
       case "2026-10-22":
-        return day({ date, firstIn: "09:04", lastOut: "13:05", shifts: 0.5, flags: ["half_day"] });
+        return day({
+          date,
+          firstIn: "09:04",
+          lastOut: "13:05",
+          shifts: 0.5,
+          flags: ["half_day"],
+          marks: ["permission"],
+        });
       case "2026-10-27":
         return day({ date, lastOut: null, flags: ["missing_punch"] });
       case "2026-10-29":

@@ -5,8 +5,8 @@ import { SECTIONS } from "./logic";
 
 /**
  * The page's own navigation: it sticks to the top while the long page scrolls, jumps to a section when one is
- * pressed and marks the section being read. The Issues entry carries the issue count and the Rules entry a dot when a
- * rule changed after the payroll was generated, so the two things worth a look are visible from anywhere on the page.
+ * pressed and marks the section being read. The Issues entry carries the issue count, so what is worth a look is
+ * visible from anywhere on the page.
  */
 export function SectionNav({
   active,
@@ -14,7 +14,6 @@ export function SectionNav({
   accent,
   issues,
   criticalIssues,
-  changedRules,
   who,
 }: {
   active: string;
@@ -22,7 +21,6 @@ export function SectionNav({
   accent: Accent;
   issues: number;
   criticalIssues: number;
-  changedRules: number;
   /** "Meena Subramanian · UKT-0142": who the page is about, kept in view while scrolling. */
   who: string;
 }) {
@@ -75,13 +73,6 @@ export function SectionNav({
                   >
                     {issues}
                   </span>
-                )}
-                {section.id === "rules" && changedRules > 0 && (
-                  <span
-                    className="h-2 w-2 rounded-full bg-amber-500"
-                    title={`${changedRules} rule${changedRules === 1 ? "" : "s"} changed since this payroll was generated`}
-                    data-testid="pd-nav-rules-changed"
-                  />
                 )}
               </button>
             );

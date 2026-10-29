@@ -155,7 +155,7 @@ async function flatnessOf(page: Page, allowShadowWithin = "") {
 
 type PageSpec = { name: string; path: () => string; ready: string; click?: string; allowShadow?: string };
 const PAGES: PageSpec[] = [
-  { name: "staff payroll: records", path: () => FEB, ready: '[data-testid="staff-dash-kpis"]' },
+  { name: "staff payroll: records", path: () => FEB, ready: '[data-testid="view-switch"]' },
   { name: "staff payroll: issues", path: () => `${FEB}&view=issues`, ready: '[data-testid="issues-panel"]' },
   { name: "staff payroll: skipped", path: () => `${FEB}&view=skipped`, ready: '[data-testid="view-switch"]' },
   { name: "staff payroll: rules", path: () => `${FEB}&view=rules`, ready: '[data-testid="view-switch"]' },
@@ -217,13 +217,9 @@ for (const width of WIDTHS) {
 }
 
 test("the figure tiles are white tiles with a 1px line and a tinted icon chip, not pastel boxes", async ({ page }) => {
-  await open(page, "clean", FEB);
-  for (const id of [
-    "staff-dash-kpi-gross",
-    "staff-dash-kpi-deductions",
-    "staff-dash-kpi-net",
-    "staff-dash-kpi-pending",
-  ]) {
+  // the production payroll page keeps its dashboard of the period (the staff page has none)
+  await open(page, "clean", "/hr/production-payroll/weekly");
+  for (const id of ["pcp-dash-kpi-gross", "pcp-dash-kpi-deductions", "pcp-dash-kpi-net", "pcp-dash-kpi-pending"]) {
     const tile = `[data-testid="${id}"]`;
     expect(isWhite(await colourOf(page, tile, "background-color")), `${id} is white`).toBe(true);
     expect(await styleOf(page, tile, ["border-top-width", "border-top-left-radius", "box-shadow"])).toEqual({
@@ -409,7 +405,7 @@ test("the production generate dialog and the details page leave amber to warning
   await open(page, "clean", `/hr/payroll/details/${ashaPayrollId}`);
   // the section bar: underlined tabs, the open one in the brand colour
   expect(
-    await styleOf(page, '[data-testid="pd-nav-overview"]', [
+    await styleOf(page, '[data-testid="pd-nav-attendance"]', [
       "border-bottom-width",
       "border-bottom-color",
       "border-top-left-radius",
@@ -461,14 +457,16 @@ function over([r, g, b, a]: number[], [br, bg, bb]: number[]) {
 test("the same pages in the default theme keep the look they always had", async ({ page }) => {
   await open(page, "default", FEB);
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("default");
-  // a pastel figure tile: 16px corners, no border, not white
+  // a pastel figure tile (on the production page, which keeps its dashboard): 16px corners, no border, not white
+  await open(page, "default", "/hr/production-payroll/weekly");
   expect(
-    await styleOf(page, '[data-testid="staff-dash-kpi-gross"]', ["border-top-width", "border-top-left-radius"]),
+    await styleOf(page, '[data-testid="pcp-dash-kpi-gross"]', ["border-top-width", "border-top-left-radius"]),
   ).toEqual({
     "border-top-width": "0px",
     "border-top-left-radius": "16px",
   });
-  expect(isWhite(await colourOf(page, '[data-testid="staff-dash-kpi-gross"]', "background-color"))).toBe(false);
+  expect(isWhite(await colourOf(page, '[data-testid="pcp-dash-kpi-gross"]', "background-color"))).toBe(false);
+  await open(page, "default", FEB);
   // the green Export button
   expect(isGreen(await colourOf(page, '[data-testid="staff-export"]', "color"))).toBe(true);
   expect(isGreen(await colourOf(page, '[data-testid="staff-export"]', "border-top-color"))).toBe(true);

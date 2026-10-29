@@ -30,6 +30,7 @@ from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .models import Payroll
 from .pf_esi import d2
+from .payroll_day_marks import attach_marks
 from .payroll_insights import (
     KIND_LEGACY,
     KIND_PRODUCTION,
@@ -506,7 +507,7 @@ def _details_response(request: Request, pk: int, wanted: str) -> Response:
             "rules": _rule_groups_of(payroll, kind, bd, resolver),
             "issues": issues,
             "issueCounts": issue_counts(issues),
-            "days": normalized_days(bd, issues),
+            "days": attach_marks(emp.id, normalized_days(bd, issues)),
             "advances": _advances_of(bd),
             "notes": "\n".join(notes) or None,
             "history": _history(payroll, kind) if kind != KIND_LEGACY else [],

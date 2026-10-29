@@ -1,5 +1,7 @@
 import {
   PAY_CYCLE_INFO,
+  type DayMark,
+  type IssueCode,
   type IssueSeverity,
   type PayrollDay,
   type PayrollDetails,
@@ -7,11 +9,9 @@ import {
   type PayrollKind,
   type RuleGroup,
   type RuleItem,
-  type RuleSource,
 } from "@/lib/api-client/custom-hooks";
 import { dateLong, inr2, parseIso, periodLabel, plural } from "@/components/payroll/kit/format";
 import { ISSUE_META, issueLabel, severityRank } from "@/components/payroll/kit/issue-meta";
-import type { Tone } from "@/lib/statusTones";
 
 // The pure logic behind the payroll details page: what the sections are, how issues are filtered and grouped, how the
 // calendar is laid out, which rules changed, and the small formatting rules. Nothing here touches React or the network,
@@ -19,14 +19,11 @@ import type { Tone } from "@/lib/statusTones";
 
 // ── Sections ──────────────────────────────────────────────────────────────────
 
+/** The sections of the page, in the order they are shown: the days first, then what was flagged, then the money. */
 export const SECTIONS = [
-  { id: "overview", label: "Overview" },
-  { id: "rules", label: "Rules" },
-  { id: "issues", label: "Issues" },
   { id: "attendance", label: "Attendance" },
+  { id: "issues", label: "Issues" },
   { id: "pay", label: "Pay & deductions" },
-  { id: "employee", label: "Employee" },
-  { id: "history", label: "History" },
 ] as const;
 
 export type SectionId = (typeof SECTIONS)[number]["id"];
@@ -36,13 +33,12 @@ export const SECTION_IDS: SectionId[] = SECTIONS.map((s) => s.id);
 /** The anchor id of a section on the page (prefixed so it can never collide with another element of the app). */
 export const sectionDomId = (id: string): string => `pd-${id}`;
 
+// A link to a section the page no longer has (overview, rules, employee, history) simply opens the page at its top.
 const SECTION_ALIASES: Record<string, SectionId> = {
   days: "attendance",
   calendar: "attendance",
   deductions: "pay",
   advances: "pay",
-  profile: "employee",
-  payroll: "overview",
 };
 
 /** `?section=issues` (or an alias such as `days`) -> the section it names; null for anything else. */
@@ -129,26 +125,6 @@ export function eachDay(from: string, to: string, limit = 400): string[] {
   if (!toUtc(from) || !toUtc(to)) return out;
   for (let day = from; day <= to && out.length < limit; day = addDaysIso(day, 1)) out.push(day);
   return out;
-}
-
-/** "3 yr 4 mo" since a join date; null for no / a future date. */
-export function tenureLabel(joinIso: string | null | undefined, now: Date = new Date()): string | null {
-  const j = parseIso(joinIso);
-  if (!j) return null;
-  let months = (now.getFullYear() - j.year) * 12 + (now.getMonth() + 1 - j.month);
-  if (now.getDate() < j.day) months -= 1;
-  if (months < 0) return null;
-  if (months === 0) return "under a month";
-  const years = Math.floor(months / 12);
-  const rest = months % 12;
-  return [years ? `${years} yr` : "", rest ? `${rest} mo` : ""].filter(Boolean).join(" ");
-}
-
-/** "••••7890": the last digits of a number and nothing more. Four digits or fewer are hidden entirely. */
-export function maskTail(value: string | null | undefined, keep = 4): string | null {
-  const text = (value ?? "").trim();
-  if (!text) return null;
-  return text.length <= keep ? "••••" : `••••${text.slice(-keep)}`;
 }
 
 // ── Issues: filtering ─────────────────────────────────────────────────────────
@@ -466,6 +442,134 @@ export function dayKind(day: Pick<PayrollDay, "status" | "flags"> & { shifts?: n
   return "other";
 }
 
+// ── The attendance categories of a day ────────────────────────────────────────
+
+/** The six categories HR looks for on a day, in the order they are listed everywhere. */
+export const MARK_KEYS: DayMark[] = [
+  "late",
+  "permission",
+  "excess_permission",
+  "on_duty",
+  "on_duty_punch",
+  "missed_punch",
+];
+
+/**
+ * One look per category: its words, a short word for the calendar cell, what it means, and a colour of its own in three
+ * strengths: `cell` fills the whole day when this is the day's main category, `bar` is the solid edge of that cell, `pill` is
+ * the solid tag every category a day carries is shown with, `swatch` is the solid dot of the legend.
+ */
+export const MARK_META: Record<
+  DayMark,
+  { label: string; short: string; hint: string; cell: string; bar: string; pill: string; swatch: string }
+> = {
+  late: {
+    label: "Late attendance",
+    short: "Late",
+    hint: "Arrived after the shift start and its grace time.",
+    cell: "border-amber-300 bg-amber-100 text-amber-950",
+    bar: "border-l-amber-500",
+    pill: "bg-amber-500 text-white",
+    swatch: "bg-amber-500",
+  },
+  permission: {
+    label: "Permission",
+    short: "Permission",
+    hint: "An approved permission (Morning Late-In, Evening Early-Out or Middle One-Hour) within the monthly cap.",
+    cell: "border-blue-300 bg-blue-100 text-blue-950",
+    bar: "border-l-blue-600",
+    pill: "bg-blue-600 text-white",
+    swatch: "bg-blue-600",
+  },
+  excess_permission: {
+    label: "Excess permission",
+    short: "Excess",
+    hint: "An approved permission beyond the monthly cap: it did not excuse the day.",
+    cell: "border-rose-400 bg-rose-200 text-rose-950",
+    bar: "border-l-rose-600",
+    pill: "bg-rose-600 text-white",
+    swatch: "bg-rose-600",
+  },
+  on_duty: {
+    label: "On-Duty",
+    short: "On-Duty",
+    hint: "The day was inside an approved On-Duty (field visit) request.",
+    cell: "border-teal-300 bg-teal-100 text-teal-950",
+    bar: "border-l-teal-600",
+    pill: "bg-teal-600 text-white",
+    swatch: "bg-teal-600",
+  },
+  on_duty_punch: {
+    label: "On-Duty punch",
+    short: "OD punch",
+    hint: "A geo-punch taken during an On-Duty request was approved and counted as a punch of the day.",
+    cell: "border-indigo-300 bg-indigo-100 text-indigo-950",
+    bar: "border-l-indigo-600",
+    pill: "bg-indigo-600 text-white",
+    swatch: "bg-indigo-600",
+  },
+  missed_punch: {
+    label: "Missed punch",
+    short: "Missed",
+    hint: "A punch was missing, or was added by an approved Missing Punch request.",
+    cell: "border-fuchsia-300 bg-fuchsia-100 text-fuchsia-950",
+    bar: "border-l-fuchsia-600",
+    pill: "bg-fuchsia-600 text-white",
+    swatch: "bg-fuchsia-600",
+  },
+};
+
+// What the payroll's own issues already say about a day, for a server that does not send `marks` (or sends fewer).
+const FLAG_MARKS: Partial<Record<IssueCode, DayMark>> = {
+  late_in: "late",
+  excess_permission: "excess_permission",
+  missing_punch: "missed_punch",
+};
+
+/** The categories a day carries, in the fixed order of MARK_KEYS: what the server marked plus what payroll flagged on it. */
+export function marksOf(day: Pick<PayrollDay, "marks" | "flags">): DayMark[] {
+  const found = new Set<DayMark>(day.marks ?? []);
+  for (const flag of day.flags ?? []) {
+    const mark = FLAG_MARKS[flag];
+    if (mark) found.add(mark);
+  }
+  return MARK_KEYS.filter((k) => found.has(k));
+}
+
+/** Which category fills a day's cell when it carries several: the one that needs the most attention first. */
+export const MARK_FILL_ORDER: DayMark[] = [
+  "excess_permission",
+  "permission",
+  "missed_punch",
+  "on_duty_punch",
+  "on_duty",
+  "late",
+];
+
+// A day that was not worked (absent, a leave, a holiday) or was cut to half keeps the colour of that status: it is what the
+// pay follows. The categories it carries are still shown on it as tags.
+const STATUS_FILLS: DayKind[] = ["half", "absent", "unpaid", "leave", "onleave", "holiday", "other"];
+
+/** The category that fills the cell of a day, or null when the cell shows the day's status (a plain day, or a status that wins). */
+export function fillMark(day: Pick<PayrollDay, "status" | "flags" | "marks" | "shifts">): DayMark | null {
+  if (STATUS_FILLS.includes(dayKind(day))) return null;
+  const marks = marksOf(day);
+  return MARK_FILL_ORDER.find((m) => marks.includes(m)) ?? null;
+}
+
+/** How many days each status colours on the calendar (the days a category fills are counted under that category). */
+export function fillKindCounts(days: PayrollDay[]): Record<DayKind, number> {
+  const counts = Object.fromEntries(DAY_KINDS.map((k) => [k, 0])) as Record<DayKind, number>;
+  for (const day of days) if (fillMark(day) === null) counts[dayKind(day)] += 1;
+  return counts;
+}
+
+export function markCounts(days: PayrollDay[]): Record<DayMark, number> {
+  const counts = Object.fromEntries(MARK_KEYS.map((k) => [k, 0])) as Record<DayMark, number>;
+  for (const day of days) for (const mark of marksOf(day)) counts[mark] += 1;
+  return counts;
+}
+
 /** "paid_leave" -> "Paid leave": a status the server sent, in words. */
 export function statusLabel(status: string | null | undefined): string {
   const text = (status ?? "").replace(/_/g, " ").trim();
@@ -478,9 +582,16 @@ export function kindCounts(days: PayrollDay[]): Record<DayKind, number> {
   return counts;
 }
 
-export function filterDays(days: PayrollDay[], opts: { kind: DayKind | "all"; flaggedOnly: boolean }): PayrollDay[] {
+export function filterDays(
+  days: PayrollDay[],
+  opts: { kind: DayKind | "all"; flaggedOnly: boolean; mark?: DayMark | "all"; plainOnly?: boolean },
+): PayrollDay[] {
+  const mark = opts.mark ?? "all";
   return days.filter(
-    (d) => (opts.kind === "all" || dayKind(d) === opts.kind) && (!opts.flaggedOnly || (d.flags ?? []).length > 0),
+    (d) =>
+      (opts.kind === "all" || (dayKind(d) === opts.kind && (!opts.plainOnly || fillMark(d) === null))) &&
+      (!opts.flaggedOnly || (d.flags ?? []).length > 0) &&
+      (mark === "all" || marksOf(d).includes(mark)),
   );
 }
 
@@ -525,15 +636,6 @@ export function buildCalendar(days: PayrollDay[], start?: string | null, end?: s
 
 // ── Rules ─────────────────────────────────────────────────────────────────────
 
-export const RULE_SOURCES: RuleSource[] = ["settings", "employee", "shift", "cycle"];
-
-export const SOURCE_META: Record<RuleSource, { label: string; tone: Tone; hint: string }> = {
-  settings: { label: "Settings", tone: "info", hint: "Configured on the Settings page" },
-  employee: { label: "Employee", tone: "accent", hint: "Set on this employee's own profile" },
-  shift: { label: "Shift", tone: "success", hint: "Comes from the shift the employee is assigned to" },
-  cycle: { label: "Cycle", tone: "caution", hint: "Comes from the pay cycle" },
-};
-
 export const countRules = (groups: RuleGroup[]): number => groups.reduce((n, g) => n + g.items.length, 0);
 
 /** True when the rule is not what the payroll was generated with: regenerating would price it differently. */
@@ -544,47 +646,6 @@ export function isRuleChanged(item: RuleItem): boolean {
 
 export function changedRules(groups: RuleGroup[]): { group: string; item: RuleItem }[] {
   return groups.flatMap((g) => g.items.filter(isRuleChanged).map((item) => ({ group: g.group, item })));
-}
-
-export function sourceCounts(groups: RuleGroup[]): Record<RuleSource | "all", number> {
-  const counts: Record<RuleSource | "all", number> = { all: 0, settings: 0, employee: 0, shift: 0, cycle: 0 };
-  for (const group of groups) {
-    for (const item of group.items) {
-      counts.all += 1;
-      if (item.source in counts) counts[item.source] += 1;
-    }
-  }
-  return counts;
-}
-
-/** The groups left after the search, the source filter and "changed only"; a group with no rule left is dropped. */
-export function filterRuleGroups(
-  groups: RuleGroup[],
-  opts: { query: string; source: RuleSource | "all"; changedOnly: boolean },
-): RuleGroup[] {
-  const query = opts.query.trim().toLowerCase();
-  return groups
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => {
-        if (opts.source !== "all" && item.source !== opts.source) return false;
-        if (opts.changedOnly && !isRuleChanged(item)) return false;
-        if (!query) return true;
-        const haystack = [
-          group.group,
-          item.label,
-          item.value,
-          item.detail,
-          item.applied,
-          SOURCE_META[item.source]?.label,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(query);
-      }),
-    }))
-    .filter((group) => group.items.length > 0);
 }
 
 // ── Money and the dashboard ───────────────────────────────────────────────────
@@ -657,95 +718,6 @@ export function netBridge(money: PayrollDetails["money"]): {
     other,
     otherIsOvertime: other !== 0 && !!money.otAmount && Math.abs(other - money.otAmount) < 0.5,
   };
-}
-
-/** A sparkline's polyline in a `width` x `height` box (the last point is where the current value sits). */
-export function sparkPoints(
-  values: number[],
-  width: number,
-  height: number,
-  pad = 3,
-): { points: string; last: { x: number; y: number } | null } {
-  if (values.length === 0) return { points: "", last: null };
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-  const step = values.length > 1 ? (width - pad * 2) / (values.length - 1) : 0;
-  const coords = values.map((v, i) => ({
-    x: values.length > 1 ? pad + i * step : width / 2,
-    y: span === 0 ? height / 2 : pad + (1 - (v - min) / span) * (height - pad * 2),
-  }));
-  return {
-    points: coords.map((c) => `${Math.round(c.x * 10) / 10},${Math.round(c.y * 10) / 10}`).join(" "),
-    last: coords[coords.length - 1],
-  };
-}
-
-// ── The employee ──────────────────────────────────────────────────────────────
-
-export type ReadinessItem = {
-  key: "bank" | "ifsc" | "pf" | "esi";
-  label: string;
-  ok: boolean;
-  /** The last digits ("••••4821") or a word ("On file", "Missing"). */
-  value: string;
-  /** What goes with it: the name of the bank. */
-  detail: string | null;
-  hint: string;
-};
-
-/**
- * Can this person be paid? Bank account, IFSC, PF and ESI numbers, each present or missing; a number is never shown in full.
- * PF and ESI only ever apply to Co Emp employees: when this payroll's own record says the employee is on the TDS list or is
- * not Co Emp (`category`), a PF / ESI number that is not on the profile is "Not needed", not a gap.
- */
-export function readiness(
-  emp: PayrollDetails["employee"],
-  category?: "co_emp" | "tds" | "none" | null,
-): ReadinessItem[] {
-  const bank = emp.bank ?? { hasAccount: false, bankName: null, hasIfsc: false, accountLast4: null };
-  const noPfEsi = category === "tds" || category === "none";
-  const notNeeded = (what: "PF" | "ESI"): Pick<ReadinessItem, "ok" | "value" | "hint"> => ({
-    ok: true,
-    value: "Not needed",
-    hint: category === "tds" ? `TDS employee: no ${what} is deducted` : `Not a Co Emp employee: no ${what} is deducted`,
-  });
-  return [
-    {
-      key: "bank",
-      label: "Bank account",
-      ok: !!bank.hasAccount,
-      value: bank.hasAccount ? (bank.accountLast4 ? `••••${bank.accountLast4}` : "On file") : "Not on file",
-      detail: bank.hasAccount ? bank.bankName : null,
-      hint: bank.hasAccount ? "Salary can be transferred" : "Add the bank account on the employee's profile",
-    },
-    {
-      key: "ifsc",
-      label: "IFSC code",
-      ok: !!bank.hasIfsc,
-      value: bank.hasIfsc ? "On file" : "Missing",
-      detail: null,
-      hint: bank.hasIfsc ? "Needed for a bank transfer" : "A bank transfer needs the branch's IFSC code",
-    },
-    {
-      key: "pf",
-      label: "PF number",
-      ok: !!emp.pfNumber,
-      value: maskTail(emp.pfNumber) ?? "Not recorded",
-      detail: null,
-      hint: emp.pfNumber ? "Provident fund account is recorded" : "Not recorded on the profile (information only)",
-      ...(noPfEsi && !emp.pfNumber ? notNeeded("PF") : {}),
-    },
-    {
-      key: "esi",
-      label: "ESI number",
-      ok: !!emp.esiNumber,
-      value: maskTail(emp.esiNumber) ?? "Not recorded",
-      detail: null,
-      hint: emp.esiNumber ? "ESI account is recorded" : "Not recorded on the profile (information only)",
-      ...(noPfEsi && !emp.esiNumber ? notNeeded("ESI") : {}),
-    },
-  ];
 }
 
 /**

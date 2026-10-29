@@ -1,12 +1,10 @@
-import { act } from "react";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanDetails, productionDetails, staffDetails } from "./fixtures";
+import { productionDetails, staffDetails } from "./fixtures";
 import {
   all,
   choose,
   click,
-  here,
   installBrowserStubs,
   installWorld,
   must,
@@ -22,9 +20,8 @@ import {
   type World,
 } from "./harness";
 
-// The sections of the details page in jsdom, one by one: the rules (and the one changed in Settings), the issues with
-// the date each was detected and every filter, the calendar and table of days, the extras on the pay, the employee's
-// payment readiness and the earlier payrolls.
+// The sections of the details page in jsdom, one by one: the issues with the date each was detected and every filter,
+// the calendar (with the six attendance categories) and the table of days, and the extras on the pay.
 
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -61,123 +58,10 @@ afterEach(() => {
 
 const openStaff = (suffix = "") => openLoaded(`/hr/payroll/details/101${suffix}`, { fromPayroll: true });
 const openProduction = () => openLoaded("/hr/production-payroll/details/301", { fromPayroll: true });
-const clickLink = (el: Element | null) =>
-  act(() => el!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
 
 const rowIds = () => all("pd-issue-detail").map((el) => el.closest("li")!.dataset.testid);
 const issueRows = () => [...document.body.querySelectorAll<HTMLElement>('li[data-testid^="pd-issue-"][data-code]')];
 const count = () => text(q("pd-issue-count"));
-
-describe("the rules", () => {
-  it("lists them in groups, each with where it comes from and a way to the Settings that holds it", async () => {
-    await openStaff();
-    for (const group of ["attendance", "shift", "late-detection", "pay", "employee"]) {
-      expect(q(`pd-rule-group-${group}`), group).not.toBeNull();
-    }
-    const mode = must("pd-rule-attendance_mode");
-    expect(text(mode)).toContain("Attendance mode");
-    expect(text(mode)).toContain("Settings");
-    expect(text(mode)).toContain("Strict (4-punch)");
-    expect(text(mode)).toContain("Morning in, lunch out, lunch in and evening out are all checked");
-    expect(must("pd-rule-link-attendance_mode").getAttribute("href")).toBe(
-      "/hr/settings?tab=attendance#attendance-mode",
-    );
-    expect(text(q("pd-rule-link-attendance_mode"))).toContain("Open in Settings");
-    // a rule that is not a setting has no link, and says where it comes from
-    expect(q("pd-rule-link-shift")).toBeNull();
-    expect(text(q("pd-rule-shift"))).toContain("Shift");
-    expect(text(q("pd-rule-salary_basis"))).toContain("Employee");
-  });
-
-  it("a rule changed in Settings after the payroll was generated says what it was generated with, and what it is now", async () => {
-    await openStaff();
-    const rule = must("pd-rule-late_free_allowance");
-    expect(rule.dataset.changed).toBe("true");
-    expect(text(q("pd-rule-diff-late_free_allowance"))).toContain("Generated with: 2 free, then slabs");
-    expect(text(q("pd-rule-diff-late_free_allowance"))).toContain("Settings now: 3 free, then slabs");
-    expect(text(q("pd-rule-changed-late_free_allowance"))).toBe(
-      "Changed since this payroll was generated - regenerate to apply",
-    );
-    expect(must("pd-rule-link-late_free_allowance").getAttribute("href")).toBe(
-      "/hr/settings?tab=late_detection#late-free-allowance",
-    );
-    // the others show their value only
-    const unchanged = must("pd-rule-attendance_mode");
-    expect(unchanged.dataset.changed).toBe("false");
-    expect(text(unchanged)).not.toContain("Generated with");
-    expect(q("pd-rule-changed-attendance_mode")).toBeNull();
-    // and the group, the banner and the section bar all say so
-    expect(text(q("pd-rule-group-late-detection"))).toContain("1 changed");
-    expect(text(q("pd-rules-changed-banner"))).toContain("1 rule has changed");
-    expect(text(q("pd-rules-changed-banner"))).toContain("this page shows what it was generated with");
-  });
-
-  it("a payroll whose rules have not changed has no banner and no chip", async () => {
-    await openLoaded("/hr/payroll/details/102", null);
-    expect(q("pd-rules-changed-banner")).toBeNull();
-    expect(document.body.querySelectorAll('[data-changed="true"]')).toHaveLength(0);
-  });
-
-  it("filters by where a rule comes from, with the counts on the chips", async () => {
-    await openStaff();
-    expect(text(q("pd-rules-source-all"))).toBe("All 15");
-    expect(text(q("pd-rules-source-settings"))).toBe("Settings 9");
-    expect(text(q("pd-rules-source-employee"))).toBe("Employee 4");
-    expect(text(q("pd-rules-source-shift"))).toBe("Shift 2");
-    expect(q("pd-rules-source-cycle")).toBeNull(); // none come from the cycle
-    click(q("pd-rules-source-shift"));
-    expect(q("pd-rule-group-shift")).not.toBeNull();
-    expect(q("pd-rule-group-pay")).toBeNull();
-    expect(must("pd-rules-source-shift").getAttribute("aria-pressed")).toBe("true");
-    click(q("pd-rules-source-shift"));
-    expect(q("pd-rule-group-pay")).not.toBeNull();
-  });
-
-  it("searches the rules, shows only the changed ones, and says when nothing matches", async () => {
-    await openStaff();
-    typeInto(must("pd-rules-search") as HTMLInputElement, "grace");
-    expect(q("pd-rule-grace")).not.toBeNull();
-    expect(q("pd-rule-shift")).toBeNull();
-    expect(q("pd-rule-group-pay")).toBeNull();
-    typeInto(must("pd-rules-search") as HTMLInputElement, "zzzz");
-    expect(text(q("pd-rules-nomatch"))).toContain("No rule matches");
-    click(q("pd-rules-nomatch")!.querySelector("button"));
-    expect((must("pd-rules-search") as HTMLInputElement).value).toBe("");
-    expect(q("pd-rule-group-pay")).not.toBeNull();
-    click(q("pd-rules-changed-only"));
-    expect(q("pd-rule-late_free_allowance")).not.toBeNull();
-    expect(q("pd-rule-late_slabs")).toBeNull();
-    expect(q("pd-rule-group-attendance")).toBeNull();
-    expect(must("pd-rules-changed-only").getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("a group collapses and expands, and Collapse all does every group", async () => {
-    await openStaff();
-    const header = q("pd-rule-group-shift")!.querySelector("button")!;
-    expect(header.getAttribute("aria-expanded")).toBe("true");
-    click(header);
-    expect(header.getAttribute("aria-expanded")).toBe("false");
-    const list = q("pd-rule-group-shift")!.querySelector("ul")!;
-    expect(list.className).toContain("hidden");
-    expect(list.className).toContain("print:block"); // a collapsed group is still printed
-    click(header);
-    expect(q("pd-rule-group-shift")!.querySelector("ul")!.className).not.toContain("hidden");
-    click(q("pd-rules-collapse-all"));
-    expect(text(q("pd-rules-collapse-all"))).toBe("Expand all");
-    for (const group of ["attendance", "shift", "late-detection", "pay", "employee"]) {
-      expect(q(`pd-rule-group-${group}`)!.querySelector("button")!.getAttribute("aria-expanded"), group).toBe("false");
-    }
-    click(q("pd-rules-collapse-all"));
-    expect(text(q("pd-rules-collapse-all"))).toBe("Collapse all");
-  });
-
-  it("says so when no rules were stored", async () => {
-    world.staff.set(101, staffDetails({ rules: [] }));
-    await openStaff();
-    expect(text(q("pd-rules-empty"))).toContain("No rules were stored with this payroll");
-    expect(q("pd-rules-search")).toBeNull();
-  });
-});
 
 describe("the issues", () => {
   it("each row says what happened, the day it was detected on, what it cost, the rule behind it and the facts", async () => {
@@ -443,15 +327,15 @@ describe("the days of the period", () => {
     expect(document.body.querySelectorAll('button[data-testid^="pd-day-2026-"]')).toHaveLength(26);
   });
 
-  it("a cell shows the day, a letter for its kind, the punches and a dot per flag, and says it all to a screen reader", async () => {
+  it("a cell shows the day, a letter for its kind, the punches and a tag per category, and says it all to a screen reader", async () => {
     await openStaff();
     const late = cell("2026-10-13");
     expect(text(late)).toContain("13");
     expect(text(late)).toContain("L");
     expect(text(late)).toContain("09:42–18:07");
-    expect(late.querySelectorAll("span.rounded-full")).toHaveLength(1); // one flag, one dot
+    expect(late.querySelectorAll("[data-mark]")).toHaveLength(1); // one category, one tag
     expect(late.getAttribute("aria-label")).toBe(
-      "Tue, 13 Oct 2026: Late. first in 09:42, last out 18:07. flagged: Late arrival",
+      "Tue, 13 Oct 2026: Late. first in 09:42, last out 18:07. Late attendance. flagged: Late arrival",
     );
     expect(cell("2026-10-22").getAttribute("aria-label")).toContain("Half day");
     expect(text(cell("2026-10-22"))).toContain("0.5 shifts");
@@ -461,15 +345,17 @@ describe("the days of the period", () => {
     expect(text(cell("2026-10-27"))).toContain("in 09:02");
     expect(text(cell("2026-10-27"))).not.toContain("—");
     expect(cell("2026-10-27").getAttribute("aria-label")).toBe(
-      "Tue, 27 Oct 2026: Present. first in 09:02. flagged: Missing punch",
+      "Tue, 27 Oct 2026: Present. first in 09:02. Missed punch. flagged: Missing punch",
     );
   });
 
-  it("the legend counts each kind of day and doubles as a filter that dims the rest", async () => {
+  it("the status legend counts the days whose cell shows that status and doubles as a filter that dims the rest", async () => {
     await openStaff();
     const legend = (k: string) => text(q(`pd-legend-${k}`));
-    expect(legend("present")).toBe("Present18");
-    expect(legend("late")).toBe("Late3");
+    // a day with a late, permission, On-Duty or missed-punch category is filled in that category's colour, so it is counted
+    // under the category: 18 present days, 5 of them filled by a category; the 3 late days all are
+    expect(legend("present")).toBe("Present13");
+    expect(q("pd-legend-late")).toBeNull();
     expect(legend("half")).toBe("Half day1");
     expect(legend("absent")).toBe("Absent1");
     expect(legend("unpaid")).toBe("Unpaid leave1");
@@ -480,13 +366,107 @@ describe("the days of the period", () => {
     // the dashed cells are explained, with how many there are (not a filter: there is nothing to filter on)
     expect(text(q("pd-legend-norecord"))).toBe("Not a working day5");
     expect(q("pd-legend-norecord")!.tagName).toBe("SPAN");
-    click(q("pd-legend-late"));
-    expect(must("pd-legend-late").getAttribute("aria-pressed")).toBe("true");
-    expect(cell("2026-10-06").className).toContain("opacity-30");
-    expect(cell("2026-10-13").className).not.toContain("opacity-30");
-    expect(cell("2026-10-29").className).not.toContain("opacity-30");
-    click(q("pd-legend-late")); // pressing it again lifts the filter
+    click(q("pd-legend-absent"));
+    expect(must("pd-legend-absent").getAttribute("aria-pressed")).toBe("true");
+    expect(cell("2026-10-13").className).toContain("opacity-30");
     expect(cell("2026-10-06").className).not.toContain("opacity-30");
+    // a plain present day is dimmed by "Present" only when it is not the one chosen; a category day is not a "present" cell
+    click(q("pd-legend-present"));
+    expect(cell("2026-10-01").className).not.toContain("opacity-30");
+    expect(cell("2026-10-15").className).toContain("opacity-30"); // filled by Permission, not by Present
+    click(q("pd-legend-present")); // pressing it again lifts the filter
+    expect(cell("2026-10-15").className).not.toContain("opacity-30");
+  });
+
+  it("fills the cell of a day with the colour of its attendance category, and tags every category the day carries", async () => {
+    await openStaff();
+    const fill = (date: string) => cell(date).dataset.fill;
+    // one colour of its own for each of the six categories
+    expect(fill("2026-10-15")).toBe("permission");
+    expect(cell("2026-10-15").className).toContain("bg-blue-100");
+    expect(fill("2026-10-19")).toBe("excess_permission");
+    expect(cell("2026-10-19").className).toContain("bg-rose-200");
+    expect(fill("2026-10-21")).toBe("on_duty");
+    expect(cell("2026-10-21").className).toContain("bg-teal-100");
+    expect(fill("2026-10-16")).toBe("on_duty_punch"); // On-Duty AND an approved geo-punch: the punch colours the cell
+    expect(cell("2026-10-16").className).toContain("bg-indigo-100");
+    expect(fill("2026-10-27")).toBe("missed_punch"); // payroll flagged a missing punch
+    expect(cell("2026-10-27").className).toContain("bg-fuchsia-100");
+    expect(fill("2026-10-13")).toBe("late");
+    expect(cell("2026-10-13").className).toContain("bg-amber-100");
+    // a plain day keeps its status colour and has no tag
+    expect(fill("2026-10-01")).toBeUndefined();
+    expect(cell("2026-10-01").className).toContain("bg-emerald-50");
+    expect(cell("2026-10-01").querySelectorAll("[data-mark]")).toHaveLength(0);
+    // every category of a day is a tag, in one fixed order
+    const tags = (date: string) =>
+      [...cell(date).querySelectorAll<HTMLElement>("[data-mark]")].map((t) => t.dataset.mark);
+    expect(tags("2026-10-16")).toEqual(["on_duty", "on_duty_punch"]);
+    expect(tags("2026-10-14")).toEqual(["late", "permission"]);
+    expect(fill("2026-10-14")).toBe("permission"); // late and permission: the permission colours it, the late tag stays
+    expect(text(cell("2026-10-14"))).toContain("Late");
+    expect(text(cell("2026-10-14"))).toContain("Permission");
+    // a day that was not worked, or cut to half, keeps the colour of that: it is what the pay follows
+    expect(fill("2026-10-22")).toBeUndefined();
+    expect(cell("2026-10-22").className).toContain("bg-orange-50");
+    expect(tags("2026-10-22")).toEqual(["permission"]);
+    expect(cell("2026-10-06").className).toContain("bg-red-50");
+    expect(cell("2026-10-16").getAttribute("aria-label")).toContain("On-Duty, On-Duty punch");
+  });
+
+  it("the attendance-types legend names all six, counts the days of each and doubles as a filter", async () => {
+    await openStaff();
+    const legend = (k: string) => text(q(`pd-mark-legend-${k}`));
+    expect(legend("late")).toBe("Late attendance3");
+    expect(legend("permission")).toBe("Permission3");
+    expect(legend("excess_permission")).toBe("Excess permission1");
+    expect(legend("on_duty")).toBe("On-Duty2");
+    expect(legend("on_duty_punch")).toBe("On-Duty punch1");
+    expect(legend("missed_punch")).toBe("Missed punch1");
+    expect(must("pd-mark-legend-on_duty").title).toBe("The day was inside an approved On-Duty (field visit) request.");
+    click(q("pd-mark-legend-permission"));
+    expect(must("pd-mark-legend-permission").getAttribute("aria-pressed")).toBe("true");
+    for (const date of ["2026-10-14", "2026-10-15", "2026-10-22"]) {
+      expect(cell(date).className, date).not.toContain("opacity-30");
+    }
+    expect(cell("2026-10-01").className).toContain("opacity-30");
+    expect(cell("2026-10-16").className).toContain("opacity-30");
+    click(q("pd-days-clear"));
+    expect(cell("2026-10-01").className).not.toContain("opacity-30");
+    expect(q("pd-days-clear")).toBeNull();
+  });
+
+  it("a category nothing in the period used is listed too, greyed out", async () => {
+    world.staff.set(101, staffDetails({ days: staffDetails().days.map((d) => ({ ...d, marks: [], flags: [] })) }));
+    await openStaff();
+    for (const key of ["late", "permission", "excess_permission", "on_duty", "on_duty_punch", "missed_punch"]) {
+      expect(q(`pd-mark-legend-${key}`), key).not.toBeNull();
+    }
+    expect((must("pd-mark-legend-on_duty") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("the table does not carry the category legend and keeps its own filters, and a view switch starts the filters again", async () => {
+    await openStaff();
+    click(q("pd-mark-legend-permission"));
+    click(q("pd-view-table"));
+    expect(q("pd-mark-legend")).toBeNull();
+    expect(document.body.querySelectorAll('tr[data-testid^="pd-row-"]')).toHaveLength(26);
+    click(q("pd-view-calendar"));
+    expect(must("pd-mark-legend-permission").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("says what each category on the chosen day means", async () => {
+    await openStaff();
+    click(cell("2026-10-16"));
+    const marks = must("pd-day-marks");
+    expect([...marks.querySelectorAll<HTMLElement>("[data-mark]")].map((m) => m.dataset.mark)).toEqual([
+      "on_duty",
+      "on_duty_punch",
+    ]);
+    expect(text(marks)).toContain("The day was inside an approved On-Duty (field visit) request.");
+    expect(text(marks)).toContain("A geo-punch taken during an On-Duty request was approved");
+    click(cell("2026-10-01"));
+    expect(q("pd-day-marks")).toBeNull();
   });
 
   it("Flagged only dims every day nothing was flagged on, and Clear lifts it", async () => {
@@ -651,7 +631,7 @@ describe("the days of the period", () => {
       const ot = cell("2026-10-13");
       expect(ot.querySelector('[data-testid="compensation-symbol-ot_allowance"]')?.textContent).toBe("OT");
       expect(ot.getAttribute("aria-label")).toBe(
-        "Tue, 13 Oct 2026: Late. OT allowance used (30 min): Arrived 09:42, inside the 30 min allowance. first in 09:42, last out 18:07. flagged: Late arrival",
+        "Tue, 13 Oct 2026: Late. OT allowance used (30 min): Arrived 09:42, inside the 30 min allowance. first in 09:42, last out 18:07. Late attendance. flagged: Late arrival",
       );
       expect(cell("2026-10-22").querySelector('[data-testid="compensation-symbol-relaxation"]')?.textContent).toBe(
         "RX",
@@ -745,117 +725,6 @@ describe("pay and deductions", () => {
   });
 });
 
-describe("the employee", () => {
-  it("says whether they can be paid, with last digits only and never a whole number", async () => {
-    await openStaff();
-    expect(must("pd-ready-bank").dataset.ok).toBe("true");
-    expect(text(q("pd-ready-bank"))).toContain("••••4821 · State Bank of India");
-    expect(must("pd-ready-ifsc").dataset.ok).toBe("true");
-    expect(must("pd-ready-pf").dataset.ok).toBe("true");
-    expect(text(q("pd-ready-pf"))).toContain("••••0142");
-    expect(must("pd-ready-esi").dataset.ok).toBe("false");
-    expect(text(q("pd-ready-esi"))).toContain("Not recorded");
-    // an icon is never the only signal
-    expect(text(q("pd-ready-bank"))).toContain(": present");
-    expect(text(q("pd-ready-esi"))).toContain(": missing");
-    expect(document.body.textContent).not.toContain("TN/MAS/0012345/000/0142");
-  });
-
-  it("a worker with no bank account is marked as one that cannot be paid by transfer", async () => {
-    await openProduction();
-    expect(must("pd-ready-bank").dataset.ok).toBe("false");
-    expect(text(q("pd-ready-bank"))).toContain("Not on file");
-    expect(must("pd-ready-ifsc").dataset.ok).toBe("false");
-    expect(text(q("pd-ready-ifsc"))).toContain("Missing");
-  });
-
-  it("shows how the salary is set, the split, the profile and a link to it", async () => {
-    await openStaff();
-    expect(text(q("pd-basis"))).toContain("₹29,500 a month");
-    const split = text(q("pd-split"));
-    expect(split).toContain("First portion");
-    expect(split).toContain("₹14,750.00");
-    expect(split).toContain("Basic, DA and Retaining allowance · 50%");
-    expect(split).toContain("Second portion");
-    expect(split).toContain("Other allowance, Petrol, HRA, Special and CA · 50%");
-    expect(split).toContain("Basic₹10,000.00");
-    expect(split).toContain("Special allowance₹3,750.00");
-    const profile = text(q("pd-profile"));
-    expect(profile).toContain("Daily rate");
-    expect(profile).toContain("₹1,134.62");
-    expect(profile).toContain("14 Jun 2021");
-    expect(profile).toMatch(/\d+ yr/);
-    expect(profile).toContain("Monthly (staff payroll)");
-    expect(profile).toContain("Active");
-    expect(must("pd-profile-link").getAttribute("href")).toBe("/hr/employees/42");
-  });
-
-  it("production: paid per shift, on a cycle, no split, and a link to the Production Employees", async () => {
-    await openProduction();
-    expect(text(q("pd-basis"))).toContain("₹650 per shift");
-    expect(text(q("pd-profile"))).toContain("Weekly");
-    expect(q("pd-split")).toBeNull();
-    expect(must("pd-profile-link").getAttribute("href")).toBe("/hr/employees/77");
-    expect(document.body.querySelector('a[href="/hr/employees/productionEmployee"]')).not.toBeNull();
-  });
-});
-
-describe("earlier payrolls", () => {
-  it("lists them with their net, status and issue count, each a link to its own details page", async () => {
-    await openStaff();
-    expect(
-      [...document.body.querySelectorAll('li[data-testid^="pd-history-"]')].map((li) => li.getAttribute("data-testid")),
-    ).toEqual(["pd-history-90", "pd-history-79", "pd-history-66"]);
-    const september = q("pd-history-90")!;
-    expect(text(september)).toContain("September 2026");
-    expect(text(september)).toContain("₹25,480.00");
-    expect(text(september)).toContain("Paid");
-    expect(text(september)).toContain("2 issues");
-    expect(text(q("pd-history-79"))).toContain("Clean");
-    expect(september.querySelector("a")!.getAttribute("href")).toBe("/hr/payroll/details/90");
-    // a tiny trend of the nets, oldest first and ending with this payroll
-    expect(must("pd-history-spark").getAttribute("aria-label")).toBe(
-      "Net payable over the last 4 payrolls: ₹24,900, ₹26,121, ₹25,480, ₹23,496",
-    );
-  });
-
-  it("production history links to production details pages", async () => {
-    await openProduction();
-    expect(q("pd-history-290")!.querySelector("a")!.getAttribute("href")).toBe("/hr/production-payroll/details/290");
-  });
-
-  it("opening one is a new page of its own (Back then goes to that period's list), not a replacement", async () => {
-    world.staff.set(
-      90,
-      staffDetails({
-        payrollId: 90,
-        period: { ...staffDetails().period, label: "September 2026", month: 9 },
-        context: { ...staffDetails().context, month: 9 },
-      }),
-    );
-    await openStaff();
-    const entries = window.history.length;
-    clickLink(q("pd-history-90")!.querySelector("a"));
-    expect(here()).toBe("/hr/payroll/details/90");
-    expect(window.history.length).toBe(entries + 1);
-    await waitFor(() => text(q("pd-back")) === "Back to Payroll · September 2026", "the September payroll");
-  });
-
-  it("says so when the employee has none", async () => {
-    world.staff.set(101, staffDetails({ history: [] }));
-    await openStaff();
-    expect(text(q("pd-history-empty"))).toContain("No earlier payrolls for this employee");
-    expect(q("pd-history-spark")).toBeNull();
-  });
-
-  it("the clean payroll's history is one earlier payroll", async () => {
-    world.staff.set(102, cleanDetails());
-    await openLoaded("/hr/payroll/details/102", null);
-    expect(q("pd-history-91")).not.toBeNull();
-    expect(text(q("pd-history-91"))).toContain("Clean");
-  });
-});
-
 describe("a half-filled answer", () => {
   it("still opens: every section shows 'nothing here' instead of the page crashing", async () => {
     const partial = {
@@ -873,14 +742,12 @@ describe("a half-filled answer", () => {
     world.production.set(301, partial);
     await openProduction();
     expect(text(q("pd-employee-name"))).toBe("Ravi Kumar");
-    expect(q("pd-rules-empty")).not.toBeNull();
     // no days and no rules is no breakdown: the page says so, and does not call the payroll clean
     expect(q("pd-issues-unavailable")).not.toBeNull();
     expect(q("pd-issues-clean")).toBeNull();
     expect(text(q("pd-degraded"))).toContain("No day-by-day breakdown is stored for this payroll");
     expect(text(q("pd-degraded"))).toContain("Bonus held back until the audit closes."); // HR's own note stays
     expect(q("pd-attendance-empty")).not.toBeNull();
-    expect(q("pd-history-empty")).not.toBeNull();
     expect(text(q("pd-position"))).toBe("1 of 1");
     await settle(10);
   });

@@ -39,7 +39,7 @@ test("HR generates staff payroll for a month and the figures are right", async (
   await expect(page.getByTestId("staff-record-count")).toHaveText("February 2026 · 2 records");
 });
 
-test("the dashboard of the month shows the totals, the skipped employee and the issues", async ({ page, request }) => {
+test("the month shows a card per payroll and counts the skipped employee on its view", async ({ page, request }) => {
   await loginAsHr(page);
   const token = await page.evaluate(() => localStorage.getItem("uk_textile_token"));
   await request.post("/api/payroll/generate", {
@@ -48,13 +48,15 @@ test("the dashboard of the month shows the totals, the skipped employee and the 
   });
 
   await page.goto(FEB);
-  const dash = page.getByTestId("staff-dash-root");
-  await expect(dash).toBeVisible();
-  // 24,000 + 15,000 net payable across the two paid-able payrolls
-  await expect(page.getByTestId("staff-dash-kpi-net")).toContainText("₹39,000");
-  await expect(page.getByTestId("staff-dash-kpi-employees")).toContainText("2");
-  // Meena has no salary: she is the one employee skipped at generation
-  await expect(page.getByTestId("staff-dash-kpi-skipped")).toContainText("1");
+  // there is no dashboard above the records any more
+  await expect(page.getByTestId("staff-payroll-tab")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("staff-dash-root")).toHaveCount(0);
+  // the two paid-able payrolls (24,000 and 15,000 net payable) are cards
+  await expect(page.getByTestId("staff-record-count")).toContainText("2 records");
+  await expect(card(page, "Asha Kumar")).toContainText("₹24,000");
+  await expect(card(page, "Ravi Nair")).toContainText("₹15,000");
+  // Meena has no salary: she is the one employee skipped at generation, and the Skipped view says so
+  await expect(page.getByTestId("view-skipped-count")).toHaveText("1");
 });
 
 test("the skipped employee is listed with the reason", async ({ page }) => {
@@ -154,8 +156,6 @@ test("an employee on the TDS list has TDS on the Payroll page, and nobody else d
     await expect(ashaCard.getByTestId(`payroll-record-tds-${asha.id}`)).toContainText("₹2,400");
     await expect(ashaCard.getByTestId(`payroll-record-net-${asha.id}`)).toHaveText("₹21,600");
     await expect(card(page, "Ravi Nair").getByTestId(/payroll-record-tds-/)).toHaveCount(0);
-    // the dashboard names the TDS inside the deductions
-    await expect(page.getByTestId("staff-dash-kpi-deductions")).toContainText("incl. ₹2,400 TDS");
 
     // the register has a TDS column while someone on it has TDS
     await page.goto(`${FEB}&layout=table`);
@@ -230,7 +230,6 @@ test("a Co Emp employee gets PF from the rules in Settings, and the details page
     // the Generate dialog counts the rules set for Staff
     await page.goto(FEB);
     await expect(card(page, "Asha Kumar")).toContainText("₹1,440", { timeout: 30_000 });
-    await expect(page.getByTestId("staff-dash-kpi-deductions")).not.toContainText("TDS");
     await expect(card(page, "Asha Kumar").getByTestId(/payroll-record-tds-/)).toHaveCount(0);
     await page.getByTestId("staff-generate-open").click();
     await expect(page.getByTestId("staff-generate-statutory")).toHaveText("PF: 1 rule · ESI: 0 rules");

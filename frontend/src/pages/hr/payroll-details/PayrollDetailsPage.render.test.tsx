@@ -1,4 +1,4 @@
-import { act, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isMutatingControl } from "@/lib/view-only-lock";
 import { noBreakdownDetails, staffDetails } from "./fixtures";
@@ -207,7 +207,7 @@ describe("the header", () => {
 });
 
 describe("the dashboard", () => {
-  it("gross, deductions, net payable, days worked, issues and rules, each with what explains it", async () => {
+  it("gross, deductions, net payable, days worked and issues, each with what explains it", async () => {
     await openStaff();
     expect(text(q("pd-kpi-gross"))).toContain("₹26,663");
     expect(text(q("pd-kpi-gross"))).toContain("of a ₹29,500 monthly salary");
@@ -220,18 +220,16 @@ describe("the dashboard", () => {
     expect(text(q("pd-kpi-days"))).toContain("21 present · 2 paid leave · 1 half · 2 LOP");
     expect(text(q("pd-kpi-issues-value"))).toBe("11");
     expect(text(q("pd-kpi-issues"))).toContain("1 critical · 8 warnings · 2 info");
-    expect(text(q("pd-kpi-rules-value"))).toBe("15");
-    expect(text(q("pd-kpi-rules"))).toContain("1 changed since generated");
+    // the rules are not part of this page: no tile for them
+    expect(q("pd-kpi-rules")).toBeNull();
   });
 
-  it("a clean payroll says so on the Issues tile, and an unchanged one on the Rules tile", async () => {
+  it("a clean payroll says so on the Issues tile", async () => {
     mountPage("/hr/payroll/details/102", null);
     await waitFor(() => !!q("pd-body"), "the clean payroll");
     expect(text(q("pd-kpi-issues-value"))).toBe("0");
     expect(text(q("pd-kpi-issues"))).toContain("Nothing to flag: this payroll is clean");
-    expect(text(q("pd-kpi-rules"))).toContain("applied as configured");
     expect(q("pd-nav-issues-count")).toBeNull();
-    expect(q("pd-nav-rules-changed")).toBeNull();
   });
 
   it("draws gross -> deductions -> net as one bar, in numbers too", async () => {
@@ -248,87 +246,52 @@ describe("the dashboard", () => {
     expect(parseFloat(q("pd-bridge-deductions")!.style.width)).toBeCloseTo(11.88, 1);
   });
 
-  it("the Issues and Rules tiles take the reader to those sections", async () => {
+  it("the Issues tile takes the reader to the Issues section", async () => {
     await openStaff();
     click(q("pd-kpi-issues"));
-    click(q("pd-kpi-rules"));
-    expect(scrolledTo(scroll)).toEqual(["pd-issues", "pd-rules"]);
+    expect(scrolledTo(scroll)).toEqual(["pd-issues"]);
   });
 });
 
-describe("how this salary was worked out", () => {
-  it("shows the arithmetic, the stored lines with their notes, and the net payable", async () => {
+describe("a simple page: the days, the issues, the pay", () => {
+  it("has no Overview, Rules, Employee or History section", async () => {
     await openStaff();
-    const formula = text(q("pd-formula"));
-    expect(formula).toContain("Monthly salary₹29,500");
-    expect(formula).toContain("Working days26");
-    expect(formula).toContain("Daily rate₹1,134.62");
-    expect(formula).toContain("Paid days23.5");
-    expect(formula).toContain("Salary earned₹26,663.46");
-
-    const earned = must("pd-line-earned");
-    expect(earned.dataset.kind).toBe("earning");
-    expect(text(earned)).toContain("₹1,134.62 x 23.5 paid days (21 present + 0.5 half day + 2 paid leave)");
-    expect(text(earned)).toContain("₹26,663.46");
-    expect(must("pd-line-monthly_salary").dataset.kind).toBe("info");
-    expect(text(q("pd-line-monthly_salary"))).toContain("not added");
-    expect(must("pd-line-gross").dataset.kind).toBe("subtotal");
-
-    const pf = must("pd-line-pf");
-    expect(pf.dataset.kind).toBe("deduction");
-    expect(text(pf)).toContain("₹1,599.92");
-    expect(text(pf)).toContain("12% of Basic + DA + Retaining ₹13,332.69");
-    expect(pf.querySelector("p:last-child")!.className).toContain("text-red-700");
-    expect(text(q("pd-deductions"))).toContain("Total deductions");
-
-    expect(text(q("pd-net-amount"))).toBe("₹23,496.23");
-    expect(text(q("pd-net-callout"))).toContain("Gross ₹26,663.46 - deductions ₹3,167.23");
+    for (const id of ["overview", "rules", "employee", "history"]) {
+      expect(q(`pd-section-${id}`), id).toBeNull();
+      expect(q(`pd-nav-${id}`), id).toBeNull();
+    }
+    // nothing of them is left on the page either
+    expect(q("pd-formula")).toBeNull();
+    expect(q("pd-net-callout")).toBeNull();
+    expect(q("pd-rule-pf_rules")).toBeNull();
+    expect(q("pd-ready-bank")).toBeNull();
   });
 
-  it("a line points at its rule only when the payroll has that rule", async () => {
+  it("shows the Attendance first, then the Issues, then the Pay & deductions", async () => {
     await openStaff();
-    expect(q("pd-line-rule-pf")).not.toBeNull(); // pf_rules is among the rules
-    expect(q("pd-line-rule-late")).not.toBeNull(); // late_slabs is
-    expect(q("pd-line-rule-advance")).toBeNull(); // no rule key
-    click(q("pd-line-rule-pf"));
-    await settle(10);
-    // it jumps to the rules and brings that one rule into view
-    expect(scrolledTo(scroll)).toContain("pd-rules");
-    expect(scrolledTo(scroll)).toContain("pf_rules");
-    expect(must("pd-rule-pf_rules").className).toContain("ring-2");
-  });
-
-  it("with no lines stored it says so instead of leaving a blank", async () => {
-    world.staff.set(101, staffDetails({ earnings: [], deductions: [] }));
-    await openStaff();
-    expect(text(q("pd-earnings"))).toContain("No earnings lines were stored for this payroll.");
-    expect(text(q("pd-deductions"))).toContain("No deductions on this payroll.");
+    const order = ["pd-section-attendance", "pd-section-issues", "pd-section-pay"].map((id) => must(id));
+    expect(order[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(order[1].compareDocumentPosition(order[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // and the money dashboard stays above them
+    const kpis = must("pd-kpis");
+    expect(kpis.compareDocumentPosition(order[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
 describe("the section bar", () => {
-  it("lists the seven sections, marks the one being read, and shows what needs a look", async () => {
+  it("lists the three sections, marks the one being read, and shows what needs a look", async () => {
     await openStaff();
     const buttons = [...must("pd-nav").querySelectorAll("button")];
-    expect(buttons.map(text)).toEqual([
-      "Overview",
-      "Rules",
-      "Issues11",
-      "Attendance",
-      "Pay & deductions",
-      "Employee",
-      "History",
-    ]);
-    expect(must("pd-nav-overview").getAttribute("aria-current")).toBe("location");
+    expect(buttons.map(text)).toEqual(["Attendance", "Issues11", "Pay & deductions"]);
+    expect(must("pd-nav-attendance").getAttribute("aria-current")).toBe("location");
     expect(must("pd-nav-issues-count").className).toContain("bg-red-500"); // there is a critical issue
-    expect(must("pd-nav-rules-changed").title).toBe("1 rule changed since this payroll was generated");
     expect(must("pd-nav").getAttribute("aria-label")).toBe("Payroll sections");
     expect(text(q("pd-nav-bar"))).toContain("Meena Subramanian · UKT-0142");
   });
 
   it("every section is on the page at once, each with the id the bar scrolls to", async () => {
     await openStaff();
-    for (const id of ["overview", "rules", "issues", "attendance", "pay", "employee", "history"]) {
+    for (const id of ["attendance", "issues", "pay"]) {
       expect(document.getElementById(`pd-${id}`), id).not.toBeNull();
       expect(q(`pd-section-${id}`)?.id).toBe(`pd-${id}`);
     }
@@ -336,13 +299,13 @@ describe("the section bar", () => {
 
   it("pressing a section scrolls to it and marks it", async () => {
     await openStaff();
-    click(q("pd-nav-attendance"));
-    expect(scrolledTo(scroll)).toEqual(["pd-attendance"]);
-    expect(must("pd-nav-attendance").getAttribute("aria-current")).toBe("location");
-    expect(must("pd-nav-overview").getAttribute("aria-current")).toBeNull();
-    click(q("pd-nav-history"));
-    expect(scrolledTo(scroll)).toEqual(["pd-attendance", "pd-history"]);
-    expect(must("pd-nav-history").getAttribute("aria-current")).toBe("location");
+    click(q("pd-nav-issues"));
+    expect(scrolledTo(scroll)).toEqual(["pd-issues"]);
+    expect(must("pd-nav-issues").getAttribute("aria-current")).toBe("location");
+    expect(must("pd-nav-attendance").getAttribute("aria-current")).toBeNull();
+    click(q("pd-nav-pay"));
+    expect(scrolledTo(scroll)).toEqual(["pd-issues", "pd-pay"]);
+    expect(must("pd-nav-pay").getAttribute("aria-current")).toBe("location");
   });
 
   it("?section=issues opens the page scrolled to the issues, once", async () => {
@@ -351,6 +314,16 @@ describe("the section bar", () => {
     await settle(30);
     expect(scrolledTo(scroll).filter((id) => id === "pd-issues")).toHaveLength(1);
     expect(must("pd-nav-issues").getAttribute("aria-current")).toBe("location");
+  });
+
+  it("a link to a section the page no longer has opens it at the top", async () => {
+    for (const gone of ["rules", "overview", "employee", "history"]) {
+      await openStaff(`?section=${gone}`);
+      await settle(30);
+      expect(scrolledTo(scroll), gone).toEqual([]);
+      unmountPage();
+      scroll.mockClear();
+    }
   });
 
   it("?section=days is the attendance section, and an unknown section is ignored", async () => {
@@ -466,26 +439,13 @@ describe("Previous and Next", () => {
     expect(shell.scrollTop).toBe(0);
   });
 
-  it("an earlier payroll of another period opens at its top too, and a first visit is left where the shell puts it", async () => {
-    const base = staffDetails();
-    world.staff.set(
-      90,
-      staffDetails({
-        payrollId: 90,
-        period: { ...base.period, label: "September 2026", month: 9, start: "2026-09-01", end: "2026-09-30" },
-        context: { ...base.context, month: 9 },
-      }),
-    );
+  it("another payroll opens at its top too, and a first visit is left where the shell puts it", async () => {
     await openStaff();
     const shell = must("shell");
     Object.defineProperty(shell, "scrollTop", { value: 900, writable: true, configurable: true });
     expect(shell.scrollTop).toBe(900); // nothing scrolled it on the first visit
-    act(() => {
-      must("pd-history-90")
-        .querySelector("a")!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    });
-    await waitFor(() => text(q("pd-back")) === "Back to Payroll · September 2026", "the September payroll");
+    click(q("pd-next"));
+    await waitFor(() => text(q("pd-employee-name")) === "Arun Prasad", "the next payroll");
     expect(shell.scrollTop).toBe(0);
   });
 
@@ -664,7 +624,7 @@ describe("Export", () => {
 });
 
 describe("a payroll with no day-by-day breakdown behind it", () => {
-  it("says why its days, rules and issues are missing, in the server's own words, instead of calling it clean", async () => {
+  it("says why its days and issues are missing, in the server's own words, instead of calling it clean", async () => {
     mountPage("/hr/payroll/details/105", null);
     await waitFor(() => !!q("pd-body"), "the payroll");
     const notice = text(q("pd-degraded"));
@@ -675,9 +635,6 @@ describe("a payroll with no day-by-day breakdown behind it", () => {
     expect(q("pd-issues-clean")).toBeNull();
     expect(text(q("pd-kpi-issues-value"))).toBe("—");
     expect(text(q("pd-kpi-issues"))).toContain("No breakdown to check");
-    expect(text(q("pd-kpi-rules-value"))).toBe("—");
-    expect(text(q("pd-kpi-rules"))).toContain("None stored");
-    expect(text(q("pd-rules-empty"))).toContain("No rules were stored with this payroll");
     expect(text(q("pd-attendance-empty"))).toContain("No day records were stored for this payroll");
     // what the payroll does have is still there: the money, and the summary counts
     expect(text(q("pd-kpi-net"))).toContain("₹23,496");
@@ -735,19 +692,15 @@ describe("a Production payroll", () => {
     expect(text(q("pd-back"))).toBe("Back to Production Payroll · Weekly");
     expect(must("pd-settings-link").getAttribute("href")).toBe("/hr/settings?tab=production_payroll");
     expect(must("pd-header-bar").className).toContain("bg-amber-500");
-    expect(must("pd-nav-overview").className).toContain("bg-amber-600");
+    expect(must("pd-nav-attendance").className).toContain("bg-amber-600");
     expect(text(q("pd-kpi-days"))).toContain("Shifts");
     expect(text(q("pd-kpi-days-value"))).toBe("4.5");
     expect(text(q("pd-kpi-days"))).toContain("5 days worked · 1 absent");
     expect(text(q("pd-kpi-gross"))).toContain("at ₹650 a shift");
   });
 
-  it("shows shifts x rate, and has no Previous payroll when it is the first", async () => {
+  it("has no Previous payroll when it is the first", async () => {
     await openProduction();
-    const formula = text(q("pd-formula"));
-    expect(formula).toContain("Shifts earned4.5");
-    expect(formula).toContain("Rate per shift₹650");
-    expect(formula).toContain("Gross₹2,925.00");
     expect(text(q("pd-position"))).toBe("1 of 18");
     expect(must("pd-prev").hasAttribute("disabled")).toBe(true);
     expect(must("pd-next").hasAttribute("disabled")).toBe(false);
@@ -800,15 +753,10 @@ describe("PF, ESI and TDS", () => {
     expect(must("pd-statutory-link").getAttribute("href")).toBe("/hr/settings?tab=pf_esi");
   });
 
-  it("shows a TDS employee's TDS line in the deductions and explains it, with no PF or ESI", async () => {
+  it("explains a TDS employee's TDS line, with no PF or ESI", async () => {
     await open(106);
     await settleCard();
-    const tds = must("pd-line-tds");
-    expect(tds.dataset.kind).toBe("deduction");
-    expect(text(tds)).toContain("TDS (10%)");
-    expect(text(tds)).toContain("− ₹2,950.00");
-    expect(q("pd-line-pf")).toBeNull();
-    expect(text(q("pd-net-callout"))).toContain("Gross ₹29,500.00 - deductions ₹2,950.00");
+    expect(text(q("pd-net-bridge"))).toContain("₹29,500.00");
     expect(must("pd-statutory-headline").dataset.category).toBe("tds");
     expect(text(q("pd-statutory-headline"))).toContain("TDS is deducted instead of PF and ESI");
     const line = must("pd-statutory-line-tds");
@@ -818,33 +766,23 @@ describe("PF, ESI and TDS", () => {
     expect(q("pd-statutory-line-pf")).toBeNull();
     expect(q("pd-statutory-eligibility")).toBeNull();
     expect(must("pd-statutory-link").getAttribute("href")).toBe("/hr/employees");
-    // the payment checklist stops asking for PF and ESI numbers this employee will never need
-    expect(must("pd-ready-pf").dataset.ok).toBe("true");
-    expect(text(q("pd-ready-pf"))).toContain("Not needed");
-    expect(text(q("pd-ready-pf"))).toContain("TDS employee: no PF is deducted");
-    expect(text(q("pd-ready-esi"))).toContain("TDS employee: no ESI is deducted");
-    // the bank details are still required
-    expect(must("pd-ready-bank").dataset.ok).toBe("true");
   });
 
   it("says an employee who is not Co Emp gets neither, in the server's own words", async () => {
     await open(102);
     await settleCard();
-    // a PF / ESI number that is on the profile is shown (masked) whatever the category
-    expect(text(q("pd-ready-pf"))).toContain("••••0142");
     expect(must("pd-statutory-headline").dataset.category).toBe("none");
     expect(text(q("pd-statutory-headline"))).toBe("Not a Co Emp employee: no PF/ESI");
     expect(q("pd-statutory-line-pf")).toBeNull();
     expect(q("pd-statutory-line-tds")).toBeNull();
   });
 
-  it("has no such card on a payroll generated before the redesign: its deductions are shown as they always were", async () => {
+  it("has no such card on a payroll generated before the redesign", async () => {
     await open(103);
     await waitFor(() => world.requests().includes("/api/payroll/103/breakdown"), "the breakdown request");
     await settle(20);
     expect(q("pd-section-statutory")).toBeNull();
-    expect(q("pd-section-overview")).not.toBeNull();
-    expect(q("pd-line-pf")).not.toBeNull();
+    expect(q("pd-section-attendance")).not.toBeNull();
   });
 
   it("has no card for a payroll with no stored breakdown, or when the breakdown cannot be read, and the page is unharmed", async () => {
@@ -858,7 +796,7 @@ describe("PF, ESI and TDS", () => {
     await settle(30);
     expect(q("pd-section-statutory")).toBeNull();
     expect(q("pd-error")).toBeNull();
-    expect(q("pd-section-overview")).not.toBeNull();
+    expect(q("pd-section-attendance")).not.toBeNull();
   });
 
   it("is on the production page too, saying whose rules were used", async () => {

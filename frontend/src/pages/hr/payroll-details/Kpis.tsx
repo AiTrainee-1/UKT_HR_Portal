@@ -1,23 +1,14 @@
-import {
-  AlertTriangle,
-  BookOpenCheck,
-  CalendarCheck,
-  Factory,
-  MinusCircle,
-  ShieldCheck,
-  TrendingUp,
-  Wallet,
-} from "lucide-react";
+import { AlertTriangle, CalendarCheck, Factory, MinusCircle, ShieldCheck, TrendingUp, Wallet } from "lucide-react";
 import { KpiTile } from "@/components/payroll/kit/parts";
 import { inr, inr2 } from "@/components/payroll/kit/format";
 import type { PayrollDetails, PayrollKind } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import type { Accent } from "./accent";
-import { changedRules, countRules, netBridge, severityCounts, workTile } from "./logic";
+import { netBridge, severityCounts, workTile } from "./logic";
 
 /**
  * The dashboard of one payroll: the money (gross, deductions, net payable), the days or shifts it paid for, how many
- * issues were detected (split by severity) and how many rules govern it. Issues and Rules jump to their section.
+ * issues were detected (split by severity). The Issues tile jumps to its section.
  */
 export function KpiStrip({
   details,
@@ -36,8 +27,6 @@ export function KpiStrip({
   const { money } = details;
   const counts = severityCounts(details.issues);
   const total = details.issues.length;
-  const rules = countRules(details.rules);
-  const changed = changedRules(details.rules).length;
   const work = workTile(details, kind);
   const deductionShare = money.gross > 0 ? Math.round((money.deductions / money.gross) * 1000) / 10 : 0;
 
@@ -61,7 +50,7 @@ export function KpiStrip({
           .join(" · ");
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-6" data-testid="pd-kpis">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5" data-testid="pd-kpis">
       <KpiTile
         label="Gross"
         value={inr(money.gross)}
@@ -116,25 +105,8 @@ export function KpiStrip({
         icon={total === 0 && !degraded ? ShieldCheck : AlertTriangle}
         tone={issuesTone}
         onClick={() => onJump("issues")}
+        className="col-span-2 xl:col-span-1"
         testId="pd-kpi-issues"
-      />
-      <KpiTile
-        label="Rules"
-        value={degraded ? "—" : rules}
-        sub={
-          degraded ? (
-            "None stored"
-          ) : changed > 0 ? (
-            <span className="font-semibold text-amber-800">{changed} changed since generated</span>
-          ) : (
-            "applied as configured"
-          )
-        }
-        icon={BookOpenCheck}
-        tone={changed > 0 ? "bg-amber-50 text-amber-800" : "bg-violet-50 text-violet-800"}
-        onClick={() => onJump("rules")}
-        className="col-span-2 sm:col-span-1"
-        testId="pd-kpi-rules"
       />
     </div>
   );

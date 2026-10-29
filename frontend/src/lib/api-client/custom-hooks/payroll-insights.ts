@@ -236,6 +236,9 @@ export type MoneyLine = {
 /** One day of the period in the same shape for staff and production. */
 // A day may carry the compensation marker (compensationKind / Minutes / Note) once the details endpoint sends it; it
 // does not today (payroll_insights.py builds the day from the stored breakdown), so the screens draw it only when present.
+/** Why a day was what it was, for the calendar: the six attendance categories HR looks for (read live from the attendance records). */
+export type DayMark = "late" | "permission" | "excess_permission" | "on_duty" | "on_duty_punch" | "missed_punch";
+
 export type PayrollDay = DayCompensationMarker & {
   date: string;
   day: string;
@@ -246,6 +249,8 @@ export type PayrollDay = DayCompensationMarker & {
   /** Shifts the day earned (staff: 1 / 0.5 / 0.75 per present day, production: 0.25 steps). */
   shifts: number | null;
   flags: IssueCode[];
+  /** The attendance categories of the day (permission, On-Duty, missed punch ...). Older servers do not send it. */
+  marks?: DayMark[];
   note: string | null;
 };
 

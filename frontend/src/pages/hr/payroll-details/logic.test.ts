@@ -4,6 +4,9 @@ import { cleanDetails, legacyDetails, noBreakdownDetails, productionDetails, sta
 import {
   CALENDAR_HEADERS,
   DAY_KINDS,
+  MARK_FILL_ORDER,
+  MARK_KEYS,
+  MARK_META,
   NO_ISSUE_FILTERS,
   SECTIONS,
   SECTION_IDS,
@@ -18,9 +21,10 @@ import {
   eachDay,
   factValue,
   fallbackListPath,
+  fillKindCounts,
+  fillMark,
   filterDays,
   filterIssues,
-  filterRuleGroups,
   groupIssuesByDate,
   groupIssuesByType,
   humanizeKey,
@@ -30,20 +34,17 @@ import {
   impactTotalsText,
   isRuleChanged,
   kindCounts,
-  maskTail,
+  markCounts,
+  marksOf,
   netBridge,
   normalizeDetails,
   parsePayrollId,
   parseSectionParam,
   pickActiveSection,
-  readiness,
   sectionDomId,
   severityCounts,
   slug,
-  sourceCounts,
-  sparkPoints,
   statusLabel,
-  tenureLabel,
   typeOptions,
   weekStartIso,
   weekdayOffset,
@@ -57,27 +58,22 @@ const withFilters = (over: Partial<IssueFilters>): IssueFilters => ({ ...NO_ISSU
 const ids = (list: PayrollIssue[]) => list.map((i) => i.id);
 
 describe("sections", () => {
-  it("are the seven the nav shows, in reading order", () => {
-    expect(SECTIONS.map((s) => s.label)).toEqual([
-      "Overview",
-      "Rules",
-      "Issues",
-      "Attendance",
-      "Pay & deductions",
-      "Employee",
-      "History",
-    ]);
-    expect(SECTION_IDS).toEqual(["overview", "rules", "issues", "attendance", "pay", "employee", "history"]);
+  it("are the three the nav shows, in reading order: the days first", () => {
+    expect(SECTIONS.map((s) => s.label)).toEqual(["Attendance", "Issues", "Pay & deductions"]);
+    expect(SECTION_IDS).toEqual(["attendance", "issues", "pay"]);
     expect(sectionDomId("issues")).toBe("pd-issues");
   });
 
   it("?section= accepts a section's name, a few aliases (days), and nothing else", () => {
     expect(parseSectionParam("issues")).toBe("issues");
-    expect(parseSectionParam(" RULES ")).toBe("rules");
+    expect(parseSectionParam(" PAY ")).toBe("pay");
     expect(parseSectionParam("days")).toBe("attendance");
     expect(parseSectionParam("calendar")).toBe("attendance");
     expect(parseSectionParam("deductions")).toBe("pay");
-    expect(parseSectionParam("profile")).toBe("employee");
+    // the sections that are gone (links made before) open the page at its top
+    for (const gone of ["overview", "rules", "employee", "history", "profile", "payroll"]) {
+      expect(parseSectionParam(gone), gone).toBeNull();
+    }
     expect(parseSectionParam("nonsense")).toBeNull();
     expect(parseSectionParam("")).toBeNull();
     expect(parseSectionParam(null)).toBeNull();
@@ -86,13 +82,12 @@ describe("sections", () => {
 
   it("the scroll spy picks the last section whose top has passed the reading line", () => {
     const tops = [
-      { id: "overview", top: -400 },
-      { id: "rules", top: -50 },
-      { id: "issues", top: 300 },
-      { id: "attendance", top: 900 },
+      { id: "attendance", top: -400 },
+      { id: "issues", top: -50 },
+      { id: "pay", top: 900 },
     ];
-    expect(pickActiveSection(tops, 96, false)).toBe("rules");
-    expect(pickActiveSection(tops, 400, false)).toBe("issues");
+    expect(pickActiveSection(tops, 96, false)).toBe("issues");
+    expect(pickActiveSection(tops, 1000, false)).toBe("pay");
     // at the very top every section is still below the line: the first one is being read
     expect(
       pickActiveSection(
@@ -100,9 +95,9 @@ describe("sections", () => {
         96,
         false,
       ),
-    ).toBe("overview");
+    ).toBe("attendance");
     // at the bottom of the page the last section wins, even if it is too short to reach the line
-    expect(pickActiveSection(tops, 96, true)).toBe("attendance");
+    expect(pickActiveSection(tops, 96, true)).toBe("pay");
     expect(pickActiveSection([], 96, false)).toBeNull();
   });
 
@@ -152,24 +147,6 @@ describe("dates", () => {
     expect(eachDay("2026-10-30", "2026-11-02")).toEqual(["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02"]);
     expect(eachDay("2026-11-02", "2026-10-30")).toEqual([]);
     expect(eachDay("2026-01-01", "2030-01-01").length).toBe(400); // a bad range cannot run away
-  });
-
-  it("tenure reads as years and months, and never as a negative", () => {
-    const now = new Date(2026, 9, 13);
-    expect(tenureLabel("2021-06-14", now)).toBe("5 yr 3 mo");
-    expect(tenureLabel("2025-10-13", now)).toBe("1 yr");
-    expect(tenureLabel("2026-08-01", now)).toBe("2 mo");
-    expect(tenureLabel("2026-10-01", now)).toBe("under a month");
-    expect(tenureLabel("2027-01-01", now)).toBeNull();
-    expect(tenureLabel(null, now)).toBeNull();
-  });
-
-  it("never shows a whole number: only its last four digits", () => {
-    expect(maskTail("1234567890")).toBe("••••7890");
-    expect(maskTail("1234")).toBe("••••");
-    expect(maskTail("12")).toBe("••••");
-    expect(maskTail("  ")).toBeNull();
-    expect(maskTail(null)).toBeNull();
   });
 });
 
@@ -426,6 +403,111 @@ describe("the days", () => {
   });
 });
 
+describe("the attendance categories of a day", () => {
+  const d = (over: Partial<PayrollDay>) => day(over);
+
+  it("are the six HR looks for, in one fixed order, each with a colour of its own", () => {
+    expect(MARK_KEYS).toEqual(["late", "permission", "excess_permission", "on_duty", "on_duty_punch", "missed_punch"]);
+    expect(Object.keys(MARK_META)).toEqual(MARK_KEYS);
+    expect(MARK_META.late.label).toBe("Late attendance");
+    expect(MARK_META.excess_permission.label).toBe("Excess permission");
+    expect(MARK_META.on_duty_punch.label).toBe("On-Duty punch");
+    expect(MARK_META.missed_punch.label).toBe("Missed punch");
+    // no two categories share a fill, an edge or a tag colour
+    for (const part of ["cell", "bar", "pill", "swatch"] as const) {
+      expect(new Set(MARK_KEYS.map((k) => MARK_META[k][part])).size, part).toBe(6);
+    }
+    expect([...MARK_FILL_ORDER].sort()).toEqual([...MARK_KEYS].sort());
+  });
+
+  it("are what the server marked on the day plus what payroll flagged on it", () => {
+    expect(marksOf(d({}))).toEqual([]);
+    expect(marksOf(d({ marks: ["on_duty", "permission"] }))).toEqual(["permission", "on_duty"]); // fixed order
+    // an older server sends no marks: the payroll's own flags still say late, excess permission and missing punch
+    expect(marksOf(d({ flags: ["late_in", "missing_punch", "excess_permission"] }))).toEqual([
+      "late",
+      "excess_permission",
+      "missed_punch",
+    ]);
+    expect(marksOf(d({ flags: ["absent", "half_day"] }))).toEqual([]);
+    // the same category from both places counts once
+    expect(marksOf(d({ marks: ["late"], flags: ["late_in"] }))).toEqual(["late"]);
+    expect(marksOf({ marks: undefined, flags: undefined as never })).toEqual([]);
+  });
+
+  it("count the days that carry each", () => {
+    expect(markCounts(staff.days)).toEqual({
+      late: 3,
+      permission: 3,
+      excess_permission: 1,
+      on_duty: 2,
+      on_duty_punch: 1,
+      missed_punch: 1,
+    });
+    expect(markCounts([])).toEqual({
+      late: 0,
+      permission: 0,
+      excess_permission: 0,
+      on_duty: 0,
+      on_duty_punch: 0,
+      missed_punch: 0,
+    });
+  });
+
+  it("colour the cell of a worked day, the most pressing category first", () => {
+    expect(fillMark(d({}))).toBeNull();
+    expect(fillMark(d({ marks: ["late"] }))).toBe("late");
+    expect(fillMark(d({ marks: ["late", "permission"] }))).toBe("permission");
+    expect(fillMark(d({ marks: ["on_duty", "on_duty_punch"] }))).toBe("on_duty_punch");
+    expect(fillMark(d({ marks: ["on_duty", "late"] }))).toBe("on_duty");
+    expect(fillMark(d({ marks: ["permission", "excess_permission"] }))).toBe("excess_permission");
+    expect(fillMark(d({ flags: ["missing_punch"] }))).toBe("missed_punch");
+  });
+
+  it("never hide that a day was not worked, or was cut to half: those keep the colour of their status", () => {
+    expect(fillMark(d({ status: "absent", marks: ["permission"] }))).toBeNull();
+    expect(fillMark(d({ status: "unpaid_leave", marks: ["on_duty"] }))).toBeNull();
+    expect(fillMark(d({ status: "paid_leave", marks: ["on_duty"] }))).toBeNull();
+    expect(fillMark(d({ status: "holiday", marks: ["on_duty"] }))).toBeNull();
+    expect(fillMark(d({ shifts: 0.5, marks: ["permission"] }))).toBeNull();
+    expect(fillMark(d({ flags: ["half_day"], marks: ["late"] }))).toBeNull();
+  });
+
+  it("leave the status legend counting the cells that really show that status", () => {
+    // 26 days: 5 plain present days were filled by a category, and the 3 late days all are
+    expect(fillKindCounts(staff.days)).toEqual({
+      present: 13,
+      late: 0,
+      half: 1,
+      absent: 1,
+      unpaid: 1,
+      leave: 2,
+      onleave: 0,
+      holiday: 0,
+      other: 0,
+    });
+    // the table counts every day of a status
+    expect(kindCounts(staff.days).present).toBe(18);
+  });
+
+  it("filter the days by category, and by the status a cell shows", () => {
+    const dates = (over: Parameters<typeof filterDays>[1]) => filterDays(staff.days, over).map((x) => x.date);
+    expect(dates({ kind: "all", flaggedOnly: false, mark: "permission" })).toEqual([
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-22",
+    ]);
+    expect(dates({ kind: "all", flaggedOnly: false, mark: "on_duty" })).toEqual(["2026-10-16", "2026-10-21"]);
+    expect(dates({ kind: "all", flaggedOnly: false, mark: "missed_punch" })).toEqual(["2026-10-27"]);
+    expect(dates({ kind: "all", flaggedOnly: false, mark: "all" })).toHaveLength(26);
+    // "present" in the table is every present day; on the calendar only the cells that show the present colour
+    expect(dates({ kind: "present", flaggedOnly: false })).toHaveLength(18);
+    expect(dates({ kind: "present", flaggedOnly: false, plainOnly: true })).toHaveLength(13);
+    // both filters have to pass
+    expect(dates({ kind: "all", flaggedOnly: true, mark: "late" })).toEqual(["2026-10-13", "2026-10-14", "2026-10-29"]);
+  });
+});
+
 describe("the calendar", () => {
   it("lays October 2026 out Monday first: three blanks before Thursday the 1st, one after the 31st", () => {
     const weeks = buildCalendar(staff.days, "2026-10-01", "2026-10-31");
@@ -521,28 +603,6 @@ describe("the rules", () => {
     expect(isRuleChanged({ ...base, value: "a", applied: "a" })).toBe(false);
     expect(isRuleChanged({ ...base, value: "a" })).toBe(false);
   });
-
-  it("counts where the rules come from", () => {
-    expect(sourceCounts(groups)).toEqual({ all: 15, settings: 9, employee: 4, shift: 2, cycle: 0 });
-  });
-
-  it("filters by words, by source and by changed only, dropping groups left empty", () => {
-    const names = (
-      query: string,
-      source: "all" | "settings" | "employee" | "shift" | "cycle" = "all",
-      changedOnly = false,
-    ) => filterRuleGroups(groups, { query, source, changedOnly }).map((g) => g.group);
-    expect(names("")).toEqual(["Attendance", "Shift", "Late detection", "Pay", "Employee"]);
-    expect(names("grace")).toEqual(["Shift"]);
-    expect(names("late")).toEqual(["Late detection"]);
-    expect(names("", "shift")).toEqual(["Shift"]);
-    expect(names("", "employee")).toEqual(["Pay", "Employee"]);
-    expect(names("", "all", true)).toEqual(["Late detection"]);
-    expect(filterRuleGroups(groups, { query: "", source: "all", changedOnly: true })[0].items).toHaveLength(1);
-    expect(names("zzz")).toEqual([]);
-    // the words are matched in what the payroll was generated with too
-    expect(names("2 free")).toEqual(["Late detection"]);
-  });
 });
 
 describe("the dashboard figures", () => {
@@ -611,58 +671,6 @@ describe("the dashboard figures", () => {
       netBridge({ gross: 100, deductions: 400, bonus: 0, otAmount: 0, net: 0, monthlySalary: null, dailyRate: null })
         .deductionsPct,
     ).toBe(100);
-  });
-
-  it("draws a sparkline inside its box", () => {
-    expect(sparkPoints([10, 20, 15], 100, 40)).toEqual({ points: "3,37 50,3 97,20", last: { x: 97, y: 20 } });
-    expect(sparkPoints([7], 100, 40)).toEqual({ points: "50,20", last: { x: 50, y: 20 } });
-    expect(sparkPoints([5, 5, 5], 100, 40).points).toBe("3,20 50,20 97,20");
-    expect(sparkPoints([], 100, 40)).toEqual({ points: "", last: null });
-  });
-});
-
-describe("payment readiness", () => {
-  it("shows the last digits only, and says what is missing", () => {
-    const checks = readiness(staff.employee);
-    expect(checks.map((c) => [c.key, c.ok])).toEqual([
-      ["bank", true],
-      ["ifsc", true],
-      ["pf", true],
-      ["esi", false],
-    ]);
-    expect(checks[0].value).toBe("••••4821");
-    expect(checks[0].detail).toBe("State Bank of India");
-    expect(checks[1].detail).toBeNull();
-    expect(checks[2].value).toBe("••••0142");
-    expect(checks[2].value).not.toContain("TN/MAS");
-    expect(checks[3].value).toBe("Not recorded");
-    const worker = readiness(productionDetails().employee);
-    expect(worker.map((c) => c.ok)).toEqual([false, false, false, false]);
-    expect(worker[0].value).toBe("Not on file");
-  });
-
-  it("a Co Emp employee, or one whose category is not known, still has PF and ESI numbers to record", () => {
-    const worker = productionDetails().employee;
-    for (const category of [undefined, null, "co_emp"] as const) {
-      const [, , pf, esi] = readiness(worker, category);
-      expect([pf.ok, pf.value, esi.ok, esi.value]).toEqual([false, "Not recorded", false, "Not recorded"]);
-    }
-  });
-
-  it("PF and ESI numbers are 'Not needed' for an employee on the TDS list or one who is not Co Emp", () => {
-    const worker = productionDetails().employee;
-    const tds = readiness(worker, "tds");
-    expect(tds.map((c) => [c.key, c.ok, c.value])).toEqual([
-      ["bank", false, "Not on file"],
-      ["ifsc", false, "Missing"],
-      ["pf", true, "Not needed"],
-      ["esi", true, "Not needed"],
-    ]);
-    expect(tds[2].hint).toBe("TDS employee: no PF is deducted");
-    expect(readiness(worker, "none")[3].hint).toBe("Not a Co Emp employee: no ESI is deducted");
-    // a number that IS on the profile is still shown (masked), whatever the category
-    const [, , pf] = readiness({ ...worker, pfNumber: "TN/MAS/0012345/000/0142" }, "none");
-    expect([pf.ok, pf.value]).toEqual([true, "••••0142"]);
   });
 });
 

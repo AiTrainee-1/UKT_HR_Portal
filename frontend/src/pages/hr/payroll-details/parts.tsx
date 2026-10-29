@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { TONE, type Tone } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
-import { sparkPoints } from "./logic";
 
 // Small controls the details page repeats: a native select (the right thing on a phone), a two-way toggle, a chip
 // that can be pressed, and a sparkline. Kept here so each section reads as content, not as markup.
@@ -125,49 +124,5 @@ export function ToggleChip({
     >
       {children}
     </button>
-  );
-}
-
-/** A tiny line chart of a few values; the last point (the payroll being looked at) is a dot. */
-export function Sparkline({
-  values,
-  width = 120,
-  height = 36,
-  label,
-  stroke = "#64748b",
-  dot = "#4f46e5",
-  testId,
-}: {
-  values: number[];
-  width?: number;
-  height?: number;
-  label: string;
-  stroke?: string;
-  dot?: string;
-  testId?: string;
-}) {
-  const { points, last } = sparkPoints(values, width, height);
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      width={width}
-      height={height}
-      role="img"
-      aria-label={label}
-      data-testid={testId}
-      className="shrink-0 overflow-visible"
-    >
-      {values.length > 1 && (
-        <polyline
-          points={points}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={1.75}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      )}
-      {last && <circle cx={last.x} cy={last.y} r={3} fill={dot} />}
-    </svg>
   );
 }
