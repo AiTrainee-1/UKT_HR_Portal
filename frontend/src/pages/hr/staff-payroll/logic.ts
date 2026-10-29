@@ -36,7 +36,9 @@ export const STAFF_URL_DEFAULTS: Record<string, string> = {
   view: "records",
   month: "",
   year: "",
-  layout: "cards",
+  layout: "table",
+  /** The department whose records are open on the Payroll tab (empty = the first department). */
+  pdept: "",
   ...FILTER_URL_DEFAULTS,
   ...ISSUE_URL_DEFAULTS,
   ...STATEMENT_URL_DEFAULTS,
@@ -113,6 +115,21 @@ export function issueFiltersToUrl(
   if (patch.to !== undefined) out.ito = patch.to;
   if (patch.groupBy !== undefined) out.igroup = patch.groupBy;
   return out;
+}
+
+// ── Salary Payroll Statement (the Export menu on the Payroll tab) ─────────────
+
+/** The Report Center report the Export menu downloads: the printed Salary Statement of HR Reports. */
+export const STATEMENT_REPORT_ID = "hr-salary-statement";
+
+/**
+ * The report's filters for the month on the page: `period` ("2026-10") and, when the page is showing only Cleared or only
+ * Pending payments, the same payment status. The statement itself lists every department, each with its sub total.
+ */
+export function statementQuery(p: { month: number; year: number }, status: string = "all"): URLSearchParams {
+  const query = new URLSearchParams({ period: `${p.year}-${String(p.month).padStart(2, "0")}` });
+  if (status === "paid" || status === "pending") query.set("paymentStatus", status);
+  return query;
 }
 
 // ── Payroll register (the Export menu on the Payroll tab) ─────────────────────

@@ -50,6 +50,8 @@ export type PayrollFilterBarProps = {
   rightSlot?: ReactNode;
   /** Everything waits (the rows are loading). */
   disabled?: boolean;
+  /** The page picks the department itself (a strip of department tabs): the department select is left out. */
+  hideDepartment?: boolean;
   /** How long the search box waits after the last keystroke. */
   searchDelayMs?: number;
   /** Test ids are `<prefix>-search`, `<prefix>-dept` and so on (default "pf"). */
@@ -121,6 +123,7 @@ export function PayrollFilterBar({
   total,
   rightSlot,
   disabled = false,
+  hideDepartment = false,
   searchDelayMs = 250,
   testIdPrefix = "pf",
   className,
@@ -234,15 +237,17 @@ export function PayrollFilterBar({
               </button>
             )}
           </div>
-          <FilterSelect
-            value={value.dept}
-            onChange={(dept) => change({ dept })}
-            label="Department"
-            testId={`${p}-dept`}
-            items={departmentItems}
-            disabled={disabled}
-            className="w-[calc(50%-0.25rem)] sm:w-44"
-          />
+          {!hideDepartment && (
+            <FilterSelect
+              value={value.dept}
+              onChange={(dept) => change({ dept })}
+              label="Department"
+              testId={`${p}-dept`}
+              items={departmentItems}
+              disabled={disabled}
+              className="w-[calc(50%-0.25rem)] sm:w-44"
+            />
+          )}
           <FilterSelect
             value={value.status}
             onChange={(status) => change({ status: status as PayStatusFilter })}

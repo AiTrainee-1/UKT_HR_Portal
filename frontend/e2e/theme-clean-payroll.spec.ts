@@ -311,7 +311,7 @@ test("the chosen issue-type chip is readable (brand text on a soft brand fill)",
 });
 
 test("initials avatars are one colour", async ({ page }) => {
-  await open(page, "clean", FEB);
+  await open(page, "clean", `${FEB}&layout=cards`);
   const colours = await page.evaluate(() =>
     Array.from(document.querySelectorAll('article span[aria-hidden="true"][style*="width"]')).map(
       (el) => getComputedStyle(el).backgroundColor,
@@ -466,7 +466,7 @@ test("the same pages in the default theme keep the look they always had", async 
     "border-top-left-radius": "16px",
   });
   expect(isWhite(await colourOf(page, '[data-testid="pcp-dash-kpi-gross"]', "background-color"))).toBe(false);
-  await open(page, "default", FEB);
+  await open(page, "default", `${FEB}&layout=cards`);
   // the green Export button
   expect(isGreen(await colourOf(page, '[data-testid="staff-export"]', "color"))).toBe(true);
   expect(isGreen(await colourOf(page, '[data-testid="staff-export"]', "border-top-color"))).toBe(true);

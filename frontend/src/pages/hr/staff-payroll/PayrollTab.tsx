@@ -18,7 +18,7 @@ import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import { Button } from "@/components/ui/button";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
 import { dateTime, fileStem, plural } from "@/components/payroll/kit/format";
-import { exportTableToCsv, exportTableToExcel } from "@/components/payroll/kit/export-table";
+import { exportTableToExcel } from "@/components/payroll/kit/export-table";
 import { addSkipped } from "@/components/payroll/kit/issue-summary";
 import { EmptyNote } from "@/components/payroll/kit/parts";
 import { withTdsColumns } from "@/components/payroll/kit/statutory";
@@ -26,6 +26,7 @@ import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { ViewSwitch, type ViewOption } from "@/components/payroll/kit/ViewSwitch";
 import {
+  ALL,
   DEFAULT_FILTERS,
   PayrollFilterBar,
   applyPayrollFilters,
@@ -36,7 +37,14 @@ import {
   hasChanges,
 } from "@/components/payroll/panels/filters";
 import { IssuesPanel } from "@/components/payroll/panels/issues";
-import { PayrollRecordList, type RecordLayout } from "@/components/payroll/panels/records";
+import {
+  DepartmentTabs,
+  PayrollRecordList,
+  departmentGroups,
+  pickDepartment,
+  runsOfDepartment,
+  type RecordLayout,
+} from "@/components/payroll/panels/records";
 import { RulesPanel } from "@/components/payroll/panels/rules";
 import { SkippedPanel, type SkippedItem } from "@/components/payroll/panels/skipped";
 import { MONTH_NAMES } from "@/components/payroll/BreakdownDrawer";
@@ -49,16 +57,19 @@ import {
   usePayrollSkipCheck,
 } from "@/lib/api-client/custom-hooks";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
+import { downloadReportFile } from "@/lib/report-download";
 import { GenerateDialog } from "./GenerateDialog";
 import { SessionConfigPanel } from "./SessionConfigPanel";
 import {
   REGISTER_COLUMNS,
+  STATEMENT_REPORT_ID,
   isStaffView,
   issueFiltersFromUrl,
   issueFiltersToUrl,
   onlyStaff,
   staffPeriodLabel,
   staffScope,
+  statementQuery,
   type StaffView,
 } from "./logic";
 
@@ -90,7 +101,8 @@ export function PayrollTab({
   const scope = useMemo(() => staffScope({ month, year }), [month, year]);
   const periodLabel = staffPeriodLabel({ month, year });
   const view: StaffView = isStaffView(url.view) ? url.view : "records";
-  const filters = useMemo(() => filtersFromUrl(url), [url]);
+  // The department is picked with the tabs above the records, never by the filter: an old address naming one is ignored.
+  const filters = useMemo(() => ({ ...filtersFromUrl(url), dept: ALL }), [url]);
   const issueFilters = useMemo(() => issueFiltersFromUrl(url), [url]);
 
   const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
@@ -121,6 +133,10 @@ export function PayrollTab({
     () => applyPayrollFilters(runs, filters, issues ? issueIndex : undefined),
     [runs, filters, issues, issueIndex],
   );
+  // The records list one department at a time; the filters, the exports and the counts still cover every department.
+  const groups = useMemo(() => departmentGroups(shown), [shown]);
+  const activeDept = pickDepartment(groups, url.pdept);
+  const deptRuns = useMemo(() => runsOfDepartment(shown, activeDept), [shown, activeDept]);
   const skipped: SkippedItem[] | undefined = useMemo(
     () =>
       skipQuery.data?.skipped.map((s) => ({
@@ -143,7 +159,7 @@ export function PayrollTab({
     {
       key: "register-xlsx",
       label: "Payroll register (Excel)",
-      hint: `${shown.length} record${shown.length === 1 ? "" : "s"} on screen, with days, earnings and deductions`,
+      hint: `${shown.length} record${shown.length === 1 ? "" : "s"} in all departments, with days, earnings and deductions`,
       icon: FileSpreadsheet,
       disabled: shown.length === 0,
       run: () =>
@@ -158,12 +174,20 @@ export function PayrollTab({
         }),
     },
     {
-      key: "register-csv",
-      label: "Payroll register (CSV)",
-      hint: "The same rows as a plain text file",
+      key: "statement-pdf",
+      label: "Salary Payroll Statement (PDF)",
+      hint: `The printed statement for ${periodLabel}: every department, with sub totals and a grand total`,
       icon: FileText,
-      disabled: shown.length === 0,
-      run: () => exportTableToCsv({ rows: shown, columns: registerColumns, filename: `${stem}_Register` }),
+      disabled: runs.length === 0,
+      // the same file as Reports > HR Reports > Salary Statement, so the two can never differ
+      run: async () => {
+        await downloadReportFile({
+          reportId: STATEMENT_REPORT_ID,
+          title: `Salary Statement ${periodLabel}`,
+          format: "pdf",
+          query: statementQuery({ month, year }, filters.status),
+        });
+      },
     },
   ];
 
@@ -238,7 +262,12 @@ export function PayrollTab({
           <Button variant="outline" className="h-9 gap-2" onClick={() => setShowSessionConfig((s) => !s)}>
             <Settings size={14} /> Legacy Session Config
           </Button>
-          <ExportMenu items={exportItems} label="Export" heading="Export what is on screen" testId="staff-export" />
+          <ExportMenu
+            items={exportItems}
+            label="Export"
+            heading={`Export ${periodLabel} payroll`}
+            testId="staff-export"
+          />
           <Button
             variant="outline"
             className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
@@ -297,9 +326,17 @@ export function PayrollTab({
             total={runs.length}
             disabled={runsQuery.isLoading}
             testIdPrefix="staff-pf"
+            hideDepartment
+          />
+          <DepartmentTabs
+            groups={groups}
+            active={activeDept}
+            accent="indigo"
+            onChange={(id) => setUrl({ pdept: id })}
+            testIdPrefix="staff-dept"
           />
           <PayrollRecordList
-            runs={shown}
+            runs={deptRuns}
             kind="staff"
             accent="indigo"
             loading={runsQuery.isLoading}
@@ -311,7 +348,7 @@ export function PayrollTab({
             onOpenIssues={(run) => openPayrollDetails(navigate, "staff", run.id, "issues")}
             onMarkPaid={(run) => void markPaid(run)}
             markingId={markingId}
-            layout={url.layout === "table" ? "table" : "cards"}
+            layout={url.layout === "cards" ? "cards" : "table"}
             onLayoutChange={(layout: RecordLayout) => setUrl({ layout })}
             empty={empty}
             testId="staff-records"

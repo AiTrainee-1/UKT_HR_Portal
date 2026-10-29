@@ -7,13 +7,15 @@ import { loginAsHr } from "./helpers";
 //   Meena       - no salary configured                -> skipped
 
 const FEB = "/hr/payroll?month=2&year=2026";
+// The Payroll tab lists a table by default; the specs that look at the cards ask for them.
+const FEB_CARDS = `${FEB}&layout=cards`;
 
 // A payroll entry is a card (an <article> named "Payroll of <employee>").
 const card = (page: Page, name: string) => page.getByRole("article", { name: `Payroll of ${name}` });
 
 test("HR generates staff payroll for a month and the figures are right", async ({ page }) => {
   await loginAsHr(page);
-  await page.goto(FEB);
+  await page.goto(FEB_CARDS);
 
   await page.getByTestId("staff-generate-open").click();
   const dialog = page.getByTestId("staff-generate-dialog");
@@ -47,7 +49,7 @@ test("the month shows a card per payroll and counts the skipped employee on its 
     data: { month: 2, year: 2026 },
   });
 
-  await page.goto(FEB);
+  await page.goto(FEB_CARDS);
   // there is no dashboard above the records any more
   await expect(page.getByTestId("staff-payroll-tab")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("staff-dash-root")).toHaveCount(0);
@@ -77,7 +79,7 @@ test("the filters narrow the payroll cards and live in the address", async ({ pa
     data: { month: 2, year: 2026 },
   });
 
-  await page.goto(FEB);
+  await page.goto(FEB_CARDS);
   await expect(card(page, "Asha Kumar")).toBeVisible({ timeout: 30_000 });
   await expect(card(page, "Ravi Nair")).toBeVisible();
 
@@ -149,7 +151,7 @@ test("an employee on the TDS list has TDS on the Payroll page, and nobody else d
     expect(Number(ravi.finalSalary)).toBe(15000);
 
     // the cards: a TDS figure on Asha's card only
-    await page.goto(FEB);
+    await page.goto(FEB_CARDS);
     const ashaCard = card(page, "Asha Kumar");
     await expect(ashaCard).toBeVisible({ timeout: 30_000 });
     await expect(ashaCard.getByTestId(`payroll-record-tds-${asha.id}`)).toContainText("TDS (10%)");
@@ -228,7 +230,7 @@ test("a Co Emp employee gets PF from the rules in Settings, and the details page
     expect(Number(ravi.finalSalary)).toBe(15000);
 
     // the Generate dialog counts the rules set for Staff
-    await page.goto(FEB);
+    await page.goto(FEB_CARDS);
     await expect(card(page, "Asha Kumar")).toContainText("₹1,440", { timeout: 30_000 });
     await expect(card(page, "Asha Kumar").getByTestId(/payroll-record-tds-/)).toHaveCount(0);
     await page.getByTestId("staff-generate-open").click();

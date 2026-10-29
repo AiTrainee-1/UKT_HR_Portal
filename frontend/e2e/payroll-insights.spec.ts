@@ -10,6 +10,8 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 // Roles created here are prefixed "pi_" and removed afterwards (the server throttles sign-ins: each signs in once).
 
 const FEB = "/hr/payroll?month=2&year=2026";
+// The Payroll tab lists a table by default; the specs that look at the cards ask for them.
+const FEB_CARDS = `${FEB}&layout=cards`;
 const PASSWORD = "Passw0rd!pinsight";
 
 let adminToken = "";
@@ -145,7 +147,7 @@ test.describe("Rules and skipped employees", () => {
   });
 
   test("the record cards carry each employee's rules and issue badges", async ({ page }) => {
-    await openAs(page, adminToken, FEB);
+    await openAs(page, adminToken, FEB_CARDS);
     const ravi = card(page, "Ravi Nair");
     await expect(ravi).toBeVisible();
     await expect(ravi.getByRole("list", { name: "Rules assigned to this employee" })).toBeVisible();
@@ -353,7 +355,7 @@ test.describe("Loaders", () => {
       await new Promise((resolve) => setTimeout(resolve, 2500));
       await route.continue();
     });
-    await openAs(page, adminToken, FEB);
+    await openAs(page, adminToken, FEB_CARDS);
     await expect(card(page, "Ravi Nair")).toBeVisible({ timeout: 30_000 });
     // the records are there; the issue badges are still loading
     await expect(page.getByTestId("payroll-record-issues-loading").first()).toBeVisible();
@@ -414,7 +416,7 @@ test.describe("Who may see what", () => {
   test("a view-only role browses, filters and exports the statement but cannot generate, adjust or pay", async ({
     page,
   }) => {
-    await openAs(page, viewerToken, FEB);
+    await openAs(page, viewerToken, FEB_CARDS);
     await expect(page.getByText(/View only/).first()).toBeVisible();
     await expect(card(page, "Ravi Nair")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("staff-generate-open")).toBeDisabled();
@@ -539,7 +541,7 @@ test.describe("Details page", () => {
 
   test("Details opens a page of its own, and Back returns to the same filtered list", async ({ page, request }) => {
     const ravi = await idOf(request, "E2E002");
-    await openAs(page, adminToken, `${FEB}&q=Ravi`);
+    await openAs(page, adminToken, `${FEB_CARDS}&q=Ravi`);
     await page.getByTestId(`payroll-record-details-${ravi}`).click();
     await expect(page).toHaveURL(new RegExp(`/hr/payroll/details/${ravi}$`));
     await expect(page.getByTestId("payroll-details-page")).toBeVisible();
@@ -764,6 +766,6 @@ test.describe("Details page", () => {
 
 test("signed in as the admin once more, the page works after all of that", async ({ page }) => {
   await loginAsHr(page);
-  await page.goto(FEB);
+  await page.goto(FEB_CARDS);
   await expect(card(page, "Asha Kumar")).toBeVisible({ timeout: 30_000 });
 });
