@@ -56,6 +56,7 @@ const NewEmployee = lazy(() => import("@/pages/hr/NewEmployee"));
 const BulkUploadEmployees = lazy(() => import("@/pages/hr/BulkUploadEmployees"));
 const ManualPunchImport = lazy(() => import("@/pages/hr/ManualPunchImport"));
 const PunchView = lazy(() => import("@/pages/hr/PunchView"));
+const PunchViewHistory = lazy(() => import("@/pages/hr/PunchViewHistory"));
 const BiometricDeviceStatus = lazy(() => import("@/pages/hr/BiometricDeviceStatus"));
 const DeviceControl = lazy(() => import("@/pages/hr/DeviceControl"));
 const EmployeeDetail = lazy(() => import("@/pages/hr/EmployeeDetail"));
@@ -336,6 +337,9 @@ function Router() {
         </Route>
         <Route path="/hr/attendance/punch-view">
           {() => <ProtectedRoute component={PunchView} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/punch-view/history">
+          {() => <ProtectedRoute component={PunchViewHistory} allowedRoles={["hr"]} />}
         </Route>
         {/* ── Biometric Connectors section (these two pages used to live under /hr/attendance) ── */}
         <Route path="/hr/Biometric-Connectors">

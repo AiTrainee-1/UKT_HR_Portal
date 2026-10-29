@@ -215,6 +215,7 @@ from .payroll_views import (
     seed_attendance, payroll_settings_view,
 )
 from .manual_attendance_import_views import export_punch_records, import_punch_excel
+from .punch_history import punch_day_status, punch_history
 from .punch_views import (
     skipped_punches, resolve_skipped_punch,
     punch_list, punch_export, punch_import, sync_status,
@@ -421,6 +422,8 @@ urlpatterns = [
     path("attendance/punches", punch_list),
     path("attendance/punches/export", punch_export),
     path("attendance/punches/import", punch_import),
+    path("attendance/punches/day-status", punch_day_status),
+    path("attendance/punches/history", punch_history),
     path("attendance/sync-status-live", sync_status),
     # Biometric Device Status page: what each device sends this server, and a connection check from this server.
     path("attendance/biometric-status", biometric_status),

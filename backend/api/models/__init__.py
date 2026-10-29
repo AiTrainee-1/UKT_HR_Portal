@@ -49,6 +49,7 @@ from .attendance import (
     MonthlyShiftSummary,
     AttendanceDayRecord,
     AttendanceOverrideRequest,
+    PunchViewHistory,
     OnDutySession,
     OnDutyPunchVerification,
     MissingPunchRequest,

@@ -293,6 +293,7 @@ api/payroll_insights.py
 api/payroll_insights_rules.py
 api/payroll_insights_views.py
 api/payroll_statement_views.py
+api/punch_history.py
 api/tests_payroll_day_marks.py
 api/tests_payroll_insights.py
 api/compensation_shared.py

@@ -185,11 +185,23 @@ def punch_list(request: Request) -> Response:
     except ValueError:
         return _error("limit/offset must be numbers")
 
+    logs = list(qs[offset:offset + limit])
+    from .punch_history import STATUS_LABEL, day_state
+
+    states = day_state({(l.employee_id, l.date) for l in logs})
+    rows = []
+    for l in logs:
+        row = _punch_row(l)
+        state = states.get((l.employee_id, l.date))
+        row["dayStatus"] = (
+            {**state, "label": STATUS_LABEL.get(state["status"], state["status"])} if state else None
+        )
+        rows.append(row)
     return Response({
         "total": total,
         "limit": limit,
         "offset": offset,
-        "results": [_punch_row(l) for l in qs[offset:offset + limit]],
+        "results": rows,
     })
 
 
@@ -298,6 +310,7 @@ def punch_import(request: Request) -> Response:
         ws = wb[PUNCH_SHEET] if PUNCH_SHEET in wb.sheetnames else wb.worksheets[0]
         rows = list(ws.iter_rows(values_only=True))
         exported_ids = _exported_ids(wb)
+        exported_range = _exported_range(wb)
     except Exception as exc:  # noqa: BLE001
         return _error(f"Could not read that Excel file: {exc}")
 
@@ -326,6 +339,8 @@ def punch_import(request: Request) -> Response:
     errors: list[str] = []
     seen_ids: set[int] = set()  # every Punch ID in the sheet, rejected rows included: a row with a typo is not a deletion
     data_rows = 0
+    sheet_emps: set[int] = set()  # employees named by a readable row of the sheet
+    sheet_days: set = set()  # and the days of those rows
     plan: list[tuple] = []  # what to write, in sheet order; nothing is written until the plan is complete
 
     for idx, raw in enumerate(rows[1:], start=2):
@@ -366,6 +381,9 @@ def punch_import(request: Request) -> Response:
         except (ValueError, TypeError, AttributeError):
             errors.append(f"Row {idx}: bad Date/Punch Time ({date_raw!r} {time_raw!r}) -expected YYYY-MM-DD and HH:MM:SS")
             continue
+
+        sheet_emps.add(emp.pk)
+        sheet_days.add(pdate)
 
         if existing:
             if (existing.employee_id == emp.id and existing.date == pdate
@@ -420,31 +438,80 @@ def punch_import(request: Request) -> Response:
     if preview:
         return Response(result)
 
+    from .punch_history import PunchViewHistory, entry, new_batch, save_entries
+
+    batch = new_batch()
+    history: list = []
+    pairs: set = set()  # (employee id, day) of every punch added, moved or deleted
+    touched_emps: set[int] = set(sheet_emps)
+    touched_days: set = set(sheet_days)
+
+    def punch_text(day, at, kind):
+        return {"date": str(day), "time": at.strftime("%H:%M:%S"), "type": kind}
+
     with transaction.atomic():
         for kind, existing, emp, pdate, ptime, ptype in plan:
             if kind == "update":
+                touched_days.add(existing.date)  # the day the punch leaves may be left with no punch
+                before = punch_text(existing.date, existing.punch_time, existing.punch_type)
+                if existing.employee_id != emp.pk:
+                    before["employee"] = str(existing.employee.employee_code)
+                pairs.update({(existing.employee_id, existing.date), (emp.pk, pdate)})
+                history.append(
+                    entry(request, PunchViewHistory.ACTION_PUNCH_EDITED, emp, pdate,
+                          before=before, after=punch_text(pdate, ptime, ptype), via="import", batch=batch)
+                )  # fmt: skip
                 existing.employee = emp
                 existing.date = pdate
                 existing.punch_time = ptime
                 existing.punch_type = ptype
                 existing.save(update_fields=["employee", "date", "punch_time", "punch_type"])
             elif kind == "create":
-                AttendanceLog.objects.get_or_create(
+                _log, made = AttendanceLog.objects.get_or_create(
                     employee=emp, date=pdate, punch_time=ptime, punch_type=ptype,
                     defaults={"source": "manual:punch-view"},
                 )
+                if made:
+                    pairs.add((emp.pk, pdate))
+                    history.append(
+                        entry(request, PunchViewHistory.ACTION_PUNCH_ADDED, emp, pdate,
+                              after=punch_text(pdate, ptime, ptype), via="import", batch=batch)
+                    )  # fmt: skip
             Attendance.objects.update_or_create(employee=emp, date=str(pdate), defaults={"present": True})
 
         if delete_missing and delete_count:
             doomed = list(to_delete)
             summary = [f"{d.employee.employee_code} {d.date} {d.punch_time:%H:%M:%S} {d.punch_type}" for d in doomed[:500]]
             AttendanceLog.objects.filter(pk__in=[d.pk for d in doomed]).delete()
+            touched_emps.update(d.employee_id for d in doomed)
+            touched_days.update(d.date for d in doomed)
+            pairs.update((d.employee_id, d.date) for d in doomed)
+            history.extend(
+                entry(request, PunchViewHistory.ACTION_PUNCH_DELETED, d.employee, d.date,
+                      before=punch_text(d.date, d.punch_time, d.punch_type), via="import", batch=batch)
+                for d in doomed
+            )  # fmt: skip
             result["deleted"] = len(doomed)
             log_action(
                 request, "delete", "attendance",
                 description=f"Punch View import deleted {len(doomed)} punch(es) that were removed from the sheet",
                 old_values={"deletedPunches": summary, "listed": len(summary), "total": len(doomed)},
             )
+
+    save_entries(history)
+    reconcile = _reconcile_days(touched_emps, touched_days, exported_range, pairs)
+    changes = reconcile.pop("statusChanges", [])
+    if changes:
+        emps = {e.pk: e for e in Employee.objects.filter(pk__in={c[0] for c in changes})}
+        save_entries(
+            [
+                entry(request, PunchViewHistory.ACTION_STATUS_AUTO, emps[e], day, before=b, after=a, via="import", batch=batch)
+                for e, day, b, a in changes
+                if e in emps
+            ]
+        )
+    result.update(reconcile)
+    result["historyRows"] = len(history) + len(changes)
 
     log_action(
         request, "update", "attendance",
@@ -455,6 +522,79 @@ def punch_import(request: Request) -> Response:
     )
     result["skippedDeletes"] = 0 if delete_missing else delete_count
     return Response(result)
+
+
+RECOMPUTE_MAX_EMPLOYEES = 300
+RECOMPUTE_MAX_DAYS = 400
+
+
+def _reconcile_days(employee_ids: set[int], days: set, exported_range, pairs: set | None = None) -> dict:
+    """Make the attendance the system shows agree with the punches the import has just left.
+
+    Every punch that is written also marks that day "present" in the legacy Attendance table, and the attendance engine
+    counts such a mark as a manual present, so a day whose punches were deleted (or moved away) kept showing Present. For
+    the employees and days the file touched (the days of the sheet, of the deleted and of the moved punches, and the dates
+    the download covered) this removes the mark where NO punch is left, and then works the stored attendance of those days
+    out again. A mark someone entered by hand (it carries hours or a note) is never removed, and a day HR set by hand in
+    Attendance stays as HR set it."""
+    out = {"marksCleared": 0, "daysRefreshed": 0, "refreshSkipped": False, "statusChanges": []}
+    day_set = {d for d in days if d is not None}
+    if exported_range:
+        day_set.update(exported_range)
+    if not employee_ids or not day_set:
+        return out
+    lo, hi = min(day_set), max(day_set)
+
+    from django.db.models import Q
+
+    punched = set(
+        AttendanceLog.objects.filter(employee_id__in=employee_ids, date__gte=lo, date__lte=hi).values_list("employee_id", "date")
+    )
+    stale = []
+    stale_pairs = set()
+    marks = Attendance.objects.filter(
+        employee_id__in=employee_ids, date__gte=lo.isoformat(), date__lte=hi.isoformat(), present=True,
+        hours_worked__isnull=True,
+    ).filter(Q(notes__isnull=True) | Q(notes=""))  # fmt: skip
+    for mark in marks:
+        try:
+            day = datetime.strptime(str(mark.date)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if (mark.employee_id, day) not in punched:
+            stale.append(mark.pk)
+            stale_pairs.add((mark.employee_id, day))
+
+    from .punch_history import day_state
+
+    watched = set(pairs or ()) | stale_pairs
+    before_state = day_state(watched)
+    if stale:
+        Attendance.objects.filter(pk__in=stale).delete()
+    out["marksCleared"] = len(stale)
+
+    if len(employee_ids) > RECOMPUTE_MAX_EMPLOYEES or (hi - lo).days > RECOMPUTE_MAX_DAYS:
+        out["refreshSkipped"] = True  # too much to redo inside a request: each day is worked out when it is next opened
+        return out
+    try:
+        from .attendance_final import compute_range_records
+        from .models import PayrollSettings
+
+        settings = PayrollSettings.get()
+        for emp in Employee.objects.filter(pk__in=employee_ids).order_by("pk"):
+            try:
+                compute_range_records(emp, lo, hi, settings)
+                out["daysRefreshed"] += 1
+            except Exception:  # noqa: BLE001 - one employee's surprise never undoes the import
+                out["refreshSkipped"] = True
+    except Exception:  # noqa: BLE001
+        out["refreshSkipped"] = True
+    # the days whose status changed because their punches changed (a day with no earlier record is not a change)
+    for pair, after in day_state(watched).items():
+        was = before_state.get(pair)
+        if was is not None and was["status"] != after["status"]:
+            out["statusChanges"].append((pair[0], pair[1], was, after))
+    return out
 
 
 def _flag(request: Request, name: str) -> bool:
@@ -471,6 +611,20 @@ def _deleted_row(log: AttendanceLog) -> dict:
         "punchTime": log.punch_time.strftime("%H:%M:%S"),
         "punchType": log.punch_type,
     }
+
+
+def _exported_range(wb) -> tuple:
+    """(first, last) date the download was made for, from its record sheet; () when it says none."""
+    if EXPORT_RECORD_SHEET not in wb.sheetnames:
+        return ()
+    found = {}
+    for row in wb[EXPORT_RECORD_SHEET].iter_rows(min_row=2, min_col=3, max_col=4, values_only=True):
+        if row and row[0] in ("Date from", "Date to") and row[1]:
+            try:
+                found[row[0]] = datetime.strptime(str(row[1])[:10], "%Y-%m-%d").date()
+            except ValueError:
+                pass
+    return tuple(found.values())
 
 
 def _exported_ids(wb) -> set[int] | None:

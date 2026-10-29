@@ -256,6 +256,59 @@ class AttendanceDayRecord(models.Model):
         ordering = ["date"]
 
 
+class PunchViewHistory(models.Model):
+    """What was changed from the Punch View page, for its History page: punches added, edited and deleted by an Excel upload,
+    a day's status set by hand (or put back to automatic), and the days whose status changed by itself as a result.
+
+    A plain record (the actor, the employee and what was there before and after are copied into it), so it still reads
+    right after an employee is renamed or removed. Never read by any calculation."""
+
+    ACTION_PUNCH_ADDED = "punch_added"
+    ACTION_PUNCH_EDITED = "punch_edited"
+    ACTION_PUNCH_DELETED = "punch_deleted"
+    ACTION_STATUS_SET = "status_set"
+    ACTION_STATUS_RESET = "status_reset"
+    ACTION_STATUS_AUTO = "status_auto"
+    ACTION_CHOICES = [
+        (ACTION_PUNCH_ADDED, "Punch added"),
+        (ACTION_PUNCH_EDITED, "Punch edited"),
+        (ACTION_PUNCH_DELETED, "Punch deleted"),
+        (ACTION_STATUS_SET, "Status set by hand"),
+        (ACTION_STATUS_RESET, "Status back to automatic"),
+        (ACTION_STATUS_AUTO, "Status changed by the punches"),
+    ]
+
+    action = models.TextField(choices=ACTION_CHOICES)
+    employee = models.ForeignKey(
+        Employee, on_delete=models.SET_NULL, null=True, blank=True, db_column="employee_id",
+        related_name="punch_view_history",
+    )
+    employee_code = models.TextField(default="", blank=True, db_column="employee_code")
+    employee_name = models.TextField(default="", blank=True, db_column="employee_name")
+    date = models.DateField(null=True, blank=True)
+    # {"before": {...}, "after": {...}}: a punch ({"date", "time", "type"}) or a day ({"status", "source", "shifts"})
+    details = models.JSONField(default=dict, blank=True)
+    note = models.TextField(default="", blank=True)
+    via = models.TextField(default="page")  # page | import
+    batch = models.TextField(default="", blank=True)  # the rows of one upload share it
+    actor_name = models.TextField(default="", blank=True, db_column="actor_name")
+    actor_id = models.IntegerField(null=True, blank=True, db_column="actor_id")
+    # the employee's branch when it happened, so a branch-limited login sees only its own branch's history
+    branch = models.ForeignKey(
+        Branch, on_delete=models.SET_NULL, null=True, blank=True, db_column="branch_id",
+        related_name="punch_view_history",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "punch_view_history"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["-created_at"], name="pvh_created_idx"),
+            models.Index(fields=["employee", "date"], name="pvh_emp_date_idx"),
+        ]
+
+
 # ──────────────────────────────────────────────
 #  Attendance Override Requests (two-level approval)
 # ──────────────────────────────────────────────

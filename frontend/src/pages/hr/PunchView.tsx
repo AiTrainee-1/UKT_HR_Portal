@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import DayStatusDialog from "./punch-view/DayStatusDialog";
+import { StatusChip } from "./punch-view/parts";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -23,7 +25,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import {
   ArrowLeft, Download, UploadCloud, Search, Fingerprint, Info,
-  CheckCircle2, AlertTriangle, X, ChevronLeft, ChevronRight, Trash2, Loader2,
+  CheckCircle2, AlertTriangle, X, ChevronLeft, ChevronRight, Trash2, Loader2, History, CalendarCheck, Pencil,
 } from "lucide-react";
 
 const PAGE_SIZE = 100;
@@ -115,6 +117,8 @@ export default function PunchView() {
   // The checked file waiting for a yes: what it would change, and the file to send again with "delete" switched on.
   const [pending, setPending] = useState<{ file: File; check: PunchImportResult } | null>(null);
   const [confirmText, setConfirmText] = useState("");
+  // the Day status dialog: opened from a day's pencil (code and date filled in) or from the toolbar (empty)
+  const [dayDialog, setDayDialog] = useState<{ code: string; date: string } | null>(null);
 
   const query: PunchFilters = { ...filters, limit: PAGE_SIZE, offset: page * PAGE_SIZE };
   const { data, isLoading } = usePunchList(query);
@@ -248,6 +252,13 @@ export default function PunchView() {
               Every punch already recorded — filter, export to Excel, edit, and upload it back.
             </p>
           </div>
+          <Button
+            variant="outline" className="ml-auto gap-1.5 h-9 text-xs"
+            onClick={() => navigate("/hr/attendance/punch-view/history")}
+            data-testid="punch-history-link"
+          >
+            <History size={14} /> History
+          </Button>
         </div>
 
         <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3 flex items-start gap-2.5">
@@ -259,7 +270,9 @@ export default function PunchView() {
             <b>delete</b> from the sheet <b>deletes</b> that punch (you are asked to confirm first). Only punches
             that were in the file you downloaded can be deleted. Re-uploading the same file changes nothing.
             Employee Name, Department and Source may be removed from the sheet; removing a column never removes
-            it from the system.
+            it from the system. A day left with no punch becomes Absent (or Half Day when the punches left fit the
+            Half Day rule). To set a day as <b>Present</b>, <b>Half Day</b> or <b>Absent</b> yourself, use <b>Set day
+            status</b> or the pencil beside a day; every change is kept in the <b>History</b>.
           </p>
         </div>
 
@@ -366,6 +379,14 @@ export default function PunchView() {
                 {exporting ? "Exporting…" : `Export ${total > 0 ? `(${total})` : ""}`}
               </Button>
 
+              <Button
+                variant="outline" className="gap-1.5 h-9 text-xs"
+                onClick={() => setDayDialog({ code: groups.length === 1 ? groups[0].employeeCode : "", date: "" })}
+                data-testid="day-status-open"
+              >
+                <CalendarCheck size={14} /> Set day status
+              </Button>
+
               <input
                 ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
                 onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -406,6 +427,20 @@ export default function PunchView() {
                   <> · <b className="text-red-600">{importResult.errorCount}</b> rejected</>
                 )}
               </p>
+              {(importResult.historyRows ?? 0) > 0 && (
+                <p className="text-xs text-muted-foreground" data-testid="punch-history-rows">
+                  {importResult.historyRows} change{importResult.historyRows === 1 ? "" : "s"} written to the{" "}
+                  <button type="button" className="font-semibold text-indigo-700 hover:underline" onClick={() => navigate("/hr/attendance/punch-view/history")}>
+                    History
+                  </button>
+                  .
+                </p>
+              )}
+              {(importResult.marksCleared ?? 0) > 0 && (
+                <p className="text-xs text-muted-foreground" data-testid="punch-marks-cleared">
+                  {importResult.marksCleared} day{importResult.marksCleared === 1 ? "" : "s"} no longer {importResult.marksCleared === 1 ? "has" : "have"} a punch, so {importResult.marksCleared === 1 ? "it is" : "they are"} no longer marked Present.
+                </p>
+              )}
               {importResult.errors.length > 0 && (
                 <div className="max-h-40 overflow-y-auto rounded-lg bg-red-50 border border-red-200 p-2 space-y-0.5">
                   {importResult.errors.map((err, i) => (
@@ -416,6 +451,13 @@ export default function PunchView() {
             </CardContent>
           </Card>
         )}
+
+        <DayStatusDialog
+          open={dayDialog !== null}
+          onClose={() => setDayDialog(null)}
+          initialCode={dayDialog?.code ?? ""}
+          initialDate={dayDialog?.date ?? ""}
+        />
 
         {/* ── Confirm the deletions ── */}
         <AlertDialog open={!!pending} onOpenChange={(open) => { if (!open && !importer.isPending) setPending(null); }}>
@@ -456,7 +498,7 @@ export default function PunchView() {
                   <p className="text-xs text-muted-foreground">
                     The same upload also updates {pending?.check.updated} and adds {pending?.check.created} punch
                     {pending?.check.updated === 1 && pending?.check.created === 0 ? "" : "es"}.
-                    Attendance days already worked out are not redone by this page.
+                    A day left with no punch stops showing as Present.
                   </p>
                   {needsTyping && (
                     <div className="space-y-1">
@@ -505,7 +547,7 @@ export default function PunchView() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-left">
-                      {["#", "Date", "Time", "Type", "Source"].map((h) => (
+                      {["#", "Date", "Time", "Type", "Source", "Day status"].map((h) => (
                         <th key={h} className="px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-gray-500 whitespace-nowrap">
                           {h}
                         </th>
@@ -519,7 +561,7 @@ export default function PunchView() {
                             between people is obvious at a glance rather than
                             having to compare the name column row by row. */}
                         <tr className="bg-slate-100/70 border-t-2 border-slate-200">
-                          <td colSpan={5} className="px-3 py-2">
+                          <td colSpan={6} className="px-3 py-2">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-mono text-[11px] text-gray-500">{g.employeeCode}</span>
                               <span className="font-bold text-gray-900">{g.employeeName}</span>
@@ -545,6 +587,25 @@ export default function PunchView() {
                               </span>
                             </td>
                             <td className="px-3 py-2 text-[11px] text-gray-400 whitespace-nowrap">{r.source}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {(i === 0 || g.punches[i - 1].date !== r.date) && (
+                                <span className="inline-flex items-center gap-1.5">
+                                  {r.dayStatus
+                                    ? <StatusChip status={r.dayStatus.status} source={r.dayStatus.source} />
+                                    : <span className="text-[10px] text-gray-300">not worked out</span>}
+                                  <button
+                                    type="button"
+                                    className="rounded p-1 text-gray-400 hover:bg-slate-100 hover:text-indigo-700"
+                                    aria-label={`Set the status of ${g.employeeName} on ${r.date}`}
+                                    title="Set this day as Present, Half Day or Absent"
+                                    onClick={() => setDayDialog({ code: g.employeeCode, date: r.date })}
+                                    data-testid={`day-status-edit-${g.employeeCode}-${r.date}`}
+                                  >
+                                    <Pencil size={12} />
+                                  </button>
+                                </span>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </Fragment>

@@ -453,7 +453,12 @@ export type PunchRow = {
   punchTime: string;
   punchType: "IN" | "OUT";
   source: string;
+  /** The stored status of this punch's day (null when that day has not been worked out yet). */
+  dayStatus?: PunchDayState | null;
 };
+
+export type PunchDayStatusValue = "present" | "half_shift" | "absent" | "on_leave" | "holiday";
+export type PunchDayState = { status: PunchDayStatusValue; source: "auto" | "manual"; shifts: string; label?: string };
 
 export type PunchListResponse = {
   total: number;
@@ -537,6 +542,12 @@ export type PunchImportResult = {
   deleteAll: boolean;
   deleted: number;
   skippedDeletes?: number;
+  /** Days that no longer have a punch, whose Present mark was removed. */
+  marksCleared?: number;
+  /** Employees whose stored attendance was worked out again. */
+  daysRefreshed?: number;
+  /** Rows this upload added to the History. */
+  historyRows?: number;
 };
 
 export type PunchImportRequest = {
@@ -1170,3 +1181,110 @@ export const useUpdateMissingPunchHR = () => {
     },
   });
 };
+
+// ── Punch View: a day's status, and the History ─────────────────────────────────────────────────────────────────────
+
+export type PunchDayDetail = {
+  employeeId: number;
+  code: string;
+  name: string;
+  employmentType: string;
+  date: string;
+  status: PunchDayStatusValue;
+  statusLabel: string;
+  source: "auto" | "manual";
+  shifts: string;
+  firstPunch: string | null;
+  lastPunch: string | null;
+  punchCount: number;
+  overrideBy: string | null;
+  overrideNote: string | null;
+};
+
+/** One employee's day as it stands now (null until a code and a date are given). */
+export const usePunchDayStatus = (code: string, date: string) =>
+  useQuery<PunchDayDetail>({
+    queryKey: ["/api/attendance/punches/day-status", code, date],
+    enabled: code.trim().length > 0 && /^\d{4}-\d{2}-\d{2}$/.test(date),
+    retry: false,
+    queryFn: () =>
+      customFetch<PunchDayDetail>(
+        `/api/attendance/punches/day-status?code=${encodeURIComponent(code.trim())}&date=${date}`,
+      ),
+  });
+
+export type SetDayStatusRequest = {
+  code: string;
+  date: string;
+  /** present / half_shift / absent, or auto to put the day back to what the punches say. */
+  status: "present" | "half_shift" | "absent" | "auto";
+  /** The reason (a few words): needed for every status but auto. */
+  note?: string;
+};
+
+export const useSetPunchDayStatus = () => {
+  const queryClient = useQueryClient();
+  return useMutation<{ ok: boolean; day: PunchDayDetail }, Error, SetDayStatusRequest>({
+    mutationFn: (body) =>
+      customFetch(`/api/attendance/punches/day-status`, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/punches"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/punches/day-status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/punches/history"] });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/attendance"),
+      });
+    },
+  });
+};
+
+export type PunchHistoryAction =
+  "punch_added" | "punch_edited" | "punch_deleted" | "status_set" | "status_reset" | "status_auto";
+
+/** A punch ({date, time, type}) or a day ({status, source, shifts}), as it was or as it became. */
+export type PunchHistoryValue = {
+  date?: string;
+  time?: string;
+  type?: "IN" | "OUT";
+  employee?: string;
+  status?: PunchDayStatusValue;
+  source?: string;
+  shifts?: string;
+} | null;
+
+export type PunchHistoryItem = {
+  id: number;
+  action: PunchHistoryAction;
+  actionLabel: string;
+  employeeId: number | null;
+  employeeCode: string;
+  employeeName: string;
+  date: string | null;
+  before: PunchHistoryValue;
+  after: PunchHistoryValue;
+  note: string;
+  via: "page" | "import";
+  batch: string;
+  actorName: string;
+  createdAt: string | null;
+};
+
+export type PunchHistoryFilters = {
+  q?: string;
+  action?: PunchHistoryAction | "";
+  from?: string;
+  to?: string;
+  by?: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export type PunchHistoryResponse = { total: number; page: number; pageSize: number; items: PunchHistoryItem[] };
+
+export const usePunchHistory = (filters: PunchHistoryFilters) =>
+  useQuery<PunchHistoryResponse>({
+    queryKey: ["/api/attendance/punches/history", punchQuery(filters as PunchFilters)],
+    queryFn: () =>
+      customFetch<PunchHistoryResponse>(`/api/attendance/punches/history?${punchQuery(filters as PunchFilters)}`),
+    placeholderData: (previous) => previous,
+  });
