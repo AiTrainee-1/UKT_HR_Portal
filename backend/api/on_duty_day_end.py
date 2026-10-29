@@ -7,12 +7,16 @@ It normally ends one of three ways:
   1. the employee taps "Done" in the app,
   2. all 4 of the day's punches are in (closed at capture -see
      geo_attendance_views.on_duty_punch_request), or
-  3. this job, at 23:00 IST, for every session still open.
+  3. this job, at the day-end time of the Geo-Tracking settings (23:50 IST by default; see
+     on_duty_day_end_scheduler.py), for every session still open.
 
 Without (3) a session that never reached 4 punches -the common case, since
 an employee off-site for half a day may only punch twice -would stay
 punchable indefinitely, letting tomorrow's punches land against yesterday's
 request and blocking a fresh one.
+
+Closing a session also ends its geo-tracking (the track's end reason is auto_day_end): _end_on_duty_session calls
+geo_tracking.sessions.end_track, so a track never outlives the day.
 
 Closing does NOT decide the request. A session still awaiting approval is
 stamped employee_ended_at and left in HR's queue at its real status; only an

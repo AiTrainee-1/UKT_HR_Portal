@@ -282,7 +282,7 @@ const VIEWS: View[] = [
     name: "geo attendance",
     path: "/hr/geo-attendance",
     heading: "Geo Attendance",
-    tabs: ["Punch Verifications", "Live Map", "On-Duty Map", "Tracking Settings"],
+    tabs: ["Punch Verifications", "Live Map", "Journey History", "On-Duty Map", "Tracking Settings"],
   },
   { name: "missing punch", path: "/hr/missing-punch", heading: "Missing Punch" },
   {

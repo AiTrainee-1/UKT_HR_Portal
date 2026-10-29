@@ -98,6 +98,8 @@ export type OnDutyPunchVerificationItem = {
   accuracyM: number | null;
   isMocked: boolean;
   hasPhoto: boolean;
+  /** A second photo was taken (an On-Duty punch takes two once HR switches the rule to two photos). Older servers omit it. */
+  hasPhoto2?: boolean;
   status: "pending" | "approved" | "rejected";
   hrReviewedBy: string | null;
   hrReviewComment: string | null;

@@ -17,6 +17,7 @@ Modules (each only imports from ones listed before it):
   md_assistant The MD portal's AI assistant: settings, conversations, daily usage.
   shared_endpoints Endpoint Sharing: the API endpoints, origins, keys and access log of data shared with other applications.
   sms          SMS one-time codes through 2Factor: the settings row and the send log.
+  geo_tracking On-Duty Geo-Tracking: settings, tracks, points, events, derived segments, devices and consents.
 """
 
 from .core import (
@@ -165,4 +166,13 @@ from .shared_endpoints import (
 from .sms import (
     SmsMessageLog,
     SmsSettings,
+)
+from .geo_tracking import (
+    DutyTrack,
+    DutyTrackEvent,
+    DutyTrackPoint,
+    DutyTrackSegment,
+    GeoTrackingSettings,
+    TrackingConsent,
+    TrackingDevice,
 )

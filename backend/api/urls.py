@@ -129,6 +129,7 @@ from .geo_attendance_views import (
     on_duty_punch_verifications_hr, on_duty_punch_verification_hr_status, on_duty_punch_verification_photo,
     live_location_team, live_location_trail, live_location_route, on_duty_map,
 )
+from .geo_tracking import hr_views as geo_tracking_hr, views as geo_tracking_views
 from .reports_views import (
     attendance_report, attendance_summary_report,
     leave_report, leave_balance_report,
@@ -509,6 +510,24 @@ urlpatterns = [
     path("live-location/team", live_location_team),
     path("live-location/team/<int:employee_id>/trail", live_location_trail),
     path("live-location/team/<int:employee_id>/route", live_location_route),
+
+    # ── Geo-Tracking: our own on-duty route / stop / connectivity tracking (api/geo_tracking/) ──────────
+    # Employee (employee token): state, consent, batch upload, own journeys.
+    path("tracking/state", geo_tracking_views.tracking_state),
+    path("tracking/consent", geo_tracking_views.tracking_consent),
+    path("tracking/batch", geo_tracking_views.tracking_batch),
+    path("tracking/my-journeys", geo_tracking_views.my_journeys),
+    # HR (module geo_attendance; branch scoped; audit-logged): journeys, raw points, export, rebuild, the live feed.
+    path("tracking/journeys", geo_tracking_hr.journeys_list),
+    path("tracking/journeys/day-map", geo_tracking_hr.journeys_day_map),  # every journey of one day + its route (On-Duty Map)
+    path("tracking/journeys/<int:pk>", geo_tracking_views.journey_detail),  # shared: an employee reads their own
+    path("tracking/journeys/<int:pk>/points", geo_tracking_hr.journey_points),
+    path("tracking/journeys/<int:pk>/trail", geo_tracking_hr.journey_trail),
+    path("tracking/journeys/<int:pk>/export", geo_tracking_hr.journey_export),
+    path("tracking/journeys/<int:pk>/rebuild", geo_tracking_hr.journey_rebuild),
+    path("tracking/live", geo_tracking_hr.live_tracks),
+    # The geo-tracking rules (permission module settings.attendance).
+    path("tracking/settings", geo_tracking_hr.tracking_settings),
 
     # ── Casual Leave (CL) ───────────────────────────────────────────────────
     path("casual-leaves", casual_leaves),

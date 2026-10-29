@@ -45,7 +45,7 @@ PATH_OPTIONS = (
 COMPLETION_OPTIONS = (
     ("manual", "Employee marked done"),
     ("auto_4th_punch", "All 4 punches recorded"),
-    ("auto_day_end", "Day ended automatically (11 PM)"),
+    ("auto_day_end", "Day ended automatically (day-end close)"),
     ("not_completed", "Not completed"),
 )
 COMPLETION_LABELS = {

@@ -460,14 +460,18 @@ Nothing is saved until you press the button, which names exactly what it will do
 
 **What it's for:** Manages employees who need to visit clients, suppliers, or other locations outside the office ("On-Duty"). Provides GPS-based tracking and punch verification with selfie photos.
 
-#### Four Sub-Sections (Tabs)
+#### The Tabs (six sub-sections)
 
 ---
 
-##### Tab 1: Live Map
-**What it shows:** A real-time map with the last known GPS location of every employee who has Live Tracking enabled.
+**The page itself:** the title row says how many employees are **on duty now** (click it to open the Live Map), then the tabs in one strip (each with its icon; an amber badge counts what is waiting for you on *On-Duty Approvals* and *Punch Verifications*; on a phone the strip scrolls sideways). Every tab uses the same look: a toolbar or filter card on top, then cards.
 
-- **Employee list** (left panel) shows all tracking-enabled employees, their department, and how recently their location was updated.
+##### Tab 1: Live Map
+**What it shows:** A real-time map with the last known GPS location of everybody being tracked: the employees on an open On-Duty request, and the employees who have Live Tracking switched on in Tracking Settings.
+
+- **On-Duty tracks** (top of the left panel) come first, one row per On-Duty request being recorded (from the moment it was submitted, approved or not). Each row shows what the phone is doing: **Moving** (green), **Stationary** (amber), **Offline** (grey: nothing received for a while) or **Location off** (red: the employee switched GPS off); when it was last heard from, the battery and network, where the request stands (Awaiting Department Head / Awaiting HR / Approved / Rejected), since when it is being tracked, and an **Open journey** link to the full route. Rows that need a look (Location off, Offline) are at the top.
+- **Employee list** (below it) shows all tracking-enabled employees, their department, and how recently their location was updated.
+- **The map opens on Tiruppur** (about a 30 km window around the town), not on the whole of India. You can still pan and zoom freely. **Back to Tiruppur** returns to that view and **Fit all** frames everybody; when somebody (or a branch) is farther than 30 km, an amber chip says how many are outside the Tiruppur area, and clicking it shows them all.
 - **Map** (right panel) shows color-coded pins:
   - 🟢 **Teal building pin** — Your company/branch location
   - 🔵 **Blue person pin** — Regular employee
@@ -480,9 +484,46 @@ Nothing is saved until you press the button, which names exactly what it will do
 
 ---
 
-##### Tab 2: On-Duty Map
-**What it shows:** GPS routes for employees who were On-Duty on a selected date (historical view).
+##### Tab 2: Journey History
+**What it's for:** The complete record of every On-Duty journey, kept after the duty is over: where the employee went, where they stopped and for how long, when the phone lost its location or its network, and how the journey ended. It is built by our own system from the position the employee's phone records while an On-Duty request is open; no other tracking service is used.
 
+**When tracking starts and ends**
+- Tracking **starts the moment the employee submits the On-Duty request**, before anybody approves it. Everything recorded is kept even if the request is approved or rejected later.
+- It **ends only** when: the employee taps **Done**; the **4th On-Duty punch** is captured; the automatic close at the **day end time** (23:50 by default, set in Tracking Settings); or the request is **rejected**. Rejecting a request stops the tracking at once, and what was recorded until then stays here. After a journey ends, the employee can submit a new request.
+- Before the first journey the employee reads and accepts a short **tracking notice** in the app. Tracking only runs while an On-Duty request is open.
+
+**The list:** one row per journey, newest first. Filter by employee (type a name or code), by **From / To** date, by **Status** (Active = still being recorded, Ended) and by **How it ended** (marked done, 4th punch, closed at day end, request rejected, closed by an administrator). Above the list, an **On duty now** strip shows a card for every journey that is still being recorded (who, where to, how long out, the phone's state, when it was last heard from). Each row of the list shows the employee (with their initials), destination and the time it started and ended (and why), the duration and distance, the number of breaks and the time spent on them (with the longest break, any time with no location and the number of events), the approval state of the request, and a red **Simulated** flag if a fake-GPS location was reported. An active journey has a green **Live** badge. Click a row to open it.
+
+**One journey (click a row):**
+- **The top of the page:** who went, where to, the date, whether the journey is live or ended and how, then one band of figures: **distance**, **travel time**, **stationary time**, **gap time** and the **whole journey**, a bar that shows how the time was divided between the road, the breaks and the time with no location, and the smaller counts (stops, longest stop, positions received, events).
+- **Journey timeline (the story of the journey):** to the right of the map, the journey is told as one chronological list that follows what was really recorded: **Journey started** (time and place), **Break taken** (where, from when to when, and for how long: *Break 1*, *Break 2 ...*, a **long** break from 15 minutes), **Journey resumed** (when the employee set off again), **Location not recorded** (a gap, with its cause), a notice for anything that matters (a fake location, network lost, a changed permission ...), and finally **On-duty completed** (the last position, the time and how it ended) or, while the journey is still recorded, **On duty now** with its state. The **travel between two items** is written on the line that joins them (for example *Travelled 12.26 km in 19 min, 38 km/h on average*). Above the story: the number of **breaks taken** (and how many were long), the **time on breaks**, the **time travelling**, how many times the employee **started travelling** and **resumed after a break**, and the **whole journey** time. Click an item to open its details (times, place, coordinates, positions recorded, cause) and to see it on the map; click a pin on the map and its item opens; **Expand all** opens every item.
+- **Map:** the route as a solid line; a **gap** (no location) as a dashed grey line between where the signal was lost and where it came back; an **estimated** stretch dashed in lighter blue; **numbered pins** for the stops (click one for start, end, duration and the address, or the coordinates when no address is looked up); a green flag at the start and a person at the last known position; round pins for **events** (location off, network lost, phone shut down, permission changed, fake location ...). Anything simulated (fake GPS) is drawn in red.
+- **Street map, satellite or satellite with names:** the layers button at the top right of every map in Geo Attendance (and of the branch location picker) switches between the **Street map** (roads, lanes, bus stops and names from OpenStreetMap), the **Satellite** view (rooftops, compounds and parking, so you can see whether a stop was inside a building or beside the road) and **Satellite + names** (the satellite view with road names and area names written on it). The map opens on the one you used last.
+- **The complete route:** the map draws a thin line through **every position the phone recorded** (blue while travelling; amber or purple for the positions recorded during a waiting / long stop) and a **dot for each position**, with the thicker travel line, the dashed gaps and the numbered stops on top. Under the map: *Show every recorded position* (turns the dots off), *Include N set aside* (shows the positions the system did not use for the route because the GPS was too inaccurate or jumped; they are grey) and the number of positions recorded. Where the phone recorded nothing (location off, no network), the dashed grey line is the only thing that can be drawn: nobody knows the way taken.
+- **Several stops at one place:** when the employee stops at the very same spot more than once (the same gate before and after a visit elsewhere), the stops within **15 m** of each other share **one pin** on the map (a break 20 m or 65 m away is always a pin of its own, however near), labelled with every number (for example **1 · 3**), so a later stop never hides an earlier one. Click the pin to list its stops with their times; click a stop's name there (or its row in the timeline) to see its details, which also say *Same place as Stop 3 (14:25 - 14:35)*. The timeline still lists every stop on its own.
+- **Colours of the pins:** the **start and the end** of the journey are one colour (**green**: a flag at the start, a person at the end or latest position). The stops and breaks in between keep their own colours: **amber** while waiting (under 15 minutes) and **purple** for a long stop (15 minutes or more). Travel is blue, a gap grey and dashed, a simulated location red.
+- **Details of a place (right of the map):** click a **dot** (time, exact position, accuracy, speed, what the phone was doing, battery, network and source), a **stop pin** (start, end, how long, how many positions, address if looked up), a row of the timeline (travel: from and to; gap: the cause and the two ends; event: its last known place) and the panel shows it. Every place has **Open in Google Maps** (Google's website or app on those coordinates, with its local names, shops and landmarks), **Directions** and **Copy coordinates**. The timeline rows of stops and events carry the same Google Maps link. With nothing picked the panel shows where the journey ended (or where the employee is now).
+- **Google Maps view:** *Show Google Maps view* in that panel puts Google's own map of the picked place beside ours (Google's names, shops and landmarks). It is Google's free embed: it shows **one place at a time** and cannot draw our route, numbered stops or clickable points, which is why the route stays on our map. It is switched off until you turn it on, because turning it on asks Google for a map of that place from your browser; your choice is remembered in your browser. Google's own full map with a drawn route would need a paid Google key.
+- **What "positions within 78 m" means on a stop:** the pin is the middle of all the positions the phone recorded during the stop, and the number is how far the **farthest** of those positions was from the pin (GPS wanders, mostly when the phone arrives or leaves and indoors). It is not a limit that decides whether something is a stop: a stop is any time of **3 minutes or more** (*Stationary after* in Tracking Settings) in which the positions stay together, within the stop radius (50 m, wider when the GPS is poor).
+- **Detailed log (under the map and the story):** the same journey as a table, every segment and event in order of time: **Travel**, **Stationary**, **Gap** and **Event** rows with the time range, the place or route, the duration, the distance and the cause of a gap. A stationary period shows how long it lasted and a small chip: **waiting** (under 15 minutes) or **long stop** (15 minutes or more). Click a row and the map moves to it and highlights it; click a pin on the map and its row is highlighted. The buttons above the table narrow it to stops, gaps, events or travel.
+- **Phone and tracking health:** the phone model, Android version, app version, whether location permission is "Allow all the time" (needed to keep tracking with the app closed), whether location services are on, whether the phone's battery optimisation or battery saver may stop the app, and when the phone was last heard from.
+- **Buttons:** **Refresh**; **Export (Excel)** (the summary, the stops/travel/gaps and the events of the journey, times in India time); **Rebuild** (works the stops, gaps and totals out again from the raw positions, for example after you changed the rules; nothing is deleted; needs edit permission on Geo Attendance). A journey that is still active updates itself every 30 seconds.
+
+**How stops and gaps are decided** (the numbers below are the defaults; they are set in **Tracking Settings -> Geo-tracking rules**):
+- A **stationary period** (waiting, a break, a visit) is recorded when the employee stays at one place (within about 50 metres) for **3 minutes or more**. There are no fixed sites or lunch times: any place counts.
+- A **gap** is a time of **more than 5 minutes** with no location at all. Its **cause** comes from what the phone reported: location services off, network lost, app closed, phone switched off, permission taken away, battery saver, or "no data received" when the phone simply went silent (**Offline** on the Live Map after 10 minutes). If the positions on both sides of a quiet stretch are within 75 metres of each other, it is part of a stop and not a gap.
+- Positions with a poor accuracy (worse than 100 metres) and jumps that would need more than 200 km/h are set aside. A position that comes from a simulated location is kept, marked **Simulated** and drawn in red: treat that journey with suspicion.
+
+**Privacy:** the route is recorded only while an On-Duty request is open and only after the employee accepted the notice. Every time HR opens a journey it is written to the activity log. An HR login that belongs to one branch sees only that branch's journeys. Raw positions are kept for **365 days** by default and then deleted (the stops, gaps and totals stay). Addresses are not looked up by default, so no coordinate leaves our server.
+
+---
+
+##### Tab 3: On-Duty Map
+**What it shows:** the journeys of every employee who was On-Duty on a selected day (it opens on today, India time), on one map of Tiruppur.
+
+- Every employee has **their own colour**: the route line, the numbered stop pins and the row in the list on the left are drawn in it, so several journeys can be told apart. A route is drawn as in Journey History: a line along the recorded path, a dashed grey line where no location was recorded, numbered pins for the stops (larger with a ring for 15 minutes or more), a flag at the start and a person at the end or latest position.
+- The list on the left shows each employee with the request (destination, Approved / Active / Completed), the state of the phone, distance, stops and time, and the day's geo-punches. **Click a row** to focus on that employee (the map zooms to the journey and the others fade; click again to let go); the **eye** hides or shows one journey; **Show everyone** resets. Click a pin or a line for its details and **Open in Google Maps**. **Back to Tiruppur** and **Fit all** work as on the Live Map.
+- An employee without a recorded journey (an old request) keeps the older plain line of pings.
 - Switch between **All On-Duty** (all field staff for the selected day) and **Single Employee** (detailed route for one person).
 - In "Single Employee" mode: select an employee and a date to see their complete travel path with direction arrows, start pin (green flag), and latest position (person pin).
 
@@ -490,14 +531,14 @@ Nothing is saved until you press the button, which names exactly what it will do
 
 ---
 
-##### Tab 3: On-Duty Approvals
+##### Tab 4: On-Duty Approvals
 **What it's for:** Approving or rejecting employee requests to go On-Duty (field visits).
 
 **The Approval Process:**
 1. An employee submits an On-Duty request through the mobile app, specifying their destination and purpose.
 2. The request first goes to their **Department Head** (HOD) for review.
 3. After HOD approval (or if no HOD is assigned), it comes to **HR** for final approval.
-4. Once approved, the session becomes **Active** and GPS tracking begins.
+4. Tracking of the route starts as soon as the request is submitted. Once approved, the session becomes **Active**; if it is rejected, the tracking stops (what was recorded stays in Journey History).
 5. The employee punches in/out up to 4 times during the visit (IN-OUT-IN-OUT).
 6. When the 4th punch is approved, or the employee manually ends the session, it becomes **Completed**.
 
@@ -510,20 +551,24 @@ Nothing is saved until you press the button, which names exactly what it will do
 | Completed | Session ended |
 | Rejected | Denied at any stage |
 
+**How the tab looks:** a toolbar with **Pending / Active / Completed / Rejected** and the count of each, then one card per request: who, the status, the destination, when it was requested, the review trail and any warnings, with **Approve** and **Reject** on the card.
+
 **Actions available:** For Pending sessions, you can click **Approve** or **Reject**. HR can approve even if the HOD hasn't acted yet (this finalizes it directly).
 
 ---
 
-##### Tab 4: Punch Verifications
+##### Tab 5: Punch Verifications
 **What it's for:** Reviewing selfie photos and GPS coordinates submitted by the employee at each punch during an On-Duty session.
 
 Each punch generates:
-- A **selfie photo** (taken in-app, cannot be uploaded from gallery)
+- One **selfie photo**, or **two** (Photo 1 and Photo 2) once the Tracking Settings rule is switched to two photos (taken in-app, cannot be uploaded from gallery)
 - A **GPS coordinate** at the moment of the punch
 - The **time** of the punch
 
+The tab shows one card per On-Duty request with its punches as rows (type, status, time, the coordinates with **View on map**, **Photos**, **Approve**, **Reject**); a card has **Approve all** and **Reject all** for its pending punches.
+
 For each pending punch verification:
-1. Click **View Photo** to see the selfie.
+1. Click **Photo** (or **Photos (2)**) to see the selfie(s). With two photos they are shown side by side, labelled Photo 1 and Photo 2; click one to enlarge it.
 2. Check the GPS coordinates shown.
 3. Click **Approve** or **Reject**.
 
@@ -531,12 +576,25 @@ For each pending punch verification:
 
 ---
 
-##### Tab 5: Tracking Settings
-**What it's for:** Control which employees have Live GPS tracking enabled.
+##### Tab 6: Tracking Settings
+**What it's for:** The rules of On-Duty geo-tracking (the **Geo-tracking rules** card at the top), and which employees have Live GPS tracking switched on by hand.
 
+**How the tab looks:** the rules card is divided into sections (stops and gaps, the phone, day end, keeping positions, photos, notice, addresses) with a collapsible *Advanced* part; the photo rule is two cards (1 photo / 2 photos). Below it, the employees with Live Tracking are listed with three figure tiles, a search/filter toolbar and the usual paging.
+
+**Geo-tracking rules** (company-wide; needs edit permission on Settings -> Attendance; a login that belongs to one branch can read but not change them). Change a value, check the message under it if it is refused, then press **Save tracking rules**; only what you changed is saved, and new rules apply to journeys from then on (use **Rebuild** on an old journey to apply them to it).
+- **Stops and gaps:** how long a stay counts as stationary (default 3 minutes) and how wide the place may be (50 metres); how long without a location is a gap (5 minutes) and when a silent phone is shown as Offline (10 minutes); the worst accuracy and the fastest speed that are still believed (100 metres, 200 km/h).
+- **The employee's phone:** how often it records a position while moving (every 3 seconds) and while still (every minute, so every stop of 3 minutes or more has positions to be recognised by, and a departure is noticed quickly), and when it sends them (after 30 positions or every 60 seconds). Shorter times use more battery; the app on a phone that is not updated keeps working, it follows the numbers the server sends.
+- **Day end:** open On-Duty sessions and their tracking close automatically at this time (India time, 23:50 by default).
+- **Keep raw positions for** (365 days by default). Older raw positions and events are deleted; stops, gaps and totals stay.
+- **On-Duty punch photos: 1 or 2.** Keep it at **1** until **everybody has the new app**. When it is set to 2, an employee whose app can take only one photo cannot punch (the app asks them to update), so the page asks you to confirm before it switches.
+- **Tracking notice:** the text employees accept before their first tracked journey. Changing the text makes everybody accept the new version again (there is also a tick to ask again without changing it).
+- **Look up addresses:** Off by default (stops show coordinates). If you switch it to OpenStreetMap Nominatim, the coordinates of each stop are sent to that public service to get an address: leave it off if coordinates must not leave our server.
+- **Advanced:** how stops close in time are joined, and how a poor GPS widens a stop.
+
+**Live tracking by hand**
 - Enable or disable tracking for individual employees using the toggle switch.
 - Use **Enable All / Disable All** for bulk changes.
-- Only enable tracking for employees who routinely travel On-Duty — not for office staff who stay at the premises.
+- Only enable tracking for employees who routinely travel On-Duty — not for office staff who stay at the premises. (An On-Duty request is tracked automatically; this switch is for tracking outside a request.)
 
 ---
 
@@ -1754,15 +1812,15 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A([Employee]) -->|Mobile App| B[Submit On-Duty request\nwith destination]
+    A([Employee]) -->|Mobile App| B[Submit On-Duty request\nwith destination\nroute tracking starts]
     B --> C[Status: Awaiting Department Head]
     C --> D{HOD reviews\nin mobile app}
     D -- Approve --> E[Status: Awaiting HR]
-    D -- Reject --> F[Session Rejected]
+    D -- Reject --> F[Session Rejected\ntracking stops]
     D -- No action --> G{HR can\ndirectly approve}
     E --> H{HR reviews\nin Geo Attendance page}
     G --> H
-    H -- Approve --> I[Status: Active\nGPS tracking begins]
+    H -- Approve --> I[Status: Active]
     H -- Reject --> F
     I --> J[Employee punches IN via mobile\nwith selfie + GPS]
     J --> K[Punch Verification created]

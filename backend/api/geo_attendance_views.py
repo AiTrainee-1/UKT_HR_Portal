@@ -53,9 +53,11 @@ Same conventions as the rest of this codebase: plain @api_view + @require_hr
 /@require_auth functions, no serializers/viewsets, camelCase response JSON,
 branch scoping via scope_to_branch for every HR-facing list/action.
 """
+import logging
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 
 from django.core.files.base import ContentFile
+from django.db import transaction
 from django.db.models import Q
 from django.http import FileResponse
 from django.utils import timezone
@@ -69,6 +71,7 @@ from .view_common import error_response as _error
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .biometric_sync import _ingest_punches
 from .branch_scope import scope_to_branch
+from .geo_tracking import sessions as geo_sessions, settings as geo_settings
 from .geo_utils import haversine_distance_m
 from .clock import ist_time, ist_today
 from .hod_scope import manager_may_act_on, managers_to_notify
@@ -76,6 +79,8 @@ from .models import (
     AttendanceLog, Employee, LiveLocationPing, Notification,
     OnDutyPunchVerification, OnDutySession, OutpassRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_PHOTO_EXTENSIONS = {"jpg", "jpeg", "png"}
 MAX_PHOTO_BYTES = 8 * 1024 * 1024  # 8MB
@@ -212,16 +217,40 @@ def _end_on_duty_session(session: OnDutySession, reason: str) -> bool:
     if session.employee_ended_at or session.status not in PUNCHABLE_STATUSES:
         return False
     now = timezone.now()
-    session.employee_ended_at = now
-    if _is_provisional(session):
-        session.save(update_fields=["employee_ended_at"])
-    else:
-        session.status = OnDutySession.STATUS_COMPLETED
-        session.completed_at = now
-        session.completed_by = "system"
-        session.completion_reason = reason
-        session.save()
+    with transaction.atomic():
+        session.employee_ended_at = now
+        if _is_provisional(session):
+            session.save(update_fields=["employee_ended_at"])
+        else:
+            session.status = OnDutySession.STATUS_COMPLETED
+            session.completed_at = now
+            session.completed_by = "system"
+            session.completion_reason = reason
+            session.save()
+        # The session's geo-tracking ends with it, for the same reason (manual / auto_4th_punch / auto_day_end).
+        _end_track_safely(session, reason, now)
     return True
+
+
+def _end_track_safely(session: OnDutySession, reason: str, now=None) -> None:
+    """End the session's geo-tracking (geo_tracking.sessions.end_track, the ONE function that ends a track). Tracking is
+    never allowed to break the attendance flow it rides on: a failure is logged and the session still ends; the scheduler's
+    orphan check ends the track a couple of minutes later."""
+    try:
+        with transaction.atomic():
+            geo_sessions.end_track_for_session(session, reason, now=now)
+    except Exception:
+        logger.exception("Could not end the geo-tracking of on-duty session %s (%s)", session.pk, reason)
+
+
+def _photo_problem(photo) -> str | None:
+    """Why an uploaded selfie is not acceptable (type / size), or None."""
+    ext = photo.name.rsplit(".", 1)[-1].lower() if "." in photo.name else ""
+    if ext not in ALLOWED_PHOTO_EXTENSIONS:
+        return f"Unsupported photo type '.{ext}' -only JPG and PNG are accepted"
+    if photo.size > MAX_PHOTO_BYTES:
+        return f"Photo is too large ({photo.size / 1024 / 1024:.1f}MB) -the limit is 8MB"
+    return None
 
 
 def _employee_from_token(request: Request) -> Employee | None:
@@ -432,6 +461,7 @@ def _on_duty_punch_verification_dict(v: OnDutyPunchVerification) -> dict:
         "accuracyM": v.accuracy_m,
         "isMocked": v.is_mocked,
         "hasPhoto": bool(v.photo),
+        "hasPhoto2": bool(v.photo2),
         "status": v.status,
         "hrReviewedBy": v.hr_reviewed_by,
         "hrReviewComment": v.hr_review_comment,
@@ -523,6 +553,8 @@ def resolve_on_duty_session(
         # punched all day under this request. Those punches never reached
         # AttendanceLog, and now never will.
         voided = _void_session_punches(session, reviewer_name, approval.ROLE_PHRASE[role])
+        # Tracking stops with the rejection; what was collected so far is kept (owner decision 2026-10-28).
+        _end_track_safely(session, "rejected")
         message = approval.notice_for(what, outcome)
         if voided:
             message += f" The {voided} punch(es) you recorded under it are not valid and have not been counted."
@@ -604,6 +636,7 @@ def resolve_on_duty_punch_hr(
             session.completed_by = "system"
             session.completion_reason = OnDutySession.COMPLETION_AUTO_4TH_PUNCH
             session.save()
+            _end_track_safely(session, OnDutySession.COMPLETION_AUTO_4TH_PUNCH)
             Notification.objects.create(
                 employee=v.employee, type="on_duty",
                 message="Your On-Duty session was automatically completed after your 4th punch was approved.",
@@ -787,10 +820,19 @@ def on_duty_session_request(request: Request) -> Response:
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
     first = approval.get_config(WORKFLOW).steps[0].roles  # the request starts with whoever the first step names
-    session = OnDutySession.objects.create(
-        employee=emp, destination=destination, branch=emp.branch,
-        status=approval.project_status(WORKFLOW, first), approval_trail=[],
-    )
+    with transaction.atomic():
+        session = OnDutySession.objects.create(
+            employee=emp, destination=destination, branch=emp.branch,
+            status=approval.project_status(WORKFLOW, first), approval_trail=[],
+        )
+        # Geo-tracking starts the moment the request is SUBMITTED (before any approval), in the same transaction, and keeps
+        # what it records whether the request is later approved or rejected. A failure here must not stop the employee
+        # starting duty: the app's next /tracking/state call creates the missing track.
+        try:
+            with transaction.atomic():
+                geo_sessions.start_track(session)
+        except Exception:
+            logger.exception("Could not start geo-tracking for on-duty session %s", session.pk)
     if approval.HOD in first:
         _notify_hod_approvers(session)
 
@@ -823,19 +865,21 @@ def on_duty_session_complete(request: Request) -> Response:
         return _error("You don't have an active On-Duty session", 404)
 
     now = timezone.now()
-    session.employee_ended_at = now
-    if _is_provisional(session):
-        # Their day is over, but HR still hasn't decided -leave `status`
-        # alone so the request stays in the approval queue. Marking it
-        # completed here would quietly remove HR's chance to reject it and
-        # strand the captured punches as pending forever.
-        session.save(update_fields=["employee_ended_at"])
-    else:
-        session.status = OnDutySession.STATUS_COMPLETED
-        session.completed_at = now
-        session.completed_by = "employee"
-        session.completion_reason = OnDutySession.COMPLETION_MANUAL
-        session.save()
+    with transaction.atomic():
+        session.employee_ended_at = now
+        if _is_provisional(session):
+            # Their day is over, but HR still hasn't decided -leave `status`
+            # alone so the request stays in the approval queue. Marking it
+            # completed here would quietly remove HR's chance to reject it and
+            # strand the captured punches as pending forever.
+            session.save(update_fields=["employee_ended_at"])
+        else:
+            session.status = OnDutySession.STATUS_COMPLETED
+            session.completed_at = now
+            session.completed_by = "employee"
+            session.completion_reason = OnDutySession.COMPLETION_MANUAL
+            session.save()
+        _end_track_safely(session, OnDutySession.COMPLETION_MANUAL, now)
     return Response(_on_duty_session_dict(session, for_employee=True))
 
 
@@ -850,12 +894,14 @@ def on_duty_session_status(request: Request) -> Response:
         return _error("Employee authentication required", 403)
 
     session = _current_on_duty_session(emp)
+    required_photos = geo_settings.punch_photos()  # 1 or 2 selfies per punch (Geo-Tracking settings)
     if not session:
-        return Response({"session": None, "punchVerifications": []})
+        return Response({"session": None, "punchVerifications": [], "requiredPhotos": required_photos})
 
     verifications = session.punch_verifications.select_related("session").order_by("punch_number", "created_at")
     return Response({
         "session": _on_duty_session_dict(session, for_employee=True),
+        "requiredPhotos": required_photos,
         "punchVerifications": [_on_duty_punch_verification_dict(v) for v in verifications],
         # All four slots, each either filled or offering "add my punch" —
         # the app renders one row per slot rather than a single next-punch
@@ -870,7 +916,8 @@ def on_duty_session_status(request: Request) -> Response:
 def on_duty_punch_request(request: Request) -> Response:
     """
     POST /api/on-duty-sessions/punch -multipart:
-      latitude, longitude, accuracy?, isMocked?, photo (file)
+      latitude, longitude, accuracy?, isMocked?, photo (file), photo2 (file; required while Geo-Tracking Settings
+      say two photos per punch: 400 PHOTO2_REQUIRED otherwise)
     Captures one of the day's (up to 4) attendance punches while an On-Duty
     session is in progress -including one still awaiting approval. Held
     pending until HR approves BOTH the session and this punch; if the
@@ -901,11 +948,22 @@ def on_duty_punch_request(request: Request) -> Response:
     photo = request.FILES.get("photo")
     if not photo:
         return _error("A selfie photo is required to verify this punch")
-    ext = photo.name.rsplit(".", 1)[-1].lower() if "." in photo.name else ""
-    if ext not in ALLOWED_PHOTO_EXTENSIONS:
-        return _error(f"Unsupported photo type '.{ext}' -only JPG and PNG are accepted")
-    if photo.size > MAX_PHOTO_BYTES:
-        return _error(f"Photo is too large ({photo.size / 1024 / 1024:.1f}MB) -the limit is 8MB")
+    problem = _photo_problem(photo)
+    if problem:
+        return _error(problem)
+
+    # The second selfie. Geo-Tracking settings say whether a punch takes one or two photos: under the two-photo policy a
+    # punch without `photo2` is refused (old app builds learn they must update); under the one-photo policy an extra
+    # photo2 is still kept if the app sent one.
+    photo2 = request.FILES.get("photo2")
+    if photo2 is None and geo_settings.punch_photos() == 2:
+        return Response(
+            {"error": "Two photos are required: please update the app", "code": "PHOTO2_REQUIRED"}, status=400
+        )
+    if photo2 is not None:
+        problem = _photo_problem(photo2)
+        if problem:
+            return _error(problem)
 
     today = ist_today()
     now_time = ist_time()
@@ -944,6 +1002,8 @@ def on_duty_punch_request(request: Request) -> Response:
         latitude=lat, longitude=lng, accuracy_m=accuracy, is_mocked=is_mocked,
     )
     v.photo.save(photo.name, ContentFile(photo.read()), save=False)
+    if photo2 is not None:
+        v.photo2.save(photo2.name, ContentFile(photo2.read()), save=False)
     v.save()
 
     # Four punches is a full day -close the session now, at capture, rather
@@ -1003,6 +1063,7 @@ def geo_punch_status(request: Request) -> Response:
             for log in logs
         ],
         "onDutySession": _on_duty_session_dict(session, for_employee=True) if session else None,
+        "requiredPhotos": geo_settings.punch_photos(),
         "nextPunchNumber": punch_num,
         "nextPunchType": next_type,
         "punchSlots": _slot_dicts(emp, d),
@@ -1220,9 +1281,13 @@ def on_duty_punch_verification_photo(request: Request, pk: int) -> Response:
     if not allowed:
         return _error("Access denied", 403)
 
-    if not v.photo:
+    which = (request.query_params.get("n") or "1").strip()
+    if which not in ("1", "2"):
+        return _error("n must be 1 or 2")
+    image = v.photo2 if which == "2" else v.photo
+    if not image:
         return _error("Photo not found", 404)
-    return FileResponse(v.photo.open("rb"))
+    return FileResponse(image.open("rb"))
 
 
 @api_view(["GET"])

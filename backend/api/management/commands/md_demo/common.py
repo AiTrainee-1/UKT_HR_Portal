@@ -96,6 +96,7 @@ def require_throwaway_database() -> str:
 SCHEDULER_MODULES = (
     "auto_sync",
     "backup_scheduler",
+    "geo_tracking_scheduler",
     "on_duty_day_end_scheduler",
     "screening_cleanup_scheduler",
     "whatsapp_alert_scheduler",

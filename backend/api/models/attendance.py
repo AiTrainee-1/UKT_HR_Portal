@@ -356,7 +356,7 @@ class OnDutySession(models.Model):
     COMPLETION_CHOICES = [
         (COMPLETION_MANUAL, "Manual -Employee Marked Done"),
         (COMPLETION_AUTO_4TH_PUNCH, "Automatic -All 4 Punches Recorded"),
-        (COMPLETION_AUTO_DAY_END, "Automatic -Day Ended (11 PM)"),
+        (COMPLETION_AUTO_DAY_END, "Automatic -Day Ended"),
     ]
 
     employee = models.ForeignKey(
@@ -446,6 +446,9 @@ class OnDutyPunchVerification(models.Model):
     accuracy_m = models.FloatField(null=True, blank=True, db_column="accuracy_m")
     is_mocked = models.BooleanField(default=False, db_column="is_mocked")
     photo = models.FileField(upload_to="on_duty_punch_verifications/%Y/%m/", db_column="photo")
+    # The second selfie, taken when Geo-Tracking Settings ask for two photos per on-duty punch (a FileField like `photo`
+    # so both go through the same storage). Null on every punch captured before it existed or under a one-photo policy.
+    photo2 = models.FileField(upload_to="on_duty_punch_verifications/%Y/%m/", db_column="photo2", null=True, blank=True)
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
     hr_reviewed_by = models.TextField(null=True, blank=True, db_column="hr_reviewed_by")
     hr_review_comment = models.TextField(null=True, blank=True, db_column="hr_review_comment")

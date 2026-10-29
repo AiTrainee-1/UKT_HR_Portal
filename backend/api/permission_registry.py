@@ -260,6 +260,16 @@ URL_MODULE_MAP: dict[str, str] = {
     "on-duty-map": "geo_attendance",
     "live-location/team": "geo_attendance",
 
+    # Geo-Tracking (api/geo_tracking/). The journey history and the live feed belong to the Geo Attendance page; the
+    # geo-tracking RULES (thresholds, retention, day-end time, photos per punch, the notice) are Settings -> Attendance:
+    # longest prefix wins, so "tracking/settings" resolves to settings.attendance and not to the module below.
+    # tracking/state, /consent, /batch and /my-journeys are called with EMPLOYEE tokens, which this middleware never gates
+    # (and the views answer an HR token 403); tracking/journeys/<id> is shared: the view itself scopes an employee to their
+    # own tracks.
+    "tracking/journeys": "geo_attendance",
+    "tracking/live": "geo_attendance",
+    "tracking/settings": "settings.attendance",
+
     # Only the HR-portal endpoints -"outpass/gate/..."/"visitor/gate/..." are
     # deliberately left out of this table so they stay reachable with no
     # bearer token at all (see outpass_visitor_views.py's module docstring).

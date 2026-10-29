@@ -13,6 +13,8 @@ export * from "./compensation-settings";
 export * from "./documents";
 export * from "./gate";
 export * from "./geo";
+export * from "./geo-tracking";
+export * from "./geo-day-map";
 export * from "./growth";
 export * from "./organization";
 export * from "./payroll";

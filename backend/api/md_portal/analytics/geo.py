@@ -83,7 +83,7 @@ PAGE = "geo-attendance"
 OFFICE_SOURCE = "geo:auto"
 #: ``hr_review_comment`` of a punch voided because its request was rejected (``_void_session_punches``).
 VOID_COMMENT_PREFIX = "Voided automatically"
-#: A session open (request to end, or to now) for longer than this is "very long". The 11 pm day-end job closes a
+#: A session open (request to end, or to now) for longer than this is "very long". The day-end job (23:50 by default) closes a
 #: session left open, so a normal one is shorter than a working day.
 LONG_SESSION_HOURS = 16
 #: A punch farther than this from its unit is worth a look (a field visit can be far; the destination should say why).
@@ -1366,7 +1366,7 @@ def geo_unusual(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> dict
             "A session is listed when one of these is true: a punch used a simulated (mock) GPS location; a punch was "
             f"more than {_num(FAR_KM)} km from the unit; a punch was taken at {ODD_FROM_HOUR}:00 or later or before "
             f"{ODD_BEFORE_HOUR:02d}:00; the session stayed open more than {LONG_SESSION_HOURS} hours; it is still open "
-            "although it was requested on an earlier day (the 11 pm close should have ended it); HR rejected one of its "
+            "although it was requested on an earlier day (the day-end close should have ended it); HR rejected one of its "
             f"punches. A person is listed for repeated rejections at {REPEAT_MIN_REJECTIONS} or more (requests rejected "
             "plus punches rejected; punches voided with a rejected request are not counted again)."
         ),
@@ -1527,7 +1527,7 @@ def geo_live(scope: Scope) -> dict:
         dataset="On-duty requests, location pings, unit locations",
         definition=(
             "Everyone whose on-duty session is open: requested (approved or not) and not yet ended by them, by the "
-            "11 pm close or by their fourth punch. 'Last seen' is the newest location ping from the app, which only "
+            "day-end close or by their fourth punch. 'Last seen' is the newest location ping from the app, which only "
             f"reports for people tracked or on duty; older than {SILENT_MINUTES} minutes counts as no signal. "
             "A session still open from an earlier day is shown as left open."
         ),
@@ -1641,7 +1641,7 @@ def _exceptions(scope: Scope, period: Period, *, limit: int) -> list[dict]:
                 "stale",
                 "warning",
                 f"{_num(stale)} on-duty {_plural(stale, 'session is', 'sessions are')} still open after {_plural(stale, 'its', 'their')} day",
-                "The 11 pm day-end close should have ended them: either it did not run, or the session was reopened.",
+                "The day-end close should have ended them: either it did not run, or the session was reopened.",
                 _num(stale),
                 f"Which on-duty sessions are still open from earlier days ({period.label})?",
             )
@@ -1701,7 +1701,7 @@ def _exceptions(scope: Scope, period: Period, *, limit: int) -> list[dict]:
                 "long",
                 "info",
                 f"{_num(long_n)} on-duty {_plural(long_n, 'session ran', 'sessions ran')} longer than {LONG_SESSION_HOURS} hours",
-                f"{period.label}: open from the request until the employee or the 11 pm close ended it.",
+                f"{period.label}: open from the request until the employee or the day-end close ended it.",
                 _num(long_n),
                 f"Which on-duty sessions ran longer than {LONG_SESSION_HOURS} hours ({period.label})?",
             )

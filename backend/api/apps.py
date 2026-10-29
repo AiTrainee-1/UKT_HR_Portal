@@ -116,6 +116,7 @@ class ApiConfig(AppConfig):
         from . import (
             auto_sync,
             backup_scheduler,
+            geo_tracking_scheduler,
             on_duty_day_end_scheduler,
             overtime_scheduler,
             screening_cleanup_scheduler,
@@ -149,6 +150,11 @@ class ApiConfig(AppConfig):
             on_duty_day_end_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("On-Duty day-end scheduler bootstrap skipped: %s", e)
+
+        try:
+            geo_tracking_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Geo-tracking scheduler bootstrap skipped: %s", e)
 
         try:
             whatsapp_alert_scheduler.start_scheduler_if_needed()
