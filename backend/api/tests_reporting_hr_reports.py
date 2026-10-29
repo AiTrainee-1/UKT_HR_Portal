@@ -39,6 +39,18 @@ from .reporting.export_xlsx import HEADER_ROW
 
 TODAY = date(2026, 9, 29)  # Tuesday
 RID = "employee-confo-details"
+# Every report in the HR Reports group: the group count and who may see which are checked against this list.
+HR_REPORT_IDS = {
+    RID,
+    "production-daily-punches",
+    "production-shift-rules",
+    "hr-salary-statement",
+    "hr-daily-movement-register",
+    "hr-punching-register",
+    "hr-strength-register",
+    "hr-attendance-register-summary",
+    "hr-time-card",
+}
 NA = "Not Assigned"
 LABELS = [
     "Employee Code",
@@ -243,7 +255,7 @@ class CatalogAndAccessTests(_World):
         body = self.client.get("/api/reports/catalog", **hdr(self.admin)).json()
         group = next(c for c in body["categories"] if c["id"] == "hr")
         self.assertEqual(group["label"], "HR Reports")
-        self.assertEqual(group["count"], 3)  # Employee Confo Details, Production Daily Punches, Production Shift Rules
+        self.assertEqual(group["count"], len(HR_REPORT_IDS))
         ids = [c["id"] for c in body["categories"]]
         self.assertEqual(ids.index("hr"), ids.index("employees") + 1)  # sits beside Employees
         report = next(r for r in body["reports"] if r["id"] == RID)
@@ -280,11 +292,12 @@ class CatalogAndAccessTests(_World):
             catalog = self.client.get("/api/reports/catalog", **hdr(who)).json()
             self.assertNotIn(RID, [r["id"] for r in catalog["reports"]], who.username)
             hr_group = [c for c in catalog["categories"] if c["id"] == "hr"]
-            if who is self.employees_user:  # may see the attendance-gated punches report, never the salary one
-                self.assertEqual([c["count"] for c in hr_group], [2], who.username)
+            if who is self.employees_user:  # sees the attendance-gated reports, never the salary or payroll ones
+                visible = sorted(HR_REPORT_IDS - {RID, "hr-salary-statement"})
+                self.assertEqual([c["count"] for c in hr_group], [len(visible)], who.username)
                 self.assertEqual(
                     sorted(r["id"] for r in catalog["reports"] if r["category"] == "hr"),
-                    sorted([PID, SID]),
+                    visible,
                     who.username,
                 )
             else:

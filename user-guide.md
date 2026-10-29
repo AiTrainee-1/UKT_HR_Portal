@@ -1284,6 +1284,16 @@ Each group is a card with: **In use**, **Used on** (Monday to Saturday, Sunday o
 - **Production Shift Rules** prints the saved table (every group's rows, the breaks, the grace and the start date) so it can be shown or exported.
 - Production attendance and payroll use the same calculation. **Manage Shifts → Production** no longer edits punch times: it shows a short read-only summary of these rules with an **Edit in Settings** link.
 
+**The company's printed registers (Reports -> HR Reports)**
+Six reports look like the company's existing printouts but use the HRMS design, and you can view them on screen, download them as Excel or as PDF:
+- **Time Card (Form 25 B)** - one card per employee for a period of up to 31 days (In, Lunch Out, Lunch In, Out, OT In / OT Out, Total Hrs, Total OT Hrs, Present, OT, with the totals and signature lines). The PDF prints one page per employee. Choose a department, designation or employees first: one run covers at most 200 employees. A day with no punches shows WO (weekly off), NH / FH / OH (holiday), the leave code, CL, CO, NA (not applicable) or NP (nobody has opened that day in Attendance yet). **License No** is left blank for writing by hand because the HRMS does not store it, and OT shows the announced overtime shifts, not "double wage".
+- **Daily Movement Register** - every punch of the day in time order (Time1 to Time12, with -I / -O), grouped by department.
+- **Punching Register (Employees Present List)** - who is present, with shift in-time, actual in-time and late hours. The **Nature of Emp** column (Hostel / Day scholar) shows a dash because the HRMS has no such field yet.
+- **Strength Register (Attendance Abstract)** - on-roll and present strength by department and designation, male and female, with SUB TOTAL and GRAND TOTAL. The **Date** filter uses its *To* date. The switch *One line per designation and gender* is on to match the printout.
+- **Attendance Register (Summary)** - Present, OT, Total and Leave Days per employee for a period, with department sub totals.
+- **Salary Statement** - the printed salary statement for a month (staff), with department sub totals. It needs the Payroll permission and shows Cleared / Pending.
+These reports only read what Attendance and Payroll have already saved; open the days in Attendance (or generate the payroll) first if a report says a day is *not processed*. Names in Tamil print as "?" in the PDF files (the PDF font has no Tamil letters); on screen and in Excel they show correctly.
+
 **Things HR should know**
 - **A night worker's 5:30 AM punch counts with the day the shift began.** Attendance pages, reports and payroll show it on the evening before (marked as next day) and do not count it again on the next date. It closes the night only when the evening's punches have an unmatched "in", the punch is at or before about 7:00 AM (the latest next-day leaving time in the tables plus 90 minutes), it is within **Night session length** of the "in", and neither day was entered by hand. A normal 8:30 AM arrival after a forgotten out-punch is **never** taken as a closing punch.
 - **A night day can change when the next morning's punch arrives.** Until the closing punch is received the evening shows only the part that is complete; it is worked out again when the punch comes in.

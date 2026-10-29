@@ -101,7 +101,7 @@ test("HR Reports holds Employee Confo Details: the requested columns, an employe
   await loginAsHr(page);
   await page.goto("/hr/reports");
   await expect(page.getByRole("heading", { name: "HR Reports", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: /HR Reports\s*3/ })).toBeVisible(); // the chip row
+  await expect(page.getByRole("link", { name: /HR Reports\s*9/ })).toBeVisible(); // the chip row
   await page.getByRole("link", { name: /Employee Confo Details/ }).click();
   await expect(page).toHaveURL(/report=employee-confo-details/);
 

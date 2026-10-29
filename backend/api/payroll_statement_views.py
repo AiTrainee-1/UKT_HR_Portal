@@ -364,20 +364,17 @@ def _branch_label(request: Request, scope) -> str | None:
     return (branch["name"] or branch["code"]) if branch else None
 
 
-def _statement_response(request: Request, kind: str) -> Response:
-    try:
-        scope = parse_scope(request, kind)
-    except ScopeError as exc:
-        return _error(str(exc), 400)
+def statement_rows(payrolls: list[Payroll], kind: str, info: dict) -> tuple[dict[int, dict], int, int]:
+    """({payroll id: the statement values of its row}, payrolls without a stored breakdown, payrolls whose NET differs from
+    E salary - Total Deduction) for `payrolls`, all of one `kind` and of the period `info` (payroll_insights.staff_period /
+    production_period). The one place a statement row is built: the Salary Statement endpoint and the Report Center's
+    Salary Statement both call it, so the two can never disagree."""
     staff = kind == KIND_STAFF
-    info = scope.period_info()
     start, end = parse_iso_date(info["start"]), parse_iso_date(info["end"])
-    payrolls = list(scope_payrolls(request, scope))
     employee_ids = [p.employee_id for p in payrolls]
     slips = slips_for(payrolls)
     balances = advance_balances_before(employee_ids, info["year"], info["month"])
-    cl = casual_leave_dates(employee_ids, scope.year, scope.month) if staff else {}
-    columns = staff_columns() if staff else production_columns()
+    cl = casual_leave_dates(employee_ids, info["year"], info["month"]) if staff else {}
 
     rows: dict[int, dict] = {}
     no_slip = mismatched = 0
@@ -396,12 +393,12 @@ def _statement_response(request: Request, kind: str) -> Response:
         if abs(dec(values["net"]) - (dec(values["eSalary"]) - dec(values["totalDeduction"]))) > Decimal("0.005"):
             mismatched += 1
         rows[p.id] = values
+    return rows, no_slip, mismatched
 
-    groups = _groups(payrolls, rows, columns)
-    every_row = [row for group in groups for row in group["rows"]]
-    company = SettingsResolver(()).base
-    from_label, to_label = ddmmyyyy(start), ddmmyyyy(end)
-    notes = _staff_notes() if staff else _production_notes()
+
+def statement_notes(kind: str, no_slip: int, mismatched: int) -> list[str]:
+    """The notes printed under a statement: how each column is worked out, plus what was found in the rows."""
+    notes = _staff_notes() if kind == KIND_STAFF else _production_notes()
     if no_slip:
         notes.append(
             f"{no_slip} payroll(s) have no stored day-by-day breakdown, so their day counts come from the payroll record "
@@ -412,6 +409,26 @@ def _statement_response(request: Request, kind: str) -> Response:
             f"For {mismatched} payroll(s) NET is the saved payroll figure, which differs from E salary - Total Deduction: "
             "the payroll was edited after it was generated (the saved net leaves overtime pay out)."
         )
+    return notes
+
+
+def _statement_response(request: Request, kind: str) -> Response:
+    try:
+        scope = parse_scope(request, kind)
+    except ScopeError as exc:
+        return _error(str(exc), 400)
+    staff = kind == KIND_STAFF
+    info = scope.period_info()
+    start, end = parse_iso_date(info["start"]), parse_iso_date(info["end"])
+    payrolls = list(scope_payrolls(request, scope))
+    columns = staff_columns() if staff else production_columns()
+    rows, no_slip, mismatched = statement_rows(payrolls, kind, info)
+
+    groups = _groups(payrolls, rows, columns)
+    every_row = [row for group in groups for row in group["rows"]]
+    company = SettingsResolver(()).base
+    from_label, to_label = ddmmyyyy(start), ddmmyyyy(end)
+    notes = statement_notes(kind, no_slip, mismatched)
     heading = "Salary Statement" if staff else "Production Salary Statement"
     paid = sum(1 for p in payrolls if p.status == Payroll.STATUS_PAID)
     return Response(

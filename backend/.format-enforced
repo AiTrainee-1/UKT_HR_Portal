@@ -136,6 +136,10 @@ api/reporting/definitions/gate_visitor_tea_overview.py
 api/reporting/definitions/gate_visitor_tea_tea.py
 api/reporting/definitions/gate_visitor_tea_visitors.py
 api/reporting/definitions/hr_reports.py
+api/reporting/definitions/hr_reports_punches.py
+api/reporting/definitions/hr_reports_salary_statement.py
+api/reporting/definitions/hr_reports_strength.py
+api/reporting/definitions/hr_reports_time_card.py
 api/reporting/definitions/md_attendance_exceptions.py
 api/reporting/definitions/md_attrition_hiring.py
 api/reporting/definitions/md_common.py
@@ -232,7 +236,11 @@ api/tests_reporting_finance.py
 api/tests_reporting_framework.py
 api/tests_reporting_gate_outpass.py
 api/tests_reporting_gate_visitor_tea.py
+api/tests_reporting_hr_punches.py
 api/tests_reporting_hr_reports.py
+api/tests_reporting_hr_salary_statement.py
+api/tests_reporting_hr_strength.py
+api/tests_reporting_hr_time_card.py
 api/tests_reporting_payroll_core.py
 api/tests_reporting_payroll_statutory.py
 api/tests_reporting_requests_leave.py
