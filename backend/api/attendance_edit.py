@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from .models import AttendanceDayRecord, AttendanceOverrideRequest, Employee
+from .models import AttendanceDayRecord, AttendanceLog, AttendanceOverrideRequest, BiometricDevice, Employee
 
 SHIFT_CHOICES = (Decimal("0.25"), Decimal("0.50"), Decimal("0.75"), Decimal("1.00"))
 COMPENSATION_KIND = "relaxation"  # the existing marker kind for a day topped up by compensation
@@ -172,6 +172,43 @@ def snapshot(record: AttendanceDayRecord) -> dict:
         "note": record.override_note,
         "source": record.source,
     }
+
+
+def _device_of(raw: str, names_by_serial: dict[str, str]) -> str | None:
+    """Which device or tool a punch came from, when its source tag says: the biometric device's name, or what uploaded it."""
+    raw = (raw or "").strip()
+    if raw.startswith("biometric:adms:"):
+        serial = raw.split(":", 2)[2]
+        return names_by_serial.get(serial) or f"device {serial}"
+    if raw == "biometric:excel-import":
+        return "Excel import"
+    if raw.startswith("biometric:"):
+        return raw[len("biometric:") :]
+    if raw == "manual:punch-view":
+        return "Punch View upload"
+    return None
+
+
+def day_punches(emp: Employee, d) -> list[dict]:
+    """Every punch the employee has on this calendar day, in time order, each with where it came from (the source tag, a plain
+    label, and the biometric device when it came from one)."""
+    from .geo_attendance_views import source_label
+
+    names = dict(BiometricDevice.objects.exclude(serial_number="").values_list("serial_number", "name"))
+    out = []
+    for log in AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time", "id"):
+        out.append(
+            {
+                "id": log.pk,
+                "time": log.punch_time.strftime("%H:%M:%S"),
+                "type": log.punch_type,
+                "source": log.source or "",
+                "sourceLabel": "Punch View" if log.source == "manual:punch-view" else source_label(log.source or ""),
+                "device": _device_of(log.source or "", names),
+                "recordedAt": log.created_at.isoformat() if log.created_at else None,
+            }
+        )
+    return out
 
 
 def hod_of(emp: Employee):

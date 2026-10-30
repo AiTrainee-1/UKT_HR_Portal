@@ -14,6 +14,7 @@ import { EmptyNote, IssueChip, SectionCard } from "@/components/payroll/kit/part
 import type { DayMark, PayrollDay, PayrollDetails, PayrollIssue, PayrollKind } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import type { Accent } from "./accent";
+import { DayAttendanceEdit } from "./DayAttendanceEdit";
 import { FilterSelect, SegmentedToggle, ToggleChip } from "./parts";
 import {
   CALENDAR_HEADERS,
@@ -284,6 +285,7 @@ export function AttendanceCard({
               {selectedDay && day && (
                 <DayPanel
                   day={day}
+                  employeeId={details.employee.id}
                   issues={dayIssues}
                   accent={accent}
                   onClose={() => onSelectDay(null)}
@@ -443,12 +445,14 @@ function CalendarDay({
 
 function DayPanel({
   day,
+  employeeId,
   issues,
   accent,
   onClose,
   onShowIssues,
 }: {
   day: PayrollDay;
+  employeeId: number;
   issues: PayrollIssue[];
   accent: Accent;
   onClose: () => void;
@@ -529,6 +533,7 @@ function DayPanel({
           Show it in the Issues list
         </button>
       )}
+      <DayAttendanceEdit employeeId={employeeId} date={day.date} />
     </div>
   );
 }

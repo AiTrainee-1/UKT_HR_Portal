@@ -5,12 +5,14 @@ have approved, and stays exactly as it was until then.
 Run via: python manage.py test api.tests_attendance_edit -v 2
 """
 
-from datetime import date
+from datetime import date, time
 from unittest import mock
 
 from . import attendance_edit as edit
 from .models import (
     AttendanceDayRecord,
+    AttendanceLog,
+    BiometricDevice,
     AttendanceOverrideRequest,
     Branch,
     DepartmentManager,
@@ -272,3 +274,41 @@ class QueueAndAccessTests(EditBase):
         pk = self.approve_both("present")
         self.assertEqual(self.hr_ok(pk, "rejected").status_code, 400)
         self.assertEqual(self.record().status, "present")
+
+
+class DayPunchesTests(EditBase):
+    def test_the_context_lists_every_punch_of_the_day_with_where_it_came_from(self):
+        BiometricDevice.objects.create(name="Head Office", host="10.0.0.1", serial_number="SN9")
+        for at, kind, source in (
+            (time(9, 3), "IN", "biometric:adms:SN9"),
+            (time(13, 0), "OUT", "biometric:HO"),
+            (time(13, 40), "IN", "manual:punch-view"),
+            (time(18, 5), "OUT", "geo:auto"),
+            (time(8, 0), "IN", "manual"),
+        ):
+            AttendanceLog.objects.create(employee=self.emp, date=DAY, punch_time=at, punch_type=kind, source=source)
+        AttendanceLog.objects.create(
+            employee=self.emp, date=date(2026, 9, 2), punch_time=time(9, 0), punch_type="IN", source="biometric:HO"
+        )  # another day: not listed
+        body = self.send("get", f"/api/attendance/edit-context?employeeId={self.emp.id}&date={DAY}").json()
+        rows = [(p["time"], p["type"], p["sourceLabel"], p["device"]) for p in body["punches"]]
+        self.assertEqual(
+            rows,
+            [
+                ("08:00:00", "IN", "HR Entry", None),
+                ("09:03:00", "IN", "Biometric", "Head Office"),
+                ("13:00:00", "OUT", "Biometric", "HO"),
+                ("13:40:00", "IN", "Punch View", "Punch View upload"),
+                ("18:05:00", "OUT", "Geo Punch", None),
+            ],
+        )
+        self.assertEqual(body["punches"][1]["source"], "biometric:adms:SN9")
+
+    def test_a_day_without_punches_has_an_empty_list_and_the_edit_flag_follows_the_role(self):
+        body = self.send("get", f"/api/attendance/edit-context?employeeId={self.emp.id}&date={DAY}").json()
+        self.assertEqual((body["punches"], body["canEdit"]), ([], True))
+        role = Role.objects.create(name="viewer2", permissions={"attendance": "view"})
+        viewer = HRUser.objects.create(username="viewer2", password_hash="x", role=role)
+        who = _bearer({"role": "hr", "hrUserId": viewer.id, "name": "Viewer"})
+        seen = self.send("get", f"/api/attendance/edit-context?employeeId={self.emp.id}&date={DAY}", None, who).json()
+        self.assertFalse(seen["canEdit"])

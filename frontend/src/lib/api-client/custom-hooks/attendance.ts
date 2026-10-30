@@ -1149,6 +1149,20 @@ export type AttendanceEditType = {
   compensation: boolean;
 };
 
+/** One punch of a day: its time, IN / OUT, and where it came from. */
+export type DayPunch = {
+  id: number;
+  time: string;
+  type: "IN" | "OUT";
+  /** The raw source tag ("biometric:adms:SN1", "manual", "geo:auto" ...). */
+  source: string;
+  /** A plain label: Biometric, Geo Punch, HR Entry, Missing Punch, Punch View ... */
+  sourceLabel: string;
+  /** The biometric device (or upload) the punch came from, when its tag says. */
+  device: string | null;
+  recordedAt: string | null;
+};
+
 export type AttendanceEditContext = {
   employee: {
     id: number;
@@ -1165,6 +1179,10 @@ export type AttendanceEditContext = {
   hod: { name: string; canApprove: boolean } | null;
   pipeline: { steps: { roles: string[]; mandatory: boolean; label: string }[]; path: string };
   types: AttendanceEditType[];
+  /** Every punch recorded on that calendar day, in time order. */
+  punches: DayPunch[];
+  /** Whether the signed-in role may propose attendance changes (Attendance: Edit). */
+  canEdit: boolean;
   requests: AttendanceOverrideRequest[];
 };
 

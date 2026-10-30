@@ -27,6 +27,7 @@ from .auth import get_hr_display_name, require_hr
 from .attendance_final import compute_day_record
 from .branch_scope import scope_to_branch
 from .clock import ist_today
+from .device_directory import can_edit_module
 from .models import AttendanceDayRecord, AttendanceOverrideRequest, Employee, Notification
 from .view_common import error_response as _error
 
@@ -81,6 +82,8 @@ def attendance_edit_context(request: Request) -> Response:
                 "path": approval.pipeline_text("HR", cfg.steps),
             },
             "types": edit.catalogue(),
+            "punches": edit.day_punches(emp, d),
+            "canEdit": can_edit_module(request, "attendance"),
             "requests": [_override_request_dict(r, cfg) for r in requests],
         }
     )
