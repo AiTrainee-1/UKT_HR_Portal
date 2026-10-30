@@ -407,7 +407,7 @@ describe("the days", () => {
 
   it("every kind has its own colour", () => {
     const swatches = DAY_KINDS.filter(
-      (k) => !["unpaid", "leave", "onleave", "holiday", "weekoff", "other"].includes(k),
+      (k) => !["unpaid", "leave", "onleave", "weekoff", "other", "holiday_worked"].includes(k),
     ).map((k) => DAY_KIND_META[k].swatch);
     expect(new Set(swatches).size).toBe(swatches.length);
     // the three leave kinds are one family: other leave
