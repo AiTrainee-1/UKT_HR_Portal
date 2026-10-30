@@ -5,6 +5,7 @@ Run:  DB_NAME=uktex_fix_geo python manage.py test api.tests_geo_tracking_views -
 
 import io
 from datetime import datetime, timedelta
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from openpyxl import load_workbook
@@ -787,7 +788,44 @@ class ExportTests(Journeys):
             self.assertIn(needle, text)
 
     def test_an_unknown_format_is_a_400(self):
-        self.assertEqual(self.export(format="pdf").status_code, 400)
+        self.assertEqual(self.export(format="docx").status_code, 400)
+
+    def test_the_pdf_is_the_journey_report_with_a_map_and_every_section(self):
+        from pypdf import PdfReader
+
+        with patch(
+            "api.geo_tracking.static_map._fetch", return_value=None
+        ):  # no tile server in a test: the grid fallback
+            r = self.export(format="pdf")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["Content-Type"], "application/pdf")
+        self.assertIn(f"journey-{self.track.pk}-G1-20261028.pdf", r["Content-Disposition"])
+        self.assertTrue(r.content.startswith(b"%PDF"))
+        reader = PdfReader(io.BytesIO(r.content))
+        text = " ".join(page.extract_text() for page in reader.pages)
+        for needle in (
+            "ON-DUTY JOURNEY REPORT",
+            "Asha Kumar",
+            "1. Journey map",
+            "2. Journey details",
+            "3. Route breakdown",
+            "4. Stop details",
+            "5. Attendance details",
+            "7. Location history",
+            "Stop 1",
+            "Page 1 of",
+        ):
+            self.assertIn(needle, text)
+        # the picture of the map is in it
+        self.assertTrue(any(page.images for page in reader.pages))
+
+    def test_the_pdf_is_scoped_and_audit_logged_like_the_other_exports(self):
+        self.assertEqual(self.export(self.hr_ho, self.other.pk, format="pdf").status_code, 404)
+        with patch("api.geo_tracking.static_map._fetch", return_value=None):
+            self.export(self.hr_ho, format="pdf")
+        entry = AuditLog.objects.get(module="geo_tracking", action="export")
+        self.assertEqual(entry.record_id, self.track.pk)
+        self.assertIn("PDF", entry.record_description)
 
     def test_a_spreadsheet_cannot_be_made_to_run_a_formula_from_a_destination(self):
         self.track.session.destination = '=HYPERLINK("http://evil")'

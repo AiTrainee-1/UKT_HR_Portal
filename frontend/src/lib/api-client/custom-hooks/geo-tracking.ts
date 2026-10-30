@@ -870,14 +870,15 @@ export function fileNameOf(disposition: string | null): string | null {
 }
 
 /**
- * Downloads the workbook of one journey (summary, segments, events sheets) with the person's own token, as a real "Save as".
+ * Downloads one journey with the person's own token, as a real "Save as": the workbook (summary, segments, events sheets), or with
+ * `pdf` the journey report (the route on a map picture, the route breakdown, stops, attendance details and location history).
  * The server sends .xlsx, or .csv when it has no spreadsheet library: the saved name follows what it sent. Returns the name.
  */
 export async function downloadJourneyExport(
   id: number,
   getToken: () => string | null,
   baseName: string,
-  format: "xlsx" | "csv" = "xlsx",
+  format: "xlsx" | "csv" | "pdf" = "xlsx",
 ): Promise<string> {
   const token = getToken();
   const response = await fetch(`${getApiOrigin()}${PATH}/journeys/${id}/export?format=${format}`, {

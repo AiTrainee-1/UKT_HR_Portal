@@ -10,6 +10,7 @@ import {
   CalendarDays,
   Download,
   Loader2,
+  FileText,
   MapPinned,
   RefreshCw,
   Wrench,
@@ -56,7 +57,7 @@ export default function JourneyDetail({ id, onBack }: { id: number; onBack: () =
   const [selected, setSelected] = useState<string | null>(null);
   const [fits, setFits] = useState(0);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<"xlsx" | "pdf" | null>(null);
 
   const detail = query.data;
   const active = detail?.track.status === "active";
@@ -77,13 +78,13 @@ export default function JourneyDetail({ id, onBack }: { id: number; onBack: () =
   // allowed to recompute: a role with View only can read a journey and export it, but not rebuild it
   const mayRebuild = canEdit(user, "geo_attendance");
 
-  const handleExport = async () => {
+  const handleExport = async (format: "xlsx" | "pdf" = "xlsx") => {
     if (!detail) return;
-    setExporting(true);
+    setExporting(format);
     try {
       const base = `journey-${detail.track.employeeCode || detail.track.employeeId}-${istDay(detail.track.startedAt) || id}`;
-      const name = await downloadJourneyExport(id, () => token, base);
-      toast({ title: "Journey exported", description: name });
+      const name = await downloadJourneyExport(id, () => token, base, format);
+      toast({ title: format === "pdf" ? "Journey report ready" : "Journey exported", description: name });
     } catch (err) {
       toast({
         title: "Export failed",
@@ -91,7 +92,7 @@ export default function JourneyDetail({ id, onBack }: { id: number; onBack: () =
         variant: "destructive",
       });
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
   };
 
@@ -175,12 +176,25 @@ export default function JourneyDetail({ id, onBack }: { id: number; onBack: () =
             variant="outline"
             size="sm"
             className="h-9 gap-1.5 text-xs"
-            onClick={() => void handleExport()}
-            disabled={exporting}
+            onClick={() => void handleExport("xlsx")}
+            disabled={exporting !== null}
             data-testid="journey-export"
             data-view-safe
           >
-            {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Export (Excel)
+            {exporting === "xlsx" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Export
+            (Excel)
+          </Button>
+          <Button
+            size="sm"
+            className="h-9 gap-1.5 bg-red-600 text-xs text-white hover:bg-red-700"
+            onClick={() => void handleExport("pdf")}
+            disabled={exporting !== null}
+            title="A PDF report of this journey: the route on a map, the route breakdown, every stop with its map, the attendance details and the location history"
+            data-testid="journey-export-pdf"
+            data-view-safe
+          >
+            {exporting === "pdf" ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}{" "}
+            {exporting === "pdf" ? "Preparing the report…" : "Export PDF"}
           </Button>
           {mayRebuild && (
             <Button

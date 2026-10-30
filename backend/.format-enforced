@@ -384,3 +384,6 @@ api/tests_geo_tracking_trail.py
 api/tests_geo_tracking_views.py
 api/payroll_calendar.py
 api/tests_payroll_calendar.py
+api/geo_tracking/static_map.py
+api/geo_tracking/journey_pdf.py
+api/tests_geo_static_map.py

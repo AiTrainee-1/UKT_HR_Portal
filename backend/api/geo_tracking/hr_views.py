@@ -4,7 +4,7 @@
   GET  /api/tracking/journeys/day-map                ?date=YYYY-MM-DD: every journey of one day with its route, in ONE answer (On-Duty Map)
   GET  /api/tracking/journeys/<id>/points           the raw fixes, cursor paged: ?after=<pointId>&limit=
   GET  /api/tracking/journeys/<id>/trail             every stored fix, compact, in time order (the whole route for the map)
-  GET  /api/tracking/journeys/<id>/export            ?format=xlsx (default) | csv: summary, segments, events
+  GET  /api/tracking/journeys/<id>/export            ?format=xlsx (default) | csv | pdf: summary, segments, events (pdf = the journey report with maps)
   POST /api/tracking/journeys/<id>/rebuild           recompute the segments and summary from the raw rows
   GET  /api/tracking/live                            the recording tracks with their latest position and state
   GET|PUT /api/tracking/settings                     the geo-tracking rules (permission settings.attendance)
@@ -502,19 +502,37 @@ def _tables(track: DutyTrack, segments, events) -> list[tuple[str, list[str], li
 @api_view(["GET"])
 @require_hr
 def journey_export(request: Request, pk: int) -> HttpResponse:
-    """GET /api/tracking/journeys/<id>/export?format=xlsx|csv : the summary, the segments (travel / stops / gaps) and the
-    events of one journey, times in Indian time."""
+    """GET /api/tracking/journeys/<id>/export?format=xlsx|csv|pdf : the summary, the segments (travel / stops / gaps) and the
+    events of one journey, times in Indian time. ``pdf`` is the On-Duty journey report: the route on a map picture, the route
+    breakdown, every stop with its own map, the attendance and approval details, and the location history (journey_pdf.py)."""
     track = _scoped_track(request, pk)
     if track is None:
         return _error("Journey not found", 404)
     fmt = (request.query_params.get("format") or "xlsx").lower()
-    if fmt not in ("xlsx", "csv"):
-        return _error("format must be xlsx or csv")
+    if fmt not in ("xlsx", "csv", "pdf"):
+        return _error("format must be xlsx, csv or pdf")
     segments = list(DutyTrackSegment.objects.filter(track=track).order_by("seq_no"))
     events = list(DutyTrackEvent.objects.filter(track=track).order_by("started_at", "id"))
-    tables = _tables(track, segments, events)
     stamp = track.started_at.astimezone(FACTORY_TZ).strftime("%Y%m%d")
     filename = f"journey-{track.pk}-{track.employee.employee_code}-{stamp}.{fmt}"
+    if fmt == "pdf":
+        from django.utils import timezone
+
+        from . import journey_pdf
+
+        trail = trail_payload(track, geo_settings.get())
+        body = journey_pdf.build(track, segments, events, trail, timezone.now())
+        response = HttpResponse(body, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        log_action(
+            request,
+            "export",
+            "geo_tracking",
+            record_id=track.pk,
+            description=f"Exported the journey report (PDF) of {_who(track)}",
+        )
+        return response
+    tables = _tables(track, segments, events)
     if fmt == "xlsx":
         from openpyxl import Workbook
         from openpyxl.styles import Font

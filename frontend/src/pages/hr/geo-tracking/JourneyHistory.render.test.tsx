@@ -654,6 +654,22 @@ describe("export and rebuild", () => {
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Journey exported" }));
   });
 
+  it("Export PDF downloads the journey report of this journey with the person's own token", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(new Blob(["%PDF"]), { status: 200, headers: { "content-type": "application/pdf" } }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    await openJourney(7);
+    expect(q("journey-export-pdf")!.hasAttribute("data-view-safe")).toBe(true); // a View Only login can export too
+    clickId("journey-export-pdf");
+    await waitFor(() => saved.length === 1, "the saved file");
+    expect(fetchMock).toHaveBeenCalledWith("/api/tracking/journeys/7/export?format=pdf", {
+      headers: { Authorization: "Bearer tok123" },
+    });
+    expect(saved[0]).toBe("journey-E2E001-2026-10-28.pdf");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Journey report ready" }));
+  });
+
   it("says why an export failed", async () => {
     globalThis.fetch = vi.fn(
       async () =>
