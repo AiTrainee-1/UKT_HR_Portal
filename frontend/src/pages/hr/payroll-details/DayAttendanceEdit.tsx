@@ -140,39 +140,47 @@ function PunchTimeline({ punches }: { punches: DayPunch[] }) {
           No punch was recorded for this day.
         </p>
       ) : (
-        <ol className="mt-4" aria-label="Punches in order">
+        // left to right in time order; a long day scrolls sideways inside the card
+        <ol className="-mx-1 mt-4 flex overflow-x-auto px-1 pb-2" aria-label="Punches in order">
           {punches.map((p, i) => {
             const Src = SOURCE_ICON[p.sourceLabel] ?? CircleDot;
-            const gap = i > 0 ? toMinutes(p.time) - toMinutes(punches[i - 1].time) : 0;
+            const isLast = i === punches.length - 1;
+            const gap = isLast ? 0 : toMinutes(punches[i + 1].time) - toMinutes(p.time);
             return (
-              <li key={p.id} data-testid="pd-day-punch" className="relative pl-7">
-                {i > 0 && (
-                  <p className="-mt-0.5 mb-1 ml-0.5 text-[11px] text-slate-400">
-                    {gap >= 1 ? `${span(gap)} later` : "same minute"}
-                  </p>
-                )}
-                {/* the line, and the dot of this punch */}
-                {i < punches.length - 1 && (
-                  <span className="absolute bottom-[-0.75rem] left-[0.6rem] top-5 w-px bg-slate-200" aria-hidden />
-                )}
-                <span
-                  className={cn(
-                    "absolute left-1 top-[0.15rem] h-3 w-3 rounded-full border-2 border-white shadow-sm ring-1",
-                    p.type === "IN" ? "bg-emerald-500 ring-emerald-300" : "bg-orange-500 ring-orange-300",
-                    i > 0 && "top-[1.45rem]",
-                  )}
-                  aria-hidden
-                />
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pb-3">
-                  <span className="font-mono text-base font-bold tabular-nums text-slate-900">{p.time}</span>
+              <li
+                key={p.id}
+                data-testid="pd-day-punch"
+                className={cn("shrink-0", isLast ? "min-w-[9rem]" : "min-w-[12.5rem]")}
+              >
+                {/* the dot of this punch, and the line to the next with the time between them */}
+                <div className="flex items-center">
                   <span
                     className={cn(
-                      "rounded-md px-1.5 py-0.5 text-[11px] font-bold",
-                      p.type === "IN" ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700",
+                      "h-3 w-3 shrink-0 rounded-full border-2 border-white shadow-sm ring-1",
+                      p.type === "IN" ? "bg-emerald-500 ring-emerald-300" : "bg-orange-500 ring-orange-300",
                     )}
-                  >
-                    {p.type === "IN" ? "In" : "Out"}
-                  </span>
+                    aria-hidden
+                  />
+                  {!isLast && (
+                    <span className="relative mx-1 h-px flex-1 bg-slate-200" aria-hidden>
+                      <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap bg-white px-1.5 text-[11px] text-slate-400">
+                        {gap >= 1 ? `${span(gap)} later` : "same minute"}
+                      </span>
+                    </span>
+                  )}
+                </div>
+                <div className="mt-2 space-y-1.5 pr-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-base font-bold tabular-nums text-slate-900">{p.time}</span>
+                    <span
+                      className={cn(
+                        "rounded-md px-1.5 py-0.5 text-[11px] font-bold",
+                        p.type === "IN" ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700",
+                      )}
+                    >
+                      {p.type === "IN" ? "In" : "Out"}
+                    </span>
+                  </div>
                   <span
                     className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-700"
                     title={p.source}
@@ -209,7 +217,7 @@ function ApprovalRoute({ hod, employeeName }: { hod: AttendanceEditContext["hod"
         </div>
       </header>
 
-      <ol className="mt-4 space-y-0">
+      <ol className="mt-4 grid gap-y-5 sm:grid-cols-2 lg:grid-cols-[1fr_1.5fr_1fr_1fr]">
         <RouteStep icon={PenLine} tone="done" last={false}>
           <p className="text-sm font-semibold text-slate-800">You propose it</p>
           <p className="text-xs text-slate-500">With the reason you write below.</p>
@@ -301,14 +309,15 @@ function RouteStep({
   children: ReactNode;
 }) {
   return (
-    <li className="relative flex gap-3 pb-4 last:pb-0">
-      {!last && <span className="absolute bottom-0 left-[0.9rem] top-8 w-px bg-slate-200" aria-hidden />}
-      <span
-        className={cn("z-[1] flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-4", ROUTE_TONE[tone])}
-      >
-        <Ico size={13} />
-      </span>
-      <div className="min-w-0 flex-1 pt-0.5">{children}</div>
+    <li className="min-w-0 pr-4">
+      {/* the step's mark, and the line on to the next step (a wide screen only: narrower ones wrap into rows) */}
+      <div className="flex items-center">
+        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-4", ROUTE_TONE[tone])}>
+          <Ico size={13} />
+        </span>
+        {!last && <span className="ml-2 hidden h-px flex-1 bg-slate-200 lg:block" aria-hidden />}
+      </div>
+      <div className="mt-2.5 min-w-0">{children}</div>
     </li>
   );
 }
@@ -482,7 +491,7 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
 
   return (
     <div className="mt-4 space-y-4 border-t border-slate-200 pt-4" data-testid="pd-day-edit">
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="space-y-4">
         <PunchTimeline punches={data.punches} />
         <ApprovalRoute hod={data.hod} employeeName={data.employee.name} />
       </div>
