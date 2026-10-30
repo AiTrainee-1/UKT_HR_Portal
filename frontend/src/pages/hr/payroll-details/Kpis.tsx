@@ -16,8 +16,9 @@ import type { Accent } from "./accent";
 import { netBridge, severityCounts, workTile } from "./logic";
 
 /**
- * The dashboard of one payroll: the money (gross, deductions, net payable), the days or shifts it paid for, how many
- * issues were detected (split by severity). The Issues tile jumps to its section.
+ * The dashboard of one payroll, left to right: the employee's monthly salary (staff), the gross earned for the days paid, what
+ * one day (or shift) pays, the deductions, the days or shifts worked, and how many issues were detected (split by severity). The
+ * Issues tile jumps to its section. The net payable is the last figure of the gross-to-net bar under the tiles.
  */
 export function KpiStrip({
   details,
@@ -39,6 +40,7 @@ export function KpiStrip({
   const work = workTile(details, kind);
   // What one day (staff) or one shift (production) pays: the salary the month was worked out from, shown on its own
   const perDay = perDayTile(details, kind, work.outOf);
+  const monthly = kind === "staff" ? money.monthlySalary : null;
   const deductionShare = money.gross > 0 ? Math.round((money.deductions / money.gross) * 1000) / 10 : 0;
 
   const issuesTone = degraded
@@ -62,15 +64,29 @@ export function KpiStrip({
 
   return (
     <div
-      className={cn("grid grid-cols-2 gap-3 sm:grid-cols-3", perDay ? "xl:grid-cols-6" : "xl:grid-cols-5")}
+      className={cn(
+        "grid grid-cols-2 gap-3 sm:grid-cols-3",
+        [monthly, perDay].filter(Boolean).length === 2 ? "xl:grid-cols-6" : "xl:grid-cols-5",
+      )}
       data-testid="pd-kpis"
     >
+      {monthly ? (
+        <KpiTile
+          label="Monthly salary"
+          value={inr(monthly)}
+          sub="the full salary for the month"
+          icon={Wallet}
+          tone={cn(accent.kpi, accent.tileRing)}
+          className="col-span-2 sm:col-span-1"
+          testId="pd-kpi-salary"
+        />
+      ) : null}
       <KpiTile
         label="Gross"
         value={inr(money.gross)}
         sub={
-          kind === "staff" && money.monthlySalary
-            ? `of a ${inr(money.monthlySalary)} monthly salary`
+          kind === "staff" && work.outOf
+            ? `earned for ${work.value} of ${work.outOf} working days`
             : kind === "production" && details.employee.salaryPerShift
               ? `at ${inr(details.employee.salaryPerShift)} a shift`
               : undefined
@@ -96,15 +112,6 @@ export function KpiStrip({
         icon={MinusCircle}
         tone="bg-red-50 text-red-800"
         testId="pd-kpi-deductions"
-      />
-      <KpiTile
-        label="Net payable"
-        value={inr(money.net)}
-        sub={details.status === "paid" ? "Cleared" : "Pending"}
-        icon={Wallet}
-        tone={cn(accent.kpi, accent.tileRing)}
-        className="order-first col-span-2 sm:order-none sm:col-span-1 [&_[data-testid=pd-kpi-net-value]]:text-3xl sm:[&_[data-testid=pd-kpi-net-value]]:text-2xl"
-        testId="pd-kpi-net"
       />
       <KpiTile
         label={work.label}

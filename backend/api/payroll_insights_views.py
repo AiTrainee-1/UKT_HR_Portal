@@ -30,6 +30,7 @@ from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .models import Payroll
 from .pf_esi import d2
+from .payroll_calendar import calendar_extras
 from .payroll_day_marks import attach_marks
 from .payroll_insights import (
     KIND_LEGACY,
@@ -51,6 +52,7 @@ from .payroll_insights import (
     normalized_days,
     period_label,
     period_of_payroll,
+    salary_breakup,
     production_period,
     slip_key,
     slips_for,
@@ -481,6 +483,22 @@ def _details_response(request: Request, pk: int, wanted: str) -> Response:
     # the lists do), so the page can find its way back to the right cycle's list.
     cycle = None if staff else payroll.pay_cycle or (bd or {}).get("payCycle") or emp.production_pay_cycle
     context_kind = KIND_PRODUCTION if wanted == KIND_PRODUCTION else KIND_STAFF
+    period = period_of_payroll(payroll, cycle)
+    # ?live=1 is the Sync button of the attendance card: the listed days are read again from the attendance engine as it
+    # stands now (so a HOD / HR approval given after the payroll was generated shows). Nothing is written and the
+    # payroll's own money figures stay as generated.
+    live = str(request.query_params.get("live") or "").lower() in ("1", "true", "yes")
+    calendar_days, off_days, sync = (
+        calendar_extras(
+            emp,
+            date.fromisoformat(period["start"]),
+            date.fromisoformat(period["end"]),
+            attach_marks(emp.id, normalized_days(bd, issues)),
+            live=live,
+        )
+        if kind != KIND_LEGACY and bd is not None
+        else ([], [], {"live": False, "syncedAt": None, "changedDays": 0})
+    )
     return Response(
         {
             "payrollId": payroll.id,
@@ -490,7 +508,7 @@ def _details_response(request: Request, pk: int, wanted: str) -> Response:
             "status": payroll.status,
             "generatedAt": iso_dt(payroll.updated_at),
             "firstGeneratedAt": iso_dt(payroll.created_at),
-            "period": period_of_payroll(payroll, cycle),
+            "period": period,
             "employee": employee_json(emp),
             "money": {
                 "gross": money(payroll.gross_salary),
@@ -502,12 +520,15 @@ def _details_response(request: Request, pk: int, wanted: str) -> Response:
                 "dailyRate": money(earn["dailyRate"]) if staff and "dailyRate" in earn else None,
             },
             "summary": _numeric_summary(bd, payroll),
+            "salary": salary_breakup(emp, payroll, bd) if staff else None,
             "earnings": earnings,
             "deductions": deductions,
             "rules": _rule_groups_of(payroll, kind, bd, resolver),
             "issues": issues,
             "issueCounts": issue_counts(issues),
-            "days": attach_marks(emp.id, normalized_days(bd, issues)),
+            "days": calendar_days,
+            "offDays": off_days,
+            "calendarSync": sync,
             "advances": _advances_of(bd),
             "notes": "\n".join(notes) or None,
             "history": _history(payroll, kind) if kind != KIND_LEGACY else [],

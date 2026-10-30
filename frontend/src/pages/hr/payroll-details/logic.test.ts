@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { PayrollDay, PayrollIssue } from "@/lib/api-client/custom-hooks";
+import type { DayKind } from "./logic";
 import { cleanDetails, legacyDetails, noBreakdownDetails, productionDetails, staffDetails } from "./fixtures";
 import {
   CALENDAR_HEADERS,
   DAY_KINDS,
+  DAY_KIND_META,
   MARK_FILL_ORDER,
   MARK_KEYS,
   MARK_META,
@@ -351,14 +353,16 @@ describe("the days", () => {
     const kind = (over: Partial<PayrollDay>) => dayKind(day(over));
     expect(kind({})).toBe("present");
     expect(kind({ flags: ["late_in"] })).toBe("late");
-    expect(kind({ flags: ["early_out"] })).toBe("present");
+    expect(kind({ flags: ["early_out"] })).toBe("early");
+    expect(kind({ isLate: true })).toBe("late");
+    expect(kind({ isEarlyOut: true })).toBe("early");
     expect(kind({ flags: ["missing_punch"] })).toBe("present");
     expect(kind({ flags: ["late_in", "half_day"] })).toBe("half");
     expect(kind({ status: "half_shift" })).toBe("half");
     expect(kind({ status: "absent", flags: ["absent"] })).toBe("absent");
     expect(kind({ status: "unpaid_leave" })).toBe("unpaid");
     expect(kind({ status: "paid_leave" })).toBe("leave");
-    expect(kind({ status: "casual_leave" })).toBe("leave");
+    expect(kind({ status: "casual_leave" })).toBe("casual");
     // production calls a leave day on_leave, and it is not paid: its own kind
     expect(kind({ status: "on_leave" })).toBe("onleave");
     // staff payroll records a half day as a present day at half a shift
@@ -367,17 +371,55 @@ describe("the days", () => {
     expect(kind({ shifts: 0.75 })).toBe("present");
     expect(kind({ status: "absent", shifts: 0.5 })).toBe("absent");
     expect(kind({ status: "holiday" })).toBe("holiday");
-    expect(kind({ status: "week_off" })).toBe("holiday");
+    expect(kind({ status: "week_off" })).toBe("weekoff");
     expect(kind({ status: "PRESENT" })).toBe("present");
     expect(kind({ status: "something new" })).toBe("other");
-    expect(DAY_KINDS).toHaveLength(9);
+    expect(DAY_KINDS).toHaveLength(19);
+    expect(new Set(DAY_KINDS).size).toBe(19);
+  });
+
+  it("tells Casual Leave, compensations, On-Duty, Sundays and holidays apart", () => {
+    const kind = (over: Partial<PayrollDay>) => dayKind(day(over));
+    // an approved Casual Leave day is stored as a present day: only the flag tells it apart
+    expect(kind({ casualLeave: true })).toBe("casual");
+    expect(kind({ compensationType: "compensation" })).toBe("comp");
+    expect(kind({ compensationType: "sunday_compensation" })).toBe("sunday_comp");
+    expect(kind({ compensationType: "ot_compensation" })).toBe("ot_comp");
+    // On-Duty only counts once HR approved it and the punches are there
+    const od = (state: "verified" | "pending" | "no_punches" | "punches_pending" | "rejected") => ({
+      state,
+      label: "x",
+      destination: "",
+    });
+    expect(kind({ onDuty: od("verified") })).toBe("onduty");
+    for (const state of ["pending", "no_punches", "punches_pending", "rejected"] as const) {
+      expect(kind({ status: "absent", shifts: 0, onDuty: od(state) }), state).toBe("onduty_pending");
+    }
+    expect(kind({ status: "absent", shifts: 0 })).toBe("absent");
+    // a Sunday nobody worked is the quiet weekly off; a named holiday is a holiday; a worked Sunday is its attendance
+    expect(kind({ status: "holiday", isSunday: true })).toBe("weekoff");
+    expect(kind({ status: "holiday", isSunday: true, holidayName: "Deepavali" })).toBe("holiday");
+    expect(kind({ status: "present", isSunday: true })).toBe("present");
+    // worked on a Sunday or a holiday: the real attendance, in the gradient colours of a worked day off
+    expect(kind({ status: "present", isSunday: true, workedOffDay: true })).toBe("sunday_worked");
+    expect(kind({ status: "present", workedOffDay: true, holidayName: "Deepavali" })).toBe("holiday_worked");
+  });
+
+  it("every kind has its own colour", () => {
+    const swatches = DAY_KINDS.filter(
+      (k) => !["unpaid", "leave", "onleave", "holiday", "weekoff", "other"].includes(k),
+    ).map((k) => DAY_KIND_META[k].swatch);
+    expect(new Set(swatches).size).toBe(swatches.length);
+    // the three leave kinds are one family: other leave
+    expect(new Set(["unpaid", "leave", "onleave"].map((k) => DAY_KIND_META[k as DayKind].swatch)).size).toBe(1);
   });
 
   it("counts the October fixture's days by kind, and they add up to the month", () => {
     const counts = kindCounts(staff.days);
-    expect(counts).toEqual({
-      present: 18,
+    expect(counts).toMatchObject({
+      present: 17,
       late: 3,
+      early: 1,
       half: 1,
       absent: 1,
       unpaid: 1,
@@ -394,10 +436,8 @@ describe("the days", () => {
   it("filters by kind and by flagged only", () => {
     expect(filterDays(staff.days, { kind: "late", flaggedOnly: false })).toHaveLength(3);
     expect(filterDays(staff.days, { kind: "all", flaggedOnly: true })).toHaveLength(8);
-    expect(filterDays(staff.days, { kind: "present", flaggedOnly: true }).map((d) => d.date)).toEqual([
-      "2026-10-20",
-      "2026-10-27",
-    ]);
+    expect(filterDays(staff.days, { kind: "present", flaggedOnly: true }).map((d) => d.date)).toEqual(["2026-10-27"]);
+    expect(filterDays(staff.days, { kind: "early", flaggedOnly: true }).map((d) => d.date)).toEqual(["2026-10-20"]);
     expect(filterDays(staff.days, { kind: "all", flaggedOnly: false })).toHaveLength(26);
     expect(filterDays(staff.days, { kind: "holiday", flaggedOnly: true })).toEqual([]);
   });
@@ -475,9 +515,10 @@ describe("the attendance categories of a day", () => {
 
   it("leave the status legend counting the cells that really show that status", () => {
     // 26 days: 5 plain present days were filled by a category, and the 3 late days all are
-    expect(fillKindCounts(staff.days)).toEqual({
-      present: 13,
+    expect(fillKindCounts(staff.days)).toMatchObject({
+      present: 12,
       late: 0,
+      early: 1,
       half: 1,
       absent: 1,
       unpaid: 1,
@@ -487,7 +528,7 @@ describe("the attendance categories of a day", () => {
       other: 0,
     });
     // the table counts every day of a status
-    expect(kindCounts(staff.days).present).toBe(18);
+    expect(kindCounts(staff.days).present).toBe(17);
   });
 
   it("filter the days by category, and by the status a cell shows", () => {
@@ -501,8 +542,8 @@ describe("the attendance categories of a day", () => {
     expect(dates({ kind: "all", flaggedOnly: false, mark: "missed_punch" })).toEqual(["2026-10-27"]);
     expect(dates({ kind: "all", flaggedOnly: false, mark: "all" })).toHaveLength(26);
     // "present" in the table is every present day; on the calendar only the cells that show the present colour
-    expect(dates({ kind: "present", flaggedOnly: false })).toHaveLength(18);
-    expect(dates({ kind: "present", flaggedOnly: false, plainOnly: true })).toHaveLength(13);
+    expect(dates({ kind: "present", flaggedOnly: false })).toHaveLength(17);
+    expect(dates({ kind: "present", flaggedOnly: false, plainOnly: true })).toHaveLength(12);
     // both filters have to pass
     expect(dates({ kind: "all", flaggedOnly: true, mark: "late" })).toEqual(["2026-10-13", "2026-10-14", "2026-10-29"]);
   });

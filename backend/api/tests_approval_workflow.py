@@ -439,6 +439,34 @@ class ConfigApiTests(Base):
         self.assertEqual(ApprovalWorkflowConfig.objects.count(), 0)
         self.assertEqual(self.send("delete", "/api/approval-workflows/nonsense").status_code, 404)
 
+    def test_on_duty_always_needs_hr_itself_to_approve(self):
+        """An On-Duty day only counts as attendance once HR approved the request (and the punches): no pipeline may let the
+        Department Head, or an "HOD or HR" step, finish it without HR."""
+        for steps in (
+            [{"roles": ["hod"]}],
+            [{"roles": ["hod", "hr"]}],  # "HOD or HR": the Department Head alone could finish it
+            [{"roles": ["hr"], "mandatory": False}, {"roles": ["hod"]}],  # HR optional: skippable
+        ):
+            r = self.send("put", "/api/approval-workflows/on_duty", {"steps": steps})
+            self.assertEqual(r.status_code, 400, steps)
+            self.assertIn("HR must approve", r.json()["error"])
+        self.assertEqual(ApprovalWorkflowConfig.objects.count(), 0)
+        # HR first then the Department Head, and the default, both keep HR in
+        for steps in (
+            [{"roles": ["hr"]}, {"roles": ["hod"]}],
+            [{"roles": ["hod"], "mandatory": False}, {"roles": ["hr"]}],
+        ):
+            self.assertEqual(
+                self.send("put", "/api/approval-workflows/on_duty", {"steps": steps}).status_code, 200, steps
+            )
+
+    def test_an_on_duty_pipeline_saved_without_hr_falls_back_to_the_default(self):
+        ApprovalWorkflowConfig.objects.create(
+            key="on_duty", enabled=True, steps=[{"roles": ["hod"], "mandatory": True}]
+        )
+        approval.clear_cache()
+        self.assertEqual(approval.get_config("on_duty").steps, approval.definition("on_duty").default_steps)
+
     def test_warnings_tell_hr_what_a_pipeline_would_mean(self):
         r = self.send("put", "/api/approval-workflows/leave", {"steps": [{"roles": ["hod"]}]}).json()
         joined = " ".join(r["warnings"])

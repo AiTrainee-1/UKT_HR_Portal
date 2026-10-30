@@ -30,6 +30,22 @@ export function usePayrollDetailsView(kind: PayrollKind, id: number | null) {
   });
 }
 
+/**
+ * The calendar's days as the attendance records stand NOW: the same details, asked with ?live=1. A payroll stores the days as they
+ * were when it was generated, so a Casual Leave or a holiday added since (or an approval given since) is missing from them; this
+ * is read as soon as the page opens, and again whenever the Sync button is pressed (`refetch`). The payroll's own figures are
+ * untouched either way. `enabled` is false for a payroll with no days to show.
+ */
+export function useLiveCalendar(kind: PayrollKind, id: number | null, enabled = true) {
+  return useQuery<PayrollDetails>({
+    queryKey: [...getPayrollDetailsQueryKey(kind, id ?? 0), "live"],
+    queryFn: () => customFetch<PayrollDetails>(`${payrollApiBase(kind)}/${id}/details?live=1`),
+    enabled: enabled && !!id,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
 /** Every payroll screen reads from a query whose key starts with this: marking one paid refreshes all of them. */
 export const isPayrollQuery = (queryKey: readonly unknown[]): boolean =>
   typeof queryKey[0] === "string" && queryKey[0].startsWith("/api/payroll");

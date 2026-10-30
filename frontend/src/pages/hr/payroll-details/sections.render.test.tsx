@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PayrollDay, PayrollDetails } from "@/lib/api-client/custom-hooks";
 import { productionDetails, staffDetails } from "./fixtures";
 import {
   all,
@@ -294,9 +295,13 @@ describe("the days of the period", () => {
     await openStaff();
     const cells = [...document.body.querySelectorAll<HTMLElement>('[data-testid^="pd-day-2026-"]')];
     expect(cells).toHaveLength(31);
-    const firstWeek = [...cell("2026-10-01").parentElement!.children].map(
-      (c) => c.getAttribute("data-testid") ?? "blank",
-    );
+    // each day sits in a bordered box of its own; the week row starts with a gutter naming the week
+    const weekRow = cell("2026-10-01").closest("[data-week]")!;
+    expect(weekRow.getAttribute("data-week")).toBe("1");
+    expect(weekRow.firstElementChild!.textContent).toBe("W1");
+    const firstWeek = [...weekRow.children]
+      .slice(1)
+      .map((c) => c.firstElementChild!.getAttribute("data-testid") ?? "blank");
     expect(firstWeek).toEqual([
       "blank",
       "blank",
@@ -316,7 +321,7 @@ describe("the days of the period", () => {
       "2026-10-07": "unpaid",
       "2026-10-08": "leave",
       "2026-10-13": "late",
-      "2026-10-20": "present",
+      "2026-10-20": "early",
       "2026-10-22": "half",
     };
     for (const [date, kind] of Object.entries(kinds)) expect(cell(date).dataset.kind, date).toBe(kind);
@@ -335,7 +340,7 @@ describe("the days of the period", () => {
     expect(text(late)).toContain("09:42–18:07");
     expect(late.querySelectorAll("[data-mark]")).toHaveLength(1); // one category, one tag
     expect(late.getAttribute("aria-label")).toBe(
-      "Tue, 13 Oct 2026: Late. first in 09:42, last out 18:07. Late attendance. flagged: Late arrival",
+      "Tue, 13 Oct 2026: Late In. first in 09:42, last out 18:07. flagged: Late arrival",
     );
     expect(cell("2026-10-22").getAttribute("aria-label")).toContain("Half day");
     expect(text(cell("2026-10-22"))).toContain("0.5 shifts");
@@ -353,16 +358,19 @@ describe("the days of the period", () => {
     await openStaff();
     const legend = (k: string) => text(q(`pd-legend-${k}`));
     // a day with a late, permission, On-Duty or missed-punch category is filled in that category's colour, so it is counted
-    // under the category: 18 present days, 5 of them filled by a category; the 3 late days all are
-    expect(legend("present")).toBe("Present13");
-    expect(q("pd-legend-late")).toBeNull();
+    // under the category: 17 present days, 5 of them filled by a category; the 3 late days all are
+    expect(legend("present")).toBe("Present12");
+    expect(legend("late")).toBe("Late In0");
+    expect(legend("early")).toBe("Early Out1");
     expect(legend("half")).toBe("Half day1");
     expect(legend("absent")).toBe("Absent1");
     expect(legend("unpaid")).toBe("Unpaid leave1");
     expect(legend("leave")).toBe("Paid leave2");
-    expect(q("pd-legend-holiday")).toBeNull(); // staff payroll has no day recorded as a holiday
-    expect(q("pd-legend-onleave")).toBeNull();
-    expect(q("pd-legend-other")).toBeNull();
+    // every kind of day is in the key, in a colour of its own; one nothing in the period used is greyed out
+    for (const k of ["holiday", "onleave", "casual", "onduty", "comp", "sunday_comp", "ot_comp", "weekoff", "other"]) {
+      expect((must(`pd-legend-${k}`) as HTMLButtonElement).disabled, k).toBe(true);
+    }
+    expect(legend("casual")).toBe("Casual Leave0");
     // the dashed cells are explained, with how many there are (not a filter: there is nothing to filter on)
     expect(text(q("pd-legend-norecord"))).toBe("Not a working day5");
     expect(q("pd-legend-norecord")!.tagName).toBe("SPAN");
@@ -408,16 +416,17 @@ describe("the days of the period", () => {
     expect(text(cell("2026-10-14"))).toContain("Permission");
     // a day that was not worked, or cut to half, keeps the colour of that: it is what the pay follows
     expect(fill("2026-10-22")).toBeUndefined();
-    expect(cell("2026-10-22").className).toContain("bg-orange-50");
+    expect(cell("2026-10-22").className).toContain("bg-orange-100");
     expect(tags("2026-10-22")).toEqual(["permission"]);
-    expect(cell("2026-10-06").className).toContain("bg-red-50");
+    expect(cell("2026-10-06").className).toContain("bg-red-100");
     expect(cell("2026-10-16").getAttribute("aria-label")).toContain("On-Duty, On-Duty punch");
   });
 
   it("the attendance-types legend names all six, counts the days of each and doubles as a filter", async () => {
     await openStaff();
     const legend = (k: string) => text(q(`pd-mark-legend-${k}`));
-    expect(legend("late")).toBe("Late attendance3");
+    // Late In has its own colour among the day types, so the categories left here are the other five
+    expect(q("pd-mark-legend-late")).toBeNull();
     expect(legend("permission")).toBe("Permission3");
     expect(legend("excess_permission")).toBe("Excess permission1");
     expect(legend("on_duty")).toBe("On-Duty2");
@@ -439,7 +448,7 @@ describe("the days of the period", () => {
   it("a category nothing in the period used is listed too, greyed out", async () => {
     world.staff.set(101, staffDetails({ days: staffDetails().days.map((d) => ({ ...d, marks: [], flags: [] })) }));
     await openStaff();
-    for (const key of ["late", "permission", "excess_permission", "on_duty", "on_duty_punch", "missed_punch"]) {
+    for (const key of ["permission", "excess_permission", "on_duty", "on_duty_punch", "missed_punch"]) {
       expect(q(`pd-mark-legend-${key}`), key).not.toBeNull();
     }
     expect((must("pd-mark-legend-on_duty") as HTMLButtonElement).disabled).toBe(true);
@@ -532,7 +541,7 @@ describe("the days of the period", () => {
     expect(rows).toHaveLength(26); // the working days, as many as payroll recorded
     expect(q("pd-row-2026-10-04")).toBeNull(); // a Sunday has no entry
     const late = [...must("pd-row-2026-10-13").querySelectorAll("td")].map(text);
-    expect(late.slice(0, 7)).toEqual(["13 Oct 2026", "Tue", "Late", "09:42", "18:07", "1", "Late arrival"]);
+    expect(late.slice(0, 7)).toEqual(["13 Oct 2026", "Tue", "Late In", "09:42", "18:07", "1", "Late arrival"]);
     expect(late[7]).toBe("Morning late-in: first punch 09:42 is after the 09:10 deadline");
     const half = [...must("pd-row-2026-10-22").querySelectorAll("td")].map(text);
     expect(half[2]).toBe("Half day"); // a present day at half a shift, with a half-day issue on it
@@ -551,19 +560,20 @@ describe("the days of the period", () => {
     const select = must("pd-status-filter") as HTMLSelectElement;
     expect([...select.options].map((o) => o.textContent)).toEqual([
       "All statuses (26)",
-      "Present (18)",
-      "Late (3)",
+      "Present (17)",
+      "Late In (3)",
+      "Early Out (1)",
       "Half day (1)",
-      "Absent (1)",
       "Unpaid leave (1)",
       "Paid leave (2)",
+      "Absent (1)",
     ]);
     choose(select, "late");
     expect(document.body.querySelectorAll('tr[data-testid^="pd-row-"]')).toHaveLength(3);
     choose(select, "present");
     expect(
       [...document.body.querySelectorAll<HTMLElement>('tr[data-testid^="pd-row-"]')].map((r) => r.dataset.testid),
-    ).toEqual(["pd-row-2026-10-20", "pd-row-2026-10-27"]);
+    ).toEqual(["pd-row-2026-10-27"]);
     choose(select, "leave"); // the two days of paid leave have nothing flagged on them
     expect(text(q("pd-days-empty"))).toContain("No day matches these filters");
     choose(select, "all");
@@ -576,7 +586,9 @@ describe("the days of the period", () => {
   it("a production period is its week of shifts", async () => {
     await openProduction();
     expect(text(q("pd-section-attendance"))).toContain("Shifts in this period");
-    const week = [...must("pd-day-2026-10-05").parentElement!.children].map((c) => c.getAttribute("data-testid"));
+    const week = [...must("pd-day-2026-10-05").closest("[data-week]")!.children]
+      .slice(1)
+      .map((c) => c.firstElementChild!.getAttribute("data-testid"));
     expect(week).toEqual([
       "pd-day-2026-10-05",
       "pd-day-2026-10-06",
@@ -631,7 +643,7 @@ describe("the days of the period", () => {
       const ot = cell("2026-10-13");
       expect(ot.querySelector('[data-testid="compensation-symbol-ot_allowance"]')?.textContent).toBe("OT");
       expect(ot.getAttribute("aria-label")).toBe(
-        "Tue, 13 Oct 2026: Late. OT allowance used (30 min): Arrived 09:42, inside the 30 min allowance. first in 09:42, last out 18:07. Late attendance. flagged: Late arrival",
+        "Tue, 13 Oct 2026: Late In. OT allowance used (30 min): Arrived 09:42, inside the 30 min allowance. first in 09:42, last out 18:07. flagged: Late arrival",
       );
       expect(cell("2026-10-22").querySelector('[data-testid="compensation-symbol-relaxation"]')?.textContent).toBe(
         "RX",
@@ -669,6 +681,180 @@ describe("the days of the period", () => {
       await openStaff();
       expect(document.body.querySelector('[data-testid^="compensation-"]')).toBeNull();
     });
+  });
+});
+
+describe("the calendar's kinds of day, Sync and the salary split-up", () => {
+  const cell = (date: string) => must(`pd-day-${date}`);
+  const withDays = (over: Record<string, Partial<PayrollDay>>, extra: Partial<PayrollDetails> = {}) => {
+    const base = staffDetails();
+    world.staff.set(
+      101,
+      staffDetails({
+        ...extra,
+        days: base.days.map((d) => (over[d.date] ? { ...d, ...over[d.date] } : d)),
+      }),
+    );
+  };
+
+  it("shows a holiday by its own name, a Sunday as the weekly off, and what was worked on a Sunday", async () => {
+    world.staff.set(
+      101,
+      staffDetails({
+        offDays: [
+          { date: "2026-10-02", kind: "holiday", name: "Gandhi Jayanti", attendance: null },
+          { date: "2026-10-04", kind: "weekly_off", name: null, attendance: null },
+          {
+            date: "2026-10-11",
+            kind: "weekly_off",
+            name: null,
+            attendance: {
+              date: "2026-10-11",
+              day: "Sunday",
+              status: "present",
+              firstIn: "09:00",
+              lastOut: "17:30",
+              shifts: 1,
+              flags: [],
+              marks: [],
+              note: null,
+              isSunday: true,
+              compensationType: "sunday_compensation",
+            },
+          },
+        ],
+      }),
+    );
+    await openStaff();
+    expect(cell("2026-10-02").dataset.kind).toBe("holiday");
+    expect(text(cell("2026-10-02"))).toContain("Gandhi Jayanti");
+    expect(cell("2026-10-02").getAttribute("aria-label")).toContain("Gandhi Jayanti");
+    // a Sunday nobody worked is the quiet weekly off, not an empty box
+    expect(cell("2026-10-04").dataset.kind).toBe("weekoff");
+    expect(text(cell("2026-10-04"))).toContain("Sunday");
+    // a Sunday somebody worked shows what they did (with its compensation), not "holiday"
+    expect(cell("2026-10-11").dataset.kind).toBe("sunday_worked");
+    expect(cell("2026-10-11").className).toContain("from-orange-200");
+    // a Sunday nobody worked is a plain blank cell; a holiday is always the pink-to-green gradient
+    expect(cell("2026-10-04").className).not.toContain("gradient");
+    expect(cell("2026-10-02").className).toContain("from-pink-200");
+    expect(text(cell("2026-10-11"))).toContain("09:00–17:30");
+    expect(text(cell("2026-10-11"))).toContain("Worked on a day off");
+    click(cell("2026-10-02"));
+    expect(text(q("pd-day-facts"))).toContain("Holiday: Gandhi Jayanti.");
+  });
+
+  it("tells Casual Leave, Late In, Early Out and the other kinds apart, each in its own colour", async () => {
+    withDays({
+      "2026-10-01": { casualLeave: true },
+      "2026-10-03": { isEarlyOut: true },
+      "2026-10-05": { compensationType: "ot_compensation" },
+      "2026-10-12": { compensationType: "compensation" },
+    });
+    await openStaff();
+    expect(cell("2026-10-01").dataset.kind).toBe("casual");
+    expect(cell("2026-10-01").className).toContain("bg-sky-100");
+    expect(text(cell("2026-10-01"))).toContain("Casual Leave");
+    expect(cell("2026-10-03").dataset.kind).toBe("early");
+    expect(cell("2026-10-03").className).toContain("bg-fuchsia-100");
+    expect(cell("2026-10-05").className).toContain("bg-indigo-100");
+    expect(cell("2026-10-12").className).toContain("bg-lime-100");
+    expect(cell("2026-10-13").className).toContain("bg-amber-100"); // Late In
+    expect(text(q("pd-legend-casual"))).toBe("Casual Leave1");
+    expect(text(q("pd-legend-ot_comp"))).toBe("OT Compensation1");
+  });
+
+  it("does not count an On-Duty day as worked until HR approved it and the punches are there", async () => {
+    withDays({
+      "2026-10-06": {
+        status: "absent",
+        shifts: 0,
+        onDuty: { state: "no_punches", label: "On-Duty approved; no punches yet", destination: "Erode mill" },
+      },
+      "2026-10-07": {
+        status: "absent",
+        shifts: 0,
+        onDuty: { state: "pending", label: "On-Duty request awaiting approval", destination: "" },
+      },
+      "2026-10-08": {
+        status: "present",
+        shifts: 1,
+        onDuty: { state: "verified", label: "On-Duty approved and punched", destination: "Tiruppur" },
+      },
+    });
+    await openStaff();
+    expect(cell("2026-10-06").dataset.kind).toBe("onduty_pending");
+    expect(text(cell("2026-10-06"))).toContain("no punches yet");
+    expect(cell("2026-10-07").dataset.kind).toBe("onduty_pending");
+    expect(cell("2026-10-08").dataset.kind).toBe("onduty");
+    click(cell("2026-10-06"));
+    expect(text(q("pd-day-facts"))).toContain(
+      "counts as worked only when HR has approved the request and the punches are there",
+    );
+    expect(text(q("pd-day-panel"))).toContain("Erode mill");
+  });
+
+  it("Sync reads the days again and says how many changed; the pay is not touched", async () => {
+    world.live.set(101, {
+      days: staffDetails().days.map((d) => (d.date === "2026-10-06" ? { ...d, status: "present", shifts: 1 } : d)),
+    });
+    await openStaff();
+    // the days are read from the attendance records as soon as the page opens: no Sync needed to see Casual Leave or a holiday
+    await settle(10);
+    expect(world.requests().filter((u) => u.endsWith("/101/details?live=1"))).toHaveLength(1);
+    expect(cell("2026-10-06").dataset.kind).toBe("present");
+    // a difference from what the payroll counted is said at once
+    expect(text(q("pd-sync-status"))).toContain("2 days differ from what this payroll counted");
+    expect(must("pd-sync").title).toContain("Sync to read the attendance records as they are now");
+    // the button reads them again
+    click(q("pd-sync"));
+    await settle(10);
+    expect(world.requests().filter((u) => u.endsWith("/101/details?live=1"))).toHaveLength(2);
+    expect(text(q("pd-sync-status"))).toContain("The pay is unchanged until the payroll is generated again");
+    // a View Only login can still Sync: it only reads
+    expect(must("pd-sync-bar").hasAttribute("data-view-safe")).toBe(true);
+  });
+
+  const salary = (recorded: boolean) => ({
+    recorded,
+    monthly: 30000,
+    earned: 26000,
+    firstPortion: { full: 15000, earned: 13000 },
+    secondPortion: { full: 15000, earned: 13000 },
+    components: [
+      { key: "basic", label: "Basic", full: 5000, earned: 4333.33, portion: "first" as const },
+      { key: "da", label: "DA", full: 5000, earned: 4333.33, portion: "first" as const },
+      {
+        key: "retainingAllowance",
+        label: "Retaining Allowance",
+        full: 5000,
+        earned: 4333.34,
+        portion: "first" as const,
+      },
+      { key: "otherAllowance", label: "Other Allowance", full: 3000, earned: 2600, portion: "second" as const },
+      { key: "petrolAllowance", label: "Petrol Allowance", full: 3000, earned: 2600, portion: "second" as const },
+      { key: "hra", label: "HRA", full: 3000, earned: 2600, portion: "second" as const },
+      { key: "specialAllowance", label: "Special Allowance", full: 3000, earned: 2600, portion: "second" as const },
+      { key: "ca", label: "CA", full: 3000, earned: 2600, portion: "second" as const },
+    ],
+  });
+
+  it("shows the whole monthly salary and its split-up, both columns adding up to the total", async () => {
+    world.staff.set(101, staffDetails({ salary: salary(true) }));
+    await openStaff();
+    expect(text(q("pd-salary-monthly"))).toBe("₹30,000.00");
+    expect(text(q("pd-salary-earned"))).toBe("₹26,000.00");
+    expect(text(q("pd-salary-total"))).toContain("₹30,000.00");
+    expect(text(q("pd-salary-total"))).toContain("₹26,000.00");
+    expect(text(q("pd-salary-first"))).toContain("₹15,000.00");
+    expect(text(q("pd-salary-hra"))).toContain("₹3,000.00");
+    expect(q("pd-salary-automatic")).toBeNull();
+  });
+
+  it("tells an employee with no recorded split that the automatic one is shown", async () => {
+    world.staff.set(101, staffDetails({ salary: salary(false) }));
+    await openStaff();
+    expect(text(q("pd-salary-automatic"))).toContain("automatic 50% + 50% split");
   });
 });
 

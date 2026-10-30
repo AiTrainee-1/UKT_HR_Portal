@@ -3,6 +3,7 @@ import {
   type DayMark,
   type IssueCode,
   type IssueSeverity,
+  type OffDay,
   type PayrollDay,
   type PayrollDetails,
   type PayrollIssue,
@@ -366,80 +367,276 @@ export function groupIssuesByType(issues: PayrollIssue[]): IssueTypeGroup[] {
 
 // ── The days: calendar and table ──────────────────────────────────────────────
 
-export type DayKind = "present" | "late" | "half" | "absent" | "unpaid" | "leave" | "onleave" | "holiday" | "other";
+export type DayKind =
+  | "present"
+  | "late"
+  | "early"
+  | "half"
+  | "absent"
+  | "unpaid"
+  | "leave"
+  | "onleave"
+  | "casual"
+  | "onduty"
+  | "onduty_pending"
+  | "comp"
+  | "sunday_comp"
+  | "ot_comp"
+  | "holiday"
+  | "weekoff"
+  | "holiday_worked"
+  | "sunday_worked"
+  | "other";
 
+/** The order of the legend: what was worked, then what was not, then the paid extras, then the days off. */
 export const DAY_KINDS: DayKind[] = [
   "present",
   "late",
+  "early",
   "half",
-  "absent",
+  "casual",
   "unpaid",
   "leave",
   "onleave",
+  "onduty",
+  "onduty_pending",
+  "comp",
+  "sunday_comp",
+  "ot_comp",
+  "absent",
   "holiday",
+  "weekoff",
+  "holiday_worked",
+  "sunday_worked",
   "other",
 ];
 
-/** One look per kind of day: its words, a one-letter code (so colour is never the only signal), and its colours. */
-export const DAY_KIND_META: Record<DayKind, { label: string; short: string; cell: string; swatch: string }> = {
+type KindLook = {
+  label: string;
+  /** A short code on the cell, so colour is never the only signal. */
+  short: string;
+  /** What the kind means, for the legend's tooltip. */
+  hint: string;
+  /** The fill, border and text of a day's cell. */
+  cell: string;
+  /** The solid dot of the legend. */
+  swatch: string;
+  /** The solid left edge of a cell. */
+  bar: string;
+};
+
+/**
+ * One look per kind of day, every one in a colour of its own: Present green, Absent red, Half day orange, Casual Leave sky blue,
+ * other leave purple, On-Duty teal, the three compensations lime / pink / indigo, Late In amber and Early Out magenta. A holiday is always a
+ * pink-to-green gradient (with its name); a Sunday nobody worked is a plain blank cell, and one somebody worked is orange-to-green.
+ */
+export const DAY_KIND_META: Record<DayKind, KindLook> = {
   present: {
     label: "Present",
     short: "P",
+    hint: "A full day worked.",
     cell: "border-emerald-200 bg-emerald-50 text-emerald-900",
-    swatch: "bg-emerald-400",
+    swatch: "bg-emerald-500",
+    bar: "border-l-emerald-500",
   },
-  late: { label: "Late", short: "L", cell: "border-amber-200 bg-amber-50 text-amber-900", swatch: "bg-amber-400" },
+  late: {
+    label: "Late In",
+    short: "LI",
+    hint: "Worked, but arrived after the shift start and its grace time.",
+    cell: "border-amber-300 bg-amber-100 text-amber-950",
+    swatch: "bg-amber-500",
+    bar: "border-l-amber-500",
+  },
+  early: {
+    label: "Early Out",
+    short: "EO",
+    hint: "Worked, but left before the shift end.",
+    cell: "border-fuchsia-300 bg-fuchsia-100 text-fuchsia-950",
+    swatch: "bg-fuchsia-500",
+    bar: "border-l-fuchsia-500",
+  },
   half: {
     label: "Half day",
     short: "½",
-    cell: "border-orange-200 bg-orange-50 text-orange-900",
-    swatch: "bg-orange-400",
+    hint: "Half a shift was earned.",
+    cell: "border-orange-300 bg-orange-100 text-orange-950",
+    swatch: "bg-orange-500",
+    bar: "border-l-orange-500",
   },
-  absent: { label: "Absent", short: "A", cell: "border-red-200 bg-red-50 text-red-900", swatch: "bg-red-400" },
+  absent: {
+    label: "Absent",
+    short: "A",
+    hint: "No attendance on a working day: counted as loss of pay.",
+    cell: "border-red-300 bg-red-100 text-red-950",
+    swatch: "bg-red-500",
+    bar: "border-l-red-500",
+  },
   unpaid: {
     label: "Unpaid leave",
     short: "UL",
-    cell: "border-purple-200 bg-purple-50 text-purple-900",
-    swatch: "bg-purple-400",
+    hint: "A declared leave that is not paid.",
+    cell: "border-purple-300 bg-purple-100 text-purple-950",
+    swatch: "bg-purple-500",
+    bar: "border-l-purple-500",
   },
-  leave: { label: "Paid leave", short: "PL", cell: "border-sky-200 bg-sky-50 text-sky-900", swatch: "bg-sky-400" },
-  onleave: { label: "On leave", short: "LV", cell: "border-cyan-200 bg-cyan-50 text-cyan-900", swatch: "bg-cyan-400" },
+  leave: {
+    label: "Paid leave",
+    short: "PL",
+    hint: "A leave that is paid.",
+    cell: "border-purple-300 bg-purple-100 text-purple-950",
+    swatch: "bg-purple-500",
+    bar: "border-l-purple-500",
+  },
+  onleave: {
+    label: "Other leave",
+    short: "LV",
+    hint: "An approved leave other than Casual Leave.",
+    cell: "border-purple-300 bg-purple-100 text-purple-950",
+    swatch: "bg-purple-500",
+    bar: "border-l-purple-500",
+  },
+  casual: {
+    label: "Casual Leave",
+    short: "CL",
+    hint: "An approved Casual Leave day (paid).",
+    cell: "border-sky-300 bg-sky-100 text-sky-950",
+    swatch: "bg-sky-500",
+    bar: "border-l-sky-500",
+  },
+  onduty: {
+    label: "On-Duty",
+    short: "OD",
+    hint: "Off-site work: the request was approved by HR and the punches are in.",
+    cell: "border-teal-300 bg-teal-100 text-teal-950",
+    swatch: "bg-teal-600",
+    bar: "border-l-teal-600",
+  },
+  onduty_pending: {
+    label: "On-Duty not verified",
+    short: "OD?",
+    hint: "An On-Duty request is waiting for approval, or approved but the punches are missing: the day is not counted as worked.",
+    cell: "border-dashed border-teal-400 bg-white text-teal-900",
+    swatch: "bg-white ring-2 ring-teal-500",
+    bar: "border-l-teal-400",
+  },
+  comp: {
+    label: "Compensation",
+    short: "C",
+    hint: "A paid day given in return for extra work.",
+    cell: "border-lime-400 bg-lime-100 text-lime-950",
+    swatch: "bg-lime-500",
+    bar: "border-l-lime-600",
+  },
+  sunday_comp: {
+    label: "Sunday Compensation",
+    short: "SC",
+    hint: "A paid day given for working a Sunday or a holiday.",
+    cell: "border-pink-300 bg-pink-100 text-pink-950",
+    swatch: "bg-pink-500",
+    bar: "border-l-pink-500",
+  },
+  ot_comp: {
+    label: "OT Compensation",
+    short: "OT",
+    hint: "A paid day given for overtime.",
+    cell: "border-indigo-300 bg-indigo-100 text-indigo-950",
+    swatch: "bg-indigo-500",
+    bar: "border-l-indigo-500",
+  },
   holiday: {
-    label: "Holiday / not worked",
-    short: "–",
-    cell: "border-slate-200 bg-slate-100 text-slate-600",
-    swatch: "bg-slate-300",
+    label: "Holiday",
+    short: "H",
+    hint: "A declared holiday.",
+    cell: "border-pink-300 bg-gradient-to-br from-pink-200 to-emerald-200 text-pink-950",
+    swatch: "bg-gradient-to-br from-pink-400 to-emerald-400",
+    bar: "border-l-pink-500",
+  },
+  weekoff: {
+    label: "Sunday off",
+    short: "Sun",
+    hint: "The weekly holiday: nobody is expected to work.",
+    cell: "border-slate-200 bg-white text-slate-400",
+    swatch: "bg-white ring-1 ring-slate-300",
+    bar: "border-l-slate-300",
+  },
+  holiday_worked: {
+    label: "Worked holiday",
+    short: "WH",
+    hint: "A declared holiday that somebody worked: the real attendance is shown.",
+    cell: "border-pink-300 bg-gradient-to-br from-pink-200 to-emerald-200 text-pink-950",
+    swatch: "bg-gradient-to-br from-pink-400 to-emerald-400",
+    bar: "border-l-pink-500",
+  },
+  sunday_worked: {
+    label: "Worked Sunday",
+    short: "WS",
+    hint: "A Sunday (the weekly holiday) that somebody worked: the real attendance is shown.",
+    cell: "border-orange-300 bg-gradient-to-br from-orange-200 to-emerald-200 text-orange-950",
+    swatch: "bg-gradient-to-br from-orange-400 to-emerald-400",
+    bar: "border-l-orange-500",
   },
   other: {
     label: "Other",
     short: "?",
+    hint: "A status this page does not know.",
     cell: "border-dashed border-slate-300 bg-white text-slate-600",
     swatch: "bg-white ring-1 ring-slate-300",
+    bar: "border-l-slate-300",
   },
 };
 
-const HOLIDAY_STATUSES = new Set(["holiday", "week_off", "weekly_off", "weekoff", "off", "not_worked", "no_shift"]);
+const HOLIDAY_STATUSES = new Set(["holiday", "not_worked", "no_shift"]);
+const WEEKOFF_STATUSES = new Set(["week_off", "weekly_off", "weekoff", "off"]);
 const PAID_LEAVE_STATUSES = new Set(["paid_leave", "casual_leave"]);
 const ON_LEAVE_STATUSES = new Set(["on_leave", "leave"]);
 
+type KindInput = Pick<PayrollDay, "status" | "flags"> &
+  Partial<
+    Pick<
+      PayrollDay,
+      | "isLate"
+      | "isEarlyOut"
+      | "isSunday"
+      | "holidayName"
+      | "casualLeave"
+      | "compensationType"
+      | "onDuty"
+      | "workedOffDay"
+    >
+  > & { shifts?: number | null };
+
 /**
- * What kind of day a day was: its status, made more specific by what was flagged on it (half beats late beats present).
+ * What kind of day a day was, most specific first. A day not worked keeps its status (absent, a leave, a holiday); a day an
+ * On-Duty request touches without the HR approval AND the punches is shown as "On-Duty not verified", never as worked. A day
+ * worked is then Casual Leave, a compensation, On-Duty (verified), a half day, Late In, Early Out or plain Present.
  * Staff payroll records a half day as a present day with 0.5 shifts and a half-day issue, so those count too.
  */
-export function dayKind(day: Pick<PayrollDay, "status" | "flags"> & { shifts?: number | null }): DayKind {
+export function dayKind(day: KindInput): DayKind {
   const status = (day.status ?? "").toLowerCase();
   const flags = day.flags ?? [];
-  if (status === "absent") return "absent";
+  const od = day.onDuty?.state;
+  if (status === "absent") return od ? "onduty_pending" : "absent";
   if (status === "unpaid_leave") return "unpaid";
-  if (PAID_LEAVE_STATUSES.has(status)) return "leave";
+  if (PAID_LEAVE_STATUSES.has(status)) return status === "casual_leave" ? "casual" : "leave";
   if (ON_LEAVE_STATUSES.has(status)) return "onleave";
-  if (HOLIDAY_STATUSES.has(status)) return "holiday";
-  if (status === "half_shift" || status === "half_day" || flags.includes("half_day")) return "half";
-  if (status === "present") {
-    if (day.shifts === 0.5) return "half";
-    return flags.includes("late_in") ? "late" : "present";
-  }
-  return "other";
+  if (WEEKOFF_STATUSES.has(status)) return "weekoff";
+  if (HOLIDAY_STATUSES.has(status)) return day.isSunday && !day.holidayName ? "weekoff" : "holiday";
+  const worked = status === "present" || status === "half_shift" || status === "half_day" || flags.includes("half_day");
+  if (!worked) return "other";
+  // a Sunday or holiday that was worked: the real attendance, in the colours of a worked day off
+  if (day.workedOffDay && day.holidayName) return "holiday_worked";
+  if (day.workedOffDay && day.isSunday) return "sunday_worked";
+  if (day.casualLeave) return "casual";
+  if (day.compensationType === "sunday_compensation") return "sunday_comp";
+  if (day.compensationType === "ot_compensation") return "ot_comp";
+  if (day.compensationType === "compensation") return "comp";
+  if (od === "verified") return "onduty";
+  if (od) return "onduty_pending";
+  if (status === "half_shift" || status === "half_day" || flags.includes("half_day") || day.shifts === 0.5)
+    return "half";
+  if (day.isLate || flags.includes("late_in")) return "late";
+  if (day.isEarlyOut || flags.includes("early_out")) return "early";
+  return "present";
 }
 
 // ── The attendance categories of a day ────────────────────────────────────────
@@ -548,7 +745,7 @@ export const MARK_FILL_ORDER: DayMark[] = [
 
 // A day that was not worked (absent, a leave, a holiday) or was cut to half keeps the colour of that status: it is what the
 // pay follows. The categories it carries are still shown on it as tags.
-const STATUS_FILLS: DayKind[] = ["half", "absent", "unpaid", "leave", "onleave", "holiday", "other"];
+const STATUS_FILLS: DayKind[] = DAY_KINDS.filter((k) => k !== "present" && k !== "late");
 
 /** The category that fills the cell of a day, or null when the cell shows the day's status (a plain day, or a status that wins). */
 export function fillMark(day: Pick<PayrollDay, "status" | "flags" | "marks" | "shifts">): DayMark | null {
@@ -597,16 +794,49 @@ export function filterDays(
 
 export type CalendarCell =
   | { type: "blank"; key: string }
-  | { type: "day"; key: string; date: string; dayNumber: number; day: PayrollDay | null; kind: DayKind | null };
+  | {
+      type: "day";
+      key: string;
+      date: string;
+      dayNumber: number;
+      day: PayrollDay | null;
+      kind: DayKind | null;
+      /** A day the payroll does not list: a Sunday, a holiday, a day off (with what was worked on it, if anything). */
+      off: OffDay | null;
+    };
 
 export const CALENDAR_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/** The day a calendar cell shows for a day the payroll does not list: the real attendance when it was worked, else the day off. */
+export function offDayAsDay(off: OffDay): PayrollDay {
+  if (off.attendance) return { ...off.attendance, holidayName: off.name, workedOffDay: true };
+  return {
+    date: off.date,
+    day: "",
+    status: off.kind === "holiday" ? "holiday" : "weekly_off",
+    firstIn: null,
+    lastOut: null,
+    shifts: null,
+    flags: [],
+    marks: [],
+    note: null,
+    holidayName: off.name,
+    isSunday: off.kind === "weekly_off",
+    onDuty: off.onDuty ?? null,
+  };
+}
+
 /**
  * The calendar grid, Monday first: blank cells before the first day (as many as its weekday needs) and after the last
- * one, so every row has seven cells. It covers the period and any day the payroll has a record for; a day with no
- * record is a cell with no data.
+ * one, so every row has seven cells. It covers the period and any day the payroll has a record for. A day the payroll does not
+ * list is a Sunday or a holiday (`offDays`: with its name, or the real attendance when it was worked) or a cell with no data.
  */
-export function buildCalendar(days: PayrollDay[], start?: string | null, end?: string | null): CalendarCell[][] {
+export function buildCalendar(
+  days: PayrollDay[],
+  start?: string | null,
+  end?: string | null,
+  offDays: OffDay[] = [],
+): CalendarCell[][] {
   const dates = days.map((d) => d.date).sort();
   const first = [start, dates[0]].filter((d): d is string => !!parseIso(d)).sort()[0];
   const last = [end, dates[dates.length - 1]]
@@ -615,10 +845,13 @@ export function buildCalendar(days: PayrollDay[], start?: string | null, end?: s
     .at(-1);
   if (!first || !last) return [];
   const byDate = new Map(days.map((d) => [d.date, d]));
+  const offByDate = new Map(offDays.map((o) => [o.date, o]));
   const cells: CalendarCell[] = [];
   for (let i = 0; i < weekdayOffset(first); i += 1) cells.push({ type: "blank", key: `lead-${i}` });
   for (const date of eachDay(first, last)) {
-    const day = byDate.get(date) ?? null;
+    const listed = byDate.get(date) ?? null;
+    const off = listed ? null : (offByDate.get(date) ?? null);
+    const day = listed ?? (off ? offDayAsDay(off) : null);
     cells.push({
       type: "day",
       key: date,
@@ -626,6 +859,7 @@ export function buildCalendar(days: PayrollDay[], start?: string | null, end?: s
       dayNumber: parseIso(date)?.day ?? 0,
       day,
       kind: day ? dayKind(day) : null,
+      off,
     });
   }
   for (let i = 0; cells.length % 7 !== 0; i += 1) cells.push({ type: "blank", key: `trail-${i}` });

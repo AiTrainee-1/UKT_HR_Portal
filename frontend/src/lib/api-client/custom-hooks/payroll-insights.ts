@@ -252,6 +252,45 @@ export type PayrollDay = DayCompensationMarker & {
   /** The attendance categories of the day (permission, On-Duty, missed punch ...). Older servers do not send it. */
   marks?: DayMark[];
   note: string | null;
+  /** Late In and Early Out, apart (Late In = arrived after the shift start and grace; Early Out = left before the shift end). */
+  isLate?: boolean;
+  isEarlyOut?: boolean;
+  /** A Sunday (the default weekly holiday; production works Sundays, so false for them). */
+  isSunday?: boolean;
+  /** The declared holiday's own name, when the day is one. */
+  holidayName?: string | null;
+  /** An approved Casual Leave day (payroll stores it as an ordinary present day). */
+  casualLeave?: boolean;
+  /** The compensation behind the day: a paid day given for extra work. */
+  compensationType?: "compensation" | "sunday_compensation" | "ot_compensation" | null;
+  /** Where an On-Duty request stands for the day: it only counts once HR approved the request AND the punches are in. */
+  onDuty?: OnDutyInfo | null;
+  /** A Sunday / holiday / day off somebody worked: it shows what was worked, not "holiday". */
+  workedOffDay?: boolean;
+};
+
+export type OnDutyState = "verified" | "punches_pending" | "no_punches" | "pending" | "rejected";
+
+export type OnDutyInfo = { state: OnDutyState; label: string; destination: string };
+
+/** A day of the period the payroll does not list (a Sunday, a holiday, a Saturday off), with what was worked on it, if anything. */
+export type OffDay = {
+  date: string;
+  kind: "weekly_off" | "holiday" | "off";
+  name: string | null;
+  attendance: PayrollDay | null;
+  onDuty?: OnDutyInfo | null;
+};
+
+/** The whole monthly salary by component, and what each came to for the days this payroll paid. */
+export type PayrollSalaryBreakup = {
+  /** False when the employee has no recorded split and this is the automatic 50% + 50% one. */
+  recorded: boolean;
+  monthly: number;
+  earned: number;
+  firstPortion: { full: number; earned: number };
+  secondPortion: { full: number; earned: number };
+  components: { key: string; label: string; full: number; earned: number; portion: "first" | "second" }[];
 };
 
 export type PayrollDetails = {
@@ -298,6 +337,12 @@ export type PayrollDetails = {
   };
   /** Counts of days / shifts (the breakdown's own summary, same keys). */
   summary: Record<string, number | null>;
+  /** The employee's whole monthly salary split into components (staff only). */
+  salary?: PayrollSalaryBreakup | null;
+  /** The other days of the period (Sundays, holidays) with the real attendance when somebody worked one. */
+  offDays?: OffDay[];
+  /** Whether the days were just re-read from the attendance records (the Sync button), and how many changed. */
+  calendarSync?: { live: boolean; syncedAt: string | null; changedDays: number };
   earnings: MoneyLine[];
   deductions: MoneyLine[];
   /** The rules that govern this employee, as applied to this payroll, with the current Settings value when it changed. */

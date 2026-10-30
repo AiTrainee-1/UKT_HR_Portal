@@ -101,6 +101,9 @@ class WorkflowDef:
     hod_flag: str | None = None  # DepartmentManager.can_approve_* switch that lets an individual HOD act
     early_reject_roles: tuple[str, ...] = ()  # roles that may reject before their turn (never approve)
     fixed_note: str = ""  # why a fixed pipeline is fixed
+    # True: HR itself must be a mandatory approver, whatever else HR configures (On-Duty only counts as attendance once HR
+    # approved it, so a Department Head alone, or an "HOD or HR" step, can never complete it).
+    hr_final: bool = False
     note: str = ""  # anything HR should know about how this approval behaves
     on_off_effect: str = (
         "New requests cannot be submitted while it is off; requests already waiting can still be decided."
@@ -164,6 +167,7 @@ DEFINITIONS: tuple[WorkflowDef, ...] = (
         ),
         requested_by="Employee",
         default_steps=(_step(HOD, mandatory=False), _step(HR)),
+        hr_final=True,
         hod_flag="can_approve_on_duty",
         note="With the HOD step optional, HR can approve straight away when the HOD has not acted.",
     ),
@@ -305,6 +309,10 @@ def _config_of(defn: WorkflowDef, row) -> Config:
     if row is None:
         return Config(defn.key, True, defn.default_steps)
     steps = steps_from_json(row.steps) if defn.editable else None
+    if steps and defn.hr_final and not _hr_is_required(steps):
+        steps = (
+            None  # a pipeline saved before this rule that lets the Department Head finish it: HR's approval comes back
+        )
     return Config(
         defn.key,
         bool(row.enabled) or not defn.can_disable,
@@ -346,6 +354,11 @@ def all_configs() -> dict[str, Config]:
 def get_config(key: str) -> Config:
     definition(key)  # unknown keys fail loudly
     return all_configs()[key]
+
+
+def _hr_is_required(steps) -> bool:
+    """HR has a step of its own that cannot be skipped (so nobody else can finish the request without HR)."""
+    return any(step.roles == (HR,) and step.mandatory for step in steps)
 
 
 def validate_steps(defn: WorkflowDef, raw) -> tuple[tuple[Step, ...] | None, str | None]:
@@ -390,6 +403,12 @@ def validate_steps(defn: WorkflowDef, raw) -> tuple[tuple[Step, ...] | None, str
     # The last step is always mandatory: nobody can skip past the end of the pipeline.
     last = steps[-1]
     steps[-1] = Step(last.roles, True)
+    if defn.hr_final and not _hr_is_required(steps):
+        return (
+            None,
+            f"HR must approve {defn.label} itself: it only counts once HR has approved it. "
+            "Give HR a step of its own that cannot be skipped.",
+        )
     return tuple(steps), None
 
 

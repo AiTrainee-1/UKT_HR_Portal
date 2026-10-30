@@ -38,7 +38,7 @@ from .models import (
     SalarySlip,
 )
 from .production_cycles import CYCLE_LABELS
-from .salary_split import COMPONENTS, FIRST_PORTION, JSON_KEYS, LABELS, breakup_of
+from .salary_split import COMPONENTS, FIRST_PORTION, JSON_KEYS, LABELS, breakup_of, effective_split
 from .user_settings import _SettingsOverlay
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -541,6 +541,47 @@ def split_info(emp) -> dict | None:
         "first": money(first),
         "second": money(total - first),
         "components": [{"key": JSON_KEYS[c], "label": LABELS[c], "amount": money(parts[c])} for c in COMPONENTS],
+    }
+
+
+def salary_breakup(emp, payroll: Payroll, bd: dict | None) -> dict | None:
+    """The employee's WHOLE monthly salary split into its components (Settings' 50% + 50% split-up), and what each component
+    came to for the days this payroll paid. The full amounts always add up to the full monthly salary and the earned
+    amounts to the salary earned (the cent left over by the rounding goes to the biggest component), so the split-up can never
+    make the total read short. Display only: payroll itself pays on the full salary, whatever the split."""
+    if emp.employment_type == "production" or not emp.salary_amount:
+        return None
+    parts, recorded = effective_split(emp)
+    if parts is None:
+        return None
+    full_total = sum(parts.values(), Decimal("0"))
+    earned_total = dec((bd or {}).get("earnings", {}).get("grossSalary"), "-1")
+    if earned_total < 0:
+        earned_total = dec(payroll.gross_salary) - dec(payroll.ot_amount)
+    ratio = (earned_total / full_total) if full_total else Decimal("0")
+    earned = {c: (parts[c] * ratio).quantize(Decimal("0.01")) for c in COMPONENTS}
+    drift = earned_total.quantize(Decimal("0.01")) - sum(earned.values(), Decimal("0"))
+    if drift:
+        biggest = max(COMPONENTS, key=lambda c: parts[c])
+        earned[biggest] += drift
+    first_full = sum((parts[c] for c in FIRST_PORTION), Decimal("0"))
+    first_earned = sum((earned[c] for c in FIRST_PORTION), Decimal("0"))
+    return {
+        "recorded": recorded,
+        "monthly": money(full_total),
+        "earned": money(earned_total),
+        "firstPortion": {"full": money(first_full), "earned": money(first_earned)},
+        "secondPortion": {"full": money(full_total - first_full), "earned": money(earned_total - first_earned)},
+        "components": [
+            {
+                "key": JSON_KEYS[c],
+                "label": LABELS[c],
+                "full": money(parts[c]),
+                "earned": money(earned[c]),
+                "portion": "first" if c in FIRST_PORTION else "second",
+            }
+            for c in COMPONENTS
+        ],
     }
 
 

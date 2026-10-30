@@ -31,6 +31,8 @@ type BreakdownAnswer = PayrollBreakdownResponse | Error;
 export type World = {
   staff: Map<number, Answer>;
   production: Map<number, Answer>;
+  /** What the Sync button (?live=1) changes in a staff payroll's details: the days read again from the attendance records. */
+  live: Map<number, Partial<PayrollDetails>>;
   /** What /api/payroll/<id>/breakdown answers (where PF / ESI / TDS were decided is stored); a missing id is a 404. */
   breakdowns: Map<number, BreakdownAnswer>;
   /** What /api/payroll-settings answers. */
@@ -57,6 +59,7 @@ export function installWorld(fetchMock: Mock): World {
       [105, noBreakdownDetails()],
       [106, tdsDetails()],
     ]),
+    live: new Map<number, Partial<PayrollDetails>>(),
     production: new Map<number, Answer>([
       [301, productionDetails()],
       [304, legacyDetails()],
@@ -96,7 +99,7 @@ export function installWorld(fetchMock: Mock): World {
       if (answer instanceof Error) throw answer;
       return JSON.parse(JSON.stringify(answer));
     }
-    const m = /^\/api\/payroll(\/production)?\/(\d+)\/details$/.exec(url);
+    const m = /^\/api\/payroll(\/production)?\/(\d+)\/details(\?live=1)?$/.exec(url);
     if (!m) throw new Error(`unexpected request ${url}`);
     const kind: PayrollKind = m[1] ? "production" : "staff";
     const id = Number(m[2]);
@@ -105,6 +108,16 @@ export function installWorld(fetchMock: Mock): World {
     const answer = world[kind].get(id);
     if (!answer) throw apiError(404);
     if (answer instanceof Error) throw answer;
+    // the Sync button asks for ?live=1: the same details with the days read again (world.live holds what changed)
+    if (m[3]) {
+      return JSON.parse(
+        JSON.stringify({
+          ...answer,
+          ...(world.live.get(id) ?? {}),
+          calendarSync: { live: true, syncedAt: "2026-10-30T08:30:00Z", changedDays: world.live.get(id) ? 2 : 0 },
+        }),
+      );
+    }
     return JSON.parse(JSON.stringify(answer));
   });
   return world;

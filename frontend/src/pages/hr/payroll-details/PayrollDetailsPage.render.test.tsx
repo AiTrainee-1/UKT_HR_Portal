@@ -111,7 +111,12 @@ describe("loading", () => {
   it("asks for this payroll's details, and only those (plus the company name for the files)", async () => {
     await openStaff();
     expect(world.requests()).toContain("/api/payroll/101/details");
-    expect(world.requests().filter((r) => r.includes("/details"))).toEqual(["/api/payroll/101/details"]);
+    // and the same details read again with the days as the attendance records stand now (Casual Leave, holidays, approvals)
+    await settle(10);
+    expect(world.requests().filter((r) => r.includes("/details"))).toEqual([
+      "/api/payroll/101/details",
+      "/api/payroll/101/details?live=1",
+    ]);
   });
 });
 
@@ -207,17 +212,29 @@ describe("the header", () => {
 });
 
 describe("the dashboard", () => {
-  it("gross, deductions, net payable, days worked and issues, each with what explains it", async () => {
+  it("monthly salary, gross, per day, deductions, days worked and issues, each with what explains it", async () => {
     await openStaff();
+    // left to right: the whole monthly salary first, and no Net payable tile (the net is the end of the gross-to-net bar)
+    expect([...must("pd-kpis").children].map((c) => (c as HTMLElement).dataset.testid)).toEqual([
+      "pd-kpi-salary",
+      "pd-kpi-gross",
+      "pd-kpi-perday",
+      "pd-kpi-deductions",
+      "pd-kpi-days",
+      "pd-kpi-issues",
+    ]);
+    expect(q("pd-kpi-net")).toBeNull();
+    expect(text(q("pd-kpi-salary-value"))).toBe("₹29,500");
+    expect(text(q("pd-kpi-salary"))).toContain("Monthly salary");
     expect(text(q("pd-kpi-gross"))).toContain("₹26,663");
-    expect(text(q("pd-kpi-gross"))).toContain("of a ₹29,500 monthly salary");
+    expect(text(q("pd-kpi-gross"))).toContain("earned for 23.5 of 26 working days");
     expect(text(q("pd-kpi-perday"))).toContain("Per day salary");
     expect(text(q("pd-kpi-perday"))).toContain("₹1,134.62");
     expect(text(q("pd-kpi-perday"))).toContain("₹29,500 over 26 working days");
     expect(text(q("pd-kpi-deductions"))).toContain("₹3,167");
     expect(text(q("pd-kpi-deductions"))).toContain("11.9% of gross");
-    expect(text(q("pd-kpi-net-value"))).toBe("₹23,496");
-    expect(text(q("pd-kpi-net"))).toContain("Pending");
+    expect(text(q("pd-net-bridge"))).toContain("₹23,496");
+    expect(text(q("pd-status"))).toBe("Pending");
     expect(text(q("pd-kpi-days"))).toContain("Days worked");
     expect(text(q("pd-kpi-days-value"))).toBe("23.5 / 26");
     expect(text(q("pd-kpi-days"))).toContain("21 present · 2 paid leave · 1 half · 2 LOP");
@@ -501,7 +518,7 @@ describe("Mark as Cleared", () => {
       expect.objectContaining({ title: "Meena Subramanian's salary marked as cleared" }),
     );
     expect(text(q("pd-status"))).toBe("Cleared");
-    expect(text(q("pd-kpi-net"))).toContain("Cleared");
+    expect(text(q("pd-net-bridge"))).toContain("₹23,496");
     const predicate = invalidate.mock.calls[0][0]!.predicate!;
     expect(predicate({ queryKey: ["/api/payroll/insights/details", "staff", 101] } as never)).toBe(true);
     expect(predicate({ queryKey: ["/api/payroll", { month: 10, year: 2026 }] } as never)).toBe(true);
@@ -640,7 +657,7 @@ describe("a payroll with no day-by-day breakdown behind it", () => {
     expect(text(q("pd-kpi-issues"))).toContain("No breakdown to check");
     expect(text(q("pd-attendance-empty"))).toContain("No day records were stored for this payroll");
     // what the payroll does have is still there: the money, and the summary counts
-    expect(text(q("pd-kpi-net"))).toContain("₹23,496");
+    expect(text(q("pd-net-bridge"))).toContain("₹23,496");
     expect(text(q("pd-kpi-days-value"))).toBe("22 / 26");
     // the notes are in the notice, not repeated as an HR adjustment
     expect(q("pd-adjustment-note")).toBeNull();

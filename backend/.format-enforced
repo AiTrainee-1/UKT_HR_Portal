@@ -382,3 +382,5 @@ api/tests_geo_tracking_stops.py
 api/tests_geo_tracking_support.py
 api/tests_geo_tracking_trail.py
 api/tests_geo_tracking_views.py
+api/payroll_calendar.py
+api/tests_payroll_calendar.py

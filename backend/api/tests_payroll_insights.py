@@ -1272,6 +1272,9 @@ DETAILS_KEYS = {
     "issues",
     "issueCounts",
     "days",
+    "offDays",
+    "calendarSync",
+    "salary",
     "advances",
     "notes",
     "history",
@@ -1291,6 +1294,36 @@ class StaffDetailsTests(TestCase):
 
     def details(self, payroll=None, headers=None, expect=200):
         return _get(self, f"/api/payroll/{(payroll or self.w.meena_payroll).id}/details", headers, expect)
+
+    def test_the_calendar_lists_the_off_days_and_sync_reads_the_days_again(self):
+        url = f"/api/payroll/{self.w.meena_payroll.id}/details"
+        stored = _get(self, url)
+        self.assertEqual(stored["calendarSync"], {"live": False, "syncedAt": None, "changedDays": 0})
+        # the days the payroll does not list: the four Sundays of February 2026 are the weekly off
+        self.assertEqual(
+            [o["date"] for o in stored["offDays"] if o["kind"] == "weekly_off"],
+            ["2026-02-01", "2026-02-08", "2026-02-15", "2026-02-22"],
+        )
+        self.assertTrue(all(o["attendance"] is None for o in stored["offDays"] if o["kind"] == "weekly_off"))
+        for day in stored["days"]:
+            for key in ("isLate", "isEarlyOut", "casualLeave", "holidayName", "compensationType", "onDuty", "isSunday"):
+                self.assertIn(key, day)
+        payroll_before = Payroll.objects.values_list("gross_salary", "final_salary").get(pk=self.w.meena_payroll.pk)
+        live = _get(self, url + "?live=1")
+        self.assertTrue(live["calendarSync"]["live"])
+        self.assertIsNotNone(live["calendarSync"]["syncedAt"])
+        self.assertEqual(live["money"], stored["money"])  # the pay is exactly as generated
+        self.assertEqual(
+            Payroll.objects.values_list("gross_salary", "final_salary").get(pk=self.w.meena_payroll.pk), payroll_before
+        )
+
+    def test_the_whole_salary_is_shown_and_its_split_up_adds_up_to_it(self):
+        d = self.details()
+        salary = d["salary"]
+        self.assertEqual(salary["monthly"], 24000.0)
+        self.assertEqual(salary["earned"], d["money"]["gross"])
+        self.assertAlmostEqual(sum(c["full"] for c in salary["components"]), 24000.0, places=2)
+        self.assertAlmostEqual(sum(c["earned"] for c in salary["components"]), d["money"]["gross"], places=2)
 
     def test_every_section_is_there_and_the_numbers_are_the_payrolls_own(self):
         d = self.details()

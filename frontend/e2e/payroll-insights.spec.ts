@@ -583,7 +583,8 @@ test.describe("Details page", () => {
     const ravi = await idOf(request, "E2E002");
     await openAs(page, adminToken, detailsPath(ravi));
     await expect(page.getByTestId("pd-kpis")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId("pd-kpi-net")).toContainText("₹15,000");
+    await expect(page.getByTestId("pd-kpi-salary")).toContainText("₹30,000");
+    await expect(page.getByTestId("pd-net-bridge")).toContainText("₹15,000");
     await expect(page.getByTestId("pd-kpi-gross")).toContainText("₹15,000");
     await expect(page.getByTestId("pd-kpi-perday")).toContainText("Per day salary");
     await expect(page.getByTestId("pd-kpi-perday")).toContainText("₹30,000 over 24 working days");
@@ -609,10 +610,28 @@ test.describe("Details page", () => {
     const issues = await page.getByTestId("pd-section-issues").boundingBox();
     expect(attendance!.y).toBeLessThan(issues!.y);
 
-    // Attendance: the key names all six attendance types
-    for (const kind of ["late", "permission", "excess_permission", "on_duty", "on_duty_punch", "missed_punch"]) {
+    // Attendance: the key names every kind of day (each in a colour of its own) and the other attendance categories
+    for (const kind of [
+      "present",
+      "late",
+      "early",
+      "half",
+      "casual",
+      "onleave",
+      "onduty",
+      "comp",
+      "sunday_comp",
+      "ot_comp",
+      "absent",
+      "holiday",
+      "weekoff",
+    ]) {
+      await expect(page.getByTestId(`pd-legend-${kind}`)).toBeVisible();
+    }
+    for (const kind of ["permission", "excess_permission", "on_duty", "on_duty_punch", "missed_punch"]) {
       await expect(page.getByTestId(`pd-mark-legend-${kind}`)).toBeVisible();
     }
+    await expect(page.getByTestId("pd-sync")).toBeVisible();
 
     // Issues: one per absent day, each on its own date
     await page.getByTestId("pd-nav-issues").click();

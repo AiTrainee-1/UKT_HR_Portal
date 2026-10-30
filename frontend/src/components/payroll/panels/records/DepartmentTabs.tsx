@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import type { DepartmentGroup } from "./department-groups";
 
 const ACTIVE = { indigo: "bg-indigo-600 text-white", amber: "bg-amber-600 text-white" } as const;
-const ACTIVE_COUNT = { indigo: "bg-white/25 text-white", amber: "bg-white/25 text-white" } as const;
+const ACTIVE_COUNT = { indigo: "bg-white/20 text-white", amber: "bg-white/20 text-white" } as const;
 
 /**
  * A strip of department tabs: one department's payroll shows at a time. Each tab says how many employees the department has;
