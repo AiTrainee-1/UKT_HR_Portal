@@ -1060,6 +1060,11 @@ export type AttendanceOverrideRequest = {
   reviewComment?: string | null;
   reviewedAt?: string | null;
   createdAt?: string | null;
+  /** Where the request stands in its pipeline: the Department Head first, then HR. */
+  approval?: ApprovalProgress | null;
+  /** The attendance type proposed (Attendance Edit page): "present", "half_day", "sunday_compensation" ... */
+  type?: string | null;
+  typeLabel?: string | null;
 };
 
 /**
@@ -1102,11 +1107,18 @@ export const useAttendanceOverride = () => {
   });
 };
 
-export const useAttendanceOverrideRequests = (params?: { employeeId?: number; code?: string; status?: string }) => {
+export const useAttendanceOverrideRequests = (params?: {
+  employeeId?: number;
+  code?: string;
+  status?: string;
+  /** Only the requests this role can decide right now (the Department Head's, or HR's second-level approval). */
+  waiting?: "hod" | "hr";
+}) => {
   const qs = new URLSearchParams();
   if (params?.employeeId) qs.set("employeeId", String(params.employeeId));
   if (params?.code) qs.set("code", params.code);
   if (params?.status) qs.set("status", params.status);
+  if (params?.waiting) qs.set("waiting", params.waiting);
   const q = qs.toString() ? `?${qs.toString()}` : "";
   return useQuery<AttendanceOverrideRequest[]>({
     queryKey: [
@@ -1114,8 +1126,104 @@ export const useAttendanceOverrideRequests = (params?: { employeeId?: number; co
       params?.employeeId ?? null,
       params?.code ?? null,
       params?.status ?? null,
+      params?.waiting ?? null,
     ],
     queryFn: () => customFetch<AttendanceOverrideRequest[]>(`/api/attendance/override-requests${q}`),
+  });
+};
+
+// ── Attendance Edit page: the types, the context of a day, the proposal and HR's decision ─────────────────────────────
+
+export type AttendanceEditType = {
+  key: string;
+  label: string;
+  group: "Attendance" | "Compensation" | "Other";
+  status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
+  /** What the type is worth in shifts ("0.75"). */
+  shifts: string;
+  description: string;
+  /** Shows the first in / last out times and the Late / Early Out marks. */
+  worked: boolean;
+  /** For the compensation types: the amounts that may be chosen ("0.25" ... "1.00"). */
+  shiftChoices: string[];
+  compensation: boolean;
+};
+
+export type AttendanceEditContext = {
+  employee: {
+    id: number;
+    code: string;
+    name: string;
+    department: string | null;
+    designation: string | null;
+    employmentType: "staff" | "production";
+  };
+  date: string;
+  day: FinalAttendanceDay;
+  future: boolean;
+  /** The Department Head who will decide it first (null: nobody can, so it cannot be submitted). */
+  hod: { name: string; canApprove: boolean } | null;
+  pipeline: { steps: { roles: string[]; mandatory: boolean; label: string }[]; path: string };
+  types: AttendanceEditType[];
+  requests: AttendanceOverrideRequest[];
+};
+
+export const useAttendanceEditContext = (employeeId: number | null, date: string | null) =>
+  useQuery<AttendanceEditContext>({
+    queryKey: ["/api/attendance/edit-context", employeeId, date],
+    enabled: employeeId !== null && !!date,
+    queryFn: () =>
+      customFetch<AttendanceEditContext>(`/api/attendance/edit-context?employeeId=${employeeId}&date=${date}`),
+  });
+
+export type AttendanceEditProposal = {
+  employeeId: number;
+  date: string;
+  type: string;
+  note: string;
+  /** For the compensation types. */
+  shifts?: string;
+  firstPunch?: string | null;
+  lastPunch?: string | null;
+  isLate?: boolean;
+  isEarlyOut?: boolean;
+};
+
+/** Propose a change. It is NEVER applied by this call: the Department Head approves it, then HR (202 + the request). */
+export const useSubmitAttendanceEdit = () => {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { ok: boolean; pendingApproval: boolean; request: AttendanceOverrideRequest },
+    Error,
+    AttendanceEditProposal
+  >({
+    mutationFn: (body) => customFetch("/api/attendance/override", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/edit-context"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/override-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/employee-monthly"] });
+    },
+  });
+};
+
+/** HR's decision on an edit the Department Head has approved: approving is what changes the attendance record. */
+export const useDecideAttendanceEdit = () => {
+  const queryClient = useQueryClient();
+  return useMutation<
+    AttendanceOverrideRequest,
+    Error,
+    { id: number; status: "approved" | "rejected"; comment?: string }
+  >({
+    mutationFn: ({ id, ...body }) =>
+      customFetch(`/api/attendance/override-requests/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/override-requests"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/edit-context"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/attendance/employee-monthly"] });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/attendance"),
+      });
+    },
   });
 };
 

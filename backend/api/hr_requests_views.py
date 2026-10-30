@@ -149,8 +149,8 @@ KINDS: tuple[Kind, ...] = (
         "attendance",
         "AttendanceOverrideRequest",
         "link",
-        "/hr/attendance",
-        "Attendance",
+        "/hr/attendance/edit-requests",
+        "Attendance edit requests",
         ("pending",),
     ),
     Kind(

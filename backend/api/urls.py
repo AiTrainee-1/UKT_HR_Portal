@@ -216,6 +216,7 @@ from .payroll_views import (
 )
 from .manual_attendance_import_views import export_punch_records, import_punch_excel
 from .punch_history import punch_day_status, punch_history
+from .attendance_edit_views import attendance_edit_context, attendance_override_decision
 from .punch_views import (
     skipped_punches, resolve_skipped_punch,
     punch_list, punch_export, punch_import, sync_status,
@@ -488,6 +489,8 @@ urlpatterns = [
     path("attendance/employee-monthly", employee_monthly_attendance),
     path("attendance/override", attendance_day_override),
     path("attendance/override-requests", attendance_override_requests),
+    path("attendance/override-requests/<int:pk>", attendance_override_decision),
+    path("attendance/edit-context", attendance_edit_context),
     path("biometric/punch", biometric_punch),
 
     # ── Co HRMS Portal (read-only external pull, X-Portal-Key auth) ─────────

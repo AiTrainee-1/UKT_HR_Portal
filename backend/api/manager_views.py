@@ -14,8 +14,7 @@ from .hod_scope import coverage, department_conflicts, department_roster, effect
 from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment, ManagerEmployeeExclusion,
-    ResignationRequest, AttendanceOverrideRequest, AttendanceDayRecord,
-    CasualLeaveRequest, Notification, OnDutySession,
+    ResignationRequest, AttendanceOverrideRequest, CasualLeaveRequest, Notification, OnDutySession,
 )
 
 
@@ -1122,8 +1121,7 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
     Approval writes the requested values onto AttendanceDayRecord (used by payroll).
     Rejection leaves the original attendance data untouched.
     """
-    from .growth_views import _override_request_dict, apply_override_values
-    from .attendance_final import compute_day_record
+    from .growth_views import _override_request_dict
 
     token_emp_id = get_token_employee_id(request)
     if not token_emp_id:
@@ -1172,10 +1170,9 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
         return approval.refusal(exc)
 
     if outcome.final:
-        record = AttendanceDayRecord.objects.filter(employee=req.employee, date=req.date).first()
-        if record is None:
-            record = compute_day_record(req.employee, req.date)
-        apply_override_values(record, req.requested_values, reviewer_name)
+        from .attendance_edit import finalize
+
+        finalize(req, reviewer_name, request)
 
     from django.utils import timezone
 
@@ -1188,7 +1185,9 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
     Notification.objects.create(
         employee=req.employee,
         type="attendance",
-        message=f"Your attendance correction request for {req.date} was {outcome.status}.",
+        message=approval.notice_for(
+            f"attendance change for {req.date}", outcome, final_tail=" and your attendance has been updated"
+        ),
     )
     if outcome.final or outcome.rejected:
         whatsapp_approvals.notify_decision(

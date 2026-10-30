@@ -234,9 +234,10 @@ def apply_override_values(record: AttendanceDayRecord, values: dict, reviewer_na
     record.source = "manual"
     # Manual overrides win: whatever compensation the auto row it replaces was marked with (a birthday, an allowance, a
     # relaxation ...) no longer describes the day, and a stale marker would draw its chip on a day HR decided by hand.
-    record.compensation_kind = ""
+    # A compensation type chosen on the Attendance Edit page carries its own marker (kind + one plain sentence).
+    record.compensation_kind = str(values.get("compensationKind") or "")
     record.compensation_minutes = 0
-    record.compensation_note = ""
+    record.compensation_note = str(values.get("compensationNote") or "")
     record.override_by = reviewer_name
     record.override_note = values.get("note")
     record.save()
@@ -262,6 +263,8 @@ def _override_request_dict(req: AttendanceOverrideRequest, cfg: approval.Config 
         "reviewedAt": req.reviewed_at.isoformat() if req.reviewed_at else None,
         "createdAt": req.created_at.isoformat() if req.created_at else None,
         "approval": approval.progress("attendance_correction", req, cfg),
+        "type": (req.requested_values or {}).get("type"),
+        "typeLabel": (req.requested_values or {}).get("typeLabel"),
     }
 
 
@@ -305,13 +308,36 @@ def attendance_day_override(request: Request) -> Response:
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
 
+    # EVERY change (any attendance type) is a request: nothing here writes the day. The Department Head approves it first,
+    # then HR; only then does the record change (attendance_edit.finalize).
+    from . import attendance_edit as edit
+
+    if d > ist_today():
+        return Response({"error": "A day that has not come yet cannot be changed."}, status=400)
+    if edit.hod_of(emp) is None:
+        return Response(
+            {
+                "error": (
+                    f"{emp.first_name} {emp.last_name} has no Department Head who can approve this. "
+                    "Assign one in User Management first: the change needs the Department Head, then HR."
+                ),
+                "code": "no_hod",
+            },
+            status=400,
+        )
+
     record = AttendanceDayRecord.objects.filter(employee=emp, date=d).first()
     if record is None:
         record = compute_day_record(emp, d)
 
     try:
-        resolved = _resolve_override_fields(record, emp, data)
-    except ValueError as e:
+        if data.get("type"):
+            resolved = edit.resolve(data)
+        else:  # an older client: the same approval, the old fields
+            if len(str(data.get("note") or "").strip()) < 3:
+                return Response({"error": "Give a reason for the change (a few words)."}, status=400)
+            resolved = _resolve_override_fields(record, emp, data)
+    except (ValueError, edit.EditError) as e:
         return Response({"error": str(e)}, status=400)
 
     # Replace any earlier pending request for the same day with this new one
@@ -324,10 +350,17 @@ def attendance_day_override(request: Request) -> Response:
         date=d,
         previous_values=_snapshot_fields(record),
         requested_values=resolved,
-        reason=data.get("note"),
+        reason=resolved.get("reason") or data.get("note"),
         requested_by=hr_name,
         approval_trail=[],
     )
+    approval.notify_new_request(
+        "attendance_correction", emp, f"attendance change for {d} ({resolved.get('typeLabel') or 'edit'})"
+    )
+    log_action(
+        request, "create", "attendance", record_id=req.id,
+        description=f"Proposed {resolved.get('typeLabel') or 'an attendance change'} for {emp.employee_code} on {d} (waiting for the Department Head, then HR)",
+    )  # fmt: skip
     return Response({
         "ok": True,
         "pendingApproval": True,
@@ -340,15 +373,22 @@ def attendance_day_override(request: Request) -> Response:
 @require_hr
 def attendance_override_requests(request: Request) -> Response:
     """HR-side visibility into submitted override requests and their approval status."""
-    qs = AttendanceOverrideRequest.objects.select_related("employee__department")
+    qs = scope_to_branch(
+        AttendanceOverrideRequest.objects.select_related("employee__department"), request, field="employee__branch_id"
+    )
     if emp_id := request.query_params.get("employeeId"):
         qs = qs.filter(employee_id=emp_id)
     if code := request.query_params.get("code"):
         qs = qs.filter(employee__employee_code__iexact=code.strip())
     if status_filter := request.query_params.get("status"):
         qs = qs.filter(status=status_filter)
-    qs = qs.order_by("-created_at")[:200]
     cfg = approval.get_config("attendance_correction")
+    waiting = request.query_params.get("waiting")  # "hod" | "hr": only the requests that role can decide right now
+    if waiting in (approval.HOD, approval.HR):
+        qs = qs.filter(status__in=("pending",))
+        rows = [r for r in qs.order_by("-created_at")[:500] if approval.can_act("attendance_correction", r, waiting, cfg)]
+        return Response([_override_request_dict(r, cfg) for r in rows[:200]])
+    qs = qs.order_by("-created_at")[:200]
     return Response([_override_request_dict(r, cfg) for r in qs])
 
 

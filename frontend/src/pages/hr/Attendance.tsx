@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
+import { useUrlParams } from "@/components/payroll/kit/url-state";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -92,6 +93,10 @@ function Pagination({
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const today = () => new Date().toISOString().slice(0, 10);
+
+/** What the page keeps in its address (?date=&month=&year=&status=), so coming back from another page (the Attendance Edit
+ *  page, a details page) or reloading lands on the same day, month and filter. A value at its default stays out of it. */
+const ATTENDANCE_URL_DEFAULTS = { date: "", month: "", year: "", status: "all" } as const;
 const currentMonth = () => new Date().getMonth() + 1;
 const currentYear = () => new Date().getFullYear();
 
@@ -263,9 +268,15 @@ export default function AttendancePage() {
   const queryClient = useQueryClient();
   const [location, navigate] = useLocation();
 
-  const [selectedDate, setSelectedDate] = useState(today());
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth());
-  const [selectedYear, setSelectedYear] = useState(currentYear());
+  const [urlState, setUrlState] = useUrlParams<Record<keyof typeof ATTENDANCE_URL_DEFAULTS, string>>(
+    ATTENDANCE_URL_DEFAULTS,
+  );
+  const selectedDate = urlState.date || today();
+  const selectedMonth = Number(urlState.month) || currentMonth();
+  const selectedYear = Number(urlState.year) || currentYear();
+  const setSelectedDate = (v: string) => setUrlState({ date: v });
+  const setSelectedMonth = (v: number) => setUrlState({ month: String(v) });
+  const setSelectedYear = (v: number) => setUrlState({ year: String(v) });
   // Staff / Production sub-section -derived from the route so the sidebar
   // stays in sync (/hr/attendance/staff | /hr/attendance/production)
   const view: "staff" | "production" =
@@ -282,7 +293,10 @@ export default function AttendancePage() {
     hoursWorked: "",
   });
 
-  const [statusFilter, setStatusFilter] = useState<"all" | "present" | "absent" | "on_leave">("all");
+  const statusFilter: "all" | "present" | "absent" | "on_leave" = (
+    ["present", "absent", "on_leave"] as const
+  ).find((s) => s === urlState.status) ?? "all";
+  const setStatusFilter = (v: "all" | "present" | "absent" | "on_leave") => setUrlState({ status: v });
   const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
   const [syncMode, setSyncMode] = useState<SyncBiometricMode>("day");
   // Multi-select checklist: which specific devices to sync. Empty selection

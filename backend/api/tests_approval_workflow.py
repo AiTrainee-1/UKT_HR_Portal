@@ -207,7 +207,7 @@ class CatalogTests(ConfigCacheMixin, TestCase):
             "missing_punch": HOD_THEN_HR,
             "on_duty": HOD_OPTIONAL_THEN_HR,
             "resignation": HOD_THEN_HR,
-            "attendance_correction": HOD_ONLY,
+            "attendance_correction": HOD_THEN_HR,
             "holiday_work": HOD_ONLY,
             "on_duty_punch": HR_ONLY,
             "advance": HR_ONLY,
@@ -972,23 +972,42 @@ class OutpassPipelineTests(Base):
 
 
 class AttendanceCorrectionAndFixedWorkflowTests(Base):
-    def test_a_correction_is_decided_by_the_hod_and_can_be_switched_off(self):
+    def test_a_correction_needs_the_hod_and_then_hr_and_cannot_be_switched_off(self):
         AttendanceDayRecord.objects.create(employee=self.emp, date=date(2026, 9, 1), status="absent", shifts_earned=0)
         r = self.send(
-            "post", "/api/attendance/override", {"employeeId": self.emp.id, "date": "2026-09-01", "status": "present"}
+            "post",
+            "/api/attendance/override",
+            {"employeeId": self.emp.id, "date": "2026-09-01", "type": "present", "note": "device missed the punch"},
         )
         self.assertEqual(r.status_code, 202, r.content)
         req_id = r.json()["request"]["id"]
         self.assertEqual(r.json()["request"]["approval"]["waitingFor"], ["hod"])
+        # nothing is written while it waits
+        self.assertEqual(AttendanceDayRecord.objects.get(employee=self.emp, date=date(2026, 9, 1)).status, "absent")
+        # HR cannot go first
+        early = self.send("patch", f"/api/attendance/override-requests/{req_id}", {"status": "approved"})
+        self.assertEqual((early.status_code, early.json()["code"]), (400, "not_your_turn"))
+        # the Department Head approves: it moves on to HR and the day is STILL unchanged
         ok = self.as_hod("patch", f"/api/manager/attendance-requests/{req_id}/status", {"status": "approved"})
         self.assertEqual(ok.status_code, 200, ok.content)
+        self.assertEqual(ok.json()["status"], "pending")
+        self.assertEqual(ok.json()["approval"]["waitingFor"], ["hr"])
+        self.assertEqual(AttendanceDayRecord.objects.get(employee=self.emp, date=date(2026, 9, 1)).status, "absent")
+        # HR approves: only now is the record written
+        done = self.send("patch", f"/api/attendance/override-requests/{req_id}", {"status": "approved"})
+        self.assertEqual(done.status_code, 200, done.content)
         self.assertEqual(AttendanceDayRecord.objects.get(employee=self.emp, date=date(2026, 9, 1)).status, "present")
-        self.assertEqual(AttendanceOverrideRequest.objects.get(pk=req_id).approval_trail[0]["role"], HOD)
-        self.configure("attendance_correction", enabled=False)
-        refused = self.send(
-            "post", "/api/attendance/override", {"employeeId": self.emp.id, "date": "2026-09-02", "status": "present"}
+        self.assertEqual(
+            [e["role"] for e in AttendanceOverrideRequest.objects.get(pk=req_id).approval_trail], [HOD, HR]
         )
-        self.assertEqual((refused.status_code, refused.json()["code"]), (403, "workflow_disabled"))
+        # the pipeline is fixed: it cannot be switched off, so a new request is still accepted
+        self.configure("attendance_correction", enabled=False)
+        again = self.send(
+            "post",
+            "/api/attendance/override",
+            {"employeeId": self.emp.id, "date": "2026-09-02", "type": "present", "note": "second day"},
+        )
+        self.assertEqual(again.status_code, 202, again.content)
         # reverting a day to the automatic result is not a request, so it still works
         reset = self.send(
             "post", "/api/attendance/override", {"employeeId": self.emp.id, "date": "2026-09-01", "reset": True}
@@ -1046,7 +1065,7 @@ class HodOnlyNotificationTests(Base):
         return qs.filter(type=key).count() if key else qs.count()
 
     def test_only_the_fixed_department_head_workflows_are_head_only(self):
-        self.assertEqual({d.key for d in approval.DEFINITIONS if d.hod_only}, {"attendance_correction", "holiday_work"})
+        self.assertEqual({d.key for d in approval.DEFINITIONS if d.hod_only}, {"holiday_work"})
         for d in approval.DEFINITIONS:
             self.assertEqual(d.hod_only, (not d.editable and d.allowed_roles == (HOD,)), d.key)
 

@@ -242,6 +242,9 @@ api/tests_reporting_hr_reports.py
 api/tests_reporting_hr_salary_statement.py
 api/tests_reporting_hr_strength.py
 api/tests_reporting_hr_time_card.py
+api/attendance_edit.py
+api/attendance_edit_views.py
+api/tests_attendance_edit.py
 api/tests_device_punch_rules.py
 api/tests_punch_view_sync.py
 api/tests_reporting_payroll_core.py

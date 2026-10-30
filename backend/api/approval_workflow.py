@@ -184,16 +184,21 @@ DEFINITIONS: tuple[WorkflowDef, ...] = (
         label="Attendance correction",
         group="Leave & attendance",
         purpose=(
-            "HR proposes a manual change to an employee's attendance and the Department Head must approve it before the day "
-            "is overwritten, so attendance is never edited without accountability."
+            "HR proposes a change to an employee's attendance (Attendance > the pencil on a day). The employee's Department "
+            "Head approves it first, then HR approves it second. Only after BOTH have approved is the attendance record "
+            "changed; until then the day stays exactly as it was."
         ),
         requested_by="HR",
-        default_steps=(_step(HOD),),
-        allowed_roles=(HOD,),
+        default_steps=(_step(HOD), _step(HR)),
+        allowed_roles=(HOD, HR),
         editable=False,
+        can_disable=False,
         hod_flag="can_approve_attendance",
-        fixed_note="HR is the one who asks for the change, so the Department Head is always the approver.",
-        on_off_effect="HR cannot raise new corrections while it is off; corrections already waiting can still be decided.",
+        fixed_note=(
+            "Every attendance change needs the Department Head first and then HR, for every attendance type, with no "
+            "exceptions. This pipeline cannot be edited or switched off."
+        ),
+        note="A change for an employee who has no Department Head (or who is the head) waits until one is assigned: it cannot be submitted.",
     ),
     WorkflowDef(
         key="holiday_work",
@@ -302,7 +307,7 @@ def _config_of(defn: WorkflowDef, row) -> Config:
     steps = steps_from_json(row.steps) if defn.editable else None
     return Config(
         defn.key,
-        bool(row.enabled),
+        bool(row.enabled) or not defn.can_disable,
         steps or defn.default_steps,
         customised=bool(steps) or not row.enabled,
         updated_by=row.updated_by,

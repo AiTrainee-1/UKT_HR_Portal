@@ -90,7 +90,7 @@ test("Approval Workflow Control is the second User Management tab and lists ever
     missing_punch: "Employee → HOD → HR",
     on_duty: "Employee → HOD → HR",
     on_duty_punch: "Employee → HR",
-    attendance_correction: "HR → HOD",
+    attendance_correction: "HR → HOD → HR",
     holiday_work: "HR → HOD",
     outpass: "Employee → HOD or HR",
     request: "Employee → HR",
@@ -267,6 +267,8 @@ test("fixed pipelines cannot be edited or switched off, and the server refuses a
   }
   // On-Duty punch verification belongs to On-Duty: it has no switch of its own; the others can still be switched off
   await expect(page.getByTestId("wf-toggle-on_duty_punch")).toBeDisabled();
+  // every attendance change needs the Department Head and then HR, always: it has no switch either
+  await expect(page.getByTestId("wf-toggle-attendance_correction")).toBeDisabled();
   await expect(page.getByTestId("wf-toggle-request")).toBeEnabled();
   await expect(page.getByTestId("wf-toggle-holiday_work")).toBeEnabled();
   await expect(page.getByTestId("wf-edit-leave")).toBeVisible();
@@ -277,6 +279,7 @@ test("fixed pipelines cannot be edited or switched off, and the server refuses a
       `${key} ${JSON.stringify(body)}`,
     ).toBe(status);
   await refuse("on_duty_punch", { enabled: false });
+  await refuse("attendance_correction", { enabled: false });
   await refuse("request", { steps: [{ roles: ["hod"], mandatory: true }] }); // no Department Head screen exists for it
   await refuse("leave", { steps: [] });
   await refuse("leave", {

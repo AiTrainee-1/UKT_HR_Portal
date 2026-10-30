@@ -1,11 +1,10 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { TONE } from "@/lib/statusTones";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AttendanceLoader } from "@/components/ui/AttendanceLoader";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -14,13 +13,15 @@ import {
   type FinalAttendanceDay,
 } from "@/lib/api-client/custom-hooks";
 import { useListEmployees } from "@/lib/api-client";
-import { halfDayWorked, isEarlyOutDay, lateDetectionFlags } from "@/lib/late-detection";
+import { waitingText } from "@/lib/approval-workflow";
+import { useUrlParams } from "@/components/payroll/kit/url-state";
+import { halfDayWorked, lateDetectionFlags } from "@/lib/late-detection";
 import { DayFlagBadges } from "@/components/DayFlagBadges";
 import {
   CompensationChip, CompensationLegend, countMarks, isPunchlessRelaxation,
 } from "@/components/attendance-compensation";
 import {
-  Search, User, RotateCcw, PenLine, X, Clock, Save, ShieldCheck, Hourglass, ShieldX, History,
+  Search, User, RotateCcw, PenLine, X, ShieldCheck, Hourglass, ShieldX, History,
 } from "lucide-react";
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -37,23 +38,7 @@ const STATUS_LABEL: Record<string, string> = {
   on_leave: "On Leave", holiday: "Holiday",
 };
 
-type EditForm = {
-  status: string;
-  firstPunch: string;
-  lastPunch: string;
-  isLate: boolean;
-  isEarlyOut: boolean;
-  note: string;
-};
-
-/** The statuses the edit form offers, with what each is worth in shifts. */
-const EDIT_STATUSES = [
-  { value: "present", label: "Present", shifts: "1.00" },
-  { value: "half_shift", label: "Half Day", shifts: "0.50" },
-  { value: "absent", label: "Absent", shifts: "0.00" },
-  { value: "on_leave", label: "On Leave", shifts: "0.00" },
-  { value: "holiday", label: "Holiday", shifts: "0.00" },
-] as const;
+const SEARCH_URL_DEFAULTS = { code: "", em: "", ey: "" } as const;
 
 /**
  * Employee attendance search: type an employee code → see the whole month
@@ -67,19 +52,19 @@ export default function AttendanceSearchSection({
   employmentType?: "staff" | "production";
 }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const now = new Date();
 
-  const [input, setInput] = useState("");
-  const [searchCode, setSearchCode] = useState("");
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
-
-  // Edit modal state
-  const [editDay, setEditDay] = useState<FinalAttendanceDay | null>(null);
-  const [form, setForm] = useState<EditForm>({
-    status: "present", firstPunch: "", lastPunch: "",
-    isLate: false, isEarlyOut: false, note: "",
-  });
+  // The searched employee and the month live in the address (?code=188&em=10&ey=2026): coming back from the Attendance Edit
+  // page, or reloading, shows the same employee and month without searching again.
+  const [urlState, setUrlState] = useUrlParams<Record<keyof typeof SEARCH_URL_DEFAULTS, string>>(SEARCH_URL_DEFAULTS);
+  const searchCode = urlState.code;
+  const setSearchCode = (v: string) => setUrlState({ code: v });
+  const month = Number(urlState.em) || now.getMonth() + 1;
+  const year = Number(urlState.ey) || now.getFullYear();
+  const setMonth = (v: number) => setUrlState({ em: String(v) });
+  const setYear = (v: number) => setUrlState({ ey: String(v) });
+  const [input, setInput] = useState(searchCode);
 
   const { data: employees } = useListEmployees({ status: "active" });
   const { data, isLoading, isError } = useEmployeeMonthlyAttendance(searchCode, month, year);
@@ -113,44 +98,6 @@ export default function AttendanceSearchSection({
     setSearchCode(code);
   };
 
-  const openEdit = (day: FinalAttendanceDay) => {
-    setForm({
-      status: day.status === "present" && day.isHalfShift ? "half_shift" : day.status,
-      firstPunch: day.firstPunch ?? "",
-      lastPunch: day.lastPunch ?? "",
-      isLate: day.isLate,
-      isEarlyOut: isEarlyOutDay(day),
-      note: day.overrideNote ?? "",
-    });
-    setEditDay(day);
-  };
-
-  const saveEdit = async () => {
-    if (!data || !editDay) return;
-    const status = form.status as "present" | "half_shift" | "absent" | "on_leave" | "holiday";
-    if (form.note.trim().length < 3) {
-      toast({ title: "Give a reason", description: "A few words: it is kept in the Punch View History.", variant: "destructive" });
-      return;
-    }
-    try {
-      // applied at once as HR's own decision (and written to the Punch View History), not sent for approval
-      await overrideMutation.mutateAsync({
-        employeeId: data.employee.id,
-        date: editDay.date,
-        status,
-        isLate: form.isLate,
-        isEarlyOut: form.isEarlyOut,
-        firstPunch: form.firstPunch || null,
-        lastPunch: form.lastPunch || null,
-        note: form.note.trim(),
-      });
-      toast({ title: `Attendance updated for ${editDay.date}` });
-      setEditDay(null);
-    } catch (err: any) {
-      toast({ title: err?.message ?? "Failed to update", variant: "destructive" });
-    }
-  };
-
   const revertDay = async (day: FinalAttendanceDay) => {
     if (!data) return;
     try {
@@ -175,8 +122,11 @@ export default function AttendanceSearchSection({
               Employee Attendance Search
             </CardTitle>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              Search by employee code -view weekly attendance and edit any day.
-              An edit applies at once and reaches payroll; it needs a reason and is kept in the Punch View History.
+              Search by employee code -view weekly attendance and click the pencil on a day to edit it. Every edit needs
+              the Department Head's approval first and then HR's before the attendance changes.{" "}
+              <a href="/hr/attendance/edit-requests" className="font-semibold text-indigo-700 hover:underline" data-testid="attendance-edit-requests-link">
+                Edit requests
+              </a>
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -414,7 +364,7 @@ export default function AttendanceSearchSection({
                           <td className="px-3 py-2 text-[10px]">
                             {pending ? (
                               <span className="inline-flex items-center gap-1 text-yellow-700 font-semibold">
-                                <Hourglass size={10} /> Under Review
+                                <Hourglass size={10} /> {waitingText(pending.approval) ?? "Under review"}
                               </span>
                             ) : day.source === "manual" ? (
                               <span className="inline-flex items-center gap-1 text-blue-600 font-semibold">
@@ -427,9 +377,14 @@ export default function AttendanceSearchSection({
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-1 justify-end">
                               <button
-                                onClick={() => openEdit(day)}
+                                onClick={() =>
+                                  navigate(
+                                    `/hr/attendance/edit/${data.employee.id}/${day.date}?back=${encodeURIComponent(window.location.pathname + window.location.search)}`,
+                                  )
+                                }
                                 className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                                title={pending ? "An older request is still waiting for approval: saving here replaces it" : "Edit this day"}
+                                title={pending ? "A change is already waiting for approval: open it to see where it is, or send a new one" : "Edit this day"}
+                                data-testid={`attendance-edit-open-${day.date}`}
                               >
                                 <PenLine size={13} />
                               </button>
@@ -491,151 +446,6 @@ export default function AttendanceSearchSection({
         )}
       </CardContent>
 
-      {/* ── Edit / Overwrite Modal ── */}
-      <Dialog open={!!editDay} onOpenChange={open => { if (!open) setEditDay(null); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Edit Attendance</DialogTitle>
-          </DialogHeader>
-          {editDay && data && (
-            <div className="space-y-4 pt-1">
-              {/* Who + when (locked) */}
-              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
-                <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center shrink-0">
-                  <User size={15} className="text-gray-500" />
-                </div>
-                <div className="min-w-0">
-                  <p className="font-bold text-sm truncate">{data.employee.name}</p>
-                  <p className="text-[11px] text-gray-400 font-mono">{data.employee.code}</p>
-                </div>
-                <div className="ml-auto text-right">
-                  <p className="text-xs font-bold text-gray-700 font-mono">{editDay.date}</p>
-                  <p className="text-[10px] text-gray-400">{editDay.day}</p>
-                </div>
-              </div>
-
-              {/* Status */}
-              <div className="space-y-1.5">
-                <Label className="text-xs">Status</Label>
-                <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Status">
-                  {EDIT_STATUSES.map(st => (
-                    <button
-                      key={st.value}
-                      type="button"
-                      aria-pressed={form.status === st.value}
-                      data-testid={`attendance-edit-${st.value}`}
-                      onClick={() => setForm(f => ({ ...f, status: st.value }))}
-                      className={`text-[11px] px-2 py-2 rounded-lg border font-semibold transition-colors ${
-                        form.status === st.value
-                          ? "bg-gray-900 text-white border-gray-900"
-                          : "bg-white hover:bg-gray-50 text-gray-700"
-                      }`}
-                    >
-                      {st.label}
-                      <span className="block text-[10px] font-normal opacity-70">{st.shifts} shift</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {(form.status === "present" || form.status === "half_shift") && (
-                <>
-                  {/* Punch times */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs flex items-center gap-1">
-                        <Clock size={11} /> First In
-                      </Label>
-                      <Input
-                        type="time"
-                        value={form.firstPunch}
-                        onChange={e => setForm(f => ({ ...f, firstPunch: e.target.value }))}
-                        data-testid="attendance-edit-first-in"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs flex items-center gap-1">
-                        <Clock size={11} /> Last Out
-                      </Label>
-                      <Input
-                        type="time"
-                        value={form.lastPunch}
-                        onChange={e => setForm(f => ({ ...f, lastPunch: e.target.value }))}
-                        data-testid="attendance-edit-last-out"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Late and Early Out marks */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      aria-pressed={form.isLate}
-                      data-testid="attendance-edit-late"
-                      onClick={() => setForm(f => ({ ...f, isLate: !f.isLate }))}
-                      className={`text-xs px-3 py-2 rounded-lg border font-semibold transition-colors ${
-                        form.isLate
-                          ? "bg-red-50 text-red-600 border-red-200"
-                          : "bg-white text-gray-600 hover:bg-gray-50"
-                      }`}
-                    >
-                      {form.isLate ? "⚠ Late -click to clear" : "Mark as Late"}
-                    </button>
-                    <button
-                      type="button"
-                      aria-pressed={form.isEarlyOut}
-                      data-testid="attendance-edit-early-out"
-                      onClick={() => setForm(f => ({ ...f, isEarlyOut: !f.isEarlyOut }))}
-                      className={`text-xs px-3 py-2 rounded-lg border font-semibold transition-colors ${
-                        form.isEarlyOut
-                          ? "bg-red-50 text-red-600 border-red-200"
-                          : "bg-white text-gray-600 hover:bg-gray-50"
-                      }`}
-                    >
-                      {form.isEarlyOut ? "⚠ Early Out -click to clear" : "Mark as Early Out"}
-                    </button>
-                  </div>
-                  {settings?.eveningEarlyOutEnabled === false && !isEarlyOutDay(editDay) && (
-                    <p className="text-[10px] text-amber-700 -mt-2">
-                      Early Out detection is switched off in Settings → Attendance. A mark set here still counts
-                      in the late deduction.
-                    </p>
-                  )}
-                </>
-              )}
-
-              {/* Reason */}
-              <div className="space-y-1.5">
-                <Label className="text-xs">Reason for this change <span className="text-gray-400 font-normal">(required; kept in the History)</span></Label>
-                <Input
-                  placeholder="e.g. CCTV verified -device missed punch"
-                  value={form.note}
-                  onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-                />
-              </div>
-
-              <div className="flex gap-3 pt-1">
-                <Button variant="outline" className="flex-1" onClick={() => setEditDay(null)}>
-                  Cancel
-                </Button>
-                <Button
-                  className="flex-1 gap-1.5"
-                  onClick={saveEdit}
-                  disabled={overrideMutation.isPending || form.note.trim().length < 3}
-                  data-testid="attendance-edit-save"
-                >
-                  <Save size={13} />
-                  {overrideMutation.isPending ? "Saving…" : "Save"}
-                </Button>
-              </div>
-              <p className="text-[10px] text-muted-foreground -mt-1">
-                This changes attendance at once, for payroll too, and is written to the Punch View
-                History. Use the ↩ button in the table to hand a day back to the punches.
-              </p>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </Card>
   );
 }
