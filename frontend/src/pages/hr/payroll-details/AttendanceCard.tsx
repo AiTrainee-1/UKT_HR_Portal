@@ -533,7 +533,7 @@ function DayPanel({
           Show it in the Issues list
         </button>
       )}
-      <DayAttendanceEdit employeeId={employeeId} date={day.date} />
+      <DayAttendanceEdit employeeId={employeeId} date={day.date} accent={accent} />
     </div>
   );
 }

@@ -148,9 +148,9 @@ KINDS: tuple[Kind, ...] = (
         "Attendance correction",
         "attendance",
         "AttendanceOverrideRequest",
-        "link",
-        "/hr/attendance/edit-requests",
-        "Attendance edit requests",
+        "quick",
+        None,
+        None,
         ("pending",),
     ),
     Kind(
@@ -422,17 +422,26 @@ def _request(r):
 def _correction(r):
     asked = r.requested_values or {}
     before = r.previous_values or {}
-    details = [("Date", str(r.date)), ("Raised by", r.requested_by or "HR")]
-    for key in sorted(asked):
-        details.append((f"Change {key}", f"{before.get(key, '-')} → {asked[key]}"))
-    changes = ", ".join(f"{k}: {asked[k]}" for k in sorted(asked)[:3])
+    proposed = asked.get("typeLabel") or _cap(asked.get("status"))
+    was = _cap(before.get("status")) or "-"
+    details = [
+        ("Date", str(r.date)),
+        ("Was", f"{was} · {float(before.get('shiftsEarned') or 0):.2f} shift"),
+        ("Proposed", f"{proposed} · {float(asked.get('shiftsEarned') or 0):.2f} shift"),
+    ]
+    if asked.get("firstPunch") or asked.get("lastPunch"):
+        details.append(("Times", f"{asked.get('firstPunch') or '-'} to {asked.get('lastPunch') or '-'}"))
+    marks = [m for m, on in (("Late", asked.get("isLate")), ("Early out", asked.get("isEarlyOut"))) if on]
+    if marks:
+        details.append(("Marked", ", ".join(marks)))
+    details.append(("Raised by", r.requested_by or "HR"))
     return {
         "label": "Attendance correction",
-        "summary": f"{r.date}" + (f" · {changes}" if changes else ""),
+        "summary": f"{r.date} · {was} → {proposed}",
         "reason": r.reason,
         "date": str(r.date),
         "details": details,
-        "decision": (r.reviewed_by, "hod" if r.reviewed_by else None, r.reviewed_at, r.review_comment),
+        "decision": (r.reviewed_by, "hr" if r.reviewed_by else None, r.reviewed_at, r.review_comment),
     }
 
 

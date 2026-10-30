@@ -124,7 +124,7 @@ export default function AttendanceSearchSection({
             <p className="text-[11px] text-muted-foreground mt-0.5">
               Search by employee code -view weekly attendance and click the pencil on a day to edit it. Every edit needs
               the Department Head's approval first and then HR's before the attendance changes.{" "}
-              <a href="/hr/attendance/edit-requests" className="font-semibold text-indigo-700 hover:underline" data-testid="attendance-edit-requests-link">
+              <a href="/hr/requests?kind=attendance_correction" className="font-semibold text-indigo-700 hover:underline" data-testid="attendance-edit-requests-link">
                 Edit requests
               </a>
             </p>

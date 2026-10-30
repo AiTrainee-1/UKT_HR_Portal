@@ -44,6 +44,9 @@ export function decisionCall({ item, status, comment }: Decision): Call | null {
       return { url: `/api/on-duty-sessions/${item.id}/status`, method: "PATCH", body: { status, comment: note } };
     case "outpass":
       return { url: `/api/outpass-requests/${item.id}/hr-status`, method: "PUT", body: { status, comment: note } };
+    case "attendance_correction":
+      // HR's second approval: the endpoint refuses it until the Department Head has approved
+      return { url: `/api/attendance/override-requests/${item.id}`, method: "PATCH", body: { status, comment: note } };
     default:
       return null;
   }
@@ -57,6 +60,7 @@ const OTHER_KEYS: Partial<Record<KindKey, string>> = {
   missing_punch: "/api/missing-punch-requests",
   on_duty: "/api/on-duty-sessions",
   outpass: "/api/outpass-requests",
+  attendance_correction: "/api/attendance/override-requests",
   request: "/api/employee-requests",
 };
 
@@ -72,6 +76,12 @@ export function useDecide() {
       queryClient.invalidateQueries({ queryKey: [HUB_KEY] });
       const other = OTHER_KEYS[item.kind];
       if (other) queryClient.invalidateQueries({ queryKey: [other] });
+      // an approved attendance change rewrites the day: every attendance view must read it again
+      if (item.kind === "attendance_correction") {
+        queryClient.invalidateQueries({
+          predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/attendance"),
+        });
+      }
     },
   });
 }

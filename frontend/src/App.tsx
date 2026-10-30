@@ -58,7 +58,6 @@ const ManualPunchImport = lazy(() => import("@/pages/hr/ManualPunchImport"));
 const PunchView = lazy(() => import("@/pages/hr/PunchView"));
 const PunchViewHistory = lazy(() => import("@/pages/hr/PunchViewHistory"));
 const AttendanceEdit = lazy(() => import("@/pages/hr/AttendanceEdit"));
-const AttendanceEditRequests = lazy(() => import("@/pages/hr/AttendanceEditRequests"));
 const BiometricDeviceStatus = lazy(() => import("@/pages/hr/BiometricDeviceStatus"));
 const DeviceControl = lazy(() => import("@/pages/hr/DeviceControl"));
 const EmployeeDetail = lazy(() => import("@/pages/hr/EmployeeDetail"));
@@ -343,8 +342,9 @@ function Router() {
         <Route path="/hr/attendance/punch-view/history">
           {() => <ProtectedRoute component={PunchViewHistory} allowedRoles={["hr"]} />}
         </Route>
+        {/* attendance edit approvals now live in the Requests page (an old link or bookmark lands there) */}
         <Route path="/hr/attendance/edit-requests">
-          {() => <ProtectedRoute component={AttendanceEditRequests} allowedRoles={["hr"]} />}
+          {() => <Redirect to="/hr/requests?kind=attendance_correction" replace />}
         </Route>
         <Route path="/hr/attendance/edit/:employeeId/:date">
           {() => <ProtectedRoute component={AttendanceEdit} allowedRoles={["hr"]} />}
@@ -471,9 +471,7 @@ function Router() {
         </Route>
         {/* SMS Control: one page with its tabs in the path (/hr/sms-control/settings/limits); the whole prefix is gated by the
           one `sms_control` module, and the component redirects the bare and unknown paths to Overview. */}
-        <Route path="/hr/sms-control/*?">
-          {() => <ProtectedRoute component={SmsControl} allowedRoles={["hr"]} />}
-        </Route>
+        <Route path="/hr/sms-control/*?">{() => <ProtectedRoute component={SmsControl} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/settings">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/settings/:tab">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/salary-slip">{() => <Redirect to="/hr/payroll" />}</Route>

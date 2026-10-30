@@ -1176,7 +1176,7 @@ export type AttendanceEditContext = {
   day: FinalAttendanceDay;
   future: boolean;
   /** The Department Head who will decide it first (null: nobody can, so it cannot be submitted). */
-  hod: { name: string; canApprove: boolean } | null;
+  hod: { name: string; code: string; canApprove: boolean } | null;
   pipeline: { steps: { roles: string[]; mandatory: boolean; label: string }[]; path: string };
   types: AttendanceEditType[];
   /** Every punch recorded on that calendar day, in time order. */

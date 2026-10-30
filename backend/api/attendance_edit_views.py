@@ -72,6 +72,7 @@ def attendance_edit_context(request: Request) -> Response:
             "hod": (
                 {
                     "name": f"{hod.employee.first_name} {hod.employee.last_name}".strip(),
+                    "code": hod.employee.employee_code,
                     "canApprove": hod.can_approve_attendance,
                 }
                 if hod

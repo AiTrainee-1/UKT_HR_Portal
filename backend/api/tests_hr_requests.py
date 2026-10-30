@@ -170,7 +170,10 @@ class EveryKindTests(HubFixture):
         self.assertEqual(modes["leave"], "quick")
         self.assertEqual(modes["on_duty"], "quick")
         self.assertEqual(modes["request"], "notes")
-        for kind in ("on_duty_punch", "attendance_correction", "holiday_work", "resignation", "advance"):
+        # attendance corrections are decided right on the Requests page: no page of their own to open
+        self.assertEqual(modes["attendance_correction"], "quick")
+        self.assertIsNone(next(k for k in self.body()["kinds"] if k["key"] == "attendance_correction")["openPath"])
+        for kind in ("on_duty_punch", "holiday_work", "resignation", "advance"):
             self.assertEqual(modes[kind], "link", kind)
 
     def test_a_leave_row_reads_like_the_leave_page(self):

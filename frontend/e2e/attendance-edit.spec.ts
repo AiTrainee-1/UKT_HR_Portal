@@ -142,17 +142,21 @@ test("the pencil opens the Attendance Edit page; a change needs the Department H
     expect(waiting.day.status).toBe(before.status);
     expect(waiting.day.source).toBe(before.source);
 
-    // HR's list: nothing is waiting for HR yet; the request shows under the Department Head and cannot be approved here
-    await page.goto("/hr/attendance/edit-requests");
-    await expect(page.getByTestId("edit-requests-empty")).toBeVisible();
-    await page.getByRole("tab", { name: /Waiting for the Department Head/ }).click();
+    // the Requests page's Attendance correction tab: the request shows as waiting for the Department Head and HR cannot decide it yet
     const requestId = waiting.requests[0].id as number;
-    await expect(page.getByTestId(`edit-request-${requestId}`)).toContainText("Sunday Compensation");
-    await expect(page.getByTestId(`edit-request-approve-${requestId}`)).toHaveCount(0);
+    await page.goto("/hr/requests?kind=attendance_correction");
+    const row = page.getByTestId(`request-attendance_correction-${requestId}`).first();
+    await expect(row).toContainText("Sunday Compensation", { timeout: 30_000 });
+    await expect(row).toContainText(/Department Head|HOD/);
+    await expect(page.getByTestId(`approve-attendance_correction-${requestId}`)).toHaveCount(0);
     expect(
       (await api(page, "PATCH", `/api/attendance/override-requests/${requestId}`, { status: "approved" }, admin))
         .status,
     ).toBe(400);
+
+    // the old address lands on the same tab
+    await page.goto("/hr/attendance/edit-requests");
+    await expect(page).toHaveURL(/\/hr\/requests\?kind=attendance_correction/);
 
     // the Department Head approves; the day is still unchanged and the request moves to HR
     const hod = await hodToken(page);
@@ -170,11 +174,14 @@ test("the pencil opens the Attendance Edit page; a change needs the Department H
     expect(between.day.status).toBe(before.status);
     expect(between.requests[0].approval.waitingFor).toEqual(["hr"]);
 
-    // HR approves from the list: only now does the day change
-    await page.goto("/hr/attendance/edit-requests");
-    await expect(page.getByTestId(`edit-request-${requestId}`)).toContainText("Sunday Compensation");
-    await page.getByTestId(`edit-request-approve-${requestId}`).click();
-    await expect(page.getByTestId("edit-requests-empty")).toBeVisible();
+    // HR approves from the Requests tab itself: only now does the day change
+    await page.goto("/hr/requests?kind=attendance_correction");
+    await expect(page.getByTestId(`request-attendance_correction-${requestId}`).first()).toContainText(
+      "Sunday Compensation",
+      { timeout: 30_000 },
+    );
+    await page.getByTestId(`approve-attendance_correction-${requestId}`).first().click();
+    await expect(page.getByTestId(`approve-attendance_correction-${requestId}`)).toHaveCount(0, { timeout: 30_000 });
     const after = (
       await api(page, "GET", `/api/attendance/edit-context?employeeId=${asha.id}&date=${day}`, undefined, admin)
     ).body!;

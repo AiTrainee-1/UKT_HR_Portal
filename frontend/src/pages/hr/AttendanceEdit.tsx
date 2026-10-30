@@ -139,7 +139,7 @@ export default function AttendanceEdit() {
               approve.
             </p>
           </div>
-          <Link href="/hr/attendance/edit-requests" className="text-xs font-semibold text-indigo-700 hover:underline">
+          <Link href="/hr/requests?kind=attendance_correction" className="text-xs font-semibold text-indigo-700 hover:underline">
             Edit requests
           </Link>
         </div>
@@ -396,8 +396,8 @@ export default function AttendanceEdit() {
                     <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-bold text-white">
                       2
                     </span>
-                    HR approves second (Attendance &gt;{" "}
-                    <Link href="/hr/attendance/edit-requests" className="font-semibold text-indigo-700 underline">
+                    HR approves second (Requests &gt;{" "}
+                    <Link href="/hr/requests?kind=attendance_correction" className="font-semibold text-indigo-700 underline">
                       Edit requests
                     </Link>
                     ).

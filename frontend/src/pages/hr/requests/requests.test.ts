@@ -439,7 +439,7 @@ describe("decisionsHere: what HR may press on this page", () => {
   });
 
   it("kinds that need their own page never offer a button here", () => {
-    for (const key of ["resignation", "advance", "on_duty_punch", "attendance_correction"] as const) {
+    for (const key of ["resignation", "advance", "on_duty_punch"] as const) {
       expect(
         decisionsHere(item({ kind: key }), kind({ key, mode: "link", openPath: "/hr/x", openLabel: "X" })),
         key,
@@ -489,10 +489,14 @@ describe("the endpoint each kind is decided on", () => {
     expect(call("missing_punch")).toMatchObject({ url: "/api/missing-punch-requests/7/status", method: "PATCH" });
     expect(call("on_duty")).toMatchObject({ url: "/api/on-duty-sessions/7/status", method: "PATCH" });
     expect(call("outpass")).toMatchObject({ url: "/api/outpass-requests/7/hr-status", method: "PUT" });
+    expect(call("attendance_correction")).toMatchObject({
+      url: "/api/attendance/override-requests/7",
+      method: "PATCH",
+    });
   });
 
   it("has no button endpoint for the kinds that open their own page", () => {
-    for (const k of ["resignation", "advance", "on_duty_punch", "attendance_correction", "request"] as const) {
+    for (const k of ["resignation", "advance", "on_duty_punch", "request"] as const) {
       expect(decisionCall({ item: { kind: k, id: 1 }, status: "rejected" }), k).toBeNull();
     }
   });

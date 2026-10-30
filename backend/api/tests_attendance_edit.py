@@ -88,6 +88,7 @@ class CatalogueTests(EditBase):
         self.assertEqual([t["key"] for t in body["types"]], ALL_TYPES)
         self.assertEqual(body["employee"]["code"], "W1")
         self.assertEqual(body["hod"]["name"], "Suresh Raj")
+        self.assertTrue(body["hod"]["code"])
         self.assertEqual(body["day"]["status"], "absent")
         self.assertEqual([s["roles"] for s in body["pipeline"]["steps"]], [["hod"], ["hr"]])
         self.assertEqual(body["pipeline"]["path"], "HR → HOD → HR")
