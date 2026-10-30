@@ -407,7 +407,9 @@ def _history(payroll: Payroll, kind: str) -> list[dict]:
 
 
 def _neighbours(request: Request, payroll: Payroll, kind: str) -> dict:
-    """Previous / next payroll of the same month or period (by employee first name, then id) and where this one stands."""
+    """Previous / next payroll of the same month or period and where this one stands. The order is the Payroll page's own: one
+    department after another (by department name, "No department" last; two departments with the same name stay apart), and the
+    employees of a department by name. So Next walks a department to its last employee, then starts the next department."""
     qs = scope_to_branch(Payroll.objects.all(), request, field="employee__branch_id")
     if kind == KIND_STAFF:
         qs = qs.filter(salary_mode=Payroll.SALARY_MODE_MONTHLY, month=payroll.month, year=payroll.year)
@@ -415,7 +417,22 @@ def _neighbours(request: Request, payroll: Payroll, kind: str) -> dict:
         qs = qs.filter(
             salary_mode=Payroll.SALARY_MODE_SHIFT, period_start=payroll.period_start, period_end=payroll.period_end
         )
-    ids = list(qs.order_by("employee__first_name", "id").values_list("id", flat=True))
+    rows = qs.values_list(
+        "id",
+        "employee__department_id",
+        "employee__department__name",
+        "employee__first_name",
+        "employee__last_name",
+    )
+
+    def order(row):
+        pk, dept_id, dept_name, first, last = row
+        name = f"{first or ''} {last or ''}".strip().casefold()
+        if dept_id is None:
+            return (1, "", 0, name, pk)
+        return (0, (dept_name or "").strip().casefold(), dept_id, name, pk)
+
+    ids = [row[0] for row in sorted(rows, key=order)]
     index = ids.index(payroll.id) if payroll.id in ids else -1
     return {
         "previousId": ids[index - 1] if index > 0 else None,

@@ -314,6 +314,8 @@ export type PayrollDetails = {
     employmentType: string;
     /** "active" | "inactive" ... (the employee's status now). */
     status: string;
+    /** The employee's phone number as it is on the profile; null when there is none. */
+    phone: string | null;
     joinDate: string | null;
     salaryAmount: number | null;
     salaryPerShift: number | null;

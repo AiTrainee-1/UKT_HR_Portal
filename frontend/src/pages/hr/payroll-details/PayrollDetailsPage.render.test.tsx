@@ -181,10 +181,27 @@ describe("a payroll that cannot be shown", () => {
 });
 
 describe("the header", () => {
+  it("shows the phone number as a big button beside Mark as Cleared, and a click copies it", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await openStaff();
+    const actions = must("pd-actions");
+    expect(actions.contains(must("pd-phone"))).toBe(true);
+    expect(actions.contains(must("pd-mark-paid"))).toBe(true);
+    expect(text(must("pd-phone"))).toBe("9876543210");
+    // a number is not in the chip row any more
+    expect(must("pd-chips").contains(must("pd-employee-phone"))).toBe(false);
+    click(must("pd-phone"));
+    await settle(5);
+    expect(writeText).toHaveBeenCalledWith("9876543210");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Phone number copied" }));
+  });
+
   it("names the employee, what they are, which payroll this is and when it was computed", async () => {
     await openStaff();
     expect(text(q("pd-employee-name"))).toBe("Meena Subramanian");
     expect(text(q("pd-employee-code"))).toBe("UKT-0142");
+    expect(text(q("pd-employee-phone"))).toBe("9876543210");
     const chips = text(q("pd-chips"));
     for (const expected of ["Accounts", "Senior Accountant", "Staff", "Head Office", "October 2026", "Pending"]) {
       expect(chips, expected).toContain(expected);

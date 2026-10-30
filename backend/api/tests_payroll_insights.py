@@ -1517,6 +1517,7 @@ class StaffDetailsTests(TestCase):
                 "branch": None,
                 "employmentType": "staff",
                 "status": "active",
+                "phone": None,
                 "joinDate": "2024-06-03",
                 "salaryAmount": 24000.0,
                 "salaryPerShift": None,
@@ -1620,15 +1621,62 @@ class StaffDetailsTests(TestCase):
         self.assertEqual((line["amount"], line["kind"]), (-750.0, "info"))
         self.assertEqual(d["money"]["net"], 20000.0)
 
-    def test_neighbours_follow_the_employees_first_name_within_the_month(self):
+    def test_neighbours_walk_one_department_after_another_and_leave_no_department_last(self):
+        # Meena is in Accounts; Anand has no department, so he comes last
         self.assertEqual(
             self.details()["neighbours"],
-            {"previousId": self.w.anand_payroll.id, "nextId": None, "position": 2, "total": 2},
+            {"previousId": None, "nextId": self.w.anand_payroll.id, "position": 1, "total": 2},
         )
         self.assertEqual(
             self.details(self.w.anand_payroll)["neighbours"],
-            {"previousId": None, "nextId": self.w.meena_payroll.id, "position": 1, "total": 2},
+            {"previousId": self.w.meena_payroll.id, "nextId": None, "position": 2, "total": 2},
         )
+
+    def test_next_finishes_a_departments_employees_by_name_then_starts_the_next_department(self):
+        admin = Department.objects.create(name="Admin")
+        admin_two = Department.objects.create(name="Admin")  # a second department with the same name stays apart
+        accounts = Employee.objects.get(pk=self.w.meena.pk).department
+        made = {}
+        for code, first, dept in (
+            ("N1", "Zed", admin),
+            ("N2", "Bob", admin),
+            ("N3", "Cara", accounts),
+            ("N4", "Yash", admin_two),
+            ("N5", "Abel", admin_two),
+        ):
+            emp = _staff(code, first=first, department=dept)
+            made[first] = Payroll.objects.create(
+                employee=emp,
+                salary_mode="monthly",
+                month=MONTH,
+                year=YEAR,
+                base_salary=Decimal("24000"),
+                gross_salary=Decimal("24000"),
+                deductions=Decimal("0"),
+                final_salary=Decimal("24000"),
+                status="pending",
+            )
+        # Accounts: Cara, Meena | Admin: Bob, Zed | the other Admin: Abel, Yash | no department: Anand
+        expected = [
+            made["Cara"],
+            self.w.meena_payroll,
+            made["Bob"],
+            made["Zed"],
+            made["Abel"],
+            made["Yash"],
+            self.w.anand_payroll,
+        ]
+        walked, current = [], expected[0]
+        for _ in range(len(expected)):
+            walked.append(current.id)
+            nxt = self.details(current)["neighbours"]["nextId"]
+            if nxt is None:
+                break
+            current = Payroll.objects.get(pk=nxt)
+        self.assertEqual(walked, [p.id for p in expected])
+        # Previous is the same walk backwards
+        self.assertEqual(self.details(made["Bob"])["neighbours"]["previousId"], self.w.meena_payroll.id)
+        self.assertEqual(self.details(made["Abel"])["neighbours"]["previousId"], made["Zed"].id)
 
     def test_history_is_the_last_six_other_payrolls_newest_first_with_their_issue_counts(self):
         months = [(1, 2026), (12, 2025), (11, 2025), (10, 2025), (9, 2025), (8, 2025), (7, 2025)]
@@ -1942,7 +1990,8 @@ class ProductionDetailsTests(TestCase):
         self.assertEqual([h["label"] for h in history], ["9 Feb - 15 Feb 2026"])
         self.assertEqual(
             self.details()["neighbours"],
-            {"previousId": self.w.lakshmi_payroll.id, "nextId": None, "position": 2, "total": 2},
+            # Raja has a department and Lakshmi has none: departments come first, "no department" last
+            {"previousId": None, "nextId": self.w.lakshmi_payroll.id, "position": 1, "total": 2},
         )
 
 

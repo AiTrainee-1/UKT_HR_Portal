@@ -612,6 +612,7 @@ def employee_json(emp) -> dict:
         "branch": emp.branch.name if emp.branch_id else None,
         "employmentType": emp.employment_type,
         "status": emp.status,
+        "phone": (emp.phone or "").strip() or None,
         "joinDate": joined.isoformat() if joined else None,
         "salaryAmount": money(emp.salary_amount) if emp.salary_amount is not None else None,
         "salaryPerShift": money(emp.salary_per_shift) if emp.salary_per_shift is not None else None,

@@ -374,6 +374,7 @@ const STAFF_EMPLOYEE: PayrollDetails["employee"] = {
   salaryPerShift: null,
   payCycle: null,
   bank: { hasAccount: true, bankName: "State Bank of India", hasIfsc: true, accountLast4: "4821" },
+  phone: "9876543210",
   pfNumber: "TN/MAS/0012345/000/0142",
   esiNumber: null,
   split: {
@@ -568,6 +569,7 @@ export function productionDetails(over: Partial<PayrollDetails> = {}): PayrollDe
       employmentType: "production",
       status: "active",
       joinDate: "2025-06-01",
+      phone: null,
       salaryAmount: null,
       salaryPerShift: 650,
       payCycle: "weekly",

@@ -12,6 +12,7 @@ import {
   ReceiptText,
   RefreshCw,
   Settings as SettingsIcon,
+  Phone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -101,42 +102,66 @@ export function DetailsHeader({
         <Button variant="outline" size="sm" className="h-9 gap-2" onClick={onBack} data-testid="pd-back">
           <ArrowLeft size={14} /> {backLabel}
         </Button>
-        <div className="flex items-center gap-2" role="group" aria-label="Move between payrolls">
-          <span className="text-xs font-medium tabular-nums text-muted-foreground" data-testid="pd-position">
-            {neighbours.position} of {neighbours.total}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9 gap-1.5 px-2.5 sm:px-3"
-            aria-label="Previous payroll"
-            ref={prevButton}
-            disabled={neighbours.previousId === null || switching}
-            onClick={() => {
-              if (neighbours.previousId === null) return;
-              pressed.current = "prev";
-              onNeighbour(neighbours.previousId);
-            }}
-            data-testid="pd-prev"
-          >
-            <ChevronLeft size={14} /> <span className="hidden sm:inline">Previous</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9 gap-1.5 px-2.5 sm:px-3"
-            aria-label="Next payroll"
-            ref={nextButton}
-            disabled={neighbours.nextId === null || switching}
-            onClick={() => {
-              if (neighbours.nextId === null) return;
-              pressed.current = "next";
-              onNeighbour(neighbours.nextId);
-            }}
-            data-testid="pd-next"
-          >
-            <span className="hidden sm:inline">Next</span> <ChevronRight size={14} />
-          </Button>
+        <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-2" data-testid="pd-top-right">
+          <div className="flex flex-wrap items-center gap-2 print:hidden" data-testid="pd-actions">
+            {employee.phone && <PhoneButton phone={employee.phone} name={employee.name} />}
+            {pending && (
+              <Button
+                size="sm"
+                className="h-9 gap-2 bg-emerald-600 bg-none text-white hover:bg-emerald-700"
+                disabled={switching || markingPaid}
+                onClick={onMarkPaid}
+                title="Update this payroll's status to Cleared"
+                data-testid="pd-mark-paid"
+              >
+                <BusyIcon busy={markingPaid} icon={CheckCircle2} /> Mark as Cleared
+              </Button>
+            )}
+            <PayslipMenu details={details} disabled={switching} />
+            <ExportMenu items={exportItems} disabled={switching} />
+            <Button asChild variant="outline" size="sm" className="h-9 gap-2">
+              <Link href={settingsPathFor(kind)} data-testid="pd-settings-link">
+                <SettingsIcon size={14} /> Settings
+              </Link>
+            </Button>
+          </div>
+          <div className="flex items-center gap-2" role="group" aria-label="Move between payrolls">
+            <span className="text-xs font-medium tabular-nums text-muted-foreground" data-testid="pd-position">
+              {neighbours.position} of {neighbours.total}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 px-2.5 sm:px-3"
+              aria-label="Previous payroll"
+              ref={prevButton}
+              disabled={neighbours.previousId === null || switching}
+              onClick={() => {
+                if (neighbours.previousId === null) return;
+                pressed.current = "prev";
+                onNeighbour(neighbours.previousId);
+              }}
+              data-testid="pd-prev"
+            >
+              <ChevronLeft size={14} /> <span className="hidden sm:inline">Previous</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 px-2.5 sm:px-3"
+              aria-label="Next payroll"
+              ref={nextButton}
+              disabled={neighbours.nextId === null || switching}
+              onClick={() => {
+                if (neighbours.nextId === null) return;
+                pressed.current = "next";
+                onNeighbour(neighbours.nextId);
+              }}
+              data-testid="pd-next"
+            >
+              <span className="hidden sm:inline">Next</span> <ChevronRight size={14} />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -193,30 +218,38 @@ export function DetailsHeader({
             </p>
           </div>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2 print:hidden" data-testid="pd-actions">
-          {pending && (
-            <Button
-              size="sm"
-              className="h-9 gap-2 bg-emerald-600 bg-none text-white hover:bg-emerald-700"
-              disabled={switching || markingPaid}
-              onClick={onMarkPaid}
-              title="Update this payroll's status to Cleared"
-              data-testid="pd-mark-paid"
-            >
-              <BusyIcon busy={markingPaid} icon={CheckCircle2} /> Mark as Cleared
-            </Button>
-          )}
-          <PayslipMenu details={details} disabled={switching} />
-          <ExportMenu items={exportItems} disabled={switching} />
-          <Button asChild variant="outline" size="sm" className="h-9 gap-2">
-            <Link href={settingsPathFor(kind)} data-testid="pd-settings-link">
-              <SettingsIcon size={14} /> Settings
-            </Link>
-          </Button>
-        </div>
       </div>
     </header>
+  );
+}
+
+/** The employee's phone number as a big button beside Mark as Cleared: a click copies it, so HR can paste it into a dialler. */
+function PhoneButton({ phone, name }: { phone: string; name: string }) {
+  const { toast } = useToast();
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(phone);
+      toast({ title: "Phone number copied", description: `${name}: ${phone}` });
+    } catch {
+      toast({ title: "Could not copy the number", description: phone, variant: "destructive" });
+    }
+  };
+  return (
+    <span data-view-safe>
+      <Button
+        type="button"
+        variant="outline"
+        className="h-10 gap-2 rounded-xl border-sky-200 bg-sky-50 px-4 text-sm font-bold text-sky-800 hover:bg-sky-100"
+        onClick={() => void copy()}
+        title={`${name}'s phone number: click to copy it`}
+        data-testid="pd-phone"
+      >
+        <Phone size={16} />
+        <span className="tabular-nums" data-testid="pd-employee-phone">
+          {phone}
+        </span>
+      </Button>
+    </span>
   );
 }
 
