@@ -226,6 +226,7 @@ def notification_json(record, employee_name: str | None = None) -> dict:
         "employeeId": record.employee_id,
         "employeeName": employee_name,
         "type": record.type,
+        "title": record.title or "",
         "message": record.message,
         "isRead": record.is_read,
         "createdAt": _dt(record.created_at),

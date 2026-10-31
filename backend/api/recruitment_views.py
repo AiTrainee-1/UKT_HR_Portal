@@ -148,7 +148,7 @@ def resolve_resignation(
             f"Your resignation request has been reviewed and approved by {who}. "
             f"It is now with {approval.phrase(outcome.waiting)} for final approval."
         )
-    Notification.objects.create(employee_id=r.employee_id, type="resignation", message=message)
+    approval.stage_notice(r.employee_id, "resignation", message, outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
         _notify_dept_heads(r)  # it has just reached the Department Head's step
     if outcome.final or outcome.rejected:

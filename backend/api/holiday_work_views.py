@@ -69,7 +69,6 @@ from .models import (
     DepartmentManager,
     Employee,
     HolidayWorkClaim,
-    Notification,
 )
 
 WORKFLOW = "holiday_work"
@@ -664,11 +663,7 @@ def decide_claim(claim_id: int, role: str, decision: str, *, actor: str, comment
             credit_balance(claim, actor)
         what = f"holiday-work compensation claim for {date_text(claim.work_date)}"
         tail = f" and {shifts_text(claim.shifts)} shift was added to your compensation balance" if outcome.final else ""
-        Notification.objects.create(
-            employee=claim.employee,
-            type="compensation",
-            message=approval.notice_for(what, outcome, tail),
-        )
+        approval.stage_notice(claim.employee, "compensation", approval.notice_for(what, outcome, tail), outcome)
     if outcome.final or outcome.rejected:
         whatsapp_approvals.notify_decision(
             WORKFLOW,

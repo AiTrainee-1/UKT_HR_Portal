@@ -108,10 +108,11 @@ def resolve_missing_punch(
     req.status = outcome.status
     req.save()
     what = f"Missing Punch request for {req.date.isoformat()}"
-    Notification.objects.create(
-        employee=req.employee,
-        type="missing_punch",
-        message=approval.notice_for(what, outcome, final_tail=" and has been added to your attendance"),
+    approval.stage_notice(
+        req.employee,
+        "missing_punch",
+        approval.notice_for(what, outcome, final_tail=" and has been added to your attendance"),
+        outcome,
     )
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
         _notify_hod_approvers(req)  # the request has just reached the Department Head's step

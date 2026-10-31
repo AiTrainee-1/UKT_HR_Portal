@@ -14,7 +14,7 @@ from .hod_scope import coverage, department_conflicts, department_roster, effect
 from .models import (
     Employee, Department,
     DepartmentManager, ManagerDepartmentAssignment, ManagerEmployeeAssignment, ManagerEmployeeExclusion,
-    ResignationRequest, AttendanceOverrideRequest, CasualLeaveRequest, Notification, OnDutySession,
+    ResignationRequest, AttendanceOverrideRequest, CasualLeaveRequest, OnDutySession,
 )
 
 
@@ -1182,12 +1182,13 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
     if comment := request.data.get("comment"):
         req.review_comment = comment
     req.save()
-    Notification.objects.create(
-        employee=req.employee,
-        type="attendance",
-        message=approval.notice_for(
+    approval.stage_notice(
+        req.employee,
+        "attendance",
+        approval.notice_for(
             f"attendance change for {req.date}", outcome, final_tail=" and your attendance has been updated"
         ),
+        outcome,
     )
     if outcome.final or outcome.rejected:
         whatsapp_approvals.notify_decision(

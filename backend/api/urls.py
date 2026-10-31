@@ -29,6 +29,10 @@ from .settlement_views import (
 )
 from .approval_workflow_views import approval_summary, approval_workflow_detail, approval_workflows
 from .login_sessions_views import login_sessions, revoke_login_session
+from .mobile_messages_views import (
+    mobile_messages_controls, mobile_messages_devices, mobile_messages_log, mobile_messages_overview,
+    mobile_messages_send,
+)
 from .mobile_app_version_views import (
     mobile_app_latest_version, mobile_app_version_detail, mobile_app_versions,
 )
@@ -788,6 +792,12 @@ urlpatterns = [
     path("mobile-app-logins/export", mobile_app_logins_export),
     path("mobile-app-logins/<int:employee_id>/reset-password", mobile_app_reset_password),
     # New Version tab: HR publishes builds; the employee app reads latest-version (public).
+    # Mobile App Login -> Mobile Messages: the control panel for what is pushed to employees' phones
+    path("mobile-app/messages/overview", mobile_messages_overview),
+    path("mobile-app/messages/controls", mobile_messages_controls),
+    path("mobile-app/messages/log", mobile_messages_log),
+    path("mobile-app/messages/devices", mobile_messages_devices),
+    path("mobile-app/messages/send", mobile_messages_send),
     path("mobile-app/versions", mobile_app_versions),
     path("mobile-app/versions/<int:pk>", mobile_app_version_detail),
     path("mobile-app/latest-version", mobile_app_latest_version),

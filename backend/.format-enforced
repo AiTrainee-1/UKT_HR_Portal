@@ -387,3 +387,9 @@ api/tests_payroll_calendar.py
 api/geo_tracking/static_map.py
 api/geo_tracking/journey_pdf.py
 api/tests_geo_static_map.py
+api/push_messages.py
+api/tests_push_messages.py
+api/mobile_messages.py
+api/mobile_messages_views.py
+api/tests_mobile_messages.py
+api/push_receipts.py

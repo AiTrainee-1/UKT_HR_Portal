@@ -2,6 +2,7 @@ import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import NewVersionTab from "./mobile-app/NewVersionTab";
+import MobileMessagesTab from "./mobile-app/MobileMessagesTab";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -10,34 +11,61 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { CircleLoader } from "@/components/ui/CircleLoader";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Smartphone, Search, KeyRound, ShieldCheck, ShieldAlert,
-  UserX, Users, Eye, EyeOff, Info, Trash2, Wand2, FileSpreadsheet, Rocket,
+  Smartphone,
+  Search,
+  KeyRound,
+  ShieldCheck,
+  ShieldAlert,
+  UserX,
+  Users,
+  Eye,
+  EyeOff,
+  Info,
+  Trash2,
+  Wand2,
+  FileSpreadsheet,
+  Rocket,
+  BellRing,
 } from "lucide-react";
 import {
-  useMobileAppLogins, useResetMobileAppPassword, downloadMobileAppLoginsExcel,
-  type MobileAppLoginEntry, type MobileAppLoginFilters,
+  useMobileAppLogins,
+  useResetMobileAppPassword,
+  downloadMobileAppLoginsExcel,
+  type MobileAppLoginEntry,
+  type MobileAppLoginFilters,
 } from "@/lib/api-client/custom-hooks";
 
 function fmtTime(iso: string | null) {
   if (!iso) return null;
   return new Date(iso).toLocaleString("en-IN", {
-    day: "2-digit", month: "short", year: "numeric",
-    hour: "2-digit", minute: "2-digit",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
-function StatCard({ label, value, sub, icon: Icon, color }: {
-  label: string; value: number | string; sub?: string;
+function StatCard({
+  label,
+  value,
+  sub,
+  icon: Icon,
+  color,
+}: {
+  label: string;
+  value: number | string;
+  sub?: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
   color: string;
 }) {
   return (
     <div className={`rounded-2xl p-4 flex items-start gap-3 ${color}`}>
-      <div className="mt-0.5 opacity-80"><Icon size={18} /></div>
+      <div className="mt-0.5 opacity-80">
+        <Icon size={18} />
+      </div>
       <div>
         <p className="text-xs font-medium opacity-70">{label}</p>
         <p className="text-2xl font-black">{value}</p>
@@ -56,10 +84,7 @@ function generatePassword(len = 10) {
   return Array.from(bytes, (b) => PW_ALPHABET[b % PW_ALPHABET.length]).join("");
 }
 
-function ResetPasswordDialog({ employee, onClose }: {
-  employee: MobileAppLoginEntry | null;
-  onClose: () => void;
-}) {
+function ResetPasswordDialog({ employee, onClose }: { employee: MobileAppLoginEntry | null; onClose: () => void }) {
   const { toast } = useToast();
   const reset = useResetMobileAppPassword();
   const [password, setPassword] = useState("");
@@ -69,34 +94,49 @@ function ResetPasswordDialog({ employee, onClose }: {
 
   const tooShort = password.length > 0 && password.length < 8;
 
-  const close = () => { setPassword(""); setReveal(false); onClose(); };
+  const close = () => {
+    setPassword("");
+    setReveal(false);
+    onClose();
+  };
 
   const handleSet = () => {
-    reset.mutate({ employeeId: employee.id, password }, {
-      onSuccess: (r) => {
-        toast({
-          title: "Password updated",
-          description: `${r.message} Share it with them directly — it can't be looked up later.`,
-        });
-        close();
+    reset.mutate(
+      { employeeId: employee.id, password },
+      {
+        onSuccess: (r) => {
+          toast({
+            title: "Password updated",
+            description: `${r.message} Share it with them directly — it can't be looked up later.`,
+          });
+          close();
+        },
+        onError: (e: any) =>
+          toast({
+            title: "Failed to update password",
+            description: e?.data?.error ?? e?.message,
+            variant: "destructive",
+          }),
       },
-      onError: (e: any) => toast({
-        title: "Failed to update password",
-        description: e?.data?.error ?? e?.message,
-        variant: "destructive",
-      }),
-    });
+    );
   };
 
   const handleClear = () => {
-    reset.mutate({ employeeId: employee.id, clear: true }, {
-      onSuccess: (r) => { toast({ title: "Password cleared", description: r.message }); close(); },
-      onError: (e: any) => toast({
-        title: "Failed to clear password",
-        description: e?.data?.error ?? e?.message,
-        variant: "destructive",
-      }),
-    });
+    reset.mutate(
+      { employeeId: employee.id, clear: true },
+      {
+        onSuccess: (r) => {
+          toast({ title: "Password cleared", description: r.message });
+          close();
+        },
+        onError: (e: any) =>
+          toast({
+            title: "Failed to clear password",
+            description: e?.data?.error ?? e?.message,
+            variant: "destructive",
+          }),
+      },
+    );
   };
 
   return (
@@ -119,9 +159,8 @@ function ResetPasswordDialog({ employee, onClose }: {
         <div className="flex gap-2 items-start rounded-lg bg-amber-50 text-amber-900 p-2.5 text-[11px] leading-relaxed">
           <Info size={13} className="mt-0.5 shrink-0" />
           <span>
-            Existing passwords are stored as one-way hashes and can never be displayed
-            or recovered — not here, not anywhere. To help someone who has forgotten
-            theirs, set a new password below and pass it on.
+            Existing passwords are stored as one-way hashes and can never be displayed or recovered — not here, not
+            anywhere. To help someone who has forgotten theirs, set a new password below and pass it on.
           </span>
         </div>
 
@@ -147,8 +186,14 @@ function ResetPasswordDialog({ employee, onClose }: {
               </button>
             </div>
             <Button
-              type="button" variant="outline" size="sm" className="gap-1.5 text-xs shrink-0"
-              onClick={() => { setPassword(generatePassword()); setReveal(true); }}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs shrink-0"
+              onClick={() => {
+                setPassword(generatePassword());
+                setReveal(true);
+              }}
             >
               <Wand2 size={13} /> Generate
             </Button>
@@ -159,21 +204,22 @@ function ResetPasswordDialog({ employee, onClose }: {
         <div className="flex items-center justify-between gap-2 pt-1">
           {employee.hasPassword ? (
             <Button
-              variant="ghost" size="sm"
+              variant="ghost"
+              size="sm"
               className="gap-1.5 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
               disabled={reset.isPending}
               onClick={handleClear}
             >
               <Trash2 size={13} /> Clear password
             </Button>
-          ) : <span />}
+          ) : (
+            <span />
+          )}
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="text-xs" onClick={close}>Cancel</Button>
-            <Button
-              size="sm" className="text-xs"
-              disabled={password.length < 8 || reset.isPending}
-              onClick={handleSet}
-            >
+            <Button variant="outline" size="sm" className="text-xs" onClick={close}>
+              Cancel
+            </Button>
+            <Button size="sm" className="text-xs" disabled={password.length < 8 || reset.isPending} onClick={handleSet}>
               {reset.isPending ? "Saving…" : employee.hasPassword ? "Reset password" : "Set password"}
             </Button>
           </div>
@@ -198,7 +244,7 @@ export default function MobileAppLogin() {
   const [search, setSearch] = useState("");
   const [resetTarget, setResetTarget] = useState<MobileAppLoginEntry | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [view, setView] = useState<"logins" | "version">("logins");
+  const [view, setView] = useState<"logins" | "messages" | "version">("logins");
 
   const { data, isLoading } = useMobileAppLogins({ access, status, search });
 
@@ -223,7 +269,6 @@ export default function MobileAppLogin() {
   return (
     <HrLayout>
       <div className="space-y-6">
-
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
@@ -237,7 +282,9 @@ export default function MobileAppLogin() {
           <div className="flex items-center gap-2">
             {view === "logins" && (
               <Button
-                variant="outline" size="sm" className="gap-1.5 text-xs"
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs"
                 onClick={handleExport}
                 disabled={exporting || isLoading || rows.length === 0}
               >
@@ -252,48 +299,61 @@ export default function MobileAppLogin() {
         <PillTabs
           items={[
             { value: "logins", label: "Login Status", icon: <Smartphone size={12} /> },
+            { value: "messages", label: "Mobile Messages", icon: <BellRing size={12} /> },
             { value: "version", label: "New Version", icon: <Rocket size={12} /> },
           ]}
           value={view}
-          onChange={(v) => setView(v as "logins" | "version")}
+          onChange={(v) => setView(v as "logins" | "messages" | "version")}
           size="sm"
         />
 
         {view === "version" ? (
           <NewVersionTab />
+        ) : view === "messages" ? (
+          <MobileMessagesTab />
         ) : (
           <>
-
             {/* ── Stats ──────────────────────────────────────────────────────── */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <StatCard
-                label="Staff" value={s?.total ?? "—"}
-                sub="in the current filter" icon={Users} color="bg-slate-100 text-slate-800"
+                label="Staff"
+                value={s?.total ?? "—"}
+                sub="in the current filter"
+                icon={Users}
+                color="bg-slate-100 text-slate-800"
               />
               <StatCard
-                label="Has App Access" value={s?.hasAccess ?? "—"}
-                sub="password set up" icon={ShieldCheck} color="bg-green-50 text-green-800"
+                label="Has App Access"
+                value={s?.hasAccess ?? "—"}
+                sub="password set up"
+                icon={ShieldCheck}
+                color="bg-green-50 text-green-800"
               />
               <StatCard
-                label="Never Set Up" value={s?.noAccess ?? "—"}
+                label="Never Set Up"
+                value={s?.noAccess ?? "—"}
                 sub={s ? `${s.activeNoAccess} of them active` : undefined}
-                icon={UserX} color="bg-amber-50 text-amber-800"
+                icon={UserX}
+                color="bg-amber-50 text-amber-800"
               />
               <StatCard
-                label="Signed In" value={s?.signedIn ?? "—"}
-                sub="login recorded" icon={Smartphone} color="bg-blue-50 text-blue-800"
+                label="Signed In"
+                value={s?.signedIn ?? "—"}
+                sub="login recorded"
+                icon={Smartphone}
+                color="bg-blue-50 text-blue-800"
               />
             </div>
 
             <div className="flex gap-2 items-start rounded-lg bg-slate-50 border text-slate-600 p-2.5 text-[11px] leading-relaxed">
               <Info size={13} className="mt-0.5 shrink-0" />
               <span>
-                This page covers <b>staff only</b> — production employees aren't listed or counted here,
-                so these totals won't match the Employees page.
+                This page covers <b>staff only</b> — production employees aren't listed or counted here, so these totals
+                won't match the Employees page.
                 <b className="ml-1">Has App Access</b> means the employee has created a password, so they can log in.
-                <b className="ml-1">Signed In</b> counts logins recorded since login tracking was added —
-                someone with access but no recorded login simply hasn't signed in since then.
-                Passwords themselves are stored as one-way hashes and can't be displayed; use
+                <b className="ml-1">Signed In</b> counts logins recorded since login tracking was added — someone with
+                access but no recorded login simply hasn't signed in since then. Passwords themselves are stored as
+                one-way hashes and can't be displayed; use
                 <b> Reset</b> to give someone a new one.
               </span>
             </div>
@@ -318,7 +378,10 @@ export default function MobileAppLogin() {
               />
               <form
                 className="relative ml-auto"
-                onSubmit={(e) => { e.preventDefault(); setSearch(searchInput.trim()); }}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setSearch(searchInput.trim());
+                }}
               >
                 <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
                 <Input
@@ -356,9 +419,11 @@ export default function MobileAppLogin() {
                             <span className="text-[11px] font-mono text-gray-400">({e.employeeCode})</span>
                             <Badge
                               variant="outline"
-                              className={e.status === "active"
-                                ? "text-[10px] border-green-200 bg-green-50 text-green-700"
-                                : "text-[10px] border-gray-200 bg-gray-50 text-gray-500"}
+                              className={
+                                e.status === "active"
+                                  ? "text-[10px] border-green-200 bg-green-50 text-green-700"
+                                  : "text-[10px] border-gray-200 bg-gray-50 text-gray-500"
+                              }
                             >
                               {e.status === "active" ? "Active" : "Inactive"}
                             </Badge>
@@ -380,13 +445,15 @@ export default function MobileAppLogin() {
                             {lastLogin
                               ? `Last signed in ${lastLogin}`
                               : e.hasPassword
-                              ? "No sign-in recorded yet"
-                              : "Has not set a password — cannot log in"}
+                                ? "No sign-in recorded yet"
+                                : "Has not set a password — cannot log in"}
                             {e.deviceCount > 0 && ` · ${e.deviceCount} device${e.deviceCount === 1 ? "" : "s"}`}
                           </p>
                         </div>
                         <Button
-                          size="sm" variant="outline" className="gap-1.5 h-8 text-xs shrink-0"
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 h-8 text-xs shrink-0"
                           onClick={() => setResetTarget(e)}
                         >
                           <KeyRound size={12} /> {e.hasPassword ? "Reset password" : "Set password"}

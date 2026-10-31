@@ -867,6 +867,17 @@ def phrase(roles: tuple[str, ...]) -> str:
     return " or ".join(ROLE_PHRASE[r] for r in roles)
 
 
+def stage_notice(employee, ntype: str, message: str, outcome: Outcome):
+    """The short in-app notice for a decision that only PASSES a request on (it now waits for the next approver). A final approval
+    or a rejection is announced by whatsapp_approvals.notify_decision with the full wording WhatsApp carries (a phone
+    notification and an in-app record: push_messages.py), so it makes none here and the employee never gets it twice."""
+    if outcome.final or outcome.rejected:
+        return None
+    from .models import Notification
+
+    return Notification.objects.create(employee_id=getattr(employee, "pk", employee), type=ntype, message=message)
+
+
 def notice_for(what: str, outcome: Outcome, final_tail: str = "") -> str:
     """The in-app message telling the employee how their request moved, e.g.
     'Your Missing Punch request for 2026-03-04 was approved by your Department Head and is now awaiting HR approval.'"""

@@ -102,6 +102,7 @@ from .accounts import (
     LoginSession,
     AuditLog,
     HrLoginAttempt,
+    MobileMessageSettings,
     Notification,
     PushToken,
 )

@@ -327,11 +327,13 @@ def employee_request_action(request: Request, pk: int) -> Response:
     er.handled_at = datetime.utcnow()
     er.save()
     if er.status != prev_status:
-        Notification.objects.create(
-            employee=er.employee,
-            type="employee_request",
-            message=f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
-        )
+        if er.status not in ("approved", "rejected"):
+            # a final decision is announced by notify_decision below with the full WhatsApp wording
+            Notification.objects.create(
+                employee=er.employee,
+                type="employee_request",
+                message=f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
+            )
         if er.status in ("approved", "rejected"):
             whatsapp_approvals.notify_decision(
                 "request", er, er.status, approver=er.handled_by or request.jwt_user.get("name", ""), role="hr",
@@ -397,7 +399,7 @@ def resolve_permission(p, role: str, decision: str, actor: str, comment: str | N
     p.status = outcome.status
     p.save()
     what = f"permission request for {p.date.isoformat()}"
-    Notification.objects.create(employee=p.employee, type="permission", message=approval.notice_for(what, outcome))
+    approval.stage_notice(p.employee, "permission", approval.notice_for(what, outcome), outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
         approval.notify_hod_of_request(PERMISSION_WORKFLOW, p.employee, "permission request")
     if outcome.final or outcome.rejected:
@@ -661,11 +663,6 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
         ]
     p.save()
     if new_status != prev_status and new_status in ("approved", "rejected"):
-        Notification.objects.create(
-            employee=p.employee,
-            type="permission",
-            message=f"Your permission request for {p.date.isoformat()} was {p.status}.",
-        )
         whatsapp_approvals.notify_decision(
             "permission", p, p.status, approver=p.approved_by or "", role="hr", comment=p.hr_comment
         )

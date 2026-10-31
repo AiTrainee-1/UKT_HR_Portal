@@ -26,7 +26,7 @@ from . import approval_workflow as approval, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .clock import ist_today
-from .models import AttendanceDayRecord, CasualLeaveRequest, Employee, Notification
+from .models import AttendanceDayRecord, CasualLeaveRequest, Employee
 from .request_window import enforce_employee_date, request_window
 
 ELIGIBILITY_MONTHS = 6
@@ -190,7 +190,7 @@ def resolve_casual_leave(
     what = f"Casual Leave request for {cl.date.isoformat()}"
     if outcome.final or outcome.rejected:
         _write_attendance_for_cl(cl, reviewer)
-    Notification.objects.create(employee=cl.employee, type="casual_leave", message=approval.notice_for(what, outcome))
+    approval.stage_notice(cl.employee, "casual_leave", approval.notice_for(what, outcome), outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
         approval.notify_hod_of_request(WORKFLOW, cl.employee, "Casual Leave request")
     if outcome.final or outcome.rejected:

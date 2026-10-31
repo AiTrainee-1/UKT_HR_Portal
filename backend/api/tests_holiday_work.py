@@ -707,10 +707,13 @@ class DepartmentHeadTests(HolidayWorkBase):
         )
         self.assertIsNotNone(claim.reviewed_at)
         self.assertEqual(body["hodName"], "HWB Hw")
-        # the employee is told
+        # the employee is told, with the same wording WhatsApp carries (one notification, also pushed to the phone)
         note = Notification.objects.get(employee=self.asha, type="compensation")
-        self.assertIn("approved by your Department Head", note.message)
-        self.assertIn("0.75 shift was added to your compensation balance", note.message)
+        self.assertEqual(note.title, "✅ Request Approved")
+        self.assertIn("Holiday Work Compensation", note.message)
+        self.assertIn("0.75 shift", note.message)
+        self.assertIn("The shifts are now in your compensation balance", note.message)
+        self.assertIn("(Department Head)", note.message)
 
     def test_a_second_approval_is_refused_and_credits_nothing_more(self):
         claim = self.raise_claim()
@@ -751,7 +754,9 @@ class DepartmentHeadTests(HolidayWorkBase):
         self.assertEqual(claim.approval_trail[0]["comment"], "He was on leave")
         self.assertFalse(CompensationLedger.objects.exists())
         note = Notification.objects.get(employee=self.asha, type="compensation")
-        self.assertIn("was rejected by your Department Head", note.message)
+        self.assertEqual(note.title, "❌ Request Rejected")
+        self.assertIn("He was on leave", note.message)
+        self.assertIn("(Department Head)", note.message)
         # a rejection is final
         self.assertEqual(self.patch_hod(claim.id, {"status": "approved"}).status_code, 400)
         self.assertFalse(CompensationLedger.objects.exists())

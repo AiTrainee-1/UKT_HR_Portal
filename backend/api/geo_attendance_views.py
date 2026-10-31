@@ -564,7 +564,7 @@ def resolve_on_duty_session(
         message = approval.notice_for(what, outcome)
         if approval.HOD in outcome.waiting and role != approval.HOD:
             _notify_hod_approvers(session)  # it has just reached the Department Head's step
-    Notification.objects.create(employee=session.employee, type="on_duty", message=message)
+    approval.stage_notice(session.employee, "on_duty", message, outcome)
     return outcome
 
 
@@ -613,13 +613,8 @@ def resolve_on_duty_punch_hr(
             whatsapp_notifications.notify_geo_punch_approved(v, reviewer_name, comment)
         else:
             whatsapp_notifications.notify_geo_punch_rejected(v, reviewer_name, comment)
-        # Suppressed for bulk runs -the caller sends one summary notification
-        # for the whole request instead of four near-identical pings.
-        punch_label = "Check-In" if v.punch_type == AttendanceLog.PUNCH_IN else "Check-Out"
-        Notification.objects.create(
-            employee=v.employee, type="on_duty",
-            message=f"Your On-Duty {punch_label} (punch {v.punch_number}) was {v.status} by HR.",
-        )
+        # (The notification and push come from the WhatsApp message above: push_messages.py.) Suppressed for bulk
+        # runs -the caller sends one summary notification for the whole request instead of four near-identical pings.
 
     # Live recount, not the frozen `v.punch_number` -that number was assigned
     # from whatever was in AttendanceLog at the moment this punch was
@@ -1249,13 +1244,6 @@ def on_duty_session_punches_hr_status(request: Request, pk: int) -> Response:
         count = _void_session_punches(session, reviewer_name, "HR")
     if count:
         whatsapp_notifications.notify_geo_punches_decided(session, status_val, count, reviewer_name, request.data.get("comment"))
-        Notification.objects.create(
-            employee=session.employee, type="on_duty",
-            message=(
-                f"{count} of your On-Duty punch(es) for {session.destination} were {status_val} by HR."
-                + ("" if status_val == "approved" else " They do not count as attendance.")
-            ),
-        )
     session.refresh_from_db()
     return Response({"updated": count, "session": _on_duty_session_dict(session)})
 

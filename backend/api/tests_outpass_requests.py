@@ -65,7 +65,9 @@ class OutpassRequestResolutionTests(TestCase):
         self.assertEqual(OutpassRecord.objects.filter(employee=self.emp).count(), 0)
 
         note = Notification.objects.filter(employee=self.emp, type="outpass").latest("created_at")
-        self.assertIn("Not Approved", note.message)
+        # the notification is the WhatsApp rejection wording (also pushed to the phone)
+        self.assertEqual(note.title, "❌ Request Rejected")
+        self.assertIn("Market", note.message)
 
 
 class OnDutyOutpassHookTests(TestCase):

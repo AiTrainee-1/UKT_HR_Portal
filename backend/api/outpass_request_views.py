@@ -24,7 +24,7 @@ from . import approval_workflow as approval, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from . import gate_qr
-from .models import Employee, Notification, OutpassRequest
+from .models import Employee, OutpassRequest
 from .outpass_visitor_views import _create_outpass_record_for
 from .view_common import paginate
 
@@ -143,11 +143,7 @@ def resolve_outpass_request(
         req.outpass_record = _create_outpass_record_for(req.employee, req.destination, source="request")
     req.save()
     what = f"Outpass request for {req.destination}"
-    if outcome.final or outcome.rejected:
-        message = f"Your {what} was {'Approved' if outcome.final else 'Not Approved'}."
-    else:
-        message = approval.notice_for(what, outcome)
-    Notification.objects.create(employee=req.employee, type="outpass", message=message)
+    approval.stage_notice(req.employee, "outpass", approval.notice_for(what, outcome), outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
         approval.notify_hod_of_request(WORKFLOW, req.employee, "Outpass request")
     if outcome.final or outcome.rejected:

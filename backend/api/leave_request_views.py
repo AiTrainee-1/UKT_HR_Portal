@@ -4,7 +4,7 @@ from . import approval_workflow as approval, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from .clock import ist_today
-from .models import Employee, LeaveBalance, LeaveRequest, LeaveType, Notification
+from .models import Employee, LeaveBalance, LeaveRequest, LeaveType
 from .request_window import enforce_employee_range, parse_request_date
 from .serializers import leave_request_json
 from .view_common import _employee_name, _error, paginate
@@ -71,7 +71,7 @@ def resolve_leave(
     what = f"leave request ({record.start_date} → {record.end_date})"
     if outcome.final:
         _deduct_leave_balance(record)
-    Notification.objects.create(employee_id=record.employee_id, type="leave", message=approval.notice_for(what, outcome))
+    approval.stage_notice(record.employee_id, "leave", approval.notice_for(what, outcome), outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
         approval.notify_hod_of_request(WORKFLOW, record.employee, "leave request")
     if outcome.final or outcome.rejected:
@@ -263,21 +263,11 @@ def update_leave_status(request: Request, pk: int) -> Response:
 
     if new_status == "approved" and old_status != "approved":
         _deduct_leave_balance(record)
-        Notification.objects.create(
-            employee_id=record.employee_id,
-            type="leave",
-            message=f"Your leave request ({record.start_date} → {record.end_date}) has been approved.",
-        )
         whatsapp_approvals.notify_decision(
             "leave", record, "approved", approver=record.approved_by or "", role="hr", comment=record.hr_comment
         )
 
     elif new_status == "rejected" and old_status != "rejected":
-        Notification.objects.create(
-            employee_id=record.employee_id,
-            type="leave",
-            message=f"Your leave request ({record.start_date} → {record.end_date}) has been rejected.",
-        )
         whatsapp_approvals.notify_decision(
             "leave", record, "rejected", approver=record.approved_by or "", role="hr", comment=record.hr_comment
         )

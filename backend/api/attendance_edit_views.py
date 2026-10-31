@@ -28,7 +28,7 @@ from .attendance_final import compute_day_record
 from .branch_scope import scope_to_branch
 from .clock import ist_today
 from .device_directory import can_edit_module
-from .models import AttendanceDayRecord, AttendanceOverrideRequest, Employee, Notification
+from .models import AttendanceDayRecord, AttendanceOverrideRequest, Employee
 from .view_common import error_response as _error
 
 KEY = "attendance_correction"
@@ -127,10 +127,11 @@ def attendance_override_decision(request: Request, pk: int) -> Response:
     req.save()
 
     what = f"attendance change for {req.date}"
-    Notification.objects.create(
-        employee=req.employee,
-        type="attendance",
-        message=approval.notice_for(what, outcome, final_tail=" and your attendance has been updated"),
+    approval.stage_notice(
+        req.employee,
+        "attendance",
+        approval.notice_for(what, outcome, final_tail=" and your attendance has been updated"),
+        outcome,
     )
     if outcome.final or outcome.rejected:
         whatsapp_approvals.notify_decision(KEY, req, status_val, approver=reviewer, role="hr", comment=comment)

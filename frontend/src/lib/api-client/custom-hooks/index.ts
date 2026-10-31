@@ -30,6 +30,7 @@ export * from "./requests";
 export * from "./shifts";
 export * from "./system";
 export * from "./whatsapp";
+export * from "./mobile-messages";
 export * from "./gmail";
 export * from "./sms-control";
 export * from "./support";

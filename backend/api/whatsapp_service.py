@@ -48,6 +48,7 @@ from django.conf import settings as dj_settings
 from django.db import connections, transaction
 from django.utils import timezone
 
+from . import push_messages
 from . import whatsapp_catalog as catalog
 
 logger = logging.getLogger(__name__)
@@ -444,6 +445,10 @@ def send_document(
     `request` is needed to build the public media URL WAClient fetches the
     document from -see _backend_public_base_url.
     """
+    # the caption of the document is also a phone notification and an in-app record (push_messages.py)
+    push_messages.announce(
+        employee, document_type, render_message(_template_body(document_type), body_params, _order_for(document_type))
+    )
     phone, caption, failed = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
     if failed is not None:
         return failed
@@ -655,6 +660,16 @@ def send_notification(
     from .models import WhatsAppMessageLog
 
     try:
+        # The same message is also a phone notification and an in-app record (push_messages.py). That is the employee's
+        # own channel, so it does not wait for WhatsApp to be configured or switched on, and a one-time code never goes
+        # through it.
+        push_messages.announce(
+            employee,
+            document_type,
+            render_message(_template_body(document_type), params, _order_for(document_type)),
+            related_module=related_module,
+            dedupe_key=dedupe_key,
+        )
         if not feature_enabled(document_type, related_module) or not is_configured():
             return None
         text, disabled_reason = _message_for(document_type, params)

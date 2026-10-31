@@ -165,11 +165,60 @@ class Notification(models.Model):
     )
     type = models.TextField(default="general")
     message = models.TextField()
+    # The headline of a notification made from a WhatsApp message (push_messages.py): "Request Approved", "Late Attendance" ...
+    # Empty for the older, one-line notifications. db_default: a backend still running during a rolling deploy inserts rows
+    # without knowing these two columns exist.
+    title = models.TextField(blank=True, default="", db_default="")
+    # Makes a notification exactly-once per employee (an alert evaluated every minute, a decision announced twice).
+    dedupe_key = models.CharField(max_length=160, blank=True, default="", db_default="", db_column="dedupe_key")
+    # Where it came from, for the Mobile App Login -> Mobile Messages page: the WhatsApp catalogue key ("late_alert",
+    # "approval_approved" ...) and the workflow behind a shared message ("leave"); "manual" for one HR typed there.
+    source = models.CharField(max_length=40, blank=True, default="", db_default="")
+    related_module = models.CharField(max_length=40, blank=True, default="", db_default="", db_column="related_module")
+    # What happened to the phone push (signals.py, push_receipts.py): "" (not tried yet / older row), "sent" (handed to Expo),
+    # "delivered" (Google / Apple accepted it for the phone), "no_device" (the employee has no phone registered), "off" (HR switched
+    # this message off for phones), "failed" (Expo, Google or Apple refused it, or the network failed).
+    push_status = models.CharField(max_length=12, blank=True, default="", db_default="", db_column="push_status")
+    push_error = models.TextField(blank=True, default="", db_default="", db_column="push_error")
+    # Expo's tickets for this push as JSON [[token, ticket id], ...]: asked for again a little later (push_receipts.py), because
+    # a ticket only says Expo took the message; the receipt says whether Google / Apple accepted it for the phone.
+    push_tickets = models.TextField(blank=True, default="", db_default="", db_column="push_tickets")
+    pushed_at = models.DateTimeField(null=True, blank=True, db_column="pushed_at")
     is_read = models.BooleanField(default=False, db_column="is_read")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:
         db_table = "notifications"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee", "dedupe_key"],
+                condition=~Q(dedupe_key=""),
+                name="uniq_notification_employee_dedupe_key",
+            )
+        ]
+
+
+class MobileMessageSettings(models.Model):
+    """
+    Singleton (pk=1): which messages may be pushed to employees' phones, edited on Mobile App Login -> Mobile Messages.
+
+    It only controls the PHONE push. The in-app record (the Notifications page of the apps) is always saved, so switching a
+    message off here never loses it. `disabled_types` holds the WhatsApp catalogue keys ("late_alert") and the approval
+    workflows ("approval:leave") HR switched off; `push_enabled` is the master switch.
+    """
+
+    push_enabled = models.BooleanField(default=True, db_default=True)
+    disabled_types = models.JSONField(default=list, blank=True)
+    updated_by = models.TextField(blank=True, default="", db_default="")
+    updated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "mobile_message_settings"
+
+    @classmethod
+    def get(cls) -> "MobileMessageSettings":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
 
 
 class PushToken(models.Model):
