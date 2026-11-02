@@ -6,6 +6,7 @@ from . import salary_split
 from .audit_utils import log_action
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
+from .image_compress import PHOTO, compress_data_url
 from .models import Department, Employee
 from .serializers import employee_json, parse_decimal
 from .view_common import _error
@@ -408,7 +409,8 @@ def _create_employee_from_data(
             father_name=data.get("fatherName") or None,
             mother_name=data.get("motherName") or None,
             biometric_device_id=data.get("biometricDeviceId") or None,
-            photo_url=data.get("photoUrl") or None,
+            # an uploaded photo is compressed before it is stored (image_compress.py); a link is kept as sent
+            photo_url=compress_data_url(data.get("photoUrl") or None, PHOTO),
             blood_group=data.get("bloodGroup") or None,
             emergency_contact=data.get("emergencyContact") or None,
         )
@@ -555,6 +557,8 @@ def _employee_update_locked(request: Request, pk: int) -> Response:
                 value = parse_decimal(value)
             elif model_key == "date_of_birth":
                 value = value or None
+            elif model_key == "photo_url":
+                value = compress_data_url(value, PHOTO)  # see create: an uploaded photo is stored compressed
             setattr(emp, model_key, value)
     # Co Emp and TDS are mutually exclusive (pf_esi.py): switching Co Emp ON for a TDS employee takes them out of TDS in
     # the same save. (TDS itself is only ever changed through /tds/employees; tdsEnabled / tdsPercent in this body are

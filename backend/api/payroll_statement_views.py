@@ -33,7 +33,7 @@ from .payroll_insights import (
     KIND_STAFF,
     SettingsResolver,
     breakdown_of,
-    casual_leave_dates,
+    casual_leave_days,
     ddmmyyyy,
     dec,
     full_name,
@@ -162,7 +162,7 @@ def _salary_parts(emp, total: Decimal) -> tuple[Decimal, Decimal, Decimal]:
     return basic, petrol, second - petrol
 
 
-def _staff_values(payroll: Payroll, slip, bd, cl_dates: set, balance: Decimal, start, end) -> dict:
+def _staff_values(payroll: Payroll, slip, bd, cl_days: dict, balance: Decimal, start, end) -> dict:
     emp = payroll.employee
     total = dec(payroll.base_salary)
     working = Decimal(int(payroll.total_working_days or 0))
@@ -171,11 +171,12 @@ def _staff_values(payroll: Payroll, slip, bd, cl_dates: set, balance: Decimal, s
         summary = bd.get("summary") or {}
         paid_days = dec(summary["effectivePaidDays"]) if "effectivePaidDays" in summary else dec(payroll.present_days)
         half_days = dec(summary.get("halfShiftDays"))
+        # a full-day CL is a paid Present day (1); a half-day CL pays its half (0.5) whatever the other half earned
         cl = sum(
             (
-                dec(d.get("shiftsCompleted"))
+                min(dec(d.get("shiftsCompleted")), cl_days[day])
                 for d in bd.get("days") or []
-                if d.get("status") == "present" and parse_iso_date(d.get("date")) in cl_dates
+                if d.get("status") in ("present", "half_shift") and (day := parse_iso_date(d.get("date"))) in cl_days
             ),
             Decimal("0"),
         )
@@ -329,7 +330,7 @@ def _staff_notes() -> list[str]:
         "Total is the monthly salary. E salary is the salary earned for the days paid (Total x Total Days / working days) "
         "plus any overtime pay and HR bonus.",
         "Present is the days paid as worked (a half day counts 0.5; a working day HR marked as a paid holiday counts 1), "
-        "without Casual Leave; CL is the approved Casual Leave days; Total Days = Present + CL; "
+        "without Casual Leave; CL is the approved Casual Leave days (a half-day CL counts 0.5); Total Days = Present + CL; "
         "LOP = working days - Total Days; HD is the number of half-shift days.",
         "T.Advance is the advance balance before this month's recovery; Advance is what was recovered this month.",
         "ESI and PF are deducted only from Co Emp employees (Employees > Co Emp), by the rules of Settings > PF & ESI, from "
@@ -374,7 +375,7 @@ def statement_rows(payrolls: list[Payroll], kind: str, info: dict) -> tuple[dict
     employee_ids = [p.employee_id for p in payrolls]
     slips = slips_for(payrolls)
     balances = advance_balances_before(employee_ids, info["year"], info["month"])
-    cl = casual_leave_dates(employee_ids, info["year"], info["month"]) if staff else {}
+    cl = casual_leave_days(employee_ids, info["year"], info["month"]) if staff else {}
 
     rows: dict[int, dict] = {}
     no_slip = mismatched = 0
@@ -384,7 +385,7 @@ def statement_rows(payrolls: list[Payroll], kind: str, info: dict) -> tuple[dict
         no_slip += bd is None
         if staff:
             values = _staff_values(
-                p, slip, bd, cl.get(p.employee_id, set()), balances.get(p.employee_id, Decimal("0")), start, end
+                p, slip, bd, cl.get(p.employee_id, {}), balances.get(p.employee_id, Decimal("0")), start, end
             )
         else:
             values = _production_values(p, slip, bd, balances.get(p.employee_id, Decimal("0")), start, end)

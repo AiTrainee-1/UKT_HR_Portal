@@ -9,9 +9,10 @@ Calendar used throughout: February 2026 -it starts on a Sunday, so it has
 exactly 24 Mon-Sat working days. A salary of 24,000 therefore has a daily
 rate of exactly 1,000, and every figure can be checked by hand.
 
-Two tests are marked expectedFailure. They pin real defects found while
-writing this suite (see the comments on each); they turn into "unexpected
-success" the day the defect is fixed, which is the cue to drop the marker.
+One test is marked expectedFailure. It pins a real defect found while
+writing this suite (see its comment); it turns into "unexpected success"
+the day the defect is fixed, which is the cue to drop the marker. (The
+second one, PATCH dropping OT pay, was fixed on 2026-10-31.)
 
 Run via: python manage.py test api.tests_payroll_engine -v 2
 """
@@ -1130,12 +1131,9 @@ class PayrollEndpointTests(TestCase):
         r = self.client.patch("/api/payroll/999999", {"status": "paid"}, content_type="application/json", **_hr())
         self.assertEqual(r.status_code, 404)
 
-    @unittest.expectedFailure
     def test_marking_paid_must_not_change_the_net_when_there_is_ot(self):
-        # KNOWN DEFECT. The engine's net is gross + OT - deductions, but PATCH
-        # always recomputes final_salary as gross + bonus - deductions, leaving
-        # OT out. So merely marking a payroll "paid" (no other field) silently
-        # removes the employee's overtime pay from what they are owed.
+        # Fixed 2026-10-31 (was a known defect): PATCH recomputed final_salary as gross + bonus - deductions, leaving
+        # OT out, so merely marking a payroll "paid" removed the employee's overtime pay. It now keeps OT.
         OvertimeRecord.objects.create(
             employee=self.emp,
             date=date(2026, 2, 2),

@@ -3,8 +3,9 @@
 from .auth import get_token_employee_id, require_auth
 from .branch_scope import scope_to_branch
 from .models import Notification, PushToken
-from .serializers import notification_json
-from .view_common import _employee_name, _error, paginate
+from .notification_targets import build_context
+from .serializers import employee_full_name, notification_json
+from .view_common import _error, paginate
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -13,8 +14,9 @@ from rest_framework.response import Response
 # --- Notifications ---
 
 
-def _notif_with_name(record: Notification) -> dict:
-    return notification_json(record, _employee_name(record.employee_id))
+def _notif_with_name(record: Notification, context: dict | None = None) -> dict:
+    # record.employee: the list selects it with the row, so the name costs no query per notification
+    return notification_json(record, employee_full_name(record.employee), context)
 
 
 @api_view(["GET", "POST"])
@@ -33,7 +35,14 @@ def notifications(request: Request) -> Response:
             qs = scope_to_branch(qs, request, field="employee__branch_id")
         if request.query_params.get("unreadOnly") in ("true", "1", True):
             qs = qs.filter(is_read=False)
-        return paginate(request, qs.order_by("-created_at", "-id"), _notif_with_name)
+        # Each row's View target (notification_targets.py) needs at most two lookups, made once for the whole page.
+        context: dict = {}
+        return paginate(
+            request,
+            qs.order_by("-created_at", "-id"),
+            lambda r: _notif_with_name(r, context),
+            prepare=lambda rows: context.update(build_context(rows)),
+        )
     # POST is HR-only -every legitimate notification is created server-side
     # by the business-logic views themselves (approvals, leave, etc.) calling
     # Notification.objects.create() directly, never through this generic

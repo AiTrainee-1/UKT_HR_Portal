@@ -77,6 +77,11 @@ export default function LeaveDetailDialog({
               <Field label="Status">
                 <StatusChip status={leave.status} approval={leave.approval} />
               </Field>
+              {leave.reasonCategoryLabel && (
+                <div className="col-span-2">
+                  <Field label="Reason Type">{leave.reasonCategoryLabel}</Field>
+                </div>
+              )}
               {leave.isHalfDay ? (
                 <div className="col-span-2">
                   <Field label="Date">

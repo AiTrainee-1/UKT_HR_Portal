@@ -56,7 +56,7 @@ def _source_label(source: str, related_module: str) -> str:
         return "Message from HR"
     t = catalog.get(source)
     if t is None:
-        return "In-app notice"
+        return mobile_messages.extra_label(source) or "In-app notice"
     if t.module == "approvals" and related_module in catalog.APPROVAL_MODULES:
         return f"{t.label}: {catalog.APPROVAL_MODULES[related_module]}"
     return t.label
@@ -246,7 +246,7 @@ def mobile_messages_log(request: Request) -> Response:
     if kind := q.get("kind"):
         if kind == "older":
             qs = qs.filter(source="")
-        elif kind == mobile_messages.MANUAL or kind in catalog.TYPES:
+        elif kind == mobile_messages.MANUAL or kind in catalog.TYPES or kind in mobile_messages.EXTRA_TYPES:
             qs = qs.filter(source=kind)
         else:
             return _error("kind is not a known kind of message")

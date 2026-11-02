@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Fingerprint,
   Inbox,
+  BellRing,
   Landmark,
   LogOut,
   MapPin,
@@ -23,6 +24,7 @@ import { WaitingChip, ApprovalTrailLine } from "@/components/ApprovalTrail";
 import { explainsWaiting } from "@/lib/approval-workflow";
 import { cn } from "@/lib/utils";
 import { decisionsHere, roleText, statusChip, waitingDays, type HubItem, type HubKind, type KindKey } from "./logic";
+import { reminderOf, reminderText } from "./reminders";
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
@@ -156,7 +158,20 @@ export function StatusCell({ item, now }: { item: HubItem; now: Date }) {
       </div>
       <ApprovalTrailLine approval={item.approval} />
       {days >= 3 && <p className="text-[11px] font-semibold text-amber-600">Waiting {days} days</p>}
+      <ReminderLine item={item} />
     </div>
+  );
+}
+
+/** "Employee reminded HR on 31 Oct, 10:05": the employee pressed "Remind HR" in the app (requests/reminders.ts). */
+export function ReminderLine({ item }: { item: HubItem }) {
+  const text = item.status === "pending" ? reminderText(reminderOf(item)) : "";
+  if (!text) return null;
+  return (
+    <p className="flex items-center gap-1 text-[11px] font-semibold text-rose-600" data-testid={`reminded-${item.key}`}>
+      <BellRing size={12} aria-hidden />
+      {text}
+    </p>
   );
 }
 

@@ -22,8 +22,8 @@ import { inr2 } from "./kit/format";
 import { hasTds, tdsAmount, tdsLabel, type TdsFields } from "./kit/statutory";
 
 // One adjustment dialog for the Salary tabs of both payroll pages: HR can correct the bonus and the total deductions of a
-// payslip. The server recomputes the net as gross + bonus - deductions (PATCH /api/payroll/:id), so the live "Net payable"
-// below is the same sum.
+// payslip. The server recomputes the net as gross + overtime + bonus - deductions (PATCH /api/payroll/:id), so the live
+// "Net payable" below is the same sum.
 
 const schema = z.object({
   bonus: z
@@ -92,7 +92,7 @@ export function AdjustPayrollDialog({
 
   const bonus = Number(form.watch("bonus")) || 0;
   const deductions = Number(form.watch("deductions")) || 0;
-  const net = target ? Math.round((target.grossSalary + bonus - deductions) * 100) / 100 : 0;
+  const net = target ? Math.round((target.grossSalary + (target.otAmount ?? 0) + bonus - deductions) * 100) / 100 : 0;
   const changed = !!target && (bonus !== target.bonus || deductions !== target.deductions);
 
   const submit = async (data: z.infer<typeof schema>) => {
@@ -172,8 +172,8 @@ export function AdjustPayrollDialog({
               <Info size={13} className="mt-0.5 shrink-0" />
               <span>
                 Deductions is the whole deduction on this payslip (PF and ESI for a Co Emp employee, TDS for a TDS
-                employee, advance recovery, late deduction and anything you add). Net payable = gross earned + bonus −
-                deductions.
+                employee, advance recovery, late deduction and anything you add). Net payable = gross earned + overtime
+                + bonus − deductions.
                 {target && hasTds(target) && (
                   <span className="mt-1 block font-semibold" data-testid="adjust-tds-note">
                     This payslip includes {tdsLabel(target)}: {inr2(tdsAmount(target))}. Keep it in the figure if it is

@@ -12,9 +12,11 @@ import {
   filterRequests,
   inMonth,
   isCurrentMonth,
+  isHalf,
   monthBounds,
   monthTitle,
   notEligibleRows,
+  portionText,
   requestExportRows,
   serviceText,
   sortRequests,
@@ -259,6 +261,15 @@ describe("wording and export", () => {
     expect(serviceText(null)).toBe("-");
   });
 
+  it("words the part of the day a request is for (an older row is a full day)", () => {
+    expect(portionText("first_half")).toBe("Half day (first half)");
+    expect(portionText("second_half")).toBe("Half day (second half)");
+    expect(portionText(undefined)).toBe("Full day");
+    expect(isHalf("first_half")).toBe(true);
+    expect(isHalf("full")).toBe(false);
+    expect(requestExportRows([{ ...requests[0], portion: "second_half" }])[0][5]).toBe("Half day (second half)");
+  });
+
   it("exports the requests and the board as shown", () => {
     expect(requestExportRows([requests[0]])[0]).toEqual([
       "E1",
@@ -266,6 +277,7 @@ describe("wording and export", () => {
       "Head Office",
       "Cutting",
       "2026-10-14",
+      "Full day",
       "approved",
       "Meena",
       "",

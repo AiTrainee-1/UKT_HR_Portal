@@ -482,8 +482,8 @@ def _payment_status_run(ctx) -> ReportResult:
         "Payment status comes from the payroll row's status: only 'paid' counts as paid, anything else (or no payroll row) is "
         "pending. There is no payment date in the system - 'Last updated' is when the payroll row was last changed, which "
         "regenerating payroll also does (regeneration resets a paid row to pending).",
-        "Slip net is the printed salary slip; payroll net is the payroll row's final salary. They differ after a 'mark "
-        "paid' edit (which drops overtime) or a manual bonus/deduction edit. 'Slip only' = a slip with no payroll row; "
+        "Slip net is the printed salary slip; payroll net is the payroll row's final salary. They differ after a manual "
+        "bonus/deduction edit, or a 'mark paid' edit made before 31 Oct 2026 (it dropped overtime; fixed since). 'Slip only' = a slip with no payroll row; "
         "'Payroll only' = a payroll row with no slip.",
         *notes,
     ]

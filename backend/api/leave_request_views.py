@@ -37,6 +37,10 @@ def _leave_with_name(record: LeaveRequest, cfg: approval.Config | None = None) -
 def _deduct_leave_balance(record: LeaveRequest) -> None:
     """Use up the days of an approved leave from the employee's balance for the year (the specific leave type's row
     when the request names one)."""
+    if not record.leave_type_ref_id and record.reason_category:
+        # A request from the apps' reason-category form names no leave type (the category changes no balance), so there
+        # is no balance row to use up. Without this guard the filter below would match EVERY balance row of the year.
+        return
     days = Decimal(str(record.total_days or 1))
     try:
         year = int(record.start_date[:4])
@@ -167,7 +171,15 @@ def _leave_requests_create(request: Request) -> Response:
     # sending "type"/"leave_type" directly.
     leave_type_id = data.get("leaveTypeId") or data.get("leave_type_id")
     leave_type_ref = LeaveType.objects.filter(pk=leave_type_id).first() if leave_type_id else None
-    leave_type = data.get("type") or data.get("leave_type") or (leave_type_ref.name if leave_type_ref else "casual")
+    # Why the employee is asking (owner 2026-10-31: Casual Leave left the apps' leave form and these four took its place):
+    # Sick Leave / Emergency / Personal / Other Reasons. Optional, so older apps and HR keep working; descriptive only.
+    reason_category = str(data.get("reasonCategory") or data.get("reason_category") or "").strip().lower()
+    if reason_category and reason_category not in dict(LeaveRequest.REASON_CATEGORY_CHOICES):
+        return Response({"error": "Choose Sick Leave, Emergency, Personal or Other Reasons"}, status=400)
+    # A request with a reason category and no leave type is a plain "Leave", never "casual" (the old default): Casual
+    # Leave is its own request (casual_leave_views.py) and must not be confused with it.
+    default_type = "Leave" if reason_category else "casual"
+    leave_type = data.get("type") or data.get("leave_type") or (leave_type_ref.name if leave_type_ref else default_type)
     is_half_day = bool(data.get("isHalfDay") or data.get("is_half_day"))
     half_day_slot = data.get("halfDaySlot") or data.get("half_day_slot")
 
@@ -217,6 +229,7 @@ def _leave_requests_create(request: Request) -> Response:
         is_half_day=is_half_day,
         half_day_slot=half_day_slot,
         reason=data.get("reason"),
+        reason_category=reason_category,
         approval_trail=[],
     )
     approval.notify_new_request(WORKFLOW, record.employee, "leave request")

@@ -255,9 +255,14 @@ describe("leave requests", () => {
       "pending",
       "",
       "",
+      "",
     ]);
     expect(out[1][4]).toBe("sick");
     expect(out[1][7]).toBe(3);
+    // the reason the employee picked in the apps, when there is one
+    expect(
+      leaveExportRows([{ ...rows[0], reasonCategory: "emergency", reasonCategoryLabel: "Emergency" }])[0][11],
+    ).toBe("Emergency");
   });
 });
 

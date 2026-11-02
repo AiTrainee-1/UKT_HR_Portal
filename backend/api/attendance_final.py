@@ -122,6 +122,63 @@ def _half_day_leave_dates_for_month(emp, year: int, month: int) -> dict:
     return out
 
 
+def _half_cl_dates_for_month(emp, year: int, month: int) -> dict:
+    """{date: {"first_half", "second_half"}} for APPROVED half-day Casual Leave in the month (staff only; a production
+    employee has no Casual Leave, so no query). A full-day CL is not here: its approval writes the whole day as a paid
+    manual day (casual_leave_views._write_attendance_for_cl). See _apply_half_casual_leave."""
+    if emp.employment_type == "production":
+        return {}
+    from .models import CasualLeaveRequest
+
+    out: dict = {}
+    for d, portion in (
+        CasualLeaveRequest.objects.filter(
+            employee=emp, date__year=year, date__month=month, status=CasualLeaveRequest.STATUS_APPROVED,
+        )
+        .exclude(portion=CasualLeaveRequest.PORTION_FULL)
+        .values_list("date", "portion")
+    ):
+        out.setdefault(d, set()).add(portion)
+    return out
+
+
+def _apply_half_casual_leave(computed: dict, portions, halves_attended: tuple) -> None:
+    """Approved half-day Casual Leave on a working day (owner 2026-10-31): the CL half is paid (0.50) and the OTHER half
+    counts by the punches exactly as it does for a Half-Day Leave: worked -> another 0.50, so a Full Day; not worked ->
+    nothing more, so a Half Day (0.50). Working the CL half itself earns nothing extra (the day is never paid twice), and
+    a day the punches already made a Full Day stays one. The covered half's flag is lifted (first half: no Morning
+    Late-In; second half: no Evening Early-Out). Both halves on the same date make a paid Full Day, like a full CL.
+    A holiday / weekly off is left alone (it is already paid as one). `halves_attended` = (morning, evening) by the
+    punches, as _half_day_status judged them."""
+    from .models import CasualLeaveRequest
+
+    status = computed.get("status")
+    if status not in ("present", "half_shift", "absent", "on_leave"):
+        return
+    first = CasualLeaveRequest.PORTION_FIRST_HALF in portions
+    second = CasualLeaveRequest.PORTION_SECOND_HALF in portions
+    if first and second:
+        computed.update(
+            status=AttendanceDayRecord.STATUS_PRESENT, shifts_earned=Decimal("1.00"), is_half_shift=False,
+            is_late=False, early_leave=False, late_reason=None,
+        )
+        return
+    if first:
+        computed["is_late"] = False
+        computed["late_reason"] = _reason_without(computed.get("late_reason"), "Morning Late-In")
+    else:
+        computed["early_leave"] = False
+        computed["late_reason"] = _reason_without(computed.get("late_reason"), "Evening Early-Out")
+    if status == AttendanceDayRecord.STATUS_PRESENT:
+        return
+    morning, evening = halves_attended
+    other_half_worked = evening if first else morning
+    if other_half_worked:
+        computed.update(status=AttendanceDayRecord.STATUS_PRESENT, shifts_earned=Decimal("1.00"), is_half_shift=False)
+    else:
+        computed.update(status=AttendanceDayRecord.STATUS_HALF, shifts_earned=Decimal("0.50"), is_half_shift=True)
+
+
 @lru_cache(maxsize=512)
 def _holiday_dates_for_month(year: int, month: int) -> set:
     """Company-wide -identical for every employee, unlike
@@ -258,8 +315,24 @@ def _half_day_status(
     earns Full Day, but leaving well before it (the announcement is a
     release, not a blanket exemption) is still only a Half Day.
     """
+    morning, evening = _halves_attended(
+        punch_times, settings, second_half_start_override=second_half_start_override,
+        first_half_limit_s=first_half_limit_s,
+    )
+    if morning and evening:
+        return "present", Decimal("1.00"), False
+    if morning or evening:
+        return "half_shift", Decimal("0.50"), True
+    return "absent", Decimal("0"), False
+
+
+def _halves_attended(
+    punch_times: list, settings, second_half_start_override=None, first_half_limit_s=None
+) -> tuple[bool, bool]:
+    """(morning half attended, evening half attended) by punch PRESENCE alone -the rule _half_day_status turns into a
+    status (see its docstring)."""
     if not punch_times:
-        return "absent", Decimal("0"), False
+        return False, False
     second_start_s = _t2s(second_half_start_override or settings.half_day_second_half_start_time)
     # A punch is a clock time or, for one reattributed from the next calendar date (a 01:00 exit
     # is this working day's 25:00), already a count of seconds since this day's midnight.
@@ -270,11 +343,7 @@ def _half_day_status(
     else:
         morning = min(secs) // 60 * 60 <= first_half_limit_s
     evening = any(s >= second_start_s for s in secs)
-    if morning and evening:
-        return "present", Decimal("1.00"), False
-    if morning or evening:
-        return "half_shift", Decimal("0.50"), True
-    return "absent", Decimal("0"), False
+    return morning, evening
 
 
 def half_period(rec, settings) -> str | None:
@@ -586,11 +655,14 @@ def day_calendar_facts(emp, year: int, month: int) -> tuple[dict, set]:
     holidays: dict = {}
     for h in Holiday.objects.filter(date__year=year, date__month=month).order_by("id"):
         holidays.setdefault(h.date, (h.name, h.holiday_type))
-    casual = set(
-        CasualLeaveRequest.objects.filter(
-            employee=emp, date__year=year, date__month=month, status=CasualLeaveRequest.STATUS_APPROVED
-        ).values_list("date", flat=True)
-    )
+    # {date: "full" | "first_half" | "second_half"} -a dict, so `d in casual` still reads as the set it used to be. Two
+    # halves on one date are that date's full day.
+    casual: dict = {}
+    for d, portion in CasualLeaveRequest.objects.filter(
+        employee=emp, date__year=year, date__month=month, status=CasualLeaveRequest.STATUS_APPROVED
+    ).values_list("date", "portion"):
+        held = casual.get(d)
+        casual[d] = portion if held is None or held == portion else CasualLeaveRequest.PORTION_FULL
     return holidays, casual
 
 
@@ -610,6 +682,8 @@ def day_kind_json(emp, d: date_type, holidays: dict, casual: set) -> dict:
         "holidayName": name,
         "holidayType": htype,
         "isCasualLeave": d in casual,
+        # added 2026-10-31: "full" | "first_half" | "second_half" on an approved Casual Leave day, else None
+        "casualLeavePortion": casual.get(d) if isinstance(casual, dict) else ("full" if d in casual else None),
     }
 
 
@@ -1116,10 +1190,14 @@ def production_day_result(d: date_type, by_date, config=None, segments=None, rul
 
 def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                        leave_dates=None, holiday_dates=None, half_day_leave_dates=None,
-                       prod_config=None, prod_segments=None, prefetch=None):
+                       prod_config=None, prod_segments=None, prefetch=None, half_cl_dates=None):
     """
     Compute and persist the AttendanceDayRecord for (emp, d).
     Manual overrides are preserved -returns the existing row untouched.
+
+    `half_cl_dates` ({date: {"first_half"|"second_half"}}, see _half_cl_dates_for_month) applies approved half-day
+    Casual Leave (_apply_half_casual_leave). Like `half_day_leave_dates`, it is only applied when the caller supplies it
+    (compute_month_records / compute_range_records always do).
 
     `prefetch`, when given, is a dict of data a bulk caller (compute_month_records)
     already fetched once for this employee's whole month instead of this
@@ -1218,6 +1296,15 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     is_holiday = (d in holiday_dates) if holiday_dates is not None else False
     # "morning" | "afternoon" | None -see _half_day_leave_dates_for_month.
     half_day_slot = half_day_leave_dates.get(d) if half_day_leave_dates is not None else None
+    # Approved half-day Casual Leave of this date ({"first_half", "second_half"} or empty), staff only. Its half is not
+    # expected at work, exactly like a Half-Day Leave's: `leave_slot` stands for either below wherever the arrival rules
+    # must not charge the missing half (the Type 1 allowance, the arrival notes, the quarter-shift deduction).
+    cl_portions = (half_cl_dates.get(d) or set()) if (half_cl_dates is not None and not is_production) else set()
+    cl_slot = None
+    if cl_portions:
+        cl_slot = LeaveRequest.HALF_DAY_MORNING if "first_half" in cl_portions else LeaveRequest.HALF_DAY_AFTERNOON
+    leave_slot = half_day_slot or cl_slot
+    halves_attended = (False, False)  # (morning, evening) by the punches; set below for a staff day with punches
 
     fields = {
         "is_late": False, "is_half_shift": False, "early_leave": False,
@@ -1350,7 +1437,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             grant = None
             if (
                 comp_ctx.allowance_on and limits is not None and not comp_day
-                and half_day_slot != LeaveRequest.HALF_DAY_MORNING
+                and leave_slot != LeaveRequest.HALF_DAY_MORNING
                 and zone_window not in (ZONE_ON_TIME, ZONE_EXCUSED)
             ):
                 candidate = comp.allowance_for_arrival(emp, d, comp_ctx, settings, prefetch)
@@ -1445,6 +1532,11 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             computed["status"] = status
             computed["shifts_earned"] = shifts_earned
             computed["is_half_shift"] = is_half
+            if cl_portions:
+                halves_attended = _halves_attended(
+                    day_secs, settings, second_half_start_override=second_half_override,
+                    first_half_limit_s=limits.first_half_until if limits else None,
+                )
 
             if limits is not None and day_secs:
                 zone = arrival_zone_of(day_secs[0], limits, permission_covers=applied_morning)
@@ -1456,7 +1548,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                     # the day is never charged twice.
                     computed["is_late"] = False
                     computed["late_reason"] = _reason_without(computed.get("late_reason"), "Morning Late-In")
-                if zone in (ZONE_EXCUSED, ZONE_QUARTER, ZONE_SECOND_HALF) and not comp_day and not half_day_slot:
+                if zone in (ZONE_EXCUSED, ZONE_QUARTER, ZONE_SECOND_HALF) and not comp_day and not leave_slot:
                     note = explain_arrival(
                         zone, day_secs[0], limits, applied_morning, settings.arrival_quarter_deduction,
                         deducted=status == AttendanceDayRecord.STATUS_PRESENT,
@@ -1468,7 +1560,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                     zone == ZONE_QUARTER
                     and status == AttendanceDayRecord.STATUS_PRESENT
                     and not comp_day
-                    and not half_day_slot
+                    and not leave_slot
                 ):
                     # They came to work: a quarter shift comes off the day rather than a whole half. Only a day
                     # that is otherwise a Full Day is reduced - one already cut to a Half Day (no second-half
@@ -1542,6 +1634,9 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         computed = {"status": "holiday", "shifts_earned": Decimal("0")}
     else:
         computed = {"status": "absent", "shifts_earned": Decimal("0")}
+
+    if cl_portions and not birthday:
+        _apply_half_casual_leave(computed, cl_portions, halves_attended)
 
     if not is_production:
         # OT measurement (a plain fact, whatever the switches say): minutes the last punch is past the REAL shift end.
@@ -1691,6 +1786,7 @@ def compute_month_records(emp, year: int, month: int, settings=None, comp_prefet
     leave_dates = _leave_dates_for_month(emp, year, month)
     holiday_dates = _holiday_dates_for_month(year, month)
     half_day_leave_dates = _half_day_leave_dates_for_month(emp, year, month)
+    half_cl_dates = _half_cl_dates_for_month(emp, year, month)
 
     prod_segments = (
         list(ProductionShiftSegment.objects.filter(is_active=True))
@@ -1760,6 +1856,7 @@ def compute_month_records(emp, year: int, month: int, settings=None, comp_prefet
             prod_config=prod_config,
             prod_segments=prod_segments,
             prefetch=prefetch,
+            half_cl_dates=half_cl_dates,
         )
         records.append(rec)
         # The days after this one read it back (the Type 1 allowance needs the previous working day's FRESH OT).
@@ -1823,10 +1920,12 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
         _cursor = (_cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
     leave_dates, holiday_dates = set(), set()
     half_day_leave_dates: dict = {}
+    half_cl_dates: dict = {}
     for y, m in months:
         leave_dates |= _leave_dates_for_month(emp, y, m)
         holiday_dates |= _holiday_dates_for_month(y, m)
         half_day_leave_dates.update(_half_day_leave_dates_for_month(emp, y, m))
+        half_cl_dates.update(_half_cl_dates_for_month(emp, y, m))
 
     prod_segments = (
         list(ProductionShiftSegment.objects.filter(is_active=True))
@@ -1906,6 +2005,7 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
             prod_config=prod_config,
             prod_segments=prod_segments,
             prefetch=prefetch,
+            half_cl_dates=half_cl_dates,
         )
         records.append(rec)
         existing_day_records[d] = rec

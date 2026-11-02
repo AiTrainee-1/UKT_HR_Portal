@@ -1581,7 +1581,10 @@ def payroll_detail(request: Request, pk: int) -> Response:
         p.deductions = Decimal(str(d["deductions"]))
     if "notes" in d:
         p.notes = d["notes"]
-    p.final_salary = _d2(p.gross_salary + p.bonus - p.deductions)
+    # Same net as the engine (gross + OT - deductions) plus HR's bonus. OT used to be left out here, so even marking a
+    # payroll paid dropped the employee's overtime pay (owner approved the fix 2026-10-31). Production rows store
+    # ot_amount 0 (their OT is inside the gross), so this is unchanged for them.
+    p.final_salary = _d2(p.gross_salary + p.ot_amount + p.bonus - p.deductions)
     p.save()
     emp = p.employee
     return Response(_payroll_json(p, f"{emp.first_name} {emp.last_name}" if emp else None))
@@ -2328,6 +2331,11 @@ def payroll_settings_view(request: Request) -> Response:
                 continue  # empty or absent = keep the saved App Password (GET never sends it back)
             if val is None and attr in _nullable_text:
                 setattr(ps, attr, None)
+            elif attr in ("signature_image", "company_logo", "authorized_signature"):
+                # an uploaded logo / signature is stored compressed (image_compress.py; PNG kept when transparent)
+                from .image_compress import LOGO, compress_data_url
+
+                setattr(ps, attr, compress_data_url(str(val), LOGO))
             else:
                 try:
                     setattr(ps, attr, Decimal(str(val)) if cast is Decimal else cast(val))

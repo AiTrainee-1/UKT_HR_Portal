@@ -127,7 +127,15 @@ class Advance(models.Model):
         Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="advances"
     )
     advance_type = models.TextField(choices=ADVANCE_TYPES, db_column="advance_type")
+    # `amount` is the APPROVED amount (what is paid out and deducted). `requested_amount` is what the employee asked for in
+    # the apps; HR may approve less (owner 2026-10-31). Null on advances HR entered itself.
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    requested_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    # The monthly fixed salary when the employee applied: the Salary Advance cap is 60 % of it.
+    salary_at_request = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    APPLIED_BY_HR = "hr"
+    APPLIED_BY_EMPLOYEE = "employee"
+    applied_by = models.TextField(default=APPLIED_BY_HR, db_default=APPLIED_BY_HR)
     purpose = models.TextField(null=True, blank=True)
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
     approved_by = models.TextField(null=True, blank=True, db_column="approved_by")

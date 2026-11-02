@@ -1332,6 +1332,10 @@ def save_employee_photo(request, employee_id: int, data_url: str) -> dict:
     emp = qs.first()
     if emp is None:
         raise LookupError("Employee not found.")
+    from .image_compress import PHOTO, compress_data_url
+
+    # stored compressed, like every other picture (image_compress.py)
+    data_url = compress_data_url(data_url, PHOTO)
     Employee.objects.filter(pk=emp.pk).update(photo_url=data_url, updated_at=timezone.now())
     log_action(
         request,

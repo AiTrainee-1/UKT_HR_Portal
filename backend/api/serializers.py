@@ -2,6 +2,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from . import approval_workflow as approval, salary_split
+from .notification_targets import target_for
 
 if TYPE_CHECKING:
     from .models import Employee
@@ -190,6 +191,10 @@ def salary_record_json(record, employee_name: str | None = None) -> dict:
     }
 
 
+# The leave form's reason categories (models.LeaveRequest.REASON_CATEGORY_CHOICES), as the apps and the HR portal word them.
+_REASON_CATEGORY_LABEL = {"sick": "Sick Leave", "emergency": "Emergency", "personal": "Personal", "other": "Other Reasons"}
+
+
 def leave_request_json(record, employee_name: str | None = None, cfg=None) -> dict:
     emp = getattr(record, "employee", None)
     # Auto-derive name from the joined employee when caller doesn't supply it
@@ -210,6 +215,10 @@ def leave_request_json(record, employee_name: str | None = None, cfg=None) -> di
         "isHalfDay": record.is_half_day,
         "halfDaySlot": record.half_day_slot,
         "reason": record.reason,
+        # added 2026-10-31: the reason the employee picked ("sick" | "emergency" | "personal" | "other", "" on older
+        # requests) and its words. Descriptive only: no leave type or balance depends on it.
+        "reasonCategory": getattr(record, "reason_category", "") or "",
+        "reasonCategoryLabel": _REASON_CATEGORY_LABEL.get(getattr(record, "reason_category", "") or ""),
         "status": record.status,
         "hrComment": record.hr_comment,
         "approvedBy": record.approved_by,
@@ -220,7 +229,8 @@ def leave_request_json(record, employee_name: str | None = None, cfg=None) -> di
     }
 
 
-def notification_json(record, employee_name: str | None = None) -> dict:
+def notification_json(record, employee_name: str | None = None, context: dict | None = None) -> dict:
+    """`context`: notification_targets.build_context of the whole page, so the targets of a list cost no query per row."""
     return {
         "id": record.id,
         "employeeId": record.employee_id,
@@ -230,6 +240,8 @@ def notification_json(record, employee_name: str | None = None) -> dict:
         "message": record.message,
         "isRead": record.is_read,
         "createdAt": _dt(record.created_at),
+        # added 2026-11-02: where the apps' View button leads (notification_targets.py), null when there is nothing to open
+        "target": target_for(record, context),
     }
 
 

@@ -119,10 +119,10 @@ const requests: ClRequest[] = [
   },
 ];
 
-function mount() {
+function mount(data: { board?: ClBoard; requests?: ClRequest[] } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
-  client.setQueryData(["/api/casual-leaves/eligibility", 10, 2026, "board"], board);
-  client.setQueryData(["/api/casual-leaves", null, 10, 2026], requests);
+  client.setQueryData(["/api/casual-leaves/eligibility", 10, 2026, "board"], data.board ?? board);
+  client.setQueryData(["/api/casual-leaves", null, 10, 2026], data.requests ?? requests);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -211,6 +211,39 @@ describe("the Casual Leave page", () => {
     });
     expect(q(el, "not-eligible-4")).not.toBeNull();
     expect(q(el, "not-eligible-3")).toBeNull();
+  });
+
+  it("names a half-day CL, and lists someone with one half-day left as still eligible", () => {
+    const half: ClRequest = {
+      id: 14,
+      employeeId: 2,
+      employeeName: "Ravi Shankar",
+      employeeCode: "E2",
+      date: "2026-10-06",
+      portion: "first_half",
+      status: "approved",
+      branch: "Head Office",
+      branchId: 1,
+      employmentType: "staff",
+    };
+    const halfBoard: ClBoard = {
+      ...board,
+      employees: board.employees.map((r) =>
+        r.employeeId === 2
+          ? {
+              ...r,
+              usedThisMonth: true,
+              left: "one_half",
+              usedParts: [{ id: 14, date: "2026-10-06", portion: "first_half", status: "approved" }],
+            }
+          : r,
+      ),
+    };
+    const el = mount({ board: halfBoard, requests: [...requests, half] });
+    expect(text(q(el, "cl-14"))).toContain("Half day (first half)");
+    expect(q(el, "cl-11")!.querySelector('[data-testid="cl-portion"]')).toBeNull(); // a full day reads as before
+    click(tab(el, "Eligible")!);
+    expect(text(q(el, "half-left-2"))).toContain("One half-day left (first half of 6 Oct 2026 used)");
   });
 
   it("has a month picker that starts on the current month and one Refresh beside the title", () => {

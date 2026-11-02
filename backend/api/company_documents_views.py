@@ -33,6 +33,7 @@ from .document_pdf import (
     fmt_date, full_name, new_premium_document, num_to_words, PremiumPageDecorator, rupee,
     signature_block, styles_for, title_block,
 )
+from .image_compress import LOGO, compress_data_url
 from .models import CompanyDocumentSettings, Employee, LeaveBalance, PayrollSettings, SalarySlip
 
 
@@ -78,7 +79,8 @@ def document_settings_view(request: Request, doc_type: str) -> Response:
     if "showWatermark" in data:
         s.show_watermark = bool(data["showWatermark"])
     if "logoOverride" in data:
-        s.logo_override = data["logoOverride"] or None
+        # an uploaded logo is stored compressed (image_compress.py; PNG kept when it has transparency)
+        s.logo_override = compress_data_url(data["logoOverride"] or None, LOGO)
     s.save()
     return Response(_settings_dict(s))
 

@@ -30,7 +30,8 @@ export function captureFrame(video: HTMLVideoElement): string {
   const sx = (video.videoWidth - side) / 2;
   const sy = (video.videoHeight - side) / 2;
   ctx.drawImage(video, sx, sy, side, side, 0, 0, SIZE, SIZE);
-  return canvas.toDataURL("image/jpeg", 0.85);
+  // quality 0.7 = the server's photo profile (backend api/image_compress.py): stored as taken, not compressed twice
+  return canvas.toDataURL("image/jpeg", 0.7);
 }
 
 /**
@@ -128,7 +129,7 @@ export default function CameraCapture({
     setError("");
     try {
       onChange(
-        await compressImageToDataUrl(file, { maxWidth: SIZE, maxHeight: SIZE, format: "image/jpeg", quality: 0.85 }),
+        await compressImageToDataUrl(file, { maxWidth: SIZE, maxHeight: SIZE, format: "image/jpeg", quality: 0.7 }),
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "That image could not be used.");

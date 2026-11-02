@@ -16,7 +16,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 
-from . import mobile_messages, push_receipts
+from . import mobile_messages, notification_targets, push_receipts
 from .models import Notification, PushToken
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ def send_push_on_notification(sender, instance: Notification, created: bool, **k
 
     # A notification made from a WhatsApp message has its own headline ("Request Approved"); the older one-liners keep the app name.
     # High priority + the default sound so it shows on the lock screen and rings like a message, not silently in the tray.
+    data = _push_data(instance)
     messages = [
         {
             "to": token,
@@ -64,7 +65,7 @@ def send_push_on_notification(sender, instance: Notification, created: bool, **k
             "sound": "default",
             "priority": "high",
             "channelId": "default",
-            "data": {"type": instance.type, "notificationId": instance.id},
+            "data": data,
         }
         for token in tokens
     ]
@@ -84,6 +85,16 @@ def send_push_on_notification(sender, instance: Notification, created: bool, **k
         # saved) is the source of truth regardless of whether this succeeds.
         logger.warning("Failed to send push notification for notification id=%s", instance.id, exc_info=True)
         _record(instance, "failed", f"{type(exc).__name__}: {exc}")
+
+
+def _push_data(instance: Notification) -> dict:
+    """What a tap on the push hands the app: the type and the row, plus where its View button leads (notification_targets.py)
+    as {kind, id, category} only, to keep the payload small. No `target` key when there is nothing to open."""
+    data = {"type": instance.type, "notificationId": instance.id}
+    target = notification_targets.target_for(instance)  # never raises
+    if target:
+        data["target"] = {"kind": target["kind"], "id": target["id"], "category": target["category"]}
+    return data
 
 
 def _prune_dead_tokens(tokens: list[str], receipts) -> None:

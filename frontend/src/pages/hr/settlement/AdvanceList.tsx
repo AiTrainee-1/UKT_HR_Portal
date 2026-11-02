@@ -6,6 +6,7 @@ import {
   STATUS_LABEL,
   STATUS_TONE,
   TYPE_LABEL,
+  appliedByEmployee,
   hasLeft,
   progressPct,
   type Sort,
@@ -50,10 +51,32 @@ function Recovery({ a }: { a: SettlementRow }) {
   );
 }
 
+/** The approved amount, and what the employee asked for when HR approved less. */
+function AmountCell({ a }: { a: SettlementRow }) {
+  const asked = a.requestedAmount;
+  return (
+    <div className="space-y-0.5 whitespace-nowrap">
+      <p className="text-sm font-bold">{formatMoney(a.amount)}</p>
+      {asked != null && asked !== a.amount && (
+        <p className="text-[11px] font-medium text-amber-700" data-testid={`advance-asked-${a.id}`}>
+          asked {formatMoney(asked)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function TypeCell({ a }: { a: SettlementRow }) {
   return (
     <div className="space-y-0.5">
-      <Chip tone={a.advanceType === "term" ? "accent" : "info"}>{TYPE_LABEL[a.advanceType]}</Chip>
+      <div className="flex flex-wrap items-center gap-1">
+        <Chip tone={a.advanceType === "term" ? "accent" : "info"}>{TYPE_LABEL[a.advanceType]}</Chip>
+        {appliedByEmployee(a) && (
+          <Chip tone="neutral" className="text-[10px]">
+            <span data-testid={`advance-by-employee-${a.id}`}>Applied by employee</span>
+          </Chip>
+        )}
+      </div>
       {a.advanceType === "term" && a.emiAmount > 0 && (
         <p className="text-[11px] text-gray-500">
           {formatMoney(a.emiAmount)}/month{a.repaymentMonths ? ` · ${a.repaymentMonths} months` : ""}
@@ -180,7 +203,9 @@ export default function AdvanceList({ rows, sort, onSort, onOpen, onApprove, onR
                 <TableCell>
                   <TypeCell a={a} />
                 </TableCell>
-                <TableCell className="whitespace-nowrap text-sm font-bold">{formatMoney(a.amount)}</TableCell>
+                <TableCell>
+                  <AmountCell a={a} />
+                </TableCell>
                 <TableCell>
                   <Recovery a={a} />
                 </TableCell>
@@ -225,7 +250,7 @@ export default function AdvanceList({ rows, sort, onSort, onOpen, onApprove, onR
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
                 <p className="text-gray-400">Amount</p>
-                <p className="text-sm font-bold">{formatMoney(a.amount)}</p>
+                <AmountCell a={a} />
                 <div className="mt-1">
                   <TypeCell a={a} />
                 </div>

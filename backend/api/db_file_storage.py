@@ -46,8 +46,22 @@ from django.core.files.storage import FileSystemStorage, Storage
 from django.utils.deconstruct import deconstructible
 
 
+class _CompressImagesOnSave:
+    """Every picture saved through this storage is compressed first (api/image_compress.py): the owner's rule that
+    pictures are kept small, for identification only. Done here, in the one place every FileField save passes through,
+    so On-Duty selfies, employee documents and any future upload are covered without a view having to remember it. A PDF,
+    Word file, damaged image or one that would not get smaller is saved exactly as it came. A picture that changes type
+    (a PNG photo stored as JPEG) is saved under the matching extension, so it is served with the right Content-Type."""
+
+    def save(self, name, content, max_length=None):
+        from .image_compress import compress_upload
+
+        name, content = compress_upload(name, content)
+        return super().save(name, content, max_length=max_length)
+
+
 @deconstructible
-class DatabaseFileStorage(Storage):
+class DatabaseFileStorage(_CompressImagesOnSave, Storage):
     """Stores file content as rows in the file_blobs table."""
 
     def _open(self, name, mode="rb"):
@@ -112,7 +126,7 @@ class DatabaseFileStorage(Storage):
 
 
 @deconstructible
-class HybridFileStorage(Storage):
+class HybridFileStorage(_CompressImagesOnSave, Storage):
     """New uploads -> Postgres. Pre-existing files -> still read from disk.
 
     This is the backend Django is actually configured with. It exists

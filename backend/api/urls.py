@@ -824,4 +824,12 @@ urlpatterns = [
 
     # ── Managing Director portal (every view behind @require_md; see api/md_portal/) ──
     path("md/", include("api.md_portal.urls")),
+
+    # ── Mobile pages round 2026-10-31: one routes file per area so the areas never edit the same lines ──
+    path("", include("api.urls_mobile_leave")),
+    path("", include("api.urls_mobile_requests")),
+    path("", include("api.urls_mobile_pay")),
+    path("", include("api.urls_mobile_settlement")),
+    path("", include("api.urls_mobile_reminders")),
+    path("", include("api.urls_mobile_approvals")),
 ]

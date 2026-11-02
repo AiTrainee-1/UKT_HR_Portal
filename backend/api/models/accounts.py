@@ -221,6 +221,26 @@ class MobileMessageSettings(models.Model):
         return obj
 
 
+class ApprovalReminder(models.Model):
+    """
+    An employee reminding the approver of one of their pending requests (mobile HOD Assignment -> My Requests).
+
+    At most one per request every 24 hours (owner 2026-10-31). `module` is the approval workflow key ("leave",
+    "permission", "missing_punch", ...) and `request_id` the row id in that module; `sent_to` is who was reminded
+    ("hod:<employee id>" or "hr").
+    """
+
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="approval_reminders")
+    module = models.TextField()
+    request_id = models.IntegerField()
+    sent_to = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "approval_reminders"
+        indexes = [models.Index(fields=["module", "request_id", "created_at"], name="approval_reminder_req_idx")]
+
+
 class PushToken(models.Model):
     """
     An Expo push token for one of an employee's devices (mobile app only —

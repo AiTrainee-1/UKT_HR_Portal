@@ -23,7 +23,23 @@ export type SettlementRow = Advance & {
   employeeBranch?: string | null;
   employeeType?: string | null;
   employeeStatus?: string | null;
+  /** What the employee asked for in the app (2026-10-31); null on an advance HR recorded. `amount` is what is approved. */
+  requestedAmount?: number | null;
+  /** The monthly salary the 60 % Salary Advance limit was taken from, when the employee applied. */
+  salaryAtRequest?: number | null;
+  /** "employee" when the employee applied from the app, "hr" (or absent on an older backend) when HR recorded it. */
+  appliedBy?: "hr" | "employee" | null;
 };
+
+/** The employee applied for this advance themselves (mobile app), rather than HR recording it. */
+export const appliedByEmployee = (a: SettlementRow): boolean => a.appliedBy === "employee";
+
+/** What the employee asked for: `requestedAmount`, or the amount itself on an advance HR recorded. */
+export const requestedOf = (a: SettlementRow): number => a.requestedAmount ?? a.amount;
+
+/** HR approved less than the employee asked for. */
+export const approvedLess = (a: SettlementRow): boolean =>
+  a.requestedAmount != null && a.status !== "pending" && a.status !== "rejected" && a.amount < a.requestedAmount;
 
 export type AdvanceStatus = Advance["status"];
 
@@ -321,6 +337,74 @@ export function previewForAdvance(a: SettlementRow, now = new Date()): ScheduleP
   });
 }
 
+// ─── Approving: the approved amount and the first deduction month ──────────────
+
+/** What HR may change when approving: a smaller amount than asked for, and the month deductions start. */
+export type ApprovalEdit = { amount: string; startMonth: number; startYear: number };
+
+/** The editor's starting values: the amount asked for and the start month already on the advance (a Salary Advance an
+ *  employee applied for starts in the month of the application, a Term Loan the month after). */
+export function approvalDefaults(a: SettlementRow, now = new Date()): ApprovalEdit {
+  return {
+    amount: String(a.amount),
+    startMonth: a.repaymentStartMonth || now.getMonth() + 1,
+    startYear: a.repaymentStartYear || now.getFullYear(),
+  };
+}
+
+/** The monthly EMI the server works out when the amount changes: a Term Loan an employee applied for rounds UP to
+ *  whole rupees (the last EMI absorbs the rest: settlement_views.whole_rupee_emi); one HR recorded divides to the
+ *  paisa, as the create call does. */
+export function approvalEmi(a: SettlementRow, amount: number): number {
+  if (a.advanceType !== "term") return 0;
+  const months = a.repaymentMonths ?? 0;
+  if (months > 0) return appliedByEmployee(a) ? Math.ceil(amount / months) : round2(amount / months);
+  return a.emiAmount;
+}
+
+/** The message to show beside the approved amount, or null when it can be sent. */
+export function approvalProblem(a: SettlementRow, edit: ApprovalEdit): string | null {
+  const text = edit.amount.trim();
+  const amount = num(text);
+  if (text === "") return "Enter the amount to approve.";
+  if (!Number.isFinite(amount) || amount <= 0) return "The approved amount must be more than 0.";
+  if (hasTooManyDecimals(text)) return "Use at most 2 decimal places.";
+  if (a.requestedAmount != null && amount > a.requestedAmount)
+    return `You can approve at most the ${formatMoney(a.requestedAmount)} the employee asked for.`;
+  if (!Number.isInteger(edit.startYear) || edit.startYear < 2000 || edit.startYear > 2100)
+    return "Enter a 4-digit year.";
+  return null;
+}
+
+/** The schedule this approval creates, with the amount and start month HR chose. */
+export function approvalPreview(a: SettlementRow, edit: ApprovalEdit): SchedulePreview | null {
+  const amount = num(edit.amount);
+  if (!(amount > 0)) return null;
+  const changed = amount !== a.amount;
+  return schedulePreview({
+    type: a.advanceType,
+    amount,
+    months: a.repaymentMonths,
+    emi: changed ? approvalEmi(a, amount) : a.emiAmount,
+    startMonth: edit.startMonth,
+    startYear: edit.startYear,
+  });
+}
+
+/** The body of the approve call: only what changed, so an untouched approval sends `{status}` as it always did. */
+export function approvalPayload(a: SettlementRow, edit: ApprovalEdit) {
+  const body: { status: "approved"; amount?: number; repaymentStartMonth?: number; repaymentStartYear?: number } = {
+    status: "approved",
+  };
+  const amount = num(edit.amount);
+  if (Number.isFinite(amount) && amount !== a.amount) body.amount = amount;
+  if (edit.startMonth !== a.repaymentStartMonth || edit.startYear !== a.repaymentStartYear) {
+    body.repaymentStartMonth = edit.startMonth;
+    body.repaymentStartYear = edit.startYear;
+  }
+  return body;
+}
+
 // ─── The "new advance" form ─────────────────────────────────────────────────────
 
 export type AdvanceForm = {
@@ -449,6 +533,7 @@ export function exportTable(rows: SettlementRow[]): ExportTable {
       "Advance type",
       "Status",
       "Amount",
+      "Requested by employee",
       "Repaid",
       "Outstanding",
       "Recovered %",
@@ -459,6 +544,7 @@ export function exportTable(rows: SettlementRow[]): ExportTable {
       "Raised on",
       "Approved by",
       "Approved on",
+      "Applied by",
     ],
     rows: rows.map((a) => [
       a.employeeCode,
@@ -470,6 +556,7 @@ export function exportTable(rows: SettlementRow[]): ExportTable {
       TYPE_LABEL[a.advanceType],
       STATUS_LABEL[a.status],
       a.amount,
+      a.requestedAmount ?? "",
       a.totalRepaid,
       a.outstanding,
       progressPct(a),
@@ -482,6 +569,7 @@ export function exportTable(rows: SettlementRow[]): ExportTable {
       formatDate(a.createdAt),
       a.approvedBy ?? "",
       formatDate(a.approvedAt),
+      appliedByEmployee(a) ? "Employee (app)" : "HR",
     ]),
   };
 }

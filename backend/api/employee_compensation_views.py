@@ -255,10 +255,11 @@ def _on_time_until(emp, applies_on: date, minutes: int, assignments=None) -> str
 # ─────────────────────────── the items ───────────────────────────
 
 
-def _ot_items(emp, today: date, cfg: CompensationConfig, master: bool, assignments: list):
+def _ot_items(emp, today: date, cfg: CompensationConfig, master: bool, assignments: list, since: date | None = None):
     """(items, todayAllowance, tomorrowAllowance) from the employee's OT records. `master` = the master switch and
-    `assignments` = the employee's shift assignments, both read once by the caller."""
-    since = today - timedelta(days=HISTORY_DAYS)
+    `assignments` = the employee's shift assignments, both read once by the caller. `since` (optional, the mobile
+    year history in mobile_pay_compensation.py) reads from that day instead of the last HISTORY_DAYS."""
+    since = since if since is not None else today - timedelta(days=HISTORY_DAYS)
     records = list(OvertimeRecord.objects.filter(employee=emp, date__gte=since).order_by("-date"))
     allowance = [r for r in records if r.ot_type == OvertimeRecord.OT_TYPE_ALLOWANCE]
     markers: list = []
@@ -449,8 +450,8 @@ def _stuck_claim_detail(emp) -> str | None:
     return None
 
 
-def _claim_items(emp, today: date, holidays: dict):
-    since = today - timedelta(days=HISTORY_DAYS)
+def _claim_items(emp, today: date, holidays: dict, since: date | None = None):
+    since = since if since is not None else today - timedelta(days=HISTORY_DAYS)
     claims = list(HolidayWorkClaim.objects.filter(employee=emp, work_date__gte=since).order_by("-work_date", "-id"))
     # looked up once, and only when something is waiting
     stuck = _stuck_claim_detail(emp) if any(c.status == HolidayWorkClaim.STATUS_PENDING for c in claims) else None
@@ -500,8 +501,8 @@ def _redemption_detail(e: CompensationLedger) -> str:
     return f"HR used {shifts_text(e.shifts)} shift of your compensation balance for {when}."
 
 
-def _redemption_items(emp, today: date):
-    since = today - timedelta(days=HISTORY_DAYS)
+def _redemption_items(emp, today: date, since: date | None = None):
+    since = since if since is not None else today - timedelta(days=HISTORY_DAYS)
     return [
         _item(
             f"rd-{e.id}",
@@ -530,13 +531,13 @@ def _covers(ann: CompensationDayAnnouncement, emp) -> bool:
     return True
 
 
-def _window_items(emp, today: date):
+def _window_items(emp, today: date, since: date | None = None, until: date | None = None):
     anns = [
         a
         for a in CompensationDayAnnouncement.objects.filter(
             kind__in=(CompensationDayAnnouncement.KIND_LATE_IN, CompensationDayAnnouncement.KIND_EARLY_OUT),
-            date__gte=today - timedelta(days=WINDOW_PAST_DAYS),
-            date__lte=today + timedelta(days=WINDOW_AHEAD_DAYS),
+            date__gte=since if since is not None else today - timedelta(days=WINDOW_PAST_DAYS),
+            date__lte=until if until is not None else today + timedelta(days=WINDOW_AHEAD_DAYS),
         )
         .prefetch_related("employees")
         .order_by("-date", "-id")
@@ -577,14 +578,24 @@ def _window_items(emp, today: date):
 
 
 def _birthday_items(
-    emp, today: date, holidays_for: Callable[[date], dict], cfg: CompensationConfig, master: bool, assignments: list
+    emp,
+    today: date,
+    holidays_for: Callable[[date], dict],
+    cfg: CompensationConfig,
+    master: bool,
+    assignments: list,
+    year: int | None = None,
 ):
+    """This year's birthday (and next year's once it has passed); with `year` (the mobile year history), that year's."""
     if emp.date_of_birth is None:
         return []
-    this_year = birthday_in_year(emp.date_of_birth, today.year)
-    days = [this_year]
-    if this_year < today:
-        days.append(birthday_in_year(emp.date_of_birth, today.year + 1))
+    if year is not None:
+        days = [birthday_in_year(emp.date_of_birth, year)]
+    else:
+        this_year = birthday_in_year(emp.date_of_birth, today.year)
+        days = [this_year]
+        if this_year < today:
+            days.append(birthday_in_year(emp.date_of_birth, today.year + 1))
     records = {
         r.date: r for r in AttendanceDayRecord.objects.filter(employee=emp, date__in=days, compensation_kind="birthday")
     }

@@ -18,6 +18,24 @@ from . import whatsapp_catalog as catalog
 MANUAL = "manual"  # a message HR typed on the Mobile Messages page
 APPROVAL_PREFIX = "approval:"
 
+# Phone notifications the HRMS sends that are NOT WhatsApp messages, so they are not in whatsapp_catalog.py: {key: (label,
+# description, catalogue group)}. Each gets its own switch next to the WhatsApp kinds of its group.
+REMINDER_SOURCE = "approval_reminder"  # an employee reminding their Department Head (mobile_reminder_views.py)
+EXTRA_TYPES: dict[str, tuple[str, str, str]] = {
+    REMINDER_SOURCE: (
+        "Approval reminder",
+        "An employee's reminder (HOD Assignment -> My Requests) asking their Department Head to review a request that is "
+        "still waiting. Sent at most once a day per request.",
+        "approvals",
+    ),
+}
+
+
+def extra_label(source: str) -> str | None:
+    """The label of a non-WhatsApp kind (EXTRA_TYPES), or None."""
+    extra = EXTRA_TYPES.get(source)
+    return extra[0] if extra else None
+
 
 def approval_key(module: str) -> str:
     return f"{APPROVAL_PREFIX}{module}"
@@ -42,6 +60,18 @@ def controls() -> list[dict]:
                     "kind": "message",
                 }
             )
+        for key, (extra_label_text, description, group) in EXTRA_TYPES.items():
+            if group == module:
+                rows.append(
+                    {
+                        "key": key,
+                        "label": extra_label_text,
+                        "description": description,
+                        "group": module,
+                        "groupLabel": label,
+                        "kind": "message",
+                    }
+                )
     for module, label in catalog.APPROVAL_MODULES.items():
         rows.append(
             {

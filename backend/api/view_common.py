@@ -29,17 +29,22 @@ DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 500
 
 
-def paginate(request, rows, serialize, *, cap: int = DEFAULT_LIST_CAP) -> Response:
+def paginate(request, rows, serialize, *, cap: int = DEFAULT_LIST_CAP, prepare=None) -> Response:
     """Serialize `rows` (an ORDERED queryset or list) with default pagination.
 
     - no `page` param  -> bare array of at most `cap` items (legacy shape).
     - `?page=N&pageSize=M` -> {"items", "total", "page", "pageSize"}, the shape
       the outpass/reception/tea-break lists already use. pageSize defaults to
       DEFAULT_PAGE_SIZE and is clamped to MAX_PAGE_SIZE.
+
+    `prepare(rows)`, when given, is called with the rows about to be returned before any is serialized: one batched
+    lookup for the whole page instead of one per row.
     """
     page = request.query_params.get("page")
     if page is None:
         window = list(rows[: cap + 1])
+        if prepare is not None:
+            prepare(window[:cap])
         response = Response([serialize(r) for r in window[:cap]])
         if len(window) > cap:
             response["X-Truncated"] = "true"
@@ -53,9 +58,12 @@ def paginate(request, rows, serialize, *, cap: int = DEFAULT_LIST_CAP) -> Respon
 
     total = rows.count() if isinstance(rows, QuerySet) else len(rows)
     start = (page_num - 1) * page_size
+    page_rows = list(rows[start : start + page_size])
+    if prepare is not None:
+        prepare(page_rows)
     return Response(
         {
-            "items": [serialize(r) for r in rows[start : start + page_size]],
+            "items": [serialize(r) for r in page_rows],
             "total": total,
             "page": page_num,
             "pageSize": page_size,

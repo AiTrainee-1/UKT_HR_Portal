@@ -275,17 +275,23 @@ def _leave(r):
     else:
         label = _cap(r.type) if (r.type or "").lower().endswith("leave") else f"{_cap(r.type)} Leave"
     span = r.start_date if r.start_date == r.end_date else f"{r.start_date} → {r.end_date}"
+    # the reason the employee picked in the apps (Sick Leave / Emergency / Personal / Other Reasons); blank on older ones
+    category = dict(r.REASON_CATEGORY_CHOICES).get(r.reason_category or "")
+    details = [
+        ("From", r.start_date),
+        ("To", r.end_date),
+        ("Days", f"{days:g}"),
+        ("Leave type", _cap(r.type)),
+    ]
+    if category:
+        label = f"{label} · {category}"
+        details.append(("Reason type", category))
     return {
         "label": label,
         "summary": f"{span} · {days:g} day{'' if days == 1 else 's'}",
         "reason": r.reason,
         "date": r.start_date,
-        "details": [
-            ("From", r.start_date),
-            ("To", r.end_date),
-            ("Days", f"{days:g}"),
-            ("Leave type", _cap(r.type)),
-        ],
+        "details": details,
         "decision": (r.approved_by, _role(r.approver_role), None, r.hr_comment),
     }
 
@@ -317,12 +323,14 @@ def _permission(r, extra):
 
 
 def _casual(r):
+    # a half-day CL (first / second half of the shift) says so; a full day reads exactly as before
+    portion = dict(r.PORTION_CHOICES).get(r.portion) if r.portion and r.portion != r.PORTION_FULL else None
     return {
-        "label": "Casual Leave",
-        "summary": str(r.date),
+        "label": f"Casual Leave · Half day ({portion.lower()})" if portion else "Casual Leave",
+        "summary": f"{r.date} · {portion.lower()}" if portion else str(r.date),
         "reason": r.reason,
         "date": str(r.date),
-        "details": [("Date", str(r.date))],
+        "details": [("Date", str(r.date)), ("Day part", f"Half day ({portion.lower()})" if portion else "Full day")],
         "decision": (r.reviewed_by, _role(r.reviewer_role), r.reviewed_at, r.review_comment),
     }
 

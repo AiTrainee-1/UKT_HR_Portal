@@ -5,7 +5,16 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAdvanceDetail, type AdvanceRepaymentItem } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
-import { STATUS_LABEL, STATUS_TONE, TYPE_LABEL, hasLeft, progressPct, type SettlementRow } from "./logic";
+import {
+  STATUS_LABEL,
+  STATUS_TONE,
+  TYPE_LABEL,
+  appliedByEmployee,
+  approvedLess,
+  hasLeft,
+  progressPct,
+  type SettlementRow,
+} from "./logic";
 import { Chip, InitialsAvatar, ProgressBar } from "./parts";
 import { MONTH_FULL, formatDate, formatDateTime, formatMoney, monthLabel } from "./shared";
 import { buildStatementHtml, printStatement } from "./statement";
@@ -86,6 +95,7 @@ export default function DetailSheet({ advanceId, onClose, onApprove, onReject, o
                 <Chip tone={STATUS_TONE[adv.status]}>{STATUS_LABEL[adv.status]}</Chip>
                 <Chip tone={adv.advanceType === "term" ? "accent" : "info"}>{TYPE_LABEL[adv.advanceType]}</Chip>
                 {hasLeft(adv) && <Chip tone="caution">Has left</Chip>}
+                {appliedByEmployee(adv) && <Chip tone="neutral">Applied by employee</Chip>}
               </div>
             </SheetHeader>
 
@@ -105,7 +115,11 @@ export default function DetailSheet({ advanceId, onClose, onApprove, onReject, o
             <section className="space-y-2" aria-label="Settlement breakdown">
               <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Breakdown</p>
               <div className="grid grid-cols-3 gap-2">
-                <Figure label="Amount" value={formatMoney(adv.amount)} tone="text-blue-700" />
+                <Figure
+                  label={adv.requestedAmount != null && adv.status !== "pending" ? "Approved" : "Amount"}
+                  value={formatMoney(adv.amount)}
+                  tone="text-blue-700"
+                />
                 <Figure label="Recovered" value={formatMoney(adv.totalRepaid)} tone="text-green-600" />
                 <Figure label="Outstanding" value={formatMoney(adv.outstanding)} tone="text-red-500" />
               </div>
@@ -135,6 +149,19 @@ export default function DetailSheet({ advanceId, onClose, onApprove, onReject, o
 
             <dl className="space-y-1.5 rounded-xl bg-gray-50 p-3" aria-label="Advance details">
               <Detail label="Purpose" value={adv.purpose} />
+              {adv.requestedAmount != null && (
+                <Detail
+                  label="Asked for"
+                  value={`${formatMoney(adv.requestedAmount)}${approvedLess(adv) ? ` (approved ${formatMoney(adv.amount)})` : ""}`}
+                />
+              )}
+              {appliedByEmployee(adv) && <Detail label="Applied by" value="The employee, from the mobile app" />}
+              {adv.salaryAtRequest != null && (
+                <Detail
+                  label="Monthly salary when applying"
+                  value={`${formatMoney(adv.salaryAtRequest)}${adv.advanceType === "general" ? ` (60% = ${formatMoney(Math.floor(adv.salaryAtRequest * 0.6))})` : ""}`}
+                />
+              )}
               {adv.advanceType === "term" && adv.emiAmount > 0 && (
                 <Detail
                   label="Monthly EMI"

@@ -6,7 +6,7 @@ import { TONE } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { longDate, shortDate } from "../leave/logic";
 import { Chip, PersonCell, StatusChip } from "../leave/parts";
-import { serviceText, whyNot, type BoardRow, type ClRequest, type Why } from "./logic";
+import { isHalf, portionText, serviceText, whyNot, type BoardRow, type ClRequest, type Why } from "./logic";
 
 const HEAD = "text-[11px] font-bold uppercase tracking-wider text-[#006496]/60";
 
@@ -19,6 +19,28 @@ const WHY_CHIP: Record<Why["tone"], string> = {
 
 const where = (r: { department?: string | null; branch?: string | null }) =>
   [r.department, r.branch].filter(Boolean).join(" · ") || null;
+
+/** "Half day (first half)" under the date of a half-day request; nothing for a full day (the usual case). */
+function PortionChip({ portion }: { portion?: string | null }) {
+  if (!isHalf(portion)) return null;
+  return (
+    <div className="my-0.5" data-testid="cl-portion">
+      <Chip className={TONE.info}>{portionText(portion)}</Chip>
+    </div>
+  );
+}
+
+/** One half-day of the month is used: the employee can still take the other half. */
+function HalfLeftNote({ r }: { r: BoardRow }) {
+  if (r.left !== "one_half") return null;
+  const used = r.usedParts?.[0];
+  return (
+    <p className="text-[11px] font-semibold text-amber-700" data-testid={`half-left-${r.employeeId}`}>
+      One half-day left
+      {used ? ` (${used.portion === "second_half" ? "second" : "first"} half of ${shortDate(used.date)} used)` : ""}
+    </p>
+  );
+}
 
 /** "Approved by Suresh (Dept Head)" under a decided request. */
 function decidedBy(r: ClRequest): string | null {
@@ -98,6 +120,7 @@ export function RequestList({ rows, ...actions }: { rows: ClRequest[] } & Reques
                 </TableCell>
                 <TableCell>
                   <p className="whitespace-nowrap text-sm font-semibold text-gray-900">{longDate(r.date)}</p>
+                  <PortionChip portion={r.portion} />
                   {r.reason && <p className="max-w-[14rem] truncate text-xs text-gray-400">{r.reason}</p>}
                 </TableCell>
                 <TableCell>
@@ -127,6 +150,7 @@ export function RequestList({ rows, ...actions }: { rows: ClRequest[] } & Reques
               <StatusChip status={r.status} approval={r.approval} />
             </div>
             <p className="text-sm font-semibold text-gray-900">{longDate(r.date)}</p>
+            <PortionChip portion={r.portion} />
             {r.reason && <p className="text-xs text-gray-500">{r.reason}</p>}
             {decidedBy(r) && <p className="text-xs text-gray-500">{decidedBy(r)}</p>}
             <Pipeline r={r} />
@@ -175,6 +199,7 @@ export function EligibleList({
               <TableRow key={r.employeeId} data-testid={`eligible-${r.employeeId}`}>
                 <TableCell>
                   <PersonCell id={r.employeeId} name={r.employeeName} code={r.employeeCode} sub={where(r)} />
+                  <HalfLeftNote r={r} />
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-xs text-gray-600">{shortDate(r.joinDate)}</TableCell>
                 <TableCell className="whitespace-nowrap text-xs font-semibold text-gray-700">
@@ -199,6 +224,7 @@ export function EligibleList({
             <p className="text-xs text-gray-500">
               {serviceText(r.serviceMonths)} of service · last CL {r.lastClDate ? shortDate(r.lastClDate) : "never"}
             </p>
+            <HalfLeftNote r={r} />
             <ApplyButton r={r} onApply={onApply} monthLabel={monthLabel} />
           </div>
         ))}

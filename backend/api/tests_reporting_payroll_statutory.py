@@ -1930,6 +1930,14 @@ class MinWageComplianceTests(_Base):
 # ================================================================================================
 #  Payroll vs slip reconciliation
 # ================================================================================================
+def _legacy_paid_without_ot(emp):
+    """A payroll marked paid BEFORE the 2026-10-31 fix: the old PATCH recomputed final pay as gross + bonus - deductions
+    and dropped the OT. Rows like that can still exist, so the reconciliation report must keep finding them."""
+    p = Payroll.objects.get(employee=emp, month=MONTH, year=YEAR)
+    Payroll.objects.filter(pk=p.pk).update(status="paid", final_salary=p.gross_salary + p.bonus - p.deductions)
+    return p
+
+
 class PayrollSlipReconciliationTests(_Base):
     def patch_payroll(self, emp, **body):
         p = Payroll.objects.get(employee=emp, month=MONTH, year=YEAR)
@@ -1949,8 +1957,12 @@ class PayrollSlipReconciliationTests(_Base):
         empty = self.run_report("payroll-slip-reconciliation", period="2019-01")
         self.assertIn("generate payroll first", empty["notes"][0])
 
-    def test_marking_paid_drops_overtime_and_is_detected(self):
-        self.patch_payroll(self.A, status="paid")  # the real mark-paid path recomputes final pay without OT
+    def test_marking_paid_now_keeps_overtime(self):
+        self.patch_payroll(self.A, status="paid")  # fixed 2026-10-31: the mark-paid path keeps the OT
+        self.assertEqual(self.run_report("payroll-slip-reconciliation", **P)["rows"], [])
+
+    def test_a_payroll_paid_before_the_fix_without_overtime_is_detected(self):
+        _legacy_paid_without_ot(self.A)
         body = self.run_report("payroll-slip-reconciliation", **P)
         self.assertEqual(self.issues(body), [("3001", "Net differs")])
         r = body["rows"][0]
@@ -2025,7 +2037,7 @@ class PayrollSlipReconciliationTests(_Base):
         self.assertEqual(self.run_report("payroll-slip-reconciliation", **P)["rows"], [])
 
     def test_issue_filter_and_scope_filters(self):
-        self.patch_payroll(self.A, status="paid")
+        _legacy_paid_without_ot(self.A)
         self.patch_payroll(self.L, bonus=500)
         self.assertEqual(
             self.issues(self.run_report("payroll-slip-reconciliation", issue="manual-edit", **P)),
@@ -2039,7 +2051,7 @@ class PayrollSlipReconciliationTests(_Base):
         self.assertEqual(self.run_report("payroll-slip-reconciliation", period="2026-01")["rows"], [])
 
     def test_branch_isolation(self):
-        self.patch_payroll(self.A, status="paid")
+        _legacy_paid_without_ot(self.A)
         _generate_staff_payroll(self.C, MONTH, YEAR)
         self.assertEqual(
             self.issues(self.run_report("payroll-slip-reconciliation", **P)),
@@ -2057,7 +2069,7 @@ class PayrollSlipReconciliationTests(_Base):
         )
 
     def test_production_only_role_cannot_see_staff_findings(self):
-        self.patch_payroll(self.A, status="paid")
+        _legacy_paid_without_ot(self.A)
         self.assertEqual(self.run_report("payroll-slip-reconciliation", user=self.u_prod_only, **P)["rows"], [])
         self.assertEqual(
             self.issues(self.run_report("payroll-slip-reconciliation", user=self.u_staff_only, **P)),
@@ -2069,7 +2081,7 @@ class PayrollSlipReconciliationTests(_Base):
         self.assertEqual((r.status_code, r.json()["error"]), (403, "report_forbidden"))
 
     def test_export_round_trip(self):
-        self.patch_payroll(self.A, status="paid")
+        _legacy_paid_without_ot(self.A)
         ws = load_workbook(io.BytesIO(self.export("payroll-slip-reconciliation", "xlsx", **P).content)).active
         self.assertEqual([c.value for c in ws[7]][:5], ["Emp Code", "Employee", "Department", "Type", "Period"])
         self.assertEqual(ws["A8"].value, "3001")
@@ -2077,7 +2089,7 @@ class PayrollSlipReconciliationTests(_Base):
         self.assertTrue(self.export("payroll-slip-reconciliation", "pdf", **P).content.startswith(b"%PDF"))
 
     def test_no_n_plus_one(self):
-        self.patch_payroll(self.A, status="paid")
+        _legacy_paid_without_ot(self.A)
         self.assert_flat_queries("payroll-slip-reconciliation", lambda: self.extras(12))
 
 
@@ -2087,10 +2099,7 @@ class PayrollSlipReconciliationTests(_Base):
 class ExportAndAccessTests(_Base):
     def setUp(self):
         PayrollSettings.objects.filter(pk=1).update(min_wage_rate=Decimal("900"))
-        p = Payroll.objects.get(employee=self.A, month=MONTH, year=YEAR)
-        self.client.patch(
-            f"/api/payroll/{p.id}", {"status": "paid"}, content_type="application/json", **_headers(self.admin)
-        )
+        _legacy_paid_without_ot(self.A)  # gives the reconciliation report a finding to export
 
     def test_every_report_exports_valid_excel_and_pdf_with_data(self):
         for rid in G2_IDS:

@@ -24,6 +24,10 @@ export type LeaveRow = {
   isHalfDay?: boolean;
   halfDaySlot?: "morning" | "afternoon" | null;
   reason?: string | null;
+  /** Why the employee asked, picked in the apps (2026-10-31): "sick" | "emergency" | "personal" | "other"; "" on older
+   *  requests. Descriptive only: no leave type or balance depends on it. */
+  reasonCategory?: string | null;
+  reasonCategoryLabel?: string | null;
   status: string;
   hrComment?: string | null;
   approvedBy?: string | null;
@@ -691,6 +695,7 @@ export const LEAVE_EXPORT_HEADERS = [
   "Status",
   "Decided by",
   "Reason",
+  "Reason type",
 ];
 
 export function leaveExportRows(rows: LeaveRow[]): (string | number)[][] {
@@ -706,6 +711,7 @@ export function leaveExportRows(rows: LeaveRow[]): (string | number)[][] {
     l.status,
     l.approvedBy ?? "",
     l.reason ?? "",
+    l.reasonCategoryLabel ?? "",
   ]);
 }
 

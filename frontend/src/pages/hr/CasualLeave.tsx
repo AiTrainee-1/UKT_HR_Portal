@@ -30,13 +30,16 @@ import {
   filterBoard,
   filterRequests,
   isCurrentMonth,
+  isHalf,
   monthTitle,
   notEligibleRows,
+  portionText,
   requestExportRows,
   sortRequests,
   summarize,
   takenRows,
   type BoardRow,
+  type ClPortion,
   type ClRequest,
 } from "./casual-leave/logic";
 
@@ -119,9 +122,13 @@ export default function CasualLeave() {
         title: passedOn ? "Casual leave approved" : `Casual leave ${status}`,
         description: passedOn
           ? `${waitingText(result.approval) ?? "Waiting for the next approval"} before it is final.`
-          : status === "approved"
-            ? `${r.employeeName}'s attendance for ${r.date} is now marked Present (paid full day).`
-            : `${r.employeeName}'s attendance for ${r.date} is marked as Leave.`,
+          : isHalf(r.portion)
+            ? status === "approved"
+              ? `${r.employeeName}'s ${portionText(r.portion).toLowerCase()} on ${r.date} is paid; the other half counts by the punches.`
+              : `${r.employeeName}'s ${r.date} counts by the punches as usual.`
+            : status === "approved"
+              ? `${r.employeeName}'s attendance for ${r.date} is now marked Present (paid full day).`
+              : `${r.employeeName}'s attendance for ${r.date} is marked as Leave.`,
       });
     } catch (err: any) {
       toast({ title: err?.message ?? "Failed to update", variant: "destructive" });
@@ -137,7 +144,7 @@ export default function CasualLeave() {
     }
   };
 
-  const submitOnBehalf = async (input: { employeeId: number; date: string; reason: string }) => {
+  const submitOnBehalf = async (input: { employeeId: number; date: string; reason: string; portion: ClPortion }) => {
     if (!applyFor) return;
     setApplyProblem(null);
     try {
@@ -145,6 +152,7 @@ export default function CasualLeave() {
         employeeId: input.employeeId,
         date: input.date,
         reason: input.reason || undefined,
+        portion: input.portion,
       });
       toast({ title: `CL request created for ${applyFor.name}` });
       setApplyFor(null);

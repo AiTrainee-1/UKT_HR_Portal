@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { downloadBlob, downloadWorkbook, fileSafe, newWorkbook, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
 import { DetailDialog, DecisionDialog, HandleDialog } from "./requests/dialogs";
 import { useDecide, useHandleRequest, useHubRequests } from "./requests/api";
+import { useHrReminders, withReminders } from "./requests/reminders";
 import {
   EXPORT_HEADERS,
   NO_FILTERS,
@@ -77,7 +78,9 @@ export default function ApprovedRequests() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const params = useMemo(() => serverParams(filters, new Date()), [filters, today]);
   const query = useHubRequests(params);
-  const hub = useMemo(() => normalizeHub(query.data), [query.data]);
+  // the reminders employees sent HR from the app show on their rows ("Employee reminded HR on ...")
+  const reminders = useHrReminders();
+  const hub = useMemo(() => withReminders(normalizeHub(query.data), reminders.data), [query.data, reminders.data]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => new Date(), [query.dataUpdatedAt]);
 

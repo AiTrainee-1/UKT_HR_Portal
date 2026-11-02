@@ -335,6 +335,9 @@ function LeaveCard({
               ) : (
                 <Chip className="border-gray-200 bg-white capitalize text-gray-700">{leave.type}</Chip>
               )}
+              {leave.reasonCategoryLabel && (
+                <Chip className="border-violet-200 bg-violet-50 text-violet-700">{leave.reasonCategoryLabel}</Chip>
+              )}
               {leave.employmentType === "production" && (
                 <Chip className="border-orange-200 bg-orange-50 text-orange-700">Production</Chip>
               )}

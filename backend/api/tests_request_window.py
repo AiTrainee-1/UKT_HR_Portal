@@ -1217,7 +1217,11 @@ class CasualLeaveWindowTests(_EndpointCases, _Base):
             with clock(today):
                 r = self.client.get("/api/casual-leaves/my-eligibility" + query, **(who or self.emp_auth))
             self.assertEqual(r.status_code, 200, r.content)
-            return r.json()
+            body = r.json()
+            # the half-day Casual Leave keys added 2026-10-31 (left / usedParts / usedHalves) are pinned in
+            # tests_mobile_leave; this pins the keys every older client reads
+            body["months"] = [{k: m[k] for k in ("month", "label", "eligible", "reason")} for m in body["months"]]
+            return body
 
         def entry(month, label, eligible=True, reason=None):
             return {"month": month, "label": label, "eligible": eligible, "reason": reason}
@@ -1226,10 +1230,10 @@ class CasualLeaveWindowTests(_EndpointCases, _Base):
         # no grace: this month only
         body = months("2026-10-15")
         self.assertEqual(body["months"], [entry("2026-10", "October 2026")])
-        # every key the clients already read is still there, unchanged
-        self.assertEqual(
-            set(body),
+        # every key the clients already read is still there, unchanged (keys are only ever added)
+        self.assertLessEqual(
             {"eligible", "reason", "year", "yearlyEntitlement", "usedThisYear", "remainingThisYear", "months"},
+            set(body),
         )
         self.assertEqual((body["yearlyEntitlement"], body["usedThisYear"], body["remainingThisYear"]), (12, 0, 12))
         # the grace days: last month first, then this month
@@ -1274,7 +1278,7 @@ class CasualLeaveWindowTests(_EndpointCases, _Base):
             r = self.client.get("/api/casual-leaves/my-eligibility", **auth)
         reason = "Casual Leave is available only for staff employees"
         self.assertEqual(
-            r.json()["months"],
+            [{k: m[k] for k in ("month", "label", "eligible", "reason")} for m in r.json()["months"]],
             [
                 {"month": "2026-09", "label": "September 2026", "eligible": False, "reason": reason},
                 {"month": "2026-10", "label": "October 2026", "eligible": False, "reason": reason},

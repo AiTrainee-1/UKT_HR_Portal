@@ -320,6 +320,9 @@ export type CasualLeaveItem = {
   createdAt?: string | null;
   /** Where the request is in its approval pipeline and who can act on it (see lib/approval-workflow.ts). */
   approval?: ApprovalProgress | null;
+  /** Full day or one half of the shift (2026-10-31); absent / "full" on older rows. */
+  portion?: "full" | "first_half" | "second_half";
+  portionLabel?: string;
 };
 
 export type CasualLeaveEligibility = {
@@ -366,7 +369,12 @@ export const useCasualLeaveEligibility = (month: number, year: number) =>
 export const useCreateCasualLeave = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: { employeeId: number; date: string; reason?: string }) =>
+    mutationFn: (data: {
+      employeeId: number;
+      date: string;
+      reason?: string;
+      portion?: "full" | "first_half" | "second_half";
+    }) =>
       customFetch<CasualLeaveItem>("/api/casual-leaves", {
         method: "POST",
         body: JSON.stringify(data),

@@ -24,6 +24,7 @@ from rest_framework.response import Response
 from .view_common import error_response as _error
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .branch_scope import scope_to_branch
+from .image_compress import matching_filename
 from .models import Employee, EmployeeDocument
 
 ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png"}
@@ -139,12 +140,15 @@ def whatsapp_employee_document(request: Request, pk: int) -> Response:
     if not scope_to_branch(Employee.objects, request).filter(pk=doc.employee_id).exists():
         return _error("Document not found", 404)
 
-    ext = (doc.original_filename or "").rsplit(".", 1)[-1].lower()
+    # The type is read off the STORED name: a picture is compressed on upload and may have changed type (a PNG photo of
+    # an Aadhaar card is kept as a JPEG), and the stored name carries the extension of what is really kept.
+    filename = matching_filename(doc.original_filename, doc.file.name) or f"document-{doc.id}"
+    ext = (doc.file.name or doc.original_filename or "").rsplit(".", 1)[-1].lower()
     mime_type = _EXT_MIME.get(ext, "application/pdf")
     file_bytes = doc.file.read()
 
     log = whatsapp_service.send_document(
-        request, doc.employee, "other", file_bytes, doc.original_filename or f"document-{doc.id}",
+        request, doc.employee, "other", file_bytes, filename,
         body_params=[f"{doc.employee.first_name} {doc.employee.last_name}".strip(), doc.get_category_display()],
         mime_type=mime_type, document_ref_id=doc.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
@@ -178,7 +182,8 @@ def employee_document_file(request: Request, pk: int) -> Response:
 
     disposition = "attachment" if request.query_params.get("download") else "inline"
     response = FileResponse(doc.file.open("rb"))
-    response["Content-Disposition"] = f'{disposition}; filename="{doc.original_filename}"'
+    # the uploaded name, with the extension of what is really stored (a compressed PNG photo is kept as a JPEG)
+    response["Content-Disposition"] = f'{disposition}; filename="{matching_filename(doc.original_filename, doc.file.name)}"'
     return response
 
 

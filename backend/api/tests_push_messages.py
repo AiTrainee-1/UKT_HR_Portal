@@ -107,7 +107,11 @@ class PushPayloadTests(TestCase):
             (sent["to"], sent["title"], sent["body"], sent["sound"], sent["priority"]),
             ("ExponentPushToken[abc]", "❌ Request Rejected", "Sorry.", "default", "high"),
         )
-        self.assertEqual(sent["data"], {"type": "leave", "notificationId": n.id})
+        # + where the app's View button leads (notification_targets.py), kept to kind / id / category
+        self.assertEqual(
+            sent["data"],
+            {"type": "leave", "notificationId": n.id, "target": {"kind": "leave", "id": None, "category": None}},
+        )
 
     def test_an_older_one_line_notification_still_pushes_with_the_app_name(self):
         emp = _employee()

@@ -478,6 +478,23 @@ def casual_leave_dates(employee_ids, year: int, month: int) -> dict[int, set[dat
     return out
 
 
+def casual_leave_days(employee_ids, year: int, month: int) -> dict[int, dict[date, Decimal]]:
+    """{employee_id: {date: days of APPROVED Casual Leave on it}}: 1 for a full day, 0.5 for each half-day (two halves on
+    one date make 1). What the Salary Statement's CL column counts (casual_leave_dates gives the dates only)."""
+    out: dict[int, dict[date, Decimal]] = {}
+    rows = CasualLeaveRequest.objects.filter(
+        employee_id__in=list(employee_ids),
+        date__year=year,
+        date__month=month,
+        status=CasualLeaveRequest.STATUS_APPROVED,
+    ).values_list("employee_id", "date", "portion")
+    for employee_id, day, portion in rows:
+        days = out.setdefault(employee_id, {})
+        part = Decimal("1") if portion == CasualLeaveRequest.PORTION_FULL else Decimal("0.5")
+        days[day] = min(Decimal("1"), days.get(day, Decimal("0")) + part)
+    return out
+
+
 def outstanding_advances(employee_ids) -> dict[int, Decimal]:
     """{employee_id: what is still owed on their running (approved, not yet closed) advances}, in one query."""
     rows = (

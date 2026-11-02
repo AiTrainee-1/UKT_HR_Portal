@@ -166,6 +166,19 @@ class LeaveRequest(models.Model):
     ]
     half_day_slot = models.TextField(choices=HALF_DAY_CHOICES, null=True, blank=True, db_column="half_day_slot")
     reason = models.TextField(null=True, blank=True)
+    # What kind of reason the employee picked in the apps (owner 2026-10-31: Casual Leave left the leave form, these four
+    # took its place). Descriptive only: it changes neither the leave type nor any balance. Blank on older requests.
+    REASON_SICK = "sick"
+    REASON_EMERGENCY = "emergency"
+    REASON_PERSONAL = "personal"
+    REASON_OTHER = "other"
+    REASON_CATEGORY_CHOICES = [
+        (REASON_SICK, "Sick Leave"), (REASON_EMERGENCY, "Emergency"), (REASON_PERSONAL, "Personal"),
+        (REASON_OTHER, "Other Reasons"),
+    ]
+    reason_category = models.TextField(
+        choices=REASON_CATEGORY_CHOICES, blank=True, default="", db_default="", db_column="reason_category"
+    )
     status = models.TextField(default="pending")  # pending/approved/rejected
     hr_comment = models.TextField(null=True, blank=True, db_column="hr_comment")
     approved_by = models.TextField(null=True, blank=True, db_column="approved_by")
@@ -362,6 +375,15 @@ class CasualLeaveRequest(models.Model):
         related_name="casual_leaves",
     )
     date = models.DateField(help_text="The single day of casual leave.")
+    # The month's one CL is either one full day or two half-days on any dates of that month (owner 2026-10-31). A half
+    # pays half a day; the other half of that day counts by the punches as usual. Older rows are all "full".
+    PORTION_FULL = "full"
+    PORTION_FIRST_HALF = "first_half"
+    PORTION_SECOND_HALF = "second_half"
+    PORTION_CHOICES = [
+        (PORTION_FULL, "Full day"), (PORTION_FIRST_HALF, "First half"), (PORTION_SECOND_HALF, "Second half"),
+    ]
+    portion = models.TextField(choices=PORTION_CHOICES, default=PORTION_FULL, db_default=PORTION_FULL)
     reason = models.TextField(null=True, blank=True)
     status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
     reviewed_by = models.TextField(null=True, blank=True, db_column="reviewed_by")

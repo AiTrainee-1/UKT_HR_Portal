@@ -103,6 +103,7 @@ from .accounts import (
     AuditLog,
     HrLoginAttempt,
     MobileMessageSettings,
+    ApprovalReminder,
     Notification,
     PushToken,
 )

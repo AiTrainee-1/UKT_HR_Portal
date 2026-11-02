@@ -38,6 +38,10 @@ export type BoardRow = PersonFields & {
   usedReviewedBy?: string | null;
   usedReviewerRole?: string | null;
   usedApproval?: ApprovalProgress | null;
+  /** What of the month's CL is left (2026-10-31: one full day OR two half-days). Absent on an older server. */
+  left?: ClLeft;
+  /** The month's pending / approved requests, by date. */
+  usedParts?: { id: number; date: string; portion: ClPortion; portionLabel?: string; status: string }[];
 };
 
 export type ClBoard = {
@@ -51,10 +55,27 @@ export type ClBoard = {
   employees: BoardRow[];
 };
 
+export type ClPortion = "full" | "first_half" | "second_half";
+export type ClLeft = "full" | "one_half" | "nothing";
+
+/** "Full day" / "Half day (first half)" / "Half day (second half)". */
+export const PORTION_TEXT: Record<ClPortion, string> = {
+  full: "Full day",
+  first_half: "Half day (first half)",
+  second_half: "Half day (second half)",
+};
+
+export const portionText = (portion: string | null | undefined): string =>
+  PORTION_TEXT[(portion as ClPortion) in PORTION_TEXT ? (portion as ClPortion) : "full"];
+
+export const isHalf = (portion: string | null | undefined) => portion === "first_half" || portion === "second_half";
+
 /** A casual leave request, as the list returns it (the employee fields beyond the name were added for the filters). */
 export type ClRequest = PersonFields & {
   id: number;
   date: string;
+  /** Full day or one half of the shift; absent on an older server (a full day). */
+  portion?: ClPortion;
   reason?: string | null;
   status: "pending" | "approved" | "rejected";
   reviewedBy?: string | null;
@@ -274,6 +295,7 @@ export const REQUEST_EXPORT_HEADERS = [
   "Branch",
   "Department",
   "CL date",
+  "Day part",
   "Status",
   "Decided by",
   "Decided on",
@@ -287,6 +309,7 @@ export function requestExportRows(rows: ClRequest[]): (string | number)[][] {
     r.branch ?? "",
     r.department ?? "",
     dateOnly(r.date) ?? "",
+    portionText(r.portion),
     r.status,
     r.reviewedBy ?? "",
     dateOnly(r.reviewedAt) ?? "",

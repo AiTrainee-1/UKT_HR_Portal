@@ -69,11 +69,11 @@ export default function Settlement() {
 
   const refreshLists = () => queryClient.invalidateQueries({ queryKey: ["/api/advances"] });
 
-  const decide = async ({ row, status }: Decision) => {
+  const decide = async ({ row, status, payload }: Decision) => {
     setDecision(null);
     setBusyId(row.id);
     try {
-      await updateMutation.mutateAsync({ id: row.id, data: { status } });
+      await updateMutation.mutateAsync({ id: row.id, data: payload ?? { status } });
       toast({ title: `Advance ${status}` });
       refreshLists();
       queryClient.invalidateQueries({ queryKey: ["advance-detail", row.id] });
@@ -134,7 +134,9 @@ export default function Settlement() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black text-gray-900">Settlement</h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">Manage general advances and term loans</p>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Manage general advances and term loans. Employees can also apply from the mobile app (20th to month end).
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span data-view-safe>

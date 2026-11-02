@@ -29,7 +29,9 @@ export default function PhotoUpload({
   const handleFile = async (file: File) => {
     setCompressing(true);
     try {
-      const dataUrl = await compressImageToDataUrl(file, { maxWidth: 640, maxHeight: 640, format: "image/jpeg", quality: 0.85 });
+      // quality 0.7 = the server's photo profile (backend api/image_compress.py), so the server keeps this copy as it is
+      // instead of compressing it a second time
+      const dataUrl = await compressImageToDataUrl(file, { maxWidth: 640, maxHeight: 640, format: "image/jpeg", quality: 0.7 });
       onChange(dataUrl);
     } catch (err) {
       toast({ title: "Couldn't process that image", description: err instanceof Error ? err.message : undefined, variant: "destructive" });

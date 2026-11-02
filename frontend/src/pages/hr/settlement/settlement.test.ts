@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_FILTERS,
+  appliedByEmployee,
+  approvalDefaults,
+  approvalEmi,
+  approvalPayload,
+  approvalPreview,
+  approvalProblem,
+  approvedLess,
   NO_FILTERS,
   describeSchedule,
   emptyForm,
@@ -445,5 +452,76 @@ describe("export and statement", () => {
 
   it("says so when there is no schedule", () => {
     expect(buildStatementHtml(adv(), [])).toContain("No deduction schedule has been created");
+  });
+});
+
+describe("approving an employee's application (2026-10-31)", () => {
+  const applied = (over: Partial<SettlementRow> = {}) =>
+    adv({
+      appliedBy: "employee",
+      advanceType: "term",
+      amount: 10000,
+      requestedAmount: 10000,
+      repaymentMonths: 3,
+      emiAmount: 3334,
+      repaymentStartMonth: 11,
+      repaymentStartYear: 2026,
+      ...over,
+    });
+
+  it("opens on the amount asked for and the start month on the advance", () => {
+    expect(approvalDefaults(applied())).toEqual({ amount: "10000", startMonth: 11, startYear: 2026 });
+  });
+
+  it("keeps the whole-rupee EMI for an employee's loan and the paisa EMI for one HR recorded", () => {
+    expect(approvalEmi(applied(), 10000)).toBe(3334);
+    expect(approvalEmi(applied({ appliedBy: "hr" }), 10000)).toBe(3333.33);
+    expect(approvalEmi(applied({ advanceType: "general" }), 10000)).toBe(0);
+  });
+
+  it("previews the smaller amount with the last EMI absorbing the rest", () => {
+    const p = approvalPreview(applied(), { amount: "7000", startMonth: 12, startYear: 2026 });
+    expect(p?.items.map((i) => [i.month, i.year, i.amount])).toEqual([
+      [12, 2026, 2334],
+      [1, 2027, 2334],
+      [2, 2027, 2332],
+    ]);
+    expect(p?.shortfall).toBe(0);
+  });
+
+  it("refuses more than was asked, nothing, and a bad year", () => {
+    const a = applied();
+    expect(approvalProblem(a, { amount: "10001", startMonth: 11, startYear: 2026 })).toMatch("₹10,000");
+    expect(approvalProblem(a, { amount: "", startMonth: 11, startYear: 2026 })).toMatch("Enter");
+    expect(approvalProblem(a, { amount: "0", startMonth: 11, startYear: 2026 })).toMatch("more than 0");
+    expect(approvalProblem(a, { amount: "5000", startMonth: 11, startYear: 26 })).toMatch("4-digit");
+    expect(approvalProblem(a, { amount: "5000", startMonth: 11, startYear: 2026 })).toBeNull();
+  });
+
+  it("sends only what changed, so an untouched approval is the call it always was", () => {
+    const a = applied();
+    expect(approvalPayload(a, approvalDefaults(a))).toEqual({ status: "approved" });
+    expect(approvalPayload(a, { amount: "6000", startMonth: 1, startYear: 2027 })).toEqual({
+      status: "approved",
+      amount: 6000,
+      repaymentStartMonth: 1,
+      repaymentStartYear: 2027,
+    });
+  });
+
+  it("tells employee applications and smaller approvals apart", () => {
+    expect(appliedByEmployee(applied())).toBe(true);
+    expect(appliedByEmployee(adv())).toBe(false);
+    expect(approvedLess(applied({ status: "approved", amount: 6000 }))).toBe(true);
+    expect(approvedLess(applied({ status: "pending", amount: 6000 }))).toBe(false);
+    expect(approvedLess(adv({ status: "approved" }))).toBe(false);
+  });
+
+  it("exports what the employee asked for and who applied", () => {
+    const t = exportTable([applied({ status: "approved", amount: 6000 })]);
+    const at = (h: string) => t.rows[0][t.headers.indexOf(h)];
+    expect(at("Requested by employee")).toBe(10000);
+    expect(at("Applied by")).toBe("Employee (app)");
+    expect(t.rows[0]).toHaveLength(t.headers.length);
   });
 });

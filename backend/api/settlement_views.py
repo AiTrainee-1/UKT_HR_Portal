@@ -1,14 +1,16 @@
 import math
-from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
+from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from . import approval_workflow as approval, whatsapp_approvals
-from .auth import require_hr, require_auth, get_token_employee_id, is_hr
+from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name, is_hr
 from .clock import ist_today
 from .models import Advance, AdvanceRepayment, Employee
+from .payroll_insights import inr
 from .view_common import paginate
 
 
@@ -96,6 +98,13 @@ def advance_json(a: Advance, include_repayments: bool = False) -> dict:
         "notes": a.notes,
         "createdAt": a.created_at.isoformat() if a.created_at else None,
         "updatedAt": a.updated_at.isoformat() if a.updated_at else None,
+        # Additive (2026-10-31, employee self-service): what the employee asked for (null on an advance HR recorded),
+        # the monthly salary the 60 % Salary Advance limit was taken from, and who raised it ("hr" | "employee").
+        # `amount` stays the APPROVED amount.
+        "requestedAmount": float(a.requested_amount) if a.requested_amount is not None else None,
+        "salaryAtRequest": float(a.salary_at_request) if a.salary_at_request is not None else None,
+        "appliedBy": a.applied_by or Advance.APPLIED_BY_HR,
+        "approval": approval.progress("advance", a),
     }
     if include_repayments:
         data["repayments"] = [repayment_json(r) for r in a.repayments.order_by("year", "month", "id")]
@@ -186,6 +195,101 @@ def advances(request: Request) -> Response:
     return Response(advance_json(adv), status=201)
 
 
+MAX_ADVANCE_AMOUNT = Decimal("99999999.99")  # Advance.amount: max_digits=10, decimal_places=2
+MAX_EMPLOYEE_TERM_MONTHS = 12  # the owner's 1-12 months for a Term Loan an employee applied for
+
+
+def whole_rupee_emi(amount, months: int) -> Decimal:
+    """The EMI of a Term Loan an employee applied for: amount / months rounded UP to whole rupees. The schedule then ends
+    with a smaller last EMI that absorbs the remainder (_auto_create_repayments pays min(emi, remaining) each month),
+    so the whole amount is scheduled: 10,000 over 3 months = 3,334 + 3,334 + 3,332."""
+    if not months or months <= 0:
+        return Decimal("0")
+    return Decimal(math.ceil(Decimal(str(amount)) / months))
+
+
+def _int_or_none(value):
+    try:
+        if isinstance(value, bool):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_amount_and_start(adv: Advance, data, previous_status: str) -> str | None:
+    """HR's approval may set a smaller `amount` (the approved amount) and a different first deduction month. Applies them
+    to `adv` in memory (the caller saves) and keeps the EMI in line; returns the refusal message, or None when fine.
+
+    * The amount can change only while the advance is waiting (it is what the schedule is built from), may not go above
+      what the employee asked for (`requested_amount`), and must be more than 0.
+    * A Term Loan the employee applied for keeps the whole-rupee EMI rule (whole_rupee_emi) and its 1-12 months; one HR
+      recorded gets the EMI the create call would have worked out (amount / months to the paisa).
+    * The start month must be 1-12 and the year 2000-2100."""
+    if "repaymentStartMonth" in data and data.get("repaymentStartMonth") not in (None, ""):
+        month = _int_or_none(data.get("repaymentStartMonth"))
+        if month is None or not 1 <= month <= 12:
+            return "The first deduction month must be 1 to 12."
+        adv.repayment_start_month = month
+    if "repaymentStartYear" in data and data.get("repaymentStartYear") not in (None, ""):
+        year = _int_or_none(data.get("repaymentStartYear"))
+        if year is None or not 2000 <= year <= 2100:
+            return "The first deduction year must be a 4-digit year."
+        adv.repayment_start_year = year
+
+    amount_changed = False
+    if "amount" in data:
+        try:
+            amount = Decimal(str(data.get("amount")))
+        except (InvalidOperation, ValueError):
+            return "Enter the approved amount in rupees."
+        if not amount.is_finite() or amount <= 0:
+            return "The approved amount must be more than 0."
+        if amount != amount.quantize(Decimal("0.01")):
+            return "Use at most 2 decimal places for the approved amount."
+        if amount > MAX_ADVANCE_AMOUNT:
+            return "That amount is too large."
+        if amount != Decimal(adv.amount):
+            if previous_status != Advance.STATUS_PENDING:
+                return "The amount can only be changed while the advance is waiting for approval."
+            if adv.requested_amount is not None and amount > Decimal(adv.requested_amount):
+                return (
+                    f"The approved amount cannot be more than the {inr(adv.requested_amount)} the employee asked for."
+                )
+            adv.amount = amount
+            adv.outstanding = max(Decimal("0"), amount - Decimal(adv.total_repaid or 0))
+            amount_changed = True
+
+    by_employee = adv.applied_by == Advance.APPLIED_BY_EMPLOYEE
+    months_changed = "repaymentMonths" in data
+    if adv.advance_type == "term" and months_changed and by_employee:
+        months = _int_or_none(adv.repayment_months)
+        if months is None or not 1 <= months <= MAX_EMPLOYEE_TERM_MONTHS:
+            return f"A Term Loan is repaid in 1 to {MAX_EMPLOYEE_TERM_MONTHS} months."
+        adv.repayment_months = months
+    if (
+        adv.advance_type == "term"
+        and "emiAmount" not in data
+        and adv.repayment_months
+        and (amount_changed or (months_changed and by_employee))
+    ):
+        months = int(adv.repayment_months)
+        adv.emi_amount = (
+            whole_rupee_emi(adv.amount, months) if by_employee else round(Decimal(adv.amount) / months, 2)
+        )
+    return None
+
+
+def _decision_comment(adv: Advance) -> str | None:
+    """HR's note on the approval, led by the approved amount when it is less than what the employee asked for."""
+    parts = []
+    if adv.requested_amount is not None and Decimal(adv.amount) < Decimal(adv.requested_amount):
+        parts.append(f"Approved {inr(adv.amount)} of the {inr(adv.requested_amount)} you asked for.")
+    if adv.notes:
+        parts.append(adv.notes.strip())
+    return " ".join(p for p in parts if p) or None
+
+
 @api_view(["GET", "PUT", "DELETE"])
 @require_hr
 def advance_detail(request: Request, pk: int) -> Response:
@@ -219,15 +323,25 @@ def advance_detail(request: Request, pk: int) -> Response:
             if field in data:
                 setattr(adv, attr, data[field])
 
+        # Approving a smaller amount and/or moving the first deduction month (2026-10-31). Validated before anything is
+        # saved: a refusal leaves the advance exactly as it was.
+        problem = _apply_amount_and_start(adv, data, previous_status)
+        if problem:
+            return Response({"error": problem, "code": "invalid"}, status=400)
+
+        decided_now = adv.status in ("approved", "rejected") and adv.status != previous_status
+        if decided_now and not adv.approved_by and "approvedBy" not in data:
+            adv.approved_by = get_hr_display_name(request)  # who decided, for the employee's timeline and the HR list
+
         if data.get("status") == "approved" and not adv.approved_at:
-            adv.approved_at = datetime.utcnow()
+            adv.approved_at = timezone.now()  # was datetime.utcnow(): same instant, without Django's naive-datetime warning
             adv.save()
             _auto_create_repayments(adv)
             adv.refresh_from_db()
             if previous_status != "approved":
                 whatsapp_approvals.notify_decision(
                     "advance", adv, "approved", approver=adv.approved_by or request.jwt_user.get("name", ""),
-                    role="hr", comment=adv.notes,
+                    role="hr", comment=_decision_comment(adv),
                 )
             return Response(advance_json(adv, include_repayments=True))
 
