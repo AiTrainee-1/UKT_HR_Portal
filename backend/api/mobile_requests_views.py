@@ -3,9 +3,11 @@
 GET /api/on-duty-sessions/mine (employee token only; an HR token gets 403)
 
     ?page=1&pageSize=50   (pageSize 1..100)
+    ?month=YYYY-MM        (optional, 2026-11-02: only the requests of that month - see below)
 
     -> {"items": [...], "total", "page", "pageSize", "hasMore",
         "counts": {"waiting", "month", "approved", "rejected"}}
+       (+ "month": "YYYY-MM" when the month filter was applied)
 
 Every On-Duty request the employee ever made, newest first, each with its places, the day it was for, how it ended,
 who approved / rejected it (the `approval` block every request carries), the four geo-punches and the recorded journey
@@ -17,11 +19,18 @@ are right even before older pages are loaded:
     rejected = rejected
     month    = requests SENT this calendar month in India time, whatever their status
 
+With `?month=YYYY-MM` (the app's month switcher, owner 2026-11-02) everything above is about that month only: the
+items, `total`, paging and all four counts cover just the requests SENT in that calendar month in India time (the day an
+On-Duty request is for), so `month` is then the number of requests of that month whatever their status. The reply echoes
+the month it applied, so an app can tell a server that knows the filter from one that ignored it. Without the param the
+reply is exactly as before. A month that is not YYYY-MM is a 400.
+
 `status` is what the employee sees elsewhere in the app (a request still with an approver reads "active" while the day
 is being worked, "completed" once ended - see geo_attendance_views._on_duty_session_dict); `approvalStatus` is the true
 HRMS state and is what the four views are sorted by.
 """
 
+import re
 from datetime import date, datetime
 
 from django.db.models import Count, Q
@@ -58,6 +67,20 @@ def month_bounds(today: date) -> tuple[datetime, datetime]:
         datetime(today.year, today.month, 1, tzinfo=FACTORY_TZ),
         datetime(year, month, 1, tzinfo=FACTORY_TZ),
     )
+
+
+MONTH_PARAM = re.compile(r"^(\d{4})-(\d{2})$")
+
+
+def parse_month(value: str) -> date:
+    """'2026-09' -> date(2026, 9, 1). Raises ValueError for anything that is not a real YYYY-MM month."""
+    m = MONTH_PARAM.match(value.strip())
+    if not m:
+        raise ValueError(f"not a YYYY-MM month: {value!r}")
+    year, month = int(m.group(1)), int(m.group(2))
+    if year < 1900 or not 1 <= month <= 12:
+        raise ValueError(f"not a YYYY-MM month: {value!r}")
+    return date(year, month, 1)
 
 
 def employee_status(session: OnDutySession) -> str:
@@ -145,9 +168,17 @@ def my_on_duty_sessions(request: Request) -> Response:
         page_size = max(1, min(MAX_PAGE_SIZE, int(request.query_params.get("pageSize", DEFAULT_PAGE_SIZE))))
     except (TypeError, ValueError):
         return error_response("page and pageSize must be numbers")
+    month_param = (request.query_params.get("month") or "").strip()
+    try:
+        month_first = parse_month(month_param) if month_param else None
+    except ValueError:
+        return error_response("month must be YYYY-MM")
 
     mine = OnDutySession.objects.filter(employee_id=emp_id)
-    month_start, next_month = month_bounds(ist_today())
+    # The month the `month` count is about: the one asked for (and then the only one listed), else this one.
+    month_start, next_month = month_bounds(month_first or ist_today())
+    if month_first is not None:
+        mine = mine.filter(created_at__gte=month_start, created_at__lt=next_month)
     counts = mine.aggregate(
         waiting=Count("id", filter=Q(status__in=WAITING_STATUSES)),
         approved=Count("id", filter=Q(status__in=APPROVED_STATUSES)),
@@ -164,13 +195,14 @@ def my_on_duty_sessions(request: Request) -> Response:
         .order_by("-created_at", "-id")[start : start + page_size]
     )
     cfg = approval.get_config(ON_DUTY_WORKFLOW)
-    return Response(
-        {
-            "items": [history_item(s, cfg) for s in rows],
-            "total": total,
-            "page": page,
-            "pageSize": page_size,
-            "hasMore": start + page_size < total,
-            "counts": counts,
-        }
-    )
+    body = {
+        "items": [history_item(s, cfg) for s in rows],
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+        "hasMore": start + page_size < total,
+        "counts": counts,
+    }
+    if month_first is not None:
+        body["month"] = month_first.strftime("%Y-%m")
+    return Response(body)

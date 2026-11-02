@@ -345,6 +345,57 @@ export type CasualLeaveEligibility = {
   }[];
 };
 
+/**
+ * An employee's Casual Leave balance for a calendar year (2026-11-02): 12 days a year, a half day counts 0.5, waiting
+ * requests hold their days, a rejected one gives them back; unused days lapse on 31 December. `tracked` is false (and
+ * `since` null) for a year wholly before the cut-over day, when no balance was kept.
+ */
+export type CasualLeaveBalance = {
+  total: number;
+  used: number;
+  pending: number;
+  remaining: number;
+  year: number;
+  since: string | null;
+  endsOn: string;
+  cutOver: string;
+  tracked: boolean;
+};
+
+/** One line of an employee's Casual Leave year, oldest first: "12 → 11 on 05 Nov: Casual Leave approved (Full day, 05 Nov 2026)". */
+export type CasualLeaveHistoryEntry = {
+  kind: "opening" | "approved" | "pending" | "rejected" | "lapsed";
+  on: string;
+  date: string | null;
+  portion: "full" | "first_half" | "second_half" | null;
+  portionLabel: string | null;
+  days: number | null;
+  change: number;
+  balanceBefore: number | null;
+  balanceAfter: number;
+  requestId: number | null;
+  requestKind: "casual_leave" | "attendance_correction" | null;
+  source: "employee" | "hr_edit" | null;
+  status: string | null;
+  text: string;
+};
+
+export type CasualLeaveHistory = {
+  employeeId: number;
+  year: number;
+  total: number;
+  balance: CasualLeaveBalance;
+  entries: CasualLeaveHistoryEntry[];
+};
+
+/** GET /api/casual-leaves/history: an employee's Casual Leave year as a running balance (HR passes the employee). */
+export const useCasualLeaveHistory = (employeeId: number | null, year: number, enabled = true) =>
+  useQuery<CasualLeaveHistory>({
+    queryKey: ["/api/casual-leaves/history", employeeId, year],
+    queryFn: () => customFetch<CasualLeaveHistory>(`/api/casual-leaves/history?employeeId=${employeeId}&year=${year}`),
+    enabled: enabled && employeeId !== null,
+  });
+
 export const getCasualLeavesQueryKey = () => ["/api/casual-leaves"] as const;
 
 export const useListCasualLeaves = (params?: { status?: string; month?: number; year?: number }, enabled = true) => {
@@ -382,6 +433,7 @@ export const useCreateCasualLeave = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: getCasualLeavesQueryKey() });
       queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/eligibility"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/history"] });
     },
   });
 };
@@ -397,6 +449,7 @@ export const useDecideCasualLeave = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: getCasualLeavesQueryKey() });
       queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/eligibility"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/history"] });
       queryClient.invalidateQueries({ queryKey: ["/api/attendance/employee-monthly"] });
     },
   });
@@ -409,6 +462,7 @@ export const useDeleteCasualLeave = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: getCasualLeavesQueryKey() });
       queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/eligibility"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/history"] });
     },
   });
 };

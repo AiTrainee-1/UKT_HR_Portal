@@ -11,6 +11,10 @@ whole period, the things that breakdown cannot say:
                       punches are there (see ON_DUTY_STATES)
     offDays           the days the payroll does not list (Sundays, holidays, a Saturday off) with their name, and the real
                       attendance when somebody worked one: a worked Sunday shows what was worked, not "holiday"
+    hrEdit            (2026-11-02) the day's latest HR attendance edit and where its approval stands (hr_edit_marks.py).
+                      Only on a day HR edited: the key is left out otherwise (the PayrollDetails TypeScript contract
+                      declares it optional), on listed days, on off days and on an off day's attendance. A day an applied
+                      HR edit made On-Duty also gets `onDuty` (state "verified") and the "on_duty" mark.
 
 Nothing here touches a payroll: no payroll, salary slip or figure is computed or written. `live=True` (the Sync button of the
 card) re-reads each listed day from the attendance engine as it stands NOW, so an approval HR or a Department Head gave after the
@@ -26,6 +30,8 @@ from django.utils import timezone
 
 from .attendance_final import compute_range_records
 from .clock import FACTORY_TZ, ist_today
+from .hr_edit_marks import hr_edit_map, latest_requests, on_duty_of
+from .payroll_day_marks import MARK_KEYS
 from .models import (
     AttendanceDayRecord,
     AttendanceLog,
@@ -195,6 +201,12 @@ def calendar_extras(
         .values_list("date", flat=True)
     )
     on_duty = _on_duty_states(emp.id, start, end)
+    edit_requests = latest_requests(emp, start, end)
+    hr_edits = hr_edit_map(emp, start, end, edit_requests)
+    for d, req in edit_requests.items():
+        marked = on_duty_of(req)
+        if marked is not None and d not in on_duty:
+            on_duty[d] = marked  # an applied HR edit made the day On-Duty: it counts as a worked On-Duty day
 
     if live:
         last = min(end, today)
@@ -249,6 +261,11 @@ def calendar_extras(
             day["isLate"] = "late_in" in (day.get("flags") or [])
             day["isEarlyOut"] = "early_out" in (day.get("flags") or [])
         day.update(extras(d, day))
+        if d in hr_edits:
+            day["hrEdit"] = hr_edits[d]
+            if on_duty_of(edit_requests[d]) is not None:
+                held = {*(day.get("marks") or []), "on_duty"}
+                day["marks"] = [k for k in MARK_KEYS if k in held]  # the marks keep their one order
 
     off_days: list[dict] = []
     for d in _each_day(start, end):
@@ -287,6 +304,10 @@ def calendar_extras(
             }
         elif d in on_duty:
             entry["onDuty"] = on_duty[d]
+        if d in hr_edits:
+            entry["hrEdit"] = hr_edits[d]
+            if entry["attendance"] is not None:
+                entry["attendance"]["hrEdit"] = hr_edits[d]
         off_days.append(entry)
 
     sync = {

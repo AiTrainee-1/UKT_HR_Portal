@@ -18,15 +18,15 @@ const at = (today: string, hour = 13, minute = 30) => {
   return new Date(y, m - 1, d, hour, minute);
 };
 
-describe("request-window shared vectors (the same ones the backend and both apps assert)", () => {
-  it("carries all 83 vectors (22 windows + 47 single dates + 14 ranges) and the shared grace length", () => {
+describe("request-window shared vectors (the same ones the backend and both apps assert, byte-identical copies)", () => {
+  it("carries all 137 vectors (34 windows + 80 single dates + 23 ranges) and the shared grace length", () => {
     const { windows, dates, ranges } = requestWindowVectors;
-    expect(windows).toHaveLength(22);
-    expect(dates).toHaveLength(47);
-    expect(ranges).toHaveLength(14);
-    expect(windows.length + dates.length + ranges.length).toBe(83);
+    expect(windows).toHaveLength(34);
+    expect(dates).toHaveLength(80);
+    expect(ranges).toHaveLength(23);
+    expect(windows.length + dates.length + ranges.length).toBe(137);
     expect(requestWindowVectors.graceDays).toBe(GRACE_DAYS);
-    expect(GRACE_DAYS).toBe(2);
+    expect(GRACE_DAYS).toBe(5);
   });
 
   describe("getRequestWindow / windowMessage / windowHint", () => {
@@ -68,17 +68,17 @@ describe("request-window behaviour around the vectors", () => {
       [12, 0],
       [23, 59],
     ]) {
-      const w = getRequestWindow(at("2026-10-02", hour, minute));
-      expect(w.today).toBe("2026-10-02");
+      const w = getRequestWindow(at("2026-10-05", hour, minute));
+      expect(w.today).toBe("2026-10-05");
       expect(w.graceOpen).toBe(true);
       expect(w.min).toBe("2026-09-01");
     }
-    expect(getRequestWindow(at("2026-10-03", 0, 0)).graceOpen).toBe(false);
+    expect(getRequestWindow(at("2026-10-06", 0, 0)).graceOpen).toBe(false);
   });
 
   it("does not remember a previous `now` (the window follows the clock passed in each time)", () => {
-    const lastNightOfGrace = at("2026-10-02", 23, 59);
-    const firstMinuteAfter = at("2026-10-03", 0, 0);
+    const lastNightOfGrace = at("2026-10-05", 23, 59);
+    const firstMinuteAfter = at("2026-10-06", 0, 0);
     expect(checkRequestDate("2026-09-30", lastNightOfGrace)).toBeNull();
     expect(checkRequestDate("2026-09-30", firstMinuteAfter)).toBe("You can only request dates in October 2026.");
     // ...and going back to the earlier clock reopens it: nothing is cached between calls.

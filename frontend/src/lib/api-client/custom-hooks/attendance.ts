@@ -2,6 +2,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "../custom-fetch";
 import type { ApprovalProgress } from "../../approval-workflow";
+import type { HrEdit } from "./payroll-insights";
+import type { CasualLeaveBalance } from "./requests";
 import { SyncResult } from "./shared";
 
 // ── Attendance (enhanced) ─────────────────────────────────────────────────────
@@ -1065,6 +1067,10 @@ export type AttendanceOverrideRequest = {
   /** The attendance type proposed (Attendance Edit page): "present", "half_day", "sunday_compensation" ... */
   type?: string | null;
   typeLabel?: string | null;
+  /** The option group it was proposed from (2026-11-02): "worked", "permission", "late", "casual_leave" ... */
+  option?: string | null;
+  /** The same request as the calendars show it: where its approval stands, in words. */
+  hrEdit?: HrEdit | null;
 };
 
 /**
@@ -1184,6 +1190,60 @@ export type AttendanceEditContext = {
   /** Whether the signed-in role may propose attendance changes (Attendance: Edit). */
   canEdit: boolean;
   requests: AttendanceOverrideRequest[];
+  /** Every option of the form in groups (2026-11-02), each saying whether it can be chosen for this day and why not.
+   *  Absent on an older server (the form then builds the first three groups from `types`). */
+  options?: AttendanceEditGroup[];
+  /** The employee's Casual Leave balance for the date's year; null for production. */
+  clBalance?: CasualLeaveBalance | null;
+  /** The day's latest HR edit and where its approval stands (null when HR never edited it). */
+  hrEdit?: HrEdit | null;
+};
+
+/** The option groups of the Edit Attendance form, in this order. */
+export type AttendanceEditGroupKey =
+  "worked" | "compensation" | "not_worked" | "permission" | "late" | "casual_leave" | "on_duty";
+
+/** A sub-choice of an option: a permission type, Mark / Unmark Late, a Casual Leave portion. */
+export type AttendanceEditChoice = {
+  value: string;
+  label: string;
+  description: string;
+  shifts: string | null;
+  /** Casual Leave: the days of the balance it uses (1 or 0.5). */
+  days: number | null;
+  /** Permission: its fixed length (60). */
+  durationMinutes: number | null;
+  available: boolean;
+  /** Why it cannot be chosen for this day ("already marked Late" ...); null when it can. */
+  unavailableReason: string | null;
+};
+
+/** One option of the form: the 11 old types (Worked / Compensation / Not worked) and one item for each newer group. */
+export type AttendanceEditItem = {
+  key: string;
+  label: string;
+  group: AttendanceEditGroupKey;
+  groupLabel: string;
+  description: string;
+  status: string | null;
+  shifts: string | null;
+  shiftChoices: string[];
+  choices: AttendanceEditChoice[];
+  /** A sub-choice must be picked before the change can be sent. */
+  choiceRequired: boolean;
+  /** Shows the first in / last out times and the Late / Early Out marks (the old worked types). */
+  worked: boolean;
+  compensation: boolean;
+  staffOnly: boolean;
+  available: boolean;
+  unavailableReason: string | null;
+};
+
+export type AttendanceEditGroup = {
+  key: AttendanceEditGroupKey;
+  label: string;
+  description: string;
+  items: AttendanceEditItem[];
 };
 
 export const useAttendanceEditContext = (employeeId: number | null, date: string | null) =>
@@ -1197,6 +1257,7 @@ export const useAttendanceEditContext = (employeeId: number | null, date: string
 export type AttendanceEditProposal = {
   employeeId: number;
   date: string;
+  /** An old type ("half_day", "sunday_compensation" ...) or a newer option: "permission" | "late" | "casual_leave" | "on_duty". */
   type: string;
   note: string;
   /** For the compensation types. */
@@ -1205,6 +1266,11 @@ export type AttendanceEditProposal = {
   lastPunch?: string | null;
   isLate?: boolean;
   isEarlyOut?: boolean;
+  /** The sub-choice of a newer option: morning_late_in / evening_early_out / middle_permission, mark / unmark,
+   *  full / first_half / second_half. */
+  choice?: string;
+  /** On-Duty: where the employee was (optional, up to 200 characters). */
+  destination?: string;
 };
 
 /** Propose a change. It is NEVER applied by this call: the Department Head approves it, then HR (202 + the request). */
@@ -1220,6 +1286,11 @@ export const useSubmitAttendanceEdit = () => {
       queryClient.invalidateQueries({ queryKey: ["/api/attendance/edit-context"] });
       queryClient.invalidateQueries({ queryKey: ["/api/attendance/override-requests"] });
       queryClient.invalidateQueries({ queryKey: ["/api/attendance/employee-monthly"] });
+      // the payroll details calendar (and its ?live=1 copy) shows the new "!" on the day; a Casual Leave edit holds days
+      // of the employee's balance while it waits
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll/insights/details"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/eligibility"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/casual-leaves/history"] });
     },
   });
 };
@@ -1241,6 +1312,7 @@ export const useDecideAttendanceEdit = () => {
       queryClient.invalidateQueries({
         predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/attendance"),
       });
+      queryClient.invalidateQueries({ queryKey: ["/api/payroll/insights/details"] });
     },
   });
 };

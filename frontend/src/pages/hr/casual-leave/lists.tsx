@@ -6,7 +6,18 @@ import { TONE } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { longDate, shortDate } from "../leave/logic";
 import { Chip, PersonCell, StatusChip } from "../leave/parts";
-import { isHalf, portionText, serviceText, whyNot, type BoardRow, type ClRequest, type Why } from "./logic";
+import {
+  balanceDetail,
+  balanceLevel,
+  balanceText,
+  isHalf,
+  portionText,
+  serviceText,
+  whyNot,
+  type BoardRow,
+  type ClRequest,
+  type Why,
+} from "./logic";
 
 const HEAD = "text-[11px] font-bold uppercase tracking-wider text-[#006496]/60";
 
@@ -30,9 +41,67 @@ function PortionChip({ portion }: { portion?: string | null }) {
   );
 }
 
-/** One half-day of the month is used: the employee can still take the other half. */
+const LEVEL_TEXT: Record<NonNullable<ReturnType<typeof balanceLevel>>, string> = {
+  full: "text-emerald-700",
+  some: "text-sky-800",
+  low: "text-amber-700",
+  none: "text-rose-700",
+};
+
+/** "11 of 12 left" (with what is used and waiting under it); a click opens the employee's Casual Leave history. Without a
+ *  balance (an older server) it shows the approved days of the year, as before. */
+function BalanceCell({
+  r,
+  onHistory,
+  testId = `cl-balance-${r.employeeId}`,
+}: {
+  r: BoardRow;
+  onHistory?: (r: BoardRow) => void;
+  testId?: string;
+}) {
+  const text = balanceText(r.balance);
+  if (!text) return <span className="text-xs text-gray-600">{r.approvedThisYear ?? 0}</span>;
+  const detail = balanceDetail(r.balance);
+  const level = balanceLevel(r.balance);
+  const body = (
+    <>
+      <span className={cn("text-xs font-bold tabular-nums", level && LEVEL_TEXT[level])}>{text}</span>
+      {detail && <span className="text-[11px] text-gray-500">{detail}</span>}
+    </>
+  );
+  if (!onHistory) {
+    return (
+      <span className="inline-flex flex-col" data-testid={testId}>
+        {body}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => onHistory(r)}
+      className="-mx-2 -my-1 inline-flex flex-col items-start rounded-lg px-2 py-1 text-left hover:bg-sky-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+      aria-label={`Casual Leave history of ${r.employeeName ?? r.employeeCode}: ${text}`}
+      title="See the Casual Leave history of the year"
+      data-testid={testId}
+      data-view-safe
+    >
+      {body}
+    </button>
+  );
+}
+
+/** One half-day of the month is used: the employee can still take the other half. Under the yearly rule: only half a day
+ *  of the year's balance is left. */
 function HalfLeftNote({ r }: { r: BoardRow }) {
   if (r.left !== "one_half") return null;
+  if (r.balance?.tracked) {
+    return (
+      <p className="text-[11px] font-semibold text-amber-700" data-testid={`half-left-${r.employeeId}`}>
+        Only half a day of Casual Leave left this year
+      </p>
+    );
+  }
   const used = r.usedParts?.[0];
   return (
     <p className="text-[11px] font-semibold text-amber-700" data-testid={`half-left-${r.employeeId}`}>
@@ -174,10 +243,13 @@ function Pipeline({ r }: { r: ClRequest }) {
 export function EligibleList({
   rows,
   onApply,
+  onHistory,
   monthLabel,
 }: {
   rows: BoardRow[];
   onApply: (r: BoardRow) => void;
+  /** Opens the employee's Casual Leave history (the balance cell is the button). */
+  onHistory?: (r: BoardRow) => void;
   monthLabel: string;
 }) {
   return (
@@ -190,7 +262,7 @@ export function EligibleList({
               <TableHead className={HEAD}>Joined</TableHead>
               <TableHead className={HEAD}>Service</TableHead>
               <TableHead className={HEAD}>Last CL</TableHead>
-              <TableHead className={HEAD}>CL this year</TableHead>
+              <TableHead className={HEAD}>CL balance</TableHead>
               <TableHead className={cn(HEAD, "text-right")}>Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -208,7 +280,9 @@ export function EligibleList({
                 <TableCell className="whitespace-nowrap text-xs text-gray-600">
                   {r.lastClDate ? shortDate(r.lastClDate) : <span className="text-gray-400">Never</span>}
                 </TableCell>
-                <TableCell className="text-xs text-gray-600">{r.approvedThisYear ?? 0}</TableCell>
+                <TableCell>
+                  <BalanceCell r={r} onHistory={onHistory} />
+                </TableCell>
                 <TableCell className="text-right">
                   <ApplyButton r={r} onApply={onApply} monthLabel={monthLabel} />
                 </TableCell>
@@ -224,6 +298,11 @@ export function EligibleList({
             <p className="text-xs text-gray-500">
               {serviceText(r.serviceMonths)} of service · last CL {r.lastClDate ? shortDate(r.lastClDate) : "never"}
             </p>
+            {balanceText(r.balance) && (
+              <div>
+                <BalanceCell r={r} onHistory={onHistory} testId={`cl-balance-card-${r.employeeId}`} />
+              </div>
+            )}
             <HalfLeftNote r={r} />
             <ApplyButton r={r} onApply={onApply} monthLabel={monthLabel} />
           </div>
@@ -250,7 +329,16 @@ function ApplyButton({ r, onApply, monthLabel }: { r: BoardRow; onApply: (r: Boa
 
 // ─── Not eligible ───
 
-export function NotEligibleList({ rows, eligibilityMonths }: { rows: BoardRow[]; eligibilityMonths: number }) {
+export function NotEligibleList({
+  rows,
+  eligibilityMonths,
+  onHistory,
+}: {
+  rows: BoardRow[];
+  eligibilityMonths: number;
+  /** Opens the employee's Casual Leave history (the balance cell is the button). */
+  onHistory?: (r: BoardRow) => void;
+}) {
   return (
     <>
       <div className="hidden md:block">
@@ -260,6 +348,7 @@ export function NotEligibleList({ rows, eligibilityMonths }: { rows: BoardRow[];
               <TableHead className={HEAD}>Employee</TableHead>
               <TableHead className={HEAD}>Type</TableHead>
               <TableHead className={HEAD}>Service</TableHead>
+              <TableHead className={HEAD}>CL balance</TableHead>
               <TableHead className={HEAD}>Why not</TableHead>
             </TableRow>
           </TableHeader>
@@ -277,6 +366,13 @@ export function NotEligibleList({ rows, eligibilityMonths }: { rows: BoardRow[];
                       <span className="text-gray-300">-</span>
                     ) : (
                       serviceText(r.serviceMonths)
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {balanceText(r.balance) ? (
+                      <BalanceCell r={r} onHistory={onHistory} />
+                    ) : (
+                      <span className="text-xs text-gray-300">-</span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -303,6 +399,11 @@ export function NotEligibleList({ rows, eligibilityMonths }: { rows: BoardRow[];
                 <div className="space-y-0.5">
                   <Chip className={WHY_CHIP[why.tone]}>{why.title}</Chip>
                   <p className="text-xs text-gray-500">{why.detail}</p>
+                </div>
+              )}
+              {balanceText(r.balance) && (
+                <div>
+                  <BalanceCell r={r} onHistory={onHistory} testId={`cl-balance-card-${r.employeeId}`} />
                 </div>
               )}
             </div>

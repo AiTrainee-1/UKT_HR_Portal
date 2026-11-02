@@ -177,7 +177,7 @@ Salary is calculated from the attendance and requests in the HRMS. If a punch is
 <ul>
   <li><b>Payroll uses the HRMS only.</b> Anything not recorded or not approved in the HRMS is treated as not happened (absent, late, no leave).</li>
   <li><b>Every deduction must be explainable</b> to the employee. The HRMS keeps the reason for each day. That only works if requests are raised correctly and on time.</li>
-  <li><b>Requests can only be raised for the current month</b> (plus last month on the 1st and 2nd). If an employee waits, the system refuses the request and HR has to correct it by a longer route.</li>
+  <li><b>Requests can only be raised for the current month</b> (plus last month from the 1st to the 5th). If an employee waits, the system refuses the request and HR has to correct it by a longer route.</li>
   <li><b>A request waiting with an HOD cannot be finished.</b> Late approvals delay payroll for the whole company at month end.</li>
   <li><b>Everything is logged</b> (who did it, when, with what comment). This protects the company and the employee in any dispute.</li>
 </ul>
@@ -366,7 +366,7 @@ Salary is calculated from the attendance and requests in the HRMS. If a punch is
 <div class="call warn"><b class="l">This causes many follow-ups &ndash; read carefully</b>
 <ul>
   <li>Leave, Casual Leave, Permission and Missing Punch can only be requested for days in the <b>current month</b> (1st to last day).</li>
-  <li>On the <b>1st and 2nd</b> of a month, last month is still open (grace). From the <b>3rd</b> it is closed.</li>
+  <li>From the <b>1st to the 5th</b> of a month, last month is still open (grace). From the <b>6th</b> it is closed.</li>
   <li>A leave of several days must start <b>and</b> end inside the month (split it if it crosses month end).</li>
   <li>Missing Punch can never be in the future (latest date is today).</li>
   <li>The system uses India date, so changing the phone clock does not help.</li>
@@ -411,7 +411,7 @@ Salary is calculated from the attendance and requests in the HRMS. If a punch is
 <div class="item"><h4>8.3 Checking attendance</h4><dl>
 <dt>What</dt><dd>Check the Attendance calendar every day (or at least every 2&ndash;3 days). Any day that looks wrong (absent, half day, late although on time) must be reported through the right request the same day.</dd>
 <dt>Where</dt><dd>M or W &rarr; Attendance.</dd>
-<dt>Why</dt><dd>Requests are only allowed in the current month (and the 1st&ndash;2nd of next). Errors found late cannot be corrected by the employee and delay salary.</dd></dl></div>
+<dt>Why</dt><dd>Requests are only allowed in the current month (and the 1st&ndash;5th of next). Errors found late cannot be corrected by the employee and delay salary.</dd></dl></div>
 
 <div class="item"><h4>8.4 Leave</h4><dl>
 <dt>What</dt><dd>Apply before the leave (or the same day if unplanned). Choose the correct type, dates and half-day option if needed, and write a clear reason. Stay inside the current month.</dd>
@@ -619,10 +619,10 @@ Salary is calculated from the attendance and requests in the HRMS. If a punch is
 
 <h3>10.7 Month-end routine (the most important days)</h3>
 <div class="tw"><table><thead><tr><th>When</th><th>What to do</th></tr></thead><tbody>
-<tr><td>3 to 5 working days before month end</td><td>Announce to employees and HODs: &ldquo;Raise ALL pending leave / permission / missing punch requests now. Requests are only possible for this month (plus last month on the 1st and 2nd).&rdquo; Clear the full pending list with every HOD.</td></tr>
+<tr><td>3 to 5 working days before month end</td><td>Announce to employees and HODs: &ldquo;Raise ALL pending leave / permission / missing punch requests now. Requests are only possible for this month (plus last month from the 1st to the 5th).&rdquo; Clear the full pending list with every HOD.</td></tr>
 <tr><td>Last working day</td><td>Zero pending approvals is the target. Escalate whatever remains. Check Biometric sync is complete up to the last day.</td></tr>
-<tr><td>1st and 2nd of next month (grace days)</td><td>Last chance for employees to raise last month&rsquo;s requests. Chase every open item and every employee with an unexplained absent / missing punch.</td></tr>
-<tr><td>From the 3rd</td><td>Last month is closed to employees. Anything missed must be fixed by HR as an Attendance correction (HR raises, the HOD must approve). Give HR the list as early as possible on the 3rd. Payroll for the month should only be generated after this is cleared.</td></tr>
+<tr><td>1st to 5th of next month (grace days)</td><td>Last chance for employees to raise last month&rsquo;s requests. Chase every open item and every employee with an unexplained absent / missing punch.</td></tr>
+<tr><td>From the 6th</td><td>Last month is closed to employees. Anything missed must be fixed by HR as an Attendance correction (HR raises, the HOD must approve). Give HR the list as early as possible on the 6th. Payroll for the month should only be generated after this is cleared.</td></tr>
 </tbody></table></div>
 </section>
 
@@ -691,13 +691,13 @@ Salary is calculated from the attendance and requests in the HRMS. If a punch is
 <div class="msg"><div class="h"><span>13.4 To an HOD &ndash; pending requests</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Dear &lt;HOD&gt;, you have &lt;N&gt; requests waiting in Approvals (&lt;names / types&gt;, oldest &lt;date&gt;). Please approve or reject them today. Payroll cannot be finished while they are open.</span></div>
 <div class="msg"><div class="h"><span>13.5 To an HOD &ndash; daily team list</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Dear &lt;HOD&gt;, attendance today for your team: absent &lt;list&gt;, late &lt;list&gt;, missing punch &lt;list&gt;. Please make sure these employees raise their requests today and tell me if anyone is wrongly shown.</span></div>
 <div class="msg"><div class="h"><span>13.6 To an HOD &ndash; rejected without a reason</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Dear &lt;HOD&gt;, &lt;Employee&gt;'s &lt;request&gt; was rejected without a reason. Please add the reason in the comment so the employee can respond.</span></div>
-<div class="msg"><div class="h"><span>13.7 Month-end announcement (everyone)</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Month-end reminder: raise ALL leave, permission and missing punch requests for this month now. Last month stays open only on the 1st and 2nd. HODs, please clear every pending approval by &lt;date&gt;.</span></div>
+<div class="msg"><div class="h"><span>13.7 Month-end announcement (everyone)</span><button class="ctl copy" type="button">Copy</button></div><span class="t">Month-end reminder: raise ALL leave, permission and missing punch requests for this month now. Last month stays open only until the 5th. HODs, please clear every pending approval by &lt;date&gt;.</span></div>
 </section>
 
 <!-- 14 -->
 <section class="s" id="s14">
 <h2><span class="n">14</span>Common questions and answers</h2>
-<details><summary>The employee says &ldquo;the app will not let me pick that date&rdquo;.</summary><div>Only the current month is allowed (plus last month on the 1st and 2nd). Missing Punch cannot be a future date. Past that, HR must correct attendance (HR raises, HOD approves).</div></details>
+<details><summary>The employee says &ldquo;the app will not let me pick that date&rdquo;.</summary><div>Only the current month is allowed (plus last month until the 5th). Missing Punch cannot be a future date. Past that, HR must correct attendance (HR raises, HOD approves).</div></details>
 <details><summary>Can I approve a request in place of an HOD?</summary><div>No. If the request is &ldquo;Waiting for HOD&rdquo;, only the HOD (or HR, where the route says &ldquo;HOD or HR&rdquo;) can decide. Chase the HOD, then escalate to HR.</div></details>
 <details><summary>The request shows &ldquo;Approved&rdquo; but attendance still looks wrong.</summary><div>Open the day in Attendance Search and read the reason. A permission beyond the monthly cap does not excuse the late. If still wrong, escalate to HR.</div></details>
 <details><summary>Why was the employee marked half day although they came at 11:00?</summary><div>The first-punch timeline (section 7.2): late window, permission window, extra minutes, and then the first half is missed. The reason is written on that day in the HR Portal.</div></details>
@@ -746,7 +746,7 @@ Salary is calculated from the attendance and requests in the HRMS. If a punch is
 <tr><td>Coordinator</td><td>Daily: absent, late, missing punch, pending</td><td>HR Portal</td><td>Daily</td></tr>
 <tr><td>Coordinator</td><td>Chase HODs for pending approvals</td><td>Phone / WhatsApp</td><td>Daily</td></tr>
 <tr><td>Coordinator</td><td>Weekly counts and backlog</td><td>Reports</td><td>Weekly</td></tr>
-<tr><td>Coordinator</td><td>Month-end clean-up</td><td>HR Portal</td><td>Last 3 days + 1st&ndash;2nd</td></tr>
+<tr><td>Coordinator</td><td>Month-end clean-up</td><td>HR Portal</td><td>Last 3 days + 1st&ndash;5th</td></tr>
 <tr><td>Coordinator</td><td>Escalate to HR with a written list</td><td>Message / Excel</td><td>As per section 12</td></tr>
 </tbody></table></div>
 <p><b>M</b> = Mobile App &nbsp; <b>W</b> = Employee Web App</p>
@@ -754,7 +754,7 @@ Salary is calculated from the attendance and requests in the HRMS. If a punch is
 <h3>The three rules to remember</h3>
 <div class="rules">
   <div><b>1</b>If it is not raised and approved in the HRMS, it did not happen for payroll.</div>
-  <div><b>2</b>Do it the same day. Only this month (and the 1st&ndash;2nd of next) can be requested.</div>
+  <div><b>2</b>Do it the same day. Only this month (and the 1st&ndash;5th of next) can be requested.</div>
   <div><b>3</b>Follow the route: Employee &rarr; HOD &rarr; HR. Nobody skips a step, nobody sits on a request.</div>
 </div>
 </section>

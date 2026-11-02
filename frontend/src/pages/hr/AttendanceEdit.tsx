@@ -7,6 +7,7 @@ import {
   Clock,
   Hourglass,
   Loader2,
+  MapPin,
   PenLine,
   Send,
   ShieldCheck,
@@ -29,6 +30,22 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { StatusChip } from "./punch-view/parts";
+import { OptionGroup } from "./payroll-details/DayAttendanceEdit";
+import { HrEditStageLine } from "./payroll-details/HrEditMark";
+import {
+  buildProposal,
+  clUseText,
+  editGroups,
+  findTile,
+  isClassicGroup,
+  pickOf,
+  sendBlocker,
+  serverSentence,
+  showsPunches,
+  tileTitle,
+  type EditPick,
+  type EditTile,
+} from "./payroll-details/edit-options";
 
 const GROUPS: { key: AttendanceEditType["group"]; title: string; hint: string }[] = [
   { key: "Attendance", title: "Attendance", hint: "How much of the day was worked" },
@@ -60,17 +77,25 @@ export default function AttendanceEdit() {
   const ctx = useAttendanceEditContext(Number.isInteger(employeeId) ? employeeId : null, date);
   const submit = useSubmitAttendanceEdit();
 
-  const [typeKey, setTypeKey] = useState<string | null>(null);
+  const [pick, setPick] = useState<EditPick | null>(null);
   const [shifts, setShifts] = useState("1.00");
   const [firstIn, setFirstIn] = useState("");
   const [lastOut, setLastOut] = useState("");
   const [late, setLate] = useState(false);
   const [earlyOut, setEarlyOut] = useState(false);
   const [note, setNote] = useState("");
+  const [destination, setDestination] = useState("");
+  // the server's own sentence when it refused the last try ("02 Nov 2026 is already marked Late.")
+  const [problem, setProblem] = useState<string | null>(null);
 
   const data = ctx.data;
   const types = useMemo(() => data?.types ?? [], [data]);
-  const selected = useMemo(() => types.find((t) => t.key === typeKey) ?? null, [types, typeKey]);
+  // the 11 types are drawn from `types` as before; the newer options (Permission, Late, Casual Leave, On-Duty) come from
+  // the server's `options`, drawn with the payroll details page's tiles
+  const groups = useMemo(() => (data ? editGroups(data) : []), [data]);
+  const extra = useMemo(() => groups.filter((g) => !isClassicGroup(g.key)), [groups]);
+  const tile = useMemo(() => findTile(groups, pick), [groups, pick]);
+  const selected = tile?.item ?? null;
   const day = data?.day;
 
   // start from the day as it stands: its times and marks (the type is chosen by the person)
@@ -83,42 +108,51 @@ export default function AttendanceEdit() {
   }, [day?.date, day?.firstPunch, day?.lastPunch, day?.isLate, day?.earlyLeave]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const choose = (t: AttendanceEditType) => {
-    setTypeKey(t.key);
+    setPick({ itemKey: t.key, choice: null });
     setShifts(t.shifts);
+    setProblem(null);
+  };
+  const chooseTile = (t: EditTile) => {
+    setPick(pickOf(t));
+    if (t.item.shifts) setShifts(t.item.shifts);
+    setProblem(null);
   };
 
   const returnTo = cameFrom(search, backTo(data?.employee.employmentType));
   const pending = (data?.requests ?? []).find((r) => r.status === "pending");
   const noHod = !!data && !data.hod;
   const future = !!data?.future;
-  const reasonOk = note.trim().length >= 3;
-  const canSend = !!data && !!selected && reasonOk && !noHod && !future && !submit.isPending;
+  const blocker = data ? sendBlocker({ noHod, future, tile, note }) : "Loading";
+  const canSend = blocker === null && !submit.isPending;
+  const clUse = selected?.group === "casual_leave" ? clUseText(data?.clBalance, tile?.choice?.days) : null;
 
   const send = async () => {
-    if (!data || !selected) return;
+    if (!data || !tile || blocker) return;
+    const what = tileTitle(tile);
     try {
-      await submit.mutateAsync({
-        employeeId: data.employee.id,
-        date: data.date,
-        type: selected.key,
-        note: note.trim(),
-        shifts: selected.shiftChoices.length ? shifts : undefined,
-        firstPunch: selected.worked ? firstIn || null : null,
-        lastPunch: selected.worked ? lastOut || null : null,
-        isLate: selected.worked ? late : false,
-        isEarlyOut: selected.worked ? earlyOut : false,
-      });
+      await submit.mutateAsync(
+        buildProposal({
+          employeeId: data.employee.id,
+          date: data.date,
+          tile,
+          note,
+          shifts,
+          firstIn,
+          lastOut,
+          late,
+          earlyOut,
+          destination,
+        }),
+      );
       toast({
         title: "Sent for approval",
-        description: `${selected.label} for ${data.employee.name} on ${data.date} goes to ${data.hod?.name ?? "the Department Head"} first, then to HR. The attendance does not change until both approve.`,
+        description: `${what} for ${data.employee.name} on ${data.date} goes to ${data.hod?.name ?? "the Department Head"} first, then to HR. The attendance does not change until both approve.`,
       });
       navigate(returnTo);
     } catch (e) {
-      toast({
-        title: "Could not send",
-        description: e instanceof Error ? e.message : undefined,
-        variant: "destructive",
-      });
+      const sentence = serverSentence(e);
+      setProblem(sentence);
+      toast({ title: "Could not send", description: sentence, variant: "destructive" });
     }
   };
 
@@ -234,6 +268,8 @@ export default function AttendanceEdit() {
               </div>
             )}
 
+            {data.hrEdit && <HrEditStageLine edit={data.hrEdit} />}
+
             {/* ── the attendance types ── */}
             {GROUPS.map((g) => {
               const items = types.filter((t) => t.group === g.key);
@@ -245,40 +281,57 @@ export default function AttendanceEdit() {
                     <p className="text-[11px] text-gray-500">{g.hint}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                    {items.map((t) => (
-                      <button
-                        key={t.key}
-                        type="button"
-                        aria-pressed={typeKey === t.key}
-                        data-testid={`edit-type-${t.key}`}
-                        onClick={() => choose(t)}
-                        className={cn(
-                          "rounded-xl border px-3 py-2.5 text-left transition-colors",
-                          typeKey === t.key
-                            ? "border-gray-900 bg-gray-900 text-white shadow-sm"
-                            : "bg-white text-gray-800 hover:bg-gray-50",
-                        )}
-                      >
-                        <span className="block text-sm font-bold">{t.label}</span>
-                        <span
-                          className={cn("block text-[11px]", typeKey === t.key ? "text-white/70" : "text-gray-500")}
+                    {items.map((t) => {
+                      const on = pick?.itemKey === t.key;
+                      return (
+                        <button
+                          key={t.key}
+                          type="button"
+                          aria-pressed={on}
+                          data-testid={`edit-type-${t.key}`}
+                          onClick={() => choose(t)}
+                          className={cn(
+                            "rounded-xl border px-3 py-2.5 text-left transition-colors",
+                            on
+                              ? "border-gray-900 bg-gray-900 text-white shadow-sm"
+                              : "bg-white text-gray-800 hover:bg-gray-50",
+                          )}
                         >
-                          {t.shiftChoices.length ? "0.25 to 1.00 shift" : `${t.shifts} shift`}
-                        </span>
-                      </button>
-                    ))}
+                          <span className="block text-sm font-bold">{t.label}</span>
+                          <span className={cn("block text-[11px]", on ? "text-white/70" : "text-gray-500")}>
+                            {t.shiftChoices.length ? "0.25 to 1.00 shift" : `${t.shifts} shift`}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
               );
             })}
 
+            {/* ── the newer options: Permission, Late, Casual Leave, On-Duty ── */}
+            {extra.length > 0 && (
+              <div className="grid gap-5 lg:grid-cols-2" data-testid="edit-more-options">
+                {extra.map((g) => (
+                  <OptionGroup
+                    key={g.key}
+                    group={g}
+                    pick={pick}
+                    clBalance={data.clBalance}
+                    wide={false}
+                    onChoose={chooseTile}
+                  />
+                ))}
+              </div>
+            )}
+
             {/* ── details of the chosen type ── */}
-            {selected && (
+            {tile && selected && (
               <Card className="rounded-2xl" data-testid="edit-details">
                 <CardContent className="space-y-4 p-4">
                   <div>
-                    <h3 className="text-sm font-bold text-gray-900">{selected.label}</h3>
-                    <p className="text-xs text-gray-500">{selected.description}</p>
+                    <h3 className="text-sm font-bold text-gray-900">{tileTitle(tile)}</h3>
+                    <p className="text-xs text-gray-500">{tile.description}</p>
                   </div>
 
                   {selected.shiftChoices.length > 0 && (
@@ -304,7 +357,35 @@ export default function AttendanceEdit() {
                     </div>
                   )}
 
-                  {selected.worked && (
+                  {selected.group === "permission" && (
+                    <p className="text-xs leading-relaxed text-gray-600" data-testid="edit-permission-note">
+                      Once approved it is an approved permission like any other: it uses {data.employee.name}&apos;s
+                      monthly permission allowance, and one beyond the allowance counts as an excess permission.
+                    </p>
+                  )}
+                  {clUse && (
+                    <p className="text-xs leading-relaxed text-gray-600" data-testid="edit-cl-use">
+                      {clUse}
+                    </p>
+                  )}
+                  {selected.group === "on_duty" && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="edit-destination" className="flex items-center gap-1 text-xs">
+                        <MapPin size={11} /> Where was the employee?{" "}
+                        <span className="font-normal text-gray-400">(optional)</span>
+                      </Label>
+                      <Input
+                        id="edit-destination"
+                        value={destination}
+                        maxLength={200}
+                        onChange={(e) => setDestination(e.target.value)}
+                        placeholder="e.g. Customer visit, Tiruppur"
+                        data-testid="edit-destination"
+                      />
+                    </div>
+                  )}
+
+                  {showsPunches(selected) && (
                     <>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
@@ -364,7 +445,10 @@ export default function AttendanceEdit() {
                       id="edit-reason"
                       rows={2}
                       value={note}
-                      onChange={(e) => setNote(e.target.value)}
+                      onChange={(e) => {
+                        setNote(e.target.value);
+                        setProblem(null);
+                      }}
                       placeholder="e.g. CCTV verified: the device missed the punch"
                       data-testid="edit-reason"
                     />
@@ -406,6 +490,15 @@ export default function AttendanceEdit() {
                 <p className="text-xs text-gray-500">
                   Until both have approved, this day stays exactly as it is now: it is not marked Present.
                 </p>
+                {problem && (
+                  <p
+                    role="alert"
+                    className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800"
+                    data-testid="edit-error"
+                  >
+                    {problem}
+                  </p>
+                )}
                 <div className="flex flex-wrap items-center gap-3 pt-1">
                   <Button onClick={send} disabled={!canSend} className="gap-1.5" data-testid="edit-send">
                     {submit.isPending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
@@ -414,8 +507,12 @@ export default function AttendanceEdit() {
                   <Button variant="ghost" onClick={() => navigate(returnTo)}>
                     Cancel
                   </Button>
-                  {!selected && <span className="text-xs text-gray-500">Choose an attendance type above.</span>}
-                  {selected && !reasonOk && <span className="text-xs text-gray-500">Give a reason to send it.</span>}
+                  {!tile && <span className="text-xs text-gray-500">Choose an attendance type above.</span>}
+                  {tile && blocker && !noHod && !future && (
+                    <span className="text-xs text-gray-500" aria-live="polite">
+                      {blocker}
+                    </span>
+                  )}
                 </div>
               </CardContent>
             </Card>

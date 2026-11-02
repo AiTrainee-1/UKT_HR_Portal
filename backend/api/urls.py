@@ -191,6 +191,7 @@ from .system_settings_views import (
 )
 from .casual_leave_views import (
     casual_leaves, casual_leave_detail, casual_leave_eligibility, my_casual_leave_eligibility,
+    casual_leave_history, casual_leave_policy,
 )
 from .missing_punch_views import (
     missing_punch_requests, missing_punch_request_hr_status,
@@ -546,6 +547,9 @@ urlpatterns = [
     path("casual-leaves", casual_leaves),
     path("casual-leaves/eligibility", casual_leave_eligibility),
     path("casual-leaves/my-eligibility", my_casual_leave_eligibility),
+    # the yearly balance (2026-11-02): its running history, and the entitlement + cut-over day (a setting)
+    path("casual-leaves/history", casual_leave_history),
+    path("casual-leaves/policy", casual_leave_policy),
     path("casual-leaves/<int:pk>", casual_leave_detail),
 
     # ── Missing Punch ────────────────────────────────────────────────────────

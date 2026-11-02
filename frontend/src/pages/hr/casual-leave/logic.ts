@@ -1,8 +1,9 @@
 // Casual Leave: the rules behind the page (who has taken CL in a month, who still can, who cannot and why), kept apart
 // from the screens so they can be tested on their own. The rules themselves live in backend/api/casual_leave_views.py
-// (staff only, six months of service, one a month, pending or approved counts); this only reads back what the API
-// decided and words it.
+// (staff only, six months of service; since 2026-11-02 a yearly balance of 12 days, before that one a month; pending or
+// approved counts); this only reads back what the API decided and words it.
 
+import type { CasualLeaveBalance } from "@/lib/api-client/custom-hooks";
 import type { ApprovalProgress } from "@/lib/approval-workflow";
 import {
   ALL,
@@ -18,7 +19,12 @@ import {
   type PersonFilters,
 } from "../leave/logic";
 
-export type ReasonCode = "not_staff" | "no_join_date" | "under_service" | "used_this_month";
+/** Why someone cannot take Casual Leave: "no_balance" (the yearly rule: nothing left of the 12) replaced
+ *  "used_this_month" (the older one-a-month rule, still sent for a month before the cut-over). */
+export type ReasonCode = "not_staff" | "no_join_date" | "under_service" | "used_this_month" | "no_balance";
+
+/** Which rule the board's month follows: the yearly balance (from the cut-over day, 2026-11-02) or one a month. */
+export type ClRule = "yearly_balance" | "one_per_month";
 
 /** One employee's standing for the month (GET /api/casual-leaves/eligibility?scope=all). */
 export type BoardRow = PersonFields & {
@@ -42,6 +48,8 @@ export type BoardRow = PersonFields & {
   left?: ClLeft;
   /** The month's pending / approved requests, by date. */
   usedParts?: { id: number; date: string; portion: ClPortion; portionLabel?: string; status: string }[];
+  /** The employee's Casual Leave balance for the board's year (2026-11-02); null for production, absent on an older server. */
+  balance?: CasualLeaveBalance | null;
 };
 
 export type ClBoard = {
@@ -53,7 +61,41 @@ export type ClBoard = {
   monthEnd?: string;
   counts?: { eligible: number; notEligible: number; usedThisMonth: number };
   employees: BoardRow[];
+  /** Added 2026-11-02; absent on an older server (which follows one a month). */
+  rule?: ClRule;
+  cutOver?: string;
+  yearlyEntitlement?: number;
 };
+
+/** The board's month follows the yearly balance. */
+export const isYearlyRule = (board: Pick<ClBoard, "rule"> | null | undefined): boolean =>
+  board?.rule === "yearly_balance";
+
+const days = (n: number): string => String(Math.round(n * 100) / 100);
+
+/** "11 of 12 left" (null when the employee has no balance: production, an older server, or a year before the cut-over). */
+export function balanceText(balance: CasualLeaveBalance | null | undefined): string | null {
+  if (!balance || !balance.tracked) return null;
+  return `${days(balance.remaining)} of ${days(balance.total)} left`;
+}
+
+/** "1 used · 0.5 waiting" (null when nothing is used or waiting). */
+export function balanceDetail(balance: CasualLeaveBalance | null | undefined): string | null {
+  if (!balance || !balance.tracked) return null;
+  const parts = [
+    balance.used ? `${days(balance.used)} used` : "",
+    balance.pending ? `${days(balance.pending)} waiting` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** How full the balance still is: "full" (nothing used), "some", "low" (a day or less), "none". */
+export function balanceLevel(balance: CasualLeaveBalance | null | undefined): "full" | "some" | "low" | "none" | null {
+  if (!balance || !balance.tracked) return null;
+  if (balance.remaining <= 0) return "none";
+  if (balance.remaining <= 1) return "low";
+  return balance.remaining >= balance.total ? "full" : "some";
+}
 
 export type ClPortion = "full" | "first_half" | "second_half";
 export type ClLeft = "full" | "one_half" | "nothing";
@@ -113,14 +155,35 @@ export type Why = {
   tone: "info" | "warning" | "neutral" | "danger";
 };
 
+/** The reason of a row that came without a code (an older server): production, an empty yearly balance, or the month's
+ *  one CL already used (only an older server, which keeps no balance, still means that). */
+function reasonWithoutCode(row: BoardRow): ReasonCode | null {
+  if (row.employmentType === "production") return "not_staff";
+  if (row.balance?.tracked && row.balance.remaining <= 0) return "no_balance";
+  if (row.usedThisMonth && !row.balance) return "used_this_month";
+  return null;
+}
+
 /** Why an employee cannot take Casual Leave this month, in words HR can read out; null when they can. Someone who is
- *  under six months is told the day they qualify. */
+ *  under six months is told the day they qualify. The server's `eligible` decides: under the yearly rule someone who took
+ *  Casual Leave this month is still eligible while their balance lasts, so "used this month" alone never makes a reason. */
 export function whyNot(row: BoardRow, months = 6): Why | null {
   if (row.eligible) return null;
-  const code =
-    row.reasonCode ??
-    (row.usedThisMonth ? "used_this_month" : row.employmentType === "production" ? "not_staff" : null);
+  const code = row.reasonCode ?? reasonWithoutCode(row);
   switch (code) {
+    case "no_balance": {
+      const b = row.balance;
+      const waiting = b?.pending ? ` (${days(b.pending)} of them waiting for approval)` : "";
+      return {
+        code,
+        title: "No Casual Leave left this year",
+        detail:
+          b && b.tracked
+            ? `All ${days(b.total)} days of ${b.year} are used or asked for${waiting}. A fresh balance of ${days(b.total)} starts on 1 January.`
+            : (row.reason ?? "All 12 days of the year are used or asked for."),
+        tone: "info",
+      };
+    }
     case "not_staff":
       return {
         code,
@@ -191,15 +254,21 @@ export function eligibleRows(rows: BoardRow[]): BoardRow[] {
     .sort((a, b) => (a.employeeName ?? "").localeCompare(b.employeeName ?? "") || a.employeeId - b.employeeId);
 }
 
-const REASON_ORDER: Record<string, number> = { used_this_month: 0, under_service: 1, no_join_date: 2, not_staff: 3 };
+const REASON_ORDER: Record<ReasonCode, number> = {
+  no_balance: 0,
+  used_this_month: 0,
+  under_service: 1,
+  no_join_date: 2,
+  not_staff: 3,
+};
 
-/** Everyone who cannot take CL: already used first, then soonest to qualify, then the rest, then production. */
+/** Everyone who cannot take CL: already used up first, then soonest to qualify, then the rest, then production. */
 export function notEligibleRows(rows: BoardRow[]): BoardRow[] {
   return rows
     .filter((r) => !r.eligible)
     .sort((a, b) => {
-      const oa = REASON_ORDER[a.reasonCode ?? ""] ?? 9;
-      const ob = REASON_ORDER[b.reasonCode ?? ""] ?? 9;
+      const oa = (a.reasonCode && REASON_ORDER[a.reasonCode]) ?? 9;
+      const ob = (b.reasonCode && REASON_ORDER[b.reasonCode]) ?? 9;
       if (oa !== ob) return oa - ob;
       if (a.reasonCode === "under_service" && b.reasonCode === "under_service") {
         const byDate = (a.eligibleFrom ?? "9999").localeCompare(b.eligibleFrom ?? "9999");
@@ -210,7 +279,13 @@ export function notEligibleRows(rows: BoardRow[]): BoardRow[] {
 }
 
 export function countByReason(rows: BoardRow[]): Record<ReasonCode, number> {
-  const out: Record<ReasonCode, number> = { not_staff: 0, no_join_date: 0, under_service: 0, used_this_month: 0 };
+  const out: Record<ReasonCode, number> = {
+    not_staff: 0,
+    no_join_date: 0,
+    under_service: 0,
+    used_this_month: 0,
+    no_balance: 0,
+  };
   for (const r of rows) {
     if (r.eligible) continue;
     const code = whyNot(r)?.code;
@@ -329,6 +404,7 @@ export const BOARD_EXPORT_HEADERS = [
   "Why not",
   "Eligible from",
   "Last CL",
+  "CL left this year",
 ];
 
 export function boardExportRows(rows: BoardRow[]): (string | number)[][] {
@@ -346,6 +422,7 @@ export function boardExportRows(rows: BoardRow[]): (string | number)[][] {
       why ? `${why.title}. ${why.detail}` : "",
       r.eligibleFrom ?? "",
       r.lastClDate ?? "",
+      balanceText(r.balance) ?? "",
     ];
   });
 }

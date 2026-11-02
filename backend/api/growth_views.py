@@ -265,7 +265,23 @@ def _override_request_dict(req: AttendanceOverrideRequest, cfg: approval.Config 
         "approval": approval.progress("attendance_correction", req, cfg),
         "type": (req.requested_values or {}).get("type"),
         "typeLabel": (req.requested_values or {}).get("typeLabel"),
+        # added 2026-11-02: the option group ("worked" | "compensation" | "not_worked" | "permission" | "late" |
+        # "casual_leave" | "on_duty") and the "HR edited this day" block the calendars show (hr_edit_marks.py)
+        "option": _edit_group_of(req.requested_values),
+        "hrEdit": _hr_edit_json(req, cfg),
     }
+
+
+def _edit_group_of(values):
+    from .attendance_edit import group_of
+
+    return group_of(values)
+
+
+def _hr_edit_json(req, cfg):
+    from .hr_edit_marks import hr_edit_json
+
+    return hr_edit_json(req, None, cfg)
 
 
 @api_view(["POST"])
@@ -300,6 +316,17 @@ def attendance_day_override(request: Request) -> Response:
         AttendanceOverrideRequest.objects.filter(
             employee=emp, date=d, status=AttendanceOverrideRequest.STATUS_PENDING
         ).update(status=AttendanceOverrideRequest.STATUS_REJECTED, review_comment="Superseded by revert to automatic")
+        # An edit already applied is history, but the day is automatic again: say so on it, so the calendars stop showing
+        # the day as HR-edited (hr_edit_marks.is_withdrawn). A permission / Casual Leave it created stays approved.
+        for applied in AttendanceOverrideRequest.objects.filter(
+            employee=emp, date=d, status=AttendanceOverrideRequest.STATUS_APPROVED
+        ):
+            values = dict(applied.requested_values or {})
+            if not values.get("revertedAt"):
+                values["revertedAt"] = timezone.now().isoformat()
+                values["revertedBy"] = hr_name
+                applied.requested_values = values
+                applied.save(update_fields=["requested_values"])
         record = compute_day_record(emp, d)
         return Response({"ok": True, "record": _record_dict(record), "reset": True})
 
@@ -331,7 +358,11 @@ def attendance_day_override(request: Request) -> Response:
         record = compute_day_record(emp, d)
 
     try:
-        if data.get("type"):
+        if data.get("type") in edit.NEW_OPTIONS:
+            # Permission / Late / Casual Leave / On-Duty (2026-11-02): checked against the day as the engine sees it now
+            record = edit.fresh_day(emp, d)
+            resolved = edit.resolve_option(data, emp, d, record)
+        elif data.get("type"):
             resolved = edit.resolve(data)
         else:  # an older client: the same approval, the old fields
             if len(str(data.get("note") or "").strip()) < 3:

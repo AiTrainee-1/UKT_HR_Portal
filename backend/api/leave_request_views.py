@@ -211,7 +211,7 @@ def _leave_requests_create(request: Request) -> Response:
         approval.require_enabled(WORKFLOW)
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
-    # An employee may only request dates in the current month (plus last month on its 1st and 2nd): both ends of the range.
+    # An employee may only request dates in the current month (plus last month on its 1st to 5th): both ends of the range.
     # HR filing on someone's behalf is never limited (api/request_window.py).
     if refused := enforce_employee_range(request, start_date, end_date):
         return refused

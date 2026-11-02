@@ -6,7 +6,8 @@ branch scoping and filters.
 
 Run via: python manage.py test api.tests_tea_break -v 2
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 
 from django.test import TestCase
 from django.utils import timezone
@@ -264,3 +265,49 @@ class TeaBreakEmployeeEndpointsTests(TestCase):
         response = tea_break_my_status(self._emp_request("/api/tea-break/my-status"))
         self.assertFalse(response.data["onBreak"])
         self.assertEqual(response.data["recent"], [])
+
+    # ?month=YYYY-MM (the app's month switcher, 2026-11-02)
+
+    def _log(self, out_at, minutes=10):
+        return TeaBreakLog.objects.create(
+            employee=self.emp, out_gate=self.gate, out_at=out_at,
+            in_gate=self.gate, in_at=out_at + timedelta(minutes=minutes) if minutes is not None else None,
+        )
+
+    def test_my_status_month_lists_every_break_of_that_month_only(self):
+        utc = dt_timezone.utc
+        sep = [self._log(datetime(2026, 9, d, 5, 0, tzinfo=utc)) for d in range(1, 13)]  # 12: more than the latest 10
+        self._log(datetime(2026, 10, 2, 5, 0, tzinfo=utc))
+        response = tea_break_my_status(self._emp_request("/api/tea-break/my-status?month=2026-09"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([r["id"] for r in response.data["recent"]], [log.id for log in reversed(sep)])
+        self.assertEqual(response.data["month"], "2026-09")
+
+    def test_my_status_month_reads_the_day_in_india_time(self):
+        utc = dt_timezone.utc
+        late_sep = self._log(datetime(2026, 9, 30, 18, 0, tzinfo=utc))  # 23:30 IST on 30 Sep
+        early_oct = self._log(datetime(2026, 9, 30, 19, 0, tzinfo=utc))  # 00:30 IST on 1 Oct
+        sep = tea_break_my_status(self._emp_request("/api/tea-break/my-status?month=2026-09"))
+        oct_ = tea_break_my_status(self._emp_request("/api/tea-break/my-status?month=2026-10"))
+        self.assertEqual([r["id"] for r in sep.data["recent"]], [late_sep.id])
+        self.assertEqual([r["id"] for r in oct_.data["recent"]], [early_oct.id])
+
+    def test_my_status_month_still_says_whether_a_break_is_open_now(self):
+        self._log(datetime(2026, 9, 3, 5, 0, tzinfo=dt_timezone.utc))
+        resolve_tea_break_scan(self.gate, self.emp)  # out right now, an open break this month
+        response = tea_break_my_status(self._emp_request("/api/tea-break/my-status?month=2026-09"))
+        self.assertTrue(response.data["onBreak"])
+        self.assertIsNotNone(response.data["outAt"])
+        self.assertEqual(len(response.data["recent"]), 1)
+
+    def test_my_status_without_month_keeps_the_latest_ten(self):
+        for d in range(1, 13):
+            self._log(datetime(2026, 9, d, 5, 0, tzinfo=dt_timezone.utc))
+        response = tea_break_my_status(self._emp_request("/api/tea-break/my-status"))
+        self.assertEqual(len(response.data["recent"]), 10)
+        self.assertNotIn("month", response.data)
+
+    def test_my_status_bad_month_is_a_400(self):
+        for bad in ("2026-13", "2026-9", "abc"):
+            response = tea_break_my_status(self._emp_request(f"/api/tea-break/my-status?month={bad}"))
+            self.assertEqual(response.status_code, 400, bad)

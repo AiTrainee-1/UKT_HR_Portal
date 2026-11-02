@@ -361,7 +361,9 @@ class MyEligibilityTests(_Staff):
         self.assertEqual(month["left"], "one_half")
         self.assertEqual(month["usedHalves"], [{"date": "2026-10-05", "portion": "first_half"}])
         self.assertEqual(month["usedParts"][0]["status"], "pending")
-        self.assertEqual(body["waitingThisYear"], 0.5)
+        # October 2026 is before the yearly balance's cut-over (2026-11-02): its Casual Leave keeps the one-per-month rule
+        # and holds nothing of the yearly balance (tests_attendance_edit_round covers the balance)
+        self.assertEqual(body["waitingThisYear"], 0)
 
     def test_two_halves_or_a_full_day_leave_nothing(self):
         self.cl(date(2026, 10, 5), "first_half")
@@ -372,12 +374,15 @@ class MyEligibilityTests(_Staff):
         self.assertIn("Both half-days", body["reason"])
 
     def test_the_year_counts_half_days_as_half(self):
-        self.cl(date(2026, 3, 5), "full")
-        self.cl(date(2026, 4, 5), "first_half")
-        self.cl(date(2026, 4, 9), "second_half", "rejected")
+        # since 2026-11-02 the year's figures are the yearly balance: only Casual Leave dated on/after the cut-over counts
+        self.cl(date(2026, 3, 5), "full")  # before the cut-over: never deducted
+        self.cl(date(2026, 11, 5), "full")
+        self.cl(date(2026, 11, 6), "first_half")
+        self.cl(date(2026, 11, 9), "second_half", "rejected")
         body = self.mine()
         self.assertEqual(body["usedThisYear"], 1.5)
         self.assertEqual(body["remainingThisYear"], 10.5)
+        self.assertEqual(body["balance"]["used"], 1.5)
 
     def test_a_production_employee_has_nothing_left(self):
         prod = self.staff("MLP3", kind="production")

@@ -18,6 +18,18 @@ const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.ge
 const now = new Date();
 const TODAY = iso(now);
 const monthsAgo = (n: number) => iso(new Date(now.getFullYear(), now.getMonth() - n, Math.min(now.getDate(), 28)));
+// Casual Leave is a yearly balance of 12 days from this day on (PayrollSettings.cl_balance_since's default)
+const CL_CUT_OVER = "2026-11-02";
+
+/** The first `n` dates of this year that the yearly Casual Leave balance counts. */
+const balanceDates = (n: number) => {
+  const out: string[] = [];
+  for (const d = new Date(now.getFullYear(), 0, 1); out.length < n && d.getFullYear() === now.getFullYear();) {
+    if (iso(d) >= CL_CUT_OVER) out.push(iso(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+};
 
 type Emp = { id: number; code: string };
 
@@ -51,25 +63,45 @@ async function cleanUp(page: Page) {
   }
 }
 
+async function makeEmployee(
+  page: Page,
+  code: string,
+  first: string,
+  extra: Record<string, unknown> = {},
+): Promise<Emp> {
+  const branches = (await api(page, "GET", "/api/branches")).body as { id: number }[];
+  const res = await api(page, "POST", "/api/employees", {
+    employeeCode: code,
+    firstName: first,
+    lastName: "Casual",
+    phone: "9000000077",
+    employmentType: "staff",
+    branchId: branches[0].id,
+    salaryType: "monthly",
+    salaryAmount: 24000,
+    joinDate: "2024-01-01",
+    ...extra,
+  });
+  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  return { id: res.body.id as number, code };
+}
+
+/** Someone who has used all 12 Casual Leave days of this year (12 approved full days). */
+async function usedUp(page: Page): Promise<Emp> {
+  const full = await makeEmployee(page, "LC-FULL", "Farah");
+  for (const date of balanceDates(12)) {
+    const made = await api(page, "POST", "/api/casual-leaves", { employeeId: full.id, date, reason: "LC used up" });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const decided = await api(page, "PATCH", `/api/casual-leaves/${made.body.id}`, { status: "approved" });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+  }
+  return full;
+}
+
 /** Five people: one eligible, one who has taken CL, one new joiner, one production, one with a CL waiting. */
 async function world(page: Page) {
-  const branches = (await api(page, "GET", "/api/branches")).body as { id: number }[];
-  const emp = async (code: string, first: string, extra: Record<string, unknown> = {}): Promise<Emp> => {
-    const res = await api(page, "POST", "/api/employees", {
-      employeeCode: code,
-      firstName: first,
-      lastName: "Casual",
-      phone: "9000000077",
-      employmentType: "staff",
-      branchId: branches[0].id,
-      salaryType: "monthly",
-      salaryAmount: 24000,
-      joinDate: "2024-01-01",
-      ...extra,
-    });
-    expect(res.status, JSON.stringify(res.body)).toBe(201);
-    return { id: res.body.id as number, code };
-  };
+  const emp = (code: string, first: string, extra: Record<string, unknown> = {}) =>
+    makeEmployee(page, code, first, extra);
   const eligible = await emp("LC-ELIG", "Elena");
   const taken = await emp("LC-TAKEN", "Tara");
   const rookie = await emp("LC-NEW", "Nila", { joinDate: monthsAgo(3) });
@@ -116,6 +148,7 @@ test("Casual Leave answers the three questions: who took it this month, who is e
   page,
 }) => {
   const w = await world(page);
+  const full = await usedUp(page);
   await page.goto("/hr/casual-leave");
   await expect(page.locator("main h2").first()).toHaveText("Casual Leave (CL)");
   await expect(page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ })).toHaveCount(1);
@@ -128,22 +161,27 @@ test("Casual Leave answers the three questions: who took it this month, who is e
   await expect(taken.getByTestId(`cl-${w.waitingCl}`)).toContainText("Wasim Casual");
   await expect(taken.getByTestId(`cl-${w.waitingCl}`)).toContainText(/pending|Waiting for/i);
 
-  // Eligible: the one who can still take it; not the one who has, the new joiner or the production employee
+  // Eligible: everyone with Casual Leave left this year (12 days a year): a CL taken or waiting leaves 11; not the one
+  // who used all 12, the new joiner or the production employee
   await tab(page, "Eligible").click();
   await expect(page.getByTestId(`eligible-${w.eligible.id}`)).toContainText("Elena Casual");
   await expect(page.getByTestId(`eligible-${w.eligible.id}`)).toContainText("Never"); // last CL
-  await expect(page.getByTestId(`eligible-${w.taken.id}`)).toHaveCount(0);
+  await expect(page.getByTestId(`eligible-${w.eligible.id}`)).toContainText("12 of 12 left");
+  await expect(page.getByTestId(`eligible-${w.taken.id}`)).toContainText("11 of 12 left");
+  await expect(page.getByTestId(`eligible-${w.waiting.id}`)).toContainText("11 of 12 left");
+  await expect(page.getByTestId(`eligible-${full.id}`)).toHaveCount(0);
   await expect(page.getByTestId(`eligible-${w.rookie.id}`)).toHaveCount(0);
   await expect(page.getByTestId(`eligible-${w.production.id}`)).toHaveCount(0);
 
   // Not eligible: each with the reason
   await tab(page, "Not eligible").click();
-  await expect(page.getByTestId(`not-eligible-${w.taken.id}`)).toContainText("Already used this month");
-  await expect(page.getByTestId(`not-eligible-${w.waiting.id}`)).toContainText("waiting for a decision");
+  await expect(page.getByTestId(`not-eligible-${full.id}`)).toContainText("No Casual Leave left this year");
   await expect(page.getByTestId(`not-eligible-${w.rookie.id}`)).toContainText("Under 6 months of service");
   await expect(page.getByTestId(`not-eligible-${w.rookie.id}`)).toContainText("Becomes eligible on");
   await expect(page.getByTestId(`not-eligible-${w.production.id}`)).toContainText("Production employee");
   await expect(page.getByTestId(`not-eligible-${w.eligible.id}`)).toHaveCount(0);
+  await expect(page.getByTestId(`not-eligible-${w.taken.id}`)).toHaveCount(0);
+  await expect(page.getByTestId(`not-eligible-${w.waiting.id}`)).toHaveCount(0);
 });
 
 test("the reason pills and the search narrow the Not eligible list, and a month back shows that month", async ({
@@ -174,9 +212,7 @@ test("the reason pills and the search narrow the Not eligible list, and a month 
   await expect(page.getByTestId(`cl-${w.takenCl}`)).toBeVisible();
 });
 
-test("Apply CL moves someone from Eligible to Not eligible, and the request is decided from Requests", async ({
-  page,
-}) => {
+test("Apply CL takes a day off the year's balance, and the request is decided from Requests", async ({ page }) => {
   const w = await world(page);
   await page.goto("/hr/casual-leave");
   await tab(page, "Eligible").click();
@@ -185,10 +221,8 @@ test("Apply CL moves someone from Eligible to Not eligible, and the request is d
   await page.getByTestId("apply-reason").fill("LC family function");
   await page.getByTestId("apply-submit").click();
   await expect(page.getByText("CL request created for Elena Casual")).toBeVisible();
-  await expect(page.getByTestId(`eligible-${w.eligible.id}`)).toHaveCount(0);
-
-  await tab(page, "Not eligible").click();
-  await expect(page.getByTestId(`not-eligible-${w.eligible.id}`)).toContainText("Already used this month");
+  // a waiting request holds its day: still eligible, with 11 of the 12 left
+  await expect(page.getByTestId(`eligible-${w.eligible.id}`)).toContainText("11 of 12 left");
 
   await tab(page, "Requests").click();
   const requests = (await api(page, "GET", `/api/casual-leaves?month=${now.getMonth() + 1}&year=${now.getFullYear()}`))
@@ -204,12 +238,15 @@ test("Apply CL moves someone from Eligible to Not eligible, and the request is d
   await expect(card).toContainText("approved");
 });
 
-test("the server refuses a second Casual Leave in a month, with the reason the page shows", async ({ page }) => {
+test("the server takes a second Casual Leave on another date but refuses the same date twice", async ({ page }) => {
   const w = await world(page);
-  // the page hides Apply CL for someone who cannot; the rule itself is the server's, and this is its answer
-  const second = await api(page, "POST", "/api/casual-leaves", { employeeId: w.taken.id, date: TODAY });
-  expect(second.status).toBe(400);
-  expect(second.body.error).toContain("already used this month");
+  // the rule is the server's, and this is its answer
+  const same = await api(page, "POST", "/api/casual-leaves", { employeeId: w.taken.id, date: TODAY });
+  expect(same.status).toBe(400);
+  expect(same.body.error).toContain("is already a full day of Casual Leave");
+  const other = balanceDates(2).find((d) => d !== TODAY)!;
+  const second = await api(page, "POST", "/api/casual-leaves", { employeeId: w.taken.id, date: other });
+  expect(second.status, JSON.stringify(second.body)).toBe(201);
 });
 
 test("Leave & Holiday: search, status, type and date filters on the leave requests", async ({ page }) => {

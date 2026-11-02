@@ -418,3 +418,7 @@ api/management/commands/fix_payroll_dropped_ot.py
 api/tests_fix_payroll_dropped_ot.py
 api/notification_targets.py
 api/tests_notification_targets.py
+api/tests_hod_journey_access.py
+api/cl_balance.py
+api/hr_edit_marks.py
+api/tests_attendance_edit_round.py

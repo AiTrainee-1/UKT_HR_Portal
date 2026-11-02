@@ -52,7 +52,7 @@ export default function EmployeeLeave() {
     defaultValues: { type: "casual" },
   });
 
-  // Employees may only request dates in the current month (the 1st and 2nd also keep last month open). The clock is
+  // Employees may only request dates in the current month (the 1st to the 5th also keep last month open). The clock is
   // read on every render, so the limits are fresh whenever the dialog is opened or edited, and read again in onSubmit.
   // Never once at module load: this page can stay open across midnight or a month end. The server has the last word.
   const requestWindow = getRequestWindow(new Date());

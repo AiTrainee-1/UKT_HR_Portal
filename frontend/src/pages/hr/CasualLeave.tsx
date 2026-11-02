@@ -18,6 +18,7 @@ import { ALL, branchOptions, departmentOptions, longDate, type PersonFilters } f
 import { MonthPicker, StatCard, useVisibleCount } from "./leave/parts";
 import ApplyDialog from "./casual-leave/ApplyDialog";
 import ClTab from "./casual-leave/ClTab";
+import HistoryDrawer from "./casual-leave/HistoryDrawer";
 import { useClBoard } from "./casual-leave/api";
 import { EligibleList, NotEligibleList, RequestList } from "./casual-leave/lists";
 import {
@@ -31,6 +32,7 @@ import {
   filterRequests,
   isCurrentMonth,
   isHalf,
+  isYearlyRule,
   monthTitle,
   notEligibleRows,
   portionText,
@@ -75,6 +77,7 @@ export default function CasualLeave() {
   const [applyFor, setApplyFor] = useState<{ employeeId: number; name: string } | null>(null);
   const [applyProblem, setApplyProblem] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<ClRequest | null>(null);
+  const [historyFor, setHistoryFor] = useState<{ employeeId: number; name: string } | null>(null);
 
   const boardQuery = useClBoard(month, year);
   const requestsQuery = useListCasualLeaves({ month, year });
@@ -86,6 +89,9 @@ export default function CasualLeave() {
   const requests = useMemo(() => (requestsQuery.data ?? []) as unknown as ClRequest[], [requestsQuery.data]);
   const summary = useMemo(() => summarize(board, requests), [board, requests]);
   const months = boardQuery.data?.eligibilityMonths ?? 6;
+  // since 2026-11-02 a month follows the yearly balance (12 a year); an earlier month (or an older server) one a month
+  const yearly = isYearlyRule(boardQuery.data);
+  const entitlement = boardQuery.data?.yearlyEntitlement ?? 12;
   const label = monthTitle(year, month);
   const current = isCurrentMonth(year, month, today);
 
@@ -162,6 +168,9 @@ export default function CasualLeave() {
     }
   };
 
+  const showHistory = (r: BoardRow) =>
+    setHistoryFor({ employeeId: r.employeeId, name: r.employeeName ?? r.employeeCode ?? `#${r.employeeId}` });
+
   const apply = (r: BoardRow) => {
     setApplyProblem(null);
     setApplyFor({ employeeId: r.employeeId, name: r.employeeName ?? r.employeeCode ?? `#${r.employeeId}` });
@@ -184,7 +193,8 @@ export default function CasualLeave() {
           <div>
             <h2 className="text-2xl font-black text-gray-900">Casual Leave (CL)</h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              Paid leave · staff only · 1 per month · eligible after {months} months of service
+              Paid leave · staff only · {yearly ? `${entitlement} days a year (a half day counts 0.5)` : "1 per month"}{" "}
+              · eligible after {months} months of service
             </p>
             <PipelineNote workflow="casual_leave" className="mt-1" />
           </div>
@@ -218,7 +228,9 @@ export default function CasualLeave() {
           <StatCard
             label="Not eligible"
             value={boardQuery.isLoading ? "…" : summary.notEligible}
-            sub={`${summary.byReason.not_staff} production · ${summary.byReason.under_service} under ${months} months · ${summary.byReason.used_this_month} used`}
+            sub={`${summary.byReason.not_staff} production · ${summary.byReason.under_service} under ${months} months · ${
+              yearly ? `${summary.byReason.no_balance} none left` : `${summary.byReason.used_this_month} used`
+            }`}
             icon={UserX}
             tone="bg-slate-100 text-slate-700"
             testId="cl-stat-not-eligible"
@@ -321,13 +333,20 @@ export default function CasualLeave() {
               empty={{
                 icon: UserCheck,
                 title: "Nobody is eligible",
-                text: `Staff who have completed ${months} months of service and have not used this month's Casual Leave appear here.`,
+                text: yearly
+                  ? `Staff who have completed ${months} months of service and still have Casual Leave left this year appear here.`
+                  : `Staff who have completed ${months} months of service and have not used this month's Casual Leave appear here.`,
               }}
               onExport={() =>
                 exportSheet(`Casual leave eligible ${label}`, BOARD_EXPORT_HEADERS, boardExportRows(eligible))
               }
             >
-              <EligibleList rows={eligible.slice(0, eligibleMore.count)} onApply={apply} monthLabel={label} />
+              <EligibleList
+                rows={eligible.slice(0, eligibleMore.count)}
+                onApply={apply}
+                onHistory={showHistory}
+                monthLabel={label}
+              />
             </ClTab>
           )}
 
@@ -348,7 +367,10 @@ export default function CasualLeave() {
                   },
                   [
                     ["all", "All"],
-                    ["used_this_month", "Used this month"],
+                    ...(yearly ? [["no_balance", "No CL left"] as [string, string]] : []),
+                    ...(!yearly || summary.byReason.used_this_month > 0
+                      ? [["used_this_month", "Used this month"] as [string, string]]
+                      : []),
                     ["under_service", `Under ${months} months`],
                     ["not_staff", "Production"],
                     ["no_join_date", "No join date"],
@@ -373,7 +395,11 @@ export default function CasualLeave() {
                 exportSheet(`Casual leave not eligible ${label}`, BOARD_EXPORT_HEADERS, boardExportRows(notEligible))
               }
             >
-              <NotEligibleList rows={notEligible.slice(0, notMore.count)} eligibilityMonths={months} />
+              <NotEligibleList
+                rows={notEligible.slice(0, notMore.count)}
+                eligibilityMonths={months}
+                onHistory={showHistory}
+              />
             </ClTab>
           )}
 
@@ -444,6 +470,7 @@ export default function CasualLeave() {
         onClose={() => setApplyFor(null)}
         onSubmit={submitOnBehalf}
       />
+      <HistoryDrawer target={historyFor} year={year} onClose={() => setHistoryFor(null)} />
       <ConfirmDialog
         open={toDelete !== null}
         title="Delete this record?"

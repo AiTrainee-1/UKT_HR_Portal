@@ -1,7 +1,8 @@
 """
 Attendance Edit: the page behind the pencil on a day, and HR's second-level decision.
 
-  GET   /api/attendance/edit-context?employeeId=&date=   everything the Attendance Edit page needs for one day
+  GET   /api/attendance/edit-context?employeeId=&date=   everything the Attendance Edit page needs for one day (incl. the
+                                                          option groups, the Casual Leave balance and the day's hrEdit)
   PATCH /api/attendance/override-requests/<id>           HR's decision (approve / reject) on an edit the Department Head
                                                           has already approved
 
@@ -22,12 +23,14 @@ from rest_framework.response import Response
 
 from . import approval_workflow as approval
 from . import attendance_edit as edit
+from . import cl_balance
 from .audit_utils import log_action
 from .auth import get_hr_display_name, require_hr
 from .attendance_final import compute_day_record
 from .branch_scope import scope_to_branch
 from .clock import ist_today
 from .device_directory import can_edit_module
+from .hr_edit_marks import hr_edit_map
 from .models import AttendanceDayRecord, AttendanceOverrideRequest, Employee
 from .view_common import error_response as _error
 
@@ -51,10 +54,16 @@ def attendance_edit_context(request: Request) -> Response:
     except (TypeError, ValueError):
         return _error("Date must look like 2026-10-05")
 
-    record = AttendanceDayRecord.objects.filter(employee=emp, date=d).first() or compute_day_record(emp, d)
+    future = d > ist_today()
+    if future:
+        record = AttendanceDayRecord.objects.filter(employee=emp, date=d).first() or compute_day_record(emp, d)
+    else:
+        record = edit.fresh_day(emp, d)  # the day as the engine sees it now (a manual day as HR fixed it)
     hod = edit.hod_of(emp)
     cfg = approval.get_config(KEY)
     requests = list(AttendanceOverrideRequest.objects.filter(employee=emp, date=d).order_by("-created_at")[:10])
+    hr_edit = hr_edit_map(emp, d, d).get(d)
+    cl_balance_block = cl_balance.balance(emp, d.year) if emp.employment_type == "staff" else None
     return Response(
         {
             "employee": {
@@ -68,7 +77,7 @@ def attendance_edit_context(request: Request) -> Response:
             },
             "date": str(d),
             "day": _record_dict(record),
-            "future": d > ist_today(),
+            "future": future,
             "hod": (
                 {
                     "name": f"{hod.employee.first_name} {hod.employee.last_name}".strip(),
@@ -86,6 +95,12 @@ def attendance_edit_context(request: Request) -> Response:
             "punches": edit.day_punches(emp, d),
             "canEdit": can_edit_module(request, "attendance"),
             "requests": [_override_request_dict(r, cfg) for r in requests],
+            # added 2026-11-02: every option of the dialog in groups (Worked / Compensation / Not worked / Permission / Late /
+            # Casual Leave / On-Duty) with its sub-choices and whether each can be chosen for this day and why not; the
+            # employee's Casual Leave balance for the date's year (None for production); the day's latest HR edit
+            "options": edit.option_catalogue(emp, d, record),
+            "clBalance": cl_balance_block,
+            "hrEdit": hr_edit,
         }
     )
 

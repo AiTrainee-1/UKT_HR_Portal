@@ -38,6 +38,13 @@ def punch_counts(session_ids: list[int]) -> dict[int, int]:
     return {session_id: len(numbers) for session_id, numbers in slots.items()}
 
 
+def journey_ids(session_ids: list[int]) -> dict[int, int]:
+    """{On-Duty session id: the id of its recorded journey (DutyTrack)}, in one query. A session with no track is absent."""
+    if not session_ids:
+        return {}
+    return dict(DutyTrack.objects.filter(session_id__in=session_ids).values_list("session_id", "id"))
+
+
 def track_item(track: DutyTrack, now: datetime, signal_lost_seconds: int, punch_count: int | None = None) -> dict:
     """One row of the journey list (needs track.employee(+department), track.branch and track.session loaded).
     `punch_count` (the list passes it) adds `punchCount`: the geo-punches recorded under this journey's session."""

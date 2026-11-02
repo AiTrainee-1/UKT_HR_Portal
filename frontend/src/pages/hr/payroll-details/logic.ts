@@ -809,8 +809,12 @@ export const CALENDAR_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"
 
 /** The day a calendar cell shows for a day the payroll does not list: the real attendance when it was worked, else the day off. */
 export function offDayAsDay(off: OffDay): PayrollDay {
-  if (off.attendance) return { ...off.attendance, holidayName: off.name, workedOffDay: true };
+  // the day's HR edit rides on the worked attendance, or on the off day itself (a Sunday HR marked, say, Compensation)
+  const hrEdit = off.attendance?.hrEdit ?? off.hrEdit;
+  const edited = hrEdit ? { hrEdit } : {};
+  if (off.attendance) return { ...off.attendance, holidayName: off.name, workedOffDay: true, ...edited };
   return {
+    ...edited,
     date: off.date,
     day: "",
     status: off.kind === "holiday" ? "holiday" : "weekly_off",

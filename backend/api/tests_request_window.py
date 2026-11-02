@@ -1,10 +1,10 @@
 """
 The request date window (api/request_window.py): an EMPLOYEE may request dates in the current calendar month only, plus last
-month on the 1st and 2nd (the grace days), and a Missing Punch can never be in the future. HR filing on someone's behalf is
-never limited. Enforced on the four dated request forms: Leave, Permission (Late-In / Early-Out), Casual Leave and
-Missing Punch.
+month from the 1st to the 5th (the grace days; it was the 1st and 2nd until 2026-11-02), and a Missing Punch can never be in
+the future. HR filing on someone's behalf is never limited. Enforced on the four dated request forms: Leave, Permission
+(Late-In / Early-Out), Casual Leave and Missing Punch.
 
-  * SharedVectorTests / PythonOnlyTests: the pure rule, against the same 83 vectors the Employee Web App, the Mobile App and
+  * SharedVectorTests / PythonOnlyTests: the pure rule, against the same 137 vectors the Employee Web App, the Mobile App and
     the HR portal assert (embedded below, so the repo does not depend on anything outside itself).
   * The endpoint tests pin India's "today" by patching api.request_window.ist_today and POST to the real endpoints with real
     tokens: the boundary days, the 400 body, HR and the Department Head, and the order of the refusals.
@@ -35,38 +35,40 @@ from .models import (
     Notification,
 )
 
-# The shared vectors (request-window-vectors.json): the SAME 83 cases are asserted by the Employee Web App, the Mobile App,
-# the HR portal and this backend, so the rule cannot drift. The sentences are the exact user-facing messages.
+# The shared vectors (request-window-vectors.json, generated from api/request_window.py): the SAME 137 cases are
+# asserted by the Employee Web App, the Mobile App, the HR portal and this backend, so the rule cannot drift. The
+# sentences are the exact user-facing messages. The grace became 5 days on 2026-11-02 (the cases for the 3rd to the
+# 5th, open, and the 6th, closed, are at the end of each list).
 GRACE_OCTOBER_2026 = (
-    "You can only request dates from 1 September 2026 to 31 October 2026. September closes at the end of 2 October."
+    "You can only request dates from 1 September 2026 to 31 October 2026. September closes at the end of 5 October."
 )
 ONLY_OCTOBER_2026 = "You can only request dates in October 2026."
 GRACE_JANUARY_2026 = (
-    "You can only request dates from 1 December 2025 to 31 January 2026. December closes at the end of 2 January."
+    "You can only request dates from 1 December 2025 to 31 January 2026. December closes at the end of 5 January."
 )
-ONLY_JANUARY_2026 = "You can only request dates in January 2026."
 GRACE_MARCH_2026 = (
-    "You can only request dates from 1 February 2026 to 31 March 2026. February closes at the end of 2 March."
+    "You can only request dates from 1 February 2026 to 31 March 2026. February closes at the end of 5 March."
 )
-ONLY_MARCH_2026 = "You can only request dates in March 2026."
 GRACE_MARCH_2028 = (
-    "You can only request dates from 1 February 2028 to 31 March 2028. February closes at the end of 2 March."
+    "You can only request dates from 1 February 2028 to 31 March 2028. February closes at the end of 5 March."
 )
-ONLY_MARCH_2028 = "You can only request dates in March 2028."
 ONLY_FEBRUARY_2026 = "You can only request dates in February 2026."
 ONLY_FEBRUARY_2028 = "You can only request dates in February 2028."
 GRACE_DECEMBER_2026 = (
-    "You can only request dates from 1 November 2026 to 31 December 2026. November closes at the end of 2 December."
+    "You can only request dates from 1 November 2026 to 31 December 2026. November closes at the end of 5 December."
 )
 ONLY_DECEMBER_2026 = "You can only request dates in December 2026."
 ONLY_NOVEMBER_2026 = "You can only request dates in November 2026."
-GRACE_MAY_2026 = "You can only request dates from 1 April 2026 to 31 May 2026. April closes at the end of 2 May."
+GRACE_MAY_2026 = "You can only request dates from 1 April 2026 to 31 May 2026. April closes at the end of 5 May."
 ONLY_JULY_2026 = "You can only request dates in July 2026."
+ONLY_JANUARY_2026 = "You can only request dates in January 2026."
+ONLY_MARCH_2026 = "You can only request dates in March 2026."
+ONLY_MARCH_2028 = "You can only request dates in March 2028."
 FUTURE = "Date cannot be in the future."
 INVALID = "Choose a valid date."
 END_BEFORE_START = "End date must be on or after start date."
 
-GRACE_DAYS_VECTOR = 2
+GRACE_DAYS_VECTOR = 5
 
 # today, min, max, graceOpen, currentMonth, previousMonth, message, hint
 WINDOWS = [
@@ -92,13 +94,13 @@ WINDOWS = [
     ),
     (
         "2026-10-03",
-        "2026-10-01",
+        "2026-09-01",
         "2026-10-31",
-        False,
+        True,
         "October 2026",
         "September 2026",
-        ONLY_OCTOBER_2026,
-        "Any day in October 2026",
+        GRACE_OCTOBER_2026,
+        "1 September 2026 to 31 October 2026",
     ),
     (
         "2026-10-15",
@@ -142,13 +144,13 @@ WINDOWS = [
     ),
     (
         "2026-01-03",
-        "2026-01-01",
+        "2025-12-01",
         "2026-01-31",
-        False,
+        True,
         "January 2026",
         "December 2025",
-        ONLY_JANUARY_2026,
-        "Any day in January 2026",
+        GRACE_JANUARY_2026,
+        "1 December 2025 to 31 January 2026",
     ),
     (
         "2026-03-01",
@@ -172,13 +174,13 @@ WINDOWS = [
     ),
     (
         "2026-03-03",
-        "2026-03-01",
+        "2026-02-01",
         "2026-03-31",
-        False,
+        True,
         "March 2026",
         "February 2026",
-        ONLY_MARCH_2026,
-        "Any day in March 2026",
+        GRACE_MARCH_2026,
+        "1 February 2026 to 31 March 2026",
     ),
     (
         "2028-03-01",
@@ -202,13 +204,13 @@ WINDOWS = [
     ),
     (
         "2028-03-03",
-        "2028-03-01",
+        "2028-02-01",
         "2028-03-31",
-        False,
+        True,
         "March 2028",
         "February 2028",
-        ONLY_MARCH_2028,
-        "Any day in March 2028",
+        GRACE_MARCH_2028,
+        "1 February 2028 to 31 March 2028",
     ),
     (
         "2026-02-28",
@@ -290,6 +292,126 @@ WINDOWS = [
         ONLY_JULY_2026,
         "Any day in July 2026",
     ),
+    (
+        "2026-10-04",
+        "2026-09-01",
+        "2026-10-31",
+        True,
+        "October 2026",
+        "September 2026",
+        GRACE_OCTOBER_2026,
+        "1 September 2026 to 31 October 2026",
+    ),
+    (
+        "2026-10-05",
+        "2026-09-01",
+        "2026-10-31",
+        True,
+        "October 2026",
+        "September 2026",
+        GRACE_OCTOBER_2026,
+        "1 September 2026 to 31 October 2026",
+    ),
+    (
+        "2026-10-06",
+        "2026-10-01",
+        "2026-10-31",
+        False,
+        "October 2026",
+        "September 2026",
+        ONLY_OCTOBER_2026,
+        "Any day in October 2026",
+    ),
+    (
+        "2026-01-04",
+        "2025-12-01",
+        "2026-01-31",
+        True,
+        "January 2026",
+        "December 2025",
+        GRACE_JANUARY_2026,
+        "1 December 2025 to 31 January 2026",
+    ),
+    (
+        "2026-01-05",
+        "2025-12-01",
+        "2026-01-31",
+        True,
+        "January 2026",
+        "December 2025",
+        GRACE_JANUARY_2026,
+        "1 December 2025 to 31 January 2026",
+    ),
+    (
+        "2026-01-06",
+        "2026-01-01",
+        "2026-01-31",
+        False,
+        "January 2026",
+        "December 2025",
+        ONLY_JANUARY_2026,
+        "Any day in January 2026",
+    ),
+    (
+        "2026-03-05",
+        "2026-02-01",
+        "2026-03-31",
+        True,
+        "March 2026",
+        "February 2026",
+        GRACE_MARCH_2026,
+        "1 February 2026 to 31 March 2026",
+    ),
+    (
+        "2026-03-06",
+        "2026-03-01",
+        "2026-03-31",
+        False,
+        "March 2026",
+        "February 2026",
+        ONLY_MARCH_2026,
+        "Any day in March 2026",
+    ),
+    (
+        "2028-03-05",
+        "2028-02-01",
+        "2028-03-31",
+        True,
+        "March 2028",
+        "February 2028",
+        GRACE_MARCH_2028,
+        "1 February 2028 to 31 March 2028",
+    ),
+    (
+        "2028-03-06",
+        "2028-03-01",
+        "2028-03-31",
+        False,
+        "March 2028",
+        "February 2028",
+        ONLY_MARCH_2028,
+        "Any day in March 2028",
+    ),
+    (
+        "2026-12-05",
+        "2026-11-01",
+        "2026-12-31",
+        True,
+        "December 2026",
+        "November 2026",
+        GRACE_DECEMBER_2026,
+        "1 November 2026 to 31 December 2026",
+    ),
+    (
+        "2026-12-06",
+        "2026-12-01",
+        "2026-12-31",
+        False,
+        "December 2026",
+        "November 2026",
+        ONLY_DECEMBER_2026,
+        "Any day in December 2026",
+    ),
 ]
 
 # today, date, error, error with no_future=True
@@ -303,12 +425,12 @@ DATES = [
     ("2026-10-02", "2026-09-01", None, None),
     ("2026-10-02", "2026-08-31", GRACE_OCTOBER_2026, GRACE_OCTOBER_2026),
     ("2026-10-02", "2026-10-31", None, FUTURE),
-    ("2026-10-03", "2026-09-30", ONLY_OCTOBER_2026, ONLY_OCTOBER_2026),
-    ("2026-10-03", "2026-09-01", ONLY_OCTOBER_2026, ONLY_OCTOBER_2026),
+    ("2026-10-03", "2026-09-30", None, None),
+    ("2026-10-03", "2026-09-01", None, None),
     ("2026-10-03", "2026-10-01", None, None),
     ("2026-10-03", "2026-10-03", None, None),
     ("2026-10-03", "2026-10-31", None, FUTURE),
-    ("2026-10-03", "2026-11-01", ONLY_OCTOBER_2026, FUTURE),
+    ("2026-10-03", "2026-11-01", GRACE_OCTOBER_2026, FUTURE),
     ("2026-10-31", "2026-10-01", None, None),
     ("2026-10-31", "2026-09-30", ONLY_OCTOBER_2026, ONLY_OCTOBER_2026),
     ("2026-10-31", "2026-11-01", ONLY_OCTOBER_2026, FUTURE),
@@ -316,17 +438,17 @@ DATES = [
     ("2026-01-01", "2025-12-31", None, None),
     ("2026-01-01", "2025-11-30", GRACE_JANUARY_2026, GRACE_JANUARY_2026),
     ("2026-01-02", "2025-12-15", None, None),
-    ("2026-01-03", "2025-12-31", ONLY_JANUARY_2026, ONLY_JANUARY_2026),
+    ("2026-01-03", "2025-12-31", None, None),
     ("2026-01-03", "2026-01-01", None, None),
     ("2026-01-03", "2026-01-31", None, FUTURE),
-    ("2026-01-03", "2026-02-01", ONLY_JANUARY_2026, FUTURE),
+    ("2026-01-03", "2026-02-01", GRACE_JANUARY_2026, FUTURE),
     ("2026-03-01", "2026-02-01", None, None),
     ("2026-03-01", "2026-02-28", None, None),
     ("2026-03-01", "2026-02-29", INVALID, INVALID),
-    ("2026-03-03", "2026-02-28", ONLY_MARCH_2026, ONLY_MARCH_2026),
+    ("2026-03-03", "2026-02-28", None, None),
     ("2028-03-01", "2028-02-29", None, None),
     ("2028-03-01", "2028-02-01", None, None),
-    ("2028-03-03", "2028-02-29", ONLY_MARCH_2028, ONLY_MARCH_2028),
+    ("2028-03-03", "2028-02-29", None, None),
     ("2028-02-29", "2028-02-29", None, None),
     ("2028-02-29", "2028-03-01", ONLY_FEBRUARY_2028, FUTURE),
     ("2026-02-28", "2026-02-28", None, None),
@@ -334,13 +456,46 @@ DATES = [
     ("2026-12-31", "2026-12-31", None, None),
     ("2026-12-31", "2027-01-01", ONLY_DECEMBER_2026, FUTURE),
     ("2026-12-02", "2026-11-01", None, None),
-    ("2026-12-03", "2026-11-30", ONLY_DECEMBER_2026, ONLY_DECEMBER_2026),
+    ("2026-12-03", "2026-11-30", None, None),
     ("2026-10-15", "not-a-date", INVALID, INVALID),
     ("2026-10-15", "", INVALID, INVALID),
     ("2026-10-15", "2026-13-01", INVALID, INVALID),
     ("2026-10-15", "2026-02-30", INVALID, INVALID),
     ("2026-10-15", "2026-10-1", INVALID, INVALID),
     ("2026-10-15", "26-10-15", INVALID, INVALID),
+    ("2026-10-04", "2026-09-30", None, None),
+    ("2026-10-04", "2026-08-31", GRACE_OCTOBER_2026, GRACE_OCTOBER_2026),
+    ("2026-10-05", "2026-09-01", None, None),
+    ("2026-10-05", "2026-09-30", None, None),
+    ("2026-10-05", "2026-08-31", GRACE_OCTOBER_2026, GRACE_OCTOBER_2026),
+    ("2026-10-05", "2026-10-05", None, None),
+    ("2026-10-05", "2026-10-31", None, FUTURE),
+    ("2026-10-05", "2026-11-01", GRACE_OCTOBER_2026, FUTURE),
+    ("2026-10-06", "2026-09-30", ONLY_OCTOBER_2026, ONLY_OCTOBER_2026),
+    ("2026-10-06", "2026-09-01", ONLY_OCTOBER_2026, ONLY_OCTOBER_2026),
+    ("2026-10-06", "2026-10-01", None, None),
+    ("2026-10-06", "2026-10-06", None, None),
+    ("2026-10-06", "2026-10-07", None, FUTURE),
+    ("2026-01-04", "2025-12-31", None, None),
+    ("2026-01-05", "2025-12-01", None, None),
+    ("2026-01-05", "2025-12-31", None, None),
+    ("2026-01-05", "2025-11-30", GRACE_JANUARY_2026, GRACE_JANUARY_2026),
+    ("2026-01-05", "2026-02-01", GRACE_JANUARY_2026, FUTURE),
+    ("2026-01-06", "2025-12-31", ONLY_JANUARY_2026, ONLY_JANUARY_2026),
+    ("2026-01-06", "2026-01-01", None, None),
+    ("2026-01-06", "2026-02-01", ONLY_JANUARY_2026, FUTURE),
+    ("2026-03-05", "2026-02-01", None, None),
+    ("2026-03-05", "2026-02-28", None, None),
+    ("2026-03-05", "2026-01-31", GRACE_MARCH_2026, GRACE_MARCH_2026),
+    ("2026-03-05", "2026-02-29", INVALID, INVALID),
+    ("2026-03-06", "2026-02-28", ONLY_MARCH_2026, ONLY_MARCH_2026),
+    ("2026-03-06", "2026-03-01", None, None),
+    ("2028-03-05", "2028-02-29", None, None),
+    ("2028-03-05", "2028-01-31", GRACE_MARCH_2028, GRACE_MARCH_2028),
+    ("2028-03-06", "2028-02-29", ONLY_MARCH_2028, ONLY_MARCH_2028),
+    ("2028-03-06", "2028-03-01", None, None),
+    ("2026-12-05", "2026-11-01", None, None),
+    ("2026-12-06", "2026-11-30", ONLY_DECEMBER_2026, ONLY_DECEMBER_2026),
 ]
 
 # today, start, end, error
@@ -351,7 +506,7 @@ RANGES = [
     ("2026-10-15", "2026-10-22", "2026-10-20", END_BEFORE_START),
     ("2026-10-02", "2026-09-29", "2026-10-02", None),
     ("2026-10-02", "2026-09-30", "2026-09-30", None),
-    ("2026-10-03", "2026-09-30", "2026-10-02", ONLY_OCTOBER_2026),
+    ("2026-10-03", "2026-09-30", "2026-10-02", None),
     ("2026-10-03", "2026-10-01", "2026-10-31", None),
     ("2026-10-15", "2026-10-31", "2026-10-31", None),
     ("2026-10-15", "2026-11-01", "2026-11-01", ONLY_OCTOBER_2026),
@@ -359,6 +514,15 @@ RANGES = [
     ("2026-10-15", "2026-10-10", "bad", INVALID),
     ("2026-10-15", "", "2026-10-10", INVALID),
     ("2026-10-02", "2026-10-05", "2026-09-28", END_BEFORE_START),
+    ("2026-10-05", "2026-09-28", "2026-10-05", None),
+    ("2026-10-05", "2026-10-30", "2026-11-02", GRACE_OCTOBER_2026),
+    ("2026-10-06", "2026-09-30", "2026-10-02", ONLY_OCTOBER_2026),
+    ("2026-10-06", "2026-10-01", "2026-10-31", None),
+    ("2026-01-05", "2025-12-30", "2026-01-05", None),
+    ("2026-01-06", "2025-12-30", "2026-01-02", ONLY_JANUARY_2026),
+    ("2028-03-05", "2028-02-28", "2028-03-01", None),
+    ("2028-03-06", "2028-02-28", "2028-03-01", ONLY_MARCH_2028),
+    ("2026-10-05", "2026-10-05", "2026-09-28", END_BEFORE_START),
 ]
 
 
@@ -376,8 +540,9 @@ def clock(today: str):
 
 class SharedVectorTests(SimpleTestCase):
     def test_the_whole_vector_set_is_here(self):
-        self.assertEqual((len(WINDOWS), len(DATES), len(RANGES)), (22, 47, 14))
+        self.assertEqual((len(WINDOWS), len(DATES), len(RANGES)), (34, 80, 23))
         self.assertEqual(rw.GRACE_DAYS, GRACE_DAYS_VECTOR)
+        self.assertEqual(rw.GRACE_DAYS, 5)  # the owner's deadline since 2026-11-02: last month closes after the 5th
 
     def test_windows(self):
         for today, lo, hi, grace_open, current, previous, message, hint in WINDOWS:
@@ -478,20 +643,20 @@ class PythonOnlyTests(SimpleTestCase):
         self.assertEqual(rw.parse_request_date("2028-02-29"), D("2028-02-29"))
 
     def test_without_a_date_the_india_clock_is_used(self):
-        with clock("2026-10-02"):
+        with clock("2026-10-05"):
             w = rw.request_window()
-            self.assertEqual((w.today, w.min, w.grace_open), (D("2026-10-02"), D("2026-09-01"), True))
+            self.assertEqual((w.today, w.min, w.grace_open), (D("2026-10-05"), D("2026-09-01"), True))
             self.assertIsNone(rw.check_date("2026-09-01"))
             self.assertEqual(rw.check_date("2026-08-31"), GRACE_OCTOBER_2026)
-        with clock("2026-10-03"):
+        with clock("2026-10-06"):
             self.assertEqual(rw.check_date("2026-09-01"), ONLY_OCTOBER_2026)
 
     def test_the_window_is_read_every_time_not_once(self):
-        with clock("2026-10-02"):
+        with clock("2026-10-05"):
             self.assertIsNone(rw.check_date("2026-09-30"))
-        with clock("2026-10-03"):
+        with clock("2026-10-06"):
             self.assertEqual(rw.check_date("2026-09-30"), ONLY_OCTOBER_2026)
-        with clock("2026-10-02"):
+        with clock("2026-10-05"):
             self.assertIsNone(rw.check_date("2026-09-30"))
 
     def test_only_an_employee_token_is_ever_limited(self):
@@ -519,10 +684,10 @@ class PythonOnlyTests(SimpleTestCase):
                     "code": "request_window_closed",
                     "earliestDate": "2026-10-01",
                     "latestDate": "2026-10-31",
-                    "graceDays": 2,
+                    "graceDays": 5,
                 },
             )
-        in_grace = rw.enforce_employee_date(employee, "2020-01-01", today=D("2026-10-02"))
+        in_grace = rw.enforce_employee_date(employee, "2020-01-01", today=D("2026-10-05"))
         self.assertEqual((in_grace.data["error"], in_grace.data["earliestDate"]), (GRACE_OCTOBER_2026, "2026-09-01"))
         future = rw.enforce_employee_date(employee, "2026-10-20", no_future=True, today=self.TODAY)
         self.assertEqual((future.data["error"], future.data["latestDate"]), (FUTURE, "2026-10-31"))
@@ -605,7 +770,7 @@ class _EndpointCases:
                 "code": "request_window_closed",
                 "earliestDate": earliest,
                 "latestDate": latest,
-                "graceDays": 2,
+                "graceDays": 5,
             },
             f"today {today}, date {value!r}",
         )
@@ -628,22 +793,22 @@ class _EndpointCases:
             self.refused(today, value, self.next_month(ONLY_OCTOBER_2026), "2026-10-01", "2026-10-31")
 
     def test_last_month_is_refused_after_the_grace_days(self):
-        for today in ("2026-10-03", "2026-10-15", "2026-10-31"):
+        for today in ("2026-10-06", "2026-10-15", "2026-10-31"):
             for value in ("2026-09-30", "2026-09-01"):
                 self.refused(today, value, ONLY_OCTOBER_2026, "2026-10-01", "2026-10-31")
         self.refused("2026-10-15", "2025-10-15", ONLY_OCTOBER_2026, "2026-10-01", "2026-10-31")
 
-    def test_last_month_is_still_open_on_the_1st_and_2nd(self):
-        for today in ("2026-10-01", "2026-10-02"):
+    def test_last_month_is_still_open_from_the_1st_to_the_5th(self):
+        for today in ("2026-10-01", "2026-10-03", "2026-10-05"):
             for value in ("2026-09-01", "2026-09-15", "2026-09-30", "2026-10-01"):
                 self.allowed(today, value)
             self.refused(today, "2026-08-31", GRACE_OCTOBER_2026, "2026-09-01", "2026-10-31")
             self.refused(today, "2026-11-01", self.next_month(GRACE_OCTOBER_2026), "2026-09-01", "2026-10-31")
 
-    def test_the_grace_is_over_from_the_3rd(self):
-        self.allowed("2026-10-02", "2026-09-30")
-        self.refused("2026-10-03", "2026-09-30", ONLY_OCTOBER_2026, "2026-10-01", "2026-10-31")
-        self.allowed("2026-10-03", "2026-10-01")
+    def test_the_grace_is_over_from_the_6th(self):
+        self.allowed("2026-10-05", "2026-09-30")
+        self.refused("2026-10-06", "2026-09-30", ONLY_OCTOBER_2026, "2026-10-01", "2026-10-31")
+        self.allowed("2026-10-06", "2026-10-01")
 
     # -- boundaries --
 
@@ -660,21 +825,23 @@ class _EndpointCases:
 
     def test_january_looks_back_to_december_of_the_year_before(self):
         self.allowed("2026-01-01", "2025-12-31")
-        self.allowed("2026-01-02", "2025-12-01")
+        self.allowed("2026-01-05", "2025-12-01")
         self.refused("2026-01-01", "2025-11-30", GRACE_JANUARY_2026, "2025-12-01", "2026-01-31")
-        self.refused("2026-01-03", "2025-12-31", ONLY_JANUARY_2026, "2026-01-01", "2026-01-31")
-        self.allowed("2026-01-03", "2026-01-01")
+        self.refused("2026-01-05", "2025-11-30", GRACE_JANUARY_2026, "2025-12-01", "2026-01-31")
+        self.refused("2026-01-06", "2025-12-31", ONLY_JANUARY_2026, "2026-01-01", "2026-01-31")
+        self.allowed("2026-01-06", "2026-01-01")
 
     def test_december_ends_the_year(self):
         self.allowed("2026-12-31", "2026-12-31")
         self.refused("2026-12-31", "2027-01-01", self.next_month(ONLY_DECEMBER_2026), "2026-12-01", "2026-12-31")
-        self.allowed("2026-12-02", "2026-11-01")
-        self.refused("2026-12-03", "2026-11-30", ONLY_DECEMBER_2026, "2026-12-01", "2026-12-31")
+        self.allowed("2026-12-05", "2026-11-01")
+        self.refused("2026-12-06", "2026-11-30", ONLY_DECEMBER_2026, "2026-12-01", "2026-12-31")
 
     def test_29_february_in_a_leap_year(self):
         self.allowed("2028-03-01", "2028-02-29")
-        self.allowed("2028-03-02", "2028-02-01")
-        self.refused("2028-03-03", "2028-02-29", ONLY_MARCH_2028, "2028-03-01", "2028-03-31")
+        self.allowed("2028-03-05", "2028-02-01")
+        self.allowed("2028-03-05", "2028-02-29")
+        self.refused("2028-03-06", "2028-02-29", ONLY_MARCH_2028, "2028-03-01", "2028-03-31")
         self.allowed("2028-02-29", "2028-02-29")
         self.refused("2028-02-29", "2028-03-01", self.next_month(ONLY_FEBRUARY_2028), "2028-02-01", "2028-02-29")
 
@@ -695,7 +862,8 @@ class _EndpointCases:
         self.refused("2026-10-15", "2026-09-30", ONLY_OCTOBER_2026, "2026-10-01", "2026-10-31", **own)
         self.refused("2026-10-15", "2026-11-02", self.next_month(ONLY_OCTOBER_2026), "2026-10-01", "2026-10-31", **own)
         self.allowed("2026-10-15", "2026-10-09", **own)
-        self.allowed("2026-10-02", "2026-09-30", **own)
+        self.allowed("2026-10-05", "2026-09-30", **own)
+        self.refused("2026-10-06", "2026-09-30", ONLY_OCTOBER_2026, "2026-10-01", "2026-10-31", **own)
 
     # -- the order of the refusals --
 
@@ -771,7 +939,9 @@ class LeaveWindowTests(_EndpointCases, _Base):
             ("2026-10-15", "2026-10-20", "2026-10-22"),
             ("2026-10-15", "2026-10-01", "2026-10-31"),
             ("2026-10-02", "2026-09-29", "2026-10-02"),  # last month's grace days
+            ("2026-10-05", "2026-09-28", "2026-10-05"),  # the last grace day
             ("2026-01-02", "2025-12-30", "2026-01-02"),
+            ("2026-01-05", "2025-12-30", "2026-01-05"),
         ):
             r = self.range(today, start, end)
             self.assertEqual(r.status_code, 201, f"{today} {start}..{end}: {r.content!r}")
@@ -780,7 +950,7 @@ class LeaveWindowTests(_EndpointCases, _Base):
     def test_a_range_straddling_the_month_end_is_refused(self):
         for today, start, end, message in (
             ("2026-10-15", "2026-10-30", "2026-11-02", ONLY_OCTOBER_2026),  # ends next month
-            ("2026-10-03", "2026-09-30", "2026-10-02", ONLY_OCTOBER_2026),  # starts last month after the grace
+            ("2026-10-06", "2026-09-30", "2026-10-02", ONLY_OCTOBER_2026),  # starts last month after the grace
             ("2026-10-15", "2026-09-01", "2026-11-30", ONLY_OCTOBER_2026),
             ("2026-10-15", "2026-11-01", "2026-11-03", ONLY_OCTOBER_2026),
             ("2026-10-02", "2026-08-30", "2026-09-02", GRACE_OCTOBER_2026),
@@ -812,12 +982,12 @@ class LeaveWindowTests(_EndpointCases, _Base):
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual(float(LeaveRequest.objects.get().total_days), 0.5)
         self.clear()
-        self.assertEqual(self.range("2026-10-02", "2026-09-30", "2026-09-30", **half).status_code, 201)  # grace
+        self.assertEqual(self.range("2026-10-05", "2026-09-30", "2026-09-30", **half).status_code, 201)  # grace
         self.clear()
         for today, day, message in (
             ("2026-10-15", "2026-09-30", ONLY_OCTOBER_2026),
             ("2026-10-15", "2026-11-01", ONLY_OCTOBER_2026),
-            ("2026-10-03", "2026-09-30", ONLY_OCTOBER_2026),
+            ("2026-10-06", "2026-09-30", ONLY_OCTOBER_2026),
         ):
             r = self.range(today, day, day, isHalfDay=True, halfDaySlot="afternoon")
             self.assertEqual((r.status_code, r.json()["error"]), (400, message), f"{today} {day}")
@@ -1191,10 +1361,10 @@ class CasualLeaveWindowTests(_EndpointCases, _Base):
         production = _employee("RW3", employment_type="production")
         return production, _bearer({"role": "employee", "employeeId": production.id})
 
-    def test_on_the_1st_and_2nd_this_months_casual_leave_does_not_use_up_last_months(self):
+    def test_on_the_grace_days_this_months_casual_leave_does_not_use_up_last_months(self):
         # one per calendar month OF THE REQUESTED DATE
         self.use("2026-10-01")
-        with clock("2026-10-02"):
+        with clock("2026-10-05"):
             last_month = self.post("2026-09-30")
             this_month = self.post("2026-10-20")
         self.assertEqual(last_month.status_code, 201, last_month.content)
@@ -1202,7 +1372,7 @@ class CasualLeaveWindowTests(_EndpointCases, _Base):
         self.assertIn("already used this month", this_month.json()["error"])
 
     def test_after_the_grace_last_month_is_closed_even_if_unused(self):
-        self.refused("2026-10-03", "2026-09-30", ONLY_OCTOBER_2026, "2026-10-01", "2026-10-31")
+        self.refused("2026-10-06", "2026-09-30", ONLY_OCTOBER_2026, "2026-10-01", "2026-10-31")
 
     def test_the_eligibility_rules_still_answer_first(self):
         production, auth = self.production_employee()
@@ -1236,12 +1406,12 @@ class CasualLeaveWindowTests(_EndpointCases, _Base):
             set(body),
         )
         self.assertEqual((body["yearlyEntitlement"], body["usedThisYear"], body["remainingThisYear"]), (12, 0, 12))
-        # the grace days: last month first, then this month
-        for today in ("2026-10-01", "2026-10-02"):
+        # the grace days (the 1st to the 5th): last month first, then this month
+        for today in ("2026-10-01", "2026-10-02", "2026-10-05"):
             self.assertEqual(
                 months(today)["months"], [entry("2026-09", "September 2026"), entry("2026-10", "October 2026")]
             )
-        self.assertEqual(months("2026-10-03")["months"], [entry("2026-10", "October 2026")])
+        self.assertEqual(months("2026-10-06")["months"], [entry("2026-10", "October 2026")])
         # this month's is used: last month's is still free during the grace, this month's is not
         self.use("2026-10-01")
         self.assertEqual(
@@ -1256,16 +1426,17 @@ class CasualLeaveWindowTests(_EndpointCases, _Base):
             months("2026-10-02")["months"],
             [entry("2026-09", "September 2026", False, used), entry("2026-10", "October 2026")],
         )
-        self.assertEqual(months("2026-10-03")["months"], [entry("2026-10", "October 2026")])
+        self.assertEqual(months("2026-10-06")["months"], [entry("2026-10", "October 2026")])
         # a rejected request frees the month
         self.clear()
         self.use("2026-09-20", status="rejected")
         self.assertEqual(months("2026-10-01")["months"][0], entry("2026-09", "September 2026"))
         # January looks back to December of the year before
-        self.assertEqual(
-            months("2026-01-02")["months"], [entry("2025-12", "December 2025"), entry("2026-01", "January 2026")]
-        )
-        self.assertEqual(months("2026-01-03")["months"], [entry("2026-01", "January 2026")])
+        for today in ("2026-01-02", "2026-01-05"):
+            self.assertEqual(
+                months(today)["months"], [entry("2025-12", "December 2025"), entry("2026-01", "January 2026")]
+            )
+        self.assertEqual(months("2026-01-06")["months"], [entry("2026-01", "January 2026")])
         # HR can read an employee's list too
         self.assertEqual(
             months("2026-10-02", who=self.hr, query=f"?employeeId={self.emp.id}")["months"],

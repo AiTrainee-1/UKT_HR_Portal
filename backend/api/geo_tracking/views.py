@@ -4,7 +4,9 @@
   POST /api/tracking/consent               employee: the employee accepted the notice
   POST /api/tracking/batch                 employee: upload points + events (see ingest.py)
   GET  /api/tracking/my-journeys           employee: own tracks (the HR list shape)
-  GET  /api/tracking/journeys/<id>         employee: own track | HR: any track of their branch scope (audit-logged)
+  GET  /api/tracking/journeys/<id>         employee: own track | Department Head: a team member's track, the people whose
+                                           On-Duty requests their Approvals list (audit-logged) | HR: any track of their
+                                           branch scope (audit-logged)
 
 Employee routes answer an HR token 403 (and the HR-only routes in hr_views.py answer an employee token 403).
 """
@@ -22,6 +24,7 @@ from ..audit_utils import log_action
 from ..auth import get_token_employee_id, is_hr, require_auth
 from ..branch_scope import scope_to_branch
 from ..clock import FACTORY_TZ
+from ..hod_scope import head_sees_requests_of
 from ..models import (
     DutyTrack,
     DutyTrackEvent,
@@ -331,27 +334,37 @@ def journey_payload(track: DutyTrack, now: datetime, s: GeoTrackingSettings) -> 
 @api_view(["GET"])
 @require_auth
 def journey_detail(request: Request, pk: int) -> Response:
-    """GET /api/tracking/journeys/<id>. An employee reads their own tracks only; HR reads any track in their branch scope,
-    and every HR view is audit-logged (module geo_tracking)."""
+    """GET /api/tracking/journeys/<id>. An employee reads their own tracks; HR reads any track in their branch scope; and
+    (owner decision 2026-11-02) an ACTIVE Department Head reads the tracks of the team members whose On-Duty requests
+    their Approvals screens list: hod_scope.head_sees_requests_of with the can_approve_on_duty switch, i.e. exactly the
+    people /manager/pending-requests and /manager/requests?category=on_duty show them, never more. Anyone else gets the
+    same 404 as a journey that does not exist. Every HR view and every Department Head view is audit-logged (module
+    geo_tracking); an employee reading their own is not."""
     qs = DutyTrack.objects.select_related("employee__department", "branch", "session")
+    as_head = False
     if is_hr(request):
         track = scope_to_branch(qs, request).filter(pk=pk).first()
     else:
         emp_id = get_token_employee_id(request)
         if not emp_id:
             return _error("Employee authentication required", 403)
-        track = qs.filter(pk=pk, employee_id=emp_id).first()
+        track = qs.filter(pk=pk).first()
+        if track is not None and track.employee_id != emp_id:
+            as_head = head_sees_requests_of(emp_id, track.employee_id, "can_approve_on_duty")
+            if not as_head:
+                track = None
     if track is None:
         return _error("Journey not found", 404)
     s = geo_settings.get()
     body = journey_payload(track, serializers.now_utc(), s)
-    if is_hr(request):
+    if is_hr(request) or as_head:
+        who = "Department Head viewed" if as_head else "Viewed"
         log_action(
             request,
             "view",
             "geo_tracking",
             record_id=track.pk,
-            description=f"Viewed the journey of {track.employee.first_name} {track.employee.last_name} "
+            description=f"{who} the journey of {track.employee.first_name} {track.employee.last_name} "
             f"({track.employee.employee_code}) started {track.started_at.astimezone(FACTORY_TZ):%d-%b-%Y %H:%M}",
         )
     return Response(body)

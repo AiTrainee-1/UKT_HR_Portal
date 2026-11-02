@@ -1,25 +1,28 @@
 """Casual Leave reports: the CL register (every request, reviewer, turnaround, attendance outcome) and the
 eligibility / yearly-usage board.
 
-Casual Leave is its own paid-leave system (``CasualLeaveRequest``): staff only, one per calendar month
-(a pending or approved request uses the slot, a rejected one does not), eligible after 6 completed months of
-service, 12 per year (a display entitlement -- it is a constant in the app, not a LeaveBalance row). Deciding a
-request writes the day's attendance record (approved = paid present, rejected = marked leave), which this
-report checks against but never changes.
+Casual Leave is its own paid-leave system (``CasualLeaveRequest``): staff only, eligible after 6 completed months of
+service. From the cut-over (``PayrollSettings.cl_balance_since``, 2026-11-02) it is a yearly balance of 12 days (a half
+day counts 0.5; approved + pending use it, a rejected one does not; it lapses on 31 December): ``api/cl_balance.py``.
+Months wholly before the cut-over keep the older rule, one per calendar month. Deciding a request writes the day's
+attendance record (approved = paid present, rejected = marked leave), which this report checks against but never
+changes.
 """
 
 from __future__ import annotations
 
+import calendar
 from collections import defaultdict
 from datetime import date
 
+from api import cl_balance
 from api.models import AttendanceDayRecord, CasualLeaveRequest
 
 from ..common import emp_cells
 from ..filters import date_range, period, scope, select
 from ..formatting import MONTH_ABBR, fmt_dt
 from ..registry import register
-from ..types import BADGE, DATE, DATETIME, HOURS, INTEGER, TEXT, ColumnSpec, ReportResult, ReportSpec
+from ..types import BADGE, DATE, DATETIME, HOURS, INTEGER, NUMBER, TEXT, ColumnSpec, ReportResult, ReportSpec
 from . import requests_leave_common as C
 
 CATEGORY = "leave"
@@ -169,6 +172,7 @@ _ELIGIBILITY_LABELS = {
     "eligible": "Eligible",
     "not_eligible_service": "Not yet eligible",
     "used_this_month": "Used this month",
+    "no_balance": "No Casual Leave left",
     "no_join_date": "No join date",
 }
 
@@ -179,9 +183,10 @@ _ELIGIBILITY_COLUMNS = (
     ColumnSpec("eligibleFrom", "Eligible from", DATE, 1.3),
     ColumnSpec("eligible", "Eligibility", BADGE, 1.3),
     ColumnSpec("reason", "Reason", TEXT, 2.3),
-    ColumnSpec("approvedThisYear", "Approved (year)", INTEGER, 0.9, total="sum"),
-    ColumnSpec("pendingThisYear", "Pending (year)", INTEGER, 0.9, total="sum"),
-    ColumnSpec("remainingThisYear", "Remaining (year)", INTEGER, 0.9, total="sum"),
+    # days in a yearly-balance month (a half day is 0.5); requests (each one day) in an earlier month
+    ColumnSpec("approvedThisYear", "Approved (year)", NUMBER, 0.9, total="sum"),
+    ColumnSpec("pendingThisYear", "Pending (year)", NUMBER, 0.9, total="sum"),
+    ColumnSpec("remainingThisYear", "Remaining (year)", NUMBER, 0.9, total="sum"),
     ColumnSpec("monthsUsed", "Months used", TEXT, 1.6),
 )
 
@@ -192,6 +197,11 @@ def _run_cl_eligibility(ctx) -> ReportResult:
     yr, month = ctx.period
     check_date = date(yr, month, 15)  # the same representative day the HR eligibility board uses
     employees = list(ctx.employees().filter(employment_type="staff"))
+    # As on the HR board: a month with any day on/after the cut-over follows the yearly balance, an earlier month the old
+    # one-per-month rule.
+    cut_over = cl_balance.since()
+    yearly = cl_balance.counts(date(yr, month, calendar.monthrange(yr, month)[1]), cut_over)
+    balances = cl_balance.balances([e.id for e in employees], yr, cut_over) if yearly else {}
 
     usage: dict[int, dict] = defaultdict(lambda: {"approved": 0, "pending": 0, "months": {}})
     for eid, d, st in CasualLeaveRequest.objects.filter(
@@ -217,7 +227,12 @@ def _run_cl_eligibility(ctx) -> ReportResult:
             key, reason = "no_join_date", "Join date not set or not readable"
         elif months < ELIGIBILITY_MONTHS:
             key, reason = "not_eligible_service", f"{months}/{ELIGIBILITY_MONTHS} months of service"
-        elif used_now:
+        elif yearly and balances[emp.id]["remaining"] <= 0:
+            key, reason = (
+                "no_balance",
+                f"No Casual Leave left in {yr} (all {cl_balance.ENTITLEMENT} days used or waiting)",
+            )
+        elif not yearly and used_now:
             key, reason = "used_this_month", "Casual Leave already used this month (limit: 1 per month)"
         else:
             key, reason = "eligible", None
@@ -234,9 +249,19 @@ def _run_cl_eligibility(ctx) -> ReportResult:
                 "eligibleFrom": C.add_months(joined, ELIGIBILITY_MONTHS).isoformat() if joined else None,
                 "eligible": _ELIGIBILITY_LABELS[key],
                 "reason": reason,
-                "approvedThisYear": u["approved"],
-                "pendingThisYear": u["pending"],
-                "remainingThisYear": max(0, CL_YEARLY_ENTITLEMENT - u["approved"]),
+                **(
+                    {
+                        "approvedThisYear": balances[emp.id]["used"],
+                        "pendingThisYear": balances[emp.id]["pending"],
+                        "remainingThisYear": balances[emp.id]["remaining"],
+                    }
+                    if yearly
+                    else {
+                        "approvedThisYear": u["approved"],
+                        "pendingThisYear": u["pending"],
+                        "remainingThisYear": max(0, CL_YEARLY_ENTITLEMENT - u["approved"]),
+                    }
+                ),
                 "monthsUsed": used_text or None,
                 "_key": key,
             }
@@ -249,6 +274,7 @@ def _run_cl_eligibility(ctx) -> ReportResult:
         {"label": "Eligible", "value": count["eligible"], "format": "integer"},
         {"label": "Not yet eligible", "value": count["not_eligible_service"], "format": "integer"},
         {"label": "Used this month", "value": count["used_this_month"], "format": "integer"},
+        {"label": "No Casual Leave left", "value": count["no_balance"], "format": "integer"},
         {"label": "No join date", "value": count["no_join_date"], "format": "integer"},
         {
             "label": f"Approved casual leave in {yr}",
@@ -261,15 +287,28 @@ def _run_cl_eligibility(ctx) -> ReportResult:
             "format": "integer",
         },
     ]
-    notes = [
-        f"Eligibility is judged as of the 15th of the selected month (as on the HR eligibility board): staff only, "
-        f"at least {ELIGIBILITY_MONTHS} completed months of service, and no pending or approved casual leave in "
-        "that month (a rejected request does not use the monthly slot). Production employees are not covered "
-        "because casual leave is a staff benefit.",
-        f"The yearly entitlement is {CL_YEARLY_ENTITLEMENT} days and is a constant in the app; remaining = "
-        f"{CL_YEARLY_ENTITLEMENT} - approved requests in {yr}. Join dates are read in any of the formats the "
-        "employee record allows (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY).",
-    ]
+    if yearly:
+        notes = [
+            f"Eligibility is judged as of the 15th of the selected month (as on the HR eligibility board): staff only, "
+            f"at least {ELIGIBILITY_MONTHS} completed months of service, and Casual Leave left in {yr}. Production "
+            "employees are not covered because casual leave is a staff benefit.",
+            f"Casual Leave is a yearly balance of {cl_balance.ENTITLEMENT} days from {cut_over:%d %b %Y} (everyone "
+            f"started fresh then): remaining = {cl_balance.ENTITLEMENT} - approved - pending days dated in {yr} on or "
+            "after that day (a half day counts 0.5, a rejected request frees its days, a Casual Leave HR proposed "
+            "through an attendance edit holds its days while it waits). Unused days lapse on 31 December. Join dates "
+            "are read in any of the formats the employee record allows (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY).",
+        ]
+    else:
+        notes = [
+            f"Eligibility is judged as of the 15th of the selected month (as on the HR eligibility board): staff only, "
+            f"at least {ELIGIBILITY_MONTHS} completed months of service, and no pending or approved casual leave in "
+            "that month (a rejected request does not use the monthly slot; this month is before the yearly balance "
+            f"started on {cut_over:%d %b %Y}). Production employees are not covered because casual leave is a staff "
+            "benefit.",
+            f"The yearly entitlement is {CL_YEARLY_ENTITLEMENT} days and is a constant in the app; remaining = "
+            f"{CL_YEARLY_ENTITLEMENT} - approved requests in {yr}. Join dates are read in any of the formats the "
+            "employee record allows (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY).",
+        ]
     return ReportResult(rows=rows, summary=summary, notes=notes)
 
 
@@ -277,7 +316,7 @@ register(
     ReportSpec(
         id="casual-leave-eligibility-usage",
         title="Casual Leave Eligibility & Usage",
-        description="Staff service length, casual leave eligibility, months already used and the yearly entitlement left.",
+        description="Staff service length, casual leave eligibility, months already used and the yearly balance left.",
         category=CATEGORY,
         icon="CalendarCheck",
         tags=("casual leave", "eligibility", "entitlement"),

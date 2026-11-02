@@ -12,7 +12,7 @@ from django.utils import timezone
 
 from .geo_attendance_views import _on_duty_session_dict
 from .jwt_utils import sign_token
-from .mobile_requests_views import employee_status, month_bounds
+from .mobile_requests_views import employee_status, month_bounds, parse_month
 from .models import Branch, DutyTrack, Employee, HRUser, OnDutyPunchVerification, OnDutySession
 
 UTC = dt_timezone.utc
@@ -177,6 +177,80 @@ class MyOnDutySessionsTests(TestCase):
     def test_month_bounds_wrap_the_year(self):
         start, end = month_bounds(date(2026, 12, 15))
         self.assertEqual((start.year, start.month, end.year, end.month), (2026, 12, 2027, 1))
+
+    # ── ?month=YYYY-MM (the app's month switcher, 2026-11-02) ───────────────
+
+    def test_month_filter_lists_and_counts_only_that_month(self):
+        sep = datetime(2026, 9, 10, 6, 0, tzinfo=UTC)
+        oct_ = datetime(2026, 10, 5, 6, 0, tzinfo=UTC)
+        waiting = self.session(status=OnDutySession.STATUS_PENDING_HR, created=sep)
+        done = self.session(status=OnDutySession.STATUS_COMPLETED, created=sep)
+        refused = self.session(status=OnDutySession.STATUS_REJECTED, created=sep)
+        self.session(status=OnDutySession.STATUS_PENDING_HOD, created=oct_)
+        self.session(self.other, status=OnDutySession.STATUS_ACTIVE, created=sep)
+        body = self.get(month="2026-09").json()
+        self.assertEqual([i["id"] for i in body["items"]], [refused.id, done.id, waiting.id])
+        self.assertEqual(body["total"], 3)
+        self.assertFalse(body["hasMore"])
+        # every request of the month, whatever its status, is the month count
+        self.assertEqual(body["counts"], {"waiting": 1, "approved": 1, "rejected": 1, "month": 3})
+        self.assertEqual(body["month"], "2026-09")
+
+    def test_month_filter_reads_the_day_in_india_time(self):
+        late_sep = self.session(created=datetime(2026, 9, 30, 18, 0, tzinfo=UTC))  # 23:30 IST on 30 Sep
+        early_oct = self.session(created=datetime(2026, 9, 30, 19, 0, tzinfo=UTC))  # 00:30 IST on 1 Oct
+        self.assertEqual([i["id"] for i in self.get(month="2026-09").json()["items"]], [late_sep.id])
+        self.assertEqual([i["id"] for i in self.get(month="2026-10").json()["items"]], [early_oct.id])
+
+    def test_month_filter_wraps_the_year(self):
+        dec = self.session(created=datetime(2025, 12, 31, 12, 0, tzinfo=UTC))
+        jan = self.session(created=datetime(2026, 1, 1, 6, 0, tzinfo=UTC))
+        self.assertEqual([i["id"] for i in self.get(month="2025-12").json()["items"]], [dec.id])
+        self.assertEqual([i["id"] for i in self.get(month="2026-01").json()["items"]], [jan.id])
+
+    def test_month_filter_pages_within_the_month(self):
+        ids = [self.session(created=datetime(2026, 8, d, 6, 0, tzinfo=UTC)).id for d in (1, 2, 3)]
+        self.session(created=datetime(2026, 9, 1, 6, 0, tzinfo=UTC))
+        first = self.get(month="2026-08", pageSize=2).json()
+        self.assertEqual([i["id"] for i in first["items"]], [ids[2], ids[1]])
+        self.assertTrue(first["hasMore"])
+        second = self.get(month="2026-08", pageSize=2, page=2).json()
+        self.assertEqual([i["id"] for i in second["items"]], [ids[0]])
+        self.assertFalse(second["hasMore"])
+        self.assertEqual(second["total"], 3)
+
+    def test_an_empty_month_is_an_empty_list(self):
+        self.session(created=datetime(2026, 10, 5, 6, 0, tzinfo=UTC))
+        body = self.get(month="2026-03").json()
+        self.assertEqual(body["items"], [])
+        self.assertEqual(body["total"], 0)
+        self.assertEqual(body["counts"], {"waiting": 0, "approved": 0, "rejected": 0, "month": 0})
+
+    def test_without_the_month_param_the_reply_is_unchanged(self):
+        self.session(created=datetime(2026, 9, 10, 6, 0, tzinfo=UTC))
+        body = self.get().json()
+        self.assertNotIn("month", body)
+        self.assertEqual(body["total"], 1)
+        self.assertEqual(self.get(month="").json()["total"], 1)
+
+    def test_a_bad_month_is_a_400(self):
+        for bad in ("2026-13", "2026-00", "2026-9", "09-2026", "abc", "2026-09-01"):
+            self.assertEqual(self.get(month=bad).status_code, 400, bad)
+
+    def test_parse_month(self):
+        self.assertEqual(parse_month("2026-09"), date(2026, 9, 1))
+        self.assertEqual(parse_month(" 2026-12 "), date(2026, 12, 1))
+        for bad in ("2026-13", "1899-05", "2026/09", ""):
+            with self.assertRaises(ValueError):
+                parse_month(bad)
+
+    def test_month_filter_query_count_does_not_grow_with_rows(self):
+        for d in range(1, 6):
+            s = self.session(created=datetime(2026, 9, d, 6, 0, tzinfo=UTC))
+            self.punch(s, 1, "09:00")
+        headers = employee_headers(self.emp)
+        with self.assertNumQueries(4):
+            self.client.get(URL, {"month": "2026-09"}, **headers)
 
     # ── paging ───────────────────────────────────────────────────────────────
 

@@ -4,14 +4,15 @@
 // (frontend/src/lib/request-window.ts), and all four are tested against the same vectors, so change them together.
 //
 //   * An employee may request dates in the CURRENT calendar month only: from the 1st to the last day of this month.
-//   * Grace: on the first GRACE_DAYS (2) days of a month, the PREVIOUS month is still open as well, so on the 1st and the
-//     2nd the window starts on the 1st of last month. From the 3rd it starts on the 1st of this month.
+//   * Grace: on the first GRACE_DAYS (5) days of a month, the PREVIOUS month is still open as well, so from the 1st to the
+//     5th the window starts on the 1st of last month. From the 6th it starts on the 1st of this month. (It was 2 days
+//     until 2026-11-02, when the owner extended it to the 5th.)
 //   * Missing Punch also cannot be in the future (opts.noFuture): a punch cannot be missed tomorrow.
 //
 // Pure TypeScript, no imports. "Today" is passed in (`now`) and must be read when the form is used, never once at start-up.
 // The server is the authority (it uses India time); a device with a wrong clock only gets the wrong hint on screen.
 
-export const GRACE_DAYS = 2;
+export const GRACE_DAYS = 5;
 
 export type RequestWindow = {
   /** First selectable day, YYYY-MM-DD. */

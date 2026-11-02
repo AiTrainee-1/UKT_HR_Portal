@@ -163,6 +163,20 @@ def manager_may_act_on(manager_employee_id: int, emp) -> bool:
     return m is not None and m.employee_id == manager_employee_id
 
 
+def head_sees_requests_of(viewer_employee_id: int, employee_id: int, permission_flag: str) -> bool:
+    """Whether the signed-in employee `viewer_employee_id` is an ACTIVE Department Head whose Approvals screens list
+    `employee_id`'s requests of the kind behind `permission_flag` (a DepartmentManager can_approve_* field): the same
+    population GET /manager/pending-requests and GET /manager/requests use - managed_employee_ids (the one-HOD-per-employee
+    rule, with HR's carve-outs), never the head themselves - and only while that per-person switch is on. Used to let a
+    head open what belongs to such a request (e.g. the route of an On-Duty day) without widening who they can see."""
+    if not viewer_employee_id or not employee_id or viewer_employee_id == employee_id:
+        return False
+    m = DepartmentManager.objects.filter(employee_id=viewer_employee_id, is_active=True).first()
+    if m is None or not getattr(m, permission_flag, False):
+        return False
+    return employee_id in managed_employee_ids(m)
+
+
 # ── Assignment-time conflict detection ──────────────────────────────────────
 
 

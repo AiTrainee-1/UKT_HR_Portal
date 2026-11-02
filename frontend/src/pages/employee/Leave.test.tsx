@@ -111,8 +111,8 @@ describe("employee Leave page request window", () => {
     expect(byTestId<HTMLInputElement>("input-end-date")!.min).toBe("2026-10-01");
   });
 
-  it("keeps last month open on the 1st and 2nd", async () => {
-    setToday(2026, 10, 2);
+  it("keeps last month open from the 1st to the 5th", async () => {
+    setToday(2026, 10, 5);
     await render();
     await openDialog();
 
@@ -188,13 +188,13 @@ describe("employee Leave page request window", () => {
   });
 
   it("reads the clock again at submit: a form left open past the grace period rejects last month", async () => {
-    setToday(2026, 10, 2, 23, 59);
+    setToday(2026, 10, 5, 23, 59);
     await render();
     await openDialog();
     await fill("2026-09-30", "2026-09-30");
 
     // midnight passes while the dialog sits open; nothing re-renders the page
-    vi.setSystemTime(new Date(2026, 9, 3, 0, 0));
+    vi.setSystemTime(new Date(2026, 9, 6, 0, 0));
     await submit();
 
     expect(mutate).not.toHaveBeenCalled();
@@ -218,10 +218,10 @@ describe("employee Leave page request window", () => {
     expect([start.min, start.max, end.max]).toEqual(["2026-10-01", "2026-11-30", "2026-11-30"]);
     expect(byTestId("text-date-window-hint")!.textContent).toBe("1 October 2026 to 30 November 2026");
 
-    // the 3rd: the grace is over, so the window starts on 1 November
-    vi.setSystemTime(new Date(2026, 10, 3, 0, 0));
-    await type("input-start-date", "2026-11-04");
-    expect([start.min, start.max, end.min, end.max]).toEqual(["2026-11-01", "2026-11-30", "2026-11-04", "2026-11-30"]);
+    // the 6th: the grace is over, so the window starts on 1 November
+    vi.setSystemTime(new Date(2026, 10, 6, 0, 0));
+    await type("input-start-date", "2026-11-07");
+    expect([start.min, start.max, end.min, end.max]).toEqual(["2026-11-01", "2026-11-30", "2026-11-07", "2026-11-30"]);
     expect(byTestId("text-date-window-hint")!.textContent).toBe("Any day in November 2026");
     // it is still the same input elements: the page was never remounted
     expect(byTestId("input-start-date")).toBe(start);

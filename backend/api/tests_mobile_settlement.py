@@ -51,7 +51,14 @@ class _Base(TestCase):
 
     def apply(self, body: dict, day: date = date(2026, 10, 25), auth=None):
         with on(day):
-            return self.client.post("/api/my/advances", body, content_type="application/json", **(auth or self.me))
+            r = self.client.post("/api/my/advances", body, content_type="application/json", **(auth or self.me))
+        if r.status_code == 201:
+            # created_at comes from the real clock; stamp the pretend day so "applied this month" rules see the same
+            # month the test is pretending (otherwise the tests break once the real calendar moves past October 2026).
+            Advance.objects.filter(pk=r.json()["id"]).update(
+                created_at=datetime(day.year, day.month, day.day, 6, 30, tzinfo=dt_timezone.utc)
+            )
+        return r
 
     def general(self, amount=10000, day: date = date(2026, 10, 25), auth=None):
         return self.apply({"advanceType": "general", "amount": amount, "purpose": "School fees"}, day, auth)

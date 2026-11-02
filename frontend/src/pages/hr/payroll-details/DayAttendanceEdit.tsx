@@ -30,49 +30,33 @@ import {
   useAttendanceEditContext,
   useSubmitAttendanceEdit,
   type AttendanceEditContext,
-  type AttendanceEditType,
+  type AttendanceEditGroup,
   type DayPunch,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import type { Accent } from "./accent";
+import {
+  buildProposal,
+  clBalanceDetail,
+  clBalanceText,
+  clUseText,
+  editGroups,
+  findTile,
+  groupLook,
+  groupNote,
+  groupTiles,
+  isClassicGroup,
+  pickOf,
+  sendBlocker,
+  serverSentence,
+  showsPunches,
+  tileTitle,
+  type EditPick,
+  type EditTile,
+} from "./edit-options";
+import { HrEditStageLine } from "./HrEditMark";
 
 type Icon = ComponentType<{ size?: number; className?: string }>;
-
-// ── the three groups of attendance types ────────────────────────────────────────────────────────────────────────────
-
-const GROUPS: {
-  key: AttendanceEditType["group"];
-  title: string;
-  hint: string;
-  tile: string; // the tile at rest
-  on: string; // the chosen tile
-  chip: string; // the shift value on it
-}[] = [
-  {
-    key: "Attendance",
-    title: "Worked",
-    hint: "How much of the day was worked",
-    tile: "border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/40",
-    on: "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200",
-    chip: "bg-indigo-100 text-indigo-800",
-  },
-  {
-    key: "Compensation",
-    title: "Compensation",
-    hint: "A paid day given in return for extra work",
-    tile: "border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/40",
-    on: "border-violet-500 bg-violet-50 ring-2 ring-violet-200",
-    chip: "bg-violet-100 text-violet-800",
-  },
-  {
-    key: "Other",
-    title: "Not worked",
-    hint: "Absent, on leave or a holiday",
-    tile: "border-slate-200 bg-white hover:border-slate-400 hover:bg-slate-50",
-    on: "border-slate-600 bg-slate-100 ring-2 ring-slate-300",
-    chip: "bg-slate-200 text-slate-700",
-  },
-];
 
 // ── where a punch came from ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -322,39 +306,119 @@ function RouteStep({
   );
 }
 
-function TypeTile({
-  t,
-  group,
+type Look = ReturnType<typeof groupLook>;
+
+/** One choice of the form: an attendance type, or a sub-choice of a newer option (a permission type, Mark / Unmark Late, a
+ *  Casual Leave portion). A tile the server says cannot be chosen for this day is greyed out and says why. */
+function OptionTile({
+  tile,
+  look,
   chosen,
   onChoose,
 }: {
-  t: AttendanceEditType;
-  group: (typeof GROUPS)[number];
+  tile: EditTile;
+  look: Look;
   chosen: boolean;
   onChoose: () => void;
 }) {
+  const off = !tile.available;
   return (
     <button
       type="button"
       aria-pressed={chosen}
-      data-testid={`pd-edit-type-${t.key}`}
+      data-testid={tile.testId}
+      data-available={off ? "false" : "true"}
       onClick={onChoose}
-      title={t.description}
+      disabled={off}
+      title={off ? (tile.reason ?? tile.item.unavailableReason ?? tile.description) : tile.description}
       className={cn(
         "relative flex min-h-[3.5rem] flex-col items-start justify-between gap-1.5 rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400",
-        chosen ? group.on : group.tile,
+        off ? "cursor-not-allowed border-dashed border-slate-200 bg-slate-50" : chosen ? look.on : look.tile,
       )}
     >
-      <span className="text-sm font-bold text-slate-900">{t.label}</span>
-      <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums", group.chip)}>
-        {t.shiftChoices.length ? "0.25 to 1.00 shift" : `${t.shifts} shift`}
-      </span>
+      <span className={cn("pr-4 text-sm font-bold", off ? "text-slate-400" : "text-slate-900")}>{tile.label}</span>
+      {tile.chip && (
+        <span
+          className={cn(
+            "rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
+            off ? "bg-slate-100 text-slate-400" : look.chip,
+          )}
+        >
+          {tile.chip}
+        </span>
+      )}
+      {tile.reason && (
+        <span className="text-[11px] leading-snug text-slate-500" data-testid={`${tile.testId}-reason`}>
+          {tile.reason}
+        </span>
+      )}
       {chosen && (
         <span className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-full bg-slate-900 text-white">
           <Check size={10} />
         </span>
       )}
     </button>
+  );
+}
+
+/** A group of the form: its title and short line (Casual Leave adds the employee's balance), then its tiles. Also used by
+ *  the Attendance Edit page for the newer options. */
+export function OptionGroup({
+  group,
+  pick,
+  clBalance,
+  wide,
+  onChoose,
+}: {
+  group: AttendanceEditGroup;
+  pick: EditPick | null;
+  clBalance: AttendanceEditContext["clBalance"];
+  /** The first three groups run across the whole form; the newer ones sit two to a row on a wide screen. */
+  wide: boolean;
+  onChoose: (tile: EditTile) => void;
+}) {
+  const look = groupLook(group);
+  const tiles = groupTiles(group);
+  const note = groupNote(group);
+  const balance = group.key === "casual_leave" ? clBalanceText(clBalance) : null;
+  const balanceDetail = group.key === "casual_leave" ? clBalanceDetail(clBalance) : null;
+  return (
+    <div role="group" aria-label={look.title} data-testid={`pd-edit-group-${group.key}`}>
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <h5 className="text-sm font-bold text-slate-800">{look.title}</h5>
+        <span className="text-xs text-slate-500" title={group.description}>
+          {look.hint}
+        </span>
+        {balance && (
+          <span
+            className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums", look.chip)}
+            title={balanceDetail ?? undefined}
+            data-testid="pd-edit-cl-balance"
+          >
+            {balance}
+          </span>
+        )}
+      </div>
+      {note && (
+        <p
+          className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600"
+          data-testid={`pd-edit-group-note-${group.key}`}
+        >
+          {note}
+        </p>
+      )}
+      <div className={cn("grid grid-cols-2 gap-2", wide ? "sm:grid-cols-3 xl:grid-cols-5" : "sm:grid-cols-3")}>
+        {tiles.map((t) => (
+          <OptionTile
+            key={t.id}
+            tile={t}
+            look={look}
+            chosen={!!pick && pick.itemKey === t.item.key && (pick.choice ?? null) === (t.choice?.value ?? null)}
+            onChoose={() => onChoose(t)}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -402,31 +466,39 @@ function ToggleMark({
  * What the Attendance this month card adds under a chosen day: every punch of that day with where it came from, who approves a
  * change (the employee's Department Head by name, or that there is none), and the Attendance Edit form inline. A change is only
  * proposed here: the Department Head approves it first, then HR, and the attendance record is written only after both (the
- * same pipeline as the Attendance page's edit page). Shows nothing for a login that has no access to Attendance.
+ * same pipeline as the Attendance page's edit page). The form draws the server's option catalogue: Worked / Compensation /
+ * Not worked as always, then Permission, Late, Casual Leave and On-Duty, each greyed out with the server's reason when it
+ * cannot be chosen for the day. Shows nothing for a login that has no access to Attendance.
  */
 export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: number; date: string; accent: Accent }) {
   const { toast } = useToast();
   const ctx = useAttendanceEditContext(employeeId, date);
   const submit = useSubmitAttendanceEdit();
   const [open, setOpen] = useState(false);
-  const [typeKey, setTypeKey] = useState<string | null>(null);
+  const [pick, setPick] = useState<EditPick | null>(null);
   const [shifts, setShifts] = useState("1.00");
   const [firstIn, setFirstIn] = useState("");
   const [lastOut, setLastOut] = useState("");
   const [late, setLate] = useState(false);
   const [earlyOut, setEarlyOut] = useState(false);
   const [note, setNote] = useState("");
+  const [destination, setDestination] = useState("");
+  // the server's own sentence when it refused the last try ("02 Nov 2026 is already marked Late.")
+  const [problem, setProblem] = useState<string | null>(null);
 
   const data = ctx.data;
-  const types = useMemo(() => data?.types ?? [], [data]);
-  const selected = types.find((t) => t.key === typeKey) ?? null;
+  const groups = useMemo(() => (data ? editGroups(data) : []), [data]);
+  const tile = useMemo(() => findTile(groups, pick), [groups, pick]);
+  const selected = tile?.item ?? null;
   const day = data?.day;
 
   // a different day starts with a closed, empty form
   useEffect(() => {
     setOpen(false);
-    setTypeKey(null);
+    setPick(null);
     setNote("");
+    setDestination("");
+    setProblem(null);
   }, [employeeId, date]);
   // the form starts from the day as it stands
   useEffect(() => {
@@ -452,40 +524,38 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
   const pending = data.requests.find((r) => r.status === "pending");
   const noHod = !data.hod;
   const reasonOk = note.trim().length >= 3;
-  const canSend = !!selected && reasonOk && !noHod && !data.future && !submit.isPending;
+  const blocker = sendBlocker({ noHod, future: data.future, tile, note });
+  const canSend = blocker === null && !submit.isPending;
+  const classic = groups.filter((g) => isClassicGroup(g.key));
+  const extra = groups.filter((g) => !isClassicGroup(g.key));
+  const clUse = selected?.group === "casual_leave" ? clUseText(data.clBalance, tile?.choice?.days) : null;
 
-  const choose = (t: AttendanceEditType) => {
-    setTypeKey(t.key);
-    setShifts(t.shifts);
+  const choose = (t: EditTile) => {
+    setPick(pickOf(t));
+    if (t.item.shifts) setShifts(t.item.shifts);
+    setProblem(null);
   };
 
   const send = async () => {
-    if (!selected) return;
+    if (!tile || blocker) return;
+    const what = tileTitle(tile);
     try {
-      await submit.mutateAsync({
-        employeeId,
-        date,
-        type: selected.key,
-        note: note.trim(),
-        shifts: selected.shiftChoices.length ? shifts : undefined,
-        firstPunch: selected.worked ? firstIn || null : null,
-        lastPunch: selected.worked ? lastOut || null : null,
-        isLate: selected.worked ? late : false,
-        isEarlyOut: selected.worked ? earlyOut : false,
-      });
+      await submit.mutateAsync(
+        buildProposal({ employeeId, date, tile, note, shifts, firstIn, lastOut, late, earlyOut, destination }),
+      );
       toast({
         title: "Sent for approval",
-        description: `${selected.label} for ${date} goes to ${data.hod?.name ?? "the Department Head"} first, then to HR. The attendance does not change until both approve.`,
+        description: `${what} for ${dateLong(date)} goes to ${data.hod?.name ?? "the Department Head"} first, then to HR. The attendance does not change until both approve.`,
       });
       setOpen(false);
-      setTypeKey(null);
+      setPick(null);
       setNote("");
+      setDestination("");
+      setProblem(null);
     } catch (e) {
-      toast({
-        title: "Could not send",
-        description: e instanceof Error ? e.message : undefined,
-        variant: "destructive",
-      });
+      const sentence = serverSentence(e);
+      setProblem(sentence);
+      toast({ title: "Could not send", description: sentence, variant: "destructive" });
     }
   };
 
@@ -557,31 +627,34 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
           </header>
 
           <div className="space-y-5 p-4">
-            {/* 1. what the day should be */}
-            {GROUPS.map((g) => {
-              const items = types.filter((t) => t.group === g.key);
-              if (items.length === 0) return null;
-              return (
-                <div key={g.key} role="group" aria-label={g.title}>
-                  <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
-                    <h5 className="text-sm font-bold text-slate-800">{g.title}</h5>
-                    <span className="text-xs text-slate-500">{g.hint}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-                    {items.map((t) => (
-                      <TypeTile key={t.key} t={t} group={g} chosen={typeKey === t.key} onChoose={() => choose(t)} />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
+            {/* 0. where the day's last HR edit stands */}
+            {data.hrEdit && <HrEditStageLine edit={data.hrEdit} />}
 
-            {/* 2. the details of the chosen type */}
-            {selected && (
+            {/* 1. what the day should be: the three groups it always had, then the newer options */}
+            {classic.map((g) => (
+              <OptionGroup key={g.key} group={g} pick={pick} clBalance={data.clBalance} wide onChoose={choose} />
+            ))}
+            {extra.length > 0 && (
+              <div className="grid gap-5 lg:grid-cols-2" data-testid="pd-edit-more-options">
+                {extra.map((g) => (
+                  <OptionGroup
+                    key={g.key}
+                    group={g}
+                    pick={pick}
+                    clBalance={data.clBalance}
+                    wide={false}
+                    onChoose={choose}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* 2. the details of the chosen option */}
+            {tile && selected && (
               <div className="space-y-4 rounded-xl bg-slate-50 p-4" data-testid="pd-day-edit-details">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-bold text-slate-900">{selected.label}</span>
-                  <span className="text-xs text-slate-500">{selected.description}</span>
+                  <span className="text-sm font-bold text-slate-900">{tileTitle(tile)}</span>
+                  <span className="text-xs text-slate-500">{tile.description}</span>
                 </div>
 
                 {selected.shiftChoices.length > 0 && (
@@ -612,7 +685,7 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
                   </div>
                 )}
 
-                {selected.worked && (
+                {showsPunches(selected) && (
                   <>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="block">
@@ -658,6 +731,36 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
                     </div>
                   </>
                 )}
+
+                {selected.group === "permission" && (
+                  <p className="text-xs leading-relaxed text-slate-600" data-testid="pd-edit-permission-note">
+                    Once approved it is an approved permission like any other: it uses {data.employee.name}&apos;s
+                    monthly permission allowance, and one beyond the allowance counts as an excess permission.
+                  </p>
+                )}
+
+                {clUse && (
+                  <p className="text-xs leading-relaxed text-slate-600" data-testid="pd-edit-cl-use">
+                    {clUse}
+                  </p>
+                )}
+
+                {selected.group === "on_duty" && (
+                  <label className="block">
+                    <span className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+                      <MapPin size={14} className="text-slate-400" /> Where was the employee?
+                      <span className="font-normal text-slate-400">(optional)</span>
+                    </span>
+                    <Input
+                      value={destination}
+                      maxLength={200}
+                      onChange={(e) => setDestination(e.target.value)}
+                      placeholder="e.g. Customer visit, Tiruppur"
+                      className="bg-white"
+                      data-testid="pd-edit-destination"
+                    />
+                  </label>
+                )}
               </div>
             )}
 
@@ -672,7 +775,10 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
               <Textarea
                 rows={2}
                 value={note}
-                onChange={(e) => setNote(e.target.value)}
+                onChange={(e) => {
+                  setNote(e.target.value);
+                  setProblem(null);
+                }}
                 placeholder="e.g. CCTV verified: the device missed the punch"
                 data-testid="pd-edit-reason"
               />
@@ -680,6 +786,15 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
           </div>
 
           <footer className="flex flex-wrap items-center gap-3 border-t border-slate-100 bg-slate-50/60 px-4 py-3">
+            {problem && (
+              <p
+                role="alert"
+                className="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800"
+                data-testid="pd-day-edit-error"
+              >
+                {problem}
+              </p>
+            )}
             <Button
               type="button"
               className={cn("gap-2", accent.solid)}
@@ -693,14 +808,9 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <p className="min-w-0 flex-1 text-xs text-slate-500" aria-live="polite">
-              {noHod
-                ? "Assign a Department Head to send this."
-                : !selected
-                  ? "Choose what the day should be."
-                  : !reasonOk
-                    ? "Write the reason to send it."
-                    : `Goes to ${data.hod?.name} first, then to HR. The payroll is not recalculated: generate it again once approved.`}
+            <p className="min-w-0 flex-1 text-xs text-slate-500" aria-live="polite" data-testid="pd-day-edit-hint">
+              {blocker ??
+                `Goes to ${data.hod?.name} first, then to HR. The payroll is not recalculated: generate it again once approved.`}
             </p>
           </footer>
         </section>

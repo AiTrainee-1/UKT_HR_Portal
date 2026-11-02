@@ -432,10 +432,12 @@ def _correction(r):
     before = r.previous_values or {}
     proposed = asked.get("typeLabel") or _cap(asked.get("status"))
     was = _cap(before.get("status")) or "-"
+    # A Permission / Casual Leave half-day edit (2026-11-02) leaves the shift count to the attendance engine: no figure then.
+    shifts = asked.get("shiftsEarned")
     details = [
         ("Date", str(r.date)),
         ("Was", f"{was} · {float(before.get('shiftsEarned') or 0):.2f} shift"),
-        ("Proposed", f"{proposed} · {float(asked.get('shiftsEarned') or 0):.2f} shift"),
+        ("Proposed", f"{proposed} · {float(shifts):.2f} shift" if shifts not in (None, "") else proposed),
     ]
     if asked.get("firstPunch") or asked.get("lastPunch"):
         details.append(("Times", f"{asked.get('firstPunch') or '-'} to {asked.get('lastPunch') or '-'}"))

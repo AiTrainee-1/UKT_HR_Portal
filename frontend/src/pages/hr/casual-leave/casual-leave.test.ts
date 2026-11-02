@@ -180,7 +180,13 @@ describe("the three groups", () => {
   });
 
   it("counts why people are held back", () => {
-    expect(countByReason(board)).toEqual({ not_staff: 2, no_join_date: 1, under_service: 2, used_this_month: 1 });
+    expect(countByReason(board)).toEqual({
+      not_staff: 2,
+      no_join_date: 1,
+      under_service: 2,
+      used_this_month: 1,
+      no_balance: 0,
+    });
   });
 
   it("the three always add up to everyone on the board", () => {

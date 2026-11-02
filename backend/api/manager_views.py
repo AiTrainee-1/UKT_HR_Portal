@@ -922,6 +922,12 @@ def manager_pending_requests(request: Request) -> Response:
         outpass_qs = OutpassRequest.objects.none()
     outpass_qs = outpass_qs.order_by("-created_at")
 
+    # Each On-Duty row also says which recorded route (DutyTrack) belongs to it, so the apps can offer "View route"
+    # (GET /tracking/journeys/<id> lets this head in for exactly these employees); null when nothing was recorded.
+    from .geo_tracking.serializers import journey_ids
+    on_duty_rows = mine("on_duty", on_duty_qs)
+    on_duty_journeys = journey_ids([s.pk for s in on_duty_rows])
+
     counts = _hod_pending_counts(m, emp_filter)
     return Response({
         "leaveRequests": [_leave_with_emp(r) for r in mine("leave", leave_qs)],
@@ -932,7 +938,10 @@ def manager_pending_requests(request: Request) -> Response:
         ],
         "casualLeaves": [_cl_dict(r, cfgs["casual_leave"]) for r in mine("casual_leave", casual_qs)],
         "holidayWorkClaims": claims_json(mine("holiday_work", holiday_qs)),
-        "onDutySessions": [_on_duty_session_dict(s, cfg=cfgs["on_duty"]) for s in mine("on_duty", on_duty_qs)],
+        "onDutySessions": [
+            {**_on_duty_session_dict(s, cfg=cfgs["on_duty"]), "journeyId": on_duty_journeys.get(s.pk)}
+            for s in on_duty_rows
+        ],
         "missingPunchRequests": [
             _missing_punch_dict(r, cfgs["missing_punch"]) for r in mine("missing_punch", missing_punch_qs)
         ],

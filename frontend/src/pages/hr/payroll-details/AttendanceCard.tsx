@@ -16,6 +16,8 @@ import { useLiveCalendar } from "./use-details";
 import { cn } from "@/lib/utils";
 import type { Accent } from "./accent";
 import { DayAttendanceEdit } from "./DayAttendanceEdit";
+import { HR_EDIT_TONE, hrEditOf, hrEditTone } from "./hr-edit";
+import { HrEditBadge, HrEditDetails, HrEditLegend } from "./HrEditMark";
 import { FilterSelect, SegmentedToggle, ToggleChip } from "./parts";
 import {
   CALENDAR_HEADERS,
@@ -318,6 +320,8 @@ export function AttendanceCard({
 
           {/* Days the employee used a compensation (only when the details endpoint sends the marker) */}
           <CompensationLegend counts={countMarks(days)} className="mb-3 print:hidden" />
+          {/* Days HR edited: the "!" and what its colours mean (only when there is one) */}
+          <HrEditLegend days={allDays} />
 
           {view === "calendar" ? (
             <div data-testid="pd-calendar">
@@ -359,7 +363,7 @@ export function AttendanceCard({
                           <div
                             key={cell.key}
                             className={cn(
-                              "min-w-0 border-l border-slate-200 p-1 sm:p-1.5",
+                              "relative min-w-0 border-l border-slate-200 p-1 sm:p-1.5",
                               col === 6 && "bg-orange-50/60",
                               cell.type === "blank" && "bg-slate-100/50",
                             )}
@@ -589,6 +593,7 @@ function CalendarDay({
   const punches = punchText(day);
   const compensation = compensationMark(day);
   const caption = captionOf(day, kind);
+  const edit = hrEditOf(day);
   const aria = [
     `${dateLong(cell.date)}: ${caption && kind !== "weekoff" && kind !== "holiday" ? caption : meta.label}`,
     kind === "holiday" ? (day.holidayName ?? "") : "",
@@ -601,91 +606,104 @@ function CalendarDay({
       .join(", "),
     marks.length > 0 ? marks.map((m) => MARK_META[m].label).join(", ") : "",
     flags.length > 0 ? `flagged: ${flags.map(issueLabel).join(", ")}` : "",
+    edit ? `edited by HR (${HR_EDIT_TONE[hrEditTone(edit.status)].word.toLowerCase()})` : "",
   ]
     .filter(Boolean)
     .join(". ");
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(cell.date)}
-      aria-pressed={selected}
-      aria-label={aria}
-      title={aria}
-      data-testid={`pd-day-${cell.date}`}
-      data-kind={kind}
-      data-fill={fill ?? undefined}
-      data-selected={selected ? "true" : "false"}
-      className={cn(
-        "group relative flex h-full w-full min-h-[3.25rem] flex-col overflow-hidden rounded-xl border p-1.5 text-left transition-shadow sm:min-h-[6rem] sm:p-2",
-        fill ? cn(MARK_META[fill].cell, "border-l-4", MARK_META[fill].bar) : cn(meta.cell, "border-l-4", meta.bar),
-        selected && cn("ring-2 ring-offset-1", accent.ring),
-        dimmed && "opacity-30",
-        "hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400",
-      )}
-    >
-      <span className="flex items-start justify-between gap-1">
-        <span className="text-xs font-black leading-none sm:text-sm">{label}</span>
-        <span
-          className="rounded bg-white/70 px-1 py-px text-[9px] font-bold leading-none opacity-90 max-[339px]:hidden"
-          aria-hidden="true"
-        >
-          {meta.short}
+    // the "!" of an HR edit is a button of its own, so it sits beside the day's button (never inside it), on the corner of
+    // the cell around both (that cell is `relative`)
+    <>
+      <button
+        type="button"
+        onClick={() => onSelect(cell.date)}
+        aria-pressed={selected}
+        aria-label={aria}
+        title={aria}
+        data-testid={`pd-day-${cell.date}`}
+        data-kind={kind}
+        data-fill={fill ?? undefined}
+        data-selected={selected ? "true" : "false"}
+        data-hr-edit={edit?.status}
+        className={cn(
+          "group relative flex h-full w-full min-h-[3.25rem] flex-col overflow-hidden rounded-xl border p-1.5 text-left transition-shadow sm:min-h-[6rem] sm:p-2",
+          fill ? cn(MARK_META[fill].cell, "border-l-4", MARK_META[fill].bar) : cn(meta.cell, "border-l-4", meta.bar),
+          selected && cn("ring-2 ring-offset-1", accent.ring),
+          dimmed && "opacity-30",
+          "hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400",
+        )}
+      >
+        <span className={cn("flex items-start justify-between gap-1", edit && "pr-2.5")}>
+          <span className="text-xs font-black leading-none sm:text-sm">{label}</span>
+          <span
+            className="rounded bg-white/70 px-1 py-px text-[9px] font-bold leading-none opacity-90 max-[339px]:hidden"
+            aria-hidden="true"
+          >
+            {meta.short}
+          </span>
         </span>
-      </span>
-      {caption && (
-        <span className="mt-1 hidden truncate text-[10px] font-semibold leading-tight sm:block">{caption}</span>
-      )}
-      {punches && (
-        <span className="mt-0.5 hidden text-[10px] leading-tight tabular-nums opacity-80 sm:block">{punches}</span>
-      )}
-      {day.shifts !== null && day.shifts !== 0 && (alwaysShifts || day.shifts !== 1) && (
-        <span className="hidden text-[10px] font-semibold leading-tight opacity-80 sm:block">
-          {trimNumber(day.shifts)} {day.shifts === 1 ? "shift" : "shifts"}
-        </span>
-      )}
-      <span className="mt-auto flex flex-wrap items-center gap-0.5 pt-1" data-testid={`pd-marks-${cell.date}`}>
-        {compensation && <CompensationSymbol day={day} decorative className="mr-0.5" />}
-        {lateIn && (
-          <span data-mark="late" title="Late In">
-            <span
-              className={cn(
-                "hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-4 sm:inline-block",
-                MARK_META.late.pill,
-              )}
-            >
-              Late In
-            </span>
-            <span className={cn("inline-block h-2 w-2 rounded-full sm:hidden", MARK_META.late.swatch)} />
+        {caption && (
+          <span className="mt-1 hidden truncate text-[10px] font-semibold leading-tight sm:block">{caption}</span>
+        )}
+        {punches && (
+          <span className="mt-0.5 hidden text-[10px] leading-tight tabular-nums opacity-80 sm:block">{punches}</span>
+        )}
+        {day.shifts !== null && day.shifts !== 0 && (alwaysShifts || day.shifts !== 1) && (
+          <span className="hidden text-[10px] font-semibold leading-tight opacity-80 sm:block">
+            {trimNumber(day.shifts)} {day.shifts === 1 ? "shift" : "shifts"}
           </span>
         )}
-        {earlyOut && (
-          <span data-mark="early_out" title="Early Out">
-            <span
-              className={cn(
-                "hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-4 sm:inline-block",
-                EARLY_OUT_PILL,
-              )}
-            >
-              Early Out
+        <span className="mt-auto flex flex-wrap items-center gap-0.5 pt-1" data-testid={`pd-marks-${cell.date}`}>
+          {compensation && <CompensationSymbol day={day} decorative className="mr-0.5" />}
+          {lateIn && (
+            <span data-mark="late" title="Late In">
+              <span
+                className={cn(
+                  "hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-4 sm:inline-block",
+                  MARK_META.late.pill,
+                )}
+              >
+                Late In
+              </span>
+              <span className={cn("inline-block h-2 w-2 rounded-full sm:hidden", MARK_META.late.swatch)} />
             </span>
-            <span className="inline-block h-2 w-2 rounded-full bg-fuchsia-600 sm:hidden" />
-          </span>
-        )}
-        {marks.map((mark) => (
-          <span key={mark} data-mark={mark} title={MARK_META[mark].label}>
-            <span
-              className={cn(
-                "hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-4 sm:inline-block",
-                MARK_META[mark].pill,
-              )}
-            >
-              {MARK_META[mark].short}
+          )}
+          {earlyOut && (
+            <span data-mark="early_out" title="Early Out">
+              <span
+                className={cn(
+                  "hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-4 sm:inline-block",
+                  EARLY_OUT_PILL,
+                )}
+              >
+                Early Out
+              </span>
+              <span className="inline-block h-2 w-2 rounded-full bg-fuchsia-600 sm:hidden" />
             </span>
-            <span className={cn("inline-block h-2 w-2 rounded-full sm:hidden", MARK_META[mark].swatch)} />
-          </span>
-        ))}
-      </span>
-    </button>
+          )}
+          {marks.map((mark) => (
+            <span key={mark} data-mark={mark} title={MARK_META[mark].label}>
+              <span
+                className={cn(
+                  "hidden whitespace-nowrap rounded px-1 text-[9px] font-bold leading-4 sm:inline-block",
+                  MARK_META[mark].pill,
+                )}
+              >
+                {MARK_META[mark].short}
+              </span>
+              <span className={cn("inline-block h-2 w-2 rounded-full sm:hidden", MARK_META[mark].swatch)} />
+            </span>
+          ))}
+        </span>
+      </button>
+      {edit && (
+        <HrEditBadge
+          edit={edit}
+          date={cell.date}
+          className={cn("absolute right-0 top-0 z-10 sm:right-0.5 sm:top-0.5", dimmed && "opacity-40")}
+        />
+      )}
+    </>
   );
 }
 
@@ -800,6 +818,15 @@ function DayPanel({
           <CompensationChip day={day} withNote />
         </div>
       )}
+      {day.hrEdit && (
+        <section
+          className="mt-3 rounded-lg border border-slate-200 bg-white p-3"
+          aria-label="What HR changed on this day"
+          data-testid="pd-day-hr-edit"
+        >
+          <HrEditDetails edit={day.hrEdit} />
+        </section>
+      )}
       <div className="mt-3 space-y-2">
         {issues.length === 0 ? (
           <p className="text-xs text-muted-foreground">Nothing was flagged on this day.</p>
@@ -840,8 +867,13 @@ function DayRow({ day, selected }: { day: PayrollDay; selected: boolean }) {
       <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-800">{dateShort(day.date)}</td>
       <td className="px-3 py-2 text-muted-foreground">{day.day || weekdayShort(day.date)}</td>
       <td className="px-3 py-2">
-        <span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold", meta.cell)}>
-          {kind === "other" ? statusLabel(day.status) : meta.label}
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold", meta.cell)}
+          >
+            {kind === "other" ? statusLabel(day.status) : meta.label}
+          </span>
+          {day.hrEdit && <HrEditBadge edit={day.hrEdit} date={day.date} />}
         </span>
       </td>
       <td className="px-3 py-2 font-mono text-xs tabular-nums">{timeText(day.firstIn)}</td>

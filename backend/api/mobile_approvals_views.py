@@ -136,14 +136,19 @@ def _rows_holiday_work(rows, cfg):
 
 
 def _rows_on_duty(rows, cfg):
-    """The On-Duty row /manager/pending-requests sends (onDutySessions), plus what the head needs to judge it: the day
-    (`date`, factory time) and every punch recorded under it with its time, place and whether it has photos (open them
-    with GET /on-duty-punch-verifications/<id>/photo?n=1|2, which lets the employee's own Department Head in)."""
+    """The On-Duty row /manager/pending-requests sends (onDutySessions, `journeyId` included), plus what the head needs to
+    judge it: the day (`date`, factory time) and every punch recorded under it with its time, place and whether it has
+    photos (open them with GET /on-duty-punch-verifications/<id>/photo?n=1|2, which lets the employee's own Department
+    Head in). `journeyId` is the recorded route of the day (GET /tracking/journeys/<id> lets this head in), null when
+    nothing was recorded."""
     from .geo_attendance_views import _on_duty_session_dict
+    from .geo_tracking.serializers import journey_ids
 
+    journeys = journey_ids([s.pk for s in rows])
     out = []
     for s in rows:
         data = _on_duty_session_dict(s, cfg=cfg)
+        data["journeyId"] = journeys.get(s.pk)
         when = s.started_at or s.created_at
         data["date"] = timezone.localtime(when, FACTORY_TZ).date().isoformat() if when else None
         punches = sorted(s.punch_verifications.all(), key=lambda v: (v.punch_date, v.punch_number, v.id))

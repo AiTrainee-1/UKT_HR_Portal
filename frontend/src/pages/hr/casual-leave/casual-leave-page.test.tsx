@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import CasualLeave from "../CasualLeave";
+import type { CasualLeaveHistory } from "@/lib/api-client/custom-hooks";
 import type { BoardRow, ClBoard, ClRequest } from "./logic";
 
 // The Casual Leave page with a filled query cache (nothing is fetched): the owner's three questions (who has taken CL
@@ -119,10 +120,11 @@ const requests: ClRequest[] = [
   },
 ];
 
-function mount(data: { board?: ClBoard; requests?: ClRequest[] } = {}) {
+function mount(data: { board?: ClBoard; requests?: ClRequest[]; prime?: (client: QueryClient) => void } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
   client.setQueryData(["/api/casual-leaves/eligibility", 10, 2026, "board"], data.board ?? board);
   client.setQueryData(["/api/casual-leaves", null, 10, 2026], data.requests ?? requests);
+  data.prime?.(client);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -244,6 +246,110 @@ describe("the Casual Leave page", () => {
     expect(q(el, "cl-11")!.querySelector('[data-testid="cl-portion"]')).toBeNull(); // a full day reads as before
     click(tab(el, "Eligible")!);
     expect(text(q(el, "half-left-2"))).toContain("One half-day left (first half of 6 Oct 2026 used)");
+  });
+
+  it("under the yearly rule shows each employee's balance, names an empty one, and opens the year's history", () => {
+    const bal = (used: number, pending = 0) => ({
+      total: 12,
+      used,
+      pending,
+      remaining: 12 - used - pending,
+      year: 2026,
+      since: "2026-11-02",
+      endsOn: "2026-12-31",
+      cutOver: "2026-11-02",
+      tracked: true,
+    });
+    const yearlyBoard: ClBoard = {
+      ...board,
+      rule: "yearly_balance",
+      cutOver: "2026-11-02",
+      yearlyEntitlement: 12,
+      employees: [
+        person(1, "Asha Kumar", { balance: bal(1), usedThisMonth: true, usedStatus: "approved" }),
+        person(2, "Ravi Shankar", { balance: bal(0) }),
+        person(3, "Meena Iyer", {
+          eligible: false,
+          reasonCode: "no_balance",
+          usedThisMonth: true,
+          balance: bal(11, 1),
+        }),
+        person(5, "Bala", { eligible: false, reasonCode: "not_staff", employmentType: "production", balance: null }),
+      ],
+    };
+    const history: CasualLeaveHistory = {
+      employeeId: 1,
+      year: 2026,
+      total: 12,
+      balance: bal(1),
+      entries: [
+        {
+          kind: "opening",
+          on: "2026-11-02",
+          date: null,
+          portion: null,
+          portionLabel: null,
+          days: null,
+          change: 12,
+          balanceBefore: null,
+          balanceAfter: 12,
+          requestId: null,
+          requestKind: null,
+          source: null,
+          status: null,
+          text: "12 Casual Leave days for 2026, from 02 Nov 2026",
+        },
+        {
+          kind: "approved",
+          on: "2026-11-05",
+          date: "2026-11-05",
+          portion: "full",
+          portionLabel: "Full day",
+          days: 1,
+          change: -1,
+          balanceBefore: 12,
+          balanceAfter: 11,
+          requestId: 31,
+          requestKind: "casual_leave",
+          source: "hr_edit",
+          status: "approved",
+          text: "12 → 11 on 05 Nov: Casual Leave given by HR (attendance edit), approved (Full day, 05 Nov 2026)",
+        },
+      ],
+    };
+    const el = mount({
+      board: yearlyBoard,
+      prime: (client) => client.setQueryData(["/api/casual-leaves/history", 1, 2026], history),
+    });
+    expect(text(el.querySelector("h2")!.parentElement!.querySelector("p"))).toContain("12 days a year");
+    expect(text(q(el, "cl-stat-not-eligible"))).toContain("1 none left");
+
+    click(tab(el, "Eligible")!);
+    // someone who took CL this month is still eligible while the balance lasts
+    expect(q(el, "eligible-1")).not.toBeNull();
+    expect(text(q(el, "cl-balance-1"))).toContain("11 of 12 left");
+    expect(text(q(el, "cl-balance-1"))).toContain("1 used");
+    expect(text(q(el, "cl-balance-2"))).toContain("12 of 12 left");
+
+    click(tab(el, "Not eligible")!);
+    expect(text(q(el, "not-eligible-3"))).toContain("No Casual Leave left this year");
+    expect(text(q(el, "not-eligible-3"))).toContain("0 of 12 left");
+    expect(tab(el, "No CL left")).toBeTruthy();
+    expect(tab(el, "Used this month")).toBeUndefined();
+
+    // the balance opens the employee's Casual Leave history (the year as a running balance)
+    click(tab(el, "Eligible")!);
+    const button = q(el, "cl-balance-1") as HTMLButtonElement;
+    expect(button.getAttribute("aria-label")).toBe("Casual Leave history of Asha Kumar: 11 of 12 left");
+    click(button);
+    const drawer = document.body.querySelector('[data-testid="cl-history"]'); // a portal, outside the page
+    expect(drawer).not.toBeNull();
+    expect(text(drawer)).toContain("Asha Kumar · 2026");
+    expect(text(drawer!.querySelector('[data-testid="cl-history-balance"]'))).toContain("11 of 12 left");
+    const entries = [...drawer!.querySelectorAll('[data-testid="cl-history-entry"]')];
+    expect(entries.map((e) => e.getAttribute("data-kind"))).toEqual(["opening", "approved"]);
+    expect(text(entries[1])).toContain("12 → 11 on 05 Nov");
+    expect(text(entries[1])).toContain("HR attendance edit");
   });
 
   it("has a month picker that starts on the current month and one Refresh beside the title", () => {

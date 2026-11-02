@@ -1,12 +1,20 @@
 """Payroll runs, salary slips, advances, settings, increments/bonuses, overtime and compensation."""
 
-from datetime import time
+from datetime import date, time
 from decimal import Decimal
 from django.db import models
 
 from ..clock import ist_today
 from ..production_cycles import CYCLE_CHOICES
 from .core import Department, Designation, Employee
+
+# The day the Casual Leave yearly balance started (PayrollSettings.cl_balance_since): everyone fresh at 12 from here.
+CL_BALANCE_DEFAULT_SINCE = date(2026, 11, 2)
+
+
+def cl_balance_default_since() -> date:
+    """A callable default (a fixed date default makes Django warn on every command, fields.W161)."""
+    return CL_BALANCE_DEFAULT_SINCE
 
 
 # ──────────────────────────────────────────────
@@ -931,6 +939,16 @@ class PayrollSettings(models.Model):
     # Optional per-token overrides applied on top of the selected theme, as
     # {"--primary": "201 100% 29%", ...}. Empty = use the theme unmodified.
     theme_custom = models.JSONField(default=dict, blank=True, db_column="theme_custom")
+
+    # ── Casual Leave yearly balance (owner 2026-11-02) ───────────────────
+    # Every eligible staff member has 12 Casual Leave days a calendar year (a half day = 0.5), used any time while the
+    # balance lasts. Casual Leave dated on/after this day counts against the balance; anything earlier never does
+    # (everyone started fresh at 12 on it) and keeps the old one-per-month rule. Unused days lapse on 31 December and a
+    # fresh 12 starts on 1 January. See cl_balance.py. db_default: an older backend still running during a rolling deploy
+    # inserts the settings row without knowing this column.
+    cl_balance_since = models.DateField(
+        default=cl_balance_default_since, db_default=CL_BALANCE_DEFAULT_SINCE, db_column="cl_balance_since"
+    )
 
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 

@@ -59,8 +59,9 @@ be wrong or delayed. Your follow-up work protects the accuracy of payroll.
     happened (absent, late, no leave).
   - Every deduction (late, half-day, absent, loss of pay) must be explainable to the employee. The
     HRMS keeps the reason for each day. That only works if requests are raised correctly and on time.
-  - Requests can only be raised for the CURRENT month (plus last month on the 1st and 2nd). If an
-    employee waits, the system will refuse the request and HR has to correct it by a longer route.
+  - Requests can only be raised for the CURRENT month (plus last month from the 1st to the 5th).
+    If an employee waits, the system will refuse the request and HR has to correct it by a longer
+    route.
   - A request waiting with an HOD is a request that cannot be finished. Late approvals delay payroll
     for the whole company at month end.
   - Everything is logged (who did it, when, with what comment). This protects the company and the
@@ -306,7 +307,7 @@ of the device unless HR has told them to use GPS punch.
 
   - Leave, Casual Leave, Permission and Missing Punch can only be requested for days in the CURRENT
     MONTH (1st to last day).
-  - On the 1st and 2nd of a month, LAST month is still open (grace). From the 3rd it is closed.
+  - From the 1st to the 5th of a month, LAST month is still open (grace). From the 6th it is closed.
   - A leave of several days must start AND end inside the month (split it if it crosses month end).
   - Missing Punch can never be in the future (latest date is today).
   - The system uses India date, so changing the phone clock does not help.
@@ -364,7 +365,7 @@ For each item: WHAT to do, WHERE (Mobile App = M, Employee Web App = W), WHY.
          wrong (absent, half day, late although on time) must be reported through the right request
          the same day.
   Where: M or W -> Attendance.
-  Why  : Requests are only allowed in the current month (and the 1st-2nd of next). Errors found late
+  Why  : Requests are only allowed in the current month (and the 1st-5th of next). Errors found late
          cannot be corrected by the employee and delay salary.
 
 8.4 LEAVE
@@ -642,18 +643,18 @@ missing from your sidebar, ask HR for VIEW access to it. You do not need edit ac
 
   3 to 5 working days before month end:
     - Announce to employees and HODs: "Raise ALL pending leave / permission / missing punch requests
-      now. Requests are only possible for this month (plus last month on the 1st and 2nd)."
+      now. Requests are only possible for this month (plus last month from the 1st to the 5th)."
     - Clear the full pending list with every HOD.
   Last working day:
     - Zero pending approvals is the target. Escalate whatever remains.
     - Check Biometric sync is complete up to the last day.
-  The 1st and 2nd of the next month (grace days):
+  The 1st to the 5th of the next month (grace days):
     - Last chance for employees to raise last month's requests. Chase every open item and every
       employee with an unexplained absent / missing punch.
-  From the 3rd:
+  From the 6th:
     - Last month is closed to employees. Anything missed must be fixed by HR as an Attendance
       correction (HR raises, the HOD must approve). Tell HR the list as early as possible on the
-      3rd. Payroll for the month should only be generated after this is cleared.
+      6th. Payroll for the month should only be generated after this is cleared.
 
 
 =====================================================================================================
@@ -767,7 +768,7 @@ missing from your sidebar, ask HR for VIEW access to it. You do not need edit ac
 
 13.7 Month-end announcement (everyone)
   "Month-end reminder: raise ALL leave, permission and missing punch requests for this month now.
-   Last month stays open only on the 1st and 2nd. HODs, please clear every pending approval by
+   Last month stays open only until the 5th. HODs, please clear every pending approval by
    <date>."
 
 
@@ -776,7 +777,7 @@ missing from your sidebar, ask HR for VIEW access to it. You do not need edit ac
 =====================================================================================================
 
 Q. The employee says "the app will not let me pick that date".
-A. Only the current month is allowed (plus last month on the 1st and 2nd). Missing Punch cannot be a
+A. Only the current month is allowed (plus last month until the 5th). Missing Punch cannot be a
    future date. Past that, HR must correct attendance (HR raises, HOD approves).
 
 Q. Can I approve a request in place of an HOD?
@@ -855,14 +856,14 @@ A. Only if HR has switched them on. Do not depend on them; your daily list is th
   Coordinator       Chase HODs for pending approvals                Phone / WhatsApp Daily
   Coordinator       Weekly counts and backlog                       Reports          Weekly
   Coordinator       Month-end clean-up                              HR Portal        Last 3 days +
-                                                                                     1st-2nd
+                                                                                     1st-5th
   Coordinator       Escalate to HR with a written list              Message / Excel  As per section 12
 
   M = Mobile App    W = Employee Web App
 
 THE THREE RULES TO REMEMBER
   1. If it is not raised and approved in the HRMS, it did not happen for payroll.
-  2. Do it the same day. Only this month (and the 1st-2nd of next) can be requested.
+  2. Do it the same day. Only this month (and the 1st-5th of next) can be requested.
   3. Follow the route: Employee -> HOD -> HR. Nobody skips a step, nobody sits on a request.
 
 =====================================================================================================

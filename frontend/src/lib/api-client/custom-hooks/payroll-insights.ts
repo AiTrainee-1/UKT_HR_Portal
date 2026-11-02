@@ -267,6 +267,43 @@ export type PayrollDay = DayCompensationMarker & {
   onDuty?: OnDutyInfo | null;
   /** A Sunday / holiday / day off somebody worked: it shows what was worked, not "holiday". */
   workedOffDay?: boolean;
+  /** The day's latest HR attendance edit and where its approval stands (the "!" on the calendar). Omitted when HR never
+   *  edited the day. */
+  hrEdit?: HrEdit | null;
+};
+
+// ── HR attendance edits (2026-11-02) ──────────────────────────────────────────
+// Every change HR proposes on the Edit Attendance form is a request the Department Head approves first, then HR; the
+// calendar marks the day with a "!" and says what was changed and where the approval stands. Backend: api/hr_edit_marks.py.
+
+/** Where an HR edit stands: waiting for the Department Head, waiting for HR (the second approval), applied, or rejected. */
+export type HrEditStatus = "waiting_hod" | "waiting_hr" | "applied" | "rejected";
+
+/** The option group of the Edit Attendance form the edit was made from. */
+export type HrEditOption =
+  "worked" | "compensation" | "not_worked" | "permission" | "late" | "casual_leave" | "on_duty";
+
+/** One side of an edit: what the day was ("Present", 1 shift) or what it was changed to. */
+export type HrEditSide = { label: string; shifts: number | null };
+
+export type HrEdit = {
+  requestId: number;
+  status: HrEditStatus;
+  /** In words: "Waiting for Department Head (Suresh Raj)", "Applied - approved by ... on 02 Nov 2026" ... */
+  stageLabel: string;
+  from: HrEditSide;
+  to: HrEditSide;
+  option: HrEditOption;
+  type: string;
+  /** "Half Day", "Permission · Morning Late-In", "Mark as Late", "Casual Leave · First half", "On-Duty" ... */
+  typeLabel: string;
+  reason: string | null;
+  /** The Department Head's or HR's comment on their decision. */
+  comment: string | null;
+  raisedBy: string | null;
+  raisedAt: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
 };
 
 export type OnDutyState = "verified" | "punches_pending" | "no_punches" | "pending" | "rejected";
@@ -280,6 +317,8 @@ export type OffDay = {
   name: string | null;
   attendance: PayrollDay | null;
   onDuty?: OnDutyInfo | null;
+  /** The day's latest HR attendance edit (also on `attendance` when the day was worked). Omitted when none. */
+  hrEdit?: HrEdit | null;
 };
 
 /** The whole monthly salary by component, and what each came to for the days this payroll paid. */

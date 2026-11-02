@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from . import gate_qr
 from .auth import get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
+from .mobile_requests_views import month_bounds, parse_month
 from .models import Employee, GateDevice, TeaBreakLog, TeaBreakRule
 from .outpass_visitor_views import _paginate_params, _range_bounds, _range_start
 
@@ -38,6 +39,9 @@ STALE_OPEN_CUTOFF = timedelta(hours=12)
 # "how long can an open scan plausibly still be mid-break before we call it
 # a no-return", per explicit spec ("time exceeds 60 minutes").
 NOT_RETURNED_MINUTES = 60
+
+# The most breaks one month of my-status?month= lists (a month holds a few dozen; this only bounds a runaway table).
+MONTH_LOG_CAP = 500
 
 
 def _employee_json(emp: Employee) -> dict:
@@ -117,23 +121,43 @@ def tea_break_qr_token(request: Request) -> Response:
 @api_view(["GET"])
 @require_auth
 def tea_break_my_status(request: Request) -> Response:
+    """GET /api/tea-break/my-status[?month=YYYY-MM]
+
+    `recent` is the latest 10 breaks. With `?month=YYYY-MM` (the app's month switcher, 2026-11-02) it is instead every
+    break of that month (by the India day the employee went out, newest first, at most MONTH_LOG_CAP) and the reply
+    echoes `month`. `onBreak` / `outAt` are about right now either way. A month that is not YYYY-MM is a 400.
+    """
     emp_id = get_token_employee_id(request)
     if not emp_id:
         return Response({"error": "Employee login required"}, status=403)
+    month_param = (request.query_params.get("month") or "").strip()
+    try:
+        month_first = parse_month(month_param) if month_param else None
+    except ValueError:
+        return Response({"error": "month must be YYYY-MM"}, status=400)
     now = timezone.now()
     rule = TeaBreakRule.get()
-    logs = list(
+    mine = (
         TeaBreakLog.objects.filter(employee_id=emp_id)
         .select_related("out_gate", "in_gate", "employee__department")
-        .order_by("-out_at")[:10]
+        .order_by("-out_at")
     )
+    logs = list(mine[:10])
     open_log = next((log for log in logs if not log.in_at), None)
-    return Response({
+    if month_first is not None:
+        start, end = month_bounds(month_first)
+        listed = list(mine.filter(out_at__gte=start, out_at__lt=end)[:MONTH_LOG_CAP])
+    else:
+        listed = logs
+    body = {
         "onBreak": bool(open_log),
         "outAt": open_log.out_at.isoformat() if open_log else None,
         "allowedMinutes": rule.allowed_minutes,
-        "recent": [_log_json(log, rule.allowed_minutes, now) for log in logs],
-    })
+        "recent": [_log_json(log, rule.allowed_minutes, now) for log in listed],
+    }
+    if month_first is not None:
+        body["month"] = month_first.strftime("%Y-%m")
+    return Response(body)
 
 
 # ── HR dashboard ─────────────────────────────────────────────────────────

@@ -847,6 +847,10 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             pass
 
     holidays_by_date, casual_dates = day_calendar_facts(emp, year, month)
+    # "HR edited this day" (2026-11-02): the day's latest HR attendance edit and where its approval stands -the apps show a
+    # "!" for any, and colour the day when status == "applied" (hr_edit_marks.py). null on a day HR never edited.
+    from .hr_edit_marks import hr_edit_map
+    hr_edits = hr_edit_map(emp, date_type(year, month, 1), date_type(year, month, days_in_month))
 
     records = []
     for day in range(1, days_in_month + 1):
@@ -896,6 +900,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "source":       (punches[0]["source"] if punches else ("manual" if manual else None)),
             "sourceLabel":  (rec.primary_source if rec and rec.primary_source else None) or (source_label(punches[0]["source"]) if punches else None),
             "notes":        manual.notes if manual else None,
+            "hrEdit":       hr_edits.get(cur_date),
         })
 
     summary = month_summary_from_records(list(day_records.values()))

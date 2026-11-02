@@ -168,8 +168,11 @@ def _outpass(r) -> Summary:
 
 @register("attendance_correction")
 def _attendance_correction(r) -> Summary:
-    status = (r.requested_values or {}).get("status")
+    asked = r.requested_values or {}
+    status = asked.get("status")
     change = f"Change day to {str(status).replace('_', ' ')}" if status else "Attendance correction"
+    if asked.get("option") in ("permission", "late", "casual_leave", "on_duty"):
+        change = str(asked.get("typeLabel") or change)  # the 2026-11-02 options: "Permission · Morning Late-In" ...
     return Summary(
         r.employee,
         "Attendance Correction",

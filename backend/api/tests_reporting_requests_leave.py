@@ -1551,6 +1551,42 @@ class CasualLeaveEligibilityTests(ContractMixin, Base):
         widened = data_rows(self.run_report(self.report_id, self.branch_user, branchIds=str(self.b2.id), **self.params))
         self.assertEqual(widened, [])
 
+    def test_a_month_from_the_cut_over_follows_the_yearly_balance(self):
+        # 12 days a year from 2 Nov 2026: a CL this month no longer blocks, a half day counts 0.5, pending counts, a
+        # rejected one frees its day, September's CL (before the cut-over) never counts, and all 12 used or waiting = none left
+        full = mk_emp("RLE11", self.cutting, self.b1, join_date="2024-01-01")
+        for i in range(11):
+            CasualLeaveRequest.objects.create(employee=full, date=date(2026, 11, 3 + i), status="approved")
+        CasualLeaveRequest.objects.create(employee=full, date=date(2026, 12, 1), status="pending")
+        CasualLeaveRequest.objects.create(
+            employee=self.e1, date=date(2026, 11, 4), status="approved", portion="first_half"
+        )
+        CasualLeaveRequest.objects.create(employee=self.e10, date=date(2026, 11, 5), status="rejected")
+
+        body = self.run_report(self.report_id, period="2026-11")
+        r = self.keyed(body)
+        e1 = r["RLE1"]
+        self.assertEqual((e1["eligible"], e1["approvedThisYear"], e1["remainingThisYear"]), ("Eligible", 0.5, 11.5))
+        e5 = r["RLE5"]  # its September CL was before the cut-over
+        self.assertEqual((e5["eligible"], e5["approvedThisYear"], e5["remainingThisYear"]), ("Eligible", 0, 12))
+        self.assertEqual((r["RLE10"]["eligible"], r["RLE10"]["remainingThisYear"]), ("Eligible", 12))
+        f = r["RLE11"]
+        self.assertEqual(
+            (f["eligible"], f["approvedThisYear"], f["pendingThisYear"], f["remainingThisYear"]),
+            ("No Casual Leave left", 11, 1, 0),
+        )
+        self.assertIn("No Casual Leave left in 2026", f["reason"])
+        self.assertEqual(r["RLE2"]["eligible"], "Not yet eligible")
+        s = {x["label"]: x["value"] for x in body["summary"]}
+        self.assertEqual((s["No Casual Leave left"], s["Used this month"]), (1, 0))
+        self.assertIn("yearly balance of 12 days from 02 Nov 2026", " ".join(body["notes"]))
+        only = data_rows(self.run_report(self.report_id, period="2026-11", eligibility="no_balance"))
+        self.assertEqual([x["employeeCode"] for x in only], ["RLE11"])
+        # September is still judged by the old rule
+        self.assertEqual(
+            self.keyed(self.run_report(self.report_id, **self.params))["RLE5"]["eligible"], "Used this month"
+        )
+
     def grow(self, start, count):
         for i in range(start, start + count):
             emp = mk_emp(f"RL_G{i:02d}", self.cutting, self.b1, join_date="2024-01-01")

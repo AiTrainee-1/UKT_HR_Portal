@@ -1,10 +1,18 @@
 """
 Casual Leave (CL) Module
 ========================
-Paid leave, staff-only, one per calendar month, eligibility after 6 months of
-service. Fully independent of LeaveRequest / permissions -its own table and
-its own approval flow (HR directly, or Department Head from the mobile app,
-configurable per-manager in User Management via can_approve_casual_leave).
+Paid leave, staff-only, eligibility after 6 months of service. Fully
+independent of LeaveRequest / permissions -its own table and its own approval
+flow (HR directly, or Department Head from the mobile app, configurable
+per-manager in User Management via can_approve_casual_leave).
+
+How much (owner 2026-11-02): 12 days a calendar year, used any time while the
+yearly balance lasts (a half day = 0.5); see cl_balance.py. Casual Leave dated
+before the cut-over (PayrollSettings.cl_balance_since, 2026-11-02) never
+counts against the balance and keeps the older rule: one per calendar month.
+
+  GET     /api/casual-leaves/history?year=&employeeId=   the year's balance as a running story
+  GET|PUT /api/casual-leaves/policy                     the yearly entitlement and the cut-over day (a setting)
 
 Attendance integration:
   approved → AttendanceDayRecord for that date = Present, 1.00 shift (paid)
@@ -26,8 +34,9 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval, whatsapp_approvals
-from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
+from . import approval_workflow as approval, cl_balance, whatsapp_approvals
+from .audit_utils import log_action
+from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name, is_hr
 from .branch_scope import scope_to_branch
 from .clock import ist_today
 from .models import AttendanceDayRecord, CasualLeaveRequest, Employee
@@ -152,11 +161,51 @@ def _half_word(portion: str) -> str:
     return "first" if portion == FIRST_HALF else "second"
 
 
+def no_balance_reason(year: int) -> str:
+    return f"No Casual Leave left for {year}: all {cl_balance.ENTITLEMENT} days are used or waiting for approval"
+
+
+def half_left_reason(year: int) -> str:
+    return f"Only half a day of Casual Leave is left for {year}. Choose First half or Second half."
+
+
+def _check_yearly_balance(emp, for_date, portion, cut_over, exclude_override_ids) -> tuple[bool, str | None]:
+    """The rule for a date on/after the cut-over: any Casual Leave while the year's balance (12 - approved - pending,
+    cl_balance.py) still holds the days asked for. On one date: never the same half twice, never a full day over a half
+    or a half over a full day (two different halves of one date are that date's full day)."""
+    remaining = cl_balance.remaining_days(emp, for_date.year, exclude_override_ids, cut_over)
+    need = PORTION_DAYS[portion] if portion in PORTIONS else Decimal("0.5")
+    if remaining <= 0:
+        return False, no_balance_reason(for_date.year)
+    if remaining < need:
+        return False, half_left_reason(for_date.year)
+    if portion in PORTIONS:
+        held = cl_balance.day_parts(emp, for_date, exclude_override_ids)
+        day = for_date.strftime("%d %b %Y")
+        if any(p.portion == FULL for p in held):
+            return False, f"{day} is already a full day of Casual Leave. Choose another date."
+        if portion == FULL and held:
+            return False, (
+                f"Half of {day} is already asked for as Casual Leave, so a full day cannot be added. "
+                "Choose the other half or another date."
+            )
+        if any(p.portion == portion for p in held):
+            return False, (
+                f"The {_half_word(portion)} half of {day} is already asked for as Casual Leave. "
+                "Choose the other half or another date."
+            )
+    return True, None
+
+
 def check_cl_eligibility(
-    emp: Employee, for_date: date_type, portion: str | None = None
+    emp: Employee, for_date: date_type, portion: str | None = None, exclude_override_ids=()
 ) -> tuple[bool, str | None]:
     """(eligible, reason_if_not). Applies all the CL business rules. Without a `portion` it answers "is anything of the
-    month's Casual Leave left?"; with one, "may this employee ask for this part of `for_date`?"."""
+    Casual Leave left (for `for_date`)?"; with one, "may this employee ask for this part of `for_date`?".
+
+    A date on/after the cut-over (cl_balance.since()) is judged by the yearly balance; an earlier date by the older
+    one-per-month rule. `exclude_override_ids`: pending HR attendance edits to leave out of the balance (the Attendance Edit
+    page replaces a waiting edit of the same day with the new one, so the old one's Casual Leave must not count)."""
     if emp.employment_type != "staff":
         return False, "Casual Leave is available only for staff employees"
     if emp.status != "active":
@@ -166,7 +215,13 @@ def check_cl_eligibility(
         return False, "Join date not set -contact HR"
     if months < ELIGIBILITY_MONTHS:
         return False, f"Eligible after {ELIGIBILITY_MONTHS} months of service (currently {months})"
-    state = month_cl_state(_month_rows(emp.id, for_date.year, for_date.month))
+    cut_over = cl_balance.since()
+    if cl_balance.counts(for_date, cut_over):
+        return _check_yearly_balance(emp, for_date, portion, cut_over, exclude_override_ids)
+    # Before the cut-over: one Casual Leave per calendar month (only that month's days before the cut-over count).
+    state = month_cl_state(
+        [r for r in _month_rows(emp.id, for_date.year, for_date.month) if not cl_balance.counts(r.date, cut_over)]
+    )
     if state["full"] is not None:
         return False, USED_UP
     if state["left"] == LEFT_NOTHING:
@@ -212,6 +267,10 @@ def _cl_dict(r: CasualLeaveRequest, cfg: approval.Config | None = None) -> dict:
         "reviewedAt": r.reviewed_at.isoformat() if r.reviewed_at else None,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
         "approval": approval.progress(WORKFLOW, r, cfg),
+        # added 2026-11-02: "hr_edit" when HR gave it from the Attendance Edit page (approved by the Department Head and HR
+        # there), with that attendance change's id; "employee" otherwise
+        "source": "hr_edit" if cl_balance.is_hr_edit_cl(r) else "employee",
+        "hrEditRequestId": cl_balance.hr_edit_id_of(r),
     }
 
 
@@ -374,7 +433,7 @@ def casual_leaves(request: Request) -> Response:
         approval.require_enabled(WORKFLOW)
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
-    # An employee may only request a date in the current month (plus last month on its 1st and 2nd); HR is never limited.
+    # An employee may only request a date in the current month (plus last month on its 1st to 5th); HR is never limited.
     if refused := enforce_employee_date(request, cl_date.isoformat()):
         return refused
     cl = CasualLeaveRequest.objects.create(
@@ -431,6 +490,9 @@ def casual_leave_eligibility(request: Request) -> Response:
     month_end = date_type(year, month, calendar.monthrange(year, month)[1])
     check_date = board_reference_date(year, month, today)
     cfg = approval.get_config(WORKFLOW)
+    # A month with any day on/after the cut-over follows the yearly balance; an earlier month the old one-per-month rule.
+    cut_over = cl_balance.since()
+    yearly = cl_balance.counts(month_end, cut_over)
 
     used_map: dict[int, CasualLeaveRequest] = {}
     month_rows: dict[int, list] = {}
@@ -463,6 +525,10 @@ def casual_leave_eligibility(request: Request) -> Response:
         )
     }
 
+    balances = cl_balance.balances(
+        [e.id for e in employees if e.employment_type == "staff"], year, cut_over=cut_over
+    )
+
     rows = []
     for emp in employees:
         joined = _parse_join_date(emp.join_date)
@@ -470,13 +536,22 @@ def casual_leave_eligibility(request: Request) -> Response:
         is_staff = emp.employment_type == "staff"
         service_ok = months is not None and months >= ELIGIBILITY_MONTHS
         used = used_map.get(emp.id)
-        state = month_cl_state(month_rows.get(emp.id, []))
+        if yearly:
+            # the month's own rows still name what was taken this month; `left` now comes from the yearly balance
+            state = month_cl_state(month_rows.get(emp.id, []))
+            state["left"] = cl_balance.left_word(balances[emp.id]["remaining"]) if is_staff else LEFT_NOTHING
+        else:
+            state = month_cl_state(
+                [r for r in month_rows.get(emp.id, []) if not cl_balance.counts(r.date, cut_over)]
+            )
         if not is_staff:
             code, reason = "not_staff", "Casual Leave is available only for staff employees"
         elif months is None:
             code, reason = "no_join_date", "Join date not set"
         elif not service_ok:
             code, reason = "under_service", f"{months}/{ELIGIBILITY_MONTHS} months of service"
+        elif yearly and state["left"] == LEFT_NOTHING:
+            code, reason = "no_balance", no_balance_reason(year)
         elif state["left"] == LEFT_NOTHING:
             code, reason = "used_this_month", USED_UP if state["full"] is not None else BOTH_HALVES_USED
         else:
@@ -517,6 +592,8 @@ def casual_leave_eligibility(request: Request) -> Response:
             "left": state["left"],
             "usedPortion": portion_of(used) if used else None,
             "usedParts": [_part_json(r) for r in sorted(month_rows.get(emp.id, []), key=lambda r: (r.date, r.id))],
+            # added 2026-11-02 (yearly balance): the employee's balance for the board's year (None for production)
+            "balance": balances.get(emp.id) if is_staff else None,
         })
 
     rows.sort(key=lambda r: (not r["eligible"], r["employeeName"]))
@@ -533,6 +610,11 @@ def casual_leave_eligibility(request: Request) -> Response:
             "usedThisMonth": sum(1 for r in rows if r["usedThisMonth"]),
         },
         "employees": rows,
+        # added 2026-11-02: which rule this month follows ("yearly_balance" | "one_per_month"), the cut-over day and the
+        # yearly entitlement
+        "rule": "yearly_balance" if yearly else "one_per_month",
+        "cutOver": cut_over.isoformat(),
+        "yearlyEntitlement": cl_balance.ENTITLEMENT,
     })
 
 
@@ -563,24 +645,116 @@ def my_casual_leave_eligibility(request: Request) -> Response:
         year = int(request.query_params.get("year") or today.year)
     except (TypeError, ValueError):
         return Response({"error": "year must be a number"}, status=400)
-    year_rows = list(CasualLeaveRequest.objects.filter(employee_id=emp.id, date__year=year).only("portion", "status"))
-    used = sum((PORTION_DAYS[portion_of(r)] for r in year_rows if r.status == "approved"), Decimal("0"))
-    waiting = sum((PORTION_DAYS[portion_of(r)] for r in year_rows if r.status == "pending"), Decimal("0"))
+    cut_over = cl_balance.since()
+    balance = cl_balance.balance(emp, year, cut_over=cut_over)
 
     return Response({
         "eligible": eligible,
         "reason": reason,
         "year": year,
         "yearlyEntitlement": CL_YEARLY_ENTITLEMENT,
-        # in days: a half-day counts 0.5 (a whole number stays a whole number)
-        "usedThisYear": days_number(used),
-        "remainingThisYear": days_number(max(Decimal("0"), CL_YEARLY_ENTITLEMENT - used)),
+        # in days: a half-day counts 0.5 (a whole number stays a whole number). Since 2026-11-02 these three mirror the
+        # yearly balance below: used = approved days that count, remaining = 12 - used - waiting (what can still be asked
+        # for). Casual Leave dated before the cut-over is not counted.
+        "usedThisYear": balance["used"],
+        "remainingThisYear": balance["remaining"],
         "months": _request_window_months(emp),
         # added 2026-10-31 (half-day CL)
-        "waitingThisYear": days_number(waiting),
+        "waitingThisYear": balance["pending"],
         "portions": [{"value": p, "label": PORTION_LABEL[p]} for p in PORTIONS],
         "shift": _shift_halves_json(emp, today),
+        # added 2026-11-02 (yearly balance): {total, used, pending, remaining, year, since, endsOn, cutOver, tracked}, the
+        # year month by month, and which rule today's requests follow
+        "balance": balance,
+        "monthsUsage": cl_balance.month_usage(emp, year, cut_over=cut_over),
+        "rule": "yearly_balance" if cl_balance.counts(today, cut_over) else "one_per_month",
     })
+
+
+def _employee_for_cl_read(request: Request):
+    """(employee, None) or (None, error response): an employee token reads its own; HR passes ?employeeId= (branch
+    scoped)."""
+    token_emp_id = get_token_employee_id(request)
+    if token_emp_id:
+        emp = Employee.objects.filter(pk=token_emp_id).first()
+    elif is_hr(request):
+        raw = request.query_params.get("employeeId")
+        if not raw:
+            return None, Response({"error": "employeeId required"}, status=400)
+        try:
+            emp = scope_to_branch(Employee.objects, request).filter(pk=int(raw)).first()
+        except (TypeError, ValueError):
+            emp = None
+    else:
+        return None, Response({"error": "Access denied"}, status=403)
+    if emp is None:
+        return None, Response({"error": "Employee not found"}, status=404)
+    return emp, None
+
+
+@api_view(["GET"])
+@require_auth
+def casual_leave_history(request: Request) -> Response:
+    """The year's Casual Leave balance as a running story ("12 → 11 on 03 Nov: Casual Leave approved (...)"), oldest first,
+    with today's balance. ?year= (default this year); HR adds ?employeeId=. See cl_balance.history."""
+    emp, refused = _employee_for_cl_read(request)
+    if refused:
+        return refused
+    try:
+        year = int(request.query_params.get("year") or ist_today().year)
+    except (TypeError, ValueError):
+        return Response({"error": "year must be a number"}, status=400)
+    return Response(cl_balance.history(emp, year, today=ist_today()))
+
+
+def _policy_json() -> dict:
+    cut_over = cl_balance.since()
+    return {
+        "yearlyEntitlement": cl_balance.ENTITLEMENT,
+        "halfDayCounts": 0.5,
+        "balanceSince": cut_over.isoformat(),
+        "eligibilityMonths": ELIGIBILITY_MONTHS,
+        "staffOnly": True,
+        "rule": (
+            f"Every eligible staff member has {cl_balance.ENTITLEMENT} Casual Leave days a calendar year, used any time "
+            f"while the balance lasts (a half day counts 0.5; waiting requests hold their days, a rejected one gives them "
+            f"back). Casual Leave dated before {cut_over.strftime('%d %b %Y')} is not counted (it kept the older one per "
+            "month rule). Unused days lapse on 31 December and a fresh balance starts on 1 January."
+        ),
+    }
+
+
+@api_view(["GET", "PUT"])
+@require_hr
+def casual_leave_policy(request: Request) -> Response:
+    """GET: the yearly entitlement and the cut-over day. PUT {balanceSince: "YYYY-MM-DD"}: change the cut-over day (Casual
+    Leave dated before it never counts against the balance). Only a company-wide login may change it: the balance is one
+    rule for everybody."""
+    if request.method == "PUT":
+        from .branch_scope import get_branch_scope
+        from .models import PayrollSettings
+
+        if get_branch_scope(request) is not None:
+            return Response(
+                {"error": "The Casual Leave balance is one company-wide rule: only a login for all branches can change it."},
+                status=403,
+            )
+        raw = request.data.get("balanceSince")
+        try:
+            new_since = date_type.fromisoformat(str(raw)[:10])
+        except (TypeError, ValueError):
+            return Response({"error": "balanceSince must be a date like 2026-11-02"}, status=400)
+        if not (2000 <= new_since.year <= 2100):
+            return Response({"error": "balanceSince must be a real date"}, status=400)
+        ps = PayrollSettings.get()
+        before = ps.cl_balance_since
+        ps.cl_balance_since = new_since
+        ps.save(update_fields=["cl_balance_since", "updated_at"])
+        log_action(
+            request, "update", "settings", record_id=ps.pk,
+            description=f"Casual Leave balance start changed from {before} to {new_since}",
+        )
+    return Response(_policy_json())
 
 
 def _part_json(r: CasualLeaveRequest) -> dict:
@@ -601,16 +775,43 @@ def _request_window_months(emp: Employee) -> list[dict]:
     window = request_window()
     this_month = (window.max.replace(day=1), window.current_month)
     open_months = [(window.min, window.previous_month), this_month] if window.grace_open else [this_month]
+    cut_over = cl_balance.since()
+    balances: dict[int, dict] = {}
     months = []
     for first, label in open_months:
-        ok, why = check_cl_eligibility(emp, first)
+        month_end = date_type(first.year, first.month, calendar.monthrange(first.year, first.month)[1])
+        # Added 2026-11-02: a month with any day on/after the cut-over follows the yearly balance, and its `left` is what
+        # that balance still holds ("full" = a whole day or more, "one_half", "nothing"); an earlier month keeps the old
+        # one-per-month answer.
+        yearly = cl_balance.counts(month_end, cut_over)
         rows = _month_rows(emp.id, first.year, first.month)
         state = month_cl_state(rows)
+        remaining = None
+        used_halves = [{"date": str(r.date), "portion": portion_of(r)} for r in state["halves"]]
+        used_full = [str(r.date) for r in rows if portion_of(r) == FULL]
+        if yearly:
+            ok, why = check_cl_eligibility(emp, max(first, cut_over))
+            if first.year not in balances:
+                balances[first.year] = cl_balance.balance(emp, first.year, cut_over=cut_over)
+            remaining = balances[first.year]["remaining"]
+            left = cl_balance.left_word(remaining)
+            # what holds a date includes a Casual Leave HR proposed on the Attendance Edit page that is still waiting
+            held = cl_balance.parts([emp.id], first, month_end)[emp.id]
+            used_halves = [{"date": p.date.isoformat(), "portion": p.portion} for p in held if p.portion != FULL]
+            used_full = [p.date.isoformat() for p in held if p.portion == FULL]
+        else:
+            ok, why = check_cl_eligibility(emp, first)
+            left = state["left"]
         months.append({
             "month": f"{first.year:04d}-{first.month:02d}", "label": label, "eligible": ok, "reason": why,
-            "left": state["left"] if ok else LEFT_NOTHING,
+            "left": left if ok else LEFT_NOTHING,
             "usedParts": [_part_json(r) for r in rows],
-            "usedHalves": [{"date": str(r.date), "portion": portion_of(r)} for r in state["halves"]],
+            "usedHalves": used_halves,
+            # added 2026-11-02: the rule of the month, the yearly days still free (None under the old rule) and the dates
+            # already taken as a full day (the app greys them out)
+            "rule": "yearly_balance" if yearly else "one_per_month",
+            "remaining": remaining,
+            "usedFullDates": used_full,
         })
     return months
 

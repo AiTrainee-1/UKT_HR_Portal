@@ -2,12 +2,14 @@
 The request date window: which dates an EMPLOYEE may put on a request (Leave, Casual Leave, Permission / Late-In,
 Missing Punch).
 
-The same rule is applied by the Employee Web App (src/lib/request-window.ts) and the Mobile App (src/lib/requestWindow.ts)
-and all three are tested against the same vectors, so change them together:
+The same rule is applied by the Employee Web App (src/lib/request-window.ts), the Mobile App (src/lib/requestWindow.ts) and
+the HR portal's employee page (frontend/src/lib/request-window.ts), and all four are tested against the same vectors, so
+change them together:
 
   * An employee may request dates in the CURRENT calendar month: from the 1st to the last day of this month.
-  * Grace: on the first GRACE_DAYS (2) days of a month the PREVIOUS month is still open too, so on the 1st and the 2nd the
-    window starts on the 1st of last month. From the 3rd it starts on the 1st of this month.
+  * Grace: on the first GRACE_DAYS (5) days of a month the PREVIOUS month is still open too, so from the 1st to the 5th the
+    window starts on the 1st of last month. From the 6th it starts on the 1st of this month. (It was 2 days until
+    2026-11-02, when the owner extended it to the 5th.)
   * A Missing Punch also cannot be in the future (``no_future``): a punch cannot be missed tomorrow.
 
 The server is the authority: "today" is India time (api.clock.ist_today), whatever the employee's phone says. Only an
@@ -28,7 +30,7 @@ from rest_framework.response import Response
 from .auth import get_token_employee_id
 from .clock import ist_today
 
-GRACE_DAYS = 2
+GRACE_DAYS = 5
 CODE = "request_window_closed"
 
 MONTHS = [

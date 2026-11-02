@@ -347,7 +347,7 @@ class EmployeePermission(models.Model):
 
 
 # ──────────────────────────────────────────────
-#  Casual Leave (CL) -paid, staff-only, 1/month
+#  Casual Leave (CL) -paid, staff-only, 12 a year
 # ──────────────────────────────────────────────
 
 class CasualLeaveRequest(models.Model):
@@ -357,7 +357,9 @@ class CasualLeaveRequest(models.Model):
     Rules enforced in the views:
       • staff employees only
       • eligible only after 6 months of service
-      • one CL per calendar month (pending or approved blocks another)
+      • 12 days a calendar year, any time while the yearly balance lasts (pending and approved hold days, a half = 0.5;
+        cl_balance.py). Dates before the cut-over (PayrollSettings.cl_balance_since, 2026-11-02) keep the older rule:
+        one CL per calendar month (pending or approved blocks another)
       • approved  → attendance for that date = Present (full paid day)
       • rejected  → attendance for that date = Leave
     """

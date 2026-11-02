@@ -143,7 +143,10 @@ DEFINITIONS: tuple[WorkflowDef, ...] = (
         key="casual_leave",
         label="Casual Leave",
         group="Leave & attendance",
-        purpose="An employee asks for one paid Casual Leave day (staff, after 6 months' service). Approval marks that day present.",
+        purpose=(
+            "An employee asks for paid Casual Leave (staff, after 6 months' service; 12 days a year, a full day or a half). "
+            "Approval marks that day present."
+        ),
         requested_by="Employee",
         default_steps=(_step(HOD, HR),),
         hod_flag="can_approve_casual_leave",
