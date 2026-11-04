@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation } from "wouter";
-import { Bell, CheckCircle2, Hourglass, ShieldAlert, UserCheck, XCircle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useLocation, useSearch } from "wouter";
+import { Bell, BellRing, CheckCircle2, Hourglass, Inbox, ShieldAlert, UserCheck, Users, XCircle } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import { PipelineSummary } from "@/components/ApprovalTrail";
@@ -35,6 +35,18 @@ import {
 import { FigureCard, type ActionHandlers } from "./requests/parts";
 import RequestList, { EmptyState, ErrorState, ListSkeleton } from "./requests/RequestList";
 import Toolbar from "./requests/Toolbar";
+import HodsTab from "./requests/hods/HodsTab";
+import NotifyTab from "./requests/notify/NotifyTab";
+import {
+  PAGE_SECTIONS,
+  focusFromSearch,
+  focusKey,
+  requestLinkTarget,
+  searchForSection,
+  sectionFromSearch,
+  type FocusTarget,
+  type PageSection,
+} from "./requests/sections";
 
 /** Requests shown before "Show more": a long list is paged on the page, the server has already narrowed it. */
 const PAGE_SIZE = 50;
@@ -44,6 +56,30 @@ const readTab = () => {
     return new URLSearchParams(window.location.search).get("kind");
   } catch {
     return null;
+  }
+};
+
+const SECTION_ICONS: Record<PageSection, ReactNode> = {
+  requests: <Inbox size={13} aria-hidden />,
+  hods: <Users size={13} aria-hidden />,
+  notify: <BellRing size={13} aria-hidden />,
+};
+
+const SECTION_NOTES: Record<PageSection, string> = {
+  requests: "Every request employees and HR raise, and who it is waiting for - auto-refreshes every 30 s",
+  hods: "What is waiting for each Department Head's approval, kind by kind - refreshes every minute",
+  notify: "Automatic reminders to every HoD with requests waiting for their approval",
+};
+
+/** The `?focus=` instruction is used once: it leaves the address so a refresh does not open the request again. */
+const dropFocus = () => {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("focus")) return;
+    url.searchParams.delete("focus");
+    window.history.replaceState(window.history.state, "", url);
+  } catch {
+    /* the address just keeps it */
   }
 };
 
@@ -60,11 +96,14 @@ const writeTab = (tab: string) => {
 
 /** Requests: every kind of request in the HRMS (leave, permission, casual leave, missing punch, on-duty, outpass, general
  *  requests, attendance corrections, Holiday / Sunday work, resignations, advances) in one place, as sub-tabs, with who each
- *  is waiting for. */
+ *  is waiting for. Two more sections sit beside the heading (`?tab=`): HoD's, what is pending with each Department Head,
+ *  and Notify, the automatic reminder to them (requests/hods, requests/notify). */
 export default function ApprovedRequests() {
   const { toast } = useToast();
   const { user } = useAuth();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
+  const search = useSearch();
+  const section = sectionFromSearch(search);
 
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [rawTab, setRawTab] = useState<string | null>(readTab);
@@ -73,6 +112,8 @@ export default function ApprovedRequests() {
   const [deciding, setDeciding] = useState<{ item: HubItem; mode: "approve" | "reject" } | null>(null);
   const [handling, setHandling] = useState<HubItem | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  // `?kind=leave&focus=12` (a HoD's link, a notification) opens that request's details once the list is in
+  const [focus, setFocus] = useState<FocusTarget | null>(() => focusFromSearch(window.location.search));
 
   const today = dayStamp(new Date());
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,6 +141,40 @@ export default function ApprovedRequests() {
 
   // a different tab or filter starts at the top again
   useEffect(() => setVisible(PAGE_SIZE), [filters, tab]);
+
+  useEffect(() => {
+    if (!focus || !query.data || query.isPlaceholderData) return;
+    const key = focusKey(focus);
+    setFocus(null);
+    dropFocus();
+    if (hub.items.some((i) => i.key === key)) setSelectedKey(key);
+    else
+      toast({
+        title: "That request is not in the list",
+        description: "It may have been decided and closed already, or it is older than the list holds.",
+      });
+  }, [focus, query.data, query.isPlaceholderData, hub.items, toast]);
+
+  const selectSection = (next: PageSection) => {
+    const qs = searchForSection(search, next);
+    navigate(qs ? `${location}?${qs}` : location);
+  };
+
+  /** A link from HoD's: a request of this page opens here (the Requests section, its kind, its details), anything else is
+   *  followed. The filters are cleared so the request cannot be hidden by them. */
+  const openFromHods = (openPath: string) => {
+    const target = requestLinkTarget(openPath);
+    if (!target) {
+      navigate(openPath);
+      return;
+    }
+    const next = new URLSearchParams(searchForSection(search, "requests"));
+    next.set("kind", target.kind);
+    setFilters((f) => ({ ...NO_FILTERS, sort: f.sort }));
+    setRawTab(target.kind);
+    setFocus(target);
+    navigate(`${location}?${next.toString()}`);
+  };
 
   const selectTab = (next: string) => {
     setRawTab(next);
@@ -218,160 +293,195 @@ export default function ApprovedRequests() {
   return (
     <HrLayout>
       <div className="space-y-5" data-testid="requests-hub">
-        {/* Header */}
+        {/* Header, with the page's three sections beside it */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900">
-              <Bell size={22} className="text-amber-500" />
-              Requests
-              {stats.waiting > 0 && <Badge className="bg-amber-500 text-xs text-white">{stats.waiting} pending</Badge>}
-            </h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              Every request employees and HR raise, and who it is waiting for - auto-refreshes every 30 s
-            </p>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3">
+            <div className="min-w-0">
+              <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900">
+                <Bell size={22} className="text-amber-500" />
+                Requests
+                {stats.waiting > 0 && (
+                  <Badge className="bg-amber-500 text-xs text-white">{stats.waiting} pending</Badge>
+                )}
+              </h2>
+              <p className="mt-0.5 text-sm text-muted-foreground" data-testid="requests-section-note">
+                {SECTION_NOTES[section]}
+              </p>
+            </div>
+            <nav
+              aria-label="Sections of the Requests page"
+              className="max-w-full overflow-x-auto"
+              data-testid="requests-sections"
+            >
+              <PillTabs
+                size="sm"
+                baseColor="#4f46e5"
+                items={PAGE_SECTIONS.map((s) => ({ ...s, icon: SECTION_ICONS[s.value] }))}
+                value={section}
+                onChange={(v) => selectSection(v as PageSection)}
+              />
+            </nav>
           </div>
           <RefreshButton />
         </div>
 
-        {/* Figures */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="requests-figures">
-          <FigureCard
-            label="Waiting for HR now"
-            value={stats.waitingHr}
-            sub="HR can decide these today"
-            icon={UserCheck}
-            tone="bg-blue-50 text-blue-800"
-            onClick={() => focusWaiting("waiting_hr")}
-            active={filters.status === "waiting_hr"}
-            testId="figure-waiting-hr"
-          />
-          <FigureCard
-            label="Waiting for HOD"
-            value={stats.waitingHod}
-            sub={
-              stats.waitingOther > 0
-                ? `HR cannot decide yet · ${stats.waitingOther} with someone else`
-                : "HR cannot decide these yet"
-            }
-            icon={Hourglass}
-            tone="bg-amber-50 text-amber-800"
-            onClick={() => focusWaiting("waiting_hod")}
-            active={filters.status === "waiting_hod"}
-            testId="figure-waiting-hod"
-          />
-          <FigureCard
-            label="Approved this month"
-            value={stats.approvedThisMonth}
-            icon={CheckCircle2}
-            tone="bg-green-50 text-green-800"
-            testId="figure-approved"
-          />
-          <FigureCard
-            label="Rejected this month"
-            value={stats.rejectedThisMonth}
-            icon={XCircle}
-            tone="bg-red-50 text-red-800"
-            testId="figure-rejected"
-          />
-          <FigureCard
-            label="Oldest waiting"
-            value={oldest ? daysText(oldestDays) : "None"}
-            sub={oldest ? `${oldest.employeeName} · ${oldest.label}` : "Nothing is waiting"}
-            icon={ShieldAlert}
-            tone={oldestDays >= 3 ? "bg-rose-50 text-rose-800" : "bg-slate-50 text-slate-700"}
-            onClick={oldest ? () => focusWaiting("waiting") : undefined}
-            testId="figure-oldest"
-          />
-        </div>
-
-        {/* Sub-tabs: all, then one per kind with how many are waiting */}
-        <div className="space-y-2">
-          <div className="overflow-x-auto pb-1" data-testid="requests-tabs">
-            <PillTabs size="sm" items={tabs} value={tab} onChange={selectTab} />
+        {section === "hods" && (
+          <div role="tabpanel" aria-label="HoD's" data-testid="requests-section-hods">
+            <HodsTab onOpenRequest={openFromHods} />
           </div>
-          {activeKind && (
-            <p className="text-xs text-muted-foreground" data-testid="requests-tab-note">
-              Approval pipeline: <strong className="text-gray-700">{activeKind.pipeline}</strong>
-              {!activeKind.enabled && (
-                <span className="ml-2 font-semibold text-red-600">Switched off: new requests are refused</span>
-              )}
-              {activeKind.mode === "link" && activeKind.openPath && (
-                <>
-                  {" "}
-                  · decided on its own page:{" "}
-                  <button
-                    type="button"
-                    className="font-semibold text-blue-600 hover:underline"
-                    onClick={() => navigate(activeKind.openPath!)}
-                  >
-                    Open in {activeKind.openLabel}
-                  </button>
-                </>
-              )}
-            </p>
-          )}
-        </div>
+        )}
+        {section === "notify" && (
+          <div role="tabpanel" aria-label="Notify" data-testid="requests-section-notify">
+            <NotifyTab />
+          </div>
+        )}
 
-        <Toolbar
-          filters={filters}
-          onFilters={setFilters}
-          options={hub.options}
-          showRequestType={tab === "request"}
-          shown={shown.length}
-          total={inTab.length}
-          canExport={shown.length > 0}
-          onExport={exportList}
-        />
+        {section === "requests" && (
+          <div role="tabpanel" aria-label="Requests" className="space-y-5" data-testid="requests-section-requests">
+            {/* Figures */}
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="requests-figures">
+              <FigureCard
+                label="Waiting for HR now"
+                value={stats.waitingHr}
+                sub="HR can decide these today"
+                icon={UserCheck}
+                tone="bg-blue-50 text-blue-800"
+                onClick={() => focusWaiting("waiting_hr")}
+                active={filters.status === "waiting_hr"}
+                testId="figure-waiting-hr"
+              />
+              <FigureCard
+                label="Waiting for HOD"
+                value={stats.waitingHod}
+                sub={
+                  stats.waitingOther > 0
+                    ? `HR cannot decide yet · ${stats.waitingOther} with someone else`
+                    : "HR cannot decide these yet"
+                }
+                icon={Hourglass}
+                tone="bg-amber-50 text-amber-800"
+                onClick={() => focusWaiting("waiting_hod")}
+                active={filters.status === "waiting_hod"}
+                testId="figure-waiting-hod"
+              />
+              <FigureCard
+                label="Approved this month"
+                value={stats.approvedThisMonth}
+                icon={CheckCircle2}
+                tone="bg-green-50 text-green-800"
+                testId="figure-approved"
+              />
+              <FigureCard
+                label="Rejected this month"
+                value={stats.rejectedThisMonth}
+                icon={XCircle}
+                tone="bg-red-50 text-red-800"
+                testId="figure-rejected"
+              />
+              <FigureCard
+                label="Oldest waiting"
+                value={oldest ? daysText(oldestDays) : "None"}
+                sub={oldest ? `${oldest.employeeName} · ${oldest.label}` : "Nothing is waiting"}
+                icon={ShieldAlert}
+                tone={oldestDays >= 3 ? "bg-rose-50 text-rose-800" : "bg-slate-50 text-slate-700"}
+                onClick={oldest ? () => focusWaiting("waiting") : undefined}
+                testId="figure-oldest"
+              />
+            </div>
 
-        {/* The list */}
-        <Card className="overflow-hidden rounded-2xl">
-          <CardContent className="p-0">
-            {query.isError && !hasData ? (
-              <ErrorState onRetry={() => void query.refetch()} />
-            ) : !hasData ? (
-              <ListSkeleton />
-            ) : hub.kinds.length === 0 ? (
-              <div className="px-6 py-14 text-center text-sm text-muted-foreground" data-testid="requests-no-access">
-                Your role cannot open any kind of request.
+            {/* Sub-tabs: all, then one per kind with how many are waiting */}
+            <div className="space-y-2">
+              <div className="overflow-x-auto pb-1" data-testid="requests-tabs">
+                <PillTabs size="sm" items={tabs} value={tab} onChange={selectTab} />
               </div>
-            ) : shown.length === 0 ? (
-              <EmptyState
-                filtered={filtered}
-                tabLabel={activeKind?.label ?? null}
-                onClear={() => setFilters({ ...NO_FILTERS, sort: filters.sort })}
-              />
-            ) : (
-              <RequestList
-                items={page}
-                kinds={kinds}
-                now={now}
-                busyKey={busyKey}
-                handlers={handlers}
-                onOpen={(item) => setSelectedKey(item.key)}
-              />
-            )}
-          </CardContent>
-        </Card>
+              {activeKind && (
+                <p className="text-xs text-muted-foreground" data-testid="requests-tab-note">
+                  Approval pipeline: <strong className="text-gray-700">{activeKind.pipeline}</strong>
+                  {!activeKind.enabled && (
+                    <span className="ml-2 font-semibold text-red-600">Switched off: new requests are refused</span>
+                  )}
+                  {activeKind.mode === "link" && activeKind.openPath && (
+                    <>
+                      {" "}
+                      · decided on its own page:{" "}
+                      <button
+                        type="button"
+                        className="font-semibold text-blue-600 hover:underline"
+                        onClick={() => navigate(activeKind.openPath!)}
+                      >
+                        Open in {activeKind.openLabel}
+                      </button>
+                    </>
+                  )}
+                </p>
+              )}
+            </div>
 
-        {shown.length > visible && (
-          <div className="flex justify-center">
-            <Button variant="outline" onClick={() => setVisible((v) => v + PAGE_SIZE)} data-testid="requests-more">
-              Show {Math.min(PAGE_SIZE, shown.length - visible)} more ({shown.length - visible} left)
-            </Button>
+            <Toolbar
+              filters={filters}
+              onFilters={setFilters}
+              options={hub.options}
+              showRequestType={tab === "request"}
+              shown={shown.length}
+              total={inTab.length}
+              canExport={shown.length > 0}
+              onExport={exportList}
+            />
+
+            {/* The list */}
+            <Card className="overflow-hidden rounded-2xl">
+              <CardContent className="p-0">
+                {query.isError && !hasData ? (
+                  <ErrorState onRetry={() => void query.refetch()} />
+                ) : !hasData ? (
+                  <ListSkeleton />
+                ) : hub.kinds.length === 0 ? (
+                  <div
+                    className="px-6 py-14 text-center text-sm text-muted-foreground"
+                    data-testid="requests-no-access"
+                  >
+                    Your role cannot open any kind of request.
+                  </div>
+                ) : shown.length === 0 ? (
+                  <EmptyState
+                    filtered={filtered}
+                    tabLabel={activeKind?.label ?? null}
+                    onClear={() => setFilters({ ...NO_FILTERS, sort: filters.sort })}
+                  />
+                ) : (
+                  <RequestList
+                    items={page}
+                    kinds={kinds}
+                    now={now}
+                    busyKey={busyKey}
+                    handlers={handlers}
+                    onOpen={(item) => setSelectedKey(item.key)}
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            {shown.length > visible && (
+              <div className="flex justify-center">
+                <Button variant="outline" onClick={() => setVisible((v) => v + PAGE_SIZE)} data-testid="requests-more">
+                  Show {Math.min(PAGE_SIZE, shown.length - visible)} more ({shown.length - visible} left)
+                </Button>
+              </div>
+            )}
+
+            {hub.kinds.some((k) => k.truncated) && (
+              <p className="text-center text-xs text-amber-700" data-testid="requests-truncated">
+                {hub.kinds
+                  .filter((k) => k.truncated)
+                  .map((k) => `${k.label}: the newest ${hub.limit} of ${k.matched}`)
+                  .join(" · ")}
+                . Narrow the period to see older ones.
+              </p>
+            )}
+
+            <PipelineSummary workflows={hub.kinds.map((k) => k.key)} />
           </div>
         )}
-
-        {hub.kinds.some((k) => k.truncated) && (
-          <p className="text-center text-xs text-amber-700" data-testid="requests-truncated">
-            {hub.kinds
-              .filter((k) => k.truncated)
-              .map((k) => `${k.label}: the newest ${hub.limit} of ${k.matched}`)
-              .join(" · ")}
-            . Narrow the period to see older ones.
-          </p>
-        )}
-
-        <PipelineSummary workflows={hub.kinds.map((k) => k.key)} />
       </div>
 
       <DetailDialog

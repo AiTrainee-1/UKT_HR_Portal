@@ -207,6 +207,9 @@ TYPE_PAGE: dict[str, str] = {
 # Types only ever sent to a Department Head, asking them to decide (approval_workflow.notify_hod_of_request for the two
 # HR-raised kinds, and the reminder).
 APPROVER_TYPES = frozenset({"holiday_work", "attendance_correction", REMINDER_SOURCE})
+# Messages (Notification.source and type) that remind a Department Head of EVERYTHING waiting for them, not one request:
+# HR's scheduled reminder (hod_reminders.py). They open Approvals with no category.
+HOD_REMINDER_SOURCE = "hod_pending_reminder"
 
 # The wording of the in-app notices that ask a Department Head to act (approval_workflow.notify_hod_of_request, the
 # reminder, recruitment_views._notify_dept_heads, missing_punch_views / geo_attendance_views._notify_hod_approvers).
@@ -422,6 +425,8 @@ def _target(n, context: dict) -> dict | None:
         return None  # HR typed it: nothing to open
     if key.startswith("reminder:") or REMINDER_SOURCE in (source, n.type):
         return _reminder(n, context)
+    if HOD_REMINDER_SOURCE in (source, n.type):
+        return _approver(None)
     if key.startswith("wa:"):
         found = _from_whatsapp_key(n, key[3:])
         if found is not _NO_MATCH:

@@ -215,6 +215,10 @@ URL_MODULE_MAP: dict[str, str] = {
     # the Requests page's unified list: its own module gates the endpoint, and the view then drops every kind whose own
     # module (leave, casual_leave, geo_attendance, settlement ...) the caller cannot open
     "hr-requests": "requests",
+    # Its HoD's and Notify tabs: what is pending with each Department Head, and the reminders sent to them. Viewing needs
+    # the page; changing the (company-wide) schedule and sending need edit (the preview only reads: READ_ONLY_POST_PATHS).
+    "hr/hod-pending": "requests",
+    "hr/hod-reminders": "requests",
 
     "promotions": "promotion",
 
@@ -358,7 +362,7 @@ URL_MODULE_MAP: dict[str, str] = {
 
 # POST endpoints that only READ (their input is too structured for a query string) and write nothing: a role that may
 # only VIEW the module can call them, like a GET. Paths relative to /api/, exact. Everything else a POST does is a change.
-READ_ONLY_POST_PATHS: frozenset[str] = frozenset({"production-shift-rules/preview"})
+READ_ONLY_POST_PATHS: frozenset[str] = frozenset({"production-shift-rules/preview", "hr/hod-reminders/preview"})
 
 
 def resolve_module(path: str) -> str | None:

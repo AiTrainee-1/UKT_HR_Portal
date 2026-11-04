@@ -836,4 +836,6 @@ urlpatterns = [
     path("", include("api.urls_mobile_settlement")),
     path("", include("api.urls_mobile_reminders")),
     path("", include("api.urls_mobile_approvals")),
+    # ── HR Requests page: HoD's (pending with each Department Head) and Notify (reminders) ──
+    path("", include("api.urls_hod_reminders")),
 ]

@@ -117,6 +117,7 @@ class ApiConfig(AppConfig):
             auto_sync,
             backup_scheduler,
             geo_tracking_scheduler,
+            hod_reminder_scheduler,
             on_duty_day_end_scheduler,
             overtime_scheduler,
             screening_cleanup_scheduler,
@@ -165,3 +166,8 @@ class ApiConfig(AppConfig):
             overtime_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("OT detection scheduler bootstrap skipped: %s", e)
+
+        try:
+            hod_reminder_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Department Head reminder scheduler bootstrap skipped: %s", e)

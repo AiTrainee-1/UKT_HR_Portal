@@ -244,6 +244,34 @@ _add(
 
 # ── Other ─────────────────────────────────────────────────────────────────────
 
+# The reminder to a Department Head about the requests waiting for their approval (HR Requests page -> Notify,
+# hod_reminders.py). The text is written on that tab and is the same on WhatsApp, email and the phone notification, so
+# the wording here is just that text; HR can still change the subject or wrap the text on the Message Text tab.
+_add(
+    key="hod_pending_reminder",
+    label="HoD Pending Approvals Reminder",
+    module="other",
+    description=(
+        "Reminds a Department Head of the requests waiting for their approval, at the times HR set on Requests -> "
+        "Notify. The text itself is written on that tab."
+    ),
+    subject="Pending approvals awaiting you – UK Textiles HRMS",
+    heading="Pending approvals",
+    body="{{message}}",
+    variables=(
+        V(
+            "message",
+            "The reminder written on Requests -> Notify, filled in for this Department Head",
+            "Dear Suresh Kumar,\nYou currently have some pending requests awaiting your approval in the UK Textiles "
+            "HRMS application.\nPending requests:\n• Leave Requests: 3\nKindly review and approve the pending requests "
+            "at the earliest.\nRegards,\nHR Team – UKT",
+        ),
+        V("employee_name", "The Department Head's name", "Suresh Kumar"),
+        V("total", "How many requests are waiting for them", "3"),
+        V("date", "Today's date", "04 Nov 2026"),
+        COMPANY,
+    ),
+)
 _add(
     key="test_email",
     label="Test Email",

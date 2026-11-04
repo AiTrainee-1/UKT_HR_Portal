@@ -1835,6 +1835,21 @@ The pipeline is unchanged: Department Head first, then HR; nothing changes until
 - **HR**: the Casual Leave page's board has a **CL balance** column ("11 of 12 left", with used and waiting under it); clicking it opens that employee's balance history for the year. "No CL left" is a reason and a filter on the Not eligible tab, and the board export has a "CL left this year" column.
 - The Report Center's *Casual Leave Eligibility & Usage* report follows the same rule for November 2026 onwards: Approved / Pending / Remaining are days of the year's balance (a half is 0.5) and "No Casual Leave left" is an eligibility value and a filter. A month before November 2026 is still judged by the old one-per-month rule.
 
+### 5.11 Requests → HoD's and Notify (November 2026)
+
+The **Requests** page (`/hr/requests`) has three tabs beside its title: **Requests** (the list as before), **HoD's** and **Notify** (`?tab=hods`, `?tab=notify`).
+
+**HoD's** shows every active Department Head (made in User Management) with what is waiting for *their own* decision right now, counted exactly as their phone's Approvals tab counts it: four figures (HoDs, HoDs with pending, total pending, the oldest waiting), then one row per head with the **Total** and a column per kind of request (Leave, Permission, Casual Leave, Attendance, Missing Punch, On-Duty, Outpass, Compensation, Resignation; "—" where that head does not approve that kind). Search (a head, a department or an employee waiting on one), branch and department filters and *Only HoDs with pending*. Click a head to see every request waiting with them, grouped by kind, oldest first, with how long it has waited and **Open** (opens the request on the Requests tab). **Export** gives a PDF, an Excel file or a PNG image sheet of the board; **Share** opens the phone or computer's share sheet with the file (or downloads it and offers *Copy summary* for WhatsApp).
+
+**Notify** sends every head with something pending their own reminder, automatically:
+- **On / off**, one or more **times of day** (India time, up to 6) and the **days** (Monday to Saturday by default). A time is sent at most once a day, even after a server restart, and only if the server reaches it within 10 minutes. The next reminder and the last run are shown at the top.
+- **Channels:** WhatsApp, Email and Mobile push, each with its own switch and a line saying whether it can work (for example "Email (SMTP) is not set up in Settings"). The WhatsApp wording can also be switched off on WhatsApp Control (*approvals*), the email on Gmail Control, the push on Mobile Messages.
+- **Message:** the default is *"Dear {{name}}, You currently have some pending requests awaiting your approval in the UK Textiles HRMS application. Pending requests: {{pendingList}} Kindly review and approve the pending requests at the earliest. Regards, HR Team – UKT"*. `{{pendingList}}` becomes one line per kind with something pending ("• Leave Requests: 3"); `{{total}}` and `{{date}}` can be used too. The **Preview** shows each head's own message.
+- **Send now** shows who will get what on which channel before anything goes, then follows the round until it is done. **Run history** lists every round (scheduled or sent now) and, head by head, what went out on each channel or why it was skipped (no phone number, no email address, no phone registered for notifications, a channel switched off).
+- A head with nothing pending gets nothing. Changing the schedule or sending needs Edit on Requests and a login for all branches (the schedule is company-wide); a branch login sees its own branch's heads only.
+
+The page needs migration `0140_hod_reminders`.
+
 ---
 
 ## 6. End-to-End Workflow Diagrams

@@ -160,7 +160,10 @@ def _paragraphs(template: str, values: dict[str, str]) -> list:
         names = _PLACEHOLDER.findall(raw)
         if names and all(not values.get(n, "").strip() for n in names):
             continue
-        lines.append(_PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), raw).rstrip())
+        filled = _PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), raw).replace("\r\n", "\n")
+        # A value with line breaks of its own (a whole message written elsewhere, e.g. the Department Head reminder)
+        # keeps them: each part is a line, and an empty part starts a new paragraph, as if typed into the wording.
+        lines.extend(part.rstrip() for part in filled.split("\n"))
 
     paragraphs: list = []
     current: list[str] = []

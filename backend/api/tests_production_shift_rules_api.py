@@ -1163,7 +1163,10 @@ class PermissionTests(Base):
         self.assertEqual(resolve_module("production-shift-rules"), "settings.attendance")
         self.assertEqual(resolve_module("production-shift-rules/preview"), "settings.attendance")
         self.assertEqual(resolve_module("production-shift-config"), "settings.attendance")
-        self.assertEqual(READ_ONLY_POST_PATHS, frozenset({"production-shift-rules/preview"}))
+        # (the HR Requests page's Notify preview is the other POST that only reads)
+        self.assertEqual(
+            READ_ONLY_POST_PATHS, frozenset({"production-shift-rules/preview", "hr/hod-reminders/preview"})
+        )
 
     def test_an_administrator_reads_saves_and_previews(self):
         self.assertEqual(self.get().status_code, 200)

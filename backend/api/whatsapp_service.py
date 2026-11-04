@@ -630,6 +630,7 @@ def send_notification(
     contact: dict | None = None,
     on_sent=None,
     asynchronous: bool | None = None,
+    announce: bool = True,
 ):
     """THE entry point for a message the *system* decided to send (an alert, an approval, a gate
     movement, a visitor arrival) or that an employee asked for (a one-time code). Returns the
@@ -654,6 +655,10 @@ def send_notification(
     `asynchronous` (default: settings.WHATSAPP_ASYNC_SEND) delivers from the background worker and
     returns the pending row straight away; pass False when the caller needs the outcome now (codes,
     the attendance job). Nothing in here raises into the calling workflow.
+
+    `announce=False` skips the phone notification + in-app record this message would otherwise also make
+    (push_messages.py): for a caller that makes its own, with its own on/off switch (the Department Head
+    reminders, hod_reminders.py, whose push must still go when WhatsApp is off and never twice).
     """
     from django.db import IntegrityError
 
@@ -663,13 +668,14 @@ def send_notification(
         # The same message is also a phone notification and an in-app record (push_messages.py). That is the employee's
         # own channel, so it does not wait for WhatsApp to be configured or switched on, and a one-time code never goes
         # through it.
-        push_messages.announce(
-            employee,
-            document_type,
-            render_message(_template_body(document_type), params, _order_for(document_type)),
-            related_module=related_module,
-            dedupe_key=dedupe_key,
-        )
+        if announce:
+            push_messages.announce(
+                employee,
+                document_type,
+                render_message(_template_body(document_type), params, _order_for(document_type)),
+                related_module=related_module,
+                dedupe_key=dedupe_key,
+            )
         if not feature_enabled(document_type, related_module) or not is_configured():
             return None
         text, disabled_reason = _message_for(document_type, params)

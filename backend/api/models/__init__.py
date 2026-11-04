@@ -18,6 +18,7 @@ Modules (each only imports from ones listed before it):
   shared_endpoints Endpoint Sharing: the API endpoints, origins, keys and access log of data shared with other applications.
   sms          SMS one-time codes through 2Factor: the settings row and the send log.
   geo_tracking On-Duty Geo-Tracking: settings, tracks, points, events, derived segments, devices and consents.
+  hod_reminders Reminders to Department Heads about pending approvals: the schedule, the rounds and each delivery.
 """
 
 from .core import (
@@ -178,4 +179,9 @@ from .geo_tracking import (
     GeoTrackingSettings,
     TrackingConsent,
     TrackingDevice,
+)
+from .hod_reminders import (
+    HodReminderDelivery,
+    HodReminderRun,
+    HodReminderSettings,
 )

@@ -319,6 +319,7 @@ AREAS: dict[str, tuple[str, str]] = {
     "leave": ("leave", "Leave & requests"),
     "casual_leave": ("leave", "Leave & requests"),
     "requests": ("leave", "Leave & requests"),
+    "hod_reminders": ("leave", "Leave & requests"),  # the Requests page's Notify tab (Department Head reminders)
     "recruitment": ("recruitment", "Recruitment"),
     "user_management": ("access", "Accounts & access"),
     "approval_workflow": ("workflow", "Approval workflow"),

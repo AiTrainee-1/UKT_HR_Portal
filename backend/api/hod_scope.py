@@ -136,6 +136,41 @@ def managed_employee_ids(m: DepartmentManager) -> list[int]:
     return coverage(m)[0]
 
 
+def managed_employee_map(managers) -> dict[int, set[int]]:
+    """{manager_id: the employees whose HOD really is that manager} for many ACTIVE HODs at once: exactly
+    managed_employee_ids(m) for each of them (the same raw coverage, the same one-HOD rule), in a fixed number of
+    queries however many HODs there are. Used by the HR overview of what is pending with every Department Head
+    (hod_pending.py), which would otherwise run coverage() once per head."""
+    ids = [m.id for m in managers]
+    raw: dict[int, set[int]] = {i: set() for i in ids}
+    if not ids:
+        return {}
+    for mgr_id, emp_id in ManagerEmployeeAssignment.objects.filter(manager_id__in=ids).values_list(
+        "manager_id", "employee_id"
+    ):
+        raw[mgr_id].add(emp_id)
+    depts: dict[int, set[int]] = {}
+    for mgr_id, dept_id in ManagerDepartmentAssignment.objects.filter(manager_id__in=ids).values_list(
+        "manager_id", "department_id"
+    ):
+        depts.setdefault(mgr_id, set()).add(dept_id)
+    if depts:
+        # Everyone in each assigned department, minus the people HR carved out of THAT head's coverage
+        # (raw_covered_employee_ids, for every head in one pass).
+        carved_out = excluded_pairs(manager_ids=list(depts))
+        members: dict[int, list[int]] = {}
+        for emp_id, dept_id in Employee.objects.filter(
+            department_id__in={d for ds in depts.values() for d in ds}
+        ).values_list("id", "department_id"):
+            members.setdefault(dept_id, []).append(emp_id)
+        for mgr_id, dept_ids in depts.items():
+            for dept_id in dept_ids:
+                raw[mgr_id].update(e for e in members.get(dept_id, ()) if (mgr_id, e) not in carved_out)
+    owner = effective_owner_map({e for covered in raw.values() for e in covered})
+    # coverage(): an employee listed against a head is theirs unless they really report to a different active HOD
+    return {mgr_id: {e for e in covered if owner.get(e, mgr_id) == mgr_id} for mgr_id, covered in raw.items()}
+
+
 def overridden_employees(m: DepartmentManager) -> dict[int, int]:
     return coverage(m)[1]
 

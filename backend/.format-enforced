@@ -422,3 +422,10 @@ api/tests_hod_journey_access.py
 api/cl_balance.py
 api/hr_edit_marks.py
 api/tests_attendance_edit_round.py
+api/hod_pending.py
+api/hod_reminders.py
+api/hod_reminders_views.py
+api/hod_reminder_scheduler.py
+api/urls_hod_reminders.py
+api/models/hod_reminders.py
+api/tests_hod_reminders.py

@@ -418,6 +418,31 @@ _add(
     ),
     variables=_APPROVAL_VARS,
 )
+# The reminder to a Department Head about the requests waiting for their approval (HR Requests page -> Notify,
+# hod_reminders.py). Its wording is written on the Notify tab (the same text goes by WhatsApp, email and phone
+# notification), so the message here is just that text; wording saved here can wrap it.
+_add(
+    key="hod_pending_reminder",
+    label="HoD Pending Approvals Reminder",
+    module="approvals",
+    description=(
+        "Reminds a Department Head of the requests waiting for their approval, at the times HR set on Requests -> "
+        "Notify. The text itself is written on that tab."
+    ),
+    body="{{message}}",
+    variables=(
+        V(
+            "message",
+            "The reminder written on Requests -> Notify, filled in for this Department Head",
+            "Dear Suresh Kumar,\nYou currently have some pending requests awaiting your approval in the UK Textiles "
+            "HRMS application.\nPending requests:\n• Leave Requests: 3\n• Permission Requests: 1\nKindly review and "
+            "approve the pending requests at the earliest.\nRegards,\nHR Team – UKT",
+        ),
+        V("name", "The Department Head's name", "Suresh Kumar"),
+        V("total", "How many requests are waiting for them", "4"),
+        V("date", "Today's date", "04 Nov 2026"),
+    ),
+)
 
 # ── Geo Attendance (On-Duty) and its punches ───────────────────────────────────
 

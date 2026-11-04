@@ -33,6 +33,7 @@ export * from "./whatsapp";
 export * from "./mobile-messages";
 export * from "./gmail";
 export * from "./sms-control";
+export * from "./hod-reminders";
 export * from "./support";
 export * from "./md";
 export * from "./md-admin";
