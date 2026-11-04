@@ -426,9 +426,9 @@ type KindLook = {
 };
 
 /**
- * One look per kind of day, every one in a colour of its own: Present green, Absent red, Half day deep violet (owner
- * 2026-11-04: it was orange, too close to Late In's amber), Casual Leave sky blue, other leave a lighter purple, On-Duty
- * teal, the three compensations lime / pink / indigo, Late In amber and Early Out magenta. A holiday is always a
+ * One look per kind of day, every one in a colour of its own: Present green, Absent red, Half day split half red / half
+ * green (owner 2026-11-04: it was orange, too close to Late In's amber), Casual Leave sky blue, other leave purple,
+ * On-Duty teal, the three compensations lime / pink / indigo, Late In amber and Early Out magenta. A holiday is always a
  * pink-to-green gradient (with its name); a Sunday nobody worked is a plain blank cell, and one somebody worked is
  * orange-to-green.
  */
@@ -461,9 +461,10 @@ export const DAY_KIND_META: Record<DayKind, KindLook> = {
     label: "Half day",
     short: "½",
     hint: "Half a shift was earned.",
-    cell: "border-violet-400 bg-violet-200 text-violet-950",
-    swatch: "bg-violet-600",
-    bar: "border-l-violet-600",
+    // half red (not worked), half green (worked): a sharp diagonal split, so it never reads as a holiday's soft blend
+    cell: "border-red-300 bg-gradient-to-br from-red-300 from-50% to-emerald-300 to-50% text-slate-950",
+    swatch: "bg-gradient-to-br from-red-500 from-50% to-emerald-500 to-50%",
+    bar: "border-l-red-500",
   },
   absent: {
     label: "Absent",

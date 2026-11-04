@@ -416,7 +416,8 @@ describe("the days of the period", () => {
     expect(text(cell("2026-10-14"))).toContain("Permission");
     // a day that was not worked, or cut to half, keeps the colour of that: it is what the pay follows
     expect(fill("2026-10-22")).toBeUndefined();
-    expect(cell("2026-10-22").className).toContain("bg-violet-200"); // a half day: deep violet, apart from Late In's amber
+    // a half day: split half red (not worked) / half green (worked), apart from Late In's amber and a holiday's blend
+    expect(cell("2026-10-22").className).toContain("from-red-300 from-50% to-emerald-300 to-50%");
     expect(tags("2026-10-22")).toEqual(["permission"]);
     expect(cell("2026-10-06").className).toContain("bg-red-100");
     expect(cell("2026-10-16").getAttribute("aria-label")).toContain("On-Duty, On-Duty punch");
