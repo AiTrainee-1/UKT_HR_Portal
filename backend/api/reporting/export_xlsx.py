@@ -268,6 +268,110 @@ def build_xlsx(out: RunOutput) -> bytes:
     ws.oddFooter.left.text = f"{co.name} - {spec.title}"
     ws.oddFooter.right.text = "Page &P of &N"
 
+    taken = {ws.title}
+    for section in out.sections:
+        _section_sheet(wb, out, section, co.name, taken)
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _section_sheet(wb: Workbook, out: RunOutput, section, company_name: str, taken: set[str]) -> None:
+    """A further table of the report (types.ReportSection) on a sheet of its own: the title band, the header, the rows
+    (zebra), the totals line and the notes, in the main sheet's look."""
+    cols = list(section.columns)
+    n_cols = max(1, len(cols))
+    name = sheet_title(section.sheet or section.title)
+    base, i = name, 2
+    while name in taken:  # sheet names must be unique
+        suffix = f" ({i})"
+        name, i = base[: 31 - len(suffix)] + suffix, i + 1
+    taken.add(name)
+    ws = wb.create_sheet(name)
+    for idx, c in enumerate(cols, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = col_width(c)
+    ws.freeze_panes = "A4"
+    ws.sheet_view.showGridLines = False
+
+    thin = Side(style="thin", color=GRID)
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    f_title = Font(name="Calibri", size=13, bold=True, color="FFFFFF")
+    f_head = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    f_body = Font(name="Calibri", size=10)
+    f_bold = Font(name="Calibri", size=10, bold=True)
+    f_note = Font(name="Calibri", size=9, italic=True, color="666666")
+    fill_brand = PatternFill("solid", fgColor=BRAND)
+    fill_zebra = PatternFill("solid", fgColor=ZEBRA)
+    fill_total = PatternFill("solid", fgColor=TOTAL_FILL)
+
+    def text_cell(value, font, fill=None, align="left", wrap=False) -> WriteOnlyCell:
+        cell = WriteOnlyCell(ws, value=safe_cell(value))
+        cell.data_type = "s"
+        cell.font = font
+        if fill is not None:
+            cell.fill = fill
+        cell.alignment = Alignment(horizontal=align, vertical="center", wrap_text=wrap)
+        return cell
+
+    ws.append(
+        [text_cell(section.title.upper(), f_title, fill_brand)]
+        + [text_cell("", f_title, fill_brand) for _ in range(n_cols - 1)]
+    )
+    filt = "   |   ".join(f"{k}: {v}" for k, v in out.filters) or "All records"
+    ws.append([text_cell(filt, f_note)])
+    ws.append([text_cell(c.label, f_head, fill_brand, "center", wrap=True) for c in cols])
+    ws.row_dimensions[3].height = 30
+
+    for r_i, r in enumerate(section.rows):
+        fill = fill_zebra if r_i % 2 == 1 else None
+        cells = []
+        for c in cols:
+            cell = WriteOnlyCell(ws, value=safe_cell(typed_value(c, r.get(c.key))))
+            fmt = _FORMATS.get(c.type)
+            if fmt:
+                cell.number_format = fmt
+            cell.font = f_body
+            cell.border = border
+            if fill is not None:
+                cell.fill = fill
+            cell.alignment = Alignment(horizontal=_align(c), vertical="center", wrap_text=c.type == TEXT)
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
+            cells.append(cell)
+        ws.append(cells)
+    if not section.rows:
+        ws.append([text_cell(section.empty, f_note)])
+    elif section.totals:
+        cells = []
+        placed = False
+        for c in cols:
+            v = section.totals.get(c.key)
+            if v is None:
+                cell = text_cell("" if placed else "TOTAL", f_bold, fill_total)
+                placed = True
+            else:
+                cell = WriteOnlyCell(ws, value=v)
+                fmt = _FORMATS.get(c.type)
+                if fmt:
+                    cell.number_format = fmt
+                cell.font = f_bold
+                cell.fill = fill_total
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            cell.border = border
+            cells.append(cell)
+        ws.append(cells)
+    if section.notes:
+        ws.append([])
+        for note in section.notes:
+            ws.append([text_cell(note, f_note)])
+
+    ws.print_title_rows = "3:3"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = 9  # A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.page_margins.left = ws.page_margins.right = 0.4
+    ws.oddFooter.left.text = f"{company_name} - {section.title}"
+    ws.oddFooter.right.text = "Page &P of &N"

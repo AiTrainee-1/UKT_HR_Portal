@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import dataclasses
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -40,6 +41,8 @@ class RunOutput:
     truncated: bool = False
     limit: int = 0
     row_count: int = 0
+    # further titled tables (ReportSection), rows normalised to their own columns
+    sections: list = field(default_factory=list)
 
     def payload(self) -> dict:
         return {
@@ -57,6 +60,16 @@ class RunOutput:
             "rowCount": self.row_count,
             "truncated": self.truncated,
             "limit": self.limit,
+            "sections": [
+                {
+                    "title": s.title,
+                    "columns": [column_json(c) for c in s.columns],
+                    "rows": s.rows,
+                    "totals": s.totals,
+                    "notes": s.notes,
+                }
+                for s in self.sections
+            ],
         }
 
 
@@ -155,6 +168,14 @@ def run_report(request, spec: ReportSpec, query, purpose: str = "screen") -> Run
         totals=totals,
         summary=summary,
         notes=list(result.notes or []),
+        sections=[
+            dataclasses.replace(
+                s,
+                rows=normalise_rows(list(s.columns), s.rows),
+                totals={k: json_safe(v) for k, v in s.totals.items()} if s.totals is not None else None,
+            )
+            for s in (result.sections or [])
+        ],
         filters=describe_params(spec, params, get_branch_scope(request)),
         generated_at=now.strftime("%Y-%m-%d %H:%M"),
         generated_by=hr_display_name(request),

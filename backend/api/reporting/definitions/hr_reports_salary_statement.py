@@ -12,6 +12,12 @@ has not been run for: the notes say how many active staff in scope have none yet
 has its own columns and stays on Production Payroll > Salary Statement.
 
 Salary and deductions are printed, so the report is gated on the ``payroll`` module exactly like the statement endpoint.
+
+PF, ESI & TDS details (owner 2026-11-04: "the PF, ESI and TDS deduction details must be in the PDF and Excel"): the
+statement's ESI / PF / TDS columns are 0 for everybody outside Co Emp and the TDS list, so the few real deductions are easy
+to miss among a hundred-odd rows. The exports add a section of their own (a second Excel sheet, a further PDF page): one line
+per employee in Co Emp or on the TDS list (or with any PF / ESI / TDS on the slip), with the wages, the rates and the
+amounts as the payroll stored them in the slip (``breakdown_details.deductions.statutory``), and their totals.
 """
 
 from __future__ import annotations
@@ -19,10 +25,12 @@ from __future__ import annotations
 import dataclasses
 from types import SimpleNamespace
 
+from decimal import Decimal
+
 from django.db.models import Exists, OuterRef
 
 from api.models import Employee, Payroll
-from api.payroll_insights import KIND_STAFF, ddmmyyyy, parse_iso_date, staff_period
+from api.payroll_insights import KIND_STAFF, ddmmyyyy, parse_iso_date, slip_key, slips_for, staff_period
 from api.payroll_statement_views import NO_DEPARTMENT, _groups, staff_columns, statement_notes, statement_rows
 
 from .. import filters as F
@@ -30,7 +38,7 @@ from ..common import with_subtotals
 from ..formatting import month_bounds
 from ..registry import register
 from ..runner import KIND_SUBTOTAL
-from ..types import CURRENCY, INTEGER, NUMBER, TEXT, ColumnSpec, ReportResult, ReportSpec
+from ..types import CURRENCY, INTEGER, NUMBER, PERCENT, TEXT, ColumnSpec, ReportResult, ReportSection, ReportSpec
 from .employees_master_base import join_date_of
 
 CATEGORY = "hr"
@@ -80,6 +88,151 @@ COLUMNS = _columns()
 VALUE_KEYS = [c.key for c in COLUMNS if c.key != "sno"]
 
 
+# ── PF, ESI & TDS details ────────────────────────────────────────────────────
+
+STATUTORY_TITLE = "PF, ESI & TDS details"
+STATUTORY_COLUMNS = (
+    ColumnSpec("sno", "SNO", INTEGER, 0.6, align="center"),
+    ColumnSpec("code", "ID NO", TEXT, 1.0),
+    ColumnSpec("name", "Name", TEXT, 2.6),
+    ColumnSpec("department", "Department", TEXT, 1.8),
+    ColumnSpec("category", "Covered by", TEXT, 1.3),
+    ColumnSpec("wages", "PF / ESI wages", CURRENCY, 1.4),
+    ColumnSpec("pfRate", "PF %", PERCENT, 0.8),
+    ColumnSpec("pf", "PF", CURRENCY, 1.3, total="sum"),
+    ColumnSpec("esiRate", "ESI %", PERCENT, 0.8),
+    ColumnSpec("esi", "ESI", CURRENCY, 1.3, total="sum"),
+    ColumnSpec("tdsRate", "TDS %", PERCENT, 0.8),
+    ColumnSpec("tdsBase", "TDS on (pay earned)", CURRENCY, 1.4),
+    ColumnSpec("tds", "TDS", CURRENCY, 1.3, total="sum"),
+    ColumnSpec("total", "PF + ESI + TDS", CURRENCY, 1.4, total="sum"),
+    ColumnSpec("how", "How it was worked out", TEXT, 3.2),
+)
+_COVER = {"co_emp": "Co Emp", "tds": "TDS list"}
+
+
+def _num(value) -> Decimal | None:
+    try:
+        return None if value is None or isinstance(value, bool) else Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _money(value: Decimal | None) -> float:
+    return float((value or Decimal("0")).quantize(Decimal("0.01")))
+
+
+def _plain(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    text = f"{value.normalize():f}"
+    return text
+
+
+def statutory_rows(payrolls: list, values: list[dict]) -> list[dict]:
+    """One line per employee in Co Emp or on the TDS list (or with any PF / ESI / TDS on the slip), in the statement's
+    order, with the wages, rates and amounts the payroll stored in the slip. `values` = the statement's own rows (for
+    the order and the department), keyed by payroll id. One query (the slips)."""
+    slips = slips_for(payrolls)
+    by_id = {p.id: p for p in payrolls}
+    out = []
+    for v in values:
+        p = by_id.get(v.get("_payrollId"))
+        if p is None:
+            continue
+        emp = p.employee
+        slip = slips.get(slip_key(p))
+        ded = ((slip.breakdown_details or {}).get("deductions") or {}) if slip is not None else {}
+        stat = ded.get("statutory") if isinstance(ded.get("statutory"), dict) else {}
+        pf = _num(slip.pf_deduction) if slip is not None else Decimal("0")
+        esi = _num(slip.esi_deduction) if slip is not None else Decimal("0")
+        tds = _num(p.tds_deduction) or Decimal("0")
+        category = stat.get("category") or (
+            "co_emp" if getattr(emp, "co_emp_enabled", False) else "tds" if getattr(emp, "tds_enabled", False) else ""
+        )
+        if category not in _COVER and not (pf or esi or tds):
+            continue
+        wages = _num(stat.get("pfWages"))
+        if wages is None and slip is not None and (pf or esi):
+            wages = _num(slip.basic)  # an older slip without the statutory block
+        pf_rule = stat.get("pfRule") if isinstance(stat.get("pfRule"), dict) else None
+        esi_rule = stat.get("esiRule") if isinstance(stat.get("esiRule"), dict) else None
+        pf_rate = _num(pf_rule.get("ratePercent")) if pf_rule else _num(ded.get("pfRate")) if pf else None
+        esi_rate = _num(esi_rule.get("ratePercent")) if esi_rule else _num(ded.get("esiRate")) if esi else None
+        tds_block = stat.get("tds") if isinstance(stat.get("tds"), dict) else None
+        tds_rate = _num(ded.get("tdsPercent"))
+        if tds_rate is None and tds_block:
+            tds_rate = _num(tds_block.get("percent"))
+        if tds_rate is None:
+            tds_rate = _num(p.tds_percent)
+        tds_base = _num(tds_block.get("base")) if tds_block else (_num(p.gross_salary) if tds else None)
+
+        how = []
+        if category == "co_emp":
+            basis = "Basic + DA + Retaining Allowance (prorated)"
+            if pf_rule:
+                how.append(f"PF {_plain(pf_rate)}% of {basis}")
+            else:
+                how.append("No PF rule matched the salary")
+            if esi_rule:
+                how.append(f"ESI {_plain(esi_rate)}%")
+            else:
+                how.append("no ESI rule matched the salary")
+        if tds_rate is not None and (tds or category == "tds"):
+            how.append(f"TDS {_plain(tds_rate)}% of the pay earned")
+        if stat.get("reason"):
+            how.append(str(stat["reason"]))
+        out.append(
+            {
+                "code": v.get("code") or emp.employee_code,
+                "name": v.get("name") or f"{emp.first_name} {emp.last_name}".strip(),
+                "department": emp.department.name if emp.department_id and emp.department else "",
+                "category": _COVER.get(category, "-"),
+                "wages": _money(wages) if wages is not None else None,
+                "pfRate": float(pf_rate) if pf_rate is not None else None,
+                "pf": _money(pf),
+                "esiRate": float(esi_rate) if esi_rate is not None else None,
+                "esi": _money(esi),
+                "tdsRate": float(tds_rate) if tds_rate is not None else None,
+                "tdsBase": _money(tds_base) if tds_base is not None else None,
+                "tds": _money(tds),
+                "total": _money((pf or 0) + (esi or 0) + tds),
+                "how": "; ".join(how),
+            }
+        )
+    for i, r in enumerate(out, start=1):
+        r["sno"] = i
+    return out
+
+
+def statutory_section(payrolls: list, values: list[dict]) -> ReportSection:
+    rows = statutory_rows(payrolls, values)
+    co_emp = sum(1 for r in rows if r["category"] == "Co Emp")
+    tds_list = sum(1 for r in rows if r["category"] == "TDS list")
+    totals = {k: round(sum(r[k] for r in rows), 2) for k in ("pf", "esi", "tds", "total")}
+    notes = [
+        f"{len(rows)} of the {len(payrolls)} employees on this statement have PF, ESI or TDS: {co_emp} in Co Emp "
+        f"(Employees > Co Emp) and {tds_list} on the TDS list. Everybody else has none, so their ESI, PF and TDS "
+        "columns on the statement are 0.",
+        "PF and ESI are taken from Co Emp employees only, by the rules of Settings > PF & ESI, from Basic + DA + Retaining "
+        "Allowance (the first portion of the salary, prorated for the days paid). TDS is taken from employees on the TDS "
+        "list only: their TDS percentage of the pay earned.",
+        "The figures are the ones payroll saved when it was generated. A change to Co Emp, the TDS list or the rules shows "
+        "here only after the month's payroll is generated again.",
+    ]
+    if not any(r["tds"] for r in rows) and not tds_list:
+        notes.append("No employee is on the TDS list for this month, so no TDS was deducted.")
+    return ReportSection(
+        title=STATUTORY_TITLE,
+        columns=STATUTORY_COLUMNS,
+        rows=rows,
+        totals=totals if rows else None,
+        notes=notes,
+        sheet="PF ESI TDS",
+        empty="No employee on this statement is in Co Emp or on the TDS list, so nobody has PF, ESI or TDS this month.",
+    )
+
+
 def _no_payroll_count(ctx, year: int, month: int) -> int:
     """Active staff in the report's scope (branch, department, designation, employee) who joined by the end of the month
     and have no monthly payroll for it. The employee-status filter does not apply: this counts active people only."""
@@ -121,6 +274,7 @@ def _run(ctx) -> ReportResult:
 
     values, no_slip, mismatched = statement_rows(payrolls, KIND_STAFF, info)
     groups = _groups(payrolls, values, staff_columns())
+    ordered = [{**r["values"], "_payrollId": r["payrollId"]} for group in groups for r in group["rows"]]
 
     rows: list[dict] = []
     for group in groups:
@@ -174,7 +328,9 @@ def _run(ctx) -> ReportResult:
         notes.append("No staff payroll has been generated for this month and selection.")
     if any(g["label"].startswith(NO_DEPARTMENT) for g in groups):
         notes.append(f"Employees with no department are listed under '{NO_DEPARTMENT}', last.")
-    return ReportResult(rows=rows, summary=summary, notes=notes)
+    # the PF / ESI / TDS lines get a section of their own in the files (the screen keeps the statement as printed)
+    sections = [statutory_section(payrolls, ordered)] if ctx.purpose in ("xlsx", "pdf") else []
+    return ReportResult(rows=rows, summary=summary, notes=notes, sections=sections)
 
 
 register(

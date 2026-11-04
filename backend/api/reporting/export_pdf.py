@@ -21,6 +21,7 @@ from reportlab.pdfgen import canvas as canvas_mod
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
+    PageBreak,
     Image as RLImage,
     PageTemplate,
     Paragraph,
@@ -156,6 +157,74 @@ def _canvas_maker(footer_left: str, footer_mid: str, regular: str):
             super().save()
 
     return NumberedCanvas
+
+
+def _section_table(section, avail: float, regular: str, bold: str, rupee_ok: bool, style) -> list:
+    """The flowables of one further table (types.ReportSection): header, zebra rows, the totals line; or its empty text."""
+    cols = list(section.columns)
+    if not section.rows:
+        return [Paragraph(escape(section.empty), style("se", fontSize=9, leading=12, textColor=MUTED))]
+    n = len(cols)
+    size = 8.0 if n <= 12 else 7.0 if n <= 18 else 6.0
+    widths = _column_widths(cols, avail)
+    pad = 3.0
+    aligns = [
+        c.align or ("right" if c.type in _NUMERIC else "center" if c.type in (DATE, TIME, DATETIME, BADGE) else "left")
+        for c in cols
+    ]
+    s_head = style("sh", fontName=bold, alignment=TA_CENTER, textColor=colors.white, fontSize=size, leading=size * 1.2)
+    by_align = {
+        a: style(
+            f"s{a}",
+            fontSize=size,
+            leading=size * 1.25,
+            alignment={"left": TA_LEFT, "right": TA_RIGHT}.get(a, TA_CENTER),
+        )
+        for a in ("left", "right", "center")
+    }
+
+    def cell(i: int, text: str, strong: bool):
+        if pdfmetrics.stringWidth(text, bold if strong else regular, size) <= widths[i] - 2 * pad:
+            return text
+        return Paragraph(escape(text), by_align[aligns[i]])
+
+    data: list[list] = [[Paragraph(escape(c.label), s_head) for c in cols]]
+    for r in section.rows:
+        data.append([cell(i, pdf_text(c, r.get(c.key), rupee_ok), False) for i, c in enumerate(cols)])
+    cmds: list[tuple] = [
+        ("FONTNAME", (0, 1), (-1, -1), regular),
+        ("FONTSIZE", (0, 1), (-1, -1), size),
+        ("TEXTCOLOR", (0, 1), (-1, -1), INK),
+        ("BACKGROUND", (0, 0), (-1, 0), BRAND),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.25, GRID),
+        ("LEFTPADDING", (0, 0), (-1, -1), pad),
+        ("RIGHTPADDING", (0, 0), (-1, -1), pad),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+    ]
+    for i, a in enumerate(aligns):
+        cmds.append(("ALIGN", (i, 1), (i, -1), a.upper()))
+    if section.totals:
+        idx = len(data)
+        first = True
+        row = []
+        for i, c in enumerate(cols):
+            v = section.totals.get(c.key)
+            if v is None:
+                row.append("TOTAL" if first else "")
+                first = False
+                cmds.append(("ALIGN", (i, idx), (i, idx), "LEFT"))
+            else:
+                row.append(cell(i, pdf_text(c, v, rupee_ok), True))
+        data.append(row)
+        cmds.append(("FONTNAME", (0, idx), (-1, idx), bold))
+        cmds.append(("BACKGROUND", (0, idx), (-1, idx), TOTAL))
+        cmds.append(("LINEABOVE", (0, idx), (-1, idx), 0.9, BRAND))
+    tbl = Table(data, colWidths=widths, repeatRows=1, splitByRow=1)
+    tbl.setStyle(TableStyle(cmds))
+    return [tbl]
 
 
 def build_pdf(out: RunOutput) -> bytes:
@@ -372,6 +441,38 @@ def build_pdf(out: RunOutput) -> bytes:
     for note in out.notes:
         story.append(Spacer(1, 2))
         story.append(Paragraph(escape(note), s_note))
+
+    # ── further sections (types.ReportSection): each on a new page, in the main table's look ──
+    for section in out.sections:
+        story.append(PageBreak())
+        band = Table(
+            [
+                [
+                    Paragraph(
+                        escape(section.title.upper()),
+                        style("st", fontName=bold, fontSize=11, leading=14, textColor=colors.white),
+                    )
+                ]
+            ],
+            colWidths=[avail],
+            hAlign="LEFT",
+        )
+        band.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), BRAND),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        story.append(band)
+        story.append(Spacer(1, 6))
+        story.extend(_section_table(section, avail, regular, bold, rupee_ok, style))
+        for note in section.notes:
+            story.append(Spacer(1, 2))
+            story.append(Paragraph(escape(note), s_note))
 
     buf = io.BytesIO()
     doc = BaseDocTemplate(

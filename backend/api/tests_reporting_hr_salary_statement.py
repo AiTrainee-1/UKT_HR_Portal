@@ -634,3 +634,134 @@ class CostAndSafetyTests(_World):
             r = self.client.get(f"/api/reports/export/{RID}", {"fmt": "xlsx", "period": PERIOD}, **hdr(self.admin))
         self.assertEqual(r.status_code, 413)
         self.assertEqual(r.json()["error"], "too_many_rows")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PF, ESI & TDS details (owner 2026-11-04: the PF / ESI / TDS deductions must be plain in the PDF and the Excel)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _rule(rule_id, low, high, rate, basis="first_portion"):
+    return {"id": rule_id, "label": rule_id, "basis": basis, "minAmount": low, "maxAmount": high, "ratePercent": rate}
+
+
+class StatutorySectionTests(TestCase):
+    """April 2026: Kavin (Co Emp: PF 8% and ESI 10% of the first portion), Divya (on the TDS list at 10%) and Arun
+    (neither), all present every working day."""
+
+    @classmethod
+    def setUpTestData(cls):
+        ps = PayrollSettings.get()
+        for key, value in {
+            "attendance_mode": "simple",
+            "late_deduction_slabs": [],
+            "compensation_feature_enabled": True,
+            "staff_pf_rules": [_rule("pf", 0, 25000, 8)],
+            "staff_esi_rules": [_rule("esi", 0, 30000, 10)],
+        }.items():
+            setattr(ps, key, value)
+        ps.save()
+        cls.dept = Department.objects.create(name="Accounts")
+
+        def staff(code, first, salary, **kw):
+            emp = Employee.objects.create(
+                employee_code=code, first_name=first, last_name="S", employment_type="staff", status="active",
+                salary_type="monthly", salary_amount=Decimal(salary), department=cls.dept, **kw,
+            )  # fmt: skip
+            for d in WORKING:
+                day(emp, d)
+            return emp
+
+        cls.kavin = staff("701", "KAVIN", "20000", co_emp_enabled=True)
+        cls.divya = staff("702", "DIVYA", "30000", tds_enabled=True, tds_percent=Decimal("10"))
+        cls.arun = staff("703", "ARUN", "18000")
+        for emp in (cls.kavin, cls.divya, cls.arun):
+            _generate_staff_payroll(emp, MONTH, YEAR)
+        cls.admin = HRUser.objects.create(
+            username="st_admin", password_hash="x", is_super_admin=True, full_name="Meena"
+        )
+
+    def export(self, fmt):
+        r = self.client.get(f"/api/reports/export/{RID}", {"fmt": fmt, "period": PERIOD}, **hdr(self.admin))
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        return r
+
+    def section_rows(self):
+        ws = load_workbook(io.BytesIO(self.export("xlsx").content))["PF ESI TDS"]
+        values = [[c.value for c in row] for row in ws.iter_rows()]
+        header = values.index(next(v for v in values if v[0] == "SNO"))
+        cols = values[header]
+        rows = [dict(zip(cols, v)) for v in values[header + 1 :] if isinstance(v[0], int)]
+        total = next(v for v in values if v[0] == "TOTAL")
+        return cols, rows, dict(zip(cols, total)), values
+
+    def test_the_excel_has_a_sheet_with_every_pf_esi_and_tds_line(self):
+        wb = load_workbook(io.BytesIO(self.export("xlsx").content))
+        self.assertEqual(wb.sheetnames, ["Salary Statement", "PF ESI TDS"])
+        cols, rows, total, values = self.section_rows()
+        self.assertEqual(
+            cols,
+            [
+                "SNO", "ID NO", "Name", "Department", "Covered by", "PF / ESI wages", "PF %", "PF", "ESI %", "ESI",
+                "TDS %", "TDS on (pay earned)", "TDS", "PF + ESI + TDS", "How it was worked out",
+            ],
+        )  # fmt: skip
+        self.assertEqual([r["ID NO"] for r in rows], ["701", "702"])  # Arun has none of the three: not listed
+        slip = SalarySlip.objects.get(employee=self.kavin, month=MONTH, year=YEAR)
+        kavin = rows[0]
+        self.assertEqual((kavin["Covered by"], kavin["PF %"], kavin["ESI %"]), ("Co Emp", 8, 10))
+        self.assertAlmostEqual(kavin["PF"], float(slip.pf_deduction), 2)
+        self.assertAlmostEqual(kavin["ESI"], float(slip.esi_deduction), 2)
+        self.assertGreater(kavin["PF"], 0)
+        self.assertAlmostEqual(kavin["PF / ESI wages"], 10000, 2)  # the first 50% of 20,000, all days paid
+        self.assertIn("PF 8% of Basic + DA + Retaining Allowance", kavin["How it was worked out"])
+        divya = rows[1]
+        payroll = Payroll.objects.get(employee=self.divya, month=MONTH, year=YEAR)
+        self.assertEqual((divya["Covered by"], divya["TDS %"]), ("TDS list", 10))
+        self.assertAlmostEqual(divya["TDS"], float(payroll.tds_deduction), 2)
+        self.assertGreater(divya["TDS"], 0)
+        self.assertIn(divya["PF"], (0, None))
+        self.assertAlmostEqual(total["PF"], kavin["PF"], 2)
+        self.assertAlmostEqual(total["ESI"], kavin["ESI"], 2)
+        self.assertAlmostEqual(total["TDS"], divya["TDS"], 2)
+        self.assertAlmostEqual(total["PF + ESI + TDS"], kavin["PF"] + kavin["ESI"] + divya["TDS"], 2)
+        notes = " ".join(str(v[0]) for v in values if v and isinstance(v[0], str))
+        self.assertIn("2 of the 3 employees on this statement have PF, ESI or TDS: 1 in Co Emp", notes)
+
+    def test_the_section_agrees_with_the_statements_own_columns(self):
+        wb = load_workbook(io.BytesIO(self.export("xlsx").content))
+        main = wb["Salary Statement"]
+        labels = [c.value for c in main[HEADER_ROW]]
+        lines = {
+            r[labels.index("ID NO")]: r
+            for r in main.iter_rows(min_row=HEADER_ROW + 1, values_only=True)
+            if isinstance(r[0], int)
+        }
+        _cols, rows, _total, _values = self.section_rows()
+        for r in rows:
+            line = lines[r["ID NO"]]
+            for key in ("PF", "ESI", "TDS"):
+                self.assertAlmostEqual(line[labels.index(key)] or 0, r[key] or 0, 2, (r["ID NO"], key))
+
+    def test_the_pdf_has_the_section_on_a_page_of_its_own(self):
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(self.export("pdf").content))
+        last = reader.pages[-1].extract_text()
+        self.assertIn("PF, ESI & TDS DETAILS", last)
+        self.assertIn("KAVIN", last)
+        self.assertIn("DIVYA", last)
+        self.assertNotIn("PF, ESI & TDS DETAILS", reader.pages[0].extract_text())
+
+    def test_the_screen_keeps_the_printed_statement_only(self):
+        r = self.client.get(f"/api/reports/run/{RID}", {"period": PERIOD}, **hdr(self.admin))
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        self.assertEqual(r.json()["sections"], [])
+
+    def test_with_nobody_covered_the_section_says_so(self):
+        Employee.objects.update(co_emp_enabled=False, tds_enabled=False, tds_percent=None)
+        for emp in Employee.objects.all():
+            _generate_staff_payroll(emp, MONTH, YEAR)
+        ws = load_workbook(io.BytesIO(self.export("xlsx").content))["PF ESI TDS"]
+        text = " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
+        self.assertIn("No employee on this statement is in Co Emp or on the TDS list", text)

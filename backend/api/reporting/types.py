@@ -150,6 +150,23 @@ class FilterSpec:
 
 
 @dataclass
+class ReportSection:
+    """A further titled table a report adds after its main one: its own sheet in the Excel file and its own section (on a
+    new page) of the PDF. For details the main table would bury, e.g. the PF / ESI / TDS lines of a salary statement."""
+
+    title: str
+    columns: tuple[ColumnSpec, ...]
+    rows: list[dict]
+    # {column key: value}; None = no totals line
+    totals: dict[str, Any] | None = None
+    notes: list[str] = field(default_factory=list)
+    # The Excel sheet's name (31 characters at most); defaults to the title
+    sheet: str | None = None
+    # Shown when `rows` is empty
+    empty: str = "Nothing to show."
+
+
+@dataclass
 class ReportResult:
     rows: list[dict]
     # Overrides the spec's columns -- for reports whose columns depend on the data
@@ -163,6 +180,8 @@ class ReportResult:
     summary: list[dict] = field(default_factory=list)
     # Footnotes: assumptions, rates used, exclusions. Shown under the table and in exports.
     notes: list[str] = field(default_factory=list)
+    # Further titled tables after the main one (an Excel sheet each, a PDF section each).
+    sections: list[ReportSection] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
