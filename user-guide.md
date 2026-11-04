@@ -664,7 +664,7 @@ The page is about **one month** at a time. Use the arrows or the Month / Year bo
 **Company month days (display only).** A staff payroll's attendance is shown out of the company's own count of the month: every day except Sundays, with the declared holidays counted in. For October 2026 the payroll list shows *24 / 27 days* and the Details page *Days worked 22 / 27*, with what the 27 is made of under it: *25 Working Days + 2 Holidays* (a month without a holiday just says, for example, *26 Working Days*). It is only shown: payroll still pays on the 25 working days, and the per day salary, the Gross card ("earned for 22 of 25 working days"), LOP and every amount are worked out exactly as before.
 
 Every kind of day has a colour of its own, and the key above the calendar (grouped: *Worked*, *Leave*, *Paid extras*, *Days off*, *Also marked*) is also a filter (click one to dim the other days; click again, or **Clear**, to lift it). A kind nothing in the month used is greyed out:
-- **Present** green, **Late In** amber, **Early Out** magenta (Late In and Early Out are separate: a day can carry both), **Half day** orange, **Absent** red.
+- **Present** green, **Late In** amber, **Early Out** magenta (Late In and Early Out are separate: a day can carry both), **Half day** deep violet (it was orange, too close to Late In), **Absent** red.
 - **Casual Leave** sky blue (it used to look like an ordinary Present day), and the **other leaves** (unpaid leave, paid leave, other leave) purple.
 - **On-Duty** teal, and **On-Duty not verified** (dashed teal) for a day an On-Duty request touches that does not count as worked yet (see On-Duty below).
 - **Compensation** lime, **Sunday Compensation** pink, **OT Compensation** indigo.
