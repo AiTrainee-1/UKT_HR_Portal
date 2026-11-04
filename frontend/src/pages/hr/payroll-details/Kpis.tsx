@@ -116,9 +116,9 @@ export function KpiStrip({
       <KpiTile
         label={work.label}
         value={
-          work.outOf ? (
+          work.shownOutOf ? (
             <>
-              {work.value} <span className="text-sm font-bold opacity-60">/ {work.outOf}</span>
+              {work.value} <span className="text-sm font-bold opacity-60">/ {work.shownOutOf}</span>
             </>
           ) : (
             work.value

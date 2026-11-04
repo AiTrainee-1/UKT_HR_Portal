@@ -896,11 +896,23 @@ export function summaryNumber(summary: PayrollDetails["summary"] | null | undefi
 /** A number with at most two decimals and no trailing zeros: 23.5, 26, 0.25. */
 export const trimNumber = (n: number): string => String(Math.round(n * 100) / 100);
 
-/** The "Days worked" (staff) or "Shifts" (production) tile: one big figure and a line that explains it. */
+/**
+ * The "Days worked" (staff) or "Shifts" (production) tile: one big figure and a line that explains it.
+ * `outOf` = the payroll's working days (what pay is worked out on; the per-day and gross lines use it). `shownOutOf` = the
+ * total the tile shows: the company's count of the month, holidays included, when the server sends it (owner 2026-11-04:
+ * "22 / 27"), else the working days; `companyMonth` = what that total is made of ("25 Working Days + 2 Holidays").
+ */
 export function workTile(
   details: Pick<PayrollDetails, "summary">,
   kind: PayrollKind,
-): { label: string; value: string; outOf: string | null; sub: string; companyMonth: string | null } {
+): {
+  label: string;
+  value: string;
+  outOf: string | null;
+  shownOutOf: string | null;
+  sub: string;
+  companyMonth: string | null;
+} {
   const s = details.summary ?? {};
   const n = (key: string) => summaryNumber(s, key);
   if (kind === "production") {
@@ -911,6 +923,7 @@ export function workTile(
       label: "Shifts",
       value: shifts === null ? "—" : trimNumber(shifts),
       outOf: null,
+      shownOutOf: null,
       sub: [worked !== null ? `${plural(worked, "day")} worked` : "", absent ? `${absent} absent` : ""]
         .filter(Boolean)
         .join(" · "),
@@ -928,21 +941,24 @@ export function workTile(
     n("halfShiftDays") ? `${trimNumber(n("halfShiftDays")!)} half` : "",
     lop ? `${trimNumber(lop)} LOP` : "",
   ].filter(Boolean);
-  // display only (2026-11-04): the company's count of the month, holidays included: "27-day month · 25 working + 2 holidays"
-  const company = n("companyDays");
+  // display only (2026-11-04): the company's count of the month, holidays included (27 = 25 working + 2 holidays)
+  const companyDays = n("companyDays");
+  const company = companyDays !== null && companyDays > 0 && working !== null ? companyDays : null;
   const holidays = company !== null && working !== null ? company - working : 0;
-  const companyMonth =
-    company !== null && company > 0
-      ? holidays > 0 && working !== null
-        ? `${trimNumber(company)}-day month · ${trimNumber(working)} working + ${plural(holidays, "holiday")}`
-        : `${trimNumber(company)}-day month`
-      : null;
+  const workingText = working !== null ? `${trimNumber(working)} Working ${working === 1 ? "Day" : "Days"}` : "";
+  const outOf = effective !== null && working !== null ? trimNumber(working) : null;
   return {
     label: "Days worked",
     value: effective === null ? "—" : trimNumber(effective),
-    outOf: effective !== null && working !== null ? trimNumber(working) : null,
+    outOf,
+    shownOutOf: outOf !== null && company !== null ? trimNumber(company) : outOf,
     sub: parts.join(" · "),
-    companyMonth,
+    companyMonth:
+      company === null
+        ? null
+        : holidays > 0
+          ? `${workingText} + ${trimNumber(holidays)} ${holidays === 1 ? "Holiday" : "Holidays"}`
+          : workingText,
   };
 }
 

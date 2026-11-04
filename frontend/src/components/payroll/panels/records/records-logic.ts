@@ -22,28 +22,40 @@ export const displayName = (run: Pick<PayrollRunItem, "employeeName" | "employee
 export const isProductionRun = (run: Pick<PayrollRunItem, "salaryMode">): boolean =>
   run.salaryMode === "shift" || run.salaryMode === "session";
 
-/** "22 / 26 days" for staff, "6.5 shifts" for production, "3 sessions" for an old session-based row. */
-export function metricText(
-  run: Pick<PayrollRunItem, "salaryMode" | "presentDays" | "totalWorkingDays" | "completedSessions">,
-): string {
-  if (run.salaryMode === "shift") return plural(Number(run.presentDays) || 0, "shift");
-  if (run.salaryMode === "session") return plural(Number(run.completedSessions) || 0, "session");
-  return `${formatCount(run.presentDays)} / ${formatCount(run.totalWorkingDays)} days`;
+/** The company's count of a staff month (display only; null for production or from an older server). */
+function companyDaysOf(run: Pick<PayrollRunItem, "salaryMode" | "companyDays">): number | null {
+  if (isProductionRun(run) || run.companyDays === null || run.companyDays === undefined) return null;
+  const company = Number(run.companyDays);
+  return Number.isFinite(company) && company > 0 ? company : null;
 }
 
 /**
- * The company's count of the month beside the payroll's working days (staff, display only): "27-day month · 2 holidays"
- * when 25 working days leave out 2 declared holidays, "26-day month" when there were none. Null for production rows and
- * for rows from a server that does not send it.
+ * "22 / 27 days" for staff, "6.5 shifts" for production, "3 sessions" for an old session-based row. A staff month is shown
+ * out of the company's count of the month (holidays included, owner 2026-11-04); without it, out of the payroll's working
+ * days as before. Display only: payroll still pays on its working days.
+ */
+export function metricText(
+  run: Pick<PayrollRunItem, "salaryMode" | "presentDays" | "totalWorkingDays" | "completedSessions" | "companyDays">,
+): string {
+  if (run.salaryMode === "shift") return plural(Number(run.presentDays) || 0, "shift");
+  if (run.salaryMode === "session") return plural(Number(run.completedSessions) || 0, "session");
+  return `${formatCount(run.presentDays)} / ${formatCount(companyDaysOf(run) ?? run.totalWorkingDays)} days`;
+}
+
+/**
+ * What the company's count of the month is made of, under the attendance line (staff, display only):
+ * "25 Working Days + 2 Holidays" (the working days payroll pays on, plus the declared holidays), "26 Working Days" in a
+ * month without a holiday. Null for production rows and for rows from a server that does not send the count.
  */
 export function companyMonthText(
   run: Pick<PayrollRunItem, "salaryMode" | "totalWorkingDays" | "companyDays">,
 ): string | null {
-  if (isProductionRun(run) || run.companyDays === null || run.companyDays === undefined) return null;
-  const company = Number(run.companyDays);
-  if (!Number.isFinite(company) || company <= 0) return null;
-  const holidays = company - (Number(run.totalWorkingDays) || 0);
-  return holidays > 0 ? `${company}-day month · ${plural(holidays, "holiday")}` : `${company}-day month`;
+  const company = companyDaysOf(run);
+  if (company === null) return null;
+  const working = Number(run.totalWorkingDays) || 0;
+  const holidays = company - working;
+  const days = `${formatCount(working)} Working ${working === 1 ? "Day" : "Days"}`;
+  return holidays > 0 ? `${days} + ${formatCount(holidays)} ${holidays === 1 ? "Holiday" : "Holidays"}` : days;
 }
 
 /** What the metric is called in a column header or a tooltip: "Days present", "Shifts". */

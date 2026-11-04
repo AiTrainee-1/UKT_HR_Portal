@@ -79,16 +79,22 @@ describe("the attendance line", () => {
     expect(metricLabel(run())).toBe("Attendance");
   });
 
-  it("staff: the company's count of the month under it (display only), with the holidays it includes", () => {
-    // October 2026: 27 days but Sundays; payroll pays 25 because of 2 declared holidays
-    const october = run({ presentDays: 23, totalWorkingDays: 25, companyDays: 27 });
-    expect(metricText(october)).toBe("23 / 25 days"); // unchanged
-    expect(companyMonthText(october)).toBe("27-day month · 2 holidays");
-    expect(companyMonthText(run({ totalWorkingDays: 26, companyDays: 27 }))).toBe("27-day month · 1 holiday");
-    expect(companyMonthText(run({ totalWorkingDays: 26, companyDays: 26 }))).toBe("26-day month");
-    // nothing from an older server, nothing for production
+  it("staff: out of the company's count of the month, with its working days and holidays under it (display only)", () => {
+    // October 2026: 27 days but Sundays; payroll still pays on 25 working days because of 2 declared holidays
+    const october = run({ presentDays: 24, totalWorkingDays: 25, companyDays: 27 });
+    expect(metricText(october)).toBe("24 / 27 days");
+    expect(companyMonthText(october)).toBe("25 Working Days + 2 Holidays");
+    expect(companyMonthText(run({ totalWorkingDays: 26, companyDays: 27 }))).toBe("26 Working Days + 1 Holiday");
+    // a month without a holiday
+    const plain = run({ presentDays: 22, totalWorkingDays: 26, companyDays: 26 });
+    expect(metricText(plain)).toBe("22 / 26 days");
+    expect(companyMonthText(plain)).toBe("26 Working Days");
+    // an older server sends no count: out of the working days as before, nothing under it
+    expect(metricText(run())).toBe("22 / 26 days");
     expect(companyMonthText(run())).toBeNull();
     expect(companyMonthText(run({ companyDays: null }))).toBeNull();
+    // production rows are shifts, never a company month
+    expect(metricText(run({ salaryMode: "shift", presentDays: 6, companyDays: 27 }))).toBe("6 shifts");
     expect(companyMonthText(run({ salaryMode: "shift", companyDays: 27 }))).toBeNull();
   });
 

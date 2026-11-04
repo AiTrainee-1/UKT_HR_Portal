@@ -652,33 +652,41 @@ describe("the dashboard figures", () => {
       label: "Days worked",
       value: "23.5",
       outOf: "26",
+      shownOutOf: "26", // an older server sends no company count: out of the working days, nothing under it
       sub: "21 present · 2 paid leave · 1 half · 2 LOP",
-      companyMonth: null, // an older server sends no company count
+      companyMonth: null,
     });
     expect(workTile({ summary: {} }, "staff")).toMatchObject({ value: "—", outOf: null, sub: "", companyMonth: null });
     // without the working days there is nothing to put the figure out of
     expect(workTile({ summary: { effectivePaidDays: 12 } }, "staff")).toMatchObject({ value: "12", outOf: null });
   });
 
-  it("staff: the company's count of the month sits under it, the payroll's working days unchanged", () => {
-    // October 2026: 27 days but Sundays, 2 of them declared holidays, so payroll pays 25 working days
+  it("staff: shown out of the company's count of the month, with its working days and holidays under it", () => {
+    // October 2026: 27 days but Sundays, 2 of them declared holidays, so payroll pays on 25 working days
     const october = {
-      summary: { totalWorkingDays: 25, effectivePaidDays: 23, presentDays: 23, absentDays: 2, companyDays: 27 },
+      summary: {
+        totalWorkingDays: 25,
+        effectivePaidDays: 22,
+        presentDays: 23,
+        halfShiftDays: 2,
+        absentDays: 2,
+        companyDays: 27,
+      },
     };
     expect(workTile(october, "staff")).toEqual({
       label: "Days worked",
-      value: "23",
-      outOf: "25",
-      sub: "23 present · 2 LOP",
-      companyMonth: "27-day month · 25 working + 2 holidays",
+      value: "22",
+      outOf: "25", // what pay is worked out on (the per-day and gross lines keep using it)
+      shownOutOf: "27",
+      sub: "23 present · 2 half · 2 LOP",
+      companyMonth: "25 Working Days + 2 Holidays",
     });
     // a month without a holiday
+    const plain = workTile({ summary: { totalWorkingDays: 26, effectivePaidDays: 26, companyDays: 26 } }, "staff");
+    expect([plain.outOf, plain.shownOutOf, plain.companyMonth]).toEqual(["26", "26", "26 Working Days"]);
     expect(
-      workTile({ summary: { totalWorkingDays: 26, effectivePaidDays: 26, companyDays: 26 } }, "staff").companyMonth,
-    ).toBe("26-day month");
-    expect(workTile({ summary: { totalWorkingDays: 26, companyDays: 27 } }, "staff").companyMonth).toBe(
-      "27-day month · 26 working + 1 holiday",
-    );
+      workTile({ summary: { totalWorkingDays: 26, effectivePaidDays: 20, companyDays: 27 } }, "staff").companyMonth,
+    ).toBe("26 Working Days + 1 Holiday");
   });
 
   it("production: shifts, with the days behind them", () => {
@@ -686,6 +694,7 @@ describe("the dashboard figures", () => {
       label: "Shifts",
       value: "4.5",
       outOf: null,
+      shownOutOf: null,
       sub: "5 days worked · 1 absent",
       companyMonth: null,
     });
