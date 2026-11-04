@@ -1,6 +1,7 @@
 """
-Casual Leave Carry Forward (owner brief 2026-11-04, final form): on the HR Casual Leave page HR turns an employee's ABSENT
-or ON LEAVE days into Casual Leave from the yearly balance, which stays a fixed 12 (no extra days are ever added).
+Casual Leave Carry Forward (owner brief 2026-11-04, final form): on the HR Casual Leave page HR turns an employee's ABSENT,
+ON LEAVE or HALF DAY days into Casual Leave (a full day or a half each) from the yearly balance, which stays a fixed 12 (no
+extra days are ever added).
 
   - GET  /api/casual-leaves/absent-dates: detection - the month's absent and on-leave days that hold no Casual Leave yet,
     with the leave's name, and the whole month as a calendar (status of every day, which ones can be picked)
@@ -102,10 +103,12 @@ class DetectTests(CarryBase):
         body = self.detect(self.emp)
         asha = body["employees"][0]
         self.assertEqual([d["date"] for d in asha["absent"]], ["2026-10-06", "2026-10-07", "2026-10-09", "2026-10-13"])
+        leave = asha["onLeave"]
         self.assertEqual(
-            asha["onLeave"],
-            [{"date": "2026-10-14", "weekday": "Wed", "status": "on_leave", "label": "On Leave · Sick Leave"}],
+            [(d["date"], d["status"], d["label"], d["portions"], d["suggested"]) for d in leave],
+            [("2026-10-14", "on_leave", "On Leave · Sick Leave", ["full", "first_half", "second_half"], "full")],
         )
+        self.assertEqual(leave[0]["halves"], {"first": "09:00-13:00", "second": "14:00-18:00"})
         self.assertEqual(
             [d["date"] for d in asha["dates"]],
             ["2026-10-06", "2026-10-07", "2026-10-09", "2026-10-13", "2026-10-14"],
@@ -176,7 +179,7 @@ class AssignTests(CarryBase):
         self.assertEqual(given[0]["source"], "hr_assign")
         self.assertRegex(
             given[0]["text"],
-            r"^12 → 11 on .*: Casual Leave given by HR for an absent / leave day \(Full day, 06 Oct 2026\)$",
+            r"^12 → 11 on .*: Casual Leave given by HR for an absent / leave / half day \(Full day, 06 Oct 2026\)$",
         )
         mine = self.as_employee("get", "/api/casual-leaves/my-eligibility").json()
         self.assertEqual((mine["monthsUsage"][9]["used"], mine["monthsUsage"][9]["beforeCutOver"]), (1, 0))
@@ -190,8 +193,8 @@ class AssignTests(CarryBase):
     def test_the_number_is_the_most_that_may_be_picked(self):
         r = self.assign([{"employeeId": self.emp.id, "limit": 1, "dates": ["2026-10-06", "2026-10-07"]}])
         self.assertEqual(r.status_code, 400)
-        self.assertEqual(r.json()["problems"][0]["error"], "2 dates picked, but the days allow 1 at most.")
-        for bad in (0, 32, "x", None, True, 1.5):
+        self.assertEqual(r.json()["problems"][0]["error"], "2 days picked, but the days allow 1 at most.")
+        for bad in (0, 32, "x", None, True, 1.25):
             r = self.assign([{"employeeId": self.emp.id, "limit": bad, "dates": ["2026-10-06"]}])
             self.assertEqual(r.status_code, 400, bad)
         r = self.assign([{"employeeId": self.emp.id, "limit": 3, "dates": []}])
@@ -203,7 +206,7 @@ class AssignTests(CarryBase):
         self.assertEqual(r.status_code, 400)
         self.assertEqual(
             r.json()["problems"][0]["error"],
-            "Not an absent or leave day (or it already has Casual Leave): 08 Oct. Pick again.",
+            "Not an absent, leave or half day (or it already has Casual Leave): 08 Oct. Pick again.",
         )
         self.assign([{"employeeId": self.emp.id, "limit": 1, "dates": ["2026-10-06"]}])
         again = self.assign([{"employeeId": self.emp.id, "limit": 1, "dates": ["2026-10-06"]}])
@@ -217,7 +220,7 @@ class AssignTests(CarryBase):
         r = self.assign([{"employeeId": self.emp.id, "limit": 2, "dates": ["2026-10-06", "2026-10-07"]}])
         self.assertEqual(r.status_code, 400)
         self.assertEqual(
-            r.json()["problems"][0]["error"], "Only 1 day of Casual Leave left, so 2 dates cannot be given."
+            r.json()["problems"][0]["error"], "Only 1 day of Casual Leave left, so 2 days cannot be given."
         )
         ok = self.assign([{"employeeId": self.emp.id, "limit": 2, "dates": ["2026-10-06"]}])
         self.assertEqual(ok.status_code, 201)
@@ -308,7 +311,7 @@ class FixedTwelveAndLogTests(CarryBase):
         self.assertEqual(self.send("get", f"{LOG}?employeeId={self.emp.id}").json()["total"], 1)
         log = AuditLog.objects.filter(module="casual_leave").order_by("id").first()
         self.assertIn(
-            "absent / leave days 06 Oct 2026, 09 Oct 2026 given as Casual Leave, 12 → 10 left", log.record_description
+            "given 2 days for 06 Oct 2026 (full day), 09 Oct 2026 (full day), 12 → 10 left", log.record_description
         )
 
     def test_a_view_only_login_or_an_employee_cannot_give_casual_leave(self):
@@ -342,3 +345,123 @@ class FixedTwelveAndLogTests(CarryBase):
         self.assign([{"employeeId": self.bala.id, "limit": 1, "dates": ["2026-10-06"]}])
         mine = self.send("get", LOG, who=_hr(user)).json()["items"]
         self.assertEqual([i["employeeId"] for i in mine], [self.emp.id])
+
+
+class HalfDayTests(CarryBase):
+    """Asha also worked only the morning of 15 October (in 09:00, out 12:30: a Half Day) on the 09:00-18:00 shift (first half
+    to 13:00, lunch 60 minutes)."""
+
+    def setUp(self):
+        super().setUp()
+        from datetime import time
+
+        from .attendance_final import compute_range_records
+
+        self.punch(date(2026, 10, 15), time(9, 0), time(12, 30))
+        compute_range_records(self.emp, date(2026, 10, 15), date(2026, 10, 15))
+        self.assertEqual(
+            AttendanceDayRecord.objects.get(employee=self.emp, date=date(2026, 10, 15)).status, "half_shift"
+        )
+
+    def day(self, d):
+        return AttendanceDayRecord.objects.get(employee=self.emp, date=d)
+
+    def test_a_half_day_is_detected_with_the_missed_half_suggested(self):
+        body = self.detect(self.emp)["employees"][0]
+        half = body["halfDay"]
+        self.assertEqual(len(half), 1)
+        self.assertEqual(
+            (half[0]["date"], half[0]["worked"], half[0]["suggested"], half[0]["portions"]),
+            ("2026-10-15", "morning", "second_half", ["second_half", "full"]),
+        )
+        self.assertEqual(half[0]["label"], "Half Day · worked the morning (09:00-12:30)")
+        self.assertEqual(half[0]["halves"], {"first": "09:00-13:00", "second": "14:00-18:00"})
+        cal = {c["date"]: c for c in body["calendar"]}
+        self.assertEqual((cal["2026-10-15"]["status"], cal["2026-10-15"]["selectable"]), ("half_shift", True))
+        self.assertIn("2026-10-15", [d["date"] for d in body["dates"]])
+
+    def test_the_missed_half_as_casual_leave_makes_the_day_a_full_paid_day(self):
+        r = self.assign(
+            [{"employeeId": self.emp.id, "limit": 1, "dates": [{"date": "2026-10-15", "portion": "second_half"}]}]
+        )
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual((r.json()["days"], r.json()["items"][0]["days"]), (0.5, -0.5))
+        self.assertEqual(
+            r.json()["items"][0]["parts"],
+            [{"date": "2026-10-15", "portion": "second_half", "portionLabel": "Half day (second half)", "days": 0.5}],
+        )
+        cl = CasualLeaveRequest.objects.get(employee=self.emp, date=date(2026, 10, 15))
+        self.assertEqual((cl.status, cl.portion), ("approved", "second_half"))
+        rec = self.day(date(2026, 10, 15))
+        self.assertEqual((rec.status, str(rec.shifts_earned)), ("present", "1.00"))
+        b = self.balance()
+        self.assertEqual((b["total"], b["used"], b["remaining"]), (12, 0.5, 11.5))
+
+    def test_the_worked_half_cannot_be_given(self):
+        r = self.assign(
+            [{"employeeId": self.emp.id, "limit": 1, "dates": [{"date": "2026-10-15", "portion": "first_half"}]}]
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(
+            r.json()["problems"][0]["error"],
+            "15 Oct: the morning was worked, so only the second half (or a full day) can be given.",
+        )
+        self.assertFalse(CasualLeaveRequest.objects.exists())
+
+    def test_a_full_day_on_a_half_day_is_a_paid_day(self):
+        r = self.assign([{"employeeId": self.emp.id, "limit": 1, "dates": [{"date": "2026-10-15", "portion": "full"}]}])
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(self.day(date(2026, 10, 15)).status, "present")
+        self.assertEqual(self.balance()["remaining"], 11)
+
+    def test_half_of_an_absent_day_pays_that_half(self):
+        r = self.assign(
+            [{"employeeId": self.emp.id, "limit": 1, "dates": [{"date": "2026-10-06", "portion": "first_half"}]}]
+        )
+        self.assertEqual(r.status_code, 201, r.content)
+        rec = self.day(date(2026, 10, 6))
+        self.assertEqual((rec.status, str(rec.shifts_earned)), ("half_shift", "0.50"))
+        self.assertEqual(self.balance()["remaining"], 11.5)
+
+    def test_the_number_counts_half_days_as_half(self):
+        mixed = [
+            {"date": "2026-10-06", "portion": "full"},
+            {"date": "2026-10-15", "portion": "second_half"},
+        ]
+        r = self.assign([{"employeeId": self.emp.id, "limit": 1, "dates": mixed}])
+        self.assertEqual(r.json()["problems"][0]["error"], "1.5 days picked, but the days allow 1 at most.")
+        ok = self.assign([{"employeeId": self.emp.id, "limit": 1.5, "dates": mixed}])
+        self.assertEqual(ok.status_code, 201, ok.content)
+        line = ok.json()["items"][0]
+        self.assertEqual((line["days"], line["balanceBefore"], line["balanceAfter"]), (-1.5, 12, 10.5))
+        self.assertEqual(self.send("get", LOG).json()["summary"]["days"], 1.5)
+
+    def test_a_day_set_by_hand_takes_a_full_day_only(self):
+        AttendanceDayRecord.objects.filter(employee=self.emp, date=date(2026, 10, 9)).update(source="manual")
+        day = next(d for d in self.detect(self.emp)["employees"][0]["dates"] if d["date"] == "2026-10-09")
+        self.assertEqual((day["portions"], day["manual"], day["halves"]), (["full"], True, None))
+        r = self.assign(
+            [{"employeeId": self.emp.id, "limit": 1, "dates": [{"date": "2026-10-09", "portion": "first_half"}]}]
+        )
+        self.assertEqual(
+            r.json()["problems"][0]["error"],
+            "09 Oct was set by hand on the attendance pages: only a full day of Casual Leave can be given on it.",
+        )
+        self.assertEqual(
+            self.assign(
+                [{"employeeId": self.emp.id, "limit": 1, "dates": [{"date": "2026-10-09", "portion": "full"}]}]
+            ).status_code,
+            201,
+        )
+
+    def test_a_bad_portion_or_a_date_twice_is_refused(self):
+        r = self.assign(
+            [{"employeeId": self.emp.id, "limit": 1, "dates": [{"date": "2026-10-06", "portion": "morning"}]}]
+        )
+        self.assertEqual(
+            r.json()["problems"][0]["error"], "Each date needs a real date and Full day, First half or Second half."
+        )
+        twice = [{"date": "2026-10-06", "portion": "first_half"}, {"date": "2026-10-06", "portion": "second_half"}]
+        r = self.assign([{"employeeId": self.emp.id, "limit": 1, "dates": twice}])
+        self.assertEqual(r.json()["problems"][0]["error"], "Each date can be picked once.")
+        self.assertFalse(CasualLeaveRequest.objects.exists())

@@ -101,6 +101,21 @@ test("Deduct days: detect the absent and on-leave days, and only the picked date
   const absentDays = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"];
   for (const d of absentDays) expect(await dayStatus(page, token, kavya, d)).toBe("absent");
   expect(await dayStatus(page, token, kavya, "2026-10-09")).toBe("on_leave");
+  // 12 October: in at 09:00, out at 12:30, a Half Day with the morning worked
+  for (const [time, type] of [
+    ["09:00", "IN"],
+    ["12:30", "OUT"],
+  ]) {
+    const r = await api(
+      page,
+      "POST",
+      "/api/attendance/manual",
+      { employeeId: kavya, date: "2026-10-12", punchTime: time, punchType: type },
+      token,
+    );
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  }
+  expect(await dayStatus(page, token, kavya, "2026-10-12")).toBe("half_shift");
   expect(await left(page, token, kavya)).toMatchObject({ total: 12, remaining: 12 });
 
   await page.goto("/hr/casual-leave?tab=carry-forward");
@@ -127,32 +142,41 @@ test("Deduct days: detect the absent and on-leave days, and only the picked date
   );
   await expect(page.getByTestId(`cf-onleave-${kavya}`)).toContainText("Fri 9 Oct · Sick Leave");
   await expect(page.getByTestId(`cf-result-${kavya}`)).toContainText(
-    "Please select the dates you want to convert into Casual Leave (up to 3).",
+    "Please select the dates you want to convert into Casual Leave (up to 3 days), then choose Full day or Half day",
   );
+  await expect(page.getByTestId(`cf-count-half-${kavya}`)).toContainText("1");
+  await expect(page.getByTestId(`cf-halfday-${kavya}`)).toContainText("Mon 12 Oct · worked the morning");
 
-  // pick an absent day from the list and the leave day from the calendar
+  // an absent day from the list, the leave day from the calendar, and the half day: it starts on its missed half
   await page.getByTestId(`cf-date-${kavya}-2026-10-05`).click();
   await page.getByTestId(`cf-cal-${kavya}-2026-10-09`).click();
-  await expect(page.getByTestId(`cf-picked-${kavya}`)).toHaveText("2 of 3 picked");
+  await page.getByTestId(`cf-date-${kavya}-2026-10-12`).click();
+  await expect(page.getByTestId(`cf-portion-${kavya}-2026-10-12-second_half`)).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId(`cf-portion-${kavya}-2026-10-12-first_half`)).toHaveCount(0);
+  await expect(page.getByTestId(`cf-type-${kavya}-2026-10-12`)).toContainText("The morning was worked");
+  await expect(page.getByTestId(`cf-picked-${kavya}`)).toHaveText("2.5 of 3 days picked");
   await expect(page.getByTestId("cf-preview")).toContainText("of 12 left");
   await page.getByTestId("cf-reason").fill("Absent days covered by unused Casual Leave");
-  await expect(page.getByTestId("cf-save")).toHaveText("Assign CL to 2 dates");
+  await expect(page.getByTestId("cf-save")).toHaveText("Assign CL to 3 dates (2.5 days)");
   await page.getByTestId("cf-save").click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByTestId(`cf-left-${kavya}`)).toContainText("10 of 12");
+  await expect(page.getByTestId(`cf-left-${kavya}`)).toContainText("9.5 of 12");
 
-  // exactly the two picked dates are approved Casual Leave and paid present days; the rest stay as they were
-  expect(await left(page, token, kavya)).toMatchObject({ total: 12, remaining: 10 });
+  // exactly the picked dates are approved Casual Leave; the half day's missed half is covered, so it is a full paid day
+  expect(await left(page, token, kavya)).toMatchObject({ total: 12, remaining: 9.5 });
   const cls = (await api(page, "GET", `/api/casual-leaves?employeeId=${kavya}`, undefined, token)).body as {
     date: string;
     status: string;
+    portion: string;
   }[];
-  expect(cls.map((c) => [c.date, c.status]).sort()).toEqual([
-    ["2026-10-05", "approved"],
-    ["2026-10-09", "approved"],
+  expect(cls.map((c) => [c.date, c.status, c.portion]).sort()).toEqual([
+    ["2026-10-05", "approved", "full"],
+    ["2026-10-09", "approved", "full"],
+    ["2026-10-12", "approved", "second_half"],
   ]);
   expect(await dayStatus(page, token, kavya, "2026-10-05")).toBe("present");
   expect(await dayStatus(page, token, kavya, "2026-10-09")).toBe("present");
+  expect(await dayStatus(page, token, kavya, "2026-10-12")).toBe("present");
   expect(await dayStatus(page, token, kavya, "2026-10-06")).toBe("absent");
 
   // the log keeps the round with its dates
@@ -160,6 +184,7 @@ test("Deduct days: detect the absent and on-leave days, and only the picked date
   await expect(page.getByTestId("cf-log")).toContainText("Absent days covered by unused Casual Leave");
   await expect(page.getByTestId("cf-log")).toContainText("Mon 5 Oct");
   await expect(page.getByTestId("cf-log")).toContainText("Fri 9 Oct");
+  await expect(page.getByTestId("cf-log")).toContainText("Mon 12 Oct2nd half");
 
   // the server never adds days, never takes more dates than the number, nor a day that already has Casual Leave
   const add = await api(
@@ -186,7 +211,7 @@ test("Deduct days: detect the absent and on-leave days, and only the picked date
     token,
   );
   expect(notOpen.status).toBe(400);
-  expect(await left(page, token, kavya)).toMatchObject({ total: 12, remaining: 10 });
+  expect(await left(page, token, kavya)).toMatchObject({ total: 12, remaining: 9.5 });
 });
 
 test("a view-only login sees the balances and the log but cannot give Casual Leave", async ({ page }) => {

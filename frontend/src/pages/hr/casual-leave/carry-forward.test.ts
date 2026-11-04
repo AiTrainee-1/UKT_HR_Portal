@@ -14,22 +14,28 @@ import {
   daysWord,
   filterCarry,
   filterLog,
+  isFull,
   logExportRows,
   parseLimit,
   pickLines,
+  pickedDays,
   pickedText,
   pickerMonth,
+  portionFits,
   reasonError,
+  setPortion,
   togglePick,
+  trimPicks,
   type CalendarDay,
   type CarryRow,
   type ClAdjustment,
   type DetectedDay,
+  type PickedDate,
 } from "./carry-forward";
 
-// Carry Forward (owner 2026-11-04): the balance stays a fixed 12; HR turns an employee's absent / on-leave days into Casual
-// Leave by entering the most days and picking that many detected dates or fewer. The server decides; these check the
-// page words it and keeps the picks inside the number.
+// Carry Forward (owner 2026-11-04): the balance stays a fixed 12; HR turns an employee's absent / on-leave / half days into
+// Casual Leave (a full day or a half each) by entering the most days and picking dates up to that many days. The server
+// decides; these check the page words it and keeps the picks inside the number.
 
 const bal = (over: Partial<CasualLeaveBalance> = {}): CasualLeaveBalance => ({
   total: 12,
@@ -64,11 +70,28 @@ const asha = row(1, "Asha Kumar", bal({ used: 1, pending: 1, remaining: 10 })) a
 const ravi = row(2, "Ravi Shankar", bal()) as CarryRow;
 const meena = row(3, "Meena Iyer", bal({ used: 12, remaining: 0 })) as CarryRow;
 
-const detected: DetectedDay[] = [
-  { date: "2026-10-06", weekday: "Tue", status: "absent", label: "Absent" },
-  { date: "2026-10-07", weekday: "Wed", status: "absent", label: "Absent" },
-  { date: "2026-10-14", weekday: "Wed", status: "on_leave", label: "On Leave · Sick Leave" },
-];
+const absent6: DetectedDay = {
+  date: "2026-10-06",
+  weekday: "Tue",
+  status: "absent",
+  label: "Absent",
+  portions: ["full", "first_half", "second_half"],
+  suggested: "full",
+};
+const absent7: DetectedDay = { ...absent6, date: "2026-10-07", weekday: "Wed" };
+const leave14: DetectedDay = { ...absent6, date: "2026-10-14", status: "on_leave", label: "On Leave · Sick Leave" };
+const half15: DetectedDay = {
+  date: "2026-10-15",
+  weekday: "Thu",
+  status: "half_shift",
+  label: "Half Day · worked the morning (09:00-12:30)",
+  portions: ["second_half", "full"],
+  suggested: "second_half",
+  worked: "morning",
+  halves: { first: "09:00-13:00", second: "14:00-18:00" },
+};
+const manual9: DetectedDay = { ...absent6, date: "2026-10-09", portions: ["full"], manual: true };
+const detected = [absent6, absent7, leave14, half15];
 
 describe("who is on the Carry Forward list", () => {
   it("lists the staff with a balance for the year, not production or a year without one", () => {
@@ -89,35 +112,64 @@ describe("who is on the Carry Forward list", () => {
   });
 });
 
-describe("the most days, and picking", () => {
-  it("takes a whole number of days from 1 to 31", () => {
+describe("the most days, and picking with half days", () => {
+  it("takes whole or half days from 0.5 to 31", () => {
     expect(parseLimit("3")).toEqual({ limit: 3, error: null });
+    expect(parseLimit("1.5")).toEqual({ limit: 1.5, error: null });
     expect(parseLimit("")).toEqual({ limit: null, error: null });
-    expect(parseLimit("1.5").error).toBe("Whole days only, e.g. 3");
-    expect(parseLimit("0").error).toBe("At least 1 day");
+    expect(parseLimit("1.25").error).toBe("Whole or half days only");
+    expect(parseLimit("0").error).toBe("More than 0 days");
+    expect(parseLimit("x").error).toBe("Whole or half days, e.g. 3 or 1.5");
     expect(parseLimit("32").error).toBe("At most 31 days");
   });
 
-  it("never picks past the number; unticking frees a place", () => {
-    let picked: string[] = [];
-    picked = togglePick(picked, "2026-10-06", 2);
-    picked = togglePick(picked, "2026-10-07", 2);
-    expect(togglePick(picked, "2026-10-14", 2)).toEqual(["2026-10-06", "2026-10-07"]);
-    picked = togglePick(picked, "2026-10-06", 2);
-    expect(togglePick(picked, "2026-10-14", 2)).toEqual(["2026-10-07", "2026-10-14"]);
-    expect(togglePick([], "2026-10-06", null)).toEqual([]); // no number yet: nothing can be picked
-    expect([pickedText(2, 3), pickedText(1, null)]).toEqual(["2 of 3 picked", "1 picked"]);
+  it("a tick starts on the day's suggested part: a full day for an absent day, the missed half of a half day", () => {
+    let picks: PickedDate[] = [];
+    picks = togglePick(picks, absent6, 3);
+    picks = togglePick(picks, half15, 3);
+    expect(picks).toEqual([
+      { date: "2026-10-06", portion: "full" },
+      { date: "2026-10-15", portion: "second_half" },
+    ]);
+    expect(pickedDays(picks)).toBe(1.5);
+    expect(togglePick(picks, absent6, 3)).toEqual([{ date: "2026-10-15", portion: "second_half" }]); // untick
+    expect(togglePick([], absent6, null)).toEqual([]); // no number yet: nothing can be picked
   });
 
-  it("only the picked dates come off the balance, and each line says what it still needs", () => {
+  it("when only half a day is left in the number, a tick becomes a half day, and then nothing more fits", () => {
+    let picks = togglePick([], absent6, 1.5);
+    picks = togglePick(picks, absent7, 1.5);
+    expect(picks[1]).toEqual({ date: "2026-10-07", portion: "first_half" });
+    expect(isFull(picks, 1.5)).toBe(true);
+    expect(togglePick(picks, leave14, 1.5)).toBe(picks);
+    expect(togglePick([], manual9, 0.5)).toEqual([]); // a full-day-only day does not fit in half a day
+  });
+
+  it("the leave type of each picked date changes within the number", () => {
+    const picks: PickedDate[] = [
+      { date: "2026-10-06", portion: "first_half" },
+      { date: "2026-10-07", portion: "full" },
+    ];
+    expect(portionFits(picks, "2026-10-06", "full", 2)).toBe(true);
+    expect(portionFits(picks, "2026-10-06", "full", 1.5)).toBe(false);
+    expect(setPortion(picks, "2026-10-06", "full", 1.5)).toBe(picks);
+    expect(setPortion(picks, "2026-10-07", "second_half", 1.5)[1]).toEqual({
+      date: "2026-10-07",
+      portion: "second_half",
+    });
+    expect(trimPicks(picks, 1)).toEqual([{ date: "2026-10-06", portion: "first_half" }]);
+    expect(trimPicks(picks, null)).toEqual([]);
+  });
+
+  it("only the picked days come off the balance, and each line says what it still needs", () => {
     const [line] = pickLines(
       [ravi],
       () => "3",
       () => detected,
-      () => ["2026-10-07"],
+      () => [{ date: "2026-10-15", portion: "second_half" }],
       "October 2026",
     );
-    expect([line.limit, line.before, line.after, line.error]).toEqual([3, 12, 11, null]);
+    expect([line.limit, line.days, line.before, line.after, line.error]).toEqual([3, 0.5, 12, 11.5, null]);
     const numbers: Record<number, string> = { 1: "11", 2: "2", 3: "1" };
     const lines = pickLines(
       [asha, ravi, meena],
@@ -128,7 +180,7 @@ describe("the most days, and picking", () => {
     );
     expect(lines.map((l) => l.error)).toEqual([
       "Only 10 days left: enter 10 at most",
-      "No absent or leave days in October 2026",
+      "No absent, leave or half days in October 2026",
       "No Casual Leave left",
     ]);
     expect(
@@ -166,7 +218,7 @@ describe("the most days, and picking", () => {
 });
 
 describe("the 12 days and the calendar", () => {
-  it("draws the fixed 12 as used, waiting, picked now and left", () => {
+  it("draws the fixed 12 as used, waiting, picked now and left, half days as half segments", () => {
     const seg = balanceSegments(bal({ used: 1.5, pending: 1, remaining: 9.5 }), 2);
     expect(seg).toHaveLength(12);
     expect(seg[0]).toEqual([{ part: "used", share: 1 }]);
@@ -210,27 +262,46 @@ describe("the words", () => {
     department: "Cutting",
     branch: "Head Office",
     year: 2026,
-    days: -2,
-    dates: ["2026-10-06", "2026-10-14"],
+    days: -1.5,
+    dates: ["2026-10-06", "2026-10-15"],
+    parts: [
+      { date: "2026-10-06", portion: "full", days: 1 },
+      { date: "2026-10-15", portion: "second_half", days: 0.5 },
+    ],
     reason: "Absent days covered",
     balanceBefore: 12,
-    balanceAfter: 10,
+    balanceAfter: 10.5,
     createdBy: "Meena",
     createdAt: "2026-11-20T10:00:00+05:30",
   };
 
-  it("names the dates, the button and the toast", () => {
+  it("names the dates, the counts, the button and the toast", () => {
     expect(chipDate("2026-10-07", "Wed")).toBe("Wed 7 Oct");
-    expect(datesText(["2026-10-07", "2026-10-13"])).toBe("07 Oct, 13 Oct");
+    expect(datesText(a.parts!)).toBe("06 Oct, 15 Oct (2nd half)");
     expect(daysWord(1)).toBe("1 day");
-    const line = pickLines(
+    expect([pickedText(1.5, 3), pickedText(1, null)]).toEqual(["1.5 of 3 days picked", "1 day picked"]);
+    const full = pickLines(
       [ravi],
       () => "3",
       () => detected,
-      () => ["2026-10-06", "2026-10-07"],
+      () => [
+        { date: "2026-10-06", portion: "full" },
+        { date: "2026-10-07", portion: "full" },
+      ],
       "October 2026",
     );
-    expect(assignLabel(line)).toBe("Assign CL to 2 dates");
+    expect(assignLabel(full)).toBe("Assign CL to 2 dates");
+    const mixed = pickLines(
+      [ravi],
+      () => "3",
+      () => detected,
+      () => [
+        { date: "2026-10-06", portion: "full" },
+        { date: "2026-10-15", portion: "second_half" },
+      ],
+      "October 2026",
+    );
+    expect(assignLabel(mixed)).toBe("Assign CL to 2 dates (1.5 days)");
     expect(
       assignLabel(
         pickLines(
@@ -253,12 +324,17 @@ describe("the words", () => {
         ),
       ),
     ).toBe("Assign CL for 2 employees");
-    expect(assignedText({ count: 1, days: 2, items: [a] })).toBe(
-      "Ravi Shankar: 2 days (06 Oct, 14 Oct) now Casual Leave. 12 → 10 left.",
+    expect(assignedText({ count: 1, days: 1.5, items: [a] })).toBe(
+      "Ravi Shankar: 1.5 days (06 Oct, 15 Oct (2nd half)) now Casual Leave. 12 → 10.5 left.",
     );
     expect(assignedText({ count: 2, days: 3, items: [a, { ...a, id: 10 }] })).toBe(
       "3 days of 2 employees are now Casual Leave. Each is in the Change log.",
     );
+  });
+
+  it("reads an older log line (dates only) as full days", () => {
+    const old: ClAdjustment = { ...a, parts: undefined, dates: ["2026-10-20", "2026-10-22"], days: -2 };
+    expect(logExportRows([old])[0][5]).toBe("20 Oct, 22 Oct");
   });
 
   it("searches the log and exports both lists", () => {
@@ -269,10 +345,10 @@ describe("the words", () => {
       "Ravi Shankar",
       "Head Office",
       "Cutting",
-      "06 Oct, 14 Oct",
-      2,
+      "06 Oct, 15 Oct (2nd half)",
+      1.5,
       12,
-      10,
+      10.5,
     ]);
     expect(carryExportRows([asha])).toEqual([["E1", "Asha Kumar", "Head Office", "Cutting", 12, 1, 1, 10]]);
   });

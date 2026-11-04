@@ -19,10 +19,15 @@ import {
   pickLines,
   pickerMonth,
   reasonError,
+  setPortion,
   togglePick,
+  trimPicks,
   type CarryRow,
   type ClAdjustProblem,
+  type DetectedDay,
   type PickLine,
+  type PickedDate,
+  type Portion,
   type SegmentPart,
 } from "./carry-forward";
 
@@ -53,7 +58,7 @@ const nameOf = (r: CarryRow) => r.employeeName ?? r.employeeCode ?? `#${r.employ
 /** The year's 12 days as segments (used, waiting, picked now, left) with "12 → 10 left" beside them. */
 function BalanceMeter({ line, year }: { line: PickLine; year: number }) {
   const b = line.row.balance;
-  const segments = balanceSegments(b, line.picked.length);
+  const segments = balanceSegments(b, line.days);
   return (
     <div className="rounded-2xl border border-gray-100 bg-white p-3 shadow-sm" data-testid="cf-meter">
       <div className="flex items-baseline justify-between gap-2">
@@ -63,7 +68,7 @@ function BalanceMeter({ line, year }: { line: PickLine; year: number }) {
           data-testid="cf-preview"
         >
           {daysNumber(line.before)}
-          {line.picked.length > 0 && (
+          {line.days > 0 && (
             <>
               <ArrowRight size={13} className="text-gray-400" aria-hidden />
               <motion.span
@@ -100,7 +105,7 @@ function BalanceMeter({ line, year }: { line: PickLine; year: number }) {
       <div className="mt-1.5 flex flex-wrap gap-x-3 text-[10px] text-gray-500">
         <span>{daysNumber(b.used)} used</span>
         {b.pending > 0 && <span>{daysNumber(b.pending)} waiting</span>}
-        {line.picked.length > 0 && <span className="font-semibold text-sky-700">{line.picked.length} picked now</span>}
+        {line.days > 0 && <span className="font-semibold text-sky-700">{daysNumber(line.days)} picked now</span>}
         <span>Fixed at {daysNumber(b.total)} a year</span>
       </div>
     </div>
@@ -209,14 +214,14 @@ export default function DeductDialog({
   problem: string | null;
   problems: ClAdjustProblem[];
   onClose: () => void;
-  onAssign: (input: { reason: string; items: { employeeId: number; limit: number; dates: string[] }[] }) => void;
+  onAssign: (input: { reason: string; items: { employeeId: number; limit: number; dates: PickedDate[] }[] }) => void;
 }) {
   const open = targets !== null && targets.length > 0;
   const rows = useMemo(() => targets ?? [], [targets]);
   const single = rows.length === 1;
   const [common, setCommon] = useState("");
   const [own, setOwn] = useState<Record<number, string>>({});
-  const [picks, setPicks] = useState<Record<number, string[]>>({});
+  const [picks, setPicks] = useState<Record<number, PickedDate[]>>({});
   const [reason, setReason] = useState("");
   const [tried, setTried] = useState(false);
   const [when, setWhen] = useState(() => pickerMonth(year, month, today));
@@ -265,10 +270,9 @@ export default function DeductDialog({
   // a lower number drops the last picks beyond it
   const trim = (next: Record<number, string>, nextCommon: string) =>
     setPicks((all) => {
-      const out: Record<number, string[]> = {};
+      const out: Record<number, PickedDate[]> = {};
       for (const r of rows) {
-        const lim = parseLimit(next[r.employeeId] ?? nextCommon).limit ?? 0;
-        out[r.employeeId] = (all[r.employeeId] ?? []).slice(0, lim);
+        out[r.employeeId] = trimPicks(all[r.employeeId] ?? [], parseLimit(next[r.employeeId] ?? nextCommon).limit);
       }
       return out;
     });
@@ -282,10 +286,15 @@ export default function DeductDialog({
     setOwn(next);
     trim(next, common);
   };
-  const toggle = (line: PickLine, date: string) =>
+  const toggle = (line: PickLine, day: DetectedDay) =>
     setPicks((all) => ({
       ...all,
-      [line.row.employeeId]: togglePick(all[line.row.employeeId] ?? [], date, line.limit),
+      [line.row.employeeId]: togglePick(all[line.row.employeeId] ?? [], day, line.limit),
+    }));
+  const choose = (line: PickLine, date: string, portion: Portion) =>
+    setPicks((all) => ({
+      ...all,
+      [line.row.employeeId]: setPortion(all[line.row.employeeId] ?? [], date, portion, line.limit),
     }));
   const moveMonth = (step: number) => {
     setWhen({ year: when.year, month: when.month + step });
@@ -297,7 +306,11 @@ export default function DeductDialog({
     if (blocked) return;
     onAssign({
       reason: reason.trim(),
-      items: lines.map((l) => ({ employeeId: l.row.employeeId, limit: l.limit!, dates: [...l.picked].sort() })),
+      items: lines.map((l) => ({
+        employeeId: l.row.employeeId,
+        limit: l.limit!,
+        dates: [...l.picked].sort((a, b) => a.date.localeCompare(b.date)),
+      })),
     });
   };
 
@@ -311,8 +324,9 @@ export default function DeductDialog({
   };
 
   const first = rows[0];
-  const maxFor = (r: CarryRow) => Math.max(0, Math.floor(r.balance.remaining));
-  const totalPicked = lines.reduce((n, l) => n + l.picked.length, 0);
+  const maxFor = (r: CarryRow) => Math.max(0, r.balance.remaining);
+  const totalDates = lines.reduce((n, l) => n + l.picked.length, 0);
+  const totalDays = lines.reduce((n, l) => n + l.days, 0);
 
   const monthNav = (
     <div className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 bg-slate-50/80 px-1.5 py-1">
@@ -352,8 +366,10 @@ export default function DeductDialog({
         line={l}
         absent={e.absent}
         onLeave={e.onLeave}
+        halfDay={e.halfDay ?? []}
         calendar={e.calendar}
         onToggle={(d) => toggle(l, d)}
+        onPortion={(date, portion) => choose(l, date, portion)}
       />
     );
   };
@@ -378,8 +394,9 @@ export default function DeductDialog({
             {single ? `Deduct days · ${first ? nameOf(first) : ""}` : `Deduct days · ${rows.length} employees`}
           </DialogTitle>
           <DialogDescription>
-            Turn the days {single ? "this employee was" : "these employees were"} marked Absent or On Leave into Casual
-            Leave. Only the dates you pick are used; the balance stays 12 a year and goes down by them.
+            Turn the days {single ? "this employee was" : "these employees were"} marked Absent, On Leave or Half Day
+            into Casual Leave, a full day or a half day each. Only the dates you pick are used; the balance stays 12 a
+            year and goes down by them.
           </DialogDescription>
         </DialogHeader>
 
@@ -399,8 +416,8 @@ export default function DeductDialog({
                 label={single && first ? nameOf(first) : "everyone"}
               />
               <p className="max-w-xs text-[11px] leading-snug text-gray-500">
-                The most dates you can pick{single ? "" : " for each employee (change any line below)"}. Nothing is
-                deducted by this number itself.
+                The most days you can pick{single ? "" : " for each employee (change any line below)"}; a half day
+                counts 0.5. Nothing is deducted by this number itself.
               </p>
             </div>
             {single && lines[0] && lineError(lines[0]) && (
@@ -455,9 +472,11 @@ export default function DeductDialog({
                           <span className="min-w-0">
                             <span className="block truncate text-sm font-bold text-gray-900">{nameOf(l.row)}</span>
                             <span className="block truncate text-[11px] text-gray-500">
-                              {e ? `${e.absent.length} absent · ${e.onLeave.length} on leave` : ""} ·{" "}
-                              {daysNumber(l.before)} left
-                              {l.picked.length ? ` · ${l.picked.length} picked` : ""}
+                              {e
+                                ? `${e.absent.length} absent · ${e.onLeave.length} on leave · ${(e.halfDay ?? []).length} half day`
+                                : ""}{" "}
+                              · {daysNumber(l.before)} left
+                              {l.picked.length ? ` · ${daysNumber(l.days)} picked` : ""}
                             </span>
                           </span>
                         </button>
@@ -524,8 +543,8 @@ export default function DeductDialog({
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3">
           <p className="text-xs text-gray-500" data-testid="cf-footer-note">
-            {totalPicked
-              ? `${totalPicked} date${totalPicked === 1 ? "" : "s"} will become Casual Leave (paid).`
+            {totalDates
+              ? `${totalDates} date${totalDates === 1 ? "" : "s"} (${daysNumber(totalDays)} day${totalDays === 1 ? "" : "s"}) will become Casual Leave (paid).`
               : "Pick the dates to convert."}
           </p>
           <div className="flex gap-2">

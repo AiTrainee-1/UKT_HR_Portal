@@ -5,7 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
-import type { ClAdjustmentLog, ClAssignSaved, Detection } from "./carry-forward";
+import type { ClAdjustmentLog, ClAssignSaved, Detection, PickedDate } from "./carry-forward";
 import type { ClBoard } from "./logic";
 
 /** Same key prefix as the shared eligibility hook, so creating, deciding or deleting a request (which invalidate that
@@ -41,7 +41,7 @@ export const useDetection = (employeeIds: number[], month: number, year: number,
 
 export type ClAssignInput = {
   reason: string;
-  items: { employeeId: number; limit: number; dates: string[] }[];
+  items: { employeeId: number; limit: number; dates: PickedDate[] }[];
 };
 
 /** Give the picked dates as approved Casual Leave (all or nothing). The attendance of those days, the board, the requests,

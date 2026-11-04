@@ -1,6 +1,7 @@
 import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MotionGlobalConfig } from "framer-motion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CasualLeaveBalance } from "@/lib/api-client/custom-hooks";
 import CasualLeave from "../CasualLeave";
@@ -10,8 +11,9 @@ import type { CalendarDay, ClAdjustment, ClAdjustmentLog, DetectedDay } from "./
 import type { BoardRow, ClBoard } from "./logic";
 
 // The Carry Forward tab of the Casual Leave page (owner 2026-11-04, final form) with a filled query cache: the balance is a
-// fixed 12 (no "Add days" anywhere); "Deduct days" = enter the most days, the absent and on-leave days of the month are
-// detected (with an animation), HR picks that many or fewer, and only those dates are sent. Plus the refusals and the log.
+// fixed 12 (no "Add days" anywhere); "Deduct days" = enter the most days, the absent, on-leave and half days of the month
+// are detected (with an animation), HR picks dates up to that many days choosing Full day / First half / Second half for
+// each, and only those dates are sent. Plus the refusals and the log.
 
 const h = vi.hoisted(() => ({ fetch: vi.fn(), post: vi.fn(), toast: vi.fn() }));
 
@@ -28,6 +30,7 @@ vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  MotionGlobalConfig.skipAnimations = true; // enter / exit animations finish at once
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}
@@ -50,6 +53,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.post.mockReset(); // a save answer a failed test left queued must not leak into the next one
   vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-20T10:00:00") });
   window.history.replaceState(null, "", "/hr/casual-leave");
   DETECT_TIMING.minMs = 0; // the detection's shortest showing time (tests that look at the animation raise it)
@@ -115,19 +119,43 @@ const board: ClBoard = {
   ],
 };
 
-/** Asha (1): absent 5, 6, 10, 12 Nov, on sick leave 13 Nov, absent 7 Oct; Ravi (2): absent 6 Nov, nothing in October. */
+const ANY: Pick<DetectedDay, "portions" | "suggested" | "halves"> = {
+  portions: ["full", "first_half", "second_half"],
+  suggested: "full",
+  halves: { first: "09:00-13:00", second: "14:00-18:00" },
+};
+const absentOn = (date: string, weekday: string): DetectedDay => ({
+  date,
+  weekday,
+  status: "absent",
+  label: "Absent",
+  ...ANY,
+});
+
+/** Asha (1): absent 5, 6, 10, 12 Nov, on sick leave 13 Nov, worked only the morning of 16 Nov, absent 7 Oct; Ravi (2):
+ *  absent 6 Nov, nothing in October. */
 const FOUND: Record<string, Record<number, DetectedDay[]>> = {
   "11": {
     1: [
-      { date: "2026-11-05", weekday: "Thu", status: "absent", label: "Absent" },
-      { date: "2026-11-06", weekday: "Fri", status: "absent", label: "Absent" },
-      { date: "2026-11-10", weekday: "Tue", status: "absent", label: "Absent" },
-      { date: "2026-11-12", weekday: "Thu", status: "absent", label: "Absent" },
-      { date: "2026-11-13", weekday: "Fri", status: "on_leave", label: "On Leave · Sick Leave" },
+      absentOn("2026-11-05", "Thu"),
+      absentOn("2026-11-06", "Fri"),
+      absentOn("2026-11-10", "Tue"),
+      absentOn("2026-11-12", "Thu"),
+      { date: "2026-11-13", weekday: "Fri", status: "on_leave", label: "On Leave · Sick Leave", ...ANY },
+      {
+        date: "2026-11-16",
+        weekday: "Mon",
+        status: "half_shift",
+        label: "Half Day · worked the morning (09:00-12:30)",
+        portions: ["second_half", "full"],
+        suggested: "second_half",
+        worked: "morning",
+        halves: { first: "09:00-13:00", second: "14:00-18:00" },
+      },
     ],
-    2: [{ date: "2026-11-06", weekday: "Fri", status: "absent", label: "Absent" }],
+    2: [absentOn("2026-11-06", "Fri")],
   },
-  "10": { 1: [{ date: "2026-10-07", weekday: "Wed", status: "absent", label: "Absent" }], 2: [] },
+  "10": { 1: [absentOn("2026-10-07", "Wed")], 2: [] },
 };
 
 function detectionOf(url: string) {
@@ -157,6 +185,7 @@ function detectionOf(url: string) {
         balance: null,
         absent: found.filter((d) => d.status === "absent"),
         onLeave: found.filter((d) => d.status === "on_leave"),
+        halfDay: found.filter((d) => d.status === "half_shift"),
         dates: found,
         calendar,
       };
@@ -248,7 +277,7 @@ describe("Carry Forward: Deduct days", () => {
     expect(text(dialog)).not.toContain("Add days");
     expect(q("cf-direction-add")).toBeNull();
     expect(text(q("cf-meter"))).toContain("10 of 12 left");
-    expect(text(q("cf-idle"))).toContain("marked Absent or On Leave in November 2026");
+    expect(text(q("cf-idle"))).toContain("marked Absent, On Leave or Half Day in November 2026");
     expect(h.fetch.mock.calls.some(([url]) => String(url).includes("absent-dates"))).toBe(false);
   });
 
@@ -277,9 +306,13 @@ describe("Carry Forward: Deduct days", () => {
     expect(text(q("cf-absent-1"))).toContain("These are the dates on which Asha Kumar was marked Absent");
     expect(text(q("cf-onleave-1"))).toContain("These are the dates on which Asha Kumar was marked On Leave");
     expect(text(q("cf-onleave-1"))).toContain("Fri 13 Nov · Sick Leave");
+    expect(text(q("cf-count-half-1"))).toContain("1");
+    expect(text(q("cf-halfday-1"))).toContain("These are the dates on which Asha Kumar was marked Half Day");
+    expect(text(q("cf-halfday-1"))).toContain("Mon 16 Nov · worked the morning (09:00-12:30)");
     expect(text(q("cf-result-1"))).toContain(
-      "Please select the dates you want to convert into Casual Leave (up to 3).",
+      "Please select the dates you want to convert into Casual Leave (up to 3 days), then choose Full day or Half day for each.",
     );
+    expect(text(q("cf-types-1"))).toContain("Tick dates above or in the calendar");
     expect(q("cf-cal-1-2026-11-05")).not.toBeNull();
     expect(q("cf-cal-1-2026-11-04")).toBeNull(); // a present day is shown but cannot be picked
   });
@@ -296,8 +329,10 @@ describe("Carry Forward: Deduct days", () => {
     await settle();
     click(q("cf-date-1-2026-11-05")); // from the Absent list
     click(q("cf-cal-1-2026-11-13")); // the On Leave day, from the calendar
-    expect(text(q("cf-picked-1"))).toBe("2 of 3 picked");
+    expect(text(q("cf-picked-1"))).toBe("2 of 3 days picked");
     expect(q("cf-cal-1-2026-11-05")!.getAttribute("aria-pressed")).toBe("true"); // the list and the calendar agree
+    expect(q("cf-type-1-2026-11-05")).not.toBeNull(); // each picked date has its leave type
+    expect(q("cf-portion-1-2026-11-05-full")!.getAttribute("aria-checked")).toBe("true");
     expect(text(q("cf-preview"))).toContain("108 of 12 left");
     expect(text(q("cf-save"))).toBe("Assign CL to 2 dates");
     type(q("cf-reason"), "Absent days covered by unused CL");
@@ -305,7 +340,16 @@ describe("Carry Forward: Deduct days", () => {
     await settle();
     expect(h.post).toHaveBeenCalledWith("/api/casual-leaves/assign", {
       reason: "Absent days covered by unused CL",
-      items: [{ employeeId: 1, limit: 3, dates: ["2026-11-05", "2026-11-13"] }],
+      items: [
+        {
+          employeeId: 1,
+          limit: 3,
+          dates: [
+            { date: "2026-11-05", portion: "full" },
+            { date: "2026-11-13", portion: "full" },
+          ],
+        },
+      ],
     });
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Casual Leave assigned" }));
     expect(q("cf-dialog")).toBeNull();
@@ -318,17 +362,79 @@ describe("Carry Forward: Deduct days", () => {
     await settle();
     click(q("cf-date-1-2026-11-05"));
     click(q("cf-date-1-2026-11-06"));
-    expect(text(q("cf-picked-1"))).toBe("2 of 2 picked");
+    expect(text(q("cf-picked-1"))).toBe("2 of 2 days picked");
     expect((q("cf-date-1-2026-11-10") as HTMLButtonElement).disabled).toBe(true);
     expect((q("cf-cal-1-2026-11-10") as HTMLButtonElement).disabled).toBe(true);
     type(q("cf-days"), "1");
-    expect(text(q("cf-picked-1"))).toBe("1 of 1 picked");
+    expect(text(q("cf-picked-1"))).toBe("1 of 1 day picked");
     expect(q("cf-date-1-2026-11-06")!.getAttribute("aria-pressed")).toBe("false");
     type(q("cf-days"), "11"); // Asha has 10 left
     expect(text(q("cf-line-error"))).toBe("Only 10 days left: enter 10 at most");
     type(q("cf-reason"), "Absent days covered");
     click(q("cf-save"));
     expect(h.post).not.toHaveBeenCalled();
+  });
+
+  it("a half day starts on its missed half; each date's leave type can be Full day or a half", async () => {
+    h.post.mockResolvedValueOnce({ count: 1, days: 1, items: [{ ...round, id: 41 }] });
+    openTab();
+    click(q("cf-assign-1"));
+    type(q("cf-days"), "1");
+    await settle();
+    click(q("cf-date-1-2026-11-16")); // the half day: the morning was worked
+    expect(q("cf-portion-1-2026-11-16-second_half")!.getAttribute("aria-checked")).toBe("true");
+    expect(q("cf-portion-1-2026-11-16-first_half")).toBeNull(); // the worked half is not offered
+    expect(text(q("cf-type-1-2026-11-16"))).toContain(
+      "The morning was worked: the second half covers the rest of the day.",
+    );
+    expect(text(q("cf-type-1-2026-11-16"))).toContain("14:00-18:00");
+    expect(q("cf-cal-1-2026-11-16")!.getAttribute("data-portion")).toBe("second_half");
+    expect(text(q("cf-picked-1"))).toBe("0.5 of 1 day picked");
+    // half a day left in the number: an absent day starts as a half, and a full day for it does not fit
+    click(q("cf-date-1-2026-11-05"));
+    expect(q("cf-portion-1-2026-11-05-first_half")!.getAttribute("aria-checked")).toBe("true");
+    expect((q("cf-portion-1-2026-11-05-full") as HTMLButtonElement).disabled).toBe(true);
+    expect((q("cf-date-1-2026-11-06") as HTMLButtonElement).disabled).toBe(true); // nothing more fits
+    click(q("cf-portion-1-2026-11-05-second_half"));
+    expect(q("cf-cal-1-2026-11-05")!.getAttribute("data-portion")).toBe("second_half");
+    expect(text(q("cf-preview"))).toContain("109 of 12 left");
+    expect(text(q("cf-save"))).toBe("Assign CL to 2 dates (1 day)");
+    // the X takes a date off again
+    click(q("cf-untick-1-2026-11-05"));
+    await settle();
+    expect(q("cf-type-1-2026-11-05")).toBeNull();
+    click(q("cf-date-1-2026-11-05"));
+    type(q("cf-reason"), "Half days covered by unused CL");
+    click(q("cf-save"));
+    await settle();
+    expect(h.post.mock.calls[0][1]).toEqual({
+      reason: "Half days covered by unused CL",
+      items: [
+        {
+          employeeId: 1,
+          limit: 1,
+          dates: [
+            { date: "2026-11-05", portion: "first_half" },
+            { date: "2026-11-16", portion: "second_half" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("a full day can be chosen for a half day when the number allows it", async () => {
+    openTab();
+    click(q("cf-assign-1"));
+    type(q("cf-days"), "2");
+    await settle();
+    click(q("cf-cal-1-2026-11-16"));
+    click(q("cf-portion-1-2026-11-16-full"));
+    expect(q("cf-portion-1-2026-11-16-full")!.getAttribute("aria-checked")).toBe("true");
+    expect(text(q("cf-picked-1"))).toBe("1 of 2 days picked");
+    // a lower number keeps what still fits
+    type(q("cf-days"), "0.5");
+    await settle();
+    expect(q("cf-type-1-2026-11-16")).toBeNull();
   });
 
   it("another month detects that month; a month with nothing says so", async () => {
@@ -341,7 +447,7 @@ describe("Carry Forward: Deduct days", () => {
     click(q("cf-month-prev"));
     await settle();
     expect(text(q("cf-month"))).toBe("October 2026");
-    expect(text(q("cf-none-2"))).toContain("No absent or leave days in October 2026");
+    expect(text(q("cf-none-2"))).toContain("No absent, leave or half days in October 2026");
   });
 
   it("several ticked employees: one number for all, a section each to pick, all in one save", async () => {
@@ -365,8 +471,8 @@ describe("Carry Forward: Deduct days", () => {
     expect(h.post.mock.calls[0][1]).toEqual({
       reason: "Absent days covered by unused CL",
       items: [
-        { employeeId: 1, limit: 1, dates: ["2026-11-12"] },
-        { employeeId: 2, limit: 1, dates: ["2026-11-06"] },
+        { employeeId: 1, limit: 1, dates: [{ date: "2026-11-12", portion: "full" }] },
+        { employeeId: 2, limit: 1, dates: [{ date: "2026-11-06", portion: "full" }] },
       ],
     });
     expect(q("cf-selection")).toBeNull(); // the ticks are cleared once saved

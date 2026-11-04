@@ -1,15 +1,29 @@
 // Carry Forward (owner 2026-11-04): the yearly Casual Leave balance stays a fixed 12. "Deduct days": HR enters how many days
-// at most, the system detects the employee's ABSENT and ON LEAVE days of a month, and HR picks that many of them (or fewer);
-// only the picked dates become Casual Leave and the balance goes down by their number (the number is a limit, never a
-// deduction of its own). Every round is kept in a log with the balance before and after. The rules live in
-// backend/api/cl_adjustment_views.py (this year up to today, staff with 6 months, a reason always, all or nothing); this
-// only reads back what the API says and words it. HR portal only for now: the employee apps just show the new balance.
+// at most (a half day counts 0.5), the system detects the employee's ABSENT, ON LEAVE and HALF DAY days of a month, and HR
+// picks dates up to that many days, choosing Full day, First half or Second half for each; only the picked dates become
+// Casual Leave and the balance goes down by their days (the number is a limit, never a deduction of its own). Every round is
+// kept in a log with the balance before and after. The rules live in backend/api/cl_adjustment_views.py (this year up to
+// today, staff with 6 months, the halves each day allows, a reason always, all or nothing); this only reads back what the
+// API says and words it. HR portal only for now: the employee apps just show the new balance.
 
 import type { CasualLeaveBalance } from "@/lib/api-client/custom-hooks";
 import { ALL, matchesPerson, matchesQuery, type PersonFields, type PersonFilters } from "../leave/logic";
 import type { BoardRow } from "./logic";
 
-/** One round of the log: some absent / leave dates of one employee given as Casual Leave. `days` = minus their number. */
+export type Portion = "full" | "first_half" | "second_half";
+
+export const PORTION_DAYS: Record<Portion, number> = { full: 1, first_half: 0.5, second_half: 0.5 };
+export const PORTION_TEXT: Record<Portion, string> = {
+  full: "Full day",
+  first_half: "First half",
+  second_half: "Second half",
+};
+const PORTION_SHORT: Record<Portion, string> = { full: "", first_half: " (1st half)", second_half: " (2nd half)" };
+
+/** One date of a log round and what of it was given. */
+export type GivenPart = { date: string; portion: Portion; portionLabel?: string; days: number };
+
+/** One round of the log: some days of one employee given as Casual Leave. `days` = minus the days given. */
 export type ClAdjustment = {
   id: number;
   employeeId: number;
@@ -20,6 +34,8 @@ export type ClAdjustment = {
   year: number;
   days: number;
   dates: string[];
+  /** Each date and what of it was given (absent on a server from before half days: all full days). */
+  parts?: GivenPart[];
   reason: string;
   balanceBefore: number;
   balanceAfter: number;
@@ -42,10 +58,28 @@ export type ClAdjustProblem = { employeeId: number; employeeName?: string | null
 /** One employee on the Carry Forward list: a staff row of the board that has a balance for the year. */
 export type CarryRow = BoardRow & { balance: CasualLeaveBalance };
 
-/** A day that can be given as Casual Leave: marked Absent, or On Leave ("On Leave · Sick Leave"). */
-export type DetectedDay = { date: string; weekday: string; status: "absent" | "on_leave"; label: string };
+export type DetectedStatus = "absent" | "on_leave" | "half_shift";
 
-/** Every day of the month as the attendance has it (`selectable` = absent / on leave and no Casual Leave on it yet). */
+/** A day that can be given as Casual Leave: marked Absent, On Leave or Half Day, with what of it may be given. */
+export type DetectedDay = {
+  date: string;
+  weekday: string;
+  status: DetectedStatus;
+  /** "Absent", "On Leave · Sick Leave", "Half Day · worked the morning (09:00-12:30)" */
+  label: string;
+  /** What may be given that day (a day set by hand: full only; a half day: the missed half or a full day). */
+  portions?: Portion[];
+  /** What the picker starts on (a half day: its missed half). */
+  suggested?: Portion;
+  worked?: "morning" | "evening" | null;
+  firstPunch?: string | null;
+  lastPunch?: string | null;
+  manual?: boolean;
+  /** The two halves in clock time on that day's shift ("09:00-13:00"), when a half may be given. */
+  halves?: { first: string; second: string } | null;
+};
+
+/** Every day of the month as the attendance has it (`selectable` = absent / on leave / half day, no Casual Leave yet). */
 export type CalendarStatus = "absent" | "on_leave" | "present" | "half_shift" | "holiday" | "cl" | "none" | "future";
 export type CalendarDay = { date: string; weekday: string; status: CalendarStatus; selectable: boolean; label: string };
 
@@ -64,6 +98,7 @@ export type Detection = {
     balance: CasualLeaveBalance | null;
     absent: DetectedDay[];
     onLeave: DetectedDay[];
+    halfDay?: DetectedDay[];
     dates: DetectedDay[];
     calendar: CalendarDay[];
   }[];
@@ -71,6 +106,9 @@ export type Detection = {
 
 /** POST /api/casual-leaves/assign answer: one log line per employee. */
 export type ClAssignSaved = { count: number; days: number; items: ClAdjustment[] };
+
+/** A picked date and what of it becomes Casual Leave. */
+export type PickedDate = { date: string; portion: Portion };
 
 export const MAX_LIMIT = 31;
 export const REASON_MIN = 3;
@@ -110,16 +148,24 @@ export function carryCounts(rows: CarryRow[]): Record<CarryView, number> {
   };
 }
 
-/** The most days HR allows for an employee: a whole number from 1 to 31 (null with no error while blank). */
+/** The most days HR allows for an employee: whole or half days from 0.5 to 31 (null with no error while blank). */
 export function parseLimit(input: string): { limit: number | null; error: string | null } {
-  const text = input.trim();
+  const text = input.trim().replace(",", ".");
   if (text === "") return { limit: null, error: null };
-  if (!/^\d+$/.test(text)) return { limit: null, error: "Whole days only, e.g. 3" };
+  if (!/^\d+(\.\d+)?$/.test(text)) return { limit: null, error: "Whole or half days, e.g. 3 or 1.5" };
   const n = Number(text);
-  if (n < 1) return { limit: null, error: "At least 1 day" };
+  if (n <= 0) return { limit: null, error: "More than 0 days" };
+  if (Math.round(n * 2) !== n * 2) return { limit: null, error: "Whole or half days only" };
   if (n > MAX_LIMIT) return { limit: null, error: `At most ${MAX_LIMIT} days` };
   return { limit: n, error: null };
 }
+
+/** The days a set of picks takes (a half counts 0.5). */
+export const pickedDays = (picks: PickedDate[]): number =>
+  round(picks.reduce((n, p) => n + PORTION_DAYS[p.portion], 0));
+
+/** What may be given on a day (an older server sends none: any of the three). */
+export const portionsOf = (day: DetectedDay): Portion[] => day.portions ?? ["full", "first_half", "second_half"];
 
 /** One employee's line: the most days, the detected days on offer, the ones picked, what is left after. */
 export type PickLine = {
@@ -127,7 +173,9 @@ export type PickLine = {
   input: string;
   limit: number | null;
   available: DetectedDay[];
-  picked: string[];
+  picked: PickedDate[];
+  /** The days the picks take. */
+  days: number;
   before: number;
   after: number;
   /** Why it cannot be saved yet (null = ready). */
@@ -138,7 +186,7 @@ export function pickLines(
   rows: CarryRow[],
   inputs: (row: CarryRow) => string,
   available: (row: CarryRow) => DetectedDay[],
-  picked: (row: CarryRow) => string[],
+  picked: (row: CarryRow) => PickedDate[],
   monthLabel: string,
 ): PickLine[] {
   return rows.map((row) => {
@@ -146,13 +194,14 @@ export function pickLines(
     const parsed = parseLimit(input);
     const days = available(row);
     const chosen = picked(row);
+    const taken = pickedDays(chosen);
     const before = row.balance.remaining;
     let error = parsed.error;
     if (!error && parsed.limit === null) error = "Enter the days";
     else if (!error && parsed.limit !== null && parsed.limit > before)
       error =
         before <= 0 ? "No Casual Leave left" : `Only ${daysWord(before)} left: enter ${daysNumber(before)} at most`;
-    else if (!error && days.length === 0) error = `No absent or leave days in ${monthLabel}`;
+    else if (!error && days.length === 0) error = `No absent, leave or half days in ${monthLabel}`;
     else if (!error && chosen.length === 0) error = "Pick at least one date";
     return {
       row,
@@ -160,23 +209,59 @@ export function pickLines(
       limit: parsed.limit,
       available: days,
       picked: chosen,
+      days: taken,
       before,
-      after: Math.max(0, before - chosen.length),
+      after: Math.max(0, round(before - taken)),
       error,
     };
   });
 }
 
-/** Tick or untick a date, never past the limit; a tick beyond it does nothing. */
-export function togglePick(picked: string[], date: string, limit: number | null): string[] {
-  if (picked.includes(date)) return picked.filter((d) => d !== date);
-  if (limit === null || picked.length >= limit) return picked;
-  return [...picked, date];
+/**
+ * Tick or untick a date, never past the limit. A tick starts on the day's suggested part; when that does not fit in what
+ * the number leaves but a half does, it starts as a half. Nothing fits: no change.
+ */
+export function togglePick(picks: PickedDate[], day: DetectedDay, limit: number | null): PickedDate[] {
+  if (picks.some((p) => p.date === day.date)) return picks.filter((p) => p.date !== day.date);
+  if (limit === null) return picks;
+  const room = round(limit - pickedDays(picks));
+  const allowed = portionsOf(day);
+  const first = day.suggested && allowed.includes(day.suggested) ? day.suggested : allowed[0];
+  const order = [first, ...allowed.filter((p) => p !== first)];
+  const portion = order.find((p) => PORTION_DAYS[p] <= room);
+  return portion ? [...picks, { date: day.date, portion }] : picks;
 }
 
-/** "2 of 3 picked". */
-export const pickedText = (picked: number, limit: number | null): string =>
-  limit === null ? `${picked} picked` : `${picked} of ${limit} picked`;
+/** Whether `date` can be given as `portion` within the number (its own part is freed first). */
+export function portionFits(picks: PickedDate[], date: string, portion: Portion, limit: number | null): boolean {
+  if (limit === null) return false;
+  const others = picks.filter((p) => p.date !== date);
+  return pickedDays(others) + PORTION_DAYS[portion] <= limit;
+}
+
+/** Change what of a picked date is given; no change when it does not fit in the number. */
+export function setPortion(picks: PickedDate[], date: string, portion: Portion, limit: number | null): PickedDate[] {
+  if (!portionFits(picks, date, portion, limit)) return picks;
+  return picks.map((p) => (p.date === date ? { ...p, portion } : p));
+}
+
+/** A lower number drops the last picks beyond it. */
+export function trimPicks(picks: PickedDate[], limit: number | null): PickedDate[] {
+  if (limit === null) return [];
+  const out: PickedDate[] = [];
+  for (const p of picks) {
+    if (pickedDays(out) + PORTION_DAYS[p.portion] <= limit) out.push(p);
+  }
+  return out;
+}
+
+/** Whether nothing more fits in the number (not even a half day). */
+export const isFull = (line: PickedDate[], limit: number | null): boolean =>
+  limit !== null && round(limit - pickedDays(line)) < 0.5;
+
+/** "1.5 of 3 days picked". */
+export const pickedText = (days: number, limit: number | null): string =>
+  limit === null ? `${daysWord(days)} picked` : `${daysNumber(days)} of ${daysWord(limit)} picked`;
 
 const monthShort = (iso: string) => {
   const [y, m, d] = iso.split("-").map(Number);
@@ -190,15 +275,21 @@ export function chipDate(iso: string, weekday?: string): string {
   return `${wd} ${d} ${monthShort(iso)}`;
 }
 
-/** "07 Oct, 13 Oct" for a log line. */
-export const datesText = (dates: string[]): string =>
-  dates.map((iso) => `${iso.slice(8, 10)} ${monthShort(iso)}`).join(", ");
+/** The parts of a log round (an older line has dates only: full days). */
+export const partsOf = (a: ClAdjustment): GivenPart[] =>
+  a.parts ?? a.dates.map((date) => ({ date, portion: "full" as Portion, days: 1 }));
 
-/** The save button's words: "Assign CL to 2 dates", "Assign CL for 3 employees". */
+/** "07 Oct, 15 Oct (2nd half)" for a log line. */
+export const datesText = (parts: { date: string; portion?: Portion }[]): string =>
+  parts.map((p) => `${p.date.slice(8, 10)} ${monthShort(p.date)}${PORTION_SHORT[p.portion ?? "full"]}`).join(", ");
+
+/** The save button's words: "Assign CL to 2 dates", "... (1.5 days)", "Assign CL for 3 employees". */
 export function assignLabel(lines: PickLine[]): string {
   if (lines.length === 1) {
     const n = lines[0].picked.length;
-    return n ? `Assign CL to ${n} date${n === 1 ? "" : "s"}` : "Pick the dates";
+    if (!n) return "Pick the dates";
+    const halves = lines[0].days !== n ? ` (${daysWord(lines[0].days)})` : "";
+    return `Assign CL to ${n} date${n === 1 ? "" : "s"}${halves}`;
   }
   return `Assign CL for ${lines.length} employees`;
 }
@@ -207,10 +298,9 @@ export function assignLabel(lines: PickLine[]): string {
 export function assignedText(saved: ClAssignSaved): string {
   if (saved.items.length === 1) {
     const a = saved.items[0];
-    const n = a.dates.length;
-    return `${a.employeeName ?? a.employeeCode}: ${n} day${n === 1 ? "" : "s"} (${datesText(a.dates)}) now Casual Leave. ${daysNumber(a.balanceBefore)} → ${daysNumber(a.balanceAfter)} left.`;
+    return `${a.employeeName ?? a.employeeCode}: ${daysWord(a.days)} (${datesText(partsOf(a))}) now Casual Leave. ${daysNumber(a.balanceBefore)} → ${daysNumber(a.balanceAfter)} left.`;
   }
-  return `${saved.days} days of ${saved.items.length} employees are now Casual Leave. Each is in the Change log.`;
+  return `${daysWord(saved.days)} of ${saved.items.length} employees are now Casual Leave. Each is in the Change log.`;
 }
 
 /** The month the detection opens on: the page's month when it is of this year and not still to come, else this month. */
@@ -338,8 +428,8 @@ export function logExportRows(items: ClAdjustment[]): (string | number)[][] {
     a.employeeName ?? "",
     a.branch ?? "",
     a.department ?? "",
-    datesText(a.dates),
-    a.dates.length,
+    datesText(partsOf(a)),
+    Math.abs(a.days),
     a.balanceBefore,
     a.balanceAfter,
     a.reason,

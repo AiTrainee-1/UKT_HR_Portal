@@ -34,16 +34,19 @@ import {
   carryCounts,
   carryExportRows,
   carryRows,
+  PORTION_TEXT,
   chipDate,
   daysNumber,
   filterCarry,
   filterLog,
   logExportRows,
   logPerson,
+  partsOf,
   whenText,
   type CarryRow,
   type ClAdjustProblem,
   type ClAdjustment,
+  type PickedDate,
 } from "./carry-forward";
 import { NO_CL_FILTERS, balanceLevel, clFiltersActive, type BoardRow } from "./logic";
 
@@ -252,12 +255,18 @@ function BalanceList({
 function DateChips({ a }: { a: ClAdjustment }) {
   return (
     <span className="flex flex-wrap gap-1" data-testid={`cf-log-dates-${a.id}`}>
-      {a.dates.map((d) => (
+      {partsOf(a).map((p) => (
         <span
-          key={d}
+          key={p.date}
           className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800 ring-1 ring-sky-100"
+          title={PORTION_TEXT[p.portion]}
         >
-          {chipDate(d)}
+          {chipDate(p.date)}
+          {p.portion !== "full" && (
+            <span className="ml-1 rounded bg-sky-200/70 px-1 text-[10px] font-bold">
+              {p.portion === "first_half" ? "1st half" : "2nd half"}
+            </span>
+          )}
         </span>
       ))}
     </span>
@@ -416,7 +425,10 @@ export default function CarryForwardTab({
     setTargets(rows);
   };
 
-  const submit = async (input: { reason: string; items: { employeeId: number; limit: number; dates: string[] }[] }) => {
+  const submit = async (input: {
+    reason: string;
+    items: { employeeId: number; limit: number; dates: PickedDate[] }[];
+  }) => {
     setProblem(null);
     setProblems([]);
     try {

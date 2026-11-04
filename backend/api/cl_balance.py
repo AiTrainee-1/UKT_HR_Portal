@@ -386,7 +386,7 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
         what = f"{base['portionLabel']}, {cl_day}"
         by_hr = base["source"] == "hr_edit"
         if kind == "approved" and base["source"] == "hr_assign":
-            did = "Casual Leave given by HR for an absent / leave day"
+            did = "Casual Leave given by HR for an absent / leave / half day"
         elif kind == "approved":
             did = "Casual Leave given by HR (attendance edit), approved" if by_hr else "Casual Leave approved"
         elif kind == "pending":

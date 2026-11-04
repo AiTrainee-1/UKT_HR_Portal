@@ -1,34 +1,43 @@
 """Casual Leave Carry Forward (owner 2026-11-04): on the HR Casual Leave page (Carry Forward tab) HR turns an employee's
-ABSENT or ON LEAVE days into Casual Leave from their yearly balance. HR portal only for now: the employee apps just read the
-balance and the Casual Leave, which already include these.
+ABSENT, ON LEAVE or HALF DAY days into Casual Leave from their yearly balance, a full day or a half day each. HR portal
+only for now: the employee apps just read the balance and the Casual Leave, which already include these.
 
-The yearly balance stays a fixed 12 (owner: never add extra days). "Deduct days": HR enters how many days at most, the
-system detects the employee's absent and on-leave days of a month, and HR picks that many of them (or fewer); exactly the
-picked dates become approved, paid Casual Leave (attendance Present 1.00, as an approved Casual Leave always writes it) and
-the balance goes down by their number. The number is only the most that may be picked, never a deduction of its own.
+The yearly balance stays a fixed 12 (owner: never add extra days). "Deduct days": HR enters how many days at most (a half
+counts 0.5), the system detects the employee's absent, on-leave and half days of a month, and HR picks dates up to that
+many days, choosing Full day, First half or Second half for each. Exactly the picked dates become approved Casual Leave
+(written as an approved Casual Leave always is: a full day = paid Present 1.00; a half pays its half and the other half
+counts by the punches, so a half day whose missed half is covered becomes a full paid day) and the balance goes down by
+their days. The number is only the most that may be picked, never a deduction of its own.
 
     GET  /api/casual-leaves/absent-dates?employeeIds=1,2&month=10&year=2026
          -> {year, month, monthLabel, monthStart, monthEnd, lastDay, assignable,
-             employees: [{employeeId, balance, absent: [Day], onLeave: [Day], dates: [Day],
+             employees: [{employeeId, balance, absent: [Day], onLeave: [Day], halfDay: [Day], dates: [Day],
                           calendar: [{date, weekday, status, selectable, label}]}]}
-         Day = {date, weekday, status: "absent"|"on_leave", label}; `dates` = absent + onLeave by date (what can be picked)
-    POST /api/casual-leaves/assign {reason, items: [{employeeId, limit, dates: ["2026-10-07", ...]}]}
+         Day = {date, weekday, status: "absent"|"on_leave"|"half_shift", label, portions: ["full", "first_half", ...],
+                suggested, worked: "morning"|"evening"|null, firstPunch, lastPunch, manual,
+                halves: {first: "09:00-13:00", second: "14:00-18:00"} | null}
+         `portions` = what may be given that day: a day HR set by hand takes a full day only (it is never recomputed); a
+         half day whose worked half is known takes the OTHER half or a full day (Casual Leave on the worked half would
+         pay nothing); `suggested` = what the picker starts on.
+    POST /api/casual-leaves/assign {reason, items: [{employeeId, limit, dates: [{date, portion} | "YYYY-MM-DD"]}]}
          -> 201 {count, days, items: [Adjustment]} | 400 {error, problems: [{employeeId, employeeName, error}]}
+         a bare date is a full day; `limit` in days (half days allowed)
     GET  /api/casual-leaves/adjustments?year=&employeeId=&page=&pageSize=
          -> {year, items: [Adjustment], total, page, pageSize, summary: {changes, employees, days}}
 
 Rules: this year's dates up to today only; staff, active, 6 months of service, within the caller's branch; every date must
-be absent or on leave and hold no Casual Leave yet; no more dates than the number entered nor than the balance has left; a
-reason always; all or nothing. The log keeps one line per employee per save (CasualLeaveAdjustment kind "assign"); it is a
-record only, the approved Casual Leave itself lowers the balance. Gated by the Casual Leave module (HrPermissionMiddleware:
-viewing reads, changing needs edit).
+be absent, on leave or a half day and hold no Casual Leave yet, with a portion that day allows; no more days than the
+number entered nor than the balance has left; a reason always; all or nothing. The log keeps one line per employee per save
+(CasualLeaveAdjustment kind "assign"); it is a record only, the approved Casual Leave itself lowers the balance. Gated by
+the Casual Leave module (HrPermissionMiddleware: viewing reads, changing needs edit).
 """
 
 from __future__ import annotations
 
 import calendar
-from datetime import date
-from decimal import Decimal
+from dataclasses import dataclass
+from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from rest_framework.decorators import api_view
@@ -43,18 +52,42 @@ from .clock import ist_today
 from .models import CasualLeaveAdjustment, Employee
 
 MAX_ITEMS = 500
-MAX_LIMIT = 31
+MAX_LIMIT = Decimal("31")
 REASON_MIN, REASON_MAX = 3, 300
-CONVERTIBLE = ("absent", "on_leave")  # AttendanceDayRecord statuses HR may turn into Casual Leave
+CONVERTIBLE = ("absent", "on_leave", "half_shift")  # AttendanceDayRecord statuses HR may turn into Casual Leave
 LEAVE_REASON = {"sick": "Sick Leave", "emergency": "Emergency", "personal": "Personal", "other": "Other"}
+FULL, FIRST, SECOND = cl_balance.FULL, cl_balance.FIRST_HALF, cl_balance.SECOND_HALF
+PORTION_DAYS = cl_balance.PORTION_DAYS
+PORTION_WORDS = {FULL: "full day", FIRST: "first half", SECOND: "second half"}
+HALF = Decimal("0.5")
 
 
 def _name(emp: Employee) -> str:
     return f"{emp.first_name} {emp.last_name}".strip() or emp.employee_code
 
 
+def _parts_of(raw) -> list[dict]:
+    """The log line's dates as [{date, portion, portionLabel, days}]; a bare date (the first builds) is a full day."""
+    out = []
+    for entry in raw or []:
+        if isinstance(entry, dict):
+            d, portion = str(entry.get("date") or ""), cl_balance.portion_of(entry.get("portion"))
+        else:
+            d, portion = str(entry), FULL
+        out.append(
+            {
+                "date": d,
+                "portion": portion,
+                "portionLabel": cl_balance.PORTION_LABEL[portion],
+                "days": cl_balance.number(PORTION_DAYS[portion]),
+            }
+        )
+    return out
+
+
 def adjustment_json(a: CasualLeaveAdjustment) -> dict:
     emp = a.employee
+    parts = _parts_of(a.dates)
     return {
         "id": a.id,
         "employeeId": emp.id,
@@ -63,8 +96,9 @@ def adjustment_json(a: CasualLeaveAdjustment) -> dict:
         "department": emp.department.name if emp.department_id and emp.department else None,
         "branch": emp.branch.name if emp.branch_id and emp.branch else None,
         "year": a.year,
-        "days": cl_balance.number(a.days),  # minus the number of dates given
-        "dates": list(a.dates or []),
+        "days": cl_balance.number(a.days),  # minus the days given (a half counts 0.5)
+        "dates": [p["date"] for p in parts],
+        "parts": parts,  # added with half days: each date and what of it was given
         "reason": a.reason,
         "balanceBefore": cl_balance.number(a.balance_before),
         "balanceAfter": cl_balance.number(a.balance_after),
@@ -106,6 +140,7 @@ def casual_leave_adjustments(request: Request) -> Response:
             return Response({"error": "employeeId must be a number"}, status=400)
     rows = list(qs.order_by("-created_at", "-id"))
     start = (page - 1) * size
+    days = sum((-Decimal(str(a.days)) for a in rows), Decimal("0"))
     return Response(
         {
             "year": year,
@@ -116,7 +151,7 @@ def casual_leave_adjustments(request: Request) -> Response:
             "summary": {
                 "changes": len(rows),
                 "employees": len({a.employee_id for a in rows}),
-                "days": sum(len(a.dates or []) for a in rows),
+                "days": cl_balance.number(days),
             },
         }
     )
@@ -125,10 +160,27 @@ def casual_leave_adjustments(request: Request) -> Response:
 # ── detection ────────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class OpenDay:
+    """A day that can be given as Casual Leave, and how."""
+
+    date: date
+    status: str  # absent | on_leave | half_shift
+    label: str
+    portions: tuple[str, ...]
+    suggested: str
+    worked: str | None  # a half day: "morning" | "evening" | None (not known)
+    first_punch: str | None
+    last_punch: str | None
+    manual: bool
+
+
+def _clock(t) -> str | None:
+    return t.strftime("%H:%M") if t else None
+
+
 def _leave_labels(employee_ids, first: date, last: date) -> dict[tuple[int, date], str]:
     """{(employee id, date): "Sick Leave"} for the approved full-day leave behind an On Leave day."""
-    from datetime import timedelta
-
     from .models import LeaveRequest
 
     out: dict[tuple[int, date], str] = {}
@@ -145,25 +197,63 @@ def _leave_labels(employee_ids, first: date, last: date) -> dict[tuple[int, date
     return out
 
 
-def _convertible(employee_ids, first: date, last: date) -> dict[int, list[tuple[date, str]]]:
-    """{employee id: [(date, status), ...]} the days between first and last the attendance marks Absent or On Leave and
-    that hold no Casual Leave yet (pending or approved, or one HR proposed through an attendance edit)."""
-    from .models import AttendanceDayRecord
+def _open_day(rec, leave_label: str | None, settings) -> OpenDay:
+    from .attendance_final import half_period
+
+    manual = rec.source == "manual"
+    first_punch, last_punch = _clock(rec.first_punch), _clock(rec.last_punch)
+    if rec.status == "half_shift":
+        worked = half_period(rec, settings)
+        missing = SECOND if worked == "morning" else FIRST if worked == "evening" else None
+        if manual:
+            portions, suggested = (FULL,), FULL
+        elif missing:
+            portions, suggested = (missing, FULL), missing
+        else:
+            portions, suggested = (FIRST, SECOND, FULL), SECOND
+        span = f" ({first_punch}-{last_punch})" if first_punch and last_punch and first_punch != last_punch else ""
+        label = {
+            "morning": f"Half Day · worked the morning{span}",
+            "evening": f"Half Day · worked the evening{span}",
+        }.get(worked or "", "Half Day")
+        return OpenDay(rec.date, rec.status, label, portions, suggested, worked, first_punch, last_punch, manual)
+    portions = (FULL,) if manual else (FULL, FIRST, SECOND)
+    label = "Absent" if rec.status == "absent" else f"On Leave · {leave_label or 'Leave'}"
+    return OpenDay(rec.date, rec.status, label, portions, FULL, None, first_punch, last_punch, manual)
+
+
+def _open_days(employee_ids, first: date, last: date) -> dict[int, list[OpenDay]]:
+    """{employee id: [OpenDay, ...]} the days between first and last the attendance marks Absent, On Leave or Half Day
+    and that hold no Casual Leave yet (pending or approved, or one HR proposed through an attendance edit)."""
+    from .models import AttendanceDayRecord, PayrollSettings
 
     ids = list(employee_ids)
-    out: dict[int, list[tuple[date, str]]] = {i: [] for i in ids}
+    out: dict[int, list[OpenDay]] = {i: [] for i in ids}
     if not ids or first > last:
         return out
     held = cl_balance.parts(ids, first, last)
     taken = {i: {p.date for p in held.get(i, [])} for i in ids}
-    for emp_id, day, status in (
-        AttendanceDayRecord.objects.filter(employee_id__in=ids, date__range=(first, last), status__in=CONVERTIBLE)
-        .order_by("date")
-        .values_list("employee_id", "date", "status")
-    ):
-        if day not in taken[emp_id]:
-            out[emp_id].append((day, status))
+    labels = _leave_labels(ids, first, last)
+    settings = PayrollSettings.get()
+    for rec in AttendanceDayRecord.objects.filter(
+        employee_id__in=ids, date__range=(first, last), status__in=CONVERTIBLE
+    ).order_by("date"):
+        if rec.date not in taken[rec.employee_id]:
+            out[rec.employee_id].append(_open_day(rec, labels.get((rec.employee_id, rec.date)), settings))
     return out
+
+
+def _halves(emp: Employee, d: date) -> dict | None:
+    """{first: "09:00-13:00", second: "14:00-18:00"}: what each half means in clock time on that day's shift."""
+    from .casual_leave_views import _shift_halves_json
+
+    shift = _shift_halves_json(emp, d)
+    if not shift:
+        return None
+    return {
+        "first": f"{shift['start']}-{shift['firstHalfEnd']}",
+        "second": f"{shift['secondHalfStart']}-{shift['end']}",
+    }
 
 
 @api_view(["GET"])
@@ -185,9 +275,9 @@ def casual_leave_absent_dates(request: Request) -> Response:
         return Response({"error": f"At most {MAX_ITEMS} employees at a time."}, status=400)
     month_end = date(year, month, calendar.monthrange(year, month)[1])
     last = min(month_end, today)
-    found = list(scope_to_branch(Employee.objects, request).filter(pk__in=ids).values_list("id", flat=True))
-    days = _convertible(found, first, last)
-    labels = _leave_labels(found, first, last)
+    employees = {e.id: e for e in scope_to_branch(Employee.objects, request).filter(pk__in=ids)}
+    found = [i for i in ids if i in employees]
+    open_days = _open_days(found, first, last)
     statuses: dict[int, dict[date, str]] = {i: {} for i in found}
     for emp_id, day, status in AttendanceDayRecord.objects.filter(
         employee_id__in=found, date__range=(first, month_end)
@@ -196,14 +286,25 @@ def casual_leave_absent_dates(request: Request) -> Response:
     held = cl_balance.parts(found, first, month_end)
     balances = cl_balance.balances(found, today.year)
 
-    def day_json(emp_id: int, d: date, status: str) -> dict:
-        label = "Absent" if status == "absent" else f"On Leave · {labels.get((emp_id, d), 'Leave')}"
-        return {"date": d.isoformat(), "weekday": d.strftime("%a"), "status": status, "label": label}
+    def day_json(emp: Employee, o: OpenDay) -> dict:
+        return {
+            "date": o.date.isoformat(),
+            "weekday": o.date.strftime("%a"),
+            "status": o.status,
+            "label": o.label,
+            "portions": list(o.portions),
+            "suggested": o.suggested,
+            "worked": o.worked,
+            "firstPunch": o.first_punch,
+            "lastPunch": o.last_punch,
+            "manual": o.manual,
+            "halves": _halves(emp, o.date) if len(o.portions) > 1 else None,
+        }
 
-    employees = []
+    out = []
     for emp_id in found:
-        mine = [day_json(emp_id, d, s) for d, s in days[emp_id]]
-        pickable = {x["date"] for x in mine}
+        mine = [day_json(employees[emp_id], o) for o in open_days[emp_id]]
+        by_date = {x["date"]: x for x in mine}
         cl_days = {p.date for p in held.get(emp_id, [])}
         cal = []
         d = first
@@ -213,14 +314,16 @@ def casual_leave_absent_dates(request: Request) -> Response:
                 status, label = "future", "Still to come"
             elif d in cl_days:
                 status, label = "cl", "Casual Leave"
+            elif iso in by_date:
+                status, label = by_date[iso]["status"], by_date[iso]["label"]
             else:
                 status = statuses[emp_id].get(d, "none")
                 label = {
                     "present": "Present",
-                    "half_shift": "Half day",
+                    "half_shift": "Half Day",
                     "holiday": "Holiday / week off",
                     "absent": "Absent",
-                    "on_leave": f"On Leave · {labels.get((emp_id, d), 'Leave')}",
+                    "on_leave": "On Leave",
                     "none": "No attendance record",
                 }.get(status, status)
             cal.append(
@@ -228,17 +331,18 @@ def casual_leave_absent_dates(request: Request) -> Response:
                     "date": iso,
                     "weekday": d.strftime("%a"),
                     "status": status,
-                    "selectable": iso in pickable,
+                    "selectable": iso in by_date,
                     "label": label,
                 }
             )
-            d = date.fromordinal(d.toordinal() + 1)
-        employees.append(
+            d += timedelta(days=1)
+        out.append(
             {
                 "employeeId": emp_id,
                 "balance": balances.get(emp_id),
                 "absent": [x for x in mine if x["status"] == "absent"],
                 "onLeave": [x for x in mine if x["status"] == "on_leave"],
+                "halfDay": [x for x in mine if x["status"] == "half_shift"],
                 "dates": mine,
                 "calendar": cal,
             }
@@ -253,7 +357,7 @@ def casual_leave_absent_dates(request: Request) -> Response:
             "lastDay": last.isoformat() if last >= first else None,
             # dates of another year cannot be given: that year's balance is not this year's
             "assignable": year == today.year and first <= today,
-            "employees": employees,
+            "employees": out,
         }
     )
 
@@ -261,20 +365,51 @@ def casual_leave_absent_dates(request: Request) -> Response:
 # ── assigning ────────────────────────────────────────────────────────────────
 
 
-def _parse_date(raw):
-    try:
-        return date.fromisoformat(str(raw)[:10])
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_limit(raw) -> int | None:
+def _parse_limit(raw) -> Decimal | None:
+    """The most days, in whole or half days."""
     if isinstance(raw, bool) or raw is None or str(raw).strip() == "":
         return None
     try:
-        return int(str(raw).strip())
-    except ValueError:
+        value = Decimal(str(raw).strip())
+    except (InvalidOperation, ValueError):
         return None
+    if not value.is_finite() or value % HALF != 0:
+        return None
+    return value
+
+
+def _parse_dates(raw) -> list[tuple[date, str]] | None:
+    """[(date, portion), ...] from [{date, portion}] or ["YYYY-MM-DD"] (a full day); None when any entry is not one."""
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for entry in raw:
+        if isinstance(entry, dict):
+            d, portion = entry.get("date"), str(entry.get("portion") or FULL)
+        else:
+            d, portion = entry, FULL
+        try:
+            day = date.fromisoformat(str(d)[:10])
+        except (TypeError, ValueError):
+            return None
+        if portion not in PORTION_DAYS:
+            return None
+        out.append((day, portion))
+    return out
+
+
+def _portion_refusal(o: OpenDay, portion: str) -> str | None:
+    """Why `portion` cannot be given on this open day (None = it can)."""
+    if portion in o.portions:
+        return None
+    day = o.date.strftime("%d %b")
+    if o.manual:
+        return f"{day} was set by hand on the attendance pages: only a full day of Casual Leave can be given on it."
+    if o.worked:
+        part = "morning" if o.worked == "morning" else "evening"
+        other = PORTION_WORDS[o.suggested]
+        return f"{day}: the {part} was worked, so only the {other} (or a full day) can be given."
+    return f"{day}: that part of the day cannot be given."
 
 
 @api_view(["POST"])
@@ -302,7 +437,7 @@ def casual_leave_assign(request: Request) -> Response:
     if cl_balance.window(today.year, cut_over) is None:
         return Response({"error": f"No Casual Leave balance is kept for {today.year}."}, status=400)
 
-    wanted: list[tuple[int, list]] = []
+    wanted: list[tuple[int, list[tuple[date, str]], Decimal]] = []
     problems: list[dict] = []
     seen: set[int] = set()
     for item in items:
@@ -315,24 +450,31 @@ def casual_leave_assign(request: Request) -> Response:
             return Response({"error": "An employee is listed twice: give each one a single line."}, status=400)
         seen.add(emp_id)
         limit = _parse_limit(item.get("limit"))
-        raw_dates = item.get("dates") if isinstance(item.get("dates"), list) else []
-        dates = [_parse_date(d) for d in raw_dates]
-        if limit is None or not (1 <= limit <= MAX_LIMIT):
-            problems.append({"employeeId": emp_id, "error": f"Enter the days as a whole number from 1 to {MAX_LIMIT}."})
-        elif not dates:
-            problems.append({"employeeId": emp_id, "error": "Pick at least one date."})
-        elif any(d is None for d in dates) or len(set(dates)) != len(dates):
-            problems.append({"employeeId": emp_id, "error": "The dates must be real dates, each picked once."})
-        elif len(dates) > limit:
+        picks = _parse_dates(item.get("dates"))
+        total = sum((PORTION_DAYS[p] for _d, p in picks or []), Decimal("0"))
+        if limit is None or not (HALF <= limit <= MAX_LIMIT):
+            problems.append({"employeeId": emp_id, "error": "Enter the days from 0.5 to 31 (whole or half days)."})
+        elif picks is None:
             problems.append(
-                {"employeeId": emp_id, "error": f"{len(dates)} dates picked, but the days allow {limit} at most."}
+                {"employeeId": emp_id, "error": "Each date needs a real date and Full day, First half or Second half."}
             )
-        elif any(d.year != today.year or d > today for d in dates):
+        elif not picks:
+            problems.append({"employeeId": emp_id, "error": "Pick at least one date."})
+        elif len({d for d, _p in picks}) != len(picks):
+            problems.append({"employeeId": emp_id, "error": "Each date can be picked once."})
+        elif total > limit:
+            problems.append(
+                {
+                    "employeeId": emp_id,
+                    "error": f"{_days_word(total)} picked, but the days allow {cl_balance.number(limit)} at most.",
+                }
+            )
+        elif any(d.year != today.year or d > today for d, _p in picks):
             problems.append(
                 {"employeeId": emp_id, "error": f"Only dates of {today.year} up to today can be given Casual Leave."}
             )
         else:
-            wanted.append((emp_id, sorted(dates)))
+            wanted.append((emp_id, sorted(picks), total))
 
     actor = get_hr_display_name(request)
     now = timezone.now()
@@ -345,7 +487,7 @@ def casual_leave_assign(request: Request) -> Response:
         staff_ids = [i for i in found if found[i].employment_type == "staff"]
         balances = cl_balance.balances(staff_ids, today.year, cut_over)
         plan = []
-        for emp_id, dates in wanted:
+        for emp_id, picks, total in wanted:
             emp = found.get(emp_id)
             if emp is None:
                 problems.append({"employeeId": emp_id, "error": "Employee not found."})
@@ -368,27 +510,31 @@ def casual_leave_assign(request: Request) -> Response:
                     }
                 )
                 continue
-            open_days = {d for d, _s in _convertible([emp_id], dates[0], dates[-1])[emp_id]}
-            not_open = [d for d in dates if d not in open_days]
-            if not_open:
-                listed = ", ".join(d.strftime("%d %b") for d in not_open)
+            open_days = {o.date: o for o in _open_days([emp_id], picks[0][0], picks[-1][0])[emp_id]}
+            closed = [d for d, _p in picks if d not in open_days]
+            if closed:
+                listed = ", ".join(d.strftime("%d %b") for d in closed)
                 problems.append(
                     {
                         "employeeId": emp_id,
-                        "error": f"Not an absent or leave day (or it already has Casual Leave): {listed}. Pick again.",
+                        "error": f"Not an absent, leave or half day (or it already has Casual Leave): {listed}. Pick again.",
                     }
                 )
+                continue
+            refusal = next((r for d, p in picks if (r := _portion_refusal(open_days[d], p))), None)
+            if refusal:
+                problems.append({"employeeId": emp_id, "error": refusal})
                 continue
             remaining = Decimal(str(balances[emp_id]["remaining"]))
-            if Decimal(len(dates)) > remaining:
+            if total > remaining:
                 problems.append(
                     {
                         "employeeId": emp_id,
-                        "error": f"Only {_days_word(remaining)} of Casual Leave left, so {len(dates)} dates cannot be given.",
+                        "error": f"Only {_days_word(remaining)} of Casual Leave left, so {_days_word(total)} cannot be given.",
                     }
                 )
                 continue
-            plan.append((emp, dates, remaining))
+            plan.append((emp, picks, total, remaining))
 
         if problems:
             names = {e.id: _name(e) for e in found.values()}
@@ -405,13 +551,13 @@ def casual_leave_assign(request: Request) -> Response:
             )
 
         made = []
-        for emp, dates, before in plan:
-            for d in dates:
+        for emp, picks, total, before in plan:
+            for d, portion in picks:
                 cl = CasualLeaveRequest.objects.create(
                     employee=emp,
                     date=d,
-                    portion=CasualLeaveRequest.PORTION_FULL,
-                    reason=f"Given by HR for an absent / leave day: {reason}",
+                    portion=portion,
+                    reason=f"Given by HR for an absent / leave / half day: {reason}",
                     status=CasualLeaveRequest.STATUS_APPROVED,
                     approval_trail=[
                         {
@@ -433,30 +579,28 @@ def casual_leave_assign(request: Request) -> Response:
                 CasualLeaveAdjustment.objects.create(
                     employee=emp,
                     year=today.year,
-                    days=-Decimal(len(dates)),
+                    days=-total,
                     reason=reason,
                     balance_before=before,
-                    balance_after=before - len(dates),
+                    balance_after=before - total,
                     created_by=actor,
                     kind=CasualLeaveAdjustment.KIND_ASSIGN,
-                    dates=[d.isoformat() for d in dates],
+                    dates=[{"date": d.isoformat(), "portion": p} for d, p in picks],
                 )
             )
 
-    for a, (emp, dates, before) in zip(made, plan):
-        word = "day" if len(dates) == 1 else "days"
-        listed = ", ".join(d.strftime("%d %b %Y") for d in dates)
+    for a, (emp, picks, total, before) in zip(made, plan):
+        listed = ", ".join(f"{d.strftime('%d %b %Y')} ({PORTION_WORDS[p]})" for d, p in picks)
         log_action(
             request,
             "create",
             "casual_leave",
             record_id=a.id,
             description=(
-                f"Casual Leave {today.year}: {_name(emp)} ({emp.employee_code})'s absent / leave {word} {listed} given "
-                f"as Casual Leave, {cl_balance.number(before)} → {cl_balance.number(before - len(dates))} left. "
-                f"Reason: {reason}"
+                f"Casual Leave {today.year}: {_name(emp)} ({emp.employee_code}) given {_days_word(total)} for "
+                f"{listed}, {cl_balance.number(before)} → {cl_balance.number(before - total)} left. Reason: {reason}"
             ),
-            new_values={"employeeId": emp.id, "dates": [d.isoformat() for d in dates]},
+            new_values={"employeeId": emp.id, "dates": [{"date": d.isoformat(), "portion": p} for d, p in picks]},
         )
     named = Employee.objects.select_related("department", "branch").in_bulk([a.employee_id for a in made])
     for a in made:
@@ -464,7 +608,7 @@ def casual_leave_assign(request: Request) -> Response:
     return Response(
         {
             "count": len(made),
-            "days": sum(len(dates) for _emp, dates, _before in plan),
+            "days": cl_balance.number(sum((total for _e, _p, total, _b in plan), Decimal("0"))),
             "items": [adjustment_json(a) for a in made],
         },
         status=201,
