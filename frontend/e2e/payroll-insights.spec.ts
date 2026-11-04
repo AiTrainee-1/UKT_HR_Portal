@@ -542,6 +542,10 @@ test.describe("Details page", () => {
   test("Details opens a page of its own, and Back returns to the same filtered list", async ({ page, request }) => {
     const ravi = await idOf(request, "E2E002");
     await openAs(page, adminToken, `${FEB_CARDS}&q=Ravi`);
+    // the list shows the company's count of the month under the attendance (display only)
+    await expect(page.locator(`[data-testid="payroll-record-company-days-${ravi}"]:visible`)).toHaveText(
+      "24-day month",
+    );
     await page.getByTestId(`payroll-record-details-${ravi}`).click();
     await expect(page).toHaveURL(new RegExp(`/hr/payroll/details/${ravi}$`));
     await expect(page.getByTestId("payroll-details-page")).toBeVisible();
@@ -593,6 +597,8 @@ test.describe("Details page", () => {
     });
     await expect(page.getByTestId("pd-kpi-days")).toContainText("12");
     await expect(page.getByTestId("pd-kpi-days")).toContainText("12 LOP");
+    // the company's count of the month under it (display only): February 2026 has 24 days but Sundays and no holiday
+    await expect(page.getByTestId("pd-kpi-company-days")).toHaveText("24-day month");
     await expect(page.getByTestId("pd-status")).toContainText("Pending");
     await expect(page.getByTestId("pd-net-bridge")).toBeVisible();
 

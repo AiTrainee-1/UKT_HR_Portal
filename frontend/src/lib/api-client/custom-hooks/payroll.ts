@@ -362,6 +362,9 @@ export type PayrollRunItem = {
   /** The production pay cycle the row was generated on; null for staff rows and rows from before the cycles. */
   payCycle?: string | null;
   totalWorkingDays: number;
+  /** Display only (2026-11-04): the company's count of the month, every day but Sundays with the holidays INCLUDED
+   *  (October 2026 = 27 beside 25 working days). Null for production rows; absent from an older server. */
+  companyDays?: number | null;
   presentDays: number;
   absentDays: number;
   completedSessions?: number | null;

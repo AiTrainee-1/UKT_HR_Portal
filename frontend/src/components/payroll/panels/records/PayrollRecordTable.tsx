@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { summarizeRuns } from "../dashboard/dashboard-logic";
 import type { PayrollIssueSummary } from "../filters/filter-logic";
 import {
+  companyMonthText,
   cycleLabelOf,
   displayName,
   isProductionRun,
@@ -137,7 +138,17 @@ export function PayrollRecordTable({
                   {cycle && <span className="mr-1.5 font-semibold text-orange-700">{cycle}</span>}
                   {periodText(run)}
                 </td>
-                <td className="px-3 py-2.5 align-middle text-gray-700">{metricText(run)}</td>
+                <td className="px-3 py-2.5 align-middle text-gray-700">
+                  {metricText(run)}
+                  {companyMonthText(run) && (
+                    <span
+                      className="block text-[11px] text-muted-foreground"
+                      data-testid={`payroll-record-company-days-${run.id}`}
+                    >
+                      {companyMonthText(run)}
+                    </span>
+                  )}
+                </td>
                 <td className="px-3 py-2.5 text-right align-middle tabular-nums">{inr(run.grossSalary)}</td>
                 {showTds && (
                   <td

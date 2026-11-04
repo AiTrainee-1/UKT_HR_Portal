@@ -59,7 +59,12 @@ from .models import (
 )
 from .payroll_insights import all_setting_refs, inr, natural_key, normalized_days, period_label, plain, plural
 from .payroll_insights_rules import describe_slabs
-from .payroll_views import _build_working_days, _generate_production_payroll, _generate_staff_payroll
+from .payroll_views import (
+    _build_working_days,
+    _generate_production_payroll,
+    _generate_staff_payroll,
+    company_month_days,
+)
 
 # The attendance engine only computes days that have elapsed: with "today" fixed after every period used here, the figures
 # below do not depend on the date the suite happens to run on.
@@ -655,6 +660,15 @@ APRIL_QS = f"month={APRIL}&year={YEAR}"
 
 
 class HelperTests(SimpleTestCase):
+    def test_the_company_month_counts_every_day_but_sundays_holidays_included(self):
+        # display only (owner 2026-11-04): October 2026 is a 27-day month even though payroll pays 25 working days
+        # because of its two holidays
+        self.assertEqual(company_month_days(2026, 10), 27)
+        self.assertEqual(company_month_days(2026, 11), 25)  # five Sundays
+        self.assertEqual(company_month_days(2026, 12), 27)
+        self.assertEqual(company_month_days(2026, 2), 24)
+        self.assertEqual(company_month_days(2028, 2), 25)  # a leap year's 29 days
+
     def test_rupees_use_indian_digit_grouping(self):
         self.assertEqual(inr(0), "₹0")
         self.assertEqual(inr(999), "₹999")
@@ -1346,7 +1360,8 @@ class StaffDetailsTests(TestCase):
             },
         )
         self.assertEqual((d["money"]["gross"], d["money"]["net"]), (21250.0, 20750.0))
-        self.assertEqual(d["summary"], slip.breakdown_details["summary"])
+        # the breakdown's own counts, plus the company's count of February 2026 (28 days - 4 Sundays; display only)
+        self.assertEqual(d["summary"], {**slip.breakdown_details["summary"], "companyDays": 24})
         self.assertEqual(len(d["days"]), 24)
         self.assertEqual(
             d["period"],
@@ -1559,6 +1574,27 @@ class StaffDetailsTests(TestCase):
             },
         )
 
+    def test_the_list_shows_the_company_month_beside_the_working_days(self):
+        rows = _get(self, f"/api/payroll?month={MONTH}&year={YEAR}&page=1&pageSize=50")["items"]
+        meena = next(r for r in rows if r["id"] == self.w.meena_payroll.id)
+        # the payroll's own working days are untouched; the company's count of the month comes beside them
+        self.assertEqual(
+            (meena["totalWorkingDays"], meena["companyDays"]), (self.w.meena_payroll.total_working_days, 24)
+        )
+        shift_row = Payroll.objects.create(
+            employee=self.w.anand,
+            salary_mode="shift",
+            month=5,
+            year=YEAR,
+            total_working_days=6,
+            base_salary=Decimal("3000"),
+            gross_salary=Decimal("3000"),
+            deductions=Decimal("0"),
+            final_salary=Decimal("3000"),
+        )
+        rows = _get(self, f"/api/payroll?month=5&year={YEAR}&page=1&pageSize=50")["items"]
+        self.assertIsNone(next(r for r in rows if r["id"] == shift_row.id)["companyDays"])  # production: none
+
     def test_a_payroll_with_no_salary_slip_still_answers(self):
         payroll = Payroll.objects.create(
             employee=self.w.anand,
@@ -1576,7 +1612,9 @@ class StaffDetailsTests(TestCase):
         d = self.details(payroll)
         self.assertEqual(set(d), DETAILS_KEYS)
         self.assertEqual((d["slipId"], d["slipNumber"], d["days"], d["advances"]), (None, None, [], []))
-        self.assertEqual(d["summary"], {"totalWorkingDays": 26, "presentDays": 20.0, "absentDays": 6.0})
+        self.assertEqual(
+            d["summary"], {"totalWorkingDays": 26, "presentDays": 20.0, "absentDays": 6.0, "companyDays": 26}
+        )
         self.assertEqual(_keys(d["issues"]), [(None, "bank_missing")])  # only what the profile can still say
         self.assertEqual(
             [(line["key"], line["amount"]) for line in d["earnings"]], [("gross", 23000.0), ("total_earnings", 23000.0)]

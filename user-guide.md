@@ -661,6 +661,8 @@ The page is about **one month** at a time. Use the arrows or the Month / Year bo
 
 **Attendance** is a calendar of the month (or a table: date, day, status, first in, last out, shifts, flags, note). At the top-left of the card is **Sync attendance**: the card shows each day as the payroll counted it when it was generated; **Sync** reads the attendance records as they are now, so a change a Department Head or HR approved since then (an attendance edit, a Missing Punch, Casual Leave, an On-Duty punch) shows up, with how many days differ. Syncing never changes the payroll: the pay stays as generated until you generate it again. A View Only login can Sync too.
 
+**Company month days (display only).** Under the attendance figure ("23 / 25 days" in the payroll list, *Days worked* on the Details page) the payroll also shows the company's own count of the month: every day except Sundays, with the declared holidays counted in, for example *27-day month · 2 holidays* for October 2026 (27 days, of which 2 are holidays, so payroll pays 25 working days). It is only shown: the working days, the per day salary, LOP and every amount are worked out exactly as before.
+
 Every kind of day has a colour of its own, and the key above the calendar (grouped: *Worked*, *Leave*, *Paid extras*, *Days off*, *Also marked*) is also a filter (click one to dim the other days; click again, or **Clear**, to lift it). A kind nothing in the month used is greyed out:
 - **Present** green, **Late In** amber, **Early Out** magenta (Late In and Early Out are separate: a day can carry both), **Half day** orange, **Absent** red.
 - **Casual Leave** sky blue (it used to look like an ordinary Present day), and the **other leaves** (unpaid leave, paid leave, other leave) purple.

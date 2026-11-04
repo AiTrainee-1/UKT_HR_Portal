@@ -900,7 +900,7 @@ export const trimNumber = (n: number): string => String(Math.round(n * 100) / 10
 export function workTile(
   details: Pick<PayrollDetails, "summary">,
   kind: PayrollKind,
-): { label: string; value: string; outOf: string | null; sub: string } {
+): { label: string; value: string; outOf: string | null; sub: string; companyMonth: string | null } {
   const s = details.summary ?? {};
   const n = (key: string) => summaryNumber(s, key);
   if (kind === "production") {
@@ -914,6 +914,7 @@ export function workTile(
       sub: [worked !== null ? `${plural(worked, "day")} worked` : "", absent ? `${absent} absent` : ""]
         .filter(Boolean)
         .join(" · "),
+      companyMonth: null,
     };
   }
   const effective = n("effectivePaidDays") ?? n("presentDays");
@@ -927,11 +928,21 @@ export function workTile(
     n("halfShiftDays") ? `${trimNumber(n("halfShiftDays")!)} half` : "",
     lop ? `${trimNumber(lop)} LOP` : "",
   ].filter(Boolean);
+  // display only (2026-11-04): the company's count of the month, holidays included: "27-day month · 25 working + 2 holidays"
+  const company = n("companyDays");
+  const holidays = company !== null && working !== null ? company - working : 0;
+  const companyMonth =
+    company !== null && company > 0
+      ? holidays > 0 && working !== null
+        ? `${trimNumber(company)}-day month · ${trimNumber(working)} working + ${plural(holidays, "holiday")}`
+        : `${trimNumber(company)}-day month`
+      : null;
   return {
     label: "Days worked",
     value: effective === null ? "—" : trimNumber(effective),
     outOf: effective !== null && working !== null ? trimNumber(working) : null,
     sub: parts.join(" · "),
+    companyMonth,
   };
 }
 

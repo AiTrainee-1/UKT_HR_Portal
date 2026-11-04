@@ -10,6 +10,7 @@ import { hasTds, tdsAmount, tdsLabel } from "@/components/payroll/kit/statutory"
 import { cn } from "@/lib/utils";
 import type { PayrollIssueSummary } from "../filters/filter-logic";
 import {
+  companyMonthText,
   cycleLabelOf,
   displayName,
   issueBadges,
@@ -203,6 +204,11 @@ function PayrollRecordCardImpl({
             <div className="min-w-0">
               <dt className="text-[11px] text-muted-foreground">{metricLabel(run)}</dt>
               <dd className="text-xs font-bold text-gray-800">{metricText(run)}</dd>
+              {companyMonthText(run) && (
+                <dd className="text-[10px] text-muted-foreground" data-testid={`payroll-record-company-days-${run.id}`}>
+                  {companyMonthText(run)}
+                </dd>
+              )}
             </div>
             <div className="min-w-0">
               <dt className="text-[11px] text-muted-foreground">Gross</dt>

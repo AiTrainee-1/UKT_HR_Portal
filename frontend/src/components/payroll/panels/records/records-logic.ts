@@ -31,6 +31,21 @@ export function metricText(
   return `${formatCount(run.presentDays)} / ${formatCount(run.totalWorkingDays)} days`;
 }
 
+/**
+ * The company's count of the month beside the payroll's working days (staff, display only): "27-day month · 2 holidays"
+ * when 25 working days leave out 2 declared holidays, "26-day month" when there were none. Null for production rows and
+ * for rows from a server that does not send it.
+ */
+export function companyMonthText(
+  run: Pick<PayrollRunItem, "salaryMode" | "totalWorkingDays" | "companyDays">,
+): string | null {
+  if (isProductionRun(run) || run.companyDays === null || run.companyDays === undefined) return null;
+  const company = Number(run.companyDays);
+  if (!Number.isFinite(company) || company <= 0) return null;
+  const holidays = company - (Number(run.totalWorkingDays) || 0);
+  return holidays > 0 ? `${company}-day month · ${plural(holidays, "holiday")}` : `${company}-day month`;
+}
+
 /** What the metric is called in a column header or a tooltip: "Days present", "Shifts". */
 export const metricLabel = (run: Pick<PayrollRunItem, "salaryMode">): string =>
   run.salaryMode === "shift" ? "Shifts" : run.salaryMode === "session" ? "Sessions" : "Attendance";

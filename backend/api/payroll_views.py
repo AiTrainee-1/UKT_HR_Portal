@@ -150,6 +150,13 @@ def _build_working_days(month: int, year: int, saturday_off: bool, holiday_dates
     return days
 
 
+def company_month_days(year: int, month: int) -> int:
+    """The company's own count of the month's working days: every day but Sundays, the declared holidays INCLUDED
+    (October 2026 = 27, while payroll pays 25 working days because of 2 holidays). Display only: shown beside the payroll's
+    working days, never used to calculate pay."""
+    return len(_build_working_days(month, year, False, set()))
+
+
 def staff_working_days(emp: Employee, month: int, year: int) -> list[date]:
     """
     The working days payroll pays a staff employee for in this month -built exactly as the payroll
@@ -1182,6 +1189,11 @@ def _payroll_json(p: Payroll, employee_name: str | None = None) -> dict:
         "periodEnd": p.period_end.isoformat() if p.period_end else None,
         "payCycle": p.pay_cycle,
         "totalWorkingDays": p.total_working_days,
+        # added 2026-11-04, display only: the company's count of the month (holidays included), e.g. 27 beside 25 working
+        # days; None for a production (shift / session) row
+        "companyDays": company_month_days(p.year, p.month)
+        if p.salary_mode not in ("shift", "session") and p.month and p.year
+        else None,
         "presentDays": float(p.present_days),
         "absentDays": float(p.absent_days),
         "completedSessions": p.completed_sessions,

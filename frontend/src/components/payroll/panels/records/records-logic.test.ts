@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PayrollRunItem } from "@/lib/api-client/custom-hooks";
 import {
+  companyMonthText,
   cycleLabelOf,
   displayName,
   formatCount,
@@ -76,6 +77,19 @@ describe("the attendance line", () => {
     expect(metricText(run({ presentDays: 24, totalWorkingDays: 24 }))).toBe("24 / 24 days");
     expect(metricText(run({ presentDays: 22.5 }))).toBe("22.5 / 26 days");
     expect(metricLabel(run())).toBe("Attendance");
+  });
+
+  it("staff: the company's count of the month under it (display only), with the holidays it includes", () => {
+    // October 2026: 27 days but Sundays; payroll pays 25 because of 2 declared holidays
+    const october = run({ presentDays: 23, totalWorkingDays: 25, companyDays: 27 });
+    expect(metricText(october)).toBe("23 / 25 days"); // unchanged
+    expect(companyMonthText(october)).toBe("27-day month · 2 holidays");
+    expect(companyMonthText(run({ totalWorkingDays: 26, companyDays: 27 }))).toBe("27-day month · 1 holiday");
+    expect(companyMonthText(run({ totalWorkingDays: 26, companyDays: 26 }))).toBe("26-day month");
+    // nothing from an older server, nothing for production
+    expect(companyMonthText(run())).toBeNull();
+    expect(companyMonthText(run({ companyDays: null }))).toBeNull();
+    expect(companyMonthText(run({ salaryMode: "shift", companyDays: 27 }))).toBeNull();
   });
 
   it("production: shifts", () => {

@@ -73,6 +73,7 @@ from .payroll_insights_rules import (
     staff_rule_groups,
     staff_settings_groups,
 )
+from .payroll_views import company_month_days
 from .production_cycles import (
     CYCLE_LABELS,
     DEFAULT_MONTHLY_EQUIVALENT_FACTOR,
@@ -536,7 +537,11 @@ def _details_response(request: Request, pk: int, wanted: str) -> Response:
                 "monthlySalary": money(earn.get("monthlySalary") or payroll.base_salary) if staff else None,
                 "dailyRate": money(earn["dailyRate"]) if staff and "dailyRate" in earn else None,
             },
-            "summary": _numeric_summary(bd, payroll),
+            # + companyDays (staff, display only): the company's count of the month, holidays included (27 beside 25)
+            "summary": {
+                **_numeric_summary(bd, payroll),
+                **({"companyDays": company_month_days(payroll.year, payroll.month)} if staff else {}),
+            },
             "salary": salary_breakup(emp, payroll, bd) if staff else None,
             "earnings": earnings,
             "deductions": deductions,

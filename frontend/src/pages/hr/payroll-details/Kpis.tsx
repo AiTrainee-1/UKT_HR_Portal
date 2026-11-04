@@ -124,7 +124,18 @@ export function KpiStrip({
             work.value
           )
         }
-        sub={work.sub || undefined}
+        sub={
+          work.companyMonth ? (
+            <>
+              {work.sub && <span className="block">{work.sub}</span>}
+              <span className="block" data-testid="pd-kpi-company-days">
+                {work.companyMonth}
+              </span>
+            </>
+          ) : (
+            work.sub || undefined
+          )
+        }
         icon={kind === "production" ? Factory : CalendarCheck}
         tone="bg-sky-50 text-sky-800"
         testId="pd-kpi-days"
