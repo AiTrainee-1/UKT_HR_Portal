@@ -13,6 +13,8 @@ counts against the balance and keeps the older rule: one per calendar month.
 
   GET     /api/casual-leaves/history?year=&employeeId=   the year's balance as a running story
   GET|PUT /api/casual-leaves/policy                     the yearly entitlement and the cut-over day (a setting)
+  GET /api/casual-leaves/absent-dates, POST /assign       absent / leave days -> Casual Leave (Carry Forward):
+  GET /api/casual-leaves/adjustments                     ... and its log; see cl_adjustment_views.py
 
 Attendance integration:
   approved → AttendanceDayRecord for that date = Present, 1.00 shift (paid)
@@ -719,7 +721,8 @@ def _policy_json() -> dict:
             f"Every eligible staff member has {cl_balance.ENTITLEMENT} Casual Leave days a calendar year, used any time "
             f"while the balance lasts (a half day counts 0.5; waiting requests hold their days, a rejected one gives them "
             f"back). Casual Leave dated before {cut_over.strftime('%d %b %Y')} is not counted (it kept the older one per "
-            "month rule). Unused days lapse on 31 December and a fresh balance starts on 1 January."
+            "month rule). HR may turn an employee's absent or leave days into Casual Leave from that balance (Carry "
+            "Forward). Unused days lapse on 31 December and a fresh balance starts on 1 January."
         ),
     }
 

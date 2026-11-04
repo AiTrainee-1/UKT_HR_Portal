@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CalendarCheck, CalendarHeart, Hourglass, ListChecks, UserCheck, UserX } from "lucide-react";
+import { CalendarCheck, CalendarHeart, Hourglass, ListChecks, Repeat2, UserCheck, UserX } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { PipelineNote } from "@/components/ApprovalTrail";
 import { RefreshButton } from "@/components/PageRefreshBar";
@@ -17,6 +17,7 @@ import { exportSheet } from "./leave/export";
 import { ALL, branchOptions, departmentOptions, longDate, type PersonFilters } from "./leave/logic";
 import { MonthPicker, StatCard, useVisibleCount } from "./leave/parts";
 import ApplyDialog from "./casual-leave/ApplyDialog";
+import CarryForwardTab from "./casual-leave/CarryForwardTab";
 import ClTab from "./casual-leave/ClTab";
 import HistoryDrawer from "./casual-leave/HistoryDrawer";
 import { useClBoard } from "./casual-leave/api";
@@ -45,7 +46,15 @@ import {
   type ClRequest,
 } from "./casual-leave/logic";
 
-type Tab = "taken" | "eligible" | "not-eligible" | "requests";
+type Tab = "taken" | "eligible" | "not-eligible" | "requests" | "carry-forward";
+
+const TABS: Tab[] = ["taken", "eligible", "not-eligible", "requests", "carry-forward"];
+
+/** `?tab=carry-forward` opens that tab (a link, a refresh); any other value the first one. */
+function tabFromUrl(): Tab {
+  const raw = new URLSearchParams(window.location.search).get("tab");
+  return TABS.includes(raw as Tab) ? (raw as Tab) : "taken";
+}
 
 const localToday = () => {
   const d = new Date();
@@ -59,7 +68,16 @@ export default function CasualLeave() {
     year: Number(today.slice(0, 4)),
     month: Number(today.slice(5, 7)),
   }));
-  const [tab, setTab] = useState<Tab>("taken");
+  const [tab, setTabState] = useState<Tab>(tabFromUrl);
+  // the tab stays in the address, so a refresh or a shared link comes back to it
+  const setTab = (next: Tab) => {
+    setTabState(next);
+    const params = new URLSearchParams(window.location.search);
+    if (next === "taken") params.delete("tab");
+    else params.set("tab", next);
+    const qs = params.toString();
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+  };
 
   // each view keeps its own search and filters
   const [takenF, setTakenF] = useState<PersonFilters>(NO_CL_FILTERS);
@@ -260,6 +278,7 @@ export default function CasualLeave() {
                 { value: "eligible", label: "Eligible", icon: <UserCheck size={14} /> },
                 { value: "not-eligible", label: "Not eligible", icon: <UserX size={14} /> },
                 { value: "requests", label: "Requests", icon: <ListChecks size={14} /> },
+                { value: "carry-forward", label: "Carry Forward", icon: <Repeat2 size={14} /> },
               ]}
               value={tab}
               onChange={(v) => setTab(v as Tab)}
@@ -456,6 +475,19 @@ export default function CasualLeave() {
             >
               <RequestList rows={reqShown.slice(0, reqMore.count)} {...decideProps} />
             </ClTab>
+          )}
+
+          {tab === "carry-forward" && (
+            <CarryForwardTab
+              board={board}
+              {...boardState}
+              branches={branches}
+              departments={departments}
+              year={year}
+              month={month}
+              today={{ year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) }}
+              onHistory={showHistory}
+            />
           )}
         </div>
       </div>

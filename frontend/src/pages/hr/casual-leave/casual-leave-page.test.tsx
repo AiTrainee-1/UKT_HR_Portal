@@ -28,6 +28,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-15T10:00:00") });
+  // the page keeps its tab in the address (?tab=): every test starts on the first one
+  window.history.replaceState(null, "", "/hr/casual-leave");
 });
 
 let root: Root | null = null;

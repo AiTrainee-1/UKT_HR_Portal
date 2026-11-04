@@ -429,3 +429,5 @@ api/hod_reminder_scheduler.py
 api/urls_hod_reminders.py
 api/models/hod_reminders.py
 api/tests_hod_reminders.py
+api/cl_adjustment_views.py
+api/tests_cl_adjustments.py

@@ -41,6 +41,7 @@ from .leave import (
     LeaveRequest,
     EmployeeRequest,
     CasualLeaveRequest,
+    CasualLeaveAdjustment,
     EmployeePermission,
 )
 from .attendance import (

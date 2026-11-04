@@ -295,7 +295,8 @@ def _run_cl_eligibility(ctx) -> ReportResult:
             f"Casual Leave is a yearly balance of {cl_balance.ENTITLEMENT} days from {cut_over:%d %b %Y} (everyone "
             f"started fresh then): remaining = {cl_balance.ENTITLEMENT} - approved - pending days dated in {yr} on or "
             "after that day (a half day counts 0.5, a rejected request frees its days, a Casual Leave HR proposed "
-            "through an attendance edit holds its days while it waits). Unused days lapse on 31 December. Join dates "
+            "through an attendance edit holds its days while it waits, and a Casual Leave HR gave for an absent or "
+            "leave day on the Carry Forward tab counts whatever its date). Unused days lapse on 31 December. Join dates "
             "are read in any of the formats the employee record allows (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY).",
         ]
     else:

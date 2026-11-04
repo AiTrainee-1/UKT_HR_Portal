@@ -84,6 +84,7 @@ export default function HistoryDrawer({
                     <div className="flex flex-wrap items-center gap-1.5">
                       <Chip className={KIND[e.kind]?.tone ?? TONE.neutral}>{KIND[e.kind]?.label ?? e.kind}</Chip>
                       {e.source === "hr_edit" && <Chip className={TONE.info}>HR attendance edit</Chip>}
+                      {e.source === "hr_assign" && <Chip className={TONE.info}>Given by HR (Carry Forward)</Chip>}
                       <span
                         className={cn(
                           "ml-auto text-sm font-black tabular-nums",

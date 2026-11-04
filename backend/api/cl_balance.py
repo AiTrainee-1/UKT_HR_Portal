@@ -8,6 +8,11 @@ a fresh 12 starts on 1 January.
 
     balance(year) = 12 - (approved + pending Casual Leave days dated in the year, on/after max(cut-over, 1 January))
 
+The 12 is fixed (owner 2026-11-04: no extra days are ever added). On the Casual Leave page's Carry Forward tab HR turns an
+employee's ABSENT or ON LEAVE dates into approved Casual Leave (cl_adjustment_views.assign): that Casual Leave counts
+against the year's balance even when its date is before the cut-over (Part.assigned), so the balance goes down by exactly
+the dates HR picked.
+
 Pending counts so nobody can ask for more than is left while requests wait; a rejected (or deleted) request frees its days
 again. A Casual Leave HR proposes from the Attendance Edit page counts as pending while that attendance change waits for
 the Department Head and HR (it becomes a real approved Casual Leave when both approve: attendance_edit._apply_casual_leave),
@@ -78,9 +83,15 @@ class Part:
     status: str  # "approved" | "pending"
     request_id: int
     kind: str  # "casual_leave" | "attendance_correction"
-    source: str  # "employee" (asked for in the apps / by HR on the Casual Leave page) | "hr_edit"
+    source: str  # "employee" (asked for in the apps / by HR on the Casual Leave page) | "hr_edit" | "hr_assign"
     created_at: datetime | None = None
     decided_at: datetime | None = None
+    # HR gave it for an absent date on the Carry Forward tab: it uses the year's balance whatever its date
+    assigned: bool = False
+
+    def counts(self, cut_over: date) -> bool:
+        """Whether it uses the yearly balance: dated on/after the cut-over, or given by HR for an absent date."""
+        return self.assigned or counts(self.date, cut_over)
 
     @property
     def days(self) -> Decimal:
@@ -102,6 +113,20 @@ class Part:
 def is_hr_edit_cl(cl) -> bool:
     """A Casual Leave written by an approved HR attendance edit (its approval trail carries the edit's id)."""
     return any(str(e.get("via") or "") == "attendance_correction" for e in (cl.approval_trail or []))
+
+
+ASSIGN_VIA = "carry_forward"  # approval_trail "via" of a Casual Leave HR gave for an absent date (Carry Forward tab)
+
+
+def is_assigned_cl(cl) -> bool:
+    """A Casual Leave HR gave for an absent date on the Carry Forward tab."""
+    return any(str(e.get("via") or "") == ASSIGN_VIA for e in (cl.approval_trail or []))
+
+
+def source_of(cl) -> str:
+    if is_assigned_cl(cl):
+        return "hr_assign"
+    return "hr_edit" if is_hr_edit_cl(cl) else "employee"
 
 
 def hr_edit_id_of(cl) -> int | None:
@@ -131,9 +156,10 @@ def parts(employee_ids, start: date, end: date, exclude_override_ids=()) -> dict
                 cl.status,
                 cl.id,
                 "casual_leave",
-                "hr_edit" if is_hr_edit_cl(cl) else "employee",
+                source_of(cl),
                 cl.created_at,
                 cl.reviewed_at,
+                is_assigned_cl(cl),
             )
         )
     proposed = AttendanceOverrideRequest.objects.filter(
@@ -160,9 +186,14 @@ def parts(employee_ids, start: date, end: date, exclude_override_ids=()) -> dict
 
 
 def balance_json(held: list[Part], year: int, cut_over: date) -> dict:
-    """The balance block every screen reads. `held` = the Parts of the year's balance window."""
+    """The balance block every screen reads. `held` = the Parts of the year (from 1 January: Casual Leave HR gave for an
+    absent / leave day counts whatever its date; any other only from the cut-over)."""
     win = window(year, cut_over)
-    counted = [p for p in held if win is not None and win[0] <= p.date <= win[1]]
+    counted = [
+        p
+        for p in held
+        if win is not None and p.date.year == year and (win[0] <= p.date or p.assigned) and p.date <= win[1]
+    ]
     used = sum((p.days for p in counted if p.status == "approved"), Decimal("0"))
     pending = sum((p.days for p in counted if p.status == "pending"), Decimal("0"))
     remaining = max(Decimal("0"), ENTITLEMENT - used - pending)
@@ -184,7 +215,8 @@ def balance_json(held: list[Part], year: int, cut_over: date) -> dict:
 def balance(emp, year: int, exclude_override_ids=(), cut_over: date | None = None) -> dict:
     cut_over = cut_over or since()
     win = window(year, cut_over)
-    held = parts([emp.pk], *win, exclude_override_ids=exclude_override_ids)[emp.pk] if win else []
+    # from 1 January: Casual Leave HR gave for an absent date counts even before the cut-over (balance_json picks)
+    held = parts([emp.pk], date(year, 1, 1), win[1], exclude_override_ids=exclude_override_ids)[emp.pk] if win else []
     return balance_json(held, year, cut_over)
 
 
@@ -193,7 +225,7 @@ def balances(employee_ids, year: int, cut_over: date | None = None) -> dict[int,
     cut_over = cut_over or since()
     win = window(year, cut_over)
     ids = list(employee_ids)
-    held = parts(ids, *win) if win else {i: [] for i in ids}
+    held = parts(ids, date(year, 1, 1), win[1]) if win else {i: [] for i in ids}
     return {i: balance_json(held.get(i, []), year, cut_over) for i in ids}
 
 
@@ -222,8 +254,8 @@ def month_usage(emp, year: int, cut_over: date | None = None) -> list[dict]:
     out = []
     for month in range(1, 13):
         mine = [p for p in held if p.date.month == month]
-        counted = [p for p in mine if counts(p.date, cut_over)]
-        before = [p for p in mine if not counts(p.date, cut_over)]
+        counted = [p for p in mine if p.counts(cut_over)]
+        before = [p for p in mine if not p.counts(cut_over)]
         last_day = date(year, month, calendar.monthrange(year, month)[1])
         out.append(
             {
@@ -234,7 +266,7 @@ def month_usage(emp, year: int, cut_over: date | None = None) -> list[dict]:
                 "beforeCutOver": number(sum((p.days for p in before), Decimal("0"))),
                 # "yearly_balance" when the month has any day on/after the cut-over, else "one_per_month" (the old rule)
                 "rule": "yearly_balance" if counts(last_day, cut_over) else "one_per_month",
-                "parts": [{**p.to_json(), "counted": counts(p.date, cut_over)} for p in mine],
+                "parts": [{**p.to_json(), "counted": p.counts(cut_over)} for p in mine],
             }
         )
     return out
@@ -260,8 +292,8 @@ def _fmt(value: Decimal) -> str:
 def history(emp, year: int, today: date | None = None, cut_over: date | None = None) -> dict:
     """The year's balance as a running story, oldest first: the fresh 12, then one line per Casual Leave that counts
     (approved: on the day it was approved; waiting: on the day it was asked for; rejected: on the day it was rejected, with
-    no days used), and, once the year is over, the unused days lapsing on 31 December. The last line's balance is today's
-    balance."""
+    no days used; Casual Leave HR gave for an absent / leave day counts whatever its date), and, once the year is over,
+    the unused days lapsing on 31 December. The last line's balance is today's balance."""
     from .clock import ist_today
     from .models import AttendanceOverrideRequest, CasualLeaveRequest
 
@@ -273,10 +305,14 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
         return {**head, "entries": []}
 
     events: list[tuple] = []  # (day, order, kind, change, payload)
-    for cl in CasualLeaveRequest.objects.filter(employee=emp, date__range=win).order_by("created_at", "id"):
+    for cl in CasualLeaveRequest.objects.filter(employee=emp, date__range=(date(year, 1, 1), win[1])).order_by(
+        "created_at", "id"
+    ):
+        if cl.date < win[0] and not is_assigned_cl(cl):
+            continue  # before the cut-over: never counted
         portion = portion_of(cl.portion)
         days = PORTION_DAYS[portion]
-        source = "hr_edit" if is_hr_edit_cl(cl) else "employee"
+        source = source_of(cl)
         base = {
             "date": cl.date.isoformat(),
             "portion": portion,
@@ -345,10 +381,13 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
     for on, _created, kind, change, base in events:
         before, after = left, left + change
         left = after
+        when = (on or win[0]).strftime("%d %b")
         cl_day = date.fromisoformat(base["date"]).strftime("%d %b %Y")
         what = f"{base['portionLabel']}, {cl_day}"
         by_hr = base["source"] == "hr_edit"
-        if kind == "approved":
+        if kind == "approved" and base["source"] == "hr_assign":
+            did = "Casual Leave given by HR for an absent / leave day"
+        elif kind == "approved":
             did = "Casual Leave given by HR (attendance edit), approved" if by_hr else "Casual Leave approved"
         elif kind == "pending":
             did = (
@@ -358,7 +397,6 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
             )
         else:
             did = "Casual Leave rejected (no days used)"
-        when = (on or win[0]).strftime("%d %b")
         entries.append(
             {
                 **base,

@@ -193,6 +193,7 @@ from .casual_leave_views import (
     casual_leaves, casual_leave_detail, casual_leave_eligibility, my_casual_leave_eligibility,
     casual_leave_history, casual_leave_policy,
 )
+from .cl_adjustment_views import casual_leave_absent_dates, casual_leave_adjustments, casual_leave_assign
 from .missing_punch_views import (
     missing_punch_requests, missing_punch_request_hr_status,
 )
@@ -550,6 +551,11 @@ urlpatterns = [
     # the yearly balance (2026-11-02): its running history, and the entitlement + cut-over day (a setting)
     path("casual-leaves/history", casual_leave_history),
     path("casual-leaves/policy", casual_leave_policy),
+    # Carry Forward (2026-11-04): HR adds carried-forward days to / deducts days from a balance, and the log of it
+    path("casual-leaves/adjustments", casual_leave_adjustments),
+    # ... and the absent dates HR may turn into Casual Leave, and turning them
+    path("casual-leaves/absent-dates", casual_leave_absent_dates),
+    path("casual-leaves/assign", casual_leave_assign),
     path("casual-leaves/<int:pk>", casual_leave_detail),
 
     # ── Missing Punch ────────────────────────────────────────────────────────

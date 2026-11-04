@@ -375,7 +375,8 @@ export type CasualLeaveHistoryEntry = {
   balanceAfter: number;
   requestId: number | null;
   requestKind: "casual_leave" | "attendance_correction" | null;
-  source: "employee" | "hr_edit" | null;
+  /** "hr_assign" (2026-11-04): Casual Leave HR gave for an absent / leave day on the Carry Forward tab. */
+  source: "employee" | "hr_edit" | "hr_assign" | null;
   status: string | null;
   text: string;
 };

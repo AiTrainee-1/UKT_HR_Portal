@@ -30,6 +30,7 @@ AUDIT_MODULES = (
     ("user_management", "User management"),
     ("approval_workflow", "Approval workflow"),
     ("hod_reminders", "HoD reminders"),
+    ("casual_leave", "Casual Leave"),
     ("settings", "Settings"),
     ("attendance", "Attendance"),
     ("bonus", "Bonus"),

@@ -401,3 +401,34 @@ class CasualLeaveRequest(models.Model):
     class Meta:
         db_table = "casual_leave_requests"
         ordering = ["-created_at"]
+
+
+class CasualLeaveAdjustment(models.Model):
+    """
+    The log of the Casual Leave page's Carry Forward tab (owner 2026-11-04): one line each time HR turned some of an
+    employee's absent / on-leave days into approved Casual Leave (kind "assign": `dates` lists them, `days` is minus their
+    count, `balance_before` / `balance_after` what was left to use). A record only: the approved Casual Leave itself lowers
+    the yearly balance, which stays a fixed 12. Kind "balance" rows ("Add days") come from the first build of the tab,
+    dropped the same day; nothing reads them. Never edited or deleted.
+    """
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="casual_leave_adjustments",
+    )
+    year = models.PositiveSmallIntegerField(db_column="year")
+    days = models.DecimalField(max_digits=5, decimal_places=1, db_column="days")
+    reason = models.TextField(db_column="reason")
+    balance_before = models.DecimalField(max_digits=6, decimal_places=1, db_column="balance_before")
+    balance_after = models.DecimalField(max_digits=6, decimal_places=1, db_column="balance_after")
+    created_by = models.TextField(null=True, blank=True, db_column="created_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    # "assign" (every line written now; see above) or "balance" (the dropped "Add days" of the first build, ignored)
+    KIND_BALANCE = "balance"
+    KIND_ASSIGN = "assign"
+    kind = models.TextField(default=KIND_BALANCE, db_default=KIND_BALANCE, db_column="kind")
+    dates = models.JSONField(null=True, blank=True, db_column="dates")
+
+    class Meta:
+        db_table = "casual_leave_adjustments"
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["employee", "year"], name="cl_adjust_emp_year_idx")]
