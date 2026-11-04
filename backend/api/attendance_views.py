@@ -2277,7 +2277,7 @@ def compute_shift_logs(request: Request) -> Response:
         # and this button used calendar days: Sunday/holiday lates entered the pool and the daily
         # rate was salary / calendar days).
         from decimal import Decimal
-        from .payroll_views import _d2, staff_working_days
+        from .payroll_views import staff_daily_rate, staff_working_days
         for emp in emps:
             daily_rate = None
             counted = None
@@ -2285,9 +2285,9 @@ def compute_shift_logs(request: Request) -> Response:
                 working = staff_working_days(emp, m, y)
                 counted = set(working)
                 if emp.salary_amount and working:
-                    # Rounded half-up to the paisa exactly like payroll's daily rate: every shift deduction is priced from
-                    # this figure, so an unrounded one made this row differ from the payslip by a paisa or two.
-                    daily_rate = _d2(Decimal(str(emp.salary_amount)) / len(working))
+                    # payroll's own per-day salary (salary / the company month, holidays included; rounded to the paisa
+                    # like payroll): every shift deduction is priced from it, so this row matches the payslip
+                    daily_rate = staff_daily_rate(emp, m, y)
             elif emp.salary_amount:
                 _, dm = cal.monthrange(y, m)
                 daily_rate = Decimal(str(emp.salary_amount)) / dm
@@ -2544,9 +2544,9 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     from .models import EmployeePermission, PayrollSettings
     from .attendance_final import late_pool_summary
     from .payroll_views import (
-        _d2,
         late_pool_pricing,
         permission_summary_json,
+        staff_daily_rate,
         staff_working_days,
     )
 
@@ -2586,7 +2586,8 @@ def employee_shift_monthly_stats(request: Request) -> Response:
         permission_overage_count = pool["excess_permissions"]
         daily_rate = None
         if emp.salary_amount and working_days_list:
-            daily_rate = _d2(emp.salary_amount / _D(str(len(working_days_list))))
+            # payroll's own per-day salary: salary / the company month (holidays included), never / the working days
+            daily_rate = staff_daily_rate(emp, m, y)
         # Payroll's own pricing: the late pool through the late slabs and (switch ON) the excess permissions through
         # the permission slabs. shiftDeductions / salaryDeductionAmount stay the TOTAL the employee loses, as the
         # installed apps expect; the parts ride along as additive keys.

@@ -1488,6 +1488,23 @@ def money_lines(payroll: Payroll, slip: SalarySlip | None, bd: dict | None) -> t
         working = int(s.get("totalWorkingDays") or payroll.total_working_days or 0)
         eff = s.get("effectivePaidDays")
         daily = dec(e.get("dailyRate"))
+        # From 2026-11-04 the salary is divided by the company month (holidays included) and the holidays are paid: such a
+        # payroll records its working days apart (`workingDays`); an older one divided by the working days.
+        if "workingDays" in s:
+            holidays = working - int(s["workingDays"])
+            basis = (
+                f"{working} days ({int(s['workingDays'])} working + {holidays} {'holiday' if holidays == 1 else 'holidays'})"
+                if holidays
+                else f"{working} days"
+            )
+            paid_holidays = int(s.get("holidayDays") or 0)
+            with_holidays = (
+                f" (incl. {paid_holidays} paid {'holiday' if paid_holidays == 1 else 'holidays'})"
+                if paid_holidays
+                else ""
+            )
+        else:
+            basis, with_holidays = f"{working} working days", ""
         if e:
             earnings.append(
                 _line(
@@ -1495,12 +1512,12 @@ def money_lines(payroll: Payroll, slip: SalarySlip | None, bd: dict | None) -> t
                     "Daily rate",
                     daily,
                     "info",
-                    f"{inr(monthly)} / {working} working days",
-                    "working_days",
+                    f"{inr(monthly)} / {basis}",
+                    "pay_days",
                 )
             )
         note = (
-            f"{inr(monthly)} / {working} working days x {plain(eff)} {'day' if dec(eff) == 1 else 'days'} paid"
+            f"{inr(monthly)} / {working} days x {plain(eff)} {'day' if dec(eff) == 1 else 'days'} paid{with_holidays}"
             if e and working and eff is not None
             else "The salary earned for the days paid"
         )

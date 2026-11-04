@@ -159,7 +159,7 @@ class StaffInsightsTests(_Base):
         self.assertIn("late", keys)
         self.assertIn("permission", keys)
         absent = next(s for s in p["steps"] if s["key"] == "absent_loss")
-        self.assertIn("21.25 of 24 working days", absent["note"])
+        self.assertIn("21.25 of 24 days", absent["note"])
         perm = next(s for s in p["steps"] if s["key"] == "permission")
         self.assertIn("not charged separately", perm["note"])
         # the year summary is the sum of its periods
@@ -179,7 +179,7 @@ class StaffInsightsTests(_Base):
         self.assert_matches_stored(p, slip, self.w.anand_payroll)
         self.assertEqual(p["absentLoss"], 0.0)
         self.assertEqual(p["netPayable"], 24000.0)
-        self.assertIn("all 24 working days", p["steps"][1]["note"])
+        self.assertIn("all 24 days", p["steps"][1]["note"])
 
     def test_hr_change_after_the_slip_is_shown_not_merged(self):
         payroll = self.w.meena_payroll
@@ -503,3 +503,24 @@ class CompensationHistoryTests(_Base):
         ]
         # CompensationConfig.get() may create its singleton row on a fresh database; nothing else is ever written
         self.assertTrue(all("compensation_config" in sql for sql in writes), writes)
+
+
+class DaysNoteTests(TestCase):
+    """The sentence under "What you lost" (owner 2026-11-04: a staff month is out of the company month, holidays paid)."""
+
+    def test_a_new_payroll_counts_the_company_month_and_names_the_paid_holidays(self):
+        from .mobile_pay import _days_note
+
+        new = {"workingDays": 27, "holidayDays": 2, "paidDays": 25, "absentDays": 2, "dailyRate": 1000.0}
+        self.assertEqual(
+            _days_note(new),
+            "You were paid for 25 of 27 days (2 absent days, 2 holidays paid). One day is worth ₹1,000.",
+        )
+        self.assertEqual(
+            _days_note({**new, "paidDays": 27, "absentDays": 0}), "You were paid for all 27 days: nothing was lost."
+        )
+        # an older payroll keeps its own words
+        old = {"workingDays": 25, "holidayDays": None, "paidDays": 23, "absentDays": 2, "dailyRate": 1080.0}
+        self.assertEqual(
+            _days_note(old), "You were paid for 23 of 25 working days (2 absent days). One day is worth ₹1,080."
+        )

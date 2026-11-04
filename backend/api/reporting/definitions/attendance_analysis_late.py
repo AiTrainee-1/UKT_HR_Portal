@@ -389,6 +389,7 @@ class _EmpMonth:
         "emp",
         "records",
         "working",
+        "pay_days",
         "approved",
         "pool",
         "flagged",
@@ -429,9 +430,10 @@ def _month_pools(ctx, year: int, month: int):
         is_prod = emp.employment_type == "production"
         em.approved = approved.get(emp_id, 0)
         if is_prod:
-            em.working, em.pool = None, None
+            em.working, em.pay_days, em.pool = None, None, None
         else:
             em.working = roster.working_days(emp_id, year, month)
+            em.pay_days = roster.pay_days(emp_id, year, month)
             em.pool = late_pool_summary(recs, em.approved, settings, counted_dates=set(em.working))
         em.flagged = sum(1 for r in recs if r.is_late)
         em.night = sum(1 for r in recs if r.late_afternoon)
@@ -689,7 +691,8 @@ def _penalty_run(ctx):
             continue
         salary = em.emp.salary_amount
         working = len(em.working)
-        daily_rate = _d2(Decimal(salary) / Decimal(str(working))) if salary and working else None
+        # payroll's own per-day salary: salary / the company month (holidays included), never / the working days
+        daily_rate = _d2(Decimal(salary) / Decimal(str(em.pay_days))) if salary and em.pay_days else None
         # payroll's own pricing: the late pool through the late slabs and (switch ON) the excess permissions through the
         # permission slabs; an employee with no salary has shifts but no rupee figure (payroll skips them)
         pricing = late_pool_pricing(pool, settings, daily_rate)

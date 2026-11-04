@@ -69,7 +69,7 @@ function SalarySplit({ salary, summary }: { salary: PayrollSalaryBreakup; summar
           {paid != null && working != null ? (
             <span className="text-xs text-muted-foreground">
               {" "}
-              for {paid} of {working} working days
+              for {paid} of {working} {summary.workingDays != null ? "days, holidays included" : "working days"}
             </span>
           ) : null}
         </p>

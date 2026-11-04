@@ -365,6 +365,9 @@ export type PayrollRunItem = {
   /** Display only (2026-11-04): the company's count of the month, every day but Sundays with the holidays INCLUDED
    *  (October 2026 = 27 beside 25 working days). Null for production rows; absent from an older server. */
   companyDays?: number | null;
+  /** The month's declared holidays among those days (October 2026: 2). From 2026-11-04 a staff payroll divides by
+   *  `companyDays` and pays the holidays, so its `totalWorkingDays` is the company month too. */
+  holidayDays?: number | null;
   presentDays: number;
   absentDays: number;
   completedSessions?: number | null;

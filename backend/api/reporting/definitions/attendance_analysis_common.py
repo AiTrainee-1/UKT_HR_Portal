@@ -319,6 +319,12 @@ class Roster:
         names = self.holidays.get(d)
         return ", ".join(names) if names else None
 
+    def pay_days(self, emp_id: int, year: int, month: int) -> int:
+        """The days payroll divides a staff month's salary by (payroll_views.staff_pay_days): the month minus Sundays
+        and Saturday-off Saturdays, the declared holidays INCLUDED."""
+        sat_off = self.saturday_off(emp_id, date(year, month, 15))
+        return len(_build_working_days(month, year, sat_off, set()))
+
     def working_days(self, emp_id: int, year: int, month: int) -> set[date]:
         """Payroll working days of the month for a staff employee (Sundays, Saturday-off Saturdays and
         Holiday rows excluded) -- built by payroll's own ``_build_working_days``."""

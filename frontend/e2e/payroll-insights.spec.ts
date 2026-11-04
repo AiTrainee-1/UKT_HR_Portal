@@ -592,7 +592,9 @@ test.describe("Details page", () => {
     await expect(page.getByTestId("pd-net-bridge")).toContainText("₹15,000");
     await expect(page.getByTestId("pd-kpi-gross")).toContainText("₹15,000");
     await expect(page.getByTestId("pd-kpi-perday")).toContainText("Per day salary");
-    await expect(page.getByTestId("pd-kpi-perday")).toContainText("₹30,000 over 24 working days");
+    // the salary is divided by the days of the month, holidays included (company policy 2026-11-04)
+    await expect(page.getByTestId("pd-kpi-perday")).toContainText("₹30,000 over 24 days, holidays included");
+    await expect(page.getByTestId("pd-kpi-gross")).toContainText("earned for 12 of 24 days");
     await page.screenshot({
       path: "C:/Users/DELL/AppData/Local/Temp/claude/D--Projects-UK-textile/e3541785-3370-4426-90e9-1da812fcd305/scratchpad/perday.png",
     });

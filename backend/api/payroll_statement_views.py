@@ -327,11 +327,13 @@ def _staff_notes() -> list[str]:
         "Basic is the first salary-split portion (Basic + DA + Retaining Allowance); with no split recorded it is 50% of the "
         "salary. PTRL is the Petrol allowance and Others Allow the rest of the second portion, so Basic + PTRL + Others "
         "Allow = Total.",
-        "Total is the monthly salary. E salary is the salary earned for the days paid (Total x Total Days / working days) "
-        "plus any overtime pay and HR bonus.",
-        "Present is the days paid as worked (a half day counts 0.5; a working day HR marked as a paid holiday counts 1), "
-        "without Casual Leave; CL is the approved Casual Leave days (a half-day CL counts 0.5); Total Days = Present + CL; "
-        "LOP = working days - Total Days; HD is the number of half-shift days.",
+        "Total is the monthly salary. E salary is the salary earned for the days paid (Total x Total Days / days of the "
+        "month) plus any overtime pay and HR bonus. The days of the month are every day but Sundays, company holidays "
+        "included (27 in a 31-day month with 4 Sundays), so declaring a holiday never raises the per-day salary; a payroll "
+        "generated before 4 Nov 2026 divided by the working days instead.",
+        "Present is the days paid as worked or as a company holiday (a half day counts 0.5; a working day HR marked as a "
+        "paid holiday counts 1), without Casual Leave; CL is the approved Casual Leave days (a half-day CL counts 0.5); "
+        "Total Days = Present + CL; LOP = days of the month - Total Days; HD is the number of half-shift days.",
         "T.Advance is the advance balance before this month's recovery; Advance is what was recovered this month.",
         "ESI and PF are deducted only from Co Emp employees (Employees > Co Emp), by the rules of Settings > PF & ESI, from "
         "Basic + DA + Retaining Allowance. TDS is deducted only from employees on the TDS list: the TDS percentage set for "

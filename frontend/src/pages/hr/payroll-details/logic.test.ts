@@ -27,6 +27,7 @@ import {
   fillMark,
   filterDays,
   filterIssues,
+  grossLine,
   groupIssuesByDate,
   groupIssuesByType,
   humanizeKey,
@@ -655,6 +656,9 @@ describe("the dashboard figures", () => {
       shownOutOf: "26", // an older server sends no company count: out of the working days, nothing under it
       sub: "21 present · 2 paid leave · 1 half · 2 LOP",
       companyMonth: null,
+      paid: null,
+      paidHolidays: 0,
+      holidaysPaid: false,
     });
     expect(workTile({ summary: {} }, "staff")).toMatchObject({ value: "—", outOf: null, sub: "", companyMonth: null });
     // without the working days there is nothing to put the figure out of
@@ -676,10 +680,13 @@ describe("the dashboard figures", () => {
     expect(workTile(october, "staff")).toEqual({
       label: "Days worked",
       value: "22",
-      outOf: "25", // what pay is worked out on (the per-day and gross lines keep using it)
+      outOf: "25", // a payroll from before 2026-11-04 divided by its working days
       shownOutOf: "27",
       sub: "23 present · 2 half · 2 LOP",
       companyMonth: "25 Working Days + 2 Holidays",
+      paid: null,
+      paidHolidays: 0,
+      holidaysPaid: false,
     });
     // a month without a holiday
     const plain = workTile({ summary: { totalWorkingDays: 26, effectivePaidDays: 26, companyDays: 26 } }, "staff");
@@ -687,6 +694,39 @@ describe("the dashboard figures", () => {
     expect(
       workTile({ summary: { totalWorkingDays: 26, effectivePaidDays: 20, companyDays: 27 } }, "staff").companyMonth,
     ).toBe("26 Working Days + 1 Holiday");
+  });
+
+  it("staff, from 2026-11-04: divided by the company month and the holidays paid", () => {
+    // October 2026: 25 working days + 2 holidays; 22 days worked, so 24 paid out of 27
+    const october = {
+      summary: {
+        totalWorkingDays: 27,
+        workingDays: 25,
+        holidayDays: 2,
+        companyDays: 27,
+        workedDays: 22,
+        effectivePaidDays: 24,
+        presentDays: 23,
+        halfShiftDays: 2,
+        absentDays: 2,
+      },
+    };
+    const work = workTile(october, "staff");
+    expect(work).toEqual({
+      label: "Days worked",
+      value: "22",
+      outOf: "27", // what the salary was divided by
+      shownOutOf: "27",
+      sub: "23 present · 2 half · 2 LOP",
+      companyMonth: "25 Working Days + 2 Holidays",
+      paid: "24",
+      paidHolidays: 2,
+      holidaysPaid: true,
+    });
+    expect(grossLine(work)).toBe("earned for 24 of 27 days (22 worked + 2 paid holidays)");
+    // an older payroll keeps its own words
+    const older = workTile({ summary: { totalWorkingDays: 25, effectivePaidDays: 22, companyDays: 27 } }, "staff");
+    expect(grossLine(older)).toBe("earned for 22 of 25 working days");
   });
 
   it("production: shifts, with the days behind them", () => {
@@ -697,6 +737,9 @@ describe("the dashboard figures", () => {
       shownOutOf: null,
       sub: "5 days worked · 1 absent",
       companyMonth: null,
+      paid: null,
+      paidHolidays: 0,
+      holidaysPaid: false,
     });
     expect(workTile({ summary: {} }, "production").value).toBe("—");
   });

@@ -48,12 +48,17 @@ export function metricText(
  * month without a holiday. Null for production rows and for rows from a server that does not send the count.
  */
 export function companyMonthText(
-  run: Pick<PayrollRunItem, "salaryMode" | "totalWorkingDays" | "companyDays">,
+  run: Pick<PayrollRunItem, "salaryMode" | "totalWorkingDays" | "companyDays" | "holidayDays">,
 ): string | null {
   const company = companyDaysOf(run);
   if (company === null) return null;
-  const working = Number(run.totalWorkingDays) || 0;
-  const holidays = company - working;
+  // the month's holidays as the server counts them; an older server: what the company month has beyond the working days
+  const sent = Number(run.holidayDays);
+  const holidays =
+    run.holidayDays !== null && run.holidayDays !== undefined && Number.isFinite(sent)
+      ? sent
+      : company - (Number(run.totalWorkingDays) || 0);
+  const working = company - holidays;
   const days = `${formatCount(working)} Working ${working === 1 ? "Day" : "Days"}`;
   return holidays > 0 ? `${days} + ${formatCount(holidays)} ${holidays === 1 ? "Holiday" : "Holidays"}` : days;
 }

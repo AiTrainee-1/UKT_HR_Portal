@@ -40,6 +40,7 @@ from .geo_attendance_views import source_label
 from .permission_registry import resolve_permission
 from .support_contact_views import FIELDS as SUPPORT_CONTACT_FIELDS, clean_updates
 from .clock import ist_today
+from .compensation_shared import parse_join_date
 from .pf_esi import production_statutory, staff_statutory
 from .production_cycles import (
     DEFAULT_MONTHLY_EQUIVALENT_FACTOR,
@@ -151,10 +152,34 @@ def _build_working_days(month: int, year: int, saturday_off: bool, holiday_dates
 
 
 def company_month_days(year: int, month: int) -> int:
-    """The company's own count of the month's working days: every day but Sundays, the declared holidays INCLUDED
-    (October 2026 = 27, while payroll pays 25 working days because of 2 holidays). Display only: shown beside the payroll's
-    working days, never used to calculate pay."""
+    """The company's own count of the month: every day but Sundays, the declared holidays INCLUDED (October 2026 = 27
+    while 2 holidays leave 25 working days). The month every staff salary is divided by (see staff_pay_days)."""
     return len(_build_working_days(month, year, False, set()))
+
+
+def company_month_holidays(year: int, month: int) -> int:
+    """The declared holidays of the month that fall on a day the company month counts (not a Sunday): October 2026 = 2."""
+    holidays = set(Holiday.objects.filter(date__year=year, date__month=month).values_list("date", flat=True))
+    return company_month_days(year, month) - len(_build_working_days(month, year, False, holidays))
+
+
+def staff_pay_days(emp: Employee, month: int, year: int) -> int:
+    """
+    The days a staff month's salary is divided by (company policy, owner 2026-11-04): the employee's calendar month minus
+    Sundays (and Saturdays on a Saturday-off shift), the declared holidays INCLUDED -- 27 in October 2026 whatever the
+    holidays. The per-day salary is salary / these days, so declaring a holiday never raises it; every late, permission
+    and overtime amount is priced from that rate, and each holiday is paid at it. Same shift pick as the payroll engine.
+    """
+    assignment = _get_active_assignment(emp, date(year, month, 15))
+    saturday_off = _effective_shift_times(assignment)[3] if assignment else False
+    return len(_build_working_days(month, year, saturday_off, set()))
+
+
+def staff_daily_rate(emp: Employee, month: int, year: int) -> Decimal | None:
+    """The per-day salary of a staff month exactly as payroll prices it (salary / staff_pay_days, rounded half-up to the
+    paisa); None without a salary. Every screen that previews a late / permission deduction uses this."""
+    days = staff_pay_days(emp, month, year)
+    return _d2(Decimal(str(emp.salary_amount)) / Decimal(days)) if emp.salary_amount and days else None
 
 
 def staff_working_days(emp: Employee, month: int, year: int) -> list[date]:
@@ -483,6 +508,17 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "(check Holidays and Saturday-off configuration)"
         )
 
+    # 3b. The days the salary is divided by (company policy, owner 2026-11-04): the calendar month minus Sundays (and
+    #     Saturdays on a Saturday-off shift), the declared holidays INCLUDED -- 27 in October 2026 whatever the holidays.
+    #     It used to be the working days (25 with two holidays), so every holiday declared raised the per-day salary and
+    #     with it every late / permission deduction. Each declared holiday on a working weekday is now paid at that same
+    #     per-day rate, from the joining date on; attendance (late pool, absences) is still counted on the working days.
+    pay_days_list = _build_working_days(month, year, saturday_off, set())
+    company_days = len(pay_days_list)
+    joined = parse_join_date(emp.join_date)
+    paid_holidays = [d for d in pay_days_list if d in holiday_dates and (joined is None or d >= joined)]
+    holiday_count = len(paid_holidays)
+
     month_start = date(year, month, 1)
     month_end = date(year, month, calendar.monthrange(year, month)[1])
 
@@ -600,8 +636,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
 
     # 7. Salary calculation
     # effective_days = sum of shifts_completed for present days + paid leave days
-    # (half shift days contribute 0.5 instead of 1.0)
+    # (half shift days contribute 0.5 instead of 1.0); paid_days = those + the paid holidays (3b): what the salary pays
     effective_days = effective_present + Decimal(str(paid_leave_count))
+    paid_days = effective_days + Decimal(holiday_count)
     # Keep full precision through the division AND the multiplication —
     # rounding the daily rate first (then multiplying back by the same
     # working-days count) silently loses a few paise per day, so a fully
@@ -611,8 +648,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     # result, once. `daily_rate` (rounded) is kept for display/breakdown
     # and the late-penalty calc below -those are fine to round, since
     # neither one needs to algebraically reconstruct the full salary.
-    daily_rate_exact = emp.salary_amount / Decimal(str(total_working_days))
-    base_gross = _d2(daily_rate_exact * effective_days)
+    daily_rate_exact = emp.salary_amount / Decimal(str(company_days))
+    base_gross = _d2(daily_rate_exact * paid_days)
     daily_rate = _d2(daily_rate_exact)
 
     # Basic = 50% of full monthly salary (not prorated -this is the component base)
@@ -620,7 +657,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     hra_full = _d2(emp.salary_amount * Decimal("0.20"))
 
     # Prorate basic and HRA by the same factor
-    prorate_factor = effective_days / Decimal(str(total_working_days))
+    prorate_factor = paid_days / Decimal(str(company_days))
     basic = _d2(basic_full * prorate_factor)
     hra = _d2(hra_full * prorate_factor)
     allowances = _d2(base_gross - basic - hra)
@@ -764,7 +801,14 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         },
         "days": days_detail,
         "summary": {
-            "totalWorkingDays": total_working_days,
+            # what the salary is divided by (the company month, holidays included; 2026-11-04). The days attendance
+            # was expected are `workingDays`, the paid holidays `holidayDays`; `effectivePaidDays` = what was paid
+            # (worked + paid leave + paid holidays) and `workedDays` = without the holidays. A payroll from before has
+            # no `workingDays`: there totalWorkingDays was the working days and effectivePaidDays had no holidays.
+            "totalWorkingDays": company_days,
+            "workingDays": total_working_days,
+            "holidayDays": holiday_count,
+            "companyDays": company_days,
             "presentDays": present_count,
             "paidLeaveDays": paid_leave_count,
             "unpaidLeaveDays": unpaid_leave_count,
@@ -773,12 +817,14 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             "earlyOutDays": early_out_count,
             "halfShiftDays": half_shift_count,
             "fullShiftDays": full_shift_count,
-            "effectivePaidDays": float(effective_days),
+            "workedDays": float(effective_days),
+            "effectivePaidDays": float(paid_days),
         },
         "earnings": {
             "monthlySalary": float(emp.salary_amount),
             "dailyRate": float(daily_rate),
-            "effectiveDays": float(effective_days),
+            "effectiveDays": float(paid_days),
+            "holidayDays": holiday_count,
             "basic": float(basic),
             "hra": float(hra),
             "allowances": float(allowances),
@@ -813,7 +859,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         employee=emp, month=month, year=year, week_number=None,
         defaults=dict(
             salary_mode="monthly",
-            total_working_days=total_working_days,
+            total_working_days=company_days,
             present_days=Decimal(str(present_count + paid_leave_count)),
             absent_days=Decimal(str(absent_count + unpaid_leave_count)),
             completed_sessions=0,
@@ -829,7 +875,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             status="pending",
             notes=(
                 f"Staff monthly: {present_count} present + {paid_leave_count} paid leave "
-                f"= {float(effective_days)} effective days / {total_working_days} working days. "
+                f"+ {holiday_count} paid holidays = {float(paid_days)} paid days / {company_days} days "
+                f"({total_working_days} working + {company_days - total_working_days} holidays). "
                 f"Late: {late_count}. Early-Out: {early_out_count}. Excess permissions: {excess_permissions}. "
                 f"Absent: {absent_count}. Unpaid leave: {unpaid_leave_count}."
                 + (
@@ -864,7 +911,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             other_deductions=_d2(late_penalty + permission_penalty),
             total_deductions=total_deductions,
             net_salary=net_salary,
-            working_days=total_working_days,
+            working_days=company_days,
             present_days=Decimal(str(present_count)),
             absent_days=Decimal(str(absent_count + unpaid_leave_count)),
             paid_leave_days=Decimal(str(paid_leave_count)),
@@ -1176,7 +1223,16 @@ def _work_session_json(ws: WorkSession, employee_name: str | None = None) -> dic
     }
 
 
-def _payroll_json(p: Payroll, employee_name: str | None = None) -> dict:
+def _payroll_json(p: Payroll, employee_name: str | None = None, holidays_by_month: dict | None = None) -> dict:
+    """One payroll row. `holidays_by_month`: a cache {(year, month): holidays} a list passes so it reads each month's
+    holidays once."""
+    staff = p.salary_mode not in ("shift", "session") and p.month and p.year
+    holidays = None
+    if staff:
+        cache = holidays_by_month if holidays_by_month is not None else {}
+        if (p.year, p.month) not in cache:
+            cache[(p.year, p.month)] = company_month_holidays(p.year, p.month)
+        holidays = cache[(p.year, p.month)]
     return {
         "id": p.id,
         "employeeId": p.employee_id,
@@ -1191,9 +1247,9 @@ def _payroll_json(p: Payroll, employee_name: str | None = None) -> dict:
         "totalWorkingDays": p.total_working_days,
         # added 2026-11-04, display only: the company's count of the month (holidays included), e.g. 27 beside 25 working
         # days; None for a production (shift / session) row
-        "companyDays": company_month_days(p.year, p.month)
-        if p.salary_mode not in ("shift", "session") and p.month and p.year
-        else None,
+        "companyDays": company_month_days(p.year, p.month) if staff else None,
+        # the month's declared holidays among those days ("27 = 25 Working Days + 2 Holidays"); None for production
+        "holidayDays": holidays,
         "presentDays": float(p.present_days),
         "absentDays": float(p.absent_days),
         "completedSessions": p.completed_sessions,
@@ -1397,10 +1453,12 @@ def payroll_list(request: Request) -> Response:
     if status_filter:
         qs = qs.filter(status=status_filter)
 
+    holidays_by_month: dict = {}
+
     def _row(p: Payroll) -> dict:
         emp = p.employee
         name = f"{emp.first_name} {emp.last_name}" if emp else None
-        row = _payroll_json(p, name)
+        row = _payroll_json(p, name, holidays_by_month)
         # Include bank details for Excel export
         row["bankAccount"] = emp.bank_account or ""
         row["bankIfsc"] = emp.bank_ifsc or ""

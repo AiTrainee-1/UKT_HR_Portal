@@ -13,7 +13,7 @@ import { inr, inr2 } from "@/components/payroll/kit/format";
 import type { PayrollDetails, PayrollKind } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import type { Accent } from "./accent";
-import { netBridge, severityCounts, workTile } from "./logic";
+import { grossLine, netBridge, severityCounts, workTile } from "./logic";
 
 /**
  * The dashboard of one payroll, left to right: the employee's monthly salary (staff), the gross earned for the days paid, what
@@ -39,7 +39,7 @@ export function KpiStrip({
   const total = details.issues.length;
   const work = workTile(details, kind);
   // What one day (staff) or one shift (production) pays: the salary the month was worked out from, shown on its own
-  const perDay = perDayTile(details, kind, work.outOf);
+  const perDay = perDayTile(details, kind, work.outOf, work.holidaysPaid);
   const monthly = kind === "staff" ? money.monthlySalary : null;
   const deductionShare = money.gross > 0 ? Math.round((money.deductions / money.gross) * 1000) / 10 : 0;
 
@@ -86,7 +86,7 @@ export function KpiStrip({
         value={inr(money.gross)}
         sub={
           kind === "staff" && work.outOf
-            ? `earned for ${work.value} of ${work.outOf} working days`
+            ? grossLine(work)
             : kind === "production" && details.employee.salaryPerShift
               ? `at ${inr(details.employee.salaryPerShift)} a shift`
               : undefined
@@ -162,6 +162,7 @@ export function perDayTile(
   details: PayrollDetails,
   kind: PayrollKind,
   workingDays: string | null,
+  holidaysIncluded = false,
 ): { label: string; value: string; sub: string | undefined } | null {
   if (kind === "production") {
     const rate = details.employee.salaryPerShift;
@@ -176,7 +177,9 @@ export function perDayTile(
     value: inr2(rate),
     sub:
       monthlySalary && workingDays
-        ? `${inr(monthlySalary)} over ${workingDays} working days`
+        ? holidaysIncluded
+          ? `${inr(monthlySalary)} over ${workingDays} days, holidays included`
+          : `${inr(monthlySalary)} over ${workingDays} working days`
         : "paid for each day worked",
   };
 }

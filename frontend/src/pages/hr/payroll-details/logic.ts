@@ -901,9 +901,11 @@ export const trimNumber = (n: number): string => String(Math.round(n * 100) / 10
 
 /**
  * The "Days worked" (staff) or "Shifts" (production) tile: one big figure and a line that explains it.
- * `outOf` = the payroll's working days (what pay is worked out on; the per-day and gross lines use it). `shownOutOf` = the
- * total the tile shows: the company's count of the month, holidays included, when the server sends it (owner 2026-11-04:
- * "22 / 27"), else the working days; `companyMonth` = what that total is made of ("25 Working Days + 2 Holidays").
+ * `outOf` = what the salary was divided by (the per-day and gross lines use it): from 2026-11-04 the company month,
+ * holidays included (27), on an older payroll its working days (25). `shownOutOf` = the total the tile shows: the company
+ * month ("22 / 27"); `companyMonth` = what that total is made of ("25 Working Days + 2 Holidays"). `paid` = the days the
+ * gross paid (worked + paid holidays) and `paidHolidays` the holidays among them: set only on a payroll that paid them
+ * (`holidaysPaid`), where an older one paid no holiday but divided by fewer days.
  */
 export function workTile(
   details: Pick<PayrollDetails, "summary">,
@@ -915,6 +917,9 @@ export function workTile(
   shownOutOf: string | null;
   sub: string;
   companyMonth: string | null;
+  paid: string | null;
+  paidHolidays: number;
+  holidaysPaid: boolean;
 } {
   const s = details.summary ?? {};
   const n = (key: string) => summaryNumber(s, key);
@@ -931,10 +936,17 @@ export function workTile(
         .filter(Boolean)
         .join(" · "),
       companyMonth: null,
+      paid: null,
+      paidHolidays: 0,
+      holidaysPaid: false,
     };
   }
-  const effective = n("effectivePaidDays") ?? n("presentDays");
-  const working = n("totalWorkingDays");
+  // a payroll generated from 2026-11-04 records its working days apart (`workingDays`), divides by the company month
+  // (`totalWorkingDays`) and pays the holidays (`effectivePaidDays` includes them; `workedDays` does not)
+  const holidaysPaid = n("workingDays") !== null;
+  const effective = holidaysPaid ? (n("workedDays") ?? n("presentDays")) : (n("effectivePaidDays") ?? n("presentDays"));
+  const divisor = n("totalWorkingDays");
+  const working = holidaysPaid ? n("workingDays") : divisor;
   const present = n("presentDays");
   const leave = n("paidLeaveDays");
   const lop = (n("absentDays") ?? 0) + (n("unpaidLeaveDays") ?? 0);
@@ -949,7 +961,8 @@ export function workTile(
   const company = companyDays !== null && companyDays > 0 && working !== null ? companyDays : null;
   const holidays = company !== null && working !== null ? company - working : 0;
   const workingText = working !== null ? `${trimNumber(working)} Working ${working === 1 ? "Day" : "Days"}` : "";
-  const outOf = effective !== null && working !== null ? trimNumber(working) : null;
+  const outOf = effective !== null && divisor !== null ? trimNumber(divisor) : null;
+  const paidDays = n("effectivePaidDays");
   return {
     label: "Days worked",
     value: effective === null ? "—" : trimNumber(effective),
@@ -962,7 +975,20 @@ export function workTile(
         : holidays > 0
           ? `${workingText} + ${trimNumber(holidays)} ${holidays === 1 ? "Holiday" : "Holidays"}`
           : workingText,
+    paid: holidaysPaid && paidDays !== null ? trimNumber(paidDays) : null,
+    paidHolidays: holidaysPaid ? (n("holidayDays") ?? 0) : 0,
+    holidaysPaid,
   };
+}
+
+/** The Gross card's line: "earned for 24 of 27 days (22 worked + 2 paid holidays)"; an older payroll that paid no holiday
+ *  "earned for 22 of 25 working days". */
+export function grossLine(work: ReturnType<typeof workTile>): string {
+  if (!work.holidaysPaid || work.paid === null) return `earned for ${work.value} of ${work.outOf} working days`;
+  const holidays = work.paidHolidays;
+  return holidays > 0
+    ? `earned for ${work.paid} of ${work.outOf} days (${work.value} worked + ${holidays} paid ${holidays === 1 ? "holiday" : "holidays"})`
+    : `earned for ${work.paid} of ${work.outOf} days`;
 }
 
 /** The Gross -> Deductions -> Net bar: how much of the gross went on deductions, and what the figures add up to. */

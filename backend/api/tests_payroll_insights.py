@@ -1402,8 +1402,8 @@ class StaffDetailsTests(TestCase):
             ],
         )
         notes = {line["key"]: line["note"] for line in d["earnings"]}
-        self.assertEqual(notes["gross"], "₹24,000 / 24 working days x 21.25 days paid")
-        self.assertEqual(notes["daily_rate"], "₹24,000 / 24 working days")
+        self.assertEqual(notes["gross"], "₹24,000 / 24 days x 21.25 days paid")
+        self.assertEqual(notes["daily_rate"], "₹24,000 / 24 days")  # February 2026: no holiday, so 24 working days too
         self.assertEqual(d["earnings"][1]["ruleKey"], "monthly_salary")
         self.assertEqual(
             [(line["key"], line["amount"], line["kind"]) for line in d["deductions"]],
@@ -1515,7 +1515,12 @@ class StaffDetailsTests(TestCase):
             (items["working_days"]["value"], items["working_days"]["applied"], items["working_days"]["changed"]),
             ("23 working days", "24 working days", True),
         )
-        self.assertTrue(items["daily_rate"]["changed"])
+        # a holiday never changes what the salary is divided by (company policy 2026-11-04): 24 days either way
+        self.assertEqual(
+            (items["pay_days"]["value"], items["pay_days"]["applied"], items["pay_days"]["changed"]),
+            ("24 days (23 working + 1 holiday)", "24 days", False),
+        )
+        self.assertTrue(items["daily_rate"]["changed"])  # the salary itself changed
         _holiday_dates_for_month.cache_clear()
 
     def test_the_employee_block_masks_the_account_number_and_hides_everything_private(self):
@@ -1578,8 +1583,10 @@ class StaffDetailsTests(TestCase):
         rows = _get(self, f"/api/payroll?month={MONTH}&year={YEAR}&page=1&pageSize=50")["items"]
         meena = next(r for r in rows if r["id"] == self.w.meena_payroll.id)
         # the payroll's own working days are untouched; the company's count of the month comes beside them
+        # February 2026 has no holiday: 24 days either way
         self.assertEqual(
-            (meena["totalWorkingDays"], meena["companyDays"]), (self.w.meena_payroll.total_working_days, 24)
+            (meena["totalWorkingDays"], meena["companyDays"], meena["holidayDays"]),
+            (self.w.meena_payroll.total_working_days, 24, 0),
         )
         shift_row = Payroll.objects.create(
             employee=self.w.anand,
@@ -2280,7 +2287,7 @@ class StaffRulesTests(TestCase):
                 ("Attendance & late detection", ["shift", "saturday_off"]),
                 ("Half day & permissions", ["first_half_limit"]),
                 ("Statutory (PF / ESI)", ["statutory_category", "pf_rules", "esi_rules"]),
-                ("Pay basis", ["monthly_salary", "working_days", "daily_rate"]),
+                ("Pay basis", ["monthly_salary", "working_days", "pay_days", "daily_rate"]),
             ],
         )
         shift = meena["groups"][0]["items"][0]

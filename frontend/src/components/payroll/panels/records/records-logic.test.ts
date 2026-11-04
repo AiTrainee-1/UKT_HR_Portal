@@ -93,6 +93,11 @@ describe("the attendance line", () => {
     expect(metricText(run())).toBe("22 / 26 days");
     expect(companyMonthText(run())).toBeNull();
     expect(companyMonthText(run({ companyDays: null }))).toBeNull();
+    // a payroll from 2026-11-04 is divided by the company month itself: the server says how many holidays it has
+    const paidOctober = run({ presentDays: 22, totalWorkingDays: 27, companyDays: 27, holidayDays: 2 });
+    expect(metricText(paidOctober)).toBe("22 / 27 days");
+    expect(companyMonthText(paidOctober)).toBe("25 Working Days + 2 Holidays");
+    expect(companyMonthText(run({ totalWorkingDays: 26, companyDays: 26, holidayDays: 0 }))).toBe("26 Working Days");
     // production rows are shifts, never a company month
     expect(metricText(run({ salaryMode: "shift", presentDays: 6, companyDays: 27 }))).toBe("6 shifts");
     expect(companyMonthText(run({ salaryMode: "shift", companyDays: 27 }))).toBeNull();

@@ -153,6 +153,9 @@ def _counts(kind: str, slip: SalarySlip, bd: dict | None) -> dict:
     perm = d.get("permissionSummary") if isinstance(d.get("permissionSummary"), dict) else {}
     out = {
         "workingDays": None,
+        # added 2026-11-04: the paid company holidays among paidDays (a staff payroll from then divides by the company
+        # month, holidays included, so workingDays is that month); null on an older payroll
+        "holidayDays": None,
         "paidDays": None,
         "presentDays": None,
         "absentDays": None,
@@ -180,6 +183,7 @@ def _counts(kind: str, slip: SalarySlip, bd: dict | None) -> dict:
     if kind == KIND_STAFF:
         out.update(
             workingDays=_int(s.get("totalWorkingDays", slip.working_days)),
+            holidayDays=_int(s.get("holidayDays")) if "workingDays" in s else None,
             paidDays=_opt(s.get("effectivePaidDays")),
             presentDays=_opt(s.get("presentDays", slip.present_days)),
             absentDays=_opt(s.get("absentDays")) if s else None,
@@ -328,14 +332,19 @@ def _days_note(counts: dict) -> str:
     working, paid = counts.get("workingDays"), counts.get("paidDays")
     if working is None or paid is None:
         return "The salary for the days you were not paid for."
+    holidays = counts.get("holidayDays")
+    # a payroll from 2026-11-04 is out of the company month, holidays included (and paid)
+    days = "days" if holidays is not None else "working days"
     if dec(paid) >= dec(working):
-        return f"You were paid for all {working} working days: nothing was lost."
+        return f"You were paid for all {working} {days}: nothing was lost."
     reasons = []
     for key, one in (("absentDays", "absent day"), ("unpaidLeaveDays", "unpaid leave day"), ("halfDays", "half day")):
         value = counts.get(key)
         if value:
             reasons.append(plural(value, one))
-    text = f"You were paid for {plain(paid)} of {working} working days"
+    text = f"You were paid for {plain(paid)} of {working} {days}"
+    if holidays:
+        reasons.append(f"{plural(holidays, 'holiday')} paid")
     if reasons:
         text += " (" + ", ".join(reasons) + ")"
     rate = counts.get("dailyRate")

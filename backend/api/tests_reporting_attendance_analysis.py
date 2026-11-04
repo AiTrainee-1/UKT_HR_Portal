@@ -15,7 +15,8 @@ March 2026, a month long past, so nothing depends on today:
     Half-Day cut-offs 13:30 / 14:30; permission cap 3; free late allowance 3;
     default slabs (3 billable = 0.25 shift, 6 = 0.5 ...); Early-Out detection ON.
 
-    AA001 staff CUT  26000  late / half-day / cross-midnight employee (working days = 25 -> daily 1040)
+    AA001 staff CUT  26000  late / half-day / cross-midnight employee (working days = 25, but payroll divides by the
+                            26 days of the month, holiday included -> daily 1000)
     AA002 staff CUT  13000  permissions (4th is in excess), early-out, half-day leave
     AA003 staff SEW  20800  Saturday off; absences; a manual half day; worked a Saturday off
     AA004 staff PACK 26000  (Unit 2) one late
@@ -64,7 +65,7 @@ from .models import (
     ShiftTemplate,
     UnmatchedPunch,
 )
-from .payroll_views import _d2, _generate_staff_payroll, staff_working_days
+from .payroll_views import _generate_staff_payroll, staff_daily_rate, staff_working_days
 from .reporting import registry
 from .reporting.runner import run_report
 from .shift_engine import compute_monthly_shift_summary
@@ -859,7 +860,7 @@ class LatePenaltyTests(_Base):
                 a["shiftDeductions"],
                 a["salaryDeduction"],
             ),
-            (25, 4, 0, 4, 1, 3, 0.25, 260.0),  # 0.25 shift x 26000 / 25 working days
+            (25, 4, 0, 4, 1, 3, 0.25, 250.0),  # 0.25 shift x 26000 / 26 days (the holiday included, not / 25)
         )
         b = by[("AA002",)]
         self.assertEqual(
@@ -884,11 +885,11 @@ class LatePenaltyTests(_Base):
         self.assertEqual(self.card(body, "Pool occurrences"), 8)
         self.assertEqual(self.card(body, "Billable occurrences"), 4)
         self.assertEqual(self.card(body, "Shifts deducted"), 0.25)
-        self.assertEqual(self.card(body, "Salary deduction"), 260.0)
-        self.assertEqual(body["totals"]["salaryDeduction"], 260.0)
+        self.assertEqual(self.card(body, "Salary deduction"), 250.0)
+        self.assertEqual(body["totals"]["salaryDeduction"], 250.0)
         self.assertEqual(body["totals"]["billable"], 4)
         subs = {s["employeeName"]: s for s in self.subtotals(body)}
-        self.assertEqual(subs["CUTTING total"]["salaryDeduction"], 260.0)
+        self.assertEqual(subs["CUTTING total"]["salaryDeduction"], 250.0)
         self.assertEqual(subs["CUTTING total"]["poolTotal"], 7)
         text = self.note_text(body)
         self.assertIn("Free allowance: 1 per month", text)
@@ -899,7 +900,7 @@ class LatePenaltyTests(_Base):
         by = self.keyed(body, "employeeCode")
         # (1) the payslip the real payroll path generates
         slip = _generate_staff_payroll(self.e1, 3, 2026)["slip"]
-        self.assertEqual(slip.other_deductions, Decimal("260.00"))
+        self.assertEqual(slip.other_deductions, Decimal("250.00"))
         self.assertEqual(float(slip.other_deductions), by[("AA001",)]["salaryDeduction"])
         self.assertEqual(
             slip.breakdown_details["deductions"]["lateSummary"]["billableLateCount"], by[("AA001",)]["billable"]
@@ -911,7 +912,7 @@ class LatePenaltyTests(_Base):
                 emp,
                 2026,
                 3,
-                daily_rate=_d2(emp.salary_amount / len(days)),
+                daily_rate=staff_daily_rate(emp, 3, 2026),  # payroll's own: salary / the 26 days, holiday included
                 counted_dates=set(days),
             )
         legacy = {
@@ -975,7 +976,7 @@ class LatePenaltyTests(_Base):
         PayrollSettings.objects.filter(pk=1).update(late_deduction_slabs=[{"fromLates": 3, "deductionShifts": 1}])
         body = self.run_report("late-penalty-breakdown", **self.P, employeeIds=str(self.e1.id))
         (a,) = self.data(body)
-        self.assertEqual((a["shiftDeductions"], a["salaryDeduction"]), (1.0, 1040.0))
+        self.assertEqual((a["shiftDeductions"], a["salaryDeduction"]), (1.0, 1000.0))
         PayrollSettings.objects.filter(pk=1).update(late_deduction_slabs=[])
         body = self.run_report("late-penalty-breakdown", **self.P, employeeIds=str(self.e1.id))
         (a,) = self.data(body)

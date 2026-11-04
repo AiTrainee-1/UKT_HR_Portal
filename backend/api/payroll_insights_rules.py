@@ -638,6 +638,11 @@ class StaffRuleInput:
     def working_days(self) -> int:
         return len(_build_working_days(self.month, self.year, self.shift_times()[3], self.holidays))
 
+    def pay_days(self) -> int:
+        """What the salary is divided by (payroll_views.staff_pay_days): the month minus Sundays and Saturday-off
+        Saturdays, the declared holidays INCLUDED."""
+        return len(_build_working_days(self.month, self.year, self.shift_times()[3], set()))
+
 
 def staff_chips(emp, ps, inp: StaffRuleInput) -> list[dict]:
     """The short, coloured facts about one staff member's rules for the table: shift, Saturday, PF, ESI, bank."""
@@ -924,7 +929,7 @@ def staff_rule_groups(inp: StaffRuleInput, company: bool = True) -> list[dict]:
             "employee",
             current=salary,
             fmt=_inr_or_unset,
-            detail="Pay is this amount, shared over the month's working days, times the days paid",
+            detail="Pay is this amount, shared over the days of the month (holidays included), times the days paid",
             applied=_got(bd, "earnings", "monthlySalary"),
             applied_fmt=inr,
         )
@@ -937,11 +942,34 @@ def staff_rule_groups(inp: StaffRuleInput, company: bool = True) -> list[dict]:
             current=working_now,
             text=f"{working_now} working days",
             detail="Sundays, company holidays and (when the shift has Saturday off) Saturdays are not working days",
-            applied=_got(bd, "summary", "totalWorkingDays"),
+            # a payroll from before 2026-11-04 has no `workingDays`: its totalWorkingDays WAS the working days
+            applied=_got(bd, "summary", "workingDays")
+            if _got(bd, "summary", "workingDays") is not None
+            else _got(bd, "summary", "totalWorkingDays"),
             applied_fmt=lambda v: f"{int(v)} working days",
         )
     )
-    daily_now = (dec(salary) / working_now).quantize(Decimal("0.01")) if salary is not None and working_now else None
+    # Company policy (owner 2026-11-04): the salary is divided by the month minus Sundays with the holidays INCLUDED, so a
+    # declared holiday never raises the per-day salary; it is paid at that rate. A payroll from before divided by the
+    # working days: its totalWorkingDays is what it divided by either way.
+    pay_days_now = inp.pay_days()
+    holidays_now = pay_days_now - working_now
+    pay.append(
+        _item(
+            "pay_days",
+            "Days the salary is divided by",
+            "shift",
+            current=pay_days_now,
+            text=f"{pay_days_now} days ({working_now} working + {holidays_now} {'holiday' if holidays_now == 1 else 'holidays'})"
+            if holidays_now
+            else f"{pay_days_now} days",
+            detail="The month without its Sundays (and Saturdays on a shift with Saturday off), company holidays included: "
+            "a holiday never raises the per-day salary, and each one is paid at it",
+            applied=_got(bd, "summary", "totalWorkingDays"),
+            applied_fmt=lambda v: f"{int(v)} days",
+        )
+    )
+    daily_now = (dec(salary) / pay_days_now).quantize(Decimal("0.01")) if salary is not None and pay_days_now else None
     pay.append(
         _item(
             "daily_rate",
@@ -949,7 +977,7 @@ def staff_rule_groups(inp: StaffRuleInput, company: bool = True) -> list[dict]:
             "employee",
             current=daily_now,
             fmt=_inr_or_unset,
-            detail="The monthly salary divided by the working days: what a late or half-day mark is priced in",
+            detail="The monthly salary divided by the days above: what a late, permission, half-day or holiday is priced in",
             applied=_got(bd, "earnings", "dailyRate"),
             applied_fmt=_inr_or_unset,
         )
@@ -1108,8 +1136,8 @@ def staff_settings_groups(base, ps) -> list[dict]:
             "How salary is worked out",
             "settings",
             current=None,
-            text="Monthly salary / working days x days paid",
-            detail="Sundays and company holidays are not working days (nor Saturdays on a shift with Saturday off). A half day pays 0.5 and a quarter-shift arrival 0.75. Basic is 50% of the salary earned",
+            text="Monthly salary / days of the month x days paid",
+            detail="The month is counted without its Sundays (nor Saturdays on a shift with Saturday off), company holidays included, so a holiday never raises the per-day salary; each holiday is paid. A half day pays 0.5 and a quarter-shift arrival 0.75. Basic is 50% of the salary earned",
         ),
         _item(
             "pay_day",

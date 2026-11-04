@@ -264,6 +264,8 @@ class StaffPayrollTests(TestCase):
             attendance_mode="simple",
             compensation_feature_enabled=True,
         )
+        # a test that declares holidays must not leave them cached for the next one
+        self.addCleanup(_holiday_dates_for_month.cache_clear)
 
     def _run(self, emp):
         return _generate_staff_payroll(emp, MONTH, YEAR)
@@ -289,7 +291,7 @@ class StaffPayrollTests(TestCase):
 
     def test_odd_working_day_count_does_not_lose_paise(self):
         # 8000 / 26 = 307.6923...: rounding the daily rate first used to make
-        # a fully present employee's gross 7999.94.
+        # a fully present employee's gross 7999.94. Here 23000 / 24 = 958.333...
         Holiday.objects.create(name="H1", date=date(2026, 2, 3))
         Holiday.objects.create(name="H2", date=date(2026, 2, 4))
         _holiday_dates_for_month.cache_clear()
@@ -297,8 +299,14 @@ class StaffPayrollTests(TestCase):
         days = _build_working_days(MONTH, YEAR, False, {date(2026, 2, 3), date(2026, 2, 4)})
         _present_all(emp, days)
         p = self._run(emp)["payroll"]
-        self.assertEqual(p.total_working_days, 22)
+        # divided by the 24 days of the month (holidays included): 22 worked + 2 paid holidays = the full salary
+        self.assertEqual(p.total_working_days, 24)
         self.assertEqual(p.gross_salary, Decimal("23000.00"))
+        summary = _breakdown(emp)["summary"]
+        self.assertEqual(
+            (summary["workingDays"], summary["holidayDays"], summary["workedDays"], summary["effectivePaidDays"]),
+            (22, 2, 22.0, 24.0),
+        )
 
     def test_partial_attendance_is_prorated_by_working_days(self):
         emp = _staff()
@@ -346,15 +354,60 @@ class StaffPayrollTests(TestCase):
         self.assertEqual(p.gross_salary, Decimal("24000.00"))
         self.assertEqual(_breakdown(emp)["summary"]["paidLeaveDays"], 2)
 
-    def test_public_holiday_shrinks_the_month_and_raises_the_daily_rate(self):
+    def test_a_public_holiday_is_paid_and_never_raises_the_daily_rate(self):
+        # company policy (owner 2026-11-04): the salary is divided by the month without its Sundays, holidays INCLUDED
+        # (24 in February 2026), never by the working days (23 here), and the holiday is paid at that same rate
         Holiday.objects.create(name="Founders Day", date=date(2026, 2, 10))
         _holiday_dates_for_month.cache_clear()
-        emp = _staff(salary="23000.00")
+        emp = _staff(salary="24000.00")
         days = _build_working_days(MONTH, YEAR, False, {date(2026, 2, 10)})
-        _present_all(emp, days[:11])  # half of 23 working days = 11.5, so use 11
+        _present_all(emp, days[:11])
         p = self._run(emp)["payroll"]
-        self.assertEqual(p.total_working_days, 23)
-        self.assertEqual(p.gross_salary, Decimal("11000.00"))  # 11 x (23000/23)
+        self.assertEqual(p.total_working_days, 24)
+        self.assertEqual(p.gross_salary, Decimal("12000.00"))  # (11 worked + 1 holiday) x (24000 / 24)
+        bd = _breakdown(emp)
+        self.assertEqual(bd["earnings"]["dailyRate"], 1000.0)  # the same as in a month without a holiday
+        self.assertEqual((bd["summary"]["workingDays"], bd["summary"]["holidayDays"]), (23, 1))
+        self.assertEqual(p.absent_days, Decimal("12.0"))  # the working days not worked; the holiday is never absent
+
+    def test_full_attendance_in_a_month_with_holidays_is_the_full_salary(self):
+        for d in (date(2026, 2, 10), date(2026, 2, 11)):
+            Holiday.objects.create(name=f"H {d}", date=d)
+        _holiday_dates_for_month.cache_clear()
+        emp = _staff(salary="27000.00")
+        _present_all(emp, _build_working_days(MONTH, YEAR, False, {date(2026, 2, 10), date(2026, 2, 11)}))
+        p = self._run(emp)["payroll"]
+        self.assertEqual((p.gross_salary, p.final_salary), (Decimal("27000.00"), Decimal("27000.00")))
+        self.assertEqual(_breakdown(emp)["earnings"]["dailyRate"], 1125.0)  # 27000 / 24, holidays or not
+
+    def test_late_and_permission_deductions_use_the_same_rate_whatever_the_holidays(self):
+        # one billable late = 1 shift: priced at salary / 24 days, the same with or without two holidays declared
+        _configure(late_free_allowance=0, late_deduction_slabs=[{"fromLates": 1, "deductionShifts": 1}])
+        plain = _staff(code="PAY_PLAIN", salary="24000.00")
+        self._late_days(plain, 1)
+        self.assertEqual(self._run(plain)["slip"].other_deductions, Decimal("1000.00"))
+        for d in (date(2026, 2, 16), date(2026, 2, 17)):
+            Holiday.objects.create(name=f"H {d}", date=d)
+        _holiday_dates_for_month.cache_clear()
+        with_holidays = _staff(code="PAY_HOL", salary="24000.00")
+        working = _build_working_days(MONTH, YEAR, False, {date(2026, 2, 16), date(2026, 2, 17)})
+        _day(with_holidays, working[0], is_late=True)
+        _present_all(with_holidays, working[1:])
+        slip = self._run(with_holidays)["slip"]
+        self.assertEqual(slip.other_deductions, Decimal("1000.00"))  # not 24000 / 22 = 1090.91
+        self.assertEqual(slip.gross_salary, Decimal("24000.00"))
+
+    def test_a_holiday_before_the_joining_date_is_not_paid(self):
+        for d in (date(2026, 2, 3), date(2026, 2, 24)):
+            Holiday.objects.create(name=f"H {d}", date=d)
+        _holiday_dates_for_month.cache_clear()
+        emp = _staff(salary="24000.00", join_date="2026-02-16")
+        working = _build_working_days(MONTH, YEAR, False, {date(2026, 2, 3), date(2026, 2, 24)})
+        _present_all(emp, [d for d in working if d >= date(2026, 2, 16)])  # 11 working days from the 16th
+        p = self._run(emp)["payroll"]
+        # 11 worked + only the 24th's holiday = 12 days x 1000; the 3rd was before joining
+        self.assertEqual(p.gross_salary, Decimal("12000.00"))
+        self.assertEqual(_breakdown(emp)["summary"]["holidayDays"], 1)
 
     # ── PF / ESI / TDS ─────────────────────────────────────────────────────
     # PF below 25,000 Basic (12%) and ESI below 30,000 Basic (0.75%): two independent limits, both on the Basic
