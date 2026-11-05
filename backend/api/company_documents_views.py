@@ -34,7 +34,8 @@ from .document_pdf import (
     signature_block, styles_for, title_block,
 )
 from .image_compress import LOGO, compress_data_url
-from .models import CompanyDocumentSettings, Employee, LeaveBalance, PayrollSettings, SalarySlip
+from .models import CompanyDocumentSettings, Employee, PayrollSettings, SalarySlip
+from .salary_slip_figures import figures as slip_figures, leave_lines as slip_leave_lines
 
 
 # ── Settings ─────────────────────────────────────────────────────────────
@@ -484,6 +485,37 @@ def _tds_deduction_row(s: SalarySlip) -> list[str] | None:
     return [label, rupee(amount)]
 
 
+def _slip_money_rows(fig) -> tuple[list, list]:
+    """The slip's Earnings and Deductions tables from the Payroll Report's figures (salary_slip_figures.figures): only the
+    lines that apply, each table ending with its total (E salary / Total Deduction, as the report calls them)."""
+    def money(amount) -> str:
+        return f"- {rupee(abs(amount))}" if amount < 0 else rupee(amount)
+
+    earn_rows = [["Earnings", "Amount"], *[[label, money(amount)] for label, amount in fig.earnings]]
+    earn_rows.append(["E salary (Total Earnings)", rupee(fig.earnings_total)])
+    ded_rows = [["Deductions", "Amount"], *[[label, money(amount)] for label, amount in fig.deductions]]
+    if not fig.deductions:
+        ded_rows.append(["No deductions this month", rupee(0)])
+    ded_rows.append(["Total Deduction", rupee(fig.deductions_total)])
+    return earn_rows, ded_rows
+
+
+def _slip_personal_rows(fig, emp, ps, min_wage_label: str) -> list:
+    """The days paid (as the Payroll Report) and the personal details that apply: an empty father's name or a 0 minimum
+    wage is left out; the PF / ESI numbers show for a Co Emp employee (a dash when not on file) or whenever they are set."""
+    rows = [[label, value] for label, value in fig.days]
+    if emp.father_name:
+        rows.append(["Father's/Husband's Name", emp.father_name])
+    if ps.min_wage_rate:
+        rows.append([min_wage_label, rupee(ps.min_wage_rate)])
+    co_emp = bool(getattr(emp, "co_emp_enabled", False))
+    if co_emp or emp.pf_number:
+        rows.append(["PF Number", emp.pf_number or "—"])
+    if co_emp or emp.esi_number:
+        rows.append(["ESI Number", emp.esi_number or "—"])
+    return rows
+
+
 def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     ps = PayrollSettings.get()
     ds = CompanyDocumentSettings.get(CompanyDocumentSettings.DOC_TYPE_SALARY_SLIP)
@@ -495,12 +527,9 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
               "July", "August", "September", "October", "November", "December"]
     period_label = f"{MONTHS[s.month]} {s.year}" + (f" -Week {s.week_number}" if s.week_number else "")
 
-    other_allowances = float(s.allowances) + float(s.incentives) + float(s.bonuses)
-    shifts_worked = s.completed_sessions if s.week_number else float(s.present_days)
-    balances = (
-        list(LeaveBalance.objects.select_related("leave_type").filter(employee=emp, year=s.year))
-        if emp.pk else []
-    )
+    # the earnings, deductions, NET and days are the Payroll Report's own (salary_slip_figures): the two never differ
+    fig = slip_figures(s)
+    leave_lines = slip_leave_lines(emp, s.year)
 
     buffer = io.BytesIO()
     decorator = PremiumPageDecorator(ds, ps, footer_note=f"System-generated payslip -{s.slip_number}")
@@ -564,29 +593,7 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     story.append(Spacer(1, 0.4 * cm))
 
     # Earnings / Deductions tables side by side
-    earn_rows = [
-        ["Earnings", "Amount"],
-        ["Basic Pay", rupee(s.basic)],
-        ["DA", rupee(0)],
-        ["HRA", rupee(s.hra)],
-        ["CA", rupee(0)],
-        ["EA", rupee(0)],
-        ["Other Allowances", rupee(other_allowances)],
-        ["OT Wages", rupee(s.ot_amount)],
-        ["PTRL", rupee(0)],
-        ["Total Earnings", rupee(s.gross_salary)],
-    ]
-    ded_rows = [
-        ["Deductions", "Amount"],
-        ["P.F", rupee(s.pf_deduction)],
-        ["E.S.I", rupee(s.esi_deduction)],
-        ["Advance", rupee(s.advance_deduction)],
-        ["T.Advance", rupee(0)],
-        *([tds_row] if (tds_row := _tds_deduction_row(s)) else []),
-        ["LOP", rupee(0)],
-        ["Other Deductions", rupee(s.other_deductions)],
-        ["Total Deductions", rupee(s.total_deductions)],
-    ]
+    earn_rows, ded_rows = _slip_money_rows(fig)
 
     def _money_table(rows, header_color):
         t = Table(rows, colWidths=[4.3 * cm, 3.4 * cm])
@@ -614,15 +621,8 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     story.append(tables_row)
     story.append(Spacer(1, 0.4 * cm))
 
-    # Personal info + leave summary side by side
-    personal_rows = [
-        ["Father's/Husband's Name", emp.father_name or "—"],
-        ["No. of Shifts Worked", f"{shifts_worked}"],
-        ["OT Hours", f"{float(s.ot_amount):.2f}"],
-        ["Minimum Rate of Wages", rupee(ps.min_wage_rate)],
-        ["PF Number", emp.pf_number or "—"],
-        ["ESI Number", emp.esi_number or "—"],
-    ]
+    # Days paid (as the Payroll Report) + personal info, and the leave balance, side by side
+    personal_rows = _slip_personal_rows(fig, emp, ps, "Minimum Rate of Wages")
     personal_table = Table(personal_rows, colWidths=[4.4 * cm, 4 * cm])
     personal_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (0, -1), FONT_BODY_BOLD),
@@ -633,13 +633,7 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
         ("TOPPADDING", (0, 0), (-1, -1), 3),
     ]))
 
-    if balances:
-        leave_rows = [["Leave Type", "Total", "Used", "Balance"]] + [
-            [lb.leave_type.name, f"{float(lb.allocated):.1f}", f"{float(lb.used):.1f}", f"{float(lb.remaining):.1f}"]
-            for lb in balances
-        ]
-    else:
-        leave_rows = [["Leave Type", "Total", "Used", "Balance"], ["Casual Leave", "0.0", "0.0", "0.0"]]
+    leave_rows = [["Leave Type", "Total", "Used", "Balance"], *leave_lines]
     leave_table = Table(leave_rows, colWidths=[3.2 * cm, 1.5 * cm, 1.5 * cm, 1.5 * cm])
     leave_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
@@ -652,15 +646,15 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
 
-    lower_row = Table([[personal_table, leave_table]], colWidths=[8.6 * cm, 8.6 * cm])
+    lower_row = Table([[personal_table, leave_table if leave_lines else ""]], colWidths=[8.6 * cm, 8.6 * cm])
     lower_row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
     story.append(lower_row)
     story.append(Spacer(1, 0.45 * cm))
 
     # Net Amount Paid -highlighted green card
-    words = num_to_words(int(float(s.net_salary)))
+    words = num_to_words(int(float(fig.net)))
     net_card = Table(
-        [["NET AMOUNT PAID", rupee(s.net_salary)], [f"Amount in Words: {words} ONLY", ""]],
+        [["NET AMOUNT PAID", rupee(fig.net)], [f"Amount in Words: {words} ONLY", ""]],
         colWidths=[10.6 * cm, 6.6 * cm],
     )
     net_card.setStyle(TableStyle([
@@ -717,7 +711,7 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
 
 
 def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, ps: PayrollSettings,
-                                     primary, accent, col_width=13.2 * cm) -> list:
+                                     primary, accent, col_width=13.2 * cm, fig=None, leave_lines=None) -> list:
     """
     Full-detail salary-slip layout for the bulk "2 slips per landscape-A4
     page" combined PDF (see salary_slip_bulk_pdf.py) -same header/info/
@@ -730,13 +724,10 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
     MONTHS = ["", "January", "February", "March", "April", "May", "June",
               "July", "August", "September", "October", "November", "December"]
     period_label = f"{MONTHS[s.month]} {s.year}" + (f" -Week {s.week_number}" if s.week_number else "")
-    other_allowances = float(s.allowances) + float(s.incentives) + float(s.bonuses)
-    shifts_worked = s.completed_sessions if s.week_number else float(s.present_days)
+    # the Payroll Report's own figures (salary_slip_figures); a bulk PDF passes them in, fetched for all slips at once
+    fig = fig if fig is not None else slip_figures(s)
+    leave_lines = leave_lines if leave_lines is not None else slip_leave_lines(emp, s.year)
     leave_taken = float(s.paid_leave_days) + float(s.unpaid_leave_days)
-    balances = (
-        list(LeaveBalance.objects.select_related("leave_type").filter(employee=emp, year=s.year))
-        if emp.pk else []
-    )
 
     company_style = ParagraphStyle("CBoldC", fontName=FONT_BODY_BOLD, fontSize=13, textColor=primary)
     title_style = ParagraphStyle("CTitle", fontName=FONT_BODY_BOLD, fontSize=11, textColor=accent, alignment=2)
@@ -784,23 +775,7 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
     story.append(info_table)
     story.append(Spacer(1, 0.22 * cm))
 
-    earn_rows = [
-        ["Earnings", "Amount"],
-        ["Basic Pay", rupee(s.basic)],
-        ["HRA", rupee(s.hra)],
-        ["Other Allowances", rupee(other_allowances)],
-        ["OT Wages", rupee(s.ot_amount)],
-        ["Total Earnings", rupee(s.gross_salary)],
-    ]
-    ded_rows = [
-        ["Deductions", "Amount"],
-        ["P.F", rupee(s.pf_deduction)],
-        ["E.S.I", rupee(s.esi_deduction)],
-        ["Advance", rupee(s.advance_deduction)],
-        *([tds_row] if (tds_row := _tds_deduction_row(s)) else []),
-        ["Other Deductions", rupee(s.other_deductions)],
-        ["Total Deductions", rupee(s.total_deductions)],
-    ]
+    earn_rows, ded_rows = _slip_money_rows(fig)
 
     def _mini_table(rows, header_color, width):
         t = Table(rows, colWidths=[width * 0.62, width * 0.38])
@@ -828,14 +803,7 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
     story.append(tables_row)
     story.append(Spacer(1, 0.3 * cm))
 
-    personal_rows = [
-        ["Father's/Husband's Name", emp.father_name or "—"],
-        ["No. of Shifts Worked", f"{shifts_worked}"],
-        ["OT Hours", f"{float(s.ot_amount):.2f}"],
-        ["Min. Rate of Wages", rupee(ps.min_wage_rate)],
-        ["PF Number", emp.pf_number or "—"],
-        ["ESI Number", emp.esi_number or "—"],
-    ]
+    personal_rows = _slip_personal_rows(fig, emp, ps, "Min. Rate of Wages")
     personal_table = Table(personal_rows, colWidths=[half * 0.62, half * 0.38])
     personal_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (0, -1), FONT_BODY_BOLD),
@@ -847,13 +815,7 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
         ("TOPPADDING", (0, 0), (-1, -1), 2.5),
     ]))
 
-    if balances:
-        leave_rows = [["Leave Type", "Total", "Used", "Balance"]] + [
-            [lb.leave_type.name, f"{float(lb.allocated):.1f}", f"{float(lb.used):.1f}", f"{float(lb.remaining):.1f}"]
-            for lb in balances
-        ]
-    else:
-        leave_rows = [["Leave Type", "Total", "Used", "Balance"], ["Casual Leave", "0.0", "0.0", "0.0"]]
+    leave_rows = [["Leave Type", "Total", "Used", "Balance"], *leave_lines]
     leave_table = Table(leave_rows, colWidths=[half * 0.4, half * 0.2, half * 0.2, half * 0.2])
     leave_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
@@ -866,13 +828,13 @@ def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, p
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
 
-    lower_row = Table([[personal_table, leave_table]], colWidths=[half, half])
+    lower_row = Table([[personal_table, leave_table if leave_lines else ""]], colWidths=[half, half])
     lower_row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
     story.append(lower_row)
     story.append(Spacer(1, 0.35 * cm))
 
-    words = num_to_words(int(float(s.net_salary)))
-    net_card = Table([["NET AMOUNT PAID", rupee(s.net_salary)]], colWidths=[CW * 0.6, CW * 0.4])
+    words = num_to_words(int(float(fig.net)))
+    net_card = Table([["NET AMOUNT PAID", rupee(fig.net)]], colWidths=[CW * 0.6, CW * 0.4])
     net_card.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), primary),
         ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),

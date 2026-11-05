@@ -2,7 +2,8 @@
 Report Center - HR Reports (category ``hr``): hr-salary-statement, the printed Salary Statement.
 
 The report must show exactly what Payroll > Salary Statement (GET /api/payroll/salary-statement) shows, because both call
-the same builder. Payrolls are made by the REAL engine (``_generate_staff_payroll``) from manual attendance day records,
+the same builder. It lists the figures unit by unit (owner 2026-11-04: split the exports by unit, like the Report Log's Late
+exports): a band per unit, its departments, its total, serial numbers from 1 in every unit, a Unit column on every line. Payrolls are made by the REAL engine (``_generate_staff_payroll``) from manual attendance day records,
 for April 2026 (26 working days, like the printed statement), with "today" frozen after the month.
 
 Run via: python manage.py test api.tests_reporting_hr_salary_statement -v 2
@@ -49,18 +50,18 @@ PERIOD = "2026-04"
 
 LABELS = [
     "SNO", "ID NO", "Name", "Designation", "Basic salary", "Total", "Present", "CL", "LOP", "HD", "Total Days", "PTRL",
-    "Others Allow", "E salary", "T.Advance", "Advance", "ESI", "PF", "TDS", "Others", "Lop& PSAmt", "Total Deduction",
-    "NET", "Remarks",
+    "Others Allow", "E salary", "Advance", "ESI", "PF", "TDS", "Others", "Lop& PSAmt", "Total Deduction",
+    "NET", "Remarks", "Unit",
 ]  # fmt: skip
 KEYS = [
     "sno", "code", "name", "designation", "basic", "total", "present", "cl", "lop", "hd", "totalDays", "petrol",
-    "othersAllow", "eSalary", "tAdvance", "advance", "esi", "pf", "tds", "others", "lopAmount", "totalDeduction", "net",
-    "remarks",
+    "othersAllow", "eSalary", "advance", "esi", "pf", "tds", "others", "lopAmount", "totalDeduction", "net",
+    "remarks", "unit",
 ]  # fmt: skip
 PRINTED_TOTALS = [
-    "petrol", "othersAllow", "eSalary", "tAdvance", "advance", "esi", "pf", "tds", "others", "totalDeduction", "net",
+    "petrol", "othersAllow", "eSalary", "advance", "esi", "pf", "tds", "others", "totalDeduction", "net",
 ]  # fmt: skip
-VALUE_KEYS = [k for k in KEYS if k != "sno"]
+VALUE_KEYS = [k for k in KEYS if k not in ("sno", "unit")]  # the Payroll page's own statement has no unit column
 
 # The attendance engine only computes days that have elapsed: with "today" fixed after the month the figures do not depend
 # on the date the suite runs on.
@@ -92,12 +93,22 @@ def headings(body) -> list[str]:
     return [r["name"] for r in body["rows"] if r.get("_kind") == "subtotal" and r["net"] is None]
 
 
-def subtotals(body) -> dict[str, dict]:
+def subtotals(body) -> dict[tuple[str, str], dict]:
+    """The department Sub total lines, by (unit, department)."""
     return {
-        r["name"][: -len(" Sub total")]: r
+        (r["unit"], r["name"][: -len(" Sub total")]): r
         for r in body["rows"]
         if r.get("_kind") == "subtotal" and r["name"].endswith(" Sub total")
     }
+
+
+def bands(body) -> list[str]:
+    """The unit band lines: total-styled lines with a name and no money."""
+    return [r["name"] for r in body["rows"] if r.get("_kind") == "total" and r["net"] is None]
+
+
+def unit_totals(body) -> dict[str, dict]:
+    return {r["unit"]: r for r in body["rows"] if r.get("_kind") == "total" and r["net"] is not None}
 
 
 def day(emp, d, status="present", shifts="1.00"):
@@ -268,12 +279,12 @@ class CatalogTests(_World):
         self.assertFalse(spec.super_admin_only)
         types = {c.key: c.type for c in spec.columns}
         self.assertEqual(types["sno"], "integer")
-        for key in ("code", "name", "designation", "remarks"):
+        for key in ("code", "name", "designation", "remarks", "unit"):
             self.assertEqual(types[key], "text", key)
         for key in ("present", "cl", "lop", "hd", "totalDays"):
             self.assertEqual(types[key], "number", key)
         for key in (
-            "basic", "total", "petrol", "othersAllow", "eSalary", "tAdvance", "advance", "esi", "pf", "tds", "others",
+            "basic", "total", "petrol", "othersAllow", "eSalary", "advance", "esi", "pf", "tds", "others",
             "lopAmount", "totalDeduction", "net",
         ):  # fmt: skip
             self.assertEqual(types[key], "currency", key)
@@ -362,21 +373,28 @@ class ContentTests(_World):
             for key in VALUE_KEYS:
                 self.assertEqual(row[key], expected[code][key], (code, key))
 
-    def test_the_departments_serial_numbers_and_order_are_the_statements(self):
+    def test_unit_by_unit_then_department_with_serial_numbers_from_1_in_every_unit(self):
         body = self.get()
-        statement = self.statement()
-        self.assertEqual(
-            headings(body), ["Accounts", "Admin (Unit 1)", "Admin (Unit 2)", "Cutting"]
-        )  # two departments that share a name are told apart, as on the statement
-        self.assertEqual(headings(body), [g["label"] for g in statement["groups"]])
+        self.assertEqual(bands(body), ["U1 – Unit 1   5 employees", "U2 – Unit 2   2 employees"])
+        # inside a unit the departments are the statement's (name order, code order), so a department name is printed
+        # plainly: each Admin is under its own unit's band
+        self.assertEqual(headings(body), ["Accounts", "Admin", "Admin", "Cutting"])
         self.assertEqual([r["code"] for r in data_rows(body)], ["2316", "2896", "30071", "189", "226", "5000", "3000"])
-        self.assertEqual([r["sno"] for r in data_rows(body)], [1, 2, 3, 4, 5, 6, 7])  # runs on across departments
-        # a heading line sits right before its department's rows, the subtotal right after
+        self.assertEqual([r["sno"] for r in data_rows(body)], [1, 2, 3, 4, 5, 1, 2])
+        self.assertEqual([r["unit"] for r in data_rows(body)], ["U1"] * 5 + ["U2"] * 2)
         kinds = [(r.get("_kind"), r["name"]) for r in body["rows"]]
-        self.assertEqual(kinds[0], ("subtotal", "Accounts"))
-        self.assertEqual(kinds[4], ("subtotal", "Accounts Sub total"))
-        self.assertEqual(kinds[5], ("subtotal", "Admin (Unit 1)"))
-        self.assertEqual(kinds[-1], ("subtotal", "Cutting Sub total"))
+        self.assertEqual(kinds[0], ("total", "U1 – Unit 1   5 employees"))  # the unit's band first
+        self.assertEqual(kinds[1], ("subtotal", "Accounts"))  # a heading right before its department's rows
+        self.assertEqual(kinds[5], ("subtotal", "Accounts Sub total"))  # the Sub total right after them
+        self.assertEqual(kinds[6], ("subtotal", "Admin"))
+        self.assertEqual(kinds[10], ("total", "U1 – Unit 1 total"))
+        self.assertEqual(kinds[11], ("total", "U2 – Unit 2   2 employees"))
+        self.assertEqual(kinds[-1], ("total", "U2 – Unit 2 total"))
+        # every structural line carries its unit too, so the Unit column filters a whole unit
+        self.assertEqual({r["unit"] for r in body["rows"]}, {"U1", "U2"})
+        # the figures are still the Payroll page's statement's, line for line
+        statement = self.statement()
+        self.assertEqual(sorted(by_code(body)), sorted(self.statement_rows(statement)))
 
     def test_a_known_row_matches_the_printed_example(self):
         row = by_code(self.get())["2316"]
@@ -389,7 +407,8 @@ class ContentTests(_World):
         )
         self.assertEqual((row["petrol"], row["othersAllow"]), (2000.0, 12750.0))
         lokesh = by_code(self.get())["2896"]
-        self.assertEqual((lokesh["tAdvance"], lokesh["advance"], lokesh["hd"]), (6000.0, 2000.0, 1.0))
+        self.assertEqual((lokesh["advance"], lokesh["hd"]), (2000.0, 1.0))
+        self.assertNotIn("tAdvance", lokesh)
         self.assertEqual(by_code(self.get())["30071"]["remarks"], "LEFT")
 
     def test_department_subtotals_add_up_the_printed_columns(self):
@@ -398,12 +417,13 @@ class ContentTests(_World):
         accounts = [r for r in rows if r["code"] in ("2316", "2896", "30071")]
         subs = subtotals(body)
         for key in PRINTED_TOTALS:
-            self.assertAlmostEqual(subs["Accounts"][key], round(sum(r[key] for r in accounts), 2), 2, key)
-            self.assertAlmostEqual(subs["Cutting"][key], by_code(body)["3000"][key], 2, key)
+            self.assertAlmostEqual(subs[("U1", "Accounts")][key], round(sum(r[key] for r in accounts), 2), 2, key)
+            self.assertAlmostEqual(subs[("U2", "Cutting")][key], by_code(body)["3000"][key], 2, key)
+            self.assertAlmostEqual(subs[("U2", "Admin")][key], by_code(body)["5000"][key], 2, key)
         # the money the printed sheet does not add up stays blank on the subtotal
         for key in ("basic", "total", "present", "totalDays", "lopAmount"):
-            self.assertIsNone(subs["Accounts"][key], key)
-        self.assertIsNone(subs["Accounts"]["sno"])
+            self.assertIsNone(subs[("U1", "Accounts")][key], key)
+        self.assertIsNone(subs[("U1", "Accounts")]["sno"])
         self.assertEqual(len(subs), 4)
 
     def test_the_grand_total_is_the_statements_total(self):
@@ -416,8 +436,10 @@ class ContentTests(_World):
         self.assertAlmostEqual(body["totals"]["net"], round(sum(s["net"] for s in subtotals(body).values()), 2), 2)
         for key in ("basic", "total", "present", "lop", "lopAmount"):
             self.assertNotIn(key, body["totals"])
+        # ... nor are the unit totals
+        self.assertAlmostEqual(body["totals"]["net"], round(sum(u["net"] for u in unit_totals(body).values()), 2), 2)
         cards = {c["label"]: c["value"] for c in body["summary"]}
-        self.assertEqual((cards["Employees listed"], cards["Departments"]), (7, 4))
+        self.assertEqual((cards["Employees listed"], cards["Units"], cards["Departments"]), (7, 2, 4))
         self.assertAlmostEqual(cards["Net pay"], body["totals"]["net"], 2)
 
     def test_the_notes_explain_the_columns_as_the_payroll_statement_does(self):
@@ -485,6 +507,9 @@ class BranchTests(_World):
         body = self.get(user=self.branch_user)
         self.assertEqual([r["code"] for r in data_rows(body)], ["2316", "2896", "30071", "189", "226"])
         self.assertEqual(headings(body), ["Accounts", "Admin"])  # no 'Admin (Unit 1)': the other Admin is not visible
+        # a unit login sees its own unit: one band and no unit total (it would only repeat the grand total)
+        self.assertEqual(bands(body), ["U1 – Unit 1   5 employees"])
+        self.assertEqual(unit_totals(body), {})
         expected = self.statement_rows(self.statement(user=self.branch_user))
         for code, row in by_code(body).items():
             self.assertEqual(row["net"], expected[code]["net"], code)
@@ -527,28 +552,121 @@ class ExportTests(_World):
         r = self.export("xlsx")
         self.assertRegex(r["Content-Disposition"], r'filename="salary_statement_\d{8}_\d{4}\.xlsx"')
         ws = load_workbook(io.BytesIO(r.content)).active
-        self.assertEqual([c.value for c in ws[HEADER_ROW]][: len(LABELS)], LABELS)
+        self.assertEqual([c.value for c in ws[HEADER_ROW]], LABELS)
+        merged = {str(m) for m in ws.merged_cells.ranges}
+        # the file has the screen's lines in order, with a blank row between departments and before a further unit
+        filled = [
+            n
+            for n in range(HEADER_ROW + 1, ws.max_row + 1)
+            if any(ws.cell(row=n, column=k + 1).value is not None for k in range(len(KEYS)))
+        ]
         for i, row in enumerate(screen["rows"]):
-            excel = [ws.cell(row=HEADER_ROW + 1 + i, column=n + 1).value for n in range(len(KEYS))]
-            for n, key in enumerate(KEYS):
+            n = filled[i]
+            excel = [ws.cell(row=n, column=k + 1).value for k in range(len(KEYS))]
+            if row.get("_kind") == "total" and row["net"] is None:
+                # a unit's band: one merged, filled cell over the statement's columns, its unit in the Unit column
+                self.assertEqual(excel[0], row["name"], i)
+                self.assertEqual(excel[-1], row["unit"], i)
+                self.assertIn(f"A{n}:W{n}", merged)
+                self.assertEqual(ws.cell(row=n, column=1).fill.fgColor.rgb[-6:], "E0E7FF")
+                continue
+            for k, key in enumerate(KEYS):
                 want = row[key]
-                got = excel[n]
+                got = excel[k]
                 if isinstance(want, float):
                     self.assertAlmostEqual(got, want, 2, (i, key))
                 else:
                     self.assertEqual(got if got != "" else None, want if want != "" else None, (i, key))
-        total_row = [c.value for c in ws[HEADER_ROW + 1 + len(screen["rows"])]]
+        total_row = [c.value for c in ws[filled[len(screen["rows"])]]]
         self.assertEqual(total_row[0], "TOTAL")
+        self.assertEqual(total_row[KEYS.index("name")], "7 employees in 2 units")
+        self.assertIsNone(total_row[KEYS.index("unit")])  # filtering one unit hides the grand total
         self.assertAlmostEqual(total_row[KEYS.index("net")], screen["totals"]["net"], 2)
         cells = " ".join(str(c.value) for rw in ws.iter_rows() for c in rw if c.value is not None)
         self.assertIn("April 2026", cells)  # the filter echo in the sheet header
+        self.assertIn("Amounts in ₹", cells)
         self.assertIn("Basic is the first salary-split portion", cells)
+
+    def test_the_excel_filters_by_unit_and_prints_a3_one_page_wide(self):
+        ws = load_workbook(io.BytesIO(self.export("xlsx").content)).active
+        last = next(n for n in range(HEADER_ROW, ws.max_row + 1) if ws.cell(row=n, column=1).value == "TOTAL")
+        self.assertEqual(ws.auto_filter.ref, f"A{HEADER_ROW}:X{last}")
+        self.assertEqual(ws.freeze_panes, f"D{HEADER_ROW + 1}")  # the header and SNO / ID NO / Name stay in view
+        self.assertEqual((ws.page_setup.paperSize, ws.page_setup.orientation), (8, "landscape"))
+        self.assertEqual(ws.page_setup.fitToWidth, 1)
+        money = ws.cell(row=HEADER_ROW + 3, column=KEYS.index("net") + 1)  # band, heading, then Meenatchi
+        self.assertIsInstance(money.value, float)
+        self.assertNotIn("₹", money.number_format)  # no ₹ on every cell: the title row says "Amounts in ₹"
+        self.assertEqual(ws.cell(row=HEADER_ROW + 3, column=1).font.sz, 11)
 
     def test_pdf_is_a_real_pdf(self):
         r = self.export("pdf")
         self.assertTrue(r.content.startswith(b"%PDF"))
         self.assertRegex(r["Content-Disposition"], r'\.pdf"$')
         self.assertGreater(len(r.content), 2000)
+
+    def test_a_blank_row_separates_the_departments_in_both_files(self):
+        from .reporting.definitions.hr_reports_salary_statement_files import GAP
+
+        ws = load_workbook(io.BytesIO(self.export("xlsx").content)).active
+        names = {n: ws.cell(row=n, column=KEYS.index("name") + 1).value for n in range(HEADER_ROW + 1, ws.max_row + 1)}
+        rows = {n: [c.value for c in ws[n]] for n in names}
+
+        def at(text):
+            return next(n for n, v in names.items() if v == text)
+
+        # after a department's Sub total one empty row, then the next department
+        accounts = at("Accounts Sub total")
+        self.assertTrue(all(v is None for v in rows[accounts + 1]), rows[accounts + 1])
+        self.assertEqual(names[accounts + 2], "Admin")
+        # a unit's last Sub total keeps the unit total right under it; then one empty row before the next unit's band
+        self.assertEqual(names[at("Admin Sub total") + 1], "U1 – Unit 1 total")
+        unit_total = at("U1 – Unit 1 total")
+        self.assertTrue(all(v is None for v in rows[unit_total + 1]))
+        self.assertEqual(rows[unit_total + 2][0], "U2 – Unit 2   2 employees")
+        # no blank row under the header or above the TOTAL
+        self.assertIsNotNone(rows[HEADER_ROW + 1][0])
+        total = next(n for n, v in rows.items() if v[0] == "TOTAL")
+        self.assertEqual(names[total - 1], "U2 – Unit 2 total")
+
+        # the PDF draws the same lines: a blank row (as tall as a one-line row, no ruling) in the same places
+        from .reporting.definitions import hr_reports_salary_statement_files as F
+
+        kinds = [line.kind for line in F.statement_lines(self._blocks(), S.SUM_KEYS, {"net": 1.0})]
+        self.assertEqual(kinds.count(GAP), 3)  # Accounts | Admin, Unit 1 | Unit 2, Admin | Cutting, and nowhere else
+        for i, kind in enumerate(kinds):
+            if kind == GAP:
+                self.assertIn(kinds[i - 1], (F.SUB, F.UNIT_TOTAL))
+                self.assertIn(kinds[i + 1], (F.HEADING, F.BAND))
+        self.assertNotEqual(kinds[0], GAP)
+        self.assertEqual(kinds[-2:], [F.UNIT_TOTAL, F.GRAND])
+
+    def _blocks(self):
+        from .payroll_insights import KIND_STAFF, staff_period
+        from .payroll_statement_views import statement_rows
+
+        payrolls = list(
+            Payroll.objects.select_related(*S.PAYROLL_RELATIONS).filter(salary_mode="monthly", month=MONTH, year=YEAR)
+        )
+        values, _a, _b = statement_rows(payrolls, KIND_STAFF, staff_period(MONTH, YEAR))
+        return S.unit_blocks(payrolls, values)
+
+    def test_the_pdf_is_unit_by_unit_in_bigger_type(self):
+        import pdfplumber
+
+        with pdfplumber.open(io.BytesIO(self.export("pdf").content)) as pdf:
+            page = pdf.pages[0]
+            text = re.sub(r"\s+", " ", page.extract_text().replace("\xa0", " "))
+            name = [w for w in page.extract_words(extra_attrs=["size"]) if w["text"] == "MEENATCHI"]
+            self.assertEqual(round(page.width), 1191)  # A3 landscape, as before
+        for line in ("U1 – Unit 1 5 employees", "U1 – Unit 1 total", "U2 – Unit 2 2 employees", "U2 – Unit 2 total"):
+            self.assertIn(line, text)
+        self.assertIn("TOTAL 7 employees in 2 units", text)
+        self.assertIn("Amounts in ₹", text)
+        self.assertNotIn("₹ 28,", text)  # amounts carry no ₹ on every cell
+        # a seven-line statement gets the largest type (it used to be 6 pt for any statement)
+        self.assertTrue(name)
+        self.assertGreaterEqual(name[0]["size"], 9.5)
 
     def test_the_export_is_audited(self):
         from .models import AuditLog
@@ -703,10 +821,12 @@ class StatutorySectionTests(TestCase):
             cols,
             [
                 "SNO", "ID NO", "Name", "Department", "Covered by", "PF / ESI wages", "PF %", "PF", "ESI %", "ESI",
-                "TDS %", "TDS on (pay earned)", "TDS", "PF + ESI + TDS", "How it was worked out",
+                "TDS %", "TDS on (pay earned)", "TDS", "PF + ESI + TDS", "How it was worked out", "Unit",
             ],
         )  # fmt: skip
         self.assertEqual([r["ID NO"] for r in rows], ["701", "702"])  # Arun has none of the three: not listed
+        self.assertEqual([r["Unit"] for r in rows], ["Other", "Other"])  # nobody here has a unit
+        self.assertEqual(values[3][0], "Other – no unit set   2 employees")  # the unit's band under the header
         slip = SalarySlip.objects.get(employee=self.kavin, month=MONTH, year=YEAR)
         kavin = rows[0]
         self.assertEqual((kavin["Covered by"], kavin["PF %"], kavin["ESI %"]), ("Co Emp", 8, 10))
@@ -765,3 +885,106 @@ class StatutorySectionTests(TestCase):
         ws = load_workbook(io.BytesIO(self.export("xlsx").content))["PF ESI TDS"]
         text = " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
         self.assertIn("No employee on this statement is in Co Emp or on the TDS list", text)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Unit by unit (owner 2026-11-04: "split the records by their units, the same way as the Late Detection exports")
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class UnitTests(_World):
+    def test_each_unit_total_adds_up_its_own_lines(self):
+        body = self.get()
+        units = unit_totals(body)
+        self.assertEqual(sorted(units), ["U1", "U2"])
+        for unit, total in units.items():
+            mine = [r for r in data_rows(body) if r["unit"] == unit]
+            for key in PRINTED_TOTALS:
+                self.assertAlmostEqual(total[key], round(sum(r[key] for r in mine), 2), 2, (unit, key))
+        for key in PRINTED_TOTALS:
+            self.assertAlmostEqual(body["totals"][key], round(sum(u[key] for u in units.values()), 2), 2, key)
+
+    def test_a_department_of_another_unit_working_here_is_told_apart(self):
+        # Velu belongs to Unit 2 but sits in Unit 1's Admin department: Unit 2 now has two departments called Admin
+        velu = self.staff_maker("6000", "VELU", self.admin_d, self.b2, "15000")
+        for d in WORKING:
+            day(velu, d)
+        _generate_staff_payroll(velu, MONTH, YEAR)
+        body = self.get()
+        self.assertEqual(headings(body), ["Accounts", "Admin", "Admin (Unit 1)", "Admin (Unit 2)", "Cutting"])
+        self.assertEqual(by_code(body)["6000"]["unit"], "U2")
+        self.assertEqual([r["sno"] for r in data_rows(body) if r["unit"] == "U2"], [1, 2, 3])  # still in order
+        self.assertEqual(bands(body)[1], "U2 – Unit 2   3 employees")
+
+    def test_staff_with_no_unit_come_last_under_other(self):
+        nobody = self.staff_maker("6100", "NOUNIT", self.accounts, None, "12000")
+        for d in WORKING:
+            day(nobody, d)
+        _generate_staff_payroll(nobody, MONTH, YEAR)
+        body = self.get()
+        self.assertEqual(bands(body)[-1], "Other – no unit set   1 employee")
+        self.assertEqual(data_rows(body)[-1]["code"], "6100")
+        self.assertEqual((data_rows(body)[-1]["sno"], data_rows(body)[-1]["unit"]), (1, "Other"))
+
+    def test_the_head_office_comes_first(self):
+        Branch.objects.filter(pk=self.b2.pk).update(is_head_office=True)
+        body = self.get()
+        self.assertEqual(bands(body), ["HO – Unit 2   2 employees", "U1 – Unit 1   5 employees"])
+        self.assertEqual([r["code"] for r in data_rows(body)][:2], ["5000", "3000"])
+
+
+class ContinuedBandTests(TestCase):
+    """The PDF of a long statement: a unit that runs onto the next page starts it with a "(contd.)" band naming the
+    department that carries on, and a band never ends a page on its own."""
+
+    def _out_and_blocks(self):
+        from types import SimpleNamespace
+
+        def unit(key, label, branch, departments):
+            groups, sno = [], 0
+            for name, people in departments:
+                rows = []
+                for i in range(people):
+                    sno += 1
+                    rows.append({"values": {"sno": sno, "code": f"{label}{sno:03d}", "name": f"{label} PERSON {sno}",
+                                            "designation": "OPERATOR", "net": 1000.0, "eSalary": 1000.0}})  # fmt: skip
+                groups.append({"key": name, "label": name, "rows": rows})
+            count = sum(p for _n, p in departments)
+            total = {k: 0.0 for k in S.SUM_KEYS} | {"net": 1000.0 * count, "eSalary": 1000.0 * count}
+            return S.UnitBlock(key, label, branch, groups, count, total)
+
+        blocks = [
+            unit("1", "HO", "Head Office", [("ADMIN", 30), ("WEAVING", 120)]),
+            unit("2", "U-1", "Unit 1", [("CUTTING", 70)]),
+        ]
+        total = {k: 0.0 for k in S.SUM_KEYS} | {"net": 220000.0, "eSalary": 220000.0}
+        out = SimpleNamespace(
+            spec=registry.get_spec(RID), columns=list(S.COLUMNS), filters=[("Month", "April 2026")], summary=[],
+            totals=total, notes=["A note."], sections=[], generated_at="2026-11-04 10:00", generated_by="Test",
+            truncated=False,
+        )  # fmt: skip
+        return out, blocks
+
+    def test_a_unit_running_onto_the_next_page_starts_it_with_a_contd_band(self):
+        import pypdf
+
+        from .reporting.definitions.hr_reports_salary_statement_files import statement_pdf
+
+        out, blocks = self._out_and_blocks()
+        reader = pypdf.PdfReader(io.BytesIO(statement_pdf(out, blocks)))
+        pages = [re.sub(r"\s+", " ", p.extract_text().replace("\xa0", " ")) for p in reader.pages]
+        self.assertGreaterEqual(len(pages), 4)
+        self.assertIn("HO – Head Office", pages[0])
+        self.assertIn("150 employees", pages[0])
+        self.assertNotIn("(contd.)", pages[0])
+        contd = [p for p in pages if "HO – Head Office (contd.)" in p]
+        self.assertTrue(contd)
+        # WEAVING runs over several pages: every page it continues on says so
+        self.assertTrue(any("WEAVING (contd.)" in p for p in contd), contd[0][:300])
+        # the second unit's band never ends a page: it shares its page with its first department heading and row
+        first = next(i for i, p in enumerate(pages) if "U-1 – Unit 1" in p and "70 employees" in p)
+        self.assertIn("CUTTING", pages[first])
+        self.assertIn("U-1001", pages[first])
+        later = [p for p in pages[first + 1 :] if "U-1" in p and "(contd.)" in p]
+        self.assertTrue(later)  # 70 people do not fit what is left of that page
+        self.assertIn("TOTAL 220 employees in 2 units", pages[-1])

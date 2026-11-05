@@ -543,24 +543,24 @@ function SlipBody({
     ["Designation", "Tailor", "Department", "Stitching"],
     ["Payroll Period", "July 2026", "Date of Joining", "15 January 2024"],
   ];
+  // the sample slip's lines as the PDF prints them since 2026-11-04 (salary_slip_figures): only the lines that apply,
+  // each table ending with its total
   const earn = [
-    ["Basic Pay", "18,000.00"],
+    ["Basic salary", "18,000.00"],
     ["HRA", "2,000.00"],
     ["Other Allowances", "1,500.00"],
     ["OT Wages", "500.00"],
-    ["Total Earnings", "22,000.00"],
+    ["E salary (Total Earnings)", "22,000.00"],
   ];
   const ded = [
-    ["P.F", "2,160.00"],
-    ["E.S.I", "165.00"],
-    ["Advance", "0.00"],
-    ["Other Deductions", "0.00"],
-    ["Total Deductions", "2,325.00"],
+    ["ESI", "165.00"],
+    ["PF", "2,160.00"],
+    ["Total Deduction", "2,325.00"],
   ];
   const personal = [
+    ["Days paid", "26"],
     ["Father's/Husband's Name", "Ganesan R"],
-    ["No. of Shifts Worked", "26.0"],
-    ["Minimum Rate of Wages", minWage || "₹0.00"],
+    ...(minWage ? [["Minimum Rate of Wages", minWage]] : []),
     ["PF Number", "TN/12345/678"],
   ];
   const money = (rows: string[][], x: number, head: string, colour: string) => (

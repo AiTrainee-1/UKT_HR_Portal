@@ -109,14 +109,14 @@ class SalarySlipTests(pe.Base):
     def test_the_slip_pdf_of_a_tds_employee_shows_the_tds_line(self):
         text = _pdf_text(build_salary_slip_pdf(self.slips["T1"]))
         self.assertRegex(text, r"TDS \(10%\)\s+(₹|Rs\. )3,000\.00")
-        self.assertRegex(text, r"Total Deductions\s+(₹|Rs\. )3,000\.00")
+        self.assertRegex(text, r"Total Deduction\s+(₹|Rs\. )3,000\.00")
         self.assertEqual(text.count("TDS"), 1)
 
     def test_the_slip_pdf_of_everybody_else_has_no_tds_line_at_all(self):
         co = _pdf_text(build_salary_slip_pdf(self.slips["C1"]))
         self.assertNotIn("TDS", co)
-        self.assertRegex(co, r"P\.F\s+(₹|Rs\. )1,440\.00")
-        self.assertRegex(co, r"E\.S\.I\s+(₹|Rs\. )90\.00")
+        self.assertRegex(co, r"PF\s+(₹|Rs\. )1,440\.00")
+        self.assertRegex(co, r"ESI\s+(₹|Rs\. )90\.00")
         self.assertNotIn("TDS", _pdf_text(build_salary_slip_pdf(self.slips["P1"])))
 
     def test_a_percentage_with_decimals_reads_as_people_write_it(self):

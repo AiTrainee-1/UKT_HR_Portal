@@ -18,6 +18,15 @@ statement's ESI / PF / TDS columns are 0 for everybody outside Co Emp and the TD
 to miss among a hundred-odd rows. The exports add a section of their own (a second Excel sheet, a further PDF page): one line
 per employee in Co Emp or on the TDS list (or with any PF / ESI / TDS on the slip), with the wages, the rates and the
 amounts as the payroll stored them in the slip (``breakdown_details.deductions.statutory``), and their totals.
+
+Unit by unit (owner 2026-11-04: "when I export from the Admin Panel the records should be split by their units, the same
+way as the Late Detection exports of the Report Log"): the statement is listed unit by unit, the head office first, then
+the units in name order, employees with no unit last. Each unit opens with a band ("HO – Head Office   119 employees"),
+lists its departments (heading, rows, Sub total) with its own serial numbers from 1, and closes with the unit's total;
+the grand total adds up every unit. A Unit column (the last one) carries the unit's short label (HO, U-1 ...) for
+filtering. A unit login sees its own unit only, so its files have one band and no unit total (it would repeat the grand
+total). The PDF and Excel files are drawn by ``hr_reports_salary_statement_files``: bigger type, less padding, a unit that
+runs onto the next PDF page starts it with a "(contd.)" band, as the Report Log's PDF does.
 """
 
 from __future__ import annotations
@@ -32,12 +41,13 @@ from django.db.models import Exists, OuterRef
 from api.models import Employee, Payroll
 from api.payroll_insights import KIND_STAFF, ddmmyyyy, parse_iso_date, slip_key, slips_for, staff_period
 from api.payroll_statement_views import NO_DEPARTMENT, _groups, staff_columns, statement_notes, statement_rows
+from api.unit_labels import NO_UNIT_KEY, OTHER_UNIT, unit_label, unit_sort_key
 
 from .. import filters as F
 from ..common import with_subtotals
 from ..formatting import month_bounds
 from ..registry import register
-from ..runner import KIND_SUBTOTAL
+from ..runner import KIND_SUBTOTAL, KIND_TOTAL
 from ..types import CURRENCY, INTEGER, NUMBER, PERCENT, TEXT, ColumnSpec, ReportResult, ReportSection, ReportSpec
 from .employees_master_base import join_date_of
 
@@ -51,7 +61,6 @@ SUM_KEYS = (
     "petrol",
     "othersAllow",
     "eSalary",
-    "tAdvance",
     "advance",
     "esi",
     "pf",
@@ -63,7 +72,13 @@ SUM_KEYS = (
 
 _TYPE_OF_FORMAT = {"int": INTEGER, "days": NUMBER, "money": CURRENCY, "text": TEXT}
 
-PAYROLL_RELATIONS = ("employee", "employee__department", "employee__designation", "employee__branch")
+PAYROLL_RELATIONS = (
+    "employee",
+    "employee__department",
+    "employee__department__branch",
+    "employee__designation",
+    "employee__branch",
+)
 PAYMENT_OPTIONS = ((Payroll.STATUS_PENDING, "Pending"), (Payroll.STATUS_PAID, "Cleared"))
 
 
@@ -84,8 +99,120 @@ def _columns() -> tuple[ColumnSpec, ...]:
     return tuple(out)
 
 
-COLUMNS = _columns()
-VALUE_KEYS = [c.key for c in COLUMNS if c.key != "sno"]
+# The unit's short label on every line of the unit, for filtering (the Report Log's Late exports have the same column).
+UNIT_COLUMN = ColumnSpec("unit", "Unit", TEXT, 0.8, align="center")
+COLUMNS = (*_columns(), UNIT_COLUMN)
+
+
+# ── Units ─────────────────────────────────────────────────────────────────────
+
+# Where _run leaves the unit blocks for the PDF / Excel builders (ReportContext._cache: one run, one export)
+PLAN_KEY = "salary_statement_units"
+
+
+@dataclasses.dataclass
+class UnitBlock:
+    """One unit of the statement: its departments (``payroll_statement_views._groups``, serial numbers from 1) and the sum
+    of the printed money columns."""
+
+    key: str  # the branch id as text, "none" with no branch
+    label: str  # HO, U-1 ... (unit_labels.unit_label), "Other" with no branch
+    branch: str | None  # the branch's name
+    groups: list[dict]
+    count: int
+    total: dict[str, float]
+
+    @property
+    def title(self) -> str:
+        """ "HO – Head Office"; the label alone when it is the branch's name too."""
+        if self.key == NO_UNIT_KEY:
+            return f"{OTHER_UNIT} – no unit set"
+        name = (self.branch or "").strip()
+        if not name or name.replace(" ", "").lower() == self.label.replace(" ", "").lower():
+            return self.label
+        return f"{self.label} – {name}"
+
+    @property
+    def band(self) -> str:
+        """The unit's band: "HO – Head Office   119 employees"."""
+        return f"{self.title}   {self.count} employee{'' if self.count == 1 else 's'}"
+
+
+def unit_of(emp) -> tuple[str, str, str | None]:
+    """(key, label, branch name) of an employee's unit."""
+    branch = emp.branch if emp.branch_id else None
+    if branch is None:
+        return NO_UNIT_KEY, OTHER_UNIT, None
+    return str(emp.branch_id), unit_label(branch) or OTHER_UNIT, branch.name
+
+
+def unit_blocks(payrolls: list, values: dict[int, dict]) -> list[UnitBlock]:
+    """The payrolls unit by unit (the head office first, the units in name order, no unit last), each unit's departments
+    grouped and numbered as the printed statement does."""
+    members: dict[str, list] = {}
+    heads: dict[str, tuple[str, str | None]] = {}
+    for p in payrolls:
+        key, label, branch = unit_of(p.employee)
+        members.setdefault(key, []).append(p)
+        heads[key] = (label, branch)
+    blocks = []
+    for key in sorted(members, key=lambda k: unit_sort_key(k, *heads[k])):
+        groups = _groups(members[key], values, staff_columns())
+        _tell_apart(groups, members[key])
+        rows = [r["values"] for g in groups for r in g["rows"]]
+        total = {k: round(sum(r.get(k) or 0 for r in rows), 2) for k in SUM_KEYS}
+        label, branch = heads[key]
+        blocks.append(UnitBlock(key, label, branch, groups, len(rows), total))
+    return blocks
+
+
+def _tell_apart(groups: list[dict], payrolls: list) -> None:
+    """Two departments in one unit that print the same name (a department of another unit can have people working at
+    this one) get their own unit's name added: "PRODUCTION (Head Office)" and "PRODUCTION (Unit1)"."""
+    departments = {str(p.employee.department_id): p.employee.department for p in payrolls if p.employee.department_id}
+    seen: dict[str, int] = {}
+    for g in groups:
+        seen[g["label"]] = seen.get(g["label"], 0) + 1
+    if all(n == 1 for n in seen.values()):
+        return
+    for g in groups:
+        dept = departments.get(g["key"])
+        if seen[g["label"]] > 1 and dept is not None:
+            g["label"] = f"{dept.name} ({dept.branch.name if dept.branch_id and dept.branch else 'no unit'})"
+    # back in name order (as _groups has them), the serial numbers running on again
+    groups.sort(key=lambda g: (g["label"].startswith(NO_DEPARTMENT), g["label"].lower()))
+    sno = 0
+    for g in groups:
+        for r in g["rows"]:
+            sno += 1
+            r["sno"] = r["values"]["sno"] = sno
+
+
+def statement_lines(blocks: list[UnitBlock]) -> list[dict]:
+    """The report's rows: per unit its band, then per department the heading, the rows and the Sub total, then the unit's
+    total (left out when there is one unit: it would repeat the grand total). Every line carries the unit's label."""
+    rows: list[dict] = []
+    several = len(blocks) > 1
+    for block in blocks:
+        unit = block.label
+        rows.append({"name": block.band, "unit": unit, "_kind": KIND_TOTAL})  # the unit's band
+        for group in block.groups:
+            band = group["label"]
+            rows.append({"name": band, "unit": unit, "_kind": KIND_SUBTOTAL})  # the department heading line
+            body = [{**r["values"], "unit": unit} for r in group["rows"]]
+            for line in with_subtotals(
+                body,
+                group_by=lambda _r, band=band: band,
+                sum_keys=SUM_KEYS,
+                label_key="name",
+                label=lambda g: f"{g} Sub total",
+            ):
+                if line.get("_kind"):
+                    line["unit"] = unit
+                rows.append(line)
+        if several:
+            rows.append({"name": f"{block.title} total", "unit": unit, **block.total, "_kind": KIND_TOTAL})
+    return rows
 
 
 # ── PF, ESI & TDS details ────────────────────────────────────────────────────
@@ -107,7 +234,9 @@ STATUTORY_COLUMNS = (
     ColumnSpec("tds", "TDS", CURRENCY, 1.3, total="sum"),
     ColumnSpec("total", "PF + ESI + TDS", CURRENCY, 1.4, total="sum"),
     ColumnSpec("how", "How it was worked out", TEXT, 3.2),
+    UNIT_COLUMN,
 )
+STATUTORY_SUM_KEYS = ("pf", "esi", "tds", "total")
 _COVER = {"co_emp": "Co Emp", "tds": "TDS list"}
 
 
@@ -131,8 +260,9 @@ def _plain(value: Decimal | None) -> str:
 
 def statutory_rows(payrolls: list, values: list[dict]) -> list[dict]:
     """One line per employee in Co Emp or on the TDS list (or with any PF / ESI / TDS on the slip), in the statement's
-    order, with the wages, rates and amounts the payroll stored in the slip. `values` = the statement's own rows (for
-    the order and the department), keyed by payroll id. One query (the slips)."""
+    order (unit by unit), with the wages, rates and amounts the payroll stored in the slip. `values` = the statement's
+    own rows (for the order and the department), keyed by payroll id. Serial numbers start from 1 in every unit, as on the
+    statement. One query (the slips)."""
     slips = slips_for(payrolls)
     by_id = {p.id: p for p in payrolls}
     out = []
@@ -198,10 +328,13 @@ def statutory_rows(payrolls: list, values: list[dict]) -> list[dict]:
                 "tds": _money(tds),
                 "total": _money((pf or 0) + (esi or 0) + tds),
                 "how": "; ".join(how),
+                "unit": unit_of(emp)[1],
             }
         )
-    for i, r in enumerate(out, start=1):
-        r["sno"] = i
+    seen: dict[str, int] = {}
+    for r in out:
+        seen[r["unit"]] = seen.get(r["unit"], 0) + 1
+        r["sno"] = seen[r["unit"]]
     return out
 
 
@@ -209,7 +342,7 @@ def statutory_section(payrolls: list, values: list[dict]) -> ReportSection:
     rows = statutory_rows(payrolls, values)
     co_emp = sum(1 for r in rows if r["category"] == "Co Emp")
     tds_list = sum(1 for r in rows if r["category"] == "TDS list")
-    totals = {k: round(sum(r[k] for r in rows), 2) for k in ("pf", "esi", "tds", "total")}
+    totals = {k: round(sum(r[k] for r in rows), 2) for k in STATUTORY_SUM_KEYS}
     notes = [
         f"{len(rows)} of the {len(payrolls)} employees on this statement have PF, ESI or TDS: {co_emp} in Co Emp "
         f"(Employees > Co Emp) and {tds_list} on the TDS list. Everybody else has none, so their ESI, PF and TDS "
@@ -257,6 +390,18 @@ def _no_payroll_count(ctx, year: int, month: int) -> int:
     return count
 
 
+def build_statement_pdf(ctx, out) -> bytes:
+    from .hr_reports_salary_statement_files import statement_pdf
+
+    return statement_pdf(out, ctx._cache.get(PLAN_KEY))
+
+
+def build_statement_xlsx(ctx, out) -> bytes:
+    from .hr_reports_salary_statement_files import statement_xlsx
+
+    return statement_xlsx(out, ctx._cache.get(PLAN_KEY))
+
+
 def _run(ctx) -> ReportResult:
     year, month = ctx.period
     info = staff_period(month, year)
@@ -273,23 +418,16 @@ def _run(ctx) -> ReportResult:
     payrolls = list(qs.order_by("employee__first_name", "employee__last_name", "id")[: ctx.row_limit])
 
     values, no_slip, mismatched = statement_rows(payrolls, KIND_STAFF, info)
-    groups = _groups(payrolls, values, staff_columns())
-    ordered = [{**r["values"], "_payrollId": r["payrollId"]} for group in groups for r in group["rows"]]
-
-    rows: list[dict] = []
-    for group in groups:
-        band = group["label"]
-        rows.append({"name": band, "_kind": KIND_SUBTOTAL})  # the department heading line
-        body = [{**r["values"]} for r in group["rows"]]
-        rows.extend(
-            with_subtotals(
-                body,
-                group_by=lambda _r, band=band: band,
-                sum_keys=SUM_KEYS,
-                label_key="name",
-                label=lambda g: f"{g} Sub total",
-            )
-        )
+    blocks = unit_blocks(payrolls, values)
+    ordered = [
+        {**r["values"], "_payrollId": r["payrollId"]}
+        for block in blocks
+        for group in block.groups
+        for r in group["rows"]
+    ]
+    rows = statement_lines(blocks)
+    if ctx.purpose in ("xlsx", "pdf"):
+        ctx._cache[PLAN_KEY] = blocks  # the files draw the units from these
 
     data = [r for r in rows if r.get("_kind") is None]
     paid = sum(1 for p in payrolls if p.status == Payroll.STATUS_PAID)
@@ -299,7 +437,8 @@ def _run(ctx) -> ReportResult:
 
     summary = [
         {"label": "Employees listed", "value": len(payrolls), "format": "integer"},
-        {"label": "Departments", "value": len(groups), "format": "integer"},
+        {"label": "Units", "value": len(blocks), "format": "integer"},
+        {"label": "Departments", "value": len({p.employee.department_id for p in payrolls}), "format": "integer"},
         {"label": "E salary", "value": total("eSalary"), "format": "currency"},
         {"label": "Total deduction", "value": total("totalDeduction"), "format": "currency"},
         {"label": "Net pay", "value": total("net"), "format": "currency"},
@@ -309,10 +448,11 @@ def _run(ctx) -> ReportResult:
 
     notes = [
         f"Salary Statement From {ddmmyyyy(parse_iso_date(info['start']))} To {ddmmyyyy(parse_iso_date(info['end']))}: "
-        "staff monthly payroll, one line per employee under the department heading, in employee-code order, with the "
-        "serial number running on across departments. These are the same figures as Payroll > Salary Statement.",
-        "Sub totals and the total line add up the money columns of the printed statement (PTRL to NET). Basic, Total, the "
-        "day columns and Lop& PSAmt are not added up, as on the printed sheet.",
+        "staff monthly payroll, unit by unit (the head office first, employees with no unit last), one line per employee "
+        "under the department heading, in employee-code order, with the serial number running on across the unit's "
+        "departments. These are the same figures as Payroll > Salary Statement.",
+        "Sub totals, the unit totals and the total line add up the money columns of the printed statement (PTRL to NET). "
+        "Basic, Total, the day columns and Lop& PSAmt are not added up, as on the printed sheet.",
         "Only employees whose payroll has been generated for the month are listed (the saved payroll is read; nothing is "
         "calculated or saved here). Production workers are paid per pay cycle and are on Production Payroll > Salary "
         "Statement.",
@@ -326,7 +466,7 @@ def _run(ctx) -> ReportResult:
         )
     if not payrolls:
         notes.append("No staff payroll has been generated for this month and selection.")
-    if any(g["label"].startswith(NO_DEPARTMENT) for g in groups):
+    if any(g["label"].startswith(NO_DEPARTMENT) for block in blocks for g in block.groups):
         notes.append(f"Employees with no department are listed under '{NO_DEPARTMENT}', last.")
     # the PF / ESI / TDS lines get a section of their own in the files (the screen keeps the statement as printed)
     sections = [statutory_section(payrolls, ordered)] if ctx.purpose in ("xlsx", "pdf") else []
@@ -337,8 +477,8 @@ register(
     ReportSpec(
         id="hr-salary-statement",
         title="Salary Statement",
-        description="The printed monthly Salary Statement: every employee's salary, days, allowances, deductions and NET "
-        "under their department, with sub totals and a grand total.",
+        description="The printed monthly Salary Statement, unit by unit: every employee's salary, days, allowances, "
+        "deductions and NET under their department, with sub totals, unit totals and a grand total.",
         category=CATEGORY,
         modules=MODULES,
         icon="FileSpreadsheet",
@@ -352,6 +492,8 @@ register(
             "tds",
             "advance",
             "department",
+            "unit",
+            "branch",
             "printed",
             "register",
         ),
@@ -367,6 +509,8 @@ register(
         ),
         columns=COLUMNS,
         run=_run,
+        pdf_builder=build_statement_pdf,
+        xlsx_builder=build_statement_xlsx,
         landscape=True,
         screen_limit=5_000,
         pdf_max_rows=3_000,

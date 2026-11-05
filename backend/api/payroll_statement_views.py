@@ -40,7 +40,6 @@ from .payroll_insights import (
     join_date_of,
     money,
     natural_key,
-    advance_balances_before,
     parse_iso_date,
     slip_key,
     slips_for,
@@ -89,7 +88,6 @@ def staff_columns() -> list[dict]:
         _column("petrol", "PTRL", "money", 1.1, "earnings"),
         _column("othersAllow", "Others Allow", "money", 1.2, "earnings"),
         _column("eSalary", "E salary", "money", 1.3, "earnings"),
-        _column("tAdvance", "T.Advance", "money", 1.2, "deductions"),
         _column("advance", "Advance", "money", 1.1, "deductions"),
         _column("esi", "ESI", "money", 1.25, "deductions"),
         _column("pf", "PF", "money", 1.25, "deductions"),
@@ -114,7 +112,6 @@ def production_columns() -> list[dict]:
         _column("late", "Late", "int", 0.8, "attendance"),
         _column("shifts", "Shifts", "days", 1, "attendance"),
         _column("eSalary", "E salary", "money", 1.3, "earnings"),
-        _column("tAdvance", "T.Advance", "money", 1.2, "deductions"),
         _column("advance", "Advance", "money", 1.1, "deductions"),
         _column("esi", "ESI / EF", "money", 1.25, "deductions"),
         _column("pf", "PF", "money", 1.25, "deductions"),
@@ -162,7 +159,7 @@ def _salary_parts(emp, total: Decimal) -> tuple[Decimal, Decimal, Decimal]:
     return basic, petrol, second - petrol
 
 
-def _staff_values(payroll: Payroll, slip, bd, cl_days: dict, balance: Decimal, start, end) -> dict:
+def _staff_values(payroll: Payroll, slip, bd, cl_days: dict, start, end) -> dict:
     emp = payroll.employee
     total = dec(payroll.base_salary)
     working = Decimal(int(payroll.total_working_days or 0))
@@ -204,7 +201,6 @@ def _staff_values(payroll: Payroll, slip, bd, cl_days: dict, balance: Decimal, s
         "petrol": money(petrol),
         "othersAllow": money(others_allow),
         "eSalary": money(gross + ot + bonus),
-        "tAdvance": money(balance),
         "advance": money(advance),
         "esi": money(esi),
         "pf": money(pf),
@@ -217,7 +213,7 @@ def _staff_values(payroll: Payroll, slip, bd, cl_days: dict, balance: Decimal, s
     }
 
 
-def _production_values(payroll: Payroll, slip, bd, balance: Decimal, start, end) -> dict:
+def _production_values(payroll: Payroll, slip, bd, start, end) -> dict:
     emp = payroll.employee
     gross, bonus = dec(payroll.gross_salary), dec(payroll.bonus)
     pf = dec(slip.pf_deduction) if slip is not None else Decimal("0")
@@ -245,7 +241,6 @@ def _production_values(payroll: Payroll, slip, bd, balance: Decimal, start, end)
         "late": late,
         "shifts": shifts,
         "eSalary": money(gross + bonus),
-        "tAdvance": money(balance),
         "advance": money(advance),
         "esi": money(esi),
         "pf": money(pf),
@@ -334,7 +329,8 @@ def _staff_notes() -> list[str]:
         "Present is the days paid as worked or as a company holiday (a half day counts 0.5; a working day HR marked as a "
         "paid holiday counts 1), without Casual Leave; CL is the approved Casual Leave days (a half-day CL counts 0.5); "
         "Total Days = Present + CL; LOP = days of the month - Total Days; HD is the number of half-shift days.",
-        "T.Advance is the advance balance before this month's recovery; Advance is what was recovered this month.",
+        "Advance is the advance recovered from this month's pay (an advance balance still owed is not part of this "
+        "month's pay and is not listed).",
         "ESI and PF are deducted only from Co Emp employees (Employees > Co Emp), by the rules of Settings > PF & ESI, from "
         "Basic + DA + Retaining Allowance. TDS is deducted only from employees on the TDS list: the TDS percentage set for "
         "them of the pay earned (it is 0 for everybody else).",
@@ -349,7 +345,7 @@ def _production_notes() -> list[str]:
         "Rate / shift is the worker's salary per shift; Shifts is the total shifts earned in the period (a day earns 0.25 to "
         "1.5); Days worked and Absent count the days of the period; Late counts the days marked late.",
         "E salary is the pay for the shifts earned (Shifts x Rate / shift) plus any HR bonus.",
-        "T.Advance is the advance balance before this period's recovery; Advance is what was recovered in this period.",
+        "Advance is the advance recovered from this period's pay (an advance balance still owed is not listed).",
         "ESI / EF is the ESI deduction. ESI and PF are deducted only from Co Emp workers (Employees > Co Emp), by the rules "
         "of Settings > PF & ESI, from the first 50% of the period pay. TDS is deducted only from workers on the TDS list: "
         "the TDS percentage set for them of the period pay (it is 0 for everybody else).",
@@ -376,7 +372,6 @@ def statement_rows(payrolls: list[Payroll], kind: str, info: dict) -> tuple[dict
     start, end = parse_iso_date(info["start"]), parse_iso_date(info["end"])
     employee_ids = [p.employee_id for p in payrolls]
     slips = slips_for(payrolls)
-    balances = advance_balances_before(employee_ids, info["year"], info["month"])
     cl = casual_leave_days(employee_ids, info["year"], info["month"]) if staff else {}
 
     rows: dict[int, dict] = {}
@@ -386,11 +381,9 @@ def statement_rows(payrolls: list[Payroll], kind: str, info: dict) -> tuple[dict
         bd = breakdown_of(slip)
         no_slip += bd is None
         if staff:
-            values = _staff_values(
-                p, slip, bd, cl.get(p.employee_id, {}), balances.get(p.employee_id, Decimal("0")), start, end
-            )
+            values = _staff_values(p, slip, bd, cl.get(p.employee_id, {}), start, end)
         else:
-            values = _production_values(p, slip, bd, balances.get(p.employee_id, Decimal("0")), start, end)
+            values = _production_values(p, slip, bd, start, end)
         # NET is the saved payroll figure; it equals E salary - Total Deduction unless the payroll was edited after
         # overtime was added (the saved net leaves overtime out), which the notes then say.
         if abs(dec(values["net"]) - (dec(values["eSalary"]) - dec(values["totalDeduction"]))) > Decimal("0.005"):

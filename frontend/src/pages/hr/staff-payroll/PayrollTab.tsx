@@ -142,11 +142,12 @@ export function PayrollTab({
   const setView = (next: StaffView) => setUrl({ view: next });
   const resetFilters = () => setUrl(filtersToUrl(DEFAULT_FILTERS) as Record<string, string>);
 
-  // Both files are the Report Center's Salary Statement (Reports > HR Reports), so the two can never differ.
+  // Both files are the Report Center's Salary Statement (Reports > HR Reports), so the two can never differ. They are split
+  // unit by unit (a band per unit, the unit's total), like the Report Log's Late exports.
   const statementItem = (format: "xlsx" | "pdf"): ExportItem => ({
     key: `statement-${format}`,
     label: `Salary Payroll Statement (${format === "pdf" ? "PDF" : "Excel"})`,
-    hint: `The printed statement for ${periodLabel}: every department, with sub totals and a grand total`,
+    hint: `The printed statement for ${periodLabel}, unit by unit: every department with sub totals, a total per unit and a grand total`,
     icon: format === "pdf" ? FileText : FileSpreadsheet,
     disabled: runs.length === 0,
     run: async () => {

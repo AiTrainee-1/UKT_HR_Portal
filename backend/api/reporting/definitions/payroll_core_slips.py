@@ -208,11 +208,18 @@ def _build_slip_pdf(slips) -> bytes:
     )
     doc.addPageTemplates([PageTemplate(id="dual", frames=[left, right], onPage=bulk._draw_cut_line)])
 
+    from api.salary_slip_figures import figures_for, leave_lines_for
+
+    slips = list(slips)
+    # every slip's figures (the Payroll Report's) and leave, fetched for all slips at once
+    figs, leaves = figures_for(slips), leave_lines_for(slips)
     story: list = []
     failed: list[str] = []
     for i, s in enumerate(slips):
         try:
-            flowables = _compact_salary_slip_flowables(s, ds, ps, primary, accent, col_width=bulk._COL_WIDTH)
+            flowables = _compact_salary_slip_flowables(
+                s, ds, ps, primary, accent, col_width=bulk._COL_WIDTH, fig=figs[id(s)], leave_lines=leaves[id(s)]
+            )
         except Exception:  # one unprintable slip must not lose the others - but it must not vanish silently either
             failed.append(s.slip_number)
             continue

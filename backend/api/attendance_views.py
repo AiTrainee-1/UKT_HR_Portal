@@ -1,5 +1,4 @@
 import calendar
-import re
 import logging
 import threading
 from collections import defaultdict
@@ -19,6 +18,7 @@ from . import production_shift_rules as psr
 from .arrival_rules import ZONE_LATE, limits_for as arrival_limits_for, zone_of as arrival_zone_of
 from .attendance_final import compensation_marker_json, permission_flags_json
 from .clock import ist_today
+from .unit_labels import unit_label
 from .models import (
     Attendance, AttendanceDayRecord, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
     LeaveRequest, DailyShiftLog, MonthlyShiftSummary, Holiday,
@@ -1439,21 +1439,8 @@ def _month_summary_row(emp, summary: dict, cl_count: int, perm_count: int) -> di
     }
 
 
-def _unit_label(branch) -> str | None:
-    """
-    Short "unit block" label for the Report Log's Daily Leave / Late reports (HO, U-1, U-2 ...): the head office is
-    always "HO", a branch coded like "Unit1" / "Unit 2" becomes "U-1" / "U-2", any other branch shows its own code
-    (or its name when it has none). None when the employee has no branch.
-    """
-    if branch is None:
-        return None
-    if branch.is_head_office:
-        return "HO"
-    code = (branch.code or "").strip()
-    match = re.fullmatch(r"unit[\s_-]*(\d+)", code, flags=re.IGNORECASE)
-    if match:
-        return f"U-{int(match.group(1))}"
-    return code or (branch.name or "").strip() or None
+# The unit label (HO, U-1 ...) now lives in unit_labels, shared with the unit-wise Salary Statement exports.
+_unit_label = unit_label
 
 
 def _late_timing(rec, shift) -> dict:

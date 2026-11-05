@@ -2461,7 +2461,7 @@ class ProductionRulesTests(TestCase):
 
 STAFF_COLUMN_KEYS = [
     "sno", "code", "name", "designation", "basic", "total", "present", "cl", "lop", "hd", "totalDays", "petrol",
-    "othersAllow", "eSalary", "tAdvance", "advance", "esi", "pf", "tds", "others", "lopAmount", "totalDeduction",
+    "othersAllow", "eSalary", "advance", "esi", "pf", "tds", "others", "lopAmount", "totalDeduction",
     "net", "remarks",
 ]  # fmt: skip
 
@@ -2485,7 +2485,7 @@ class StaffStatementTests(TestCase):
             [c["label"] for c in columns],
             [
                 "SNO", "ID NO", "Name", "Designation", "Basic salary", "Total", "Present", "CL", "LOP", "HD", "Total Days",
-                "PTRL", "Others Allow", "E salary", "T.Advance", "Advance", "ESI", "PF", "TDS", "Others", "Lop& PSAmt",
+                "PTRL", "Others Allow", "E salary", "Advance", "ESI", "PF", "TDS", "Others", "Lop& PSAmt",
                 "Total Deduction", "NET", "Remarks",
             ],
         )  # fmt: skip
@@ -2528,7 +2528,6 @@ class StaffStatementTests(TestCase):
             "petrol": 2000.0,
             "othersAllow": 12750.0,
             "eSalary": 27230.77,  # 29,500 x 24 / 26 (the printed row shows it without the paise)
-            "tAdvance": 0.0,
             "advance": 0.0,
             "esi": 0.0,
             "pf": 0.0,
@@ -2567,33 +2566,22 @@ class StaffStatementTests(TestCase):
         self.assertEqual(
             (row["basic"], row["petrol"], row["othersAllow"], row["total"]), (8750.0, 0.0, 8750.0, 17500.0)
         )
-        # 6,000 advance with 2,000 recovered this month: 4,000 is still owed, so the balance before this month was 6,000
-        self.assertEqual((row["tAdvance"], row["advance"], row["others"]), (6000.0, 2000.0, 0.0))
+        # 6,000 advance with 2,000 recovered this month: only the 2,000 taken from this month's pay is listed (owner
+        # 2026-11-04: no T.Advance balance column)
+        self.assertEqual((row["advance"], row["others"]), (2000.0, 0.0))
+        self.assertNotIn("tAdvance", row)
         self.assertEqual((row["eSalary"], row["totalDeduction"], row["net"]), (14471.15, 2000.0, 12471.15))
         self.assertEqual(float(Payroll.objects.get(pk=self.w.payrolls["2896"].pk).final_salary), 12471.15)
 
-    def test_t_advance_is_the_balance_before_the_months_recovery_even_after_later_repayments(self):
+    def test_no_advance_balance_is_listed_only_what_this_month_recovered(self):
+        # owner 2026-11-04: the Temporary Advance balance is not this month's pay, so it is not on the statement at all
         advance = self.w.advance
-        # May's 1,000 was recovered after April's payroll: still owed now is 3,000, but before April it was still 6,000
         Advance.objects.filter(pk=advance.pk).update(outstanding=Decimal("3000"), total_repaid=Decimal("3000"))
         AdvanceRepayment.objects.create(advance=advance, month=5, year=YEAR, amount=Decimal("1000"), is_processed=True)
-        row = self.rows()["2896"]
-        self.assertEqual((row["tAdvance"], row["advance"]), (6000.0, 2000.0))
-        # the advance is closed by a later repayment: it is no longer outstanding, but it was owed before April
-        Advance.objects.filter(pk=advance.pk).update(
-            status="closed", outstanding=Decimal("0"), total_repaid=Decimal("6000")
-        )
-        AdvanceRepayment.objects.create(advance=advance, month=6, year=YEAR, amount=Decimal("3000"), is_processed=True)
-        self.assertEqual(self.rows()["2896"]["tAdvance"], 6000.0)
-        # an advance recovered BEFORE April was already paid back, and a rejected or pending one was never owed
-        AdvanceRepayment.objects.create(advance=advance, month=3, year=YEAR, amount=Decimal("999"), is_processed=True)
-        Advance.objects.create(
-            employee_id=self.w.payrolls["2316"].employee_id, advance_type="general", amount=Decimal("5000"),
-            status="rejected", total_repaid=Decimal("0"), outstanding=Decimal("5000"),
-        )  # fmt: skip
         rows = self.rows()
-        self.assertEqual(rows["2896"]["tAdvance"], 6000.0)
-        self.assertEqual(rows["2316"]["tAdvance"], 0.0)
+        self.assertEqual(rows["2896"]["advance"], 2000.0)
+        self.assertNotIn("tAdvance", rows["2896"])
+        self.assertNotIn("tAdvance", [c["key"] for c in self.statement()["columns"]])
 
     def test_only_approved_casual_leave_counts_as_cl(self):
         # Meena has a PENDING request on a day she worked: it is not CL
@@ -2758,7 +2746,7 @@ class ProductionStatementTests(TestCase):
             [
                 ("sno", "SNO"), ("code", "ID NO"), ("name", "Name"), ("designation", "Designation"),
                 ("rate", "Rate / shift"), ("worked", "Days worked"), ("absent", "Absent"), ("late", "Late"),
-                ("shifts", "Shifts"), ("eSalary", "E salary"), ("tAdvance", "T.Advance"), ("advance", "Advance"),
+                ("shifts", "Shifts"), ("eSalary", "E salary"), ("advance", "Advance"),
                 ("esi", "ESI / EF"), ("pf", "PF"), ("tds", "TDS"), ("others", "Others"),
                 ("totalDeduction", "Total Deduction"),
                 ("net", "NET"), ("remarks", "Remarks"),
@@ -2788,7 +2776,6 @@ class ProductionStatementTests(TestCase):
                 "late": 2,
                 "shifts": 6.0,
                 "eSalary": 3000.0,
-                "tAdvance": 0.0,
                 "advance": 0.0,
                 "esi": 0.0,
                 "pf": 0.0,

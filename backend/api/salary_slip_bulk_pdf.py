@@ -21,6 +21,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import BaseDocTemplate, Frame, FrameBreak, PageTemplate, Spacer
 
 from .company_documents_views import _compact_salary_slip_flowables
+from .salary_slip_figures import figures_for, leave_lines_for
 from .document_pdf import _hex
 from .models import CompanyDocumentSettings, PayrollSettings
 
@@ -73,13 +74,20 @@ def build_bulk_salary_slip_pdf(slips, on_progress=None) -> bytes:
     )
     doc.addPageTemplates([PageTemplate(id="dual", frames=[left_frame, right_frame], onPage=_draw_cut_line)])
 
+    slips = list(slips)
+    # every slip's figures (the Payroll Report's) and leave, fetched for all slips at once
+    figs, leaves = figures_for(slips), leave_lines_for(slips)
     story = []
     for i, s in enumerate(slips):
         emp_name = f"{s.employee.first_name} {s.employee.last_name}".strip()
         try:
             if i > 0:
                 story.append(FrameBreak())
-            story.extend(_compact_salary_slip_flowables(s, ds, ps, primary, accent, col_width=_COL_WIDTH))
+            story.extend(
+                _compact_salary_slip_flowables(
+                    s, ds, ps, primary, accent, col_width=_COL_WIDTH, fig=figs[id(s)], leave_lines=leaves[id(s)]
+                )
+            )
             ok = True
         except Exception:
             ok = False

@@ -130,7 +130,10 @@ def _column_widths(cols: list[ColumnSpec], avail: float) -> list[float]:
     return widths
 
 
-def _canvas_maker(footer_left: str, footer_mid: str, regular: str):
+def _canvas_maker(footer_left: str, footer_mid: str, regular: str, margin: float = 1 * cm, baseline: float = 0.7 * cm):
+    """A canvas that adds the footer (a rule, the stamp, the title and "Page x of y") to every page, `margin` in from the
+    sides with its text on `baseline` (the rule 0.45 cm above it)."""
+
     class NumberedCanvas(canvas_mod.Canvas):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -147,12 +150,13 @@ def _canvas_maker(footer_left: str, footer_mid: str, regular: str):
                 w, _h = self._pagesize
                 self.setStrokeColor(GRID)
                 self.setLineWidth(0.5)
-                self.line(1 * cm, 1.15 * cm, w - 1 * cm, 1.15 * cm)
+                rule = baseline + 0.45 * cm
+                self.line(margin, rule, w - margin, rule)
                 self.setFont(regular, 7)
                 self.setFillColor(MUTED)
-                self.drawString(1 * cm, 0.7 * cm, footer_left)
-                self.drawCentredString(w / 2, 0.7 * cm, footer_mid)
-                self.drawRightString(w - 1 * cm, 0.7 * cm, f"Page {self._pageNumber} of {total}")
+                self.drawString(margin, baseline, footer_left)
+                self.drawCentredString(w / 2, baseline, footer_mid)
+                self.drawRightString(w - margin, baseline, f"Page {self._pageNumber} of {total}")
                 super().showPage()
             super().save()
 

@@ -431,3 +431,7 @@ api/models/hod_reminders.py
 api/tests_hod_reminders.py
 api/cl_adjustment_views.py
 api/tests_cl_adjustments.py
+api/salary_slip_figures.py
+api/tests_salary_slip_figures.py
+api/reporting/definitions/hr_reports_salary_statement_files.py
+api/unit_labels.py
