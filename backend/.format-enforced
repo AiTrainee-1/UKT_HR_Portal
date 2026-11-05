@@ -435,3 +435,7 @@ api/salary_slip_figures.py
 api/tests_salary_slip_figures.py
 api/reporting/definitions/hr_reports_salary_statement_files.py
 api/unit_labels.py
+api/md_auto_attendance.py
+api/md_auto_attendance_scheduler.py
+api/tests_md_auto_attendance.py
+api/management/commands/md_auto_attendance.py

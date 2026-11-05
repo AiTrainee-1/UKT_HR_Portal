@@ -218,6 +218,8 @@ def _resolve_primary_source(punch_logs, has_manual: bool = False) -> str | None:
         return "missing_punch:approved"
     if "geo:auto" in sources:
         return "geo:auto"
+    if sources == {"auto:md"} and not has_manual:
+        return "auto:md"  # only the MD department's generated punches (md_auto_attendance)
     if sources or has_manual:
         return "manual"
     return None

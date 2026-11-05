@@ -105,6 +105,8 @@ def source_label(source: str) -> str:
         return "Missing Punch"
     if source == "manual":
         return "HR Entry"
+    if source == "auto:md":
+        return "Auto Attendance"  # md_auto_attendance: the MD department's generated Full-Day Present punches
     return source.replace("_", " ").replace(":", " ").title()
 
 

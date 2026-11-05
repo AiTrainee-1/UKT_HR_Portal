@@ -464,6 +464,15 @@ Nothing is saved until you press the button, which names exactly what it will do
 - ❌ Don't backdate an assignment across a period you have already run payroll for unless you intend those days to be recalculated with the new shift (the preview warns you when the date is in the past).
 - ❌ Don't create a second shift with a different name for the same hours; assign the one that exists.
 
+#### Automatic attendance for the MD department
+Employees **2671** and **1** of the **MD** department are marked present automatically. Every evening at **8:00 PM** the server gives each working day since **1 January 2026** that has no attendance yet one IN and one OUT punch at a random time inside the employee's own shift: IN up to 15 minutes before the shift starts and before the grace ends, OUT from the evening grace up to 10 minutes after the shift ends. The day therefore reads **Full-Day Present** (never Late, Early-Out or overtime), and payroll counts it like any other present day. Nobody has to do anything.
+
+- The punches show as **Auto Attendance** (not Biometric or HR Entry), so they can always be told apart.
+- A day that already has its own attendance is never touched: a real punch of any kind, an HR edit or Add Attendance, an approved leave, half-day leave or Casual Leave. Sundays, company holidays, Saturdays on a Saturday-off shift, days before joining and days still to come are skipped too.
+- Today is filled once the shift is over (the 8 PM run fills today for a shift ending by 8 PM; a later shift gets today filled the next evening). Running again never adds a second pair of punches.
+- Only those two employees, and only while they are active staff in the MD department; everybody else is untouched.
+- The first run fills every month since 1 January 2026 at once; later runs only add the new day. A day before the employee's first shift assignment is timed by that first shift. Payroll already generated for those months does not change by itself: generate a month's payroll again for the pay to follow the filled attendance.
+
 ### 4.4 Geo Attendance & On-Duty Tracking
 
 **What it's for:** Manages employees who need to visit clients, suppliers, or other locations outside the office ("On-Duty"). Provides GPS-based tracking and punch verification with selfie photos.
