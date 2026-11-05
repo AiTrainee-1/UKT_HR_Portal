@@ -50,6 +50,7 @@ from . import device_remote
 from .device_health import connection_state, last_contact
 from .device_probe import is_private_host
 from .device_punch_rules import device_rules
+from .employee_photo import photo_link
 from .models import BiometricDevice, BiometricDeviceUser, Employee
 
 logger = logging.getLogger(__name__)
@@ -511,10 +512,10 @@ def load_people(request) -> tuple[list[Person], list[BiometricDevice]]:
 
 
 def _photo_url(emp: Employee) -> str | None:
-    photo = emp.photo_url
-    if not photo:
-        return None
-    return f"/api/employees/{emp.pk}/photo" if photo.startswith("data:") else photo
+    """An embedded photo as its signed link (an absolute URL an <img> loads with no token, employee_photo.py); an
+    external link as it is. `emp` comes from load_people, which never reads the photo (the database supplies the
+    digest)."""
+    return photo_link(emp.pk, emp.photo_url, getattr(emp, "photo_digest", None)) or None
 
 
 RESTRICTED_NAME = "Another branch"
@@ -1344,7 +1345,7 @@ def save_employee_photo(request, employee_id: int, data_url: str) -> dict:
         record_id=emp.pk,
         description=f"Updated the photo of {emp.employee_code} -{employee_name(emp)} (Device Control)",
     )
-    return {"employeeId": emp.pk, "photoUrl": f"/api/employees/{emp.pk}/photo"}
+    return {"employeeId": emp.pk, "photoUrl": photo_link(emp.pk, data_url)}
 
 
 LINK_SEARCH_LIMIT = 25
@@ -1386,9 +1387,7 @@ def list_device_links(request, search: str) -> dict:
         rows = list(exact) or list(qs.filter(cond).order_by("employee_code")[:LINK_SEARCH_LIMIT])
         mode = "search"
     else:
-        ids = list(
-            Employee.unlinked_devices.through.objects.values_list("employee_id", flat=True).distinct()
-        )
+        ids = list(Employee.unlinked_devices.through.objects.values_list("employee_id", flat=True).distinct())
         rows = list(qs.filter(pk__in=ids).order_by("employee_code")[:LINK_RESTRICTED_LIMIT])
         mode = "restricted"
     unlinked = device_rules([e.pk for e in rows])

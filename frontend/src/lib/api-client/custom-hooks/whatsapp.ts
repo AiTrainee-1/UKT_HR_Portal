@@ -136,7 +136,7 @@ export const useWhatsAppBulkProgress = (enabled: boolean) =>
     queryKey: ["/api/salary-slips/bulk-whatsapp-progress"],
     queryFn: () => customFetch<WhatsAppBulkProgress>("/api/salary-slips/bulk-whatsapp-progress"),
     enabled,
-    refetchInterval: enabled ? 600 : false,
+    refetchInterval: enabled ? 1500 : false,
     staleTime: 0,
   });
 

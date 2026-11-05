@@ -24,6 +24,7 @@ from . import approval_workflow as approval, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from . import gate_qr
+from .employee_photo import employee_photo_link, photo_links
 from .models import Employee, OutpassRequest
 from .outpass_visitor_views import _create_outpass_record_for
 from .view_common import paginate
@@ -52,7 +53,10 @@ def _outpass_scan_status(req: OutpassRequest, expires_at, now) -> str:
 WORKFLOW = "outpass"
 
 
-def _outpass_request_json(req: OutpassRequest, with_employee: bool = False, cfg: approval.Config | None = None) -> dict:
+def _outpass_request_json(
+    req: OutpassRequest, with_employee: bool = False, cfg: approval.Config | None = None, photos: dict | None = None
+) -> dict:
+    """`photos`: photo_links of the listed employees, when the list loaded its rows without the employee's photo."""
     expires_at = req.approved_at + timedelta(minutes=60) if req.approved_at else None
     now = timezone.now()
     scan_status = _outpass_scan_status(req, expires_at, now)
@@ -110,14 +114,15 @@ def _outpass_request_json(req: OutpassRequest, with_employee: bool = False, cfg:
         emp = req.employee
         # employeeCode (not "code") to match _leave_with_emp/_perm_with_emp's
         # existing nested-employee convention in manager_views.py -photoUrl is
-        # the one addition unique to Outpass, for the approved-pass card.
+        # the one addition unique to Outpass, for the approved-pass card: a
+        # signed link to the photo (employee_photo.py), never the picture itself.
         data["employee"] = {
             "id": emp.id,
             "employeeCode": emp.employee_code,
             "name": f"{emp.first_name} {emp.last_name}",
             "department": emp.department.name if emp.department else None,
             "designation": emp.designation.title if emp.designation else None,
-            "photoUrl": emp.photo_url,
+            "photoUrl": employee_photo_link(emp, photos),
         }
     return data
 
@@ -157,9 +162,14 @@ def resolve_outpass_request(
 @require_auth
 def outpass_requests(request: Request) -> Response:
     if request.method == "GET":
-        qs = OutpassRequest.objects.select_related(
-            "employee__department", "employee__designation", "exit_gate", "entry_gate"
-        ).order_by("-created_at")
+        # the employee's photo is never read here (it can be MBs, once per row): the list sends a link to it
+        qs = (
+            OutpassRequest.objects.select_related(
+                "employee__department", "employee__designation", "exit_gate", "entry_gate"
+            )
+            .defer("employee__photo_url")
+            .order_by("-created_at")
+        )
         qs = scope_to_branch(qs, request, field="employee__branch_id")
 
         token_emp_id = get_token_employee_id(request)
@@ -174,7 +184,13 @@ def outpass_requests(request: Request) -> Response:
         # HR's list (no token_emp_id) includes it, same convention as
         # manager_pending_requests' *_with_emp() serializers.
         cfg = approval.get_config(WORKFLOW)
-        return paginate(request, qs, lambda r: _outpass_request_json(r, with_employee=not token_emp_id, cfg=cfg))
+        photos: dict = {}
+        return paginate(
+            request,
+            qs,
+            lambda r: _outpass_request_json(r, with_employee=not token_emp_id, cfg=cfg, photos=photos),
+            prepare=None if token_emp_id else lambda rows: photos.update(photo_links(r.employee_id for r in rows)),
+        )
 
     data = request.data
     token_emp_id = get_token_employee_id(request)

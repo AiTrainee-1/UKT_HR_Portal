@@ -29,8 +29,8 @@ describe("filename helpers", () => {
 });
 
 describe("cell styling", () => {
-  it("styleHeaderCell applies fill, bold font, centred wrapped alignment and border", () => {
-    const ws = newWorkbook().addWorksheet("t");
+  it("styleHeaderCell applies fill, bold font, centred wrapped alignment and border", async () => {
+    const ws = (await newWorkbook()).addWorksheet("t");
     const cell = ws.getCell("A1");
     styleHeaderCell(cell, { fill: "FF1B4B6E", size: 11, border: allBorders("thin") });
 
@@ -40,21 +40,28 @@ describe("cell styling", () => {
     expect(cell.border?.top?.style).toBe("thin");
   });
 
-  it("styleHeaderCell can turn wrapping off and change the font colour", () => {
-    const cell = newWorkbook().addWorksheet("t").getCell("A1");
+  it("styleHeaderCell can turn wrapping off and change the font colour", async () => {
+    const cell = (await newWorkbook()).addWorksheet("t").getCell("A1");
     styleHeaderCell(cell, { fill: "FFF1F5F9", color: "FF000000", wrapText: false });
     expect(cell.alignment?.wrapText).toBe(false);
     expect(cell.font?.color?.argb).toBe("FF000000");
   });
 
-  it("newWorkbook stamps the creator", () => {
-    expect(newWorkbook().creator).toBe("UKTextiles HRMS");
+  it("newWorkbook stamps the creator", async () => {
+    expect((await newWorkbook()).creator).toBe("UKTextiles HRMS");
+  });
+
+  it("newWorkbook loads ExcelJS on first use and hands back a real workbook every time", async () => {
+    const [a, b] = await Promise.all([newWorkbook(), newWorkbook()]);
+    expect(a).toBeInstanceOf(ExcelJS.Workbook);
+    expect(b).toBeInstanceOf(ExcelJS.Workbook);
+    expect(a).not.toBe(b);
   });
 });
 
 describe("title block", () => {
-  it("addMergedTextRow merges across the requested columns and sets the row height", () => {
-    const ws = newWorkbook().addWorksheet("t");
+  it("addMergedTextRow merges across the requested columns and sets the row height", async () => {
+    const ws = (await newWorkbook()).addWorksheet("t");
     addMergedTextRow(ws, 2, 6, "Hello", { size: 10, bold: false, color: "FF555555", height: 18 });
 
     expect(ws.getCell("A2").value).toBe("Hello");
@@ -63,8 +70,8 @@ describe("title block", () => {
     expect(ws.getCell("A2").font).toMatchObject({ bold: false, size: 10, color: { argb: "FF555555" } });
   });
 
-  it("addTitleBlock writes company, branch and title into rows 1-3 and returns 3", () => {
-    const wb = newWorkbook();
+  it("addTitleBlock writes company, branch and title into rows 1-3 and returns 3", async () => {
+    const wb = await newWorkbook();
     const ws = wb.addWorksheet("t");
     const last = addTitleBlock(wb, ws, {
       totalCols: 8,
@@ -81,14 +88,14 @@ describe("title block", () => {
     expect(ws.model.merges).toEqual(expect.arrayContaining(["A1:H1", "A2:H2", "A3:H3"]));
   });
 
-  it("embeds a valid data-URL logo and silently ignores anything else", () => {
-    const wb1 = newWorkbook();
+  it("embeds a valid data-URL logo and silently ignores anything else", async () => {
+    const wb1 = await newWorkbook();
     const ws1 = wb1.addWorksheet("t");
     addTitleBlock(wb1, ws1, { totalCols: 4, company: "c", branchLabel: "b", title: "t", logoDataUrl: PNG_DATA_URL });
     expect(ws1.getImages()).toHaveLength(1);
 
     for (const bad of [null, undefined, "", "https://example.com/logo.png", "data:image/gif;base64,AAAA"]) {
-      const wb = newWorkbook();
+      const wb = await newWorkbook();
       const ws = wb.addWorksheet("t");
       addTitleBlock(wb, ws, { totalCols: 4, company: "c", branchLabel: "b", title: "t", logoDataUrl: bad });
       expect(ws.getImages()).toHaveLength(0);
@@ -136,7 +143,7 @@ describe("downloads", () => {
   });
 
   it("downloadWorkbook produces a real .xlsx that reads back with the same cells", async () => {
-    const wb = newWorkbook();
+    const wb = await newWorkbook();
     const ws = wb.addWorksheet("Report");
     ws.getCell("A1").value = "Code";
     ws.getCell("B2").value = 42;

@@ -4,7 +4,7 @@
 
 import { ROLE_LABEL, hrCanAct, hrCanReject, stepLabel, waitingText, type ApprovalRole } from "@/lib/approval-workflow";
 import type { MissingPunchItem, MissingPunchSlot } from "@/lib/api-client/custom-hooks";
-import { formatDate, formatDateTime, inDayRange, localDay, matchesWords, type ExportTable } from "../settlement/shared";
+import { formatDate, formatDateTime, inDayRange, localDay, type ExportTable } from "../settlement/shared";
 
 /** A request as the list sends it. The branch is an additive field: an older backend does not send it. */
 export type MissingRow = MissingPunchItem & { branch?: string | null; branchId?: number | null };
@@ -185,15 +185,14 @@ export const filtersActive = (f: Filters): boolean =>
 const statusMatches = (r: MissingRow, status: StatusFilter): boolean =>
   status === "all" || (status === "pending" ? isPending(r) : r.status === status);
 
-/** Every word typed must appear in the employee's name, code, department, branch, the reason, the date or the punch slot. */
-export function filterRows(rows: MissingRow[], f: Filters, ignoreStatus = false): MissingRow[] {
-  return rows.filter((r) => {
-    if (!ignoreStatus && !statusMatches(r, f.status)) return false;
-    if (f.slot !== "all" && (f.slot === "other" ? r.punchSlot !== null : r.punchSlot !== f.slot)) return false;
-    if (f.branch !== "all" && (r.branch ?? "") !== f.branch) return false;
-    if (f.department !== "all" && (r.department ?? "") !== f.department) return false;
-    if (!inDayRange(r.date, f.from, f.to)) return false;
-    const haystack = [
+/** A request's search text, lower-cased. Built once per row object and remembered: filterRows runs on every keystroke, for the
+ *  list and again for the status counts, and rebuilding this (two date/time formats included) for every row each time is what
+ *  made typing slow. A refetch brings new row objects, so the text is rebuilt then; the old ones are simply dropped. */
+const searchTexts = new WeakMap<MissingRow, string>();
+function searchTextOf(r: MissingRow): string {
+  let text = searchTexts.get(r);
+  if (text === undefined) {
+    text = [
       r.employeeName,
       r.employeeCode,
       r.department,
@@ -207,8 +206,25 @@ export function filterRows(rows: MissingRow[], f: Filters, ignoreStatus = false)
       formatPunchTime(r.punchTime),
     ]
       .filter(Boolean)
-      .join(" ");
-    return matchesWords(f.query, haystack);
+      .join(" ")
+      .toLowerCase();
+    searchTexts.set(r, text);
+  }
+  return text;
+}
+
+/** Every word typed must appear in the employee's name, code, department, branch, the reason, the date or the punch slot. */
+export function filterRows(rows: MissingRow[], f: Filters, ignoreStatus = false): MissingRow[] {
+  const words = f.query.toLowerCase().split(/\s+/).filter(Boolean);
+  return rows.filter((r) => {
+    if (!ignoreStatus && !statusMatches(r, f.status)) return false;
+    if (f.slot !== "all" && (f.slot === "other" ? r.punchSlot !== null : r.punchSlot !== f.slot)) return false;
+    if (f.branch !== "all" && (r.branch ?? "") !== f.branch) return false;
+    if (f.department !== "all" && (r.department ?? "") !== f.department) return false;
+    if (!inDayRange(r.date, f.from, f.to)) return false;
+    if (words.length === 0) return true;
+    const text = searchTextOf(r);
+    return words.every((w) => text.includes(w));
   });
 }
 

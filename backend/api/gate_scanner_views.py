@@ -26,6 +26,7 @@ from . import gate_qr, whatsapp_notifications
 from .auth import get_hr_display_name, require_gate_device, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import FACTORY_TZ
+from .employee_photo import employee_photo_link, photo_links
 from .jwt_utils import sign_token, verify_token
 from .models import Branch, GateDevice, OutpassGateScan, OutpassRequest
 from .outpass_visitor_views import _paginate_params
@@ -62,7 +63,8 @@ def _gate_scan_employee_payload(req: OutpassRequest) -> dict:
             "name": f"{emp.first_name} {emp.last_name}",
             "employeeCode": emp.employee_code,
             "department": emp.department.name if emp.department else None,
-            "photoUrl": emp.photo_url,
+            # a signed link the kiosk's <img> loads with no token (employee_photo.py), not the embedded picture
+            "photoUrl": employee_photo_link(emp),
         },
         "destination": req.destination,
         "reason": req.reason,
@@ -360,11 +362,13 @@ def gate_scan_log(request: Request) -> Response:
             scan_type=OutpassGateScan.SCAN_TYPE_EXIT, scanned_at__gte=_today_start(),
         )
         .select_related("employee__department", "outpass_request")
+        .defer("employee__photo_url")  # the list sends a link to the photo (photo_links), never the picture
         .order_by("-scanned_at")
     )
     total = qs.count()
     offset = (page - 1) * page_size
-    rows = qs[offset:offset + page_size]
+    rows = list(qs[offset:offset + page_size])
+    photos = photo_links(s.employee_id for s in rows)
     return Response({
         "items": [
             {
@@ -372,7 +376,7 @@ def gate_scan_log(request: Request) -> Response:
                 "employeeName": f"{s.employee.first_name} {s.employee.last_name}" if s.employee else "—",
                 "employeeCode": s.employee.employee_code if s.employee else None,
                 "department": s.employee.department.name if s.employee and s.employee.department else None,
-                "photoUrl": s.employee.photo_url if s.employee else None,
+                "photoUrl": employee_photo_link(s.employee, photos),
                 "destination": s.outpass_request.destination if s.outpass_request else None,
                 "reason": s.outpass_request.reason if s.outpass_request else None,
                 "approvedBy": s.outpass_request.approved_by if s.outpass_request else None,

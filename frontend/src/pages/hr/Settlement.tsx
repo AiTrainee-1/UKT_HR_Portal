@@ -10,7 +10,7 @@ import {
   useCreateAdvance,
   useDeleteAdvance,
   useListAdvances,
-  useListEmployees,
+  useListEmployeesLite,
   useUpdateAdvance,
 } from "@/lib/api-client";
 import AdvanceList from "./settlement/AdvanceList";
@@ -58,7 +58,7 @@ export default function Settlement() {
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
 
   const { data: advances, isLoading, isError, refetch } = useListAdvances();
-  const { data: employees } = useListEmployees({ status: "active" });
+  const { data: employees } = useListEmployeesLite({ status: "active" });
   const createMutation = useCreateAdvance();
   const updateMutation = useUpdateAdvance();
   const deleteMutation = useDeleteAdvance();

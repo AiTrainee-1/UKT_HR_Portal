@@ -485,24 +485,29 @@ def production_generate_payroll(request: Request) -> Response:
     from . import payroll_progress
 
     generated, skipped = [], list(outside) + blocked
-    payroll_progress.start(len(to_run))
-    prod_config = ProductionShiftConfig.get()  # one config object for the whole loop: the shift rules load once
-    for emp in to_run:
-        emp_name = _name(emp)
-        before = len(generated)
-        try:
-            result = _generate_production_payroll(emp, start, end, pay_cycle=cycle, prod_config=prod_config)
-            generated.append(_payroll_json(result["payroll"], emp_name))
-        except PayrollSkip as exc:
-            skipped.append(
-                {"employeeId": emp.id, "employeeCode": emp.employee_code, "name": emp_name, "reason": str(exc)}
-            )
-        except Exception as exc:
-            skipped.append(
-                {"employeeId": emp.id, "employeeCode": emp.employee_code, "name": emp_name, "reason": str(exc)}
-            )
-        payroll_progress.step(emp_name, len(generated) > before)
-    payroll_progress.finish()
+    if not payroll_progress.try_begin_run():
+        return _error("A payroll run is already in progress. Wait for it to finish, then try again.", 409)
+    try:
+        payroll_progress.start(len(to_run))
+        prod_config = ProductionShiftConfig.get()  # one config object for the whole loop: the shift rules load once
+        for emp in to_run:
+            emp_name = _name(emp)
+            before = len(generated)
+            try:
+                result = _generate_production_payroll(emp, start, end, pay_cycle=cycle, prod_config=prod_config)
+                generated.append(_payroll_json(result["payroll"], emp_name))
+            except PayrollSkip as exc:
+                skipped.append(
+                    {"employeeId": emp.id, "employeeCode": emp.employee_code, "name": emp_name, "reason": str(exc)}
+                )
+            except Exception as exc:
+                skipped.append(
+                    {"employeeId": emp.id, "employeeCode": emp.employee_code, "name": emp_name, "reason": str(exc)}
+                )
+            payroll_progress.step(emp_name, len(generated) > before)
+        payroll_progress.finish()
+    finally:
+        payroll_progress.end_run()
 
     from .audit_utils import log_action as _log
 

@@ -93,7 +93,7 @@ export type ExportTable = {
 export async function downloadTable(table: ExportTable, filenameBase: string): Promise<void> {
   const { addMergedTextRow, downloadWorkbook, fileSafe, newWorkbook, styleHeaderCell, todayStamp } =
     await import("@/lib/exportUtils");
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet(table.sheet.slice(0, 31));
   const cols = table.headers.length;
   addMergedTextRow(ws, 1, cols, `UKTextiles: ${table.title}`, { size: 14 });

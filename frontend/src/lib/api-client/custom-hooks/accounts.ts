@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "../custom-fetch";
+import { keepPreviousWhileSearching } from "./shared";
 
 export type PermissionLevel = "hidden" | "view" | "edit";
 
@@ -192,15 +193,18 @@ export const useAuditLogStats = () =>
     refetchInterval: 30000,
   });
 
-export const listAuditLogs = (params?: {
-  module?: string;
-  action?: string;
-  userName?: string;
-  dateFrom?: string;
-  dateTo?: string;
-  page?: number;
-  pageSize?: number;
-}) => {
+export const listAuditLogs = (
+  params?: {
+    module?: string;
+    action?: string;
+    userName?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    pageSize?: number;
+  },
+  init?: { signal?: AbortSignal },
+) => {
   const qs = new URLSearchParams();
   if (params?.module && params.module !== "all") qs.set("module", params.module);
   if (params?.action && params.action !== "all") qs.set("action", params.action);
@@ -210,18 +214,22 @@ export const listAuditLogs = (params?: {
   if (params?.page) qs.set("page", String(params.page));
   if (params?.pageSize) qs.set("pageSize", String(params.pageSize));
   const q = qs.toString();
-  return customFetch<AuditLogsResponse>(`/api/audit-logs${q ? `?${q}` : ""}`);
+  return customFetch<AuditLogsResponse>(`/api/audit-logs${q ? `?${q}` : ""}`, { signal: init?.signal });
 };
 
 export const useListAuditLogs = <TData = AuditLogsResponse>(
   params?: Parameters<typeof listAuditLogs>[0],
   options?: UseQueryOptions<AuditLogsResponse, unknown, TData>,
-) =>
-  useQuery<AuditLogsResponse, unknown, TData>({
-    queryKey: getListAuditLogsQueryKey(params as Record<string, string | number>),
-    queryFn: () => listAuditLogs(params),
+) => {
+  const queryKey = getListAuditLogsQueryKey(params as Record<string, string | number>);
+  return useQuery<AuditLogsResponse, unknown, TData>({
+    queryKey,
+    queryFn: ({ signal }) => listAuditLogs(params, { signal }),
+    // a new user-name search keeps the log on screen until its rows arrive; a new page or filter shows the loader
+    placeholderData: keepPreviousWhileSearching(queryKey, "userName"),
     ...options,
   });
+};
 
 // ── Login Devices ─────────────────────────────────────────────────────────────
 
@@ -249,7 +257,7 @@ export const useListLoginSessions = (options?: UseQueryOptions<LoginSessionsResp
   useQuery<LoginSessionsResponse>({
     queryKey: getListLoginSessionsQueryKey(),
     queryFn: () => customFetch<LoginSessionsResponse>("/api/login-sessions"),
-    refetchInterval: 15000,
+    refetchInterval: 60_000,
     ...options,
   });
 

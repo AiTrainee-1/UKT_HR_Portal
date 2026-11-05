@@ -15,7 +15,7 @@ function roundMoney(value: number): number {
 }
 
 export async function exportPayrollToExcel(runs: PayrollRunItem[], sheetLabel: string, monthYear: string) {
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet(sheetLabel.substring(0, 31));
 
   // Column definitions -widths match the bank template

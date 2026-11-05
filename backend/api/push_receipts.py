@@ -74,7 +74,7 @@ def check_pending(limit: int = BATCH) -> int:
                 ticket_of[ticket] = (n, token)
         if not ticket_of:
             return 0
-        resp = requests.post(EXPO_RECEIPTS_URL, json={"ids": list(ticket_of)}, timeout=5)
+        resp = requests.post(EXPO_RECEIPTS_URL, json={"ids": list(ticket_of)}, timeout=(3, 5))  # (connect, read)
         if not resp.ok:
             return 0
         receipts = (resp.json() or {}).get("data") or {}

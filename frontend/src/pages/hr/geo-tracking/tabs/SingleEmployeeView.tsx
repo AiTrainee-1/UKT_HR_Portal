@@ -8,7 +8,7 @@ import { BaseMapLayers } from "@/components/geo/BaseMapLayers";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useListEmployees, type Employee } from "@/lib/api-client";
+import { useListEmployeesLite, type Employee } from "@/lib/api-client";
 import { useLiveLocationRoute } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { MapBridge, MapCardHeader, MapViewButtons, MapOverlayNote, useMapView, viewPlaces } from "../mapKit";
@@ -25,7 +25,7 @@ export default function SingleEmployeeView({ date }: { date: string }) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const view = useMapView();
 
-  const { data: trackedList, isLoading: employeesLoading } = useListEmployees({ status: "active" });
+  const { data: trackedList, isLoading: employeesLoading } = useListEmployeesLite({ status: "active" });
   const tracked = (trackedList ?? []).filter((e) => (e as Tracked).locationTrackingEnabled);
   const q = search.trim().toLowerCase();
   const filtered = tracked.filter(

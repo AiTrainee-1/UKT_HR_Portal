@@ -63,7 +63,12 @@ def _source_label(source: str, related_module: str) -> str:
 
 
 def _notifications(request: Request):
-    return scope_to_branch(Notification.objects.select_related("employee"), request, field="employee__branch_id")
+    # The log shows the employee's name and code only: never load the base64 photo (up to ~2 MB) with every row.
+    return scope_to_branch(
+        Notification.objects.select_related("employee").defer("employee__photo_url"),
+        request,
+        field="employee__branch_id",
+    )
 
 
 def _employees(request: Request):

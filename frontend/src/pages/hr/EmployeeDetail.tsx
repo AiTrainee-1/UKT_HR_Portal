@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
-import html2canvas from "html2canvas-pro";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -87,10 +86,13 @@ export default function EmployeeDetail() {
   };
 
   const handleDownloadIdCard = async () => {
-    if (!cardRef.current || !employee) return;
+    const card = cardRef.current;
+    if (!card || !employee) return;
     setDownloading(true);
     try {
-      const canvas = await html2canvas(cardRef.current, {
+      // Loaded on demand: the page opens often, the ID card is downloaded rarely.
+      const { default: html2canvas } = await import("html2canvas-pro");
+      const canvas = await html2canvas(card, {
         backgroundColor: "#ffffff",
         scale: 3,
         useCORS: true,

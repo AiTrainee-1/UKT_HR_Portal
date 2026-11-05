@@ -121,9 +121,13 @@ def _filtered_punches(request: Request):
     #
     # The Excel export shares this function, so a download always matches the
     # on-screen order rather than quietly re-sorting.
+    #
+    # The rows show the employee's code, name, department and type only: the
+    # base64 photo (up to ~2 MB per employee) is never loaded with each punch.
     qs = (
         AttendanceLog.objects
         .select_related("employee", "employee__department")
+        .defer("employee__photo_url")
         .order_by(
             "employee__first_name", "employee__last_name", "employee_id",
             "date", "punch_time",
@@ -228,18 +232,25 @@ def punch_export(request: Request) -> HttpResponse:
 
     count = 0
     exported: list[int] = []
-    for log in qs.iterator(chunk_size=1000):
-        emp = log.employee
-        exported.append(log.id)
+    # Plain tuples, not model instances: the same filter and order, but an unfiltered download is ~100,000 punches and
+    # building an AttendanceLog + Employee object for each one cost several seconds on its own.
+    rows = qs.values_list(
+        "id", "employee__employee_code", "employee__first_name", "employee__last_name",
+        "employee__department_id", "employee__department__name", "date", "punch_time", "punch_type", "source",
+    )
+    for log_id, code, first_name, last_name, dept_id, dept_name, day, punch_time, punch_type, source in rows.iterator(
+        chunk_size=1000
+    ):
+        exported.append(log_id)
         ws.append([
-            log.id,
-            str(emp.employee_code or ""),
-            f"{emp.first_name} {emp.last_name}".strip(),
-            emp.department.name if emp.department else "",
-            str(log.date),
-            log.punch_time.strftime("%H:%M:%S"),
-            log.punch_type,
-            log.source or "",
+            log_id,
+            str(code or ""),
+            f"{first_name} {last_name}".strip(),
+            dept_name if dept_id is not None else "",
+            str(day),
+            punch_time.strftime("%H:%M:%S"),
+            punch_type,
+            source or "",
         ])
         count += 1
 

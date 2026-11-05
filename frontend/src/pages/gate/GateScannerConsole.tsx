@@ -692,7 +692,7 @@ export default function GateScannerConsole() {
         batchPage += 1;
       }
 
-      const wb = newWorkbook();
+      const wb = await newWorkbook();
       const ws = wb.addWorksheet("Gate-Out Report");
       ws.columns = [
         { header: "Employee", key: "employeeName", width: 26 },

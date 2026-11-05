@@ -796,7 +796,9 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
     hour_sent, day_sent = _recently_sent()
     held = 0
 
-    for emp in Employee.objects.filter(status="active", employment_type=Employee.EMPLOYMENT_TYPE_STAFF):
+    # every minute: without the photo column (base64, up to MBs per person), which the alerts never read
+    staff = Employee.objects.filter(status="active", employment_type=Employee.EMPLOYMENT_TYPE_STAFF).defer("photo_url")
+    for emp in staff:
         for item in evaluate(emp, day):
             key = f"{item.tag}:{day.iso}:{emp.id}"
             if key in day.already:

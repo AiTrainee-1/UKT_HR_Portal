@@ -87,7 +87,7 @@ export default function DeviceControl() {
               <Switch
                 checked={autoRefresh}
                 onCheckedChange={setAutoRefresh}
-                aria-label="Check the devices every 30 seconds"
+                aria-label="Check the devices every 2 minutes"
               />
               Auto-check
             </label>

@@ -17,8 +17,8 @@ const argb = (hex: string) => `FF${hex.replace("#", "").toUpperCase()}`;
 const BLACK = argb("#000000");
 
 /** The workbook of one list (not yet saved). Row 5 is the header row, as it always was on the Daily report. */
-export function buildSheetWorkbook(spec: SheetSpec, ctx: ExcelContext): Workbook {
-  const wb = newWorkbook();
+export async function buildSheetWorkbook(spec: SheetSpec, ctx: ExcelContext): Promise<Workbook> {
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet("Report");
   const totalCols = spec.columns.length + 1;
   ws.columns = [{ width: 7 }, ...spec.columns.map((c) => ({ width: c.chars }))];

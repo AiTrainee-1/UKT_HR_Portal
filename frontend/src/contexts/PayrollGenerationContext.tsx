@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useToast } from "@/hooks/use-toast";
@@ -132,8 +132,14 @@ export function PayrollGenerationProvider({ children }: { children: ReactNode })
 
   const dismiss = useCallback(() => setShowPipeline(false), []);
 
+  // Memoized so the readers re-render when the generation state changes, not whenever this provider does (every toast).
+  const value = useMemo(
+    () => ({ isGenerating, showPipeline, progress, lastResult, triggerGenerate, triggerGenerateProduction, dismiss }),
+    [isGenerating, showPipeline, progress, lastResult, triggerGenerate, triggerGenerateProduction, dismiss],
+  );
+
   return (
-    <PayrollGenerationCtx.Provider value={{ isGenerating, showPipeline, progress, lastResult, triggerGenerate, triggerGenerateProduction, dismiss }}>
+    <PayrollGenerationCtx.Provider value={value}>
       {children}
     </PayrollGenerationCtx.Provider>
   );

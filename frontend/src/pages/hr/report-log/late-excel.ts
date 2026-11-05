@@ -60,11 +60,11 @@ export const HEADER_ROW = 6;
 /** The columns of the sheet: the report's seven and the narrow Unit one for filtering. */
 export const EXCEL_UNIT_COLUMN = LATE_COLUMNS.length + 1;
 
-export function buildLateWorkbook(input: LateReportInput): Workbook {
+export async function buildLateWorkbook(input: LateReportInput): Promise<Workbook> {
   const now = input.now ?? new Date();
   const cols = EXCEL_UNIT_COLUMN;
   const groups = groupEntriesByUnit(input.entries);
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet("Daily Late Report", {
     views: [{ state: "frozen", ySplit: HEADER_ROW }],
     pageSetup: {
@@ -177,5 +177,5 @@ export const lateExcelName = (date: string) => `${lateFileStem(date)}.xlsx`;
 
 /** Builds the workbook and downloads it. */
 export async function downloadLateExcel(input: LateReportInput): Promise<void> {
-  await downloadWorkbook(buildLateWorkbook(input), lateExcelName(input.date));
+  await downloadWorkbook(await buildLateWorkbook(input), lateExcelName(input.date));
 }

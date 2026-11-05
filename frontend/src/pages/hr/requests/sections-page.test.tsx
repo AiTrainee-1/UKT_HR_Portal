@@ -157,7 +157,7 @@ describe("the sections beside the heading", () => {
     expect(section("Requests")?.getAttribute("aria-selected")).toBe("true");
     expect(q("requests-figures")).not.toBeNull();
     expect(q("requests-tabs")).not.toBeNull();
-    expect(text(q("requests-section-note"))).toContain("auto-refreshes every 30 s");
+    expect(text(q("requests-section-note"))).toContain("auto-refreshes every minute");
     expect(q("stub-hods")).toBeNull();
   });
 

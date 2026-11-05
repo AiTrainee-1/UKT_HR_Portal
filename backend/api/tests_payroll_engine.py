@@ -18,6 +18,7 @@ Run via: python manage.py test api.tests_payroll_engine -v 2
 from datetime import date, time
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest import mock
 
 from django.test import TestCase
 
@@ -1179,6 +1180,41 @@ class PayrollEndpointTests(TestCase):
         self.assertFalse(Payroll.objects.exists())
         self.assertFalse(SalarySlip.objects.exists())
         self.assertFalse(AdvanceRepayment.objects.get(advance=adv).is_processed)
+
+    def test_skip_check_reuses_its_answer_until_a_salary_changes(self):
+        # owner 2026-11-05 audit: the Payroll page asks on arrival and the dry run is a whole month's payroll per staff
+        # member; the answer is kept while nothing behind the skip reasons changed, and Re-check (fresh=1) always reruns
+        from . import payroll_views
+
+        nosal = _staff("EP_NOSAL2", salary="0")
+        url = f"/api/payroll/skip-check?month={MONTH}&year={YEAR}"
+        real = payroll_views._dry_run_skip_reason
+        with mock.patch.object(payroll_views, "_dry_run_skip_reason", side_effect=real) as engine:
+            first = self.client.get(url, **_hr()).json()
+            self.assertEqual(engine.call_count, 2)
+            self.assertEqual(self.client.get(url, **_hr()).json(), first)
+            self.assertEqual(engine.call_count, 2)  # served from the kept answer, no engine run
+            self.client.get(url + "&fresh=1", **_hr())
+            self.assertEqual(engine.call_count, 4)  # Re-check runs the engine again
+            Employee.objects.filter(pk=nosal.pk).update(salary_amount=Decimal("15000"))
+            again = self.client.get(url, **_hr()).json()
+            self.assertEqual(engine.call_count, 6)  # the salary changed: worked out again at once
+        self.assertEqual((first["skippedCount"], again["skippedCount"]), (1, 0))
+
+    def test_a_second_payroll_run_while_one_is_working_is_refused(self):
+        # app health audit 2026-11-05: two runs side by side could write a second monthly row for the same employee
+        from . import payroll_progress
+
+        self.assertTrue(payroll_progress.try_begin_run())  # a run is working
+        try:
+            r = self._generate()
+            self.assertEqual(r.status_code, 409)
+            self.assertFalse(Payroll.objects.exists())
+        finally:
+            payroll_progress.end_run()
+        self.assertEqual(self._generate().status_code, 201)  # the slot is free again
+        self.assertTrue(payroll_progress.try_begin_run())  # and released after that run
+        payroll_progress.end_run()
 
     def test_skip_check_validates_its_query(self):
         self.assertEqual(self.client.get("/api/payroll/skip-check", **_hr()).status_code, 400)

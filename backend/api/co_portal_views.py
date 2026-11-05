@@ -76,7 +76,12 @@ def co_portal_employees(request: Request) -> Response:
 @api_view(["GET"])
 @require_portal_key
 def co_portal_attendance_logs(request: Request) -> Response:
-    qs = AttendanceLog.objects.filter(COPORTAL_Q_VIA_EMPLOYEE).select_related("employee")
+    # Only the employee code is sent: never load the base64 photo (up to ~2 MB) with every punch.
+    qs = (
+        AttendanceLog.objects.filter(COPORTAL_Q_VIA_EMPLOYEE)
+        .select_related("employee")
+        .defer("employee__photo_url")
+    )
     date_from = request.query_params.get("dateFrom")
     if date_from:
         qs = qs.filter(date__gte=date_from)

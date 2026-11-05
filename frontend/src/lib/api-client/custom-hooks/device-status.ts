@@ -186,7 +186,7 @@ export const useDeviceStatus = (autoRefresh: boolean) =>
   useQuery<DeviceStatusPayload>({
     queryKey: DEVICE_STATUS_QUERY_KEY,
     queryFn: () => customFetch<DeviceStatusPayload>("/api/attendance/biometric-status"),
-    refetchInterval: autoRefresh ? 15_000 : false,
+    refetchInterval: autoRefresh ? 60_000 : false,
   });
 
 /** Run a connection check from the server now: every enabled device, or just the ones named. */

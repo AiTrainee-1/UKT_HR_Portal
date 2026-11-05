@@ -27,6 +27,23 @@ _state: dict = {
 }
 
 
+# One payroll run (staff or production) at a time in this process. Two runs at once (two HR users pressing Generate,
+# or a double click while the first is still working) used to work through the same employees side by side and could
+# write a second monthly payroll row for the same person, which then broke every later regeneration of that month
+# (app health audit, 2026-11-05).
+_run_lock = threading.Lock()
+
+
+def try_begin_run() -> bool:
+    """Claim the payroll run slot; False when another run holds it."""
+    return _run_lock.acquire(blocking=False)
+
+
+def end_run() -> None:
+    if _run_lock.locked():
+        _run_lock.release()
+
+
 def start(total: int) -> None:
     with _lock:
         _state["stage"] = "running"

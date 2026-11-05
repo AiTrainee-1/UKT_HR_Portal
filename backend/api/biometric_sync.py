@@ -261,7 +261,8 @@ def _active_employee_lookup() -> dict:
     fallback map, which caused real misattribution when that field held stale
     or wrong values. That field is now profile information only -it plays no
     part in attendance matching."""
-    active_employees = list(Employee.objects.filter(status="active"))
+    # without the photo column (base64, up to MBs per person): this runs on every geo punch and every sync
+    active_employees = list(Employee.objects.filter(status="active").defer("photo_url"))
     return {str(e.employee_code).strip(): e for e in active_employees}
 
 

@@ -36,8 +36,11 @@ const COL = {
 const sheet = (wb: ExcelJS.Workbook) => wb.getWorksheet("Salary Statement")!;
 const at = (ws: ExcelJS.Worksheet, address: string) => ws.getCell(address);
 
+// Built once for the layout tests below (the builder is async: it loads ExcelJS on first use).
+const layoutWorkbook = await buildStatementWorkbook(staffStatement());
+
 describe("the workbook: layout", () => {
-  const wb = buildStatementWorkbook(staffStatement());
+  const wb = layoutWorkbook;
   const ws = sheet(wb);
 
   it("is one sheet with the title block merged across every column", () => {
@@ -197,8 +200,8 @@ describe("the workbook: layout", () => {
 });
 
 describe("the workbook: other statements", () => {
-  it("a filtered statement exports the rows on screen with their recomputed totals", () => {
-    const wb = buildStatementWorkbook(filterStatement(staffStatement(), { search: "kannan" }));
+  it("a filtered statement exports the rows on screen with their recomputed totals", async () => {
+    const wb = await buildStatementWorkbook(filterStatement(staffStatement(), { search: "kannan" }));
     const ws = sheet(wb);
     expect(at(ws, "A6").value).toBe("ACCOUNTS  (1 employee)");
     expect(at(ws, `${COL.name}7`).value).toBe("LOKESH KANNAN");
@@ -210,15 +213,15 @@ describe("the workbook: other statements", () => {
     expect(at(ws, `${COL.net}12`).value).toBe(132005);
   });
 
-  it("an empty statement is just the header and a zero grand total", () => {
-    const ws = sheet(buildStatementWorkbook(filterStatement(staffStatement(), { search: "zzz" })));
+  it("an empty statement is just the header and a zero grand total", async () => {
+    const ws = sheet(await buildStatementWorkbook(filterStatement(staffStatement(), { search: "zzz" })));
     expect(at(ws, "A6").value).toBe("GRAND TOTAL");
     expect(at(ws, `${COL.net}6`).value).toBe(0);
     expect(ws.model.merges.some((m) => m.startsWith("A7:"))).toBe(false);
   });
 
-  it("the production statement uses its own columns and Production Payroll's amber", () => {
-    const wb = buildStatementWorkbook(productionStatement());
+  it("the production statement uses its own columns and Production Payroll's amber", async () => {
+    const wb = await buildStatementWorkbook(productionStatement());
     const ws = sheet(wb);
     expect(ws.model.merges).toEqual(expect.arrayContaining(["A1:R1", "A2:R2", "A3:R3"]));
     expect(at(ws, "A2").value).toBe("Weaving unit");
@@ -237,12 +240,14 @@ describe("the workbook: other statements", () => {
     expect(PRODUCTION_COLUMNS).toHaveLength(18);
   });
 
-  it("pins a company logo when one is given, and ignores anything that is not an image", () => {
-    expect(sheet(buildStatementWorkbook(staffStatement(), { logoDataUrl: PNG_DATA_URL })).getImages()).toHaveLength(1);
+  it("pins a company logo when one is given, and ignores anything that is not an image", async () => {
     expect(
-      sheet(buildStatementWorkbook(staffStatement(), { logoDataUrl: "https://example.com/a.png" })).getImages(),
+      sheet(await buildStatementWorkbook(staffStatement(), { logoDataUrl: PNG_DATA_URL })).getImages(),
+    ).toHaveLength(1);
+    expect(
+      sheet(await buildStatementWorkbook(staffStatement(), { logoDataUrl: "https://example.com/a.png" })).getImages(),
     ).toHaveLength(0);
-    expect(sheet(buildStatementWorkbook(staffStatement())).getImages()).toHaveLength(0);
+    expect(sheet(await buildStatementWorkbook(staffStatement())).getImages()).toHaveLength(0);
   });
 
   it("number formats and column widths", () => {

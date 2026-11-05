@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useToast } from "@/hooks/use-toast";
@@ -104,8 +104,14 @@ export function BiometricSyncProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback(() => setShowPipeline(false), []);
 
+  // Memoized so the readers re-render when the sync state changes, not whenever this provider does (every toast).
+  const value = useMemo(
+    () => ({ isSyncing, showPipeline, progress, lastSyncedAt, triggerSync, dismiss }),
+    [isSyncing, showPipeline, progress, lastSyncedAt, triggerSync, dismiss],
+  );
+
   return (
-    <BiometricSyncCtx.Provider value={{ isSyncing, showPipeline, progress, lastSyncedAt, triggerSync, dismiss }}>
+    <BiometricSyncCtx.Provider value={value}>
       {children}
     </BiometricSyncCtx.Provider>
   );

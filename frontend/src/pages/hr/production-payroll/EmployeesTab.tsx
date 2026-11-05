@@ -19,6 +19,7 @@ import { EmptyNote, SkeletonRows } from "@/components/payroll/kit/parts";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { buildIssueSummaries } from "@/components/payroll/panels/filters";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
+import { useDraft } from "@/hooks/use-debounced";
 import {
   PAY_CYCLE_INFO,
   usePayrollIssues,
@@ -75,6 +76,9 @@ export function EmployeesTab({
   const rulesQuery = usePayrollRules(scope);
 
   const search = url.eq ?? "";
+  // The box shows every letter; the address (and the list filtered from it) changes once typing pauses, so the page is
+  // not re-rendered per keystroke.
+  const [searchDraft, setSearchDraft] = useDraft(search, (eq) => setUrl({ eq }));
   const stateFilter = rosterStateFromUrl(url.estate);
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [again, setAgain] = useState<PeriodEmployee | null>(null);
@@ -165,8 +169,8 @@ export function EmployeesTab({
             <Input
               placeholder="Search by employee code or name"
               aria-label="Search the roster by employee name or code"
-              value={search}
-              onChange={(e) => setUrl({ eq: e.target.value })}
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
               className="h-10 pl-9"
               disabled={!status.data}
               data-testid="pcp-roster-search"

@@ -84,16 +84,16 @@ export type StatementWorkbookOptions = {
   logoDataUrl?: string | null;
 };
 
-export function buildStatementWorkbook(
+export async function buildStatementWorkbook(
   statement: SalaryStatement,
   options: StatementWorkbookOptions = {},
-): ExcelJS.Workbook {
+): Promise<ExcelJS.Workbook> {
   const columns = statement.columns;
   const n = Math.max(1, columns.length);
   const accent = ACCENT[statement.kind] ?? ACCENT.staff;
   const title = statementTitle(statement);
 
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   wb.title = title;
   wb.subject = `${statement.company.name} payroll`;
   const created = new Date(statement.generatedAt);
@@ -239,5 +239,5 @@ export async function downloadStatementXlsx(
   statement: SalaryStatement,
   options: StatementWorkbookOptions = {},
 ): Promise<void> {
-  await downloadWorkbook(buildStatementWorkbook(statement, options), statementXlsxFilename(statement));
+  await downloadWorkbook(await buildStatementWorkbook(statement, options), statementXlsxFilename(statement));
 }

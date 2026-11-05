@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useToast } from "@/hooks/use-toast";
@@ -91,8 +91,14 @@ export function ResumeScreeningProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback(() => setShowPipeline(false), []);
 
+  // Memoized so the readers re-render when the screening state changes, not whenever this provider does (every toast).
+  const value = useMemo(
+    () => ({ isScreening, showPipeline, progress, lastResult, triggerBulkScreen, dismiss }),
+    [isScreening, showPipeline, progress, lastResult, triggerBulkScreen, dismiss],
+  );
+
   return (
-    <ResumeScreeningCtx.Provider value={{ isScreening, showPipeline, progress, lastResult, triggerBulkScreen, dismiss }}>
+    <ResumeScreeningCtx.Provider value={value}>
       {children}
     </ResumeScreeningCtx.Provider>
   );

@@ -120,6 +120,17 @@ describe("the MD's dashboard", () => {
     expect(byTestId(page, "md-home-open-requests")?.getAttribute("href")).toBe("/md/requests");
   });
 
+  it("asks only for the requests still waiting, never every request ever raised", async () => {
+    page = await renderMdPage(MdDashboardHome, data(), { path: "/md/dashboard" });
+    const asked = (path: string) => page!.requests().filter((r) => r.split("?")[0] === path);
+    expect(asked("/api/leave-requests")).toEqual(["/api/leave-requests?status=pending"]);
+    expect(asked("/api/permissions")).toEqual(["/api/permissions?status=pending"]);
+    expect(asked("/api/advances")).toEqual(["/api/advances?status=pending"]);
+    expect(asked("/api/recruitment/resignations")).toEqual([
+      "/api/recruitment/resignations?status=pending,dept_approved",
+    ]);
+  });
+
   it("only shows the requests: there is no way to approve, reject or change one from here", async () => {
     page = await renderMdPage(MdDashboardHome, data(), { path: "/md/dashboard" });
     const card = byTestId(page, "md-home-requests")!;

@@ -5,7 +5,7 @@ import { EXPORT_HEADERS, exportRows } from "./logic";
 /** Downloads the branches as an Excel sheet, in the order shown. The workbook library is loaded only when this runs. */
 export async function exportBranchesXlsx(branches: Branch[], figures: Map<number, BranchSummaryRow>): Promise<void> {
   const { newWorkbook, downloadWorkbook, styleHeaderCell, todayStamp } = await import("@/lib/exportUtils");
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet("Branches");
   ws.addRow(EXPORT_HEADERS);
   ws.getRow(1).eachCell((cell) => styleHeaderCell(cell, { fill: "FF0F766E" }));

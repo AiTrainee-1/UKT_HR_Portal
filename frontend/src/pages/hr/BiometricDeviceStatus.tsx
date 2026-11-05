@@ -99,7 +99,7 @@ export default function BiometricDeviceStatus() {
               <Switch
                 checked={autoRefresh}
                 onCheckedChange={setAutoRefresh}
-                aria-label="Auto-refresh every 15 seconds"
+                aria-label="Auto-refresh every minute"
               />
               Auto-refresh
             </label>

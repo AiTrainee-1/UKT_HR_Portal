@@ -358,14 +358,52 @@ def employee_request_action(request: Request, pk: int) -> Response:
 # permission_monthly_cap now, not a hardcoded display number.
 
 
+def _month_bounds(year: int, month: int) -> tuple[date_type, date_type]:
+    """[first day of the month, first day of the next month)."""
+    return date_type(year, month, 1), date_type(year + month // 12, month % 12 + 1, 1)
+
+
 class _CapStatusCache:
-    """within_cap / excess for many permissions with ONE query per employee-month instead of one
-    COUNT per row (an HR list can hold thousands). Same ordering rule as
-    attendance_final.permission_cap_status: earliest (date, id) first."""
+    """within_cap / excess for many permissions without a COUNT per row (an HR list can hold
+    thousands). Same ordering rule as attendance_final.permission_cap_status: earliest (date, id)
+    first, among the employee's approved permissions of that calendar month.
+
+    `prime(rows)` loads every employee-month a page of rows needs in ONE query. A month asked for
+    without it is loaded for every employee at once - one query per month, not one per employee-
+    month - so a caller that never primes still batches."""
 
     def __init__(self, cap):
         self.cap = max(0, int(cap or 0))
-        self._months = {}
+        self._months = {}  # (employee_id, year, month) -> {permission id: position in that month}
+        self._whole_months = set()  # (year, month) already loaded for every employee
+
+    def _store(self, rows):
+        """rows: (employee_id, date, id) ordered by (date, id). Every employee-month they cover must be complete."""
+        loaded = {}
+        for emp_id, day, pid in rows:
+            loaded.setdefault((emp_id, day.year, day.month), []).append(pid)
+        for key, ids in loaded.items():
+            self._months.setdefault(key, {pid: i for i, pid in enumerate(ids)})
+
+    def prime(self, rows):
+        wanted = {
+            (p.employee_id, p.date.year, p.date.month)
+            for p in rows
+            if p.status == "approved" and p.date is not None
+        }
+        wanted = {k for k in wanted if k not in self._months and (k[1], k[2]) not in self._whole_months}
+        if not wanted:
+            return
+        lo = _month_bounds(*min((y, m) for _e, y, m in wanted))[0]
+        hi = _month_bounds(*max((y, m) for _e, y, m in wanted))[1]
+        # Every month of [lo, hi) is complete for these employees, so all of it can be kept.
+        self._store(
+            EmployeePermission.objects.filter(
+                status="approved", employee_id__in={k[0] for k in wanted}, date__gte=lo, date__lt=hi
+            ).order_by("date", "id").values_list("employee_id", "date", "id")
+        )
+        for key in wanted:
+            self._months.setdefault(key, {})
 
     def status(self, p):
         if p.status != "approved":
@@ -373,10 +411,16 @@ class _CapStatusCache:
         key = (p.employee_id, p.date.year, p.date.month)
         position = self._months.get(key)
         if position is None:
-            ids = EmployeePermission.objects.filter(
-                employee_id=p.employee_id, status="approved", date__year=p.date.year, date__month=p.date.month,
-            ).order_by("date", "id").values_list("id", flat=True)
-            position = self._months[key] = {pid: i for i, pid in enumerate(ids)}
+            month = (p.date.year, p.date.month)
+            if month not in self._whole_months:
+                self._whole_months.add(month)
+                lo, hi = _month_bounds(*month)
+                self._store(
+                    EmployeePermission.objects.filter(status="approved", date__gte=lo, date__lt=hi)
+                    .order_by("date", "id")
+                    .values_list("employee_id", "date", "id")
+                )
+            position = self._months.setdefault(key, {})
         return "within_cap" if position.get(p.id, len(position)) < self.cap else "excess"
 
 
@@ -472,9 +516,10 @@ def _permission_json(p, monthly_used=None, settings=None, cap_cache=None, cfg=No
 @require_auth
 def employee_permissions(request: Request) -> Response:
     if request.method == "GET":
+        # Never the employee's photo (a base64 data URL, up to ~2 MB each): no row shows it, and the sidebar polls this.
         qs = EmployeePermission.objects.select_related(
             "employee__department", "employee__designation", "employee__branch"
-        ).order_by("-date", "-created_at")
+        ).defer("employee__photo_url").order_by("-date", "-created_at")
         qs = scope_to_branch(qs, request, field="employee__branch_id")
         # Resolve employee by code or ID; employees can only see their own
         token_emp_id = get_token_employee_id(request)
@@ -498,7 +543,12 @@ def employee_permissions(request: Request) -> Response:
         settings = PayrollSettings.get()
         cap_cache = _CapStatusCache(settings.permission_monthly_cap)
         cfg = approval.get_config(PERMISSION_WORKFLOW)
-        return paginate(request, qs, lambda p: _permission_json(p, settings=settings, cap_cache=cap_cache, cfg=cfg))
+        return paginate(
+            request,
+            qs,
+            lambda p: _permission_json(p, settings=settings, cap_cache=cap_cache, cfg=cfg),
+            prepare=cap_cache.prime,  # the monthly-cap positions of the whole page in one query
+        )
 
     data = request.data
     # Accept employeeCode, camelCase, or snake_case

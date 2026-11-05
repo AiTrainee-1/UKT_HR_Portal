@@ -75,7 +75,8 @@ listed (`isStaff: false`). The Department Head card is for everybody, production
                  depends on the approval path HR set for each kind, and that a request only a Department Head can decide
                  (holiday-work compensation) needs another head
     employeeId, employeeCode  ONLY when assigned: the head's own employee id / code
-    photoUrl     whatever is stored on the head's profile: a URL, a /media path or an embedded data: image (can be large)
+    photoUrl     the head's photo: an external link / path as stored, or for an embedded data: image its signed absolute
+                 link (employee_photo.py), which loads with no token; never the picture itself (it can be MBs)
     approvals    [{ key, label, canApprove, reason, requestedBy, path }] in APPROVAL_ORDER. `reason` explains a false
                  `canApprove`. holiday_work with the compensation / holiday-work switch OFF is canApprove TRUE with a reason
                  saying that no new claims are raised but waiting ones can still be decided: the manager endpoints never
@@ -110,6 +111,7 @@ from .compensation_shared import (
     shifts_text,
     switches,
 )
+from .employee_photo import photo_link
 from .hod_scope import effective_manager
 from .overtime import next_working_day, refresh_employee_overtime
 from .models import (
@@ -821,7 +823,7 @@ def employee_hod(request: Request) -> Response:
             "employeeCode": boss.employee_code,
             "name": full_name(boss),
             "phone": boss.phone,
-            "photoUrl": boss.photo_url,
+            "photoUrl": photo_link(boss.id, boss.photo_url),
             "designation": boss.designation.title if boss.designation_id and boss.designation else None,
             "department": boss.department.name if boss.department_id and boss.department else None,
             "branch": boss.branch.name if boss.branch_id and boss.branch else None,

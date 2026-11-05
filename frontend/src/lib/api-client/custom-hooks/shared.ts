@@ -1,4 +1,5 @@
 // shared: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
+import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { getApiOrigin } from "../custom-fetch";
 
 // ── Biometric Sync ────────────────────────────────────────────────────────────
@@ -48,4 +49,29 @@ export async function downloadReportCsv(reportId: string, params: Record<string,
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(objectUrl);
+}
+
+// ── Search Lists ──────────────────────────────────────────────────────────────
+
+/** The query key with the search text taken out of its params object(s), hashed the way TanStack compares keys. */
+const keyWithoutSearch = (queryKey: QueryKey, searchParam: string) =>
+  hashKey(
+    queryKey.map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return part;
+      const rest: Record<string, unknown> = { ...(part as Record<string, unknown>) };
+      delete rest[searchParam];
+      return rest;
+    }),
+  );
+
+/**
+ * placeholderData for a list whose params carry a search box's text. While only the search changed, the last results
+ * stay on screen until the new ones arrive, instead of the list dropping to its loader at every pause in typing. Any
+ * other change (a date, a range, a page, a department) shows the loader as before, so rows of one filter are never
+ * shown under another. `queryKey` is the key of the query being built.
+ */
+export function keepPreviousWhileSearching(queryKey: QueryKey, searchParam = "search") {
+  const rest = keyWithoutSearch(queryKey, searchParam);
+  return <T>(previousData: T | undefined, previousQuery: { queryKey: QueryKey } | undefined): T | undefined =>
+    previousQuery && keyWithoutSearch(previousQuery.queryKey, searchParam) === rest ? previousData : undefined;
 }

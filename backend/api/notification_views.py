@@ -23,7 +23,8 @@ def _notif_with_name(record: Notification, context: dict | None = None) -> dict:
 @require_auth
 def notifications(request: Request) -> Response:
     if request.method == "GET":
-        qs = Notification.objects.select_related("employee")
+        # The row needs only the employee's name: never drag the base64 photo (up to ~2 MB each) along with every one.
+        qs = Notification.objects.select_related("employee").defer("employee__photo_url")
         # An employee token only ever sees their own notifications.
         employee_id = get_token_employee_id(request)
         if employee_id:
@@ -35,6 +36,10 @@ def notifications(request: Request) -> Response:
             qs = scope_to_branch(qs, request, field="employee__branch_id")
         if request.query_params.get("unreadOnly") in ("true", "1", True):
             qs = qs.filter(is_read=False)
+        # countOnly=1: just the number (the sidebar's unread badge polls this), one COUNT instead of up to 2,000 rows
+        # serialized with their View targets every few seconds on every open HR page.
+        if request.query_params.get("countOnly") in ("1", "true"):
+            return Response({"count": qs.count()})
         # Each row's View target (notification_targets.py) needs at most two lookups, made once for the whole page.
         context: dict = {}
         return paginate(
@@ -84,10 +89,17 @@ def mark_notification_read(request: Request, pk: int) -> Response:
 @api_view(["PATCH"])
 @require_auth
 def mark_all_notifications_read(request: Request) -> Response:
+    """One UPDATE marks every unread notification the caller can see as read.
+
+    An employee token: their own. HR: every notification the HR list shows them (their branches; all for an unscoped
+    admin). HR's "Mark all read" used to send one PATCH per unread message, each followed by a reload of the whole
+    list: hundreds of requests at once against a single server worker, which took the server down."""
     employee_id = get_token_employee_id(request)
-    if not employee_id:
-        return _error("Employee access required", 403)
-    updated = Notification.objects.filter(employee_id=employee_id, is_read=False).update(is_read=True)
+    if employee_id:
+        qs = Notification.objects.filter(employee_id=employee_id)
+    else:
+        qs = scope_to_branch(Notification.objects.all(), request, field="employee__branch_id")
+    updated = qs.filter(is_read=False).update(is_read=True)
     return Response({"updated": updated})
 
 

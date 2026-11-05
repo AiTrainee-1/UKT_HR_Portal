@@ -21,6 +21,7 @@ class PayrollSkip(Exception):
 import calendar
 import math
 import re
+import threading
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -1579,6 +1580,17 @@ def payroll_skip_check(request: Request) -> Response:
         .order_by("first_name", "last_name")
     )
 
+    # The Payroll and Salary pages ask for this on arrival, and the dry run is a whole month's payroll for every active
+    # staff member (seconds of work, during which the single server worker served no one else). The answer is kept
+    # and reused while nothing it depends on has changed: see _skip_check_fingerprint. "fresh=1" (the page's Re-check)
+    # always works it out again.
+    key = (month, year, _skip_check_fingerprint(employees, month, year))
+    fresh = request.query_params.get("fresh") in ("1", "true")
+    if not fresh:
+        cached = _skip_check_cache_get(key)
+        if cached is not None:
+            return Response(cached)
+
     skipped = []
     for emp in employees:
         emp_name = f"{emp.first_name} {emp.last_name}".strip()
@@ -1591,11 +1603,64 @@ def payroll_skip_check(request: Request) -> Response:
                 "reason": reason,
             })
 
-    return Response({
+    result = {
         "totalChecked": len(employees),
         "skippedCount": len(skipped),
         "skipped": skipped,
-    })
+    }
+    _skip_check_cache_put(key, result)
+    return Response(result)
+
+
+# The skip check's kept answers: {(month, year, fingerprint): (time, result)}. Process-local (each server process keeps
+# its own), bounded, thread-safe.
+_SKIP_CHECK_TTL_SECONDS = 600
+_SKIP_CHECK_MAX = 32
+_skip_check_cache: dict = {}
+_skip_check_lock = threading.Lock()
+
+
+def _skip_check_fingerprint(employees, month: int, year: int) -> str:
+    """What the skip check's answer depends on, as a short hash: who is checked (the list is already branch-scoped,
+    so two scopes never share an answer) with the fields behind the engine's skip reasons -- the salary ("No Salary
+    Amount"), the employee's name and code as shown, the joining date and branch -- and the month's holidays ("no
+    working days"). A change to any of these gives a new fingerprint, so a fixed salary shows at once. Anything else
+    that could make the engine fail (an error in someone's attendance data) is caught by the time limit and by the
+    page's Re-check, which always runs the engine again."""
+    import hashlib
+
+    rows = [
+        (e.id, str(e.salary_amount), e.first_name, e.last_name, e.employee_code, str(e.join_date), e.branch_id)
+        for e in employees
+    ]
+    holidays = sorted(
+        str(d) for d in Holiday.objects.filter(date__year=year, date__month=month).values_list("date", flat=True)
+    )
+    return hashlib.sha1(repr((rows, holidays)).encode("utf-8")).hexdigest()
+
+
+def _skip_check_cache_get(key):
+    import time as _time
+
+    with _skip_check_lock:
+        hit = _skip_check_cache.get(key)
+        if hit is None:
+            return None
+        at, result = hit
+        if _time.monotonic() - at > _SKIP_CHECK_TTL_SECONDS:
+            _skip_check_cache.pop(key, None)
+            return None
+        return result
+
+
+def _skip_check_cache_put(key, result) -> None:
+    import time as _time
+
+    with _skip_check_lock:
+        _skip_check_cache[key] = (_time.monotonic(), result)
+        while len(_skip_check_cache) > _SKIP_CHECK_MAX:
+            oldest = min(_skip_check_cache, key=lambda k: _skip_check_cache[k][0])
+            _skip_check_cache.pop(oldest, None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1633,21 +1698,26 @@ def generate_payroll(request: Request) -> Response:
     skipped = []
 
     from . import payroll_progress
-    payroll_progress.start(len(employees))
+    if not payroll_progress.try_begin_run():
+        return _error("A payroll run is already in progress. Wait for it to finish, then try again.", 409)
+    try:
+        payroll_progress.start(len(employees))
 
-    for emp in employees:
-        emp_name = f"{emp.first_name} {emp.last_name}"
-        before_count = len(generated)
-        try:
-            result = _generate_staff_payroll(emp, month, year)
-            generated.append(_payroll_json(result["payroll"], emp_name))
-        except PayrollSkip as e:
-            skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
-        except Exception as e:
-            skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
-        payroll_progress.step(emp_name, len(generated) > before_count)
+        for emp in employees:
+            emp_name = f"{emp.first_name} {emp.last_name}"
+            before_count = len(generated)
+            try:
+                result = _generate_staff_payroll(emp, month, year)
+                generated.append(_payroll_json(result["payroll"], emp_name))
+            except PayrollSkip as e:
+                skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
+            except Exception as e:
+                skipped.append({"employeeId": emp.id, "name": emp_name, "reason": str(e)})
+            payroll_progress.step(emp_name, len(generated) > before_count)
 
-    payroll_progress.finish()
+        payroll_progress.finish()
+    finally:
+        payroll_progress.end_run()
 
     from .audit_utils import log_action as _log
     _log(request, "create", "payroll", description=(

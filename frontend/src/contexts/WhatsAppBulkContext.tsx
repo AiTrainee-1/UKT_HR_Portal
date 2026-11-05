@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -72,8 +72,14 @@ export function WhatsAppBulkProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback(() => setShowPipeline(false), []);
 
+  // Memoized so the readers re-render when the send state changes, not whenever this provider does (every toast).
+  const value = useMemo(
+    () => ({ isRunning, showPipeline, progress, lastResult, triggerBulkWhatsApp, dismiss }),
+    [isRunning, showPipeline, progress, lastResult, triggerBulkWhatsApp, dismiss],
+  );
+
   return (
-    <WhatsAppBulkCtx.Provider value={{ isRunning, showPipeline, progress, lastResult, triggerBulkWhatsApp, dismiss }}>
+    <WhatsAppBulkCtx.Provider value={value}>
       {children}
     </WhatsAppBulkCtx.Provider>
   );

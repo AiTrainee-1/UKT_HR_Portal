@@ -21,7 +21,7 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { useListEmployees, type Employee } from "@/lib/api-client";
+import { useListEmployeesLite, type Employee } from "@/lib/api-client";
 import { useBulkUpdateLocationTracking, useUpdateEmployeeLocationTracking } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { PersonCell, ToolbarCard } from "../kit";
@@ -36,7 +36,7 @@ export default function TrackingSettingsTab() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [bulkConfirm, setBulkConfirm] = useState<null | boolean>(null);
-  const { data: employees, isLoading } = useListEmployees({ status: "active" });
+  const { data: employees, isLoading } = useListEmployeesLite({ status: "active" });
   const toggleMutation = useUpdateEmployeeLocationTracking();
   const bulkMutation = useBulkUpdateLocationTracking();
 

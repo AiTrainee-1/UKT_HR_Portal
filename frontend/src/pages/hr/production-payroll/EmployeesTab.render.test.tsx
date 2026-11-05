@@ -211,10 +211,15 @@ describe("searching and filtering the roster", () => {
   it("searches by name or code, and keeps the search in the address", async () => {
     await openRoster();
     typeInto(must("pcp-roster-search") as HTMLInputElement, "bala");
-    expect(params().eq).toBe("bala");
+    // the box shows the letters at once; the address and the list follow once typing pauses
+    expect((must("pcp-roster-search") as HTMLInputElement).value).toBe("bala");
+    expect(params().eq).toBeUndefined();
+    await waitFor(() => params().eq === "bala", "the search in the address");
     expect(rowIds()).toEqual(["PC-W2"]);
     typeInto(must("pcp-roster-search") as HTMLInputElement, "pc-n1");
+    await waitFor(() => params().eq === "pc-n1", "the next search in the address");
     expect(rowIds()).toEqual(["PC-N1"]);
+    // emptying the box clears the search at once
     typeInto(must("pcp-roster-search") as HTMLInputElement, "");
     expect(params().eq).toBeUndefined();
     expect(rowIds()).toHaveLength(3);

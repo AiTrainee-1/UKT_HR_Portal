@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useDraft } from "@/hooks/use-debounced";
 import { useListDepartments } from "@/lib/api-client";
 import { ALL } from "../leave/logic";
 import { DateField, FilterPanel, FilterSelect, SearchBox } from "../leave/parts";
@@ -29,13 +30,15 @@ export default function DailyFiltersBar({
 }) {
   const { data: departments } = useListDepartments();
   const set = (patch: Partial<DailyFilters>) => onChange({ ...filters, ...patch });
+  // the box keeps its own text and hands the search up once typing pauses: one request per pause, not per letter
+  const [search, setSearch] = useDraft(filters.search, (next) => set({ search: next }));
   return (
     <div data-testid={testId}>
       <FilterPanel>
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
           <SearchBox
-            value={filters.search}
-            onChange={(search) => set({ search })}
+            value={search}
+            onChange={setSearch}
             placeholder="Search by employee code or name"
             label="Search employees"
             testId="daily-search"

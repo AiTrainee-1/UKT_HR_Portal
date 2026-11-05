@@ -26,13 +26,13 @@ const row = (over: Partial<ReportLogDailyRow>): ReportLogDailyRow => ({
 const ctx = { company: "UK Textiles", branchLabel: "All Branches", logoDataUrl: null };
 
 describe("the Excel file of the paper STAFF LEAVE LIST", () => {
-  it("draws the leave list with the Remarks colours", () => {
+  it("draws the leave list with the Remarks colours", async () => {
     const spec = leaveSpec("2026-10-03", [
       row({ employeeCode: "2503", isInformed: true }),
       row({ employeeCode: "2998", isInformed: false }),
       row({ employeeCode: "3000", isInformed: null }),
     ]);
-    const ws = buildSheetWorkbook(spec, ctx).getWorksheet("Report")!;
+    const ws = (await buildSheetWorkbook(spec, ctx)).getWorksheet("Report")!;
     expect(ws.getCell("A3").value).toBe("03.10.2026 STAFF LEAVE LIST");
     expect(ws.getCell("G5").value).toBe("Remarks");
     const fill = (a: string) => (ws.getCell(a).fill as { fgColor?: { argb?: string } }).fgColor?.argb;
@@ -42,13 +42,13 @@ describe("the Excel file of the paper STAFF LEAVE LIST", () => {
     expect(ws.getCell("E6").value).toBe("QAD");
   });
 
-  it("puts the unit label in the gutter of its block and leaves a blank row between blocks", () => {
+  it("puts the unit label in the gutter of its block and leaves a blank row between blocks", async () => {
     const spec = leaveSpec("2026-10-03", [
       row({ employeeCode: "1", employeeName: "A" }),
       row({ employeeCode: "2", employeeName: "B" }),
       row({ employeeCode: "3", employeeName: "C", branchId: 2, branchName: "Unit One", unitLabel: "U-1" }),
     ]);
-    const ws = buildSheetWorkbook(spec, ctx).getWorksheet("Report")!;
+    const ws = (await buildSheetWorkbook(spec, ctx)).getWorksheet("Report")!;
     expect([ws.getCell("A6").value, ws.getCell("A7").value]).toEqual(["HO", null]);
     expect(ws.getCell("C8").value).toBeNull();
     expect([ws.getCell("A9").value, ws.getCell("B9").value]).toEqual(["U-1", 1]);

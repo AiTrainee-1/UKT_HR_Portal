@@ -58,7 +58,7 @@ from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Prefetch, Q
 from django.http import FileResponse
 from django.utils import timezone
 from rest_framework.decorators import api_view, parser_classes
@@ -384,6 +384,23 @@ def _current_on_duty_session(emp: Employee) -> OnDutySession | None:
 WORKFLOW = "on_duty"
 
 
+def with_pending_punch_count(qs):
+    """An OnDutySession queryset with each session's pending punch verifications counted in the same query (read by
+    _on_duty_session_dict), instead of one COUNT per session."""
+    return qs.annotate(
+        pending_punch_count=Count(
+            "punch_verifications", filter=Q(punch_verifications__status=OnDutyPunchVerification.STATUS_PENDING)
+        )
+    )
+
+
+def _pending_punch_count(session: OnDutySession) -> int:
+    annotated = getattr(session, "pending_punch_count", None)
+    if annotated is not None:
+        return annotated
+    return session.punch_verifications.filter(status=OnDutyPunchVerification.STATUS_PENDING).count()
+
+
 def _on_duty_session_dict(
     session: OnDutySession, *, for_employee: bool = False, cfg: approval.Config | None = None
 ) -> dict:
@@ -417,10 +434,9 @@ def _on_duty_session_dict(
         "isProvisional": provisional,
         # What HR is actually deciding about: punches already captured under
         # a request nobody has approved yet, every one of which is voided if
-        # they reject.
-        "pendingPunchCount": session.punch_verifications.filter(
-            status=OnDutyPunchVerification.STATUS_PENDING
-        ).count(),
+        # they reject. A list annotates it (with_pending_punch_count) so it
+        # costs no COUNT per session.
+        "pendingPunchCount": _pending_punch_count(session),
         "employeeEndedAt": session.employee_ended_at.isoformat() if session.employee_ended_at else None,
         "hodReviewedBy": session.hod_reviewed_by,
         "hodReviewComment": session.hod_review_comment,
@@ -1118,13 +1134,16 @@ def on_duty_sessions_hr(request: Request) -> Response:
     pending_hr so HR's Pending Approvals tab sees everything awaiting either
     stage in one list."""
     status_filter = request.query_params.get("status", "pending")
-    qs = OnDutySession.objects.select_related("employee__department", "employee__designation", "branch")
+    # Never the employee's photo (a base64 data URL, up to ~2 MB each): no row shows it.
+    qs = OnDutySession.objects.select_related(
+        "employee__department", "employee__designation", "branch"
+    ).defer("employee__photo_url")
     qs = scope_to_branch(qs, request)  # OnDutySession.branch_id is a direct field
     if status_filter == "pending":
         qs = qs.filter(status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR])
     elif status_filter != "all":
         qs = qs.filter(status=status_filter)
-    qs = qs.order_by("-created_at")[:200]
+    qs = with_pending_punch_count(qs).order_by("-created_at")[:200]
     cfg = approval.get_config(WORKFLOW)
     return Response([_on_duty_session_dict(s, cfg=cfg) for s in qs])
 
@@ -1385,9 +1404,17 @@ def on_duty_map(request: Request) -> Response:
         except ValueError:
             return _error("Invalid date format")
 
+    # The punches prefetched already in punch order (an .order_by() on the related manager would query once per
+    # session again); never the employee's photo (a base64 data URL, up to ~2 MB each), which the map does not show.
     sessions = scope_to_branch(
         OnDutySession.objects.select_related("employee__department", "employee__branch", "branch")
-        .prefetch_related("punch_verifications"),
+        .defer("employee__photo_url")
+        .prefetch_related(
+            Prefetch(
+                "punch_verifications",
+                queryset=OnDutyPunchVerification.objects.order_by("punch_number", "id"),
+            )
+        ),
         request,
     ).filter(Q(created_at__date=d) | Q(status=OnDutySession.STATUS_ACTIVE)).order_by("employee_id", "-created_at")
 
@@ -1420,7 +1447,7 @@ def on_duty_map(request: Request) -> Response:
             "session": {"id": s.id, "destination": s.destination, "status": s.status},
             "punches": [
                 {"punchNumber": v.punch_number, "punchType": v.punch_type, "punchTime": v.punch_time.strftime("%H:%M:%S"), "status": v.status}
-                for v in s.punch_verifications.order_by("punch_number")
+                for v in s.punch_verifications.all()
             ],
         }
 

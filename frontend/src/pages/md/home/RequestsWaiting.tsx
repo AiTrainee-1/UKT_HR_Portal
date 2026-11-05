@@ -45,11 +45,13 @@ const TONE_CLASS = {
  * its page.
  */
 export default function RequestsWaiting({ onTotal }: { onTotal?: (total: number) => void }) {
-  const leaves = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000 } } as never);
-  const permissions = useListPermissions(undefined, REFRESH);
+  // Only what is still waiting is asked for (each list takes `status=`), not every request ever raised: the card shows
+  // and counts nothing else. The status checks below stay, so the card reads the same whatever a list sends.
+  const leaves = useListLeaveRequests({ status: "pending" }, { query: { refetchInterval: 30_000 } } as never);
+  const permissions = useListPermissions({ status: "pending" }, REFRESH);
   const outpasses = useListOutpassRequests("pending");
-  const advances = useListAdvances(undefined, REFRESH);
-  const resignations = useListResignations(undefined, REFRESH);
+  const advances = useListAdvances({ status: "pending" }, REFRESH);
+  const resignations = useListResignations("pending,dept_approved", REFRESH);
   const onDutySessions = useOnDutySessionsHR("pending");
   const onDutyPunches = useOnDutyPunchVerificationsHR("pending");
 

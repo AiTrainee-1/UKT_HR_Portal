@@ -67,6 +67,8 @@ MIDDLEWARE = [
     "api.middleware.DatabaseHealthMiddleware",
     "api.permission_middleware.HrPermissionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    # Keeps the request being served reachable for absolute API links (employee photo links, api/employee_photo.py).
+    "api.request_context.RequestContextMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -146,6 +148,40 @@ if _sslmode:
 # transparently reconnects if it's gone stale within that window.
 DATABASES["default"]["CONN_MAX_AGE"] = int(os.environ.get("DB_CONN_MAX_AGE", "60"))
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+
+# Time limits on the database connection (app health audit, 2026-11-05). Without them a database that stops answering
+# made every request wait for the operating system's TCP timeout (~2 minutes) -- longer than the server's own request
+# limit, so the worker was killed and restarted ("the server went down") -- and a query left behind by a killed request
+# kept running in Postgres, slowing everyone else.
+#   connect_timeout   give up opening a connection after 5 s (the request fails with a clear error instead of hanging)
+#   keepalives        notice a silently dropped connection in about a minute instead of hours
+#   statement_timeout no single SQL statement may run longer than 2 minutes (normal ones take milliseconds)
+#   idle_in_transaction_session_timeout  a transaction left open and idle for 5 minutes is closed by Postgres
+# Each is set from the environment (0 turns a limit off). The two statement limits are not applied to commands that
+# legitimately run long single statements (migrations, a restore, a database shell).
+_db_options = DATABASES["default"].setdefault("OPTIONS", {})
+_db_options.setdefault("connect_timeout", int(os.environ.get("DB_CONNECT_TIMEOUT", "5") or 0) or None)
+if _db_options["connect_timeout"] is None:
+    del _db_options["connect_timeout"]
+_db_options.setdefault("keepalives", 1)
+_db_options.setdefault("keepalives_idle", 30)
+_db_options.setdefault("keepalives_interval", 10)
+_db_options.setdefault("keepalives_count", 3)
+_LONG_STATEMENT_COMMANDS = {"migrate", "dbshell", "restore_backup", "loaddata", "dumpdata", "sqlmigrate", "flush"}
+# A connection pooler (PgBouncer, port 6432 / a "pooler" host) refuses the `options` startup parameter: never send it there.
+_behind_pooler = str(DATABASES["default"].get("PORT") or "") == "6432" or "pooler" in str(
+    DATABASES["default"].get("HOST") or ""
+)
+if not (len(sys.argv) > 1 and sys.argv[1] in _LONG_STATEMENT_COMMANDS) and not _behind_pooler:
+    _limits = []
+    _statement_ms = int(os.environ.get("DB_STATEMENT_TIMEOUT_MS", "120000") or 0)
+    _idle_tx_ms = int(os.environ.get("DB_IDLE_IN_TRANSACTION_TIMEOUT_MS", "300000") or 0)
+    if _statement_ms > 0:
+        _limits.append(f"-c statement_timeout={_statement_ms}")
+    if _idle_tx_ms > 0:
+        _limits.append(f"-c idle_in_transaction_session_timeout={_idle_tx_ms}")
+    if _limits and "options" not in _db_options:
+        _db_options["options"] = " ".join(_limits)
 
 # Several people (or agents) can run the test suite at once only if each run has its own throwaway database: the test
 # runner creates and DROPS "test_<NAME>", so two runs would delete each other's data mid-test. DB_TEST_NAME gives a run

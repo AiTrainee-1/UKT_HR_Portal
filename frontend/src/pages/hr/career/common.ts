@@ -108,7 +108,7 @@ export async function exportSheet(opts: {
 }): Promise<void> {
   const { downloadWorkbook, newWorkbook, styleHeaderCell, addMergedTextRow, todayStamp } =
     await import("@/lib/exportUtils");
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet(opts.title.slice(0, 31));
   addMergedTextRow(ws, 1, opts.headers.length, opts.title, { size: 14 });
   const header = ws.getRow(3);

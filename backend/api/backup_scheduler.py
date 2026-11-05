@@ -17,6 +17,7 @@ import logging
 import os
 
 from django.utils import timezone
+from .scheduler_db import fresh_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ def get_scheduler():
     return _scheduler
 
 
+@fresh_db_connection
 def _run_scheduled_backup() -> None:
     """Executed by APScheduler in a worker thread. Re-fetches the schedule
     fresh from the DB so edits/disables made after the job was scheduled

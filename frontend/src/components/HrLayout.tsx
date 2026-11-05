@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Menu, Eye } from "lucide-react";
 import { HrSidebar } from "@/components/ui/dashboard-sidebar";
@@ -7,7 +7,7 @@ import { pageHasRefresh } from "@/lib/page-refresh";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
-import { lockMutatingControls } from "@/lib/view-only-lock";
+import { watchMutatingControls } from "@/lib/view-only-lock";
 import { useSidebarCollapsed, useIsDesktop, toggleSidebarCollapsed } from "@/lib/sidebar-state";
 import { useMdEmbedded } from "@/lib/md/embed";
 import MdLayout from "@/components/md/MdLayout";
@@ -25,6 +25,8 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
 
 function HrShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Stable, so the memoized sidebar is not re-rendered by every render of the page around it.
+  const closeMobile = useCallback(() => setMobileOpen(false), []);
   const { data: settings } = usePayrollSettings();
   const companyName = settings?.companyName || "UKTextiles";
   const companyLogo = settings?.companyLogo;
@@ -65,17 +67,14 @@ function HrShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!isViewOnly) return;
 
-    const relock = () => lockMutatingControls(document.body);
-    relock();
-    // Observing document.body (not just the page's own content div) on
+    // Watching document.body (not just the page's own content div) on
     // purpose: Radix Dialog/Popover/Select content portals straight to
     // <body>, outside this page's DOM subtree. A "View Details" dialog is
     // fine to open (its trigger isn't a mutating word), but if that dialog
     // has its own "Edit"/"Save" button, that only exists in the portaled
-    // content -this is what catches it once it mounts.
-    const observer = new MutationObserver(relock);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    // content -this is what catches it once it mounts. One full pass now,
+    // then only what changes, at most once a frame (see watchMutatingControls).
+    return watchMutatingControls(document.body);
   }, [isViewOnly, location]);
 
   useLayoutEffect(() => {
@@ -140,7 +139,7 @@ function HrShell({ children }: { children: React.ReactNode }) {
         }}
       >
         <HrSidebar
-          onClose={() => setMobileOpen(false)}
+          onClose={closeMobile}
           collapsed={collapsed}
           onToggleCollapse={toggleSidebarCollapsed}
         />
@@ -152,7 +151,7 @@ function HrShell({ children }: { children: React.ReactNode }) {
           data-ui-shell="overlay"
           className="fixed inset-0 z-40 lg:hidden"
           style={{ background: "rgba(0,60,100,0.2)", backdropFilter: "blur(4px)" }}
-          onClick={() => setMobileOpen(false)}
+          onClick={closeMobile}
         />
       )}
 

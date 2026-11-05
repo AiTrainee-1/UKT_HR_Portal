@@ -15,6 +15,7 @@ from fake_zk_device import FakeDevice, FakeServer, record28, record72
 
 from . import device_client as dc
 from . import device_directory as dd
+from .employee_photo import photo_link
 from .jwt_utils import sign_token
 from .models import (
     AuditLog,
@@ -765,7 +766,9 @@ class PhotoTests(WithDevices):
 
     def test_a_photo_becomes_the_employees_profile_photo_and_is_audited(self):
         out = dd.save_employee_photo(self.req, self.emp.pk, JPEG)
-        self.assertEqual(out["photoUrl"], f"/api/employees/{self.emp.pk}/photo")
+        # the signed, token-free link of the photo now stored (employee_photo.py)
+        self.assertEqual(out["photoUrl"], photo_link(self.emp.pk, JPEG))
+        self.assertIn(f"/api/employees/{self.emp.pk}/photo?v=", out["photoUrl"])
         self.emp.refresh_from_db()
         self.assertEqual(self.emp.photo_url, JPEG)
         self.assertEqual(AuditLog.objects.filter(action="update", module="employees", record_id=self.emp.pk).count(), 1)

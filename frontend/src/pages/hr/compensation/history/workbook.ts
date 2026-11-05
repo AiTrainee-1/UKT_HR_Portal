@@ -178,12 +178,12 @@ function summarySheet(wb: ExcelJS.Workbook, report: CompensationReport, company:
 export type ExportFilters = { department?: string | null; branch?: string | null };
 
 /** The whole report as a workbook (built for real; the caller downloads it). */
-export function buildReportWorkbook(
+export async function buildReportWorkbook(
   report: CompensationReport,
   company: string,
   filters: ExportFilters = {},
-): ExcelJS.Workbook {
-  const wb = newWorkbook();
+): Promise<ExcelJS.Workbook> {
+  const wb = await newWorkbook();
   summarySheet(wb, report, company, filters);
   for (const section of report.sections) typeSheet(wb, report, section, company);
   return wb;
@@ -194,5 +194,5 @@ export async function exportReportWorkbook(
   company: string,
   filters: ExportFilters = {},
 ): Promise<void> {
-  await downloadWorkbook(buildReportWorkbook(report, company, filters), `${reportFileStem(report)}.xlsx`);
+  await downloadWorkbook(await buildReportWorkbook(report, company, filters), `${reportFileStem(report)}.xlsx`);
 }

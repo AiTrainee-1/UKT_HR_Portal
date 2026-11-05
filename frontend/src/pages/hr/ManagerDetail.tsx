@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { canView, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { useListEmployees } from "@/lib/api-client";
+import { useListEmployeesLite } from "@/lib/api-client";
 import {
   useAssignEmployeeToManager,
   useGetDepartmentManager,
@@ -35,7 +35,7 @@ export default function ManagerDetail() {
   const [claimingId, setClaimingId] = useState<number | null>(null);
 
   const { data: manager, isLoading } = useGetDepartmentManager(managerId);
-  const { data: employees } = useListEmployees({ status: "active" });
+  const { data: employees } = useListEmployeesLite({ status: "active" });
   const update = useUpdateDepartmentManager();
   const assignEmployee = useAssignEmployeeToManager();
 

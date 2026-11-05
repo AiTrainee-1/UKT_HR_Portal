@@ -131,7 +131,9 @@ def _compensation_dict(emp: Employee, settings=None) -> dict:
 @require_compensation_features_for_changes
 def compensation_list(request: Request) -> Response:
     qs = scope_to_branch(
-        Employee.objects.select_related("department", "designation", "branch"), request
+        # never the photo (a base64 data URL, up to ~2 MB per employee): the CTC rows do not show it
+        Employee.objects.select_related("department", "designation", "branch").defer("photo_url"),
+        request,
     ).filter(status=request.query_params.get("status") or "active")
 
     dept_id = request.query_params.get("departmentId")
@@ -150,7 +152,16 @@ def compensation_list(request: Request) -> Response:
             Q(first_name__icontains=search) | Q(last_name__icontains=search) | Q(employee_code__icontains=search)
         )
 
-    rows = [_compensation_dict(emp) for emp in qs.order_by("employee_code")]
+    # Each employee's figures follow their own branch's settings: resolved once per branch for this request (a few
+    # branches), not once per employee. Only within this one request, so they are never stale.
+    by_branch: dict = {}
+
+    def settings_of(emp: Employee):
+        if emp.branch_id not in by_branch:
+            by_branch[emp.branch_id] = settings_for_employee(emp)
+        return by_branch[emp.branch_id]
+
+    rows = [_compensation_dict(emp, settings_of(emp)) for emp in qs.order_by("employee_code")]
     return Response({"results": rows, "count": len(rows)})
 
 

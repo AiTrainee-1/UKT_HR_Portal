@@ -1,18 +1,79 @@
-import { useState, useSyncExternalStore } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { memo, useCallback, useState, useSyncExternalStore } from "react";
+import { useQueryClient, type QueryCache } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { runPageRefreshers } from "@/lib/page-refresh";
 
+const newestActiveData = (cache: QueryCache) =>
+  cache.findAll({ type: "active" }).reduce((newest, q) => Math.max(newest, q.state.dataUpdatedAt), 0);
+
+type LastUpdatedStore = {
+  value: number;
+  listeners: Set<() => void>;
+  unsubscribe: (() => void) | null;
+  frame: number;
+};
+const lastUpdatedStores = new WeakMap<QueryCache, LastUpdatedStore>();
+
+const nextFrame = (cb: () => void): number =>
+  typeof requestAnimationFrame === "function" ? requestAnimationFrame(cb) : window.setTimeout(cb, 16);
+const cancelFrame = (handle: number) =>
+  typeof cancelAnimationFrame === "function" ? cancelAnimationFrame(handle) : window.clearTimeout(handle);
+
+/**
+ * One shared watcher per query cache. The cache emits an event for every fetch, result and observer change (dozens a
+ * second on a busy page), and walking every query on each of them was measurable; this recomputes at most once per
+ * frame, and only tells its readers when the time actually changed.
+ */
+function lastUpdatedStore(cache: QueryCache): LastUpdatedStore {
+  let store = lastUpdatedStores.get(cache);
+  if (!store) {
+    store = { value: 0, listeners: new Set(), unsubscribe: null, frame: 0 };
+    lastUpdatedStores.set(cache, store);
+  }
+  return store;
+}
+
+function subscribeLastUpdated(cache: QueryCache, onChange: () => void): () => void {
+  const store = lastUpdatedStore(cache);
+  store.listeners.add(onChange);
+  if (!store.unsubscribe) {
+    store.value = newestActiveData(cache);
+    const recompute = () => {
+      store.frame = 0;
+      const value = newestActiveData(cache);
+      if (value === store.value) return;
+      store.value = value;
+      store.listeners.forEach((listener) => listener());
+    };
+    store.unsubscribe = cache.subscribe(() => {
+      if (!store.frame) store.frame = nextFrame(recompute);
+    });
+  }
+  return () => {
+    store.listeners.delete(onChange);
+    if (store.listeners.size > 0) return;
+    store.unsubscribe?.();
+    store.unsubscribe = null;
+    if (store.frame) cancelFrame(store.frame);
+    store.frame = 0;
+  };
+}
+
 /** When the newest data on screen arrived (0 = nothing loaded yet). */
 function useLastUpdated(): number {
   const queryClient = useQueryClient();
   const cache = queryClient.getQueryCache();
-  return useSyncExternalStore(
-    (onChange) => cache.subscribe(onChange),
-    () => cache.findAll({ type: "active" }).reduce((newest, q) => Math.max(newest, q.state.dataUpdatedAt), 0),
-  );
+  // Stable, so a re-render (a Refresh button in a page's title row re-renders with every keystroke there) does not
+  // unsubscribe and subscribe again.
+  const subscribe = useCallback((onChange: () => void) => subscribeLastUpdated(cache, onChange), [cache]);
+  const getSnapshot = useCallback(() => {
+    const store = lastUpdatedStore(cache);
+    // Live while someone is subscribed; before the first subscription (the first render) it is computed fresh.
+    return store.unsubscribe ? store.value : newestActiveData(cache);
+  }, [cache]);
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 export const clock = (ms: number) =>
@@ -77,7 +138,7 @@ export function RefreshButton({ className = "" }: { className?: string }) {
  * The strip HrLayout shows at the top of every HR page that doesn't put its own RefreshButton in its
  * title row (see lib/page-refresh.ts): "Updated 3:47:23 pm" and the button.
  */
-export default function PageRefreshBar() {
+function PageRefreshBar() {
   const { lastUpdated } = useRefreshAction();
   return (
     <div className="mb-3 flex items-center justify-end gap-3 print:hidden" data-testid="page-refresh-bar">
@@ -90,3 +151,6 @@ export default function PageRefreshBar() {
     </div>
   );
 }
+
+// No props: re-renders only when its own data changes, not on every render of the page around it.
+export default memo(PageRefreshBar);

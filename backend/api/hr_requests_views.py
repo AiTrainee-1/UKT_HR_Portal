@@ -32,6 +32,7 @@ from . import approval_workflow as approval
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .clock import FACTORY_TZ, ist_today
+from .employee_photo import employee_photo_link, photo_links
 from .models import AttendanceLog
 from .permission_registry import effective_permissions, resolve_permission
 
@@ -220,7 +221,9 @@ def _money(value) -> str:
     return f"Rs. {float(value):,.0f}"
 
 
-def _employee_json(emp) -> dict:
+def _employee_json(emp, photos: dict | None = None) -> dict:
+    """`photos`: photo_links of the listed employees. The photo is a signed link (employee_photo.py), never the embedded
+    picture: one employee's 2 MB photo used to be repeated in every request they had made, 86 MB for one list."""
     return {
         "id": emp.id,
         "code": emp.employee_code,
@@ -231,7 +234,7 @@ def _employee_json(emp) -> dict:
         "branch": emp.branch.name if emp.branch_id and emp.branch else None,
         "branchId": emp.branch_id,
         "type": emp.employment_type,
-        "photoUrl": emp.photo_url,
+        "photoUrl": employee_photo_link(emp, photos),
     }
 
 
@@ -536,7 +539,7 @@ def _decision_of(kind: Kind, obj, parts: dict) -> dict:
     return {"by": by, "role": _role(role), "at": at.isoformat() if hasattr(at, "isoformat") else at, "comment": comment}
 
 
-def _item(kind: Kind, obj, cfg, extra: dict) -> dict:
+def _item(kind: Kind, obj, cfg, extra: dict, photos: dict | None = None) -> dict:
     build = BUILDERS.get(kind.key)
     parts = build(obj) if build else _permission(obj, extra)
     prog = approval.progress(kind.key, obj, cfg)
@@ -546,7 +549,7 @@ def _item(kind: Kind, obj, cfg, extra: dict) -> dict:
         "key": f"{kind.key}-{obj.id}",
         "kind": kind.key,
         "id": obj.id,
-        "employee": _employee_json(obj.employee),
+        "employee": _employee_json(obj.employee, photos),
         "label": parts["label"],
         "summary": parts["summary"],
         "reason": parts.get("reason"),
@@ -576,8 +579,16 @@ def _base_qs(kind: Kind, request: Request):
     return scope_to_branch(qs, request, field=kind.scope_field)
 
 
+def _with_related(kind: Kind, request: Request):
+    """The kind's rows with what the list shows of them, except the employee's photo: an embedded photo can be MBs and
+    select_related would read it once per row. The list shows a link instead (photo_links, one query per response). A
+    resignation's Department Head (an employee too) is only ever shown by name."""
+    unread = ["employee__photo_url"] + (["dept_head__photo_url"] if "dept_head" in kind.select else [])
+    return _base_qs(kind, request).select_related(*kind.select).defer(*unread)
+
+
 def _filtered_qs(kind: Kind, request: Request, params: dict):
-    qs = _base_qs(kind, request).select_related(*kind.select)
+    qs = _with_related(kind, request)
     status = params["status"]
     waiting = Q(status__in=kind.waiting)
     if status == "waiting":
@@ -659,7 +670,7 @@ def _stats_and_waiting(kinds: list[Kind], request: Request, month_start: datetim
     for kind in kinds:
         cfg = approval.get_config(kind.key)
         counts = {"total": 0, "hr": 0, "hod": 0, "other": 0}
-        base = _base_qs(kind, request).select_related(*kind.select)
+        base = _with_related(kind, request)
         for obj in base.filter(status__in=kind.waiting):
             queue = _queue(approval.progress(kind.key, obj, cfg)) or "other"
             counts["total"] += 1
@@ -745,11 +756,15 @@ def hr_requests(request: Request) -> Response:
     extra = {"permission": _permission_row_builder()}
     items: list[dict] = []
     matched: dict[str, int] = {}
+    listed: list[tuple[Kind, list]] = []
     for kind in wanted:
         qs = _filtered_qs(kind, request, params)
         matched[kind.key] = qs.count()
+        listed.append((kind, list(qs[: params["limit"]])))
+    photos = photo_links(obj.employee_id for _kind, rows in listed for obj in rows)
+    for kind, rows in listed:
         cfg = approval.get_config(kind.key)
-        items.extend(_item(kind, obj, cfg, extra) for obj in qs[: params["limit"]])
+        items.extend(_item(kind, obj, cfg, extra, photos) for obj in rows)
     items.sort(key=lambda i: (i["submittedAt"] or "", i["id"]), reverse=True)
 
     kinds_json = []

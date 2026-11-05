@@ -11,6 +11,7 @@ import {
   TrendingUp, AlertTriangle,
 } from "lucide-react";
 import { useListAuditLogs, useAuditLogStats } from "@/lib/api-client";
+import { useDebounced } from "@/hooks/use-debounced";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import { DataPagination } from "@/components/ui/DataPagination";
 
@@ -104,10 +105,19 @@ export default function ActivityLogs() {
   const [dateTo, setDateTo]           = useState("");
   const [page, setPage]               = useState(1);
 
+  // The box shows every letter; the log is asked for once typing pauses. A new search starts on page 1, set when the
+  // search is sent (resetting on the keystroke would first fetch page 1 of the old search).
+  const debouncedSearch = useDebounced(search);
+  const [searchOfPage, setSearchOfPage] = useState(debouncedSearch);
+  if (searchOfPage !== debouncedSearch) {
+    setSearchOfPage(debouncedSearch);
+    setPage(1);
+  }
+
   const { data, isLoading, refetch } = useListAuditLogs({
     module:   filterModule !== "all" ? filterModule : undefined,
     action:   filterAction !== "all" ? filterAction : undefined,
-    userName: search || undefined,
+    userName: debouncedSearch || undefined,
     dateFrom: dateFrom || undefined,
     dateTo:   dateTo || undefined,
     page,
@@ -255,7 +265,7 @@ export default function ActivityLogs() {
                 <Input
                   placeholder="Search by user name…"
                   value={search}
-                  onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+                  onChange={(e) => setSearch(e.target.value)}
                   className="pl-9 h-9 text-sm"
                 />
               </div>

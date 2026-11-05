@@ -103,8 +103,8 @@ function sheetTable(
 }
 
 /** The workbook: "HoD board" (heads x categories with the totals row) and "Pending requests" (every request, oldest first). */
-export function buildHodWorkbook(input: HodReportInput): ExcelJS.Workbook {
-  const wb = newWorkbook();
+export async function buildHodWorkbook(input: HodReportInput): Promise<ExcelJS.Workbook> {
+  const wb = await newWorkbook();
   const rows = sortHods(input.rows);
   const date = dayText(input.now);
 
@@ -507,7 +507,7 @@ export async function buildHodPdf(input: HodReportInput): Promise<jsPDF> {
 export const hodFileName = (now: Date, ext: "xlsx" | "pdf" | "png") => `${hodFileStem(now)}.${ext}`;
 
 export async function hodExcelBlob(input: HodReportInput): Promise<Blob> {
-  const buffer = await buildHodWorkbook(input).xlsx.writeBuffer();
+  const buffer = await (await buildHodWorkbook(input)).xlsx.writeBuffer();
   return new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 

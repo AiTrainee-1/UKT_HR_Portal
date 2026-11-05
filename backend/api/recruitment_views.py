@@ -12,6 +12,7 @@ from .user_settings import settings_for
 from .branch_scope import scope_to_branch
 from .company_documents_views import build_resignation_letter_pdf
 from .clock import ist_today
+from .employee_photo import photo_link, photo_stand_ins
 from .models import (
     Department,
     DepartmentHeadcount,
@@ -221,6 +222,9 @@ def recruitment_dashboard(request: Request) -> Response:
             employment_type="staff", status="active", join_date__gte=thirty_days_ago_str,
         )
         .select_related("department", "designation")
+        # the photo is sent as a link (employee_photo.py): the database gives what the link needs, not the picture
+        .annotate(**photo_stand_ins())
+        .defer("photo_url")
         .order_by("-join_date")[:10]
     )
 
@@ -250,7 +254,7 @@ def recruitment_dashboard(request: Request) -> Response:
                 "department": e.department.name if e.department_id and e.department else None,
                 "designation": e.designation.title if e.designation_id and e.designation else None,
                 "joinDate": e.join_date,
-                "photoUrl": e.photo_url,
+                "photoUrl": photo_link(e.id, e.photo_ref, e.photo_digest),
             }
             for e in recent_joinee_qs
         ],
@@ -282,6 +286,9 @@ def new_joinees(request: Request) -> Response:
         scope_to_branch(Employee.objects, request)
         .filter(status="active", join_date__gte=since)
         .select_related("department", "designation", "branch")
+        # the photo is sent as a link (employee_photo.py): the database gives what the link needs, not the picture
+        .annotate(**photo_stand_ins())
+        .defer("photo_url")
         .order_by("-join_date")
     )
 
@@ -297,7 +304,7 @@ def new_joinees(request: Request) -> Response:
             "branchName": e.branch.name if e.branch_id and e.branch else None,
             "employmentType": e.employment_type,
             "joinDate": e.join_date,
-            "photoUrl": e.photo_url,
+            "photoUrl": photo_link(e.id, e.photo_ref, e.photo_digest),
         }
         for e in qs
     ])
@@ -320,7 +327,8 @@ def _resignations_list(request: Request) -> Response:
         "employee", "employee__department", "dept_head",
     ).order_by("-created_at")
     if status_filter:
-        qs = qs.filter(status=status_filter)
+        # one status, or several comma-separated (the sidebar badge asks for "pending,dept_approved" only)
+        qs = qs.filter(status__in=[s.strip() for s in status_filter.split(",") if s.strip()])
     cfg = approval.get_config(WORKFLOW)
     return Response([_resignation_json(r, cfg) for r in qs])
 

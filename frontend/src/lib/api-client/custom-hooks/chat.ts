@@ -33,7 +33,7 @@ export const useChatMessages = (channelId: number | null) =>
     queryKey: ["/api/chat/channels", channelId, "messages"],
     queryFn: () => customFetch<ChatMessageItem[]>(`/api/chat/channels/${channelId}/messages?limit=100`),
     enabled: channelId != null,
-    refetchInterval: 4000,
+    refetchInterval: 10_000,
   });
 
 export const useSendChatMessage = () => {

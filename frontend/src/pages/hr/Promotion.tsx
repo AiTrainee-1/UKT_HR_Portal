@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
-import { useListDepartments, useListEmployees } from "@/lib/api-client";
+import { useListDepartments, useListEmployeesLite } from "@/lib/api-client";
 import { useDeletePromotion, useListDesignations } from "@/lib/api-client/custom-hooks";
 import { formatDate, monthsLabel, todayYmd } from "./career/dates";
 import { PersonCell, StatCard } from "./career/parts";
@@ -44,7 +44,7 @@ export default function Promotion() {
   const { toast } = useToast();
   const today = todayYmd();
 
-  const employeesQuery = useListEmployees({ status: "active" });
+  const employeesQuery = useListEmployeesLite({ status: "active" });
   const { data: departments } = useListDepartments();
   const { data: designations } = useListDesignations();
   const historyQuery = usePromotionHistory();

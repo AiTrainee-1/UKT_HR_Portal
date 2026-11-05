@@ -74,7 +74,7 @@ function instructionsSheet(wb: ExcelJS.Workbook, category: Category, headers: st
 
 export async function downloadTemplate(category: Category, user: Scope) {
   const cfg = CATEGORIES[category];
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet("Employees", { properties: { tabColor: { argb: cfg.sheetFill } } });
   styleHeaders(ws, cfg.headers);
 
@@ -105,7 +105,7 @@ export async function downloadTemplate(category: Category, user: Scope) {
 export async function downloadEmployees(category: Category, status: ListStatus, employees: Employee[], user: Scope) {
   const cfg = CATEGORIES[category];
   const headers = exportHeaders(category);
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet("Employees", { properties: { tabColor: { argb: cfg.sheetFill } } });
   styleHeaders(ws, headers);
   employeesOf(employees, category, status).forEach((emp) => ws.addRow(employeeRow(emp, headers)));
@@ -121,7 +121,7 @@ export async function downloadEmployees(category: Category, status: ListStatus, 
 /** The result of an upload as an Excel report: one row per sheet row, with what happened and why. */
 export async function downloadResultReport(result: BulkResult, context: UploadContext) {
   const cfg = CATEGORIES[context.category];
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet("Result", { properties: { tabColor: { argb: cfg.sheetFill } } });
   const headers = ["Sheet row", "Employee Code", "Name", "Result", "Reason / what changed", "Warnings"];
   ws.columns = [{ width: 11 }, { width: 18 }, { width: 28 }, { width: 14 }, { width: 70 }, { width: 50 }];

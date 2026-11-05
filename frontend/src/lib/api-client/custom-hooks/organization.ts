@@ -2,7 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
-import type { Employee } from "../generated/api.schemas";
+import type { Employee, ListEmployeesParams } from "../generated/api.schemas";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -62,6 +62,8 @@ export const useListBranches = <TData = Branch[]>(options?: UseQueryOptions<Bran
   useQuery<Branch[], unknown, TData>({
     queryKey: getListBranchesQueryKey(),
     queryFn: listBranches,
+    // branches rarely change, and every create / edit / delete (Branches.tsx) invalidates this key
+    staleTime: 5 * 60_000,
     ...options,
   });
 
@@ -217,16 +219,21 @@ export const useDeleteShift = () =>
 
 // ── Employee Search & Assignment ─────────────────────────────────────────────
 
-export const useSearchEmployees = (search: string, enabled = true) =>
-  useQuery({
+export const useSearchEmployees = (search: string, enabled = true) => {
+  const searching = enabled && search.trim().length >= 2;
+  return useQuery({
     queryKey: getSearchEmployeesQueryKey(search),
-    queryFn: () => {
-      const qs = new URLSearchParams({ search, status: "active" });
-      return customFetch<import("../generated/api.schemas").Employee[]>(`/api/employees?${qs}`);
+    queryFn: ({ signal }) => {
+      // lite: an embedded photo comes back as its /photo link instead of its bytes (no caller shows the picture)
+      const qs = new URLSearchParams({ search, status: "active", lite: "1" });
+      return customFetch<import("../generated/api.schemas").Employee[]>(`/api/employees?${qs}`, { signal });
     },
-    enabled: enabled && search.trim().length >= 2,
+    enabled: searching,
+    // the last matches stay listed while the next search loads; a box emptied below 2 letters shows none
+    placeholderData: (previous) => (searching ? previous : undefined),
     staleTime: 10_000,
   });
+};
 
 export const useAssignEmployee = () =>
   useMutation({
@@ -827,11 +834,15 @@ export const useEmployeeCount = (
 
 /** Every employee, as `useListEmployees` returns them, except that a photo is a link to /photo instead of its
  * bytes. For pages that list people without showing a picture (Bulk Upload): the full directory with every embedded
- * photo is tens of MB on a real company. Same key prefix as the list, so invalidating "/api/employees" refreshes it. */
-export const useListEmployeesLite = () =>
+ * photo is tens of MB on a real company. Takes the same filters as `useListEmployees` (e.g. `{ status: "active" }`;
+ * the server applies them before dropping the photos). Same key prefix as the list, so invalidating "/api/employees"
+ * refreshes it; the "lite" segment keeps it from sharing a cache entry with the photo-laden list. */
+export const useListEmployeesLite = (params?: ListEmployeesParams, options?: { enabled?: boolean }) =>
   useQuery<Employee[]>({
-    queryKey: ["/api/employees", "lite"] as const,
-    queryFn: () => customFetch<Employee[]>("/api/employees?lite=1"),
+    queryKey: ["/api/employees", "lite", ...(params ? [params] : [])] as const,
+    queryFn: ({ signal }) =>
+      customFetch<Employee[]>(`/api/employees?${employeesQueryString({ ...params, lite: 1 })}`, { signal }),
+    enabled: options?.enabled ?? true,
   });
 
 export const useBulkUpdateLocationTracking = () => {

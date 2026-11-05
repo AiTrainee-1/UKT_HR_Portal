@@ -6,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityOverlay from "@/components/ConnectivityOverlay";
 import { AuthProvider, useAuth, canViewRoute } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
-import { ApiError } from "@/lib/api-client/custom-fetch";
+import { ApiError, ResponseParseError } from "@/lib/api-client/custom-fetch";
 import { toast } from "@/hooks/use-toast";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { BiometricSyncProvider } from "@/contexts/BiometricSyncContext";
@@ -23,12 +23,19 @@ import { CircleLoader } from "@/components/ui/CircleLoader";
 import NotFound from "@/pages/not-found";
 import ServerError from "@/pages/ServerError";
 import ErrorBoundary from "@/components/status/ErrorBoundary";
-import AssistantHost from "@/components/md/assistant/AssistantHost";
+
+// The MD's AI assistant (its panel, framer-motion, the mascot) is only ever shown to the Managing Director, so nobody
+// else downloads it: it loads the first time an MD session is open (see AssistantGate below).
+// It sits outside the ErrorBoundary, so a chunk that fails to download renders nothing instead of taking the app down.
+const AssistantHost = lazy(() =>
+  import("@/components/md/assistant/AssistantHost").catch(() => ({ default: () => null })),
+);
 
 // Public pages
 import Landing from "@/pages/Landing";
 import LoginSelect from "@/pages/LoginSelect";
-import HrLogin from "@/pages/HrLogin";
+// Its own chunk: the WebGL orb (ogl) and the gsap text effects are only needed on the HR sign-in screen.
+const HrLogin = lazy(() => import("@/pages/HrLogin"));
 import EmployeeLogin from "@/pages/EmployeeLogin";
 const ErpLogin = lazy(() => import("@/pages/ErpLogin"));
 const SetPassword = lazy(() => import("@/pages/SetPassword"));
@@ -143,10 +150,18 @@ import {
   ErpSettings,
 } from "@/pages/erp/ErpPlaceholder";
 
+// Retry a failed query once, and only when the request never got an answer (offline, DNS, a dropped connection). An
+// HTTP error is the server's answer: a 4xx fails the same way again, and a 5xx/504 means the single worker is already
+// overloaded, so a retry would only double its load. A body that could not be read (ResponseParseError) is an answer too.
+function retryNetworkFailureOnce(failureCount: number, error: unknown): boolean {
+  if (failureCount >= 1) return false;
+  return !(error instanceof ApiError || error instanceof ResponseParseError);
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: retryNetworkFailureOnce,
       staleTime: 30_000,
     },
     mutations: {
@@ -543,6 +558,18 @@ function Router() {
   );
 }
 
+function AssistantGate() {
+  const { user } = useAuth();
+  // AssistantHost itself decides where it shows (only on /md pages) and closes the panel when the MD leaves them, so it
+  // stays mounted for the whole MD session; for everyone else it is never loaded.
+  if (!user?.isMd) return null;
+  return (
+    <Suspense fallback={null}>
+      <AssistantHost />
+    </Suspense>
+  );
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -562,7 +589,7 @@ function App() {
                         </ErrorBoundary>
                         {/* The MD's AI assistant lives here, not in a page: every page mounts its own layout, so a panel
                           inside it would reset on each navigation. It renders only for the MD, on /md/* pages. */}
-                        <AssistantHost />
+                        <AssistantGate />
                       </WouterRouter>
                       <GlobalSyncBanner />
                       <GlobalPayrollBanner />

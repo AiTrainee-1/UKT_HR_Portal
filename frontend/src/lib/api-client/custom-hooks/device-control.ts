@@ -98,7 +98,8 @@ export const useDeviceControlOverview = (autoRefresh: boolean) =>
   useQuery<DeviceControlOverview>({
     queryKey: DEVICE_CONTROL_OVERVIEW_KEY,
     queryFn: () => customFetch<DeviceControlOverview>(`${BASE}/overview`),
-    refetchInterval: autoRefresh ? 30_000 : false,
+    // every read opens a TCP session to each LAN device: kept to one every 2 minutes
+    refetchInterval: autoRefresh ? 120_000 : false,
   });
 
 /** Ask every device again (the server otherwise reuses an answer a few seconds old). */
@@ -689,13 +690,16 @@ export type SiteConnector = {
 
 export type ConnectorWithCode = { connector: SiteConnector; pairingCode: string; pairingExpiresAt: string };
 
-/** Every connector, with how it and its devices are (asked again every 10 seconds). */
-export const useConnectors = (enabled = true) =>
+/**
+ * Every connector, with how it and its devices are (asked again every 30 seconds). `poll: false` reads it once, for a
+ * page that only needs the list (Settings -> Devices picks a connector from it), not the live state.
+ */
+export const useConnectors = (enabled = true, { poll = true }: { poll?: boolean } = {}) =>
   useQuery<{ connectors: SiteConnector[] }>({
     queryKey: CONNECTORS_KEY,
     queryFn: () => customFetch<{ connectors: SiteConnector[] }>(`${BASE}/connectors`),
-    // asked again every 10 seconds, except while the answer is an error (a role without Attendance access, a server down)
-    refetchInterval: (query) => (query.state.status === "error" ? false : 10_000),
+    // asked again every 30 seconds, except while the answer is an error (a role without Attendance access, a server down)
+    refetchInterval: (query) => (!poll || query.state.status === "error" ? false : 30_000),
     enabled,
   });
 

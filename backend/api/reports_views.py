@@ -147,6 +147,7 @@ def attendance_report(request: Request):
     qs = (
         AttendanceLog.objects
         .select_related("employee", "employee__department", "employee__designation")
+        .defer("employee__photo_url")  # _emp_base never shows it; up to ~2 MB per employee
         .order_by("date", "employee__employee_code", "punch_time")
     )
     qs = scope_to_branch(qs, request, field="employee__branch_id")

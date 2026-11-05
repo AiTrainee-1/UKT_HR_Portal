@@ -544,9 +544,14 @@ def load_slips(
     order: "code" = natural employee code then period; "dept" = department, code, period.
     month_filter=False lets a report bring its own window through ``extra_q`` (production wage sheet)."""
     q, notes = slip_filter(ctx, full_modules=full_modules, legacy_key=legacy_key, force_kind=force_kind)
-    qs = SalarySlip.objects.select_related(
-        "employee", "employee__department", "employee__designation", "employee__branch"
-    ).filter(q)
+    # photo_url is a base64 data URL (up to ~2 MB per employee) and no slip report shows it: never load it per slip.
+    qs = (
+        SalarySlip.objects.select_related(
+            "employee", "employee__department", "employee__designation", "employee__branch"
+        )
+        .defer("employee__photo_url")
+        .filter(q)
+    )
     if extra_q is not None:
         qs = qs.filter(extra_q)
     if month_filter and ctx.period:

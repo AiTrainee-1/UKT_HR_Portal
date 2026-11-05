@@ -7,7 +7,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { useListEmployees, useSearchEmployees } from "@/lib/api-client";
+import { useDebounced } from "@/hooks/use-debounced";
+import { useListEmployeesLite, useSearchEmployees } from "@/lib/api-client";
 import { useAssignEmployeeToManager } from "@/lib/api-client/custom-hooks";
 import { DataPagination } from "@/components/ui/DataPagination";
 
@@ -95,9 +96,9 @@ export function ManagerAssignmentLookup({
   const [busyId, setBusyId] = useState<number | null>(null);
 
   // Only fetched while the Unassigned tab is open -it is the whole roster.
-  const { data: allEmployees, isLoading: empLoading } = useListEmployees(
-    { status: "active" } as any,
-    { query: { enabled: tab === "unassigned" } } as any,
+  const { data: allEmployees, isLoading: empLoading } = useListEmployeesLite(
+    { status: "active" },
+    { enabled: tab === "unassigned" },
   );
 
   /** Every employee already under some HOD, across all managers. */
@@ -132,9 +133,15 @@ export function ManagerAssignmentLookup({
   // Driven by `listSearch` (the single search box in the header above) -
   // there used to be a second, near-identical box just for this, which read
   // as two different searches doing two different things side by side.
-  const { data: staffMatches, isFetching: staffFetching } = useSearchEmployees(
-    tab === "users" ? listSearch : "",
-  );
+  // The server is asked once typing pauses (the HOD matches below still filter
+  // on every letter); until then it reads as "Searching…", not "nothing matches".
+  const staffSearch = tab === "users" ? listSearch : "";
+  const debouncedStaffSearch = useDebounced(staffSearch);
+  const staffTyped = staffSearch.trim().length >= 2;
+  const { data: staffResults, isFetching: staffRequestInFlight } = useSearchEmployees(debouncedStaffSearch);
+  const staffFetching = staffTyped && (staffRequestInFlight || staffSearch !== debouncedStaffSearch);
+  // The last matches stay listed while the next search loads, never under fewer than 2 characters.
+  const staffMatches = staffTyped ? staffResults : undefined;
 
   /** employeeId -> the HOD they report to. Built from every manager's
    *  assignment list, so one pass answers it for any employee. */

@@ -15,6 +15,7 @@ apps.py starts this scheduler once at boot via start_scheduler_if_needed().
 """
 
 import logging
+from .scheduler_db import fresh_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ def get_scheduler():
     return _scheduler
 
 
+@fresh_db_connection
 def _run_purge() -> None:
     from . import screening_cleanup
 

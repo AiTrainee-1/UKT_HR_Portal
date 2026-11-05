@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -112,11 +112,17 @@ export function SalarySlipBulkProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback(() => setShowPipeline(false), []);
 
-  return (
-    <SalarySlipBulkCtx.Provider value={{
+  // Memoized so the readers re-render when the bulk state changes, not whenever this provider does (every toast).
+  const value = useMemo(
+    () => ({
       isRunning, kind, showPipeline, progress, lastEmailResult,
       triggerBulkDownload, triggerBulkEmail, dismiss,
-    }}>
+    }),
+    [isRunning, kind, showPipeline, progress, lastEmailResult, triggerBulkDownload, triggerBulkEmail, dismiss],
+  );
+
+  return (
+    <SalarySlipBulkCtx.Provider value={value}>
       {children}
     </SalarySlipBulkCtx.Provider>
   );

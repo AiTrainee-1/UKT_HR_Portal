@@ -58,6 +58,9 @@ Percent-encoded characters in the password are decoded correctly, which matters 
 ```
 gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
 ```
+
+Gunicorn also reads `backend/gunicorn.conf.py` by itself (it starts in that folder): **one** worker (the scheduled jobs start in every worker process, so a second worker would run each job twice), a **120 s** request limit instead of gunicorn's 30 s (a long payroll run used to be killed half way, taking the site down while the worker restarted), and the classic one-request-at-a-time worker unless `GUNICORN_THREADS` is set above 1. Leave threads at 1 until the approval and payroll paths have row locks for requests running at the same moment. `GUNICORN_TIMEOUT` changes the limit. The database connection has its own limits (`config/settings.py`): `DB_CONNECT_TIMEOUT` (5 s), `DB_STATEMENT_TIMEOUT_MS` (120000) and `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` (300000); 0 turns one off, and the two statement limits are never sent to a connection pooler (port 6432) or used by `migrate` / `restore_backup`.
+
 `gunicorn` is already in `requirements.txt`. The on-premise deployment keeps using `waitress` (gunicorn needs `fcntl` and cannot run on Windows) -both are listed, so neither deployment target has to edit the file.
 
 **Environment variables** (Railway → Variables tab), matching `backend.md` Section 3:

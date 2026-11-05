@@ -15,6 +15,7 @@ delete so a rule change takes effect immediately.
 import logging
 
 from django.utils import timezone
+from .scheduler_db import fresh_db_connection
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ def _job_id(rule_id: int) -> str:
     return f"auto_sync_rule_{rule_id}"
 
 
+@fresh_db_connection
 def _run_rule(rule_id: int) -> None:
     """Executed by APScheduler in a worker thread. Re-fetches the rule fresh
     from the DB rather than closing over a stale object, so edits/disables

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { useDebounced } from "@/hooks/use-debounced";
 import { downloadWorkbook, newWorkbook, styleHeaderCell } from "@/lib/exportUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,7 +20,7 @@ import { FIRST_PORTION, SECOND_PORTION } from "@/lib/salary-split";
 const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
 async function exportCompensation(rows: CompensationRow[]) {
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet("Compensation");
 
   const columns = [
@@ -84,16 +85,12 @@ async function exportCompensation(rows: CompensationRow[]) {
 
 export default function CtcBreakdownTab({ isBranchScoped }: { isBranchScoped: boolean }) {
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  // The search is sent once typing pauses. (It used useMemo with a timer, whose "cleanup" useMemo never runs, so every
+  // keystroke still sent its own request, 300 ms later.)
+  const debouncedSearch = useDebounced(search.trim());
   const [deptFilter, setDeptFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
-
-  useMemo(() => {
-    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
 
   const { data: departments } = useListDepartments();
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });

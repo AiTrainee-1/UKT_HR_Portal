@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { TONE } from "@/lib/statusTones";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,7 @@ import {
   usePayrollSettings,
   type FinalAttendanceDay,
 } from "@/lib/api-client/custom-hooks";
-import { useListEmployees } from "@/lib/api-client";
+import { useListEmployeesLite } from "@/lib/api-client";
 import { waitingText } from "@/lib/approval-workflow";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { halfDayWorked, lateDetectionFlags } from "@/lib/late-detection";
@@ -66,7 +66,7 @@ export default function AttendanceSearchSection({
   const setYear = (v: number) => setUrlState({ ey: String(v) });
   const [input, setInput] = useState(searchCode);
 
-  const { data: employees } = useListEmployees({ status: "active" });
+  const { data: employees } = useListEmployeesLite({ status: "active" });
   const { data, isLoading, isError } = useEmployeeMonthlyAttendance(searchCode, month, year);
   // Half-Day times from Settings → Attendance, to say which half a Half Shift day was worked in.
   const { data: settings } = usePayrollSettings();
@@ -84,14 +84,25 @@ export default function AttendanceSearchSection({
     (myRequests ?? []).filter(r => r.status === "pending").map(r => [r.date, r]),
   );
 
-  const suggestions = input.trim() && !searchCode
-    ? (employees ?? [])
-        .filter(e =>
-          (!employmentType || e.employmentType === employmentType) &&
-          (e.employeeCode.toLowerCase().includes(input.toLowerCase()) ||
-           `${e.firstName} ${e.lastName}`.toLowerCase().includes(input.toLowerCase())))
-        .slice(0, 6)
-    : [];
+  // Lower-cased once per roster instead of twice per employee on every keystroke.
+  const suggestionIndex = useMemo(
+    () => (employees ?? []).map(e => ({
+      emp: e,
+      code: e.employeeCode.toLowerCase(),
+      name: `${e.firstName} ${e.lastName}`.toLowerCase(),
+    })),
+    [employees],
+  );
+  const suggestions = useMemo(() => {
+    if (!input.trim() || searchCode) return [];
+    const q = input.toLowerCase();
+    return suggestionIndex
+      .filter(({ emp, code, name }) =>
+        (!employmentType || emp.employmentType === employmentType) &&
+        (code.includes(q) || name.includes(q)))
+      .slice(0, 6)
+      .map(({ emp }) => emp);
+  }, [suggestionIndex, input, searchCode, employmentType]);
 
   const runSearch = (code: string) => {
     setInput(code);

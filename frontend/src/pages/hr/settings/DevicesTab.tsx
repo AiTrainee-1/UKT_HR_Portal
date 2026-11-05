@@ -31,8 +31,9 @@ const CONTENTS = [
 export default function DevicesTab() {
   const { toast } = useToast();
   const { data: devices, isLoading } = useListBiometricDevices();
-  // a role without Attendance access cannot list connectors: then the choice is simply not offered
-  const connectors = useConnectors().data?.connectors ?? [];
+  // a role without Attendance access cannot list connectors: then the choice is simply not offered. Read once, not
+  // polled: this tab only picks a connector from the list.
+  const connectors = useConnectors(true, { poll: false }).data?.connectors ?? [];
   const create = useCreateBiometricDevice();
 
   const [adding, setAdding] = useState(false);

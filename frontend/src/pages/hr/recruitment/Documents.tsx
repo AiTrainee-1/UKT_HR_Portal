@@ -3,7 +3,7 @@ import { FolderOpen } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { useAuth } from "@/contexts/AuthContext";
-import { useListEmployees } from "@/lib/api-client";
+import { useListEmployeesLite } from "@/lib/api-client";
 import {
   useDocumentCompletionStats,
   useEmployeeDocuments,
@@ -26,7 +26,7 @@ export default function Documents() {
   const [docTab, setDocTab] = useState<"letters" | "extra">("letters");
   const [activeCategory, setActiveCategory] = useState<EmployeeDocumentCategory | null>(null);
 
-  const employeesQuery = useListEmployees();
+  const employeesQuery = useListEmployeesLite();
   const everyone = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
   const selectedEmployee = everyone.find((e) => e.id === selectedEmployeeId) ?? null;
 

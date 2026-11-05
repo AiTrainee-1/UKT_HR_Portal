@@ -1,5 +1,5 @@
 import type { Worksheet } from "exceljs";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { EXCEL_UNIT_COLUMN, HEADER_ROW, buildLateWorkbook, lateExcelName } from "./late-excel";
 import type { LateEntry } from "./late";
 
@@ -55,8 +55,10 @@ describe("the Daily Late Report Excel file, unit by unit", () => {
     entry(4, "Babu", { minutesLate: 40, punchIn: "09:55" }),
     u1(5, "Mani", { minutesLate: 31, punchIn: "09:46" }),
   ];
-  const wb = buildLateWorkbook(input(entries));
-  const ws = wb.getWorksheet("Daily Late Report")!;
+  let ws: Worksheet;
+  beforeAll(async () => {
+    ws = (await buildLateWorkbook(input(entries))).getWorksheet("Daily Late Report")!;
+  });
   // HO band, Babu, Anand | U-1 band, Mani, Kumar | Other band, Loose
   const rows = {
     hoBand: first,
@@ -146,33 +148,33 @@ describe("the Daily Late Report Excel file, unit by unit", () => {
 });
 
 describe("what the Excel file holds when only some rows are exported", () => {
-  it("has a band only for a unit that has a row, with the count of the rows exported", () => {
+  it("has a band only for a unit that has a row, with the count of the rows exported", async () => {
     const ticked = [u1(7, "Only U1 A", { minutesLate: 9 }), u1(8, "Only U1 B", { minutesLate: 30 })];
-    const ws = buildLateWorkbook(input(ticked)).getWorksheet("Daily Late Report")!;
+    const ws = (await buildLateWorkbook(input(ticked))).getWorksheet("Daily Late Report")!;
     expect(ws.getCell(first, 1).value).toBe("U-1   2 late");
     expect([first + 1, first + 2].map((r) => ws.getCell(r, 1).value)).toEqual(["Only U1 B", "Only U1 A"]);
     expect(ws.rowCount).toBe(first + 2);
     expect(allText(ws)).not.toContain("HO ");
   });
 
-  it("says what narrows the list in one small line above the table, and only when something does", () => {
+  it("says what narrows the list in one small line above the table, and only when something does", async () => {
     const rows = [entry(1, "A")];
-    expect(buildLateWorkbook(input(rows)).getWorksheet("Daily Late Report")!.getCell("A5").value).toBeNull();
-    const narrowed = buildLateWorkbook(input(rows, "Department: Admin; Selected: 1 of 18")).getWorksheet(
+    expect((await buildLateWorkbook(input(rows))).getWorksheet("Daily Late Report")!.getCell("A5").value).toBeNull();
+    const narrowed = (await buildLateWorkbook(input(rows, "Department: Admin; Selected: 1 of 18"))).getWorksheet(
       "Daily Late Report",
     )!;
     expect(narrowed.getCell("A5").value).toBe("Department: Admin; Selected: 1 of 18");
     expect(narrowed.getCell(HEADER_ROW, 1).value).toBe("Employee Name");
   });
 
-  it("shows a dash where a value is missing and builds for nobody late", () => {
-    const sparse = buildLateWorkbook(
+  it("shows a dash where a value is missing and builds for nobody late", async () => {
+    const sparse = await buildLateWorkbook(
       input([entry(4, "No Shift", { shiftStart: null, grace: null, minutesLate: null })]),
     );
     const w = sparse.getWorksheet("Daily Late Report")!;
     const row = first + 1; // under the HO band
     expect([w.getCell(row, 4).value, w.getCell(row, 5).value, w.getCell(row, 7).value]).toEqual(["—", "—", "—"]);
-    const empty = buildLateWorkbook(input([])).getWorksheet("Daily Late Report")!;
+    const empty = (await buildLateWorkbook(input([]))).getWorksheet("Daily Late Report")!;
     expect(empty.rowCount).toBe(HEADER_ROW);
     expect(empty.autoFilter).toBeFalsy();
   });

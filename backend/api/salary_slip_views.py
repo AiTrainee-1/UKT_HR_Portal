@@ -19,18 +19,46 @@ MONTHS = ["","January","February","March","April","May","June",
 logger = logging.getLogger(__name__)
 
 
-def slip_json(s: SalarySlip, include_settings: bool = False) -> dict:
+def _balance_json(lb: LeaveBalance) -> dict:
+    return {
+        "leaveType": lb.leave_type.name,
+        "leaveCode": lb.leave_type.code,
+        "allocated": float(lb.allocated),
+        "used": float(lb.used),
+        "remaining": float(lb.remaining),
+    }
+
+
+def leave_balances_for(slips) -> dict[tuple[int, int], list[dict]]:
+    """{(employee_id, year): that slip's `leaveBalances`} for many slips in ONE query, so a list of slips does not ask
+    for the balances once per slip. Leave-type order within a key, as the single-slip lookup (on the
+    (employee, leave type, year) unique index) returns them."""
+    out: dict[tuple[int, int], list[dict]] = {(s.employee_id, s.year): [] for s in slips}
+    if not out:
+        return out
+    rows = (
+        LeaveBalance.objects.select_related("leave_type")
+        .filter(employee_id__in={k[0] for k in out}, year__in={k[1] for k in out})
+        .order_by("employee_id", "leave_type_id", "year")
+    )
+    for lb in rows:
+        key = (lb.employee_id, lb.year)
+        if key in out:
+            out[key].append(_balance_json(lb))
+    return out
+
+
+def slip_json(s: SalarySlip, include_settings: bool = False, balances: dict | None = None) -> dict:
+    """`balances`: leave_balances_for() of the whole list being serialized (None = look this slip's up)."""
     emp = s.employee
 
-    balances = []
-    for lb in LeaveBalance.objects.select_related("leave_type").filter(employee=emp, year=s.year):
-        balances.append({
-            "leaveType": lb.leave_type.name,
-            "leaveCode": lb.leave_type.code,
-            "allocated": float(lb.allocated),
-            "used": float(lb.used),
-            "remaining": float(lb.remaining),
-        })
+    if balances is not None:
+        balances = balances.get((s.employee_id, s.year), [])
+    else:
+        balances = [
+            _balance_json(lb)
+            for lb in LeaveBalance.objects.select_related("leave_type").filter(employee=emp, year=s.year)
+        ]
 
     data = {
         "id": s.id,
@@ -116,9 +144,12 @@ def _filtered_slip_qs(request: Request, params=None):
     emp_type   = params.get("employmentType")
     pay_cycle  = params.get("payCycle")
 
+    # Nothing built from these slips (the list, the PDFs, the email / WhatsApp sends) shows the employee's photo: the
+    # base64 data URL (up to ~2 MB per employee) is never loaded with every slip.
     qs = (
         SalarySlip.objects
         .select_related("employee", "employee__department", "employee__designation")
+        .defer("employee__photo_url")
         .order_by("-year", "-month", "employee__employee_code")
     )
     qs = scope_to_branch(qs, request, field="employee__branch_id")
@@ -174,9 +205,11 @@ def salary_slips(request: Request) -> Response:
         "signatureImage":     ps.signature_image or "",
     }
 
+    slips = list(qs)
+    balances = leave_balances_for(slips)
     result = []
-    for s in qs:
-        d = slip_json(s, include_settings=False)
+    for s in slips:
+        d = slip_json(s, include_settings=False, balances=balances)
         d.update(settings_data)
         result.append(d)
 
@@ -441,7 +474,14 @@ def employee_salary_slips(request: Request) -> Response:
     qs = (
         SalarySlip.objects
         .select_related("employee", "employee__department", "employee__designation")
+        .defer("employee__photo_url")
         .filter(employee_id=emp_id)
         .order_by("-year", "-month")
     )
-    return paginate(request, qs, slip_json)
+    balances: dict = {}
+    return paginate(
+        request,
+        qs,
+        lambda s: slip_json(s, balances=balances),
+        prepare=lambda rows: balances.update(leave_balances_for(rows)),
+    )

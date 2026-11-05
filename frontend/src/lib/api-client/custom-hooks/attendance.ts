@@ -4,7 +4,7 @@ import { customFetch, getApiOrigin } from "../custom-fetch";
 import type { ApprovalProgress } from "../../approval-workflow";
 import type { HrEdit } from "./payroll-insights";
 import type { CasualLeaveBalance } from "./requests";
-import { SyncResult } from "./shared";
+import { SyncResult, keepPreviousWhileSearching } from "./shared";
 
 // ── Attendance (enhanced) ─────────────────────────────────────────────────────
 
@@ -717,12 +717,17 @@ export type ReportLogDailyParams = {
 export const getReportLogDailyQueryKey = (params: ReportLogDailyParams) =>
   ["/api/attendance/report-log", "daily", params] as const;
 
-export const useAttendanceReportDaily = (params: ReportLogDailyParams, enabled = true) =>
-  useQuery<ReportLogDailyResponse>({
-    queryKey: getReportLogDailyQueryKey(params),
-    queryFn: () => customFetch<ReportLogDailyResponse>(`/api/attendance/report-log?${reportLogQueryString(params)}`),
+export const useAttendanceReportDaily = (params: ReportLogDailyParams, enabled = true) => {
+  const queryKey = getReportLogDailyQueryKey(params);
+  return useQuery<ReportLogDailyResponse>({
+    queryKey,
+    queryFn: ({ signal }) =>
+      customFetch<ReportLogDailyResponse>(`/api/attendance/report-log?${reportLogQueryString(params)}`, { signal }),
+    // a new search keeps the list on screen until its rows arrive; a new date or department shows the loader
+    placeholderData: keepPreviousWhileSearching(queryKey),
     enabled,
   });
+};
 
 export const useSetDayInformed = () => {
   const queryClient = useQueryClient();
@@ -805,13 +810,19 @@ export type AttendanceSheetParams = {
 export const getAttendanceSheetQueryKey = (params: AttendanceSheetParams) =>
   ["/api/attendance/report-log/sheet", params] as const;
 
-export const useAttendanceReportSheet = (params: AttendanceSheetParams, enabled = true) =>
-  useQuery<AttendanceSheetResponse>({
-    queryKey: getAttendanceSheetQueryKey(params),
-    queryFn: () =>
-      customFetch<AttendanceSheetResponse>(`/api/attendance/report-log/sheet?${reportLogQueryString(params)}`),
+export const useAttendanceReportSheet = (params: AttendanceSheetParams, enabled = true) => {
+  const queryKey = getAttendanceSheetQueryKey(params);
+  return useQuery<AttendanceSheetResponse>({
+    queryKey,
+    queryFn: ({ signal }) =>
+      customFetch<AttendanceSheetResponse>(`/api/attendance/report-log/sheet?${reportLogQueryString(params)}`, {
+        signal,
+      }),
+    // a new search keeps the grid on screen until its rows arrive; a new range or department shows the loader
+    placeholderData: keepPreviousWhileSearching(queryKey),
     enabled,
   });
+};
 
 export type AttendanceSearchPunch = {
   time: string;
@@ -1361,7 +1372,7 @@ export const useMissingPunchRequestsHR = (
   useQuery<MissingPunchItem[]>({
     queryKey: ["/api/missing-punch-requests", status],
     queryFn: () => customFetch<MissingPunchItem[]>(`/api/missing-punch-requests?status=${status}`),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
     enabled,
   });
 

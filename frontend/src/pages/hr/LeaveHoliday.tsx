@@ -44,7 +44,7 @@ export default function LeaveHoliday() {
 
   // Polled: this page has no other live-update mechanism, and a mobile HOD approval writes straight to the DB with no
   // signal back to whatever HR is looking at (ApprovedRequests.tsx polls the same query keys for the same reason).
-  const leavesQuery = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000 } } as any);
+  const leavesQuery = useListLeaveRequests(undefined, { query: { refetchInterval: 60_000 } } as any);
   const all = useMemo(() => (leavesQuery.data ?? []) as unknown as LeaveRow[], [leavesQuery.data]);
   // Half-day requests get their own tab, so a half day is never listed twice.
   const fullDay = useMemo(() => all.filter((l) => !l.isHalfDay), [all]);

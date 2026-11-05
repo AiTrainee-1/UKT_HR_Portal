@@ -21,7 +21,7 @@ export function useSheetExport(spec: SheetSpec, context: ExcelContext) {
     setBusy(format);
     try {
       if (format === "excel") {
-        await downloadWorkbook(buildSheetWorkbook(spec, context), sheetFileName(spec));
+        await downloadWorkbook(await buildSheetWorkbook(spec, context), sheetFileName(spec));
       } else {
         if (!sheetRef.current) throw new Error("The sheet is not on screen");
         await exportElementToFile(sheetRef.current, fileSafe(spec.title), format === "image" ? "png" : "pdf");

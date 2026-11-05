@@ -11,10 +11,13 @@ export type GateQr = { token: string; branchId: number; branchName: string };
 export type GateSummary = { today: number; thisWeek: number; thisMonth: number };
 
 export const getOutpassQrQueryKey = (branchId?: number | null) => ["/api/outpass/qr", branchId] as const;
-export const useOutpassQr = (branchId?: number | null) =>
+// `enabled: false` until there is a branch to ask for: an admin's page used to ask before its branch list had loaded
+// and got a 400 "No branch selected" every time it opened.
+export const useOutpassQr = (branchId?: number | null, options?: { enabled?: boolean }) =>
   useQuery<GateQr>({
     queryKey: getOutpassQrQueryKey(branchId),
     queryFn: () => customFetch<GateQr>(`/api/outpass/qr${branchId ? `?branchId=${branchId}` : ""}`),
+    enabled: options?.enabled ?? true,
   });
 
 export const getOutpassSummaryQueryKey = () => ["/api/outpass/summary"] as const;
@@ -65,10 +68,11 @@ export const useOutpassGateSubmit = (token: string) =>
   });
 
 export const getVisitorQrQueryKey = (branchId?: number | null) => ["/api/visitor/qr", branchId] as const;
-export const useVisitorQr = (branchId?: number | null) =>
+export const useVisitorQr = (branchId?: number | null, options?: { enabled?: boolean }) =>
   useQuery<GateQr>({
     queryKey: getVisitorQrQueryKey(branchId),
     queryFn: () => customFetch<GateQr>(`/api/visitor/qr${branchId ? `?branchId=${branchId}` : ""}`),
+    enabled: options?.enabled ?? true,
   });
 
 export const getVisitorSummaryQueryKey = () => ["/api/visitor/summary"] as const;
@@ -242,7 +246,7 @@ export const useListOutpassRequests = (status?: string, options?: { enabled?: bo
   useQuery<OutpassRequestItem[]>({
     queryKey: getListOutpassRequestsQueryKey(status),
     queryFn: () => customFetch<OutpassRequestItem[]>(`/api/outpass-requests${status ? `?status=${status}` : ""}`),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
     enabled: options?.enabled,
   });
 
@@ -480,5 +484,5 @@ export const useTeaBreakRecords = (range: GateRange, page: number, filter: TeaBr
         `/api/tea-break/records?range=${range}&page=${page}&pageSize=${pageSize}${filter ? `&filter=${filter}` : ""}`,
       ),
     placeholderData: keepPreviousData,
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
   });

@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useDebounced } from "@/hooks/use-debounced";
 import { useToast } from "@/hooks/use-toast";
 import { useAssignEmployee, useSearchEmployees, type Employee } from "@/lib/api-client";
 import { errorMessage, useRefreshOrg } from "./api";
@@ -23,7 +24,13 @@ export default function AssignDialog({ target, onClose }: { target: Target; onCl
   const { toast } = useToast();
   const refresh = useRefreshOrg();
   const [query, setQuery] = useState("");
-  const { data: results, isFetching } = useSearchEmployees(query);
+  // asked once typing pauses; until then the list reads as "Searching…", never as "no match"
+  const debouncedQuery = useDebounced(query);
+  const { data: results, isFetching } = useSearchEmployees(debouncedQuery);
+  const typedEnough = query.trim().length >= 2;
+  const searching = typedEnough && (isFetching || query !== debouncedQuery);
+  // the last matches stay listed while the next search loads, never under fewer than 2 characters
+  const shown = typedEnough ? (results ?? []) : [];
   const assignMutation = useAssignEmployee();
   const isDept = target.kind === "department";
 
@@ -63,15 +70,15 @@ export default function AssignDialog({ target, onClose }: { target: Target; onCl
                 data-testid="assign-search"
               />
             </div>
-            {query.trim().length < 2 && <p className="text-xs text-muted-foreground">Type at least 2 characters.</p>}
+            {!typedEnough && <p className="text-xs text-muted-foreground">Type at least 2 characters.</p>}
           </div>
 
           <div className="max-h-64 space-y-2 overflow-y-auto">
-            {isFetching && <p className="py-4 text-center text-xs text-muted-foreground">Searching…</p>}
-            {!isFetching && query.trim().length >= 2 && (results ?? []).length === 0 && (
+            {searching && <p className="py-4 text-center text-xs text-muted-foreground">Searching…</p>}
+            {!searching && typedEnough && shown.length === 0 && (
               <p className="py-4 text-center text-xs text-muted-foreground">No active employee matches.</p>
             )}
-            {(results ?? []).map((emp) => {
+            {shown.map((emp) => {
               const already = isDept ? emp.departmentId === target.id : emp.designationId === target.id;
               const current = isDept ? emp.departmentName : emp.designationTitle;
               return (

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { isMutatingControl, lockIconOnlyDeletes, lockMutatingControls } from "./view-only-lock";
+import { afterEach, describe, expect, it } from "vitest";
+import { isMutatingControl, lockIconOnlyDeletes, lockMutatingControls, watchMutatingControls } from "./view-only-lock";
 
 function button(label: string, attrs: Record<string, string> = {}): HTMLButtonElement {
   const el = document.createElement("button");
@@ -101,5 +101,83 @@ describe("lockMutatingControls", () => {
     expect((root.querySelector("#a") as HTMLButtonElement).disabled).toBe(true);
     expect((root.querySelector("#b") as HTMLButtonElement).disabled).toBe(false);
     expect((root.querySelector("#c") as HTMLInputElement).disabled).toBe(false);
+  });
+});
+
+describe("watchMutatingControls", () => {
+  // The observer reports in a microtask and the lock runs on the next frame.
+  const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 40));
+  const byId = (root: HTMLElement, id: string) => root.querySelector(`#${id}`) as HTMLButtonElement;
+  let stop: (() => void) | undefined;
+  let root: HTMLDivElement;
+
+  function watch(html: string): HTMLDivElement {
+    root = document.createElement("div");
+    root.innerHTML = html;
+    document.body.appendChild(root);
+    stop = watchMutatingControls(root);
+    return root;
+  }
+
+  afterEach(() => {
+    stop?.();
+    stop = undefined;
+    root?.remove();
+  });
+
+  it("locks what is already there straight away", () => {
+    watch('<button id="a">Delete</button><button id="b">Next</button>');
+    expect(byId(root, "a").disabled).toBe(true);
+    expect(byId(root, "b").disabled).toBe(false);
+  });
+
+  it("locks a mutating button that mounts later, however deep, and leaves the others alone", async () => {
+    watch("<div id='host'></div>");
+    const dialog = document.createElement("div");
+    dialog.innerHTML = '<section><button id="save">Save changes</button><button id="close">Close</button></section>';
+    root.querySelector("#host")!.appendChild(dialog);
+    const lone = document.createElement("button");
+    lone.id = "add";
+    lone.textContent = "Add Employee";
+    root.appendChild(lone);
+    await nextFrame();
+    expect(byId(root, "save").disabled).toBe(true);
+    expect(byId(root, "add").disabled).toBe(true);
+    expect(byId(root, "close").disabled).toBe(false);
+  });
+
+  it("locks a button whose name turns into a mutating one, by text or by its children", async () => {
+    watch('<button id="t">View</button><button id="c"><span>View</span></button><button id="l">Open</button>');
+    byId(root, "t").firstChild!.nodeValue = "Edit";
+    byId(root, "c").replaceChildren(document.createTextNode("Approve"));
+    byId(root, "l").setAttribute("aria-label", "Delete row");
+    await nextFrame();
+    expect(byId(root, "t").disabled).toBe(true);
+    expect(byId(root, "c").disabled).toBe(true);
+    expect(byId(root, "l").disabled).toBe(true);
+  });
+
+  it("locks a mutating button again when something re-enables it", async () => {
+    watch('<button id="s">Save</button>');
+    byId(root, "s").disabled = false;
+    await nextFrame();
+    expect(byId(root, "s").disabled).toBe(true);
+  });
+
+  it("locks what was inside a view-safe area once the opt-out goes", async () => {
+    watch('<div id="safe" data-view-safe><button id="x">Export</button></div>');
+    expect(byId(root, "x").disabled).toBe(false);
+    root.querySelector("#safe")!.removeAttribute("data-view-safe");
+    await nextFrame();
+    expect(byId(root, "x").disabled).toBe(true);
+  });
+
+  it("stops watching when told to", async () => {
+    watch("");
+    stop!();
+    stop = undefined;
+    root.innerHTML = '<button id="late">Delete</button>';
+    await nextFrame();
+    expect(byId(root, "late").disabled).toBe(false);
   });
 });

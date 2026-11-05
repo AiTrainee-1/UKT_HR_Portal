@@ -4,7 +4,7 @@ import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
-import { useListEmployees } from "@/lib/api-client";
+import { useListEmployeesLite } from "@/lib/api-client";
 import {
   useListShiftAssignments,
   useShiftTemplates,
@@ -79,7 +79,7 @@ export default function ManageShift() {
 
   const { data: shifts = [], isLoading } = useShiftTemplates();
   const { data: assignments = [] } = useListShiftAssignments({ activeOnly: true });
-  const { data: employees = [] } = useListEmployees({ status: "active" });
+  const { data: employees = [] } = useListEmployeesLite({ status: "active" });
 
   const without = useMemo(() => unassignedOf<Person>(employees, assignments).length, [employees, assignments]);
   const unused = shifts.filter((s) => s.isActive && !(s.assignedCount ?? 0)).length;

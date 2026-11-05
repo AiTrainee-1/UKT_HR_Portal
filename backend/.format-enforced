@@ -439,3 +439,8 @@ api/md_auto_attendance.py
 api/md_auto_attendance_scheduler.py
 api/tests_md_auto_attendance.py
 api/management/commands/md_auto_attendance.py
+api/scheduler_db.py
+api/tests_notification_read_all.py
+api/employee_photo.py
+api/request_context.py
+api/tests_employee_photo_links.py

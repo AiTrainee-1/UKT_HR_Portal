@@ -38,8 +38,8 @@ const headerOf = (ws: ExcelJS.Worksheet, label = "Code") => {
 beforeEach(() => h.download.mockReset());
 
 describe("the report workbook", () => {
-  it("is a Summary sheet and one sheet per type, in the order of the report", () => {
-    const wb = buildReportWorkbook(reportOf(qs("period=week")), COMPANY);
+  it("is a Summary sheet and one sheet per type, in the order of the report", async () => {
+    const wb = await buildReportWorkbook(reportOf(qs("period=week")), COMPANY);
     expect(wb.worksheets.map((s) => s.name)).toEqual([
       "Summary",
       "OT allowance",
@@ -52,13 +52,13 @@ describe("the report workbook", () => {
     ]);
   });
 
-  it("has only the sheets of the types asked for", () => {
-    const wb = buildReportWorkbook(reportOf(qs("period=today&type=birthday,ot_allowance")), COMPANY);
+  it("has only the sheets of the types asked for", async () => {
+    const wb = await buildReportWorkbook(reportOf(qs("period=today&type=birthday,ot_allowance")), COMPANY);
     expect(wb.worksheets.map((s) => s.name)).toEqual(["Summary", "OT allowance", "Birthday"]);
   });
 
-  it("opens every sheet with the company, the period and what the sheet is", () => {
-    const wb = buildReportWorkbook(reportOf(qs("period=week")), COMPANY);
+  it("opens every sheet with the company, the period and what the sheet is", async () => {
+    const wb = await buildReportWorkbook(reportOf(qs("period=week")), COMPANY);
     for (const ws of wb.worksheets) {
       expect(ws.getCell(1, 1).value).toBe(COMPANY);
       expect(ws.getCell(2, 1).value).toBe("Compensation · 12 Oct - 18 Oct 2026");
@@ -67,8 +67,11 @@ describe("the report workbook", () => {
   });
 
   describe("the Summary sheet", () => {
-    it("says the period, the filters and the totals", () => {
-      const wb = buildReportWorkbook(reportOf(qs("period=week")), COMPANY, { department: "Cutting", branch: null });
+    it("says the period, the filters and the totals", async () => {
+      const wb = await buildReportWorkbook(reportOf(qs("period=week")), COMPANY, {
+        department: "Cutting",
+        branch: null,
+      });
       const ws = wb.getWorksheet("Summary")!;
       const facts = new Map(
         rows(ws, 4, 2)
@@ -84,8 +87,8 @@ describe("the report workbook", () => {
       expect(facts.get("Employees who benefited")).toBe("6");
     });
 
-    it("has a row per type: who benefits, how many employees and records, and its totals", () => {
-      const wb = buildReportWorkbook(reportOf(qs("period=today")), COMPANY);
+    it("has a row per type: who benefits, how many employees and records, and its totals", async () => {
+      const wb = await buildReportWorkbook(reportOf(qs("period=today")), COMPANY);
       const ws = wb.getWorksheet("Summary")!;
       const header = headerOf(ws, "Type");
       const table = rows(ws, header + 1, 5);
@@ -99,8 +102,8 @@ describe("the report workbook", () => {
       expect(table.at(-1)![0]).toBe("Birthday leave");
     });
 
-    it("says which types are switched off in Settings", () => {
-      const wb = buildReportWorkbook(reportOf(qs("period=today"), ["ot_shift_pay"]), COMPANY);
+    it("says which types are switched off in Settings", async () => {
+      const wb = await buildReportWorkbook(reportOf(qs("period=today"), ["ot_shift_pay"]), COMPANY);
       const ws = wb.getWorksheet("Summary")!;
       const names = rows(ws, headerOf(ws, "Type") + 1, 1).map((r) => String(r[0]));
       expect(names).toContain("OT: shift compensation as pay (switched off in Settings)");
@@ -109,9 +112,9 @@ describe("the report workbook", () => {
   });
 
   describe("a type's sheet", () => {
-    it("has who, then the type's own columns, with a frozen header", () => {
+    it("has who, then the type's own columns, with a frozen header", async () => {
       const report = reportOf(qs("period=today"));
-      const wb = buildReportWorkbook(report, COMPANY);
+      const wb = await buildReportWorkbook(report, COMPANY);
       const ws = wb.getWorksheet("OT allowance")!;
       const header = headerOf(ws);
       const labels = rows(ws, header, ws.columnCount)[0];
@@ -120,8 +123,8 @@ describe("the report workbook", () => {
       expect(ws.views[0]).toMatchObject({ state: "frozen", ySplit: header });
     });
 
-    it("writes dates as real dates and numbers as numbers", () => {
-      const wb = buildReportWorkbook(reportOf(qs("period=today")), COMPANY);
+    it("writes dates as real dates and numbers as numbers", async () => {
+      const wb = await buildReportWorkbook(reportOf(qs("period=today")), COMPANY);
       const ws = wb.getWorksheet("OT payment")!;
       const header = headerOf(ws);
       const labels = rows(ws, header, ws.columnCount)[0] as string[];
@@ -136,14 +139,14 @@ describe("the report workbook", () => {
       expect(ws.getCell(header + 1, labels.indexOf("Amount (₹)") + 1).numFmt).toBe("#,##0.00");
     });
 
-    it("says nobody benefited on a type with no rows", () => {
-      const wb = buildReportWorkbook(reportOf(qs("period=today")), COMPANY);
+    it("says nobody benefited on a type with no rows", async () => {
+      const wb = await buildReportWorkbook(reportOf(qs("period=today")), COMPANY);
       const ws = wb.getWorksheet("Early-out window")!;
       expect(ws.getCell(headerOf(ws) + 1, 1).value).toBe("Nobody in this period.");
     });
 
-    it("lists the balance redeemed under the claims, with its own header", () => {
-      const wb = buildReportWorkbook(reportOf(qs("period=today")), COMPANY);
+    it("lists the balance redeemed under the claims, with its own header", async () => {
+      const wb = await buildReportWorkbook(reportOf(qs("period=today")), COMPANY);
       const ws = wb.getWorksheet("Holiday work")!;
       const header = headerOf(ws);
       expect(rows(ws, header + 1, 1)[0][0]).toBe("E24");
@@ -168,8 +171,8 @@ describe("the report workbook", () => {
       expect(redeemed[6]).toBe(0.5);
     });
 
-    it("does not add the redeemed block when nothing was redeemed", () => {
-      const wb = buildReportWorkbook(emptyReport(qs("period=today")), COMPANY);
+    it("does not add the redeemed block when nothing was redeemed", async () => {
+      const wb = await buildReportWorkbook(emptyReport(qs("period=today")), COMPANY);
       const ws = wb.getWorksheet("Holiday work")!;
       for (let r = 1; r <= ws.rowCount; r += 1) {
         expect(ws.getCell(r, 1).value).not.toBe("Balance redeemed as days off in this period");

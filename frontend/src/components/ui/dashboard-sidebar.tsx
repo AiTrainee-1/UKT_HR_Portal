@@ -8,7 +8,9 @@ import { useAuth, canView, canViewRoute } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { hrCanAct } from '@/lib/approval-workflow';
 import { COMPENSATION_BASE, COMPENSATION_PAGES, pagePath } from '@/pages/hr/compensation/routes';
-import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances, useListNotifications } from '@/lib/api-client';
+import { useQuery } from '@tanstack/react-query';
+import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
+import { customFetch } from '@/lib/api-client/custom-fetch';
 import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR, useListOutpassRequests } from '@/lib/api-client/custom-hooks';
 import {
   LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee, Factory,
@@ -627,7 +629,7 @@ function RailItem({
 // module re-executes from scratch.
 let sidebarScrollTop = 0;
 
-export function HrSidebar({
+function HrSidebarView({
   onClose,
   collapsed = false,
   onToggleCollapse,
@@ -652,10 +654,13 @@ export function HrSidebar({
   const canSeeNotifications = canView(user, 'notifications');
   const canSeeOutpass = canView(user, 'outpass_visitors');
 
-  const { data: leaveData }  = useListLeaveRequests(undefined, { query: { refetchInterval: 30_000, enabled: canSeeRequests } } as any);
-  const { data: permData }   = useListPermissions(undefined, { refetchInterval: 30_000, enabled: canSeeRequests } as any);
-  const { data: resignData } = useListResignations(undefined, { refetchInterval: 30_000, enabled: canSeeResignations } as any);
-  const { data: advanceData } = useListAdvances(undefined, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
+  // Only the statuses a badge counts are fetched (the server filters): these polls run on every open HR page, and they
+  // used to download every leave / permission / resignation / advance ever raised (up to 2,000 rows each, every 30 s)
+  // just to count the handful still pending. The counting below is unchanged.
+  const { data: leaveData }  = useListLeaveRequests({ status: 'pending' }, { query: { refetchInterval: 30_000, enabled: canSeeRequests } } as any);
+  const { data: permData }   = useListPermissions({ status: 'pending' }, { refetchInterval: 30_000, enabled: canSeeRequests } as any);
+  const { data: resignData } = useListResignations('pending,dept_approved', { refetchInterval: 30_000, enabled: canSeeResignations } as any);
+  const { data: advanceData } = useListAdvances({ status: 'pending' }, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
   const { data: onDutySessionData } = useOnDutySessionsHR('pending', canSeeGeoAttendance);
   const { data: onDutyPunchData } = useOnDutyPunchVerificationsHR('pending', canSeeGeoAttendance);
   // Outpass requests also show up in the general Requests queue (see
@@ -665,11 +670,14 @@ export function HrSidebar({
   const { data: outpassData } = useListOutpassRequests('pending', { enabled: canSeeRequests || canSeeOutpass });
   // Live notification count -polls independently of the Notifications page
   // itself so the sidebar badge updates even while the user is elsewhere.
-  const { data: unreadNotifications } = useListNotifications(
-    { unreadOnly: true },
-    { query: { refetchInterval: 12_000, enabled: canSeeNotifications } } as any
-  );
-  const unreadNotificationCount = (unreadNotifications ?? []).length;
+  // Just the number (countOnly): it used to fetch every unread message (up to 2,000) every 12 s to read its length.
+  const { data: unreadNotifications } = useQuery<{ count: number }>({
+    queryKey: ['/api/notifications', 'unreadCount'],
+    queryFn: () => customFetch<{ count: number }>('/api/notifications?unreadOnly=true&countOnly=1'),
+    refetchInterval: 30_000,
+    enabled: canSeeNotifications,
+  });
+  const unreadNotificationCount = unreadNotifications?.count ?? 0;
   // A badge counts what HR can decide now under the approval pipelines (User Management -> Approval Workflow Control):
   // a request that is only waiting for a Department Head is not HR's to act on. An older backend sends no pipeline, and
   // then every pending request counts, as before.
@@ -1004,5 +1012,10 @@ export function HrSidebar({
     </TooltipProvider>
   );
 }
+
+// Memoized: every HR page renders its own HrLayout, so without this a state change at a page's root (each keystroke in
+// a search box kept there) re-rendered all ~55 nav rows and their tooltips/popovers. HrLayout passes stable props, so the
+// sidebar now re-renders only for its own reasons (route, sign-in, badge counts, settings, collapse).
+export const HrSidebar = React.memo(HrSidebarView);
 
 export default HrSidebar;

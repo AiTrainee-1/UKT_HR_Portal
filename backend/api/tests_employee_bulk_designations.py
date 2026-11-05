@@ -17,6 +17,7 @@ from openpyxl.styles import Font
 
 from . import employee_bulk_views
 from .employee_bulk_views import _collect_rows
+from .employee_photo import photo_digest, photo_signature
 from .jwt_utils import sign_token
 from .models import AuditLog, Branch, Department, Designation, Employee, HRUser, Role
 from .org_lookup import OrgLookup, clean_name, is_blank_name
@@ -521,9 +522,10 @@ class AuditTrail(Fixtures):
 
 
 class LiteDirectory(Fixtures):
-    """The Bulk Upload page lists people without ever showing a photo, so it asks for the directory without them."""
+    """The Bulk Upload page lists people without ever showing a photo, so it asks for the directory without them. Since
+    the photo links (employee_photo.py) the plain list is the same: no list carries the embedded picture."""
 
-    def test_the_lite_list_sends_a_link_instead_of_the_photo_and_is_otherwise_the_same(self):
+    def test_the_list_sends_a_link_instead_of_the_photo_and_lite_is_the_same(self):
         big = "data:image/jpeg;base64," + "A" * 60_000
         with_photo = self.person("P1", photo_url=big)
         self.person("P2", photo_url="https://example.com/p2.png")
@@ -532,16 +534,18 @@ class LiteDirectory(Fixtures):
         lite = self.client.get("/api/employees?lite=1", **self.hr)
         self.assertEqual(lite.status_code, 200)
         by_code = {e["employeeCode"]: e for e in lite.json()}
-        self.assertEqual(by_code["P1"]["photoUrl"], f"/api/employees/{with_photo.id}/photo")
+        digest = photo_digest(big)  # computed by the database for the list: the same md5 as Python's
+        self.assertEqual(
+            by_code["P1"]["photoUrl"],
+            f"http://testserver/api/employees/{with_photo.id}/photo?v={digest}&s={photo_signature(with_photo.id, digest)}",
+        )
         self.assertEqual(by_code["P2"]["photoUrl"], "https://example.com/p2.png")
         self.assertIsNone(by_code["P3"]["photoUrl"])
         self.assertLess(len(lite.content), 20_000)
-        self.assertGreater(len(full.content), 60_000)  # the plain list is unchanged: the picture is inline
-        plain = {e["employeeCode"]: e for e in full.json()}
-        self.assertEqual(plain["P1"]["photoUrl"], big)
-        for code in ("P1", "P2", "P3"):
-            without_photo = lambda e: {k: v for k, v in e.items() if k != "photoUrl"}  # noqa: E731
-            self.assertEqual(without_photo(plain[code]), without_photo(by_code[code]), code)
+        self.assertLess(len(full.content), 20_000)  # the plain list too: the picture is a link
+        self.assertEqual(full.json(), lite.json())
+        # the employee's own record still has the picture itself (Edit Employee sends it back on save)
+        self.assertEqual(self.client.get(f"/api/employees/{with_photo.id}", **self.hr).json()["photoUrl"], big)
 
     def test_it_is_one_query_for_the_people_however_many_there_are(self):
         for i in range(8):

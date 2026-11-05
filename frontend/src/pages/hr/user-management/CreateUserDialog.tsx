@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { useListEmployees } from "@/lib/api-client";
+import { useListEmployeesLite } from "@/lib/api-client";
 import { useCreateDepartmentManager } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { ApprovalPermissionPicker } from "./ApprovalPermissionPicker";
@@ -47,7 +47,7 @@ export default function CreateUserDialog({
   const [values, setValues] = useState<PermissionValues>(() => allPermissions(true));
   const [notes, setNotes] = useState("");
 
-  const { data: employees } = useListEmployees({ status: "active" });
+  const { data: employees } = useListEmployeesLite({ status: "active" });
   const createMutation = useCreateDepartmentManager();
 
   const candidates = useMemo(() => {

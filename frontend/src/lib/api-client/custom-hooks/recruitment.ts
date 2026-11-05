@@ -445,7 +445,7 @@ export const useResumeScreeningProgress = (enabled: boolean) =>
     queryKey: [`${RESUME_SCREENING_BASE}/upload-bulk-progress`],
     queryFn: () => customFetch<ResumeScreeningProgress>(`${RESUME_SCREENING_BASE}/upload-bulk-progress`),
     enabled,
-    refetchInterval: enabled ? 600 : false,
+    refetchInterval: enabled ? 1500 : false,
     staleTime: 0,
   });
 

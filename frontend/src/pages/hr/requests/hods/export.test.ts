@@ -127,8 +127,8 @@ describe("the PDF pages", () => {
 });
 
 describe("the workbook", () => {
-  it("has the board with the totals and the detail, a dash where a head may not decide", () => {
-    const wb = buildHodWorkbook(input());
+  it("has the board with the totals and the detail, a dash where a head may not decide", async () => {
+    const wb = await buildHodWorkbook(input());
     expect(wb.worksheets.map((w) => w.name)).toEqual(["HoD board", "Pending requests"]);
     const board = wb.getWorksheet("HoD board")!;
     const values = (r: number) => (board.getRow(r).values as unknown[]).slice(1);

@@ -6,12 +6,21 @@ from . import salary_split
 from .audit_utils import log_action
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
+from .employee_photo import (
+    LINK_CACHE_CONTROL,
+    is_embedded,
+    is_own_photo_link,
+    photo_digest,
+    photo_link,
+    photo_stand_ins,
+    signature_matches,
+)
 from .image_compress import PHOTO, compress_data_url
 from .models import Department, Employee
 from .serializers import employee_json, parse_decimal
 from .view_common import _error
 from django.db import transaction
-from django.db.models import Case, F, Q, TextField, Value, When
+from django.db.models import Q, TextField, Value
 from django.db.models.functions import Concat
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -34,7 +43,8 @@ def _serialize_employee(emp: Employee) -> dict:
 
 def _serialize_employee_for_list(emp: Employee) -> dict:
     """Same as _serialize_employee, except a photo stored as an embedded
-    base64 data: URI is replaced with a lightweight link to /photo.
+    base64 data: URI is replaced with its signed link (employee_photo.photo_link:
+    an absolute /api/employees/<id>/photo?v=&s= an <img> loads with no token).
 
     This is the actual fix for "opening Employees fetches every photo at
     once": one employee's photo alone was ~43KB of base64 sitting inline in
@@ -42,7 +52,8 @@ def _serialize_employee_for_list(emp: Employee) -> dict:
     row was ever scrolled into view. A normal external URL (the common case
     -most employees have none, and this field also accepts a plain link) is
     left untouched, since it's already a cheap string with nothing to fetch
-    eagerly.
+    eagerly. `emp` from _without_embedded_photos carries the digest the
+    database computed (photo_digest), so the photo itself is never read.
 
     Deliberately NOT applied to _serialize_employee / the single-employee
     detail endpoint: EditEmployee.tsx loads a record via that endpoint,
@@ -52,9 +63,7 @@ def _serialize_employee_for_list(emp: Employee) -> dict:
     photo with an API link instead of the original picture.
     """
     row = _serialize_employee(emp)
-    photo = row.get("photoUrl")
-    if isinstance(photo, str) and photo.startswith("data:"):
-        row["photoUrl"] = f"/api/employees/{emp.id}/photo"
+    row["photoUrl"] = photo_link(emp.id, row.get("photoUrl"), getattr(emp, "photo_digest", None))
     return row
 
 
@@ -64,26 +73,61 @@ def _without_embedded_photos(qs):
     A photo is stored as a base64 data: URI of tens to hundreds of KB per person. The directory used to be sent to
     pages that never show a picture (Bulk Upload: it only needs names, codes and pay) with every one of them inline:
     on a real company that is tens of MB read from the database, copied into Python strings, rendered to JSON and
-    sent, per visit, by a worker that has nothing else to do it with. Here the column is not read at all: a database
-    expression keeps the short value of an external link and marks an embedded picture with "data:", which
-    _serialize_employee_for_list turns into the lazy /photo link, exactly as the paginated list does."""
-    rows = qs.annotate(
-        photo_lite=Case(
-            When(photo_url__startswith="data:", then=Value("data:")),
-            default=F("photo_url"),
-            output_field=TextField(),
-        )
-    ).defer("photo_url")
-    for emp in rows:
-        emp.photo_url = emp.photo_lite  # assigned, so reading it later never fetches the deferred column
+    sent, per visit, by a worker that has nothing else to do it with. Here the column is not read at all: database
+    expressions keep the short value of an external link, mark an embedded picture with "data:" and compute its digest
+    (employee_photo.photo_stand_ins), which _serialize_employee_for_list turns into the signed photo link."""
+    for emp in qs.annotate(**photo_stand_ins()).defer("photo_url"):
+        emp.photo_url = emp.photo_ref  # assigned, so reading it later never fetches the deferred column
         yield emp
 
 
+def _photo_response(photo_url: str, cache_control: str) -> Response:
+    """The picture inside a stored data: URL, as image bytes."""
+    import base64
+
+    try:
+        header, encoded = photo_url.split(",", 1)
+        # "data:image/jpeg;base64" -> "image/jpeg"
+        content_type = header.split(":", 1)[1].split(";", 1)[0] or "application/octet-stream"
+        raw = base64.b64decode(encoded)
+    except Exception:
+        return _error("Stored photo is corrupted", 500)
+
+    from django.http import HttpResponse
+
+    response = HttpResponse(raw, content_type=content_type)
+    response["Cache-Control"] = cache_control
+    return response
+
+
 @api_view(["GET"])
-@require_auth
 def employee_photo(request: Request, pk: int) -> Response:
-    """GET /api/employees/<id>/photo -the lazy-loaded counterpart to the
-    data: URI _serialize_employee_for_list replaces in list responses.
+    """GET /api/employees/<id>/photo -the picture behind the link that list
+    responses send in place of an embedded data: URI. Two ways in:
+
+    - ?v=<digest>&s=<signature> (employee_photo.photo_link): no token, since an
+      <img> sends none and the HR portal / employee apps load it from another
+      domain. The signature proves the server made the link; v must be the
+      digest of the photo stored NOW, so a replaced photo's old link is a 404
+      and a link's bytes never change (cached for a year, immutable). A bad
+      signature or a stale digest is a plain 404.
+    - neither: the token check below (_employee_photo_with_token), unchanged.
+    """
+    version = request.query_params.get("v")
+    signature = request.query_params.get("s")
+    if version is None or signature is None:
+        return _employee_photo_with_token(request, pk)
+    if not signature_matches(pk, version, signature):
+        return _error("Not found", 404)
+    photo = Employee.objects.filter(pk=pk).values_list("photo_url", flat=True).first()
+    if not is_embedded(photo) or photo_digest(photo) != version:
+        return _error("Not found", 404)
+    return _photo_response(photo, LINK_CACHE_CONTROL)
+
+
+@require_auth
+def _employee_photo_with_token(request: Request, pk: int) -> Response:
+    """The photo for a Bearer token (no signed link).
 
     @require_auth (not @require_hr) because an employee token must reach
     this too, to view their own photo -it only rejects requests with no
@@ -103,26 +147,11 @@ def employee_photo(request: Request, pk: int) -> Response:
         return _error("Authentication required", 401)
 
     emp = scope_to_branch(Employee.objects, request).filter(pk=pk).first()
-    if not emp or not emp.photo_url or not emp.photo_url.startswith("data:"):
+    if not emp or not is_embedded(emp.photo_url):
         return _error("Not found", 404)
-
-    import base64
-
-    try:
-        header, encoded = emp.photo_url.split(",", 1)
-        # "data:image/jpeg;base64" -> "image/jpeg"
-        content_type = header.split(":", 1)[1].split(";", 1)[0] or "application/octet-stream"
-        raw = base64.b64decode(encoded)
-    except Exception:
-        return _error("Stored photo is corrupted", 500)
-
-    from django.http import HttpResponse
-
-    response = HttpResponse(raw, content_type=content_type)
     # Employee photos change rarely; this only shaves repeat page-loads for
     # the same browser session, it never affects what a fresh fetch sees.
-    response["Cache-Control"] = "private, max-age=3600"
-    return response
+    return _photo_response(emp.photo_url, "private, max-age=3600")
 
 
 @api_view(["GET", "POST"])
@@ -188,13 +217,14 @@ def _employees_list(request: Request) -> Response:
 
     page = request.query_params.get("page")
     if page is None:
-        # No `page` param: identical to every response this endpoint has
-        # ever returned -a bare array. Existing callers that don't yet know
-        # about pagination are completely unaffected.
-        if request.query_params.get("lite") in ("1", "true"):
-            # Same array, but an embedded photo is a /photo link instead of its bytes (see above).
-            return Response([_serialize_employee_for_list(e) for e in _without_embedded_photos(qs)])
-        return Response([_serialize_employee(e) for e in qs])
+        # No `page` param: the bare array every caller that doesn't know
+        # about pagination expects. An embedded photo is its signed link, not
+        # its bytes (see _serialize_employee_for_list): the pages that load
+        # this whole directory only ever draw the photo in an <img> (or check
+        # that there is one), and none sends a row back on save (Edit Employee reloads the record from
+        # /api/employees/<id>, which keeps the data URI). `lite=1` used to be
+        # the only way to get the links; it is still accepted, and now the same.
+        return Response([_serialize_employee_for_list(e) for e in _without_embedded_photos(qs)])
 
     try:
         page_num = max(1, int(page))
@@ -213,7 +243,7 @@ def _employees_list(request: Request) -> Response:
     start = (page_num - 1) * page_size
     page_qs = qs.order_by("id")[start:start + page_size]
     return Response({
-        "results": [_serialize_employee_for_list(e) for e in page_qs],
+        "results": [_serialize_employee_for_list(e) for e in _without_embedded_photos(page_qs)],
         "count": total,
         "staffCount": staff_count,
         "productionCount": production_count,
@@ -558,6 +588,10 @@ def _employee_update_locked(request: Request, pk: int) -> Response:
             elif model_key == "date_of_birth":
                 value = value or None
             elif model_key == "photo_url":
+                if is_own_photo_link(emp.pk, value):
+                    # a list row sent back (lists carry a link to the photo, not the photo): storing the link would
+                    # replace the picture with a pointer to itself, so the stored photo stays as it is
+                    continue
                 value = compress_data_url(value, PHOTO)  # see create: an uploaded photo is stored compressed
             setattr(emp, model_key, value)
     # Co Emp and TDS are mutually exclusive (pf_esi.py): switching Co Emp ON for a TDS employee takes them out of TDS in

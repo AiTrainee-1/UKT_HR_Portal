@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useListNotifications, useMarkNotificationRead, getListNotificationsQueryKey } from "@/lib/api-client";
+import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { Bell, CheckCheck, MessageSquare, IndianRupee, Calendar } from "lucide-react";
@@ -27,8 +28,9 @@ export default function Notifications() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const { data: notifications, isLoading } = useListNotifications({}, { query: { refetchInterval: 12000 } } as any);
+  const { data: notifications, isLoading } = useListNotifications({}, { query: { refetchInterval: 30_000 } } as any);
   const mutation = useMarkNotificationRead();
+  const [markingAll, setMarkingAll] = useState(false);
 
   const unread = notifications?.filter((n) => !n.isRead) ?? [];
   const read = notifications?.filter((n) => n.isRead) ?? [];
@@ -55,8 +57,19 @@ export default function Notifications() {
     });
   };
 
-  const markAllRead = () => {
-    unread.forEach((n) => markRead(n.id));
+  // One request marks them all (it used to send one request per unread message, each followed by a reload of the
+  // whole list, which overloaded the server).
+  const markAllRead = async () => {
+    if (markingAll) return;
+    setMarkingAll(true);
+    try {
+      await customFetch("/api/notifications/mark-all-read", { method: "PATCH" });
+      await queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+    } catch {
+      toast({ title: "Failed to mark all as read", variant: "destructive" });
+    } finally {
+      setMarkingAll(false);
+    }
   };
 
   if (isLoading) {
@@ -79,7 +92,7 @@ export default function Notifications() {
             <p className="text-muted-foreground text-sm mt-0.5">{unread.length} unread</p>
           </div>
           {unread.length > 0 && (
-            <Button variant="outline" size="sm" onClick={markAllRead} data-testid="button-mark-all-read">
+            <Button variant="outline" size="sm" onClick={markAllRead} disabled={markingAll} data-testid="button-mark-all-read">
               <CheckCheck size={15} className="mr-2" /> Mark all read
             </Button>
           )}

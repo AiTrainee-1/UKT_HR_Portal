@@ -49,7 +49,7 @@ export async function exportTableToExcel<Row>({
   subtitle: string;
   title: string;
 }): Promise<void> {
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet(sheetName.slice(0, 31));
   ws.columns = columns.map((c) => ({ key: c.key, width: c.width ?? 16 }));
   const last = addTitleBlock(wb, ws, {

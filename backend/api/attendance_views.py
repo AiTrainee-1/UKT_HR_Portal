@@ -189,6 +189,24 @@ def _half_day_leave_slots(d: date_type) -> dict[int, str]:
     )
 
 
+def _assignments_on(employee_ids, d: date_type) -> dict[int, EmployeeShiftAssignment]:
+    """{employee_id: the shift assignment in force on d} for many employees in ONE query: the per-employee pick
+    (effective on d, the latest start wins) with the shift loaded."""
+    out: dict[int, EmployeeShiftAssignment] = {}
+    if not employee_ids:
+        return out
+    rows = (
+        EmployeeShiftAssignment.objects
+        .filter(employee_id__in=list(employee_ids), effective_from__lte=d)
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=d))
+        .select_related("shift")
+        .order_by("-effective_from", "-id")
+    )
+    for row in rows:
+        out.setdefault(row.employee_id, row)
+    return out
+
+
 def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
     """Employees whose first punch fell in the Late window: after their shift start + grace, but not so late that
     it is a quarter-shift or second-half arrival (those are not Late - see arrival_rules.py).
@@ -223,6 +241,17 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
     )
     prod_ruleset, prod_days = _production_roster_days(prod_ids, d) if prod_ids else (None, {})
 
+    # The shift in force on d of everyone judged on the raw punch below: one query for all of them, not one each (the
+    # mobile Home screen of every employee asks for today's count).
+    assignment_of = _assignments_on(
+        [
+            emp_id
+            for emp_id in first_punch
+            if (allowed_ids is None or emp_id in allowed_ids) and not (prod_ruleset is not None and emp_id in prod_ids)
+        ],
+        d,
+    )
+
     late_ids = []
     for emp_id, pt in first_punch.items():
         if allowed_ids is not None and emp_id not in allowed_ids:
@@ -235,17 +264,7 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
             if resolved and psr.judge_day(prod_ruleset, d, resolved[0][0], None).is_late:
                 late_ids.append(emp_id)
             continue
-        asgn = (
-            EmployeeShiftAssignment.objects
-            .filter(
-                employee_id=emp_id,
-                effective_from__lte=d,
-            )
-            .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=d))
-            .select_related("shift")
-            .order_by("-effective_from")
-            .first()
-        )
+        asgn = assignment_of.get(emp_id)
         if asgn and asgn.shift.start_time:
             # Whole minutes: a punch at 9:10:20 against a 9:10 limit is on time, as everywhere else.
             limits = arrival_limits_for(asgn.shift, settings)
@@ -370,7 +389,8 @@ def attendance_company_summary(request: Request) -> Response:
     d = _today()
     branch_id = get_branch_scope(request)
 
-    employees_qs = Employee.objects.filter(status="active")
+    # The engine never reads the photo (a base64 data URL, up to ~2 MB per employee): not loaded for the whole roster.
+    employees_qs = Employee.objects.filter(status="active").defer("photo_url")
     if branch_id is not None:
         employees_qs = employees_qs.filter(branch_id=branch_id)
     employees = list(employees_qs)
@@ -1973,9 +1993,10 @@ def attendance_search(request: Request) -> Response:
         except ValueError:
             return Response({"error": "Invalid date format"}, status=400)
 
-    emps = (
+    emps = list(
         scope_to_branch(Employee.objects, request)
         .select_related("department", "designation")
+        .defer("photo_url")  # never shown here; a base64 data URL of up to ~2 MB per employee
         .filter(
             Q(employee_code__icontains=query)
             | Q(first_name__icontains=query)
@@ -1985,11 +2006,20 @@ def attendance_search(request: Request) -> Response:
         .order_by("employee_code")[:25]
     )
 
+    # The matches' punches, shift assignments and production shift days in a fixed number of queries for all of them,
+    # not a few per match.
+    emp_ids = [emp.id for emp in emps]
+    logs_by_emp: dict[int, list] = {}
+    for log in AttendanceLog.objects.filter(employee_id__in=emp_ids, date=d).order_by("punch_time", "id"):
+        logs_by_emp.setdefault(log.employee_id, []).append(log)
+    assignment_of = _assignments_on(emp_ids, d)
+    _prod_rules, prod_days = _production_roster_days(
+        [emp.id for emp in emps if emp.employment_type == "production"], d
+    )
+
     results = []
     for emp in emps:
-        logs = list(
-            AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time")
-        )
+        logs = logs_by_emp.get(emp.id, [])
         # Displayed IN/OUT alternates by time-sorted position rather than the
         # raw stored punch_type -a Geo/On-Duty punch captured before that
         # day's biometric sync catches up can end up with a stale stored
@@ -2011,14 +2041,15 @@ def attendance_search(request: Request) -> Response:
             for i, log in enumerate(logs)
         ]
         # Production, once the shift-table rules judge the date: the SHIFT day's punches (a night's closing punch made
-        # the next morning is listed here, marked nextDay, and not again on the date it was made).
-        _prod_rules, prod_days = _production_shift_days(emp, d, d)
-        if d in prod_days:
-            punches = _shift_day_punch_dicts(prod_days[d], d, seconds=True)
+        # the next morning is listed here, marked nextDay, and not again on the date it was made). No entry: a staff
+        # member, a date the rules do not judge, or a day HR overrode by hand - the raw punches stay.
+        if emp.id in prod_days:
+            punches = _shift_day_punch_dicts(prod_days[emp.id], d, seconds=True)
         while len(punches) < 4:
             punches.append(None)
 
-        shift = _get_shift_for_date(emp, d)
+        asgn = assignment_of.get(emp.id)
+        shift = _get_shift_for_date(emp, d, assignments=[asgn] if asgn else [])
         results.append({
             "employeeId": emp.id,
             "employeeCode": emp.employee_code,

@@ -169,8 +169,9 @@ def scope_payrolls(request: Request, scope: Scope):
 
     A production period is judged by its exact dates, never against today's period rules: a period generated under an
     earlier Settings value is still a period that exists. The rows are those generated on the cycle plus older rows
-    (no cycle stamped) whose employee is assigned to it now, as the production list does."""
-    qs = Payroll.objects.select_related(*_PAYROLL_RELATIONS)
+    (no cycle stamped) whose employee is assigned to it now, as the production list does. Never the employee's photo:
+    no issue, rule or statement row shows it, and the base64 data URL is up to ~2 MB per employee."""
+    qs = Payroll.objects.select_related(*_PAYROLL_RELATIONS).defer("employee__photo_url")
     if scope.kind == KIND_STAFF:
         qs = qs.filter(salary_mode=Payroll.SALARY_MODE_MONTHLY, month=scope.month, year=scope.year)
     else:

@@ -293,14 +293,31 @@ def backup_restore_run(request: Request) -> Response:
     with open(_MAINTENANCE_MARKER, "w") as f:
         f.write(datetime.now().isoformat())
 
-    log_action(request, "restore", "settings", description=f"Automated restore started from {staged_path}")
+    # From here the whole application answers "restoring" (maintenance.lock) until the restore process removes the
+    # marker when it ends. If the restore process never starts, nothing would ever remove it -- every request would get
+    # 503 while /api/healthz stays green, so the host would never restart the app. So any failure before the process is
+    # running takes the marker away again (app health audit, 2026-11-05).
+    try:
+        log_action(request, "restore", "settings", description=f"Automated restore started from {staged_path}")
 
-    manage_py = os.path.join(str(dj_settings.BASE_DIR), "manage.py")
-    subprocess.Popen(
-        [sys.executable, manage_py, "restore_backup", "--file", staged_path],
-        cwd=str(dj_settings.BASE_DIR),
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
-    )
+        manage_py = os.path.join(str(dj_settings.BASE_DIR), "manage.py")
+        subprocess.Popen(
+            [sys.executable, manage_py, "restore_backup", "--file", staged_path],
+            cwd=str(dj_settings.BASE_DIR),
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
+    except Exception as exc:
+        try:
+            os.remove(_MAINTENANCE_MARKER)
+        except OSError:
+            pass
+        with open(_STATUS_FILE, "w") as f:
+            json.dump(
+                {"step": "failed", "detail": f"The restore could not start: {exc}", "ok": False,
+                 "updatedAt": datetime.now().isoformat()},
+                f,
+            )  # fmt: skip
+        return _error(f"The restore could not start: {exc}", 500)
 
     return Response({"ok": True, "message": "Restore started. The application will be briefly unavailable."})
 

@@ -3,7 +3,7 @@
 
 export async function downloadSheet(sheetName: string, fileBase: string, rows: (string | number)[][]): Promise<void> {
   const { newWorkbook, downloadWorkbook, solidFill, todayStamp, fileSafe } = await import("@/lib/exportUtils");
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet(sheetName);
   rows.forEach((r) => ws.addRow(r));
   const header = ws.getRow(1);

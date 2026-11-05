@@ -10,8 +10,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useDebounced } from "@/hooks/use-debounced";
 import {
-  useSearchEmployees, useAssignEmployee, useListEmployees,
+  useSearchEmployees, useAssignEmployee, useListEmployeesLite,
   getListEmployeesQueryKey, getListDepartmentsQueryKey,
 } from "@/lib/api-client";
 import { DataPagination } from "@/components/ui/DataPagination";
@@ -70,13 +71,17 @@ export function EmployeeAssignmentLookup({
   /** Which row is mid-assign, so only that button shows a spinner. */
   const [busyId, setBusyId] = useState<number | null>(null);
 
-  const { data: results, isFetching } = useSearchEmployees(query);
+  // The server is asked once typing pauses, not once per letter. Until that
+  // pause the box reads as "Searching…", never as "no match".
+  const debouncedQuery = useDebounced(query);
+  const searchPending = query !== debouncedQuery;
+  const { data: results, isFetching } = useSearchEmployees(debouncedQuery);
 
   // Every active employee, so the unassigned set can be derived. Only
   // fetched while that tab is open -it is the whole roster.
-  const { data: allEmployees, isLoading: allLoading } = useListEmployees(
-    { status: "active" } as any,
-    { query: { enabled: tab === "unassigned" } } as any,
+  const { data: allEmployees, isLoading: allLoading } = useListEmployeesLite(
+    { status: "active" },
+    { enabled: tab === "unassigned" },
   );
 
   const unassigned = useMemo(() => {
@@ -120,6 +125,9 @@ export function EmployeeAssignmentLookup({
 
   const label = kind === "department" ? "department" : "designation";
   const typedEnough = query.trim().length >= 2;
+  // The last matches stay listed while the next search loads, but never under
+  // a box holding fewer than 2 characters.
+  const shownResults = typedEnough ? results ?? [] : [];
 
   return (
     <Card className="border-0 shadow-sm">
@@ -198,14 +206,16 @@ export function EmployeeAssignmentLookup({
             {query.trim().length > 0 && !typedEnough && (
               <p className="text-xs text-muted-foreground">Keep typing — at least 2 characters.</p>
             )}
-            {typedEnough && isFetching && <p className="text-xs text-muted-foreground">Searching…</p>}
-            {typedEnough && !isFetching && (results?.length ?? 0) === 0 && (
+            {typedEnough && (isFetching || searchPending) && (
+              <p className="text-xs text-muted-foreground">Searching…</p>
+            )}
+            {typedEnough && !isFetching && !searchPending && shownResults.length === 0 && (
               <p className="text-xs text-muted-foreground">No active employee matches “{query}”.</p>
             )}
 
-            {(results ?? []).length > 0 && (
+            {shownResults.length > 0 && (
               <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                {(results ?? []).map((emp) => (
+                {shownResults.map((emp) => (
                   <EmployeeRow key={emp.id} emp={emp} kind={kind} />
                 ))}
               </div>

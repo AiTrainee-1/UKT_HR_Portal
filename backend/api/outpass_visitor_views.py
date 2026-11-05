@@ -34,6 +34,7 @@ from rest_framework.response import Response
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import FACTORY_TZ
+from .employee_photo import employee_photo_link, photo_links
 from .models import Branch, Employee, GateQRCode, OutpassRecord, Visitor, VisitorVisit
 from .throttles import throttle
 from .user_settings import settings_for_employee
@@ -140,7 +141,8 @@ def _find_employee_by_phone(raw_phone: str) -> Employee | None:
     return None
 
 
-def _employee_contact_json(emp: Employee) -> dict:
+def _employee_contact_json(emp: Employee, photos: dict | None = None) -> dict:
+    """The photo is a signed link (employee_photo.py), never the embedded picture; `photos`: photo_links of a list."""
     return {
         "id": emp.id,
         "employeeCode": emp.employee_code,
@@ -149,7 +151,7 @@ def _employee_contact_json(emp: Employee) -> dict:
         "designation": emp.designation.title if emp.designation else None,
         "phone": emp.phone,
         "email": emp.email,
-        "photoUrl": emp.photo_url,
+        "photoUrl": employee_photo_link(emp, photos),
     }
 
 
@@ -327,7 +329,7 @@ def visitor_summary(request: Request) -> Response:
     })
 
 
-def _visitor_visit_dict(v: VisitorVisit) -> dict:
+def _visitor_visit_dict(v: VisitorVisit, photos: dict | None = None) -> dict:
     # Full Aadhaar is included here (not just the last-4 preview) -this
     # endpoint is already @require_hr + RBAC-gated on the "outpass_visitors"
     # module (see permission_registry.py), so whoever can load this table at
@@ -347,7 +349,7 @@ def _visitor_visit_dict(v: VisitorVisit) -> dict:
         "purpose": v.purpose,
         "branchName": v.branch.name if v.branch else None,
         "visitedAt": v.visited_at.isoformat(),
-        "meetingEmployee": _employee_contact_json(v.meeting_employee) if v.meeting_employee_id else None,
+        "meetingEmployee": _employee_contact_json(v.meeting_employee, photos) if v.meeting_employee_id else None,
         "notifiedEmailAt": v.notified_email_at.isoformat() if v.notified_email_at else None,
         "notifiedWhatsappAt": v.notified_whatsapp_at.isoformat() if v.notified_whatsapp_at else None,
     }
@@ -362,12 +364,14 @@ def visitor_records(request: Request) -> Response:
         scope_to_branch(VisitorVisit.objects, request)
         .filter(visited_at__gte=start)
         .select_related("visitor", "branch", "meeting_employee__department", "meeting_employee__designation")
+        .defer("meeting_employee__photo_url")  # the list sends a link to the photo (photo_links), never the picture
     )
     total = qs.count()
     offset = (page - 1) * page_size
-    rows = qs[offset:offset + page_size]
+    rows = list(qs[offset:offset + page_size])
+    photos = photo_links(v.meeting_employee_id for v in rows)
     return Response({
-        "items": [_visitor_visit_dict(v) for v in rows],
+        "items": [_visitor_visit_dict(v, photos) for v in rows],
         "total": total,
         "page": page,
         "pageSize": page_size,

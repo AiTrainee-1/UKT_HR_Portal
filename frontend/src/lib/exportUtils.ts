@@ -1,10 +1,29 @@
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
 
 // One place for the export plumbing every page used to hand-roll: workbook
 // creation, cell/header styling, the company title block, and the
 // blob -> file download dance. Page-specific SHEET LAYOUTS (which columns,
 // which totals) still live in each page -only the mechanics are shared, so a
 // fix to (say) how a download is triggered lands everywhere at once.
+//
+// ExcelJS itself (~1 MB) is only a TYPE import here: the library is downloaded
+// the first time a workbook is actually built (newWorkbook), so a page that
+// merely imports downloadBlob/todayStamp/... -or that can export but never
+// does- does not pay for it.
+
+type ExcelJSModule = typeof import("exceljs");
+let excelJS: Promise<ExcelJSModule> | null = null;
+
+/** Loads ExcelJS once (later calls share the same download). A failed download is forgotten, so the next try retries. */
+function loadExcelJS(): Promise<ExcelJSModule> {
+  excelJS ??= import("exceljs")
+    .then((mod) => ((mod as { default?: ExcelJSModule }).default ?? mod) as ExcelJSModule)
+    .catch((err: unknown) => {
+      excelJS = null;
+      throw err;
+    });
+  return excelJS;
+}
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -31,8 +50,10 @@ export function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-export function newWorkbook(): ExcelJS.Workbook {
-  const wb = new ExcelJS.Workbook();
+/** A new, empty workbook. Async because it loads ExcelJS on first use (see loadExcelJS). */
+export async function newWorkbook(): Promise<ExcelJS.Workbook> {
+  const { Workbook } = await loadExcelJS();
+  const wb = new Workbook();
   wb.creator = "UKTextiles HRMS";
   return wb;
 }

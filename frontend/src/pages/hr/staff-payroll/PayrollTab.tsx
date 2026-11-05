@@ -48,7 +48,15 @@ import { SkippedPanel, type SkippedItem } from "@/components/payroll/panels/skip
 import { MONTH_NAMES } from "@/components/payroll/BreakdownDrawer";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useListDepartments, useListPayrollRuns } from "@/lib/api-client";
-import { usePayrollIssues, usePayrollRules, usePayrollSkipCheck } from "@/lib/api-client/custom-hooks";
+import {
+  getPayrollSkipCheckQueryKey,
+  usePayrollIssues,
+  usePayrollRules,
+  usePayrollSkipCheck,
+  type PayrollSkipCheckResult,
+} from "@/lib/api-client/custom-hooks";
+import { customFetch } from "@/lib/api-client/custom-fetch";
+import { useQueryClient } from "@tanstack/react-query";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import { downloadReportFile } from "@/lib/report-download";
 import { GenerateDialog } from "./GenerateDialog";
@@ -107,6 +115,23 @@ export function PayrollTab({
   // Runs on arrival (not behind a button) so the Skipped tile and the view's count are always live; the Generate dialog
   // and the Skipped view read the same cached answer.
   const skipQuery = usePayrollSkipCheck({ month, year, runType: "monthly" });
+  // The server keeps its last answer while no salary, name, joining date, branch or holiday changed; Re-check asks it
+  // to run the whole check again (fresh=1) and puts the answer where the tile and the view read it.
+  const queryClient = useQueryClient();
+  const [rechecking, setRechecking] = useState(false);
+  const recheckSkips = async () => {
+    setRechecking(true);
+    try {
+      const fresh = await customFetch<PayrollSkipCheckResult>(
+        `/api/payroll/skip-check?month=${month}&year=${year}&runType=monthly&fresh=1`,
+      );
+      queryClient.setQueryData(getPayrollSkipCheckQueryKey({ month, year, runType: "monthly" }), fresh);
+    } catch {
+      await skipQuery.refetch();
+    } finally {
+      setRechecking(false);
+    }
+  };
 
   const issues = issuesQuery.data;
   // what the Issues view's count says: the issues plus the employees skipped at generation, as the view lists them
@@ -341,8 +366,8 @@ export function PayrollTab({
           totalChecked={skipQuery.data?.totalChecked}
           loading={skipQuery.isLoading}
           error={skipQuery.error}
-          onRecheck={() => void skipQuery.refetch()}
-          rechecking={skipQuery.isFetching && !skipQuery.isLoading}
+          onRecheck={() => void recheckSkips()}
+          rechecking={rechecking || (skipQuery.isFetching && !skipQuery.isLoading)}
           periodLabel={periodLabel}
           kind="staff"
           accent="indigo"

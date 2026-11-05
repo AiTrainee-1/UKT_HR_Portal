@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from . import gate_qr
 from .auth import get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
+from .employee_photo import employee_photo_link, photo_links
 from .mobile_requests_views import month_bounds, parse_month
 from .models import Employee, GateDevice, TeaBreakLog, TeaBreakRule
 from .outpass_visitor_views import _paginate_params, _range_bounds, _range_start
@@ -44,26 +45,30 @@ NOT_RETURNED_MINUTES = 60
 MONTH_LOG_CAP = 500
 
 
-def _employee_json(emp: Employee) -> dict:
+def _employee_json(emp: Employee, photos: dict | None = None) -> dict:
+    """The photo is a signed link (employee_photo.py), never the embedded picture; `photos`: photo_links of a list."""
     return {
         "id": emp.id,
         "employeeCode": emp.employee_code,
         "name": f"{emp.first_name} {emp.last_name}",
         "department": emp.department.name if emp.department else None,
-        "photoUrl": emp.photo_url,
+        "photoUrl": employee_photo_link(emp, photos),
     }
 
 
-def _log_json(log: TeaBreakLog, allowed_minutes: int, now) -> dict:
+def _taken_and_remark(log: TeaBreakLog, allowed_minutes: int, now) -> tuple[int, str]:
     if log.in_at:
         taken_minutes = round((log.in_at - log.out_at).total_seconds() / 60)
-        remark = "overtime" if taken_minutes > allowed_minutes else "on_time"
-    else:
-        taken_minutes = round((now - log.out_at).total_seconds() / 60)
-        remark = "not_returned" if taken_minutes > NOT_RETURNED_MINUTES else "in_progress"
+        return taken_minutes, "overtime" if taken_minutes > allowed_minutes else "on_time"
+    taken_minutes = round((now - log.out_at).total_seconds() / 60)
+    return taken_minutes, "not_returned" if taken_minutes > NOT_RETURNED_MINUTES else "in_progress"
+
+
+def _log_json(log: TeaBreakLog, allowed_minutes: int, now, photos: dict | None = None) -> dict:
+    taken_minutes, remark = _taken_and_remark(log, allowed_minutes, now)
     return {
         "id": log.id,
-        "employee": _employee_json(log.employee),
+        "employee": _employee_json(log.employee, photos),
         "outGateName": log.out_gate.name if log.out_gate_id else None,
         "outAt": log.out_at.isoformat(),
         "inGateName": log.in_gate.name if log.in_gate_id else None,
@@ -140,6 +145,7 @@ def tea_break_my_status(request: Request) -> Response:
     mine = (
         TeaBreakLog.objects.filter(employee_id=emp_id)
         .select_related("out_gate", "in_gate", "employee__department")
+        .defer("employee__photo_url")  # every row is this employee: the photo's link is looked up once (photo_links)
         .order_by("-out_at")
     )
     logs = list(mine[:10])
@@ -149,11 +155,12 @@ def tea_break_my_status(request: Request) -> Response:
         listed = list(mine.filter(out_at__gte=start, out_at__lt=end)[:MONTH_LOG_CAP])
     else:
         listed = logs
+    photos = photo_links([emp_id] if listed else [])
     body = {
         "onBreak": bool(open_log),
         "outAt": open_log.out_at.isoformat() if open_log else None,
         "allowedMinutes": rule.allowed_minutes,
-        "recent": [_log_json(log, rule.allowed_minutes, now) for log in listed],
+        "recent": [_log_json(log, rule.allowed_minutes, now, photos) for log in listed],
     }
     if month_first is not None:
         body["month"] = month_first.strftime("%Y-%m")
@@ -209,16 +216,19 @@ def tea_break_records(request: Request) -> Response:
         scope_to_branch(TeaBreakLog.objects, request, field="employee__branch_id")
         .filter(out_at__gte=start)
         .select_related("employee__department", "out_gate", "in_gate")
+        .defer("employee__photo_url")  # a month is thousands of rows: only the page's photo links are looked up
         .order_by("-out_at")
     )
-    rows = [_log_json(log, rule.allowed_minutes, now) for log in qs]
+    logs = list(qs)
     if filter_key in ("overtime", "not_returned"):
-        rows = [r for r in rows if r["remark"] == filter_key]
+        logs = [log for log in logs if _taken_and_remark(log, rule.allowed_minutes, now)[1] == filter_key]
 
-    total = len(rows)
+    total = len(logs)
     offset = (page - 1) * page_size
+    page_logs = logs[offset:offset + page_size]
+    photos = photo_links(log.employee_id for log in page_logs)
     return Response({
-        "items": rows[offset:offset + page_size],
+        "items": [_log_json(log, rule.allowed_minutes, now, photos) for log in page_logs],
         "total": total,
         "page": page,
         "pageSize": page_size,

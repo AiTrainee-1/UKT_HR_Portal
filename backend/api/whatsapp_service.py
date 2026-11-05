@@ -269,7 +269,9 @@ def _post_send(payload: dict, url: str | None = None) -> dict:
         "access_token": dj_settings.WACLIENT_ACCESS_TOKEN,
     }
     try:
-        resp = requests.post(url or dj_settings.WACLIENT_API_URL, json=body, timeout=30)
+        # (connect, read): 5 s to reach WAClient, 20 s for its answer. It was 30 s for each, as long as the whole request
+        # may take on the server, so a slow WAClient made the click (an OTP login, sending a document) kill the worker.
+        resp = requests.post(url or dj_settings.WACLIENT_API_URL, json=body, timeout=(5, 20))
     except requests.RequestException as exc:
         raise WhatsAppServiceError(f"Could not reach WAClient: {exc}")
 

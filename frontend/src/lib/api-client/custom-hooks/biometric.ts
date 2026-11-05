@@ -25,7 +25,7 @@ export const useSyncBiometricProgress = (enabled: boolean) =>
     queryKey: ["/api/attendance/sync-biometric-progress"],
     queryFn: () => customFetch<SyncProgress>("/api/attendance/sync-biometric-progress"),
     enabled,
-    refetchInterval: enabled ? 600 : false,
+    refetchInterval: enabled ? 1500 : false,
     // The pipeline only cares about the freshest snapshot -never serve a stale one.
     staleTime: 0,
   });

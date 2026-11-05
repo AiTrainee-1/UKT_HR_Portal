@@ -955,8 +955,17 @@ class PayrollSettings(models.Model):
     class Meta:
         db_table = "payroll_settings"
 
+    # The pictures stored on the row as base64 text (the company logo alone is ~280 KB on the live data). get() leaves
+    # them out of the query: it runs in nearly every request and twice per employee in a payroll run, and almost no
+    # caller looks at a picture. Reading one of these attributes loads it then (Django's deferred fields), and save()
+    # writes only what was loaded or assigned, so a caller that sets a picture still saves it.
+    HEAVY_FIELDS = ("company_logo", "signature_image", "authorized_signature")
+
     @classmethod
     def get(cls) -> "PayrollSettings":
+        obj = cls.objects.defer(*cls.HEAVY_FIELDS).filter(pk=1).first()
+        if obj is not None:
+            return obj
         obj, created = cls.objects.get_or_create(pk=1)
         if created:
             # get_or_create's freshly-inserted instance keeps its Python-level

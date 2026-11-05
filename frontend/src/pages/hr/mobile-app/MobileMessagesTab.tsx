@@ -19,6 +19,7 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { useDebounced } from "@/hooks/use-debounced";
 import { useToast } from "@/hooks/use-toast";
 import {
   useMobileDevices,
@@ -594,7 +595,9 @@ function SendMessage() {
   const [picked, setPicked] = useState<MobileDeviceRow | null>(null);
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
-  const search = useMobileDevices({ search: text.trim(), page: 1, pageSize: 6 });
+  // asked once typing pauses, not once per letter (the last matches stay listed meanwhile)
+  const searchText = useDebounced(text.trim());
+  const search = useMobileDevices({ search: searchText, page: 1, pageSize: 6 });
   const send = useSendMobileMessage();
   const ready = !!picked && title.trim().length > 0 && message.trim().length > 0;
 

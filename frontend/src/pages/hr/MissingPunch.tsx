@@ -58,7 +58,10 @@ export default function MissingPunch() {
 
   const all = useMemo(() => (items ?? []) as MissingRow[], [items]);
   const summary = useMemo(() => summarize(all), [all]);
-  const shown = useMemo(() => sortRows(filterRows(all, filters), sort), [all, filters, sort]);
+  // Sorted once per data/sort change, then filtered per keystroke (filtering keeps the order, and the sort is a total order,
+  // so this is the same list as sorting the filtered rows, without re-sorting on every letter typed).
+  const sorted = useMemo(() => sortRows(all, sort), [all, sort]);
+  const shown = useMemo(() => filterRows(sorted, filters), [sorted, filters]);
   const decidable = useMemo(() => bulkApprovable(shown), [shown]);
   const picked = useMemo(() => decidable.filter((r) => selected.has(r.id)), [decidable, selected]);
   const detail = useMemo(() => all.find((r) => r.id === detailId) ?? null, [all, detailId]);

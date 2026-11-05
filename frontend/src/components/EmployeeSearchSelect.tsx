@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,9 @@ interface EmployeeSearchSelectProps {
   dataTestId?: string;
 }
 
+/** How many matches the list draws at once; typing narrows it. */
+const MAX_VISIBLE = 50;
+
 export default function EmployeeSearchSelect({
   employees,
   value,
@@ -27,20 +30,44 @@ export default function EmployeeSearchSelect({
 }: EmployeeSearchSelectProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  // The list follows the typed text a beat behind, so the input itself never waits for a roster-wide filter + re-render.
+  const deferredSearch = useDeferredValue(search);
 
-  const selectedEmployee = employees?.find((e) => String(e.id) === value);
+  const selectedEmployee = useMemo(() => employees?.find((e) => String(e.id) === value), [employees, value]);
 
-  const filtered = employees?.filter((e) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      e.employeeCode?.toLowerCase().includes(q) ||
-      e.firstName?.toLowerCase().includes(q) ||
-      e.lastName?.toLowerCase().includes(q) ||
-      `${e.firstName} ${e.lastName}`.toLowerCase().includes(q) ||
-      e.phone?.includes(q)
-    );
-  }) ?? [];
+  // Lower-cased once per roster, not once per employee per keystroke. Code, first name, last name and the full name are
+  // joined by a character nobody can type, so a match never spans two of them; the phone is compared as it is, as before.
+  const searchIndex = useMemo(
+    () =>
+      (employees ?? []).map((e) => ({
+        emp: e,
+        text: [
+          e.employeeCode?.toLowerCase() ?? "",
+          e.firstName?.toLowerCase() ?? "",
+          e.lastName?.toLowerCase() ?? "",
+          `${e.firstName} ${e.lastName}`.toLowerCase(),
+        ].join("\u0000"),
+        phone: e.phone as string | null | undefined,
+      })),
+    [employees],
+  );
+
+  const filtered = useMemo(() => {
+    if (!deferredSearch) return employees ?? [];
+    const q = deferredSearch.toLowerCase();
+    return searchIndex.filter((x) => x.text.includes(q) || x.phone?.includes(q)).map((x) => x.emp);
+  }, [employees, searchIndex, deferredSearch]);
+
+  // Rendering every match (the whole roster before anything is typed) is what froze the dialogs: show the first
+  // MAX_VISIBLE, plus the selected employee when they match but fall outside that window, so they stay selectable.
+  const visible = useMemo(() => {
+    const head = filtered.slice(0, MAX_VISIBLE);
+    if (filtered.length > MAX_VISIBLE && value) {
+      const picked = filtered.find((e) => String(e.id) === value);
+      if (picked && !head.includes(picked)) return [picked, ...head];
+    }
+    return head;
+  }, [filtered, value]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -101,8 +128,8 @@ export default function EmployeeSearchSelect({
             </button>
           )}
 
-          {filtered.length > 0 ? (
-            filtered.map((emp) => {
+          {visible.length > 0 ? (
+            visible.map((emp) => {
               const isSelected = String(emp.id) === value;
               return (
                 <button
@@ -141,6 +168,14 @@ export default function EmployeeSearchSelect({
             <div className="py-8 text-center text-sm text-muted-foreground">
               No employees found
             </div>
+          )}
+          {filtered.length > MAX_VISIBLE && (
+            <p
+              className="px-2 py-1.5 text-center text-xs text-muted-foreground"
+              data-testid={`${dataTestId}-truncated`}
+            >
+              Showing {visible.length} of {filtered.length} — type to narrow
+            </p>
           )}
         </div>
       </PopoverContent>

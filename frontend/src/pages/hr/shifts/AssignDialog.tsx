@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { useListDepartments, useListEmployees } from "@/lib/api-client";
+import { useListDepartments, useListEmployeesLite } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import {
   useApplyShiftAssignment,
@@ -132,7 +132,7 @@ export default function AssignDialog({
   const [confirming, setConfirming] = useState(false);
   const patch = (p: Partial<AssignState>) => setState((s) => ({ ...s, ...p }));
 
-  const { data: employees = [] } = useListEmployees({ status: "active" });
+  const { data: employees = [] } = useListEmployeesLite({ status: "active" });
   const { data: departments = [] } = useListDepartments();
   const { data: designations = [] } = useListDesignations();
   const { data: assignments = [] } = useListShiftAssignments({ activeOnly: true });

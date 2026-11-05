@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { useListEmployees } from "@/lib/api-client";
+import { useListEmployeesLite } from "@/lib/api-client";
 import { useListShiftAssignments } from "@/lib/api-client/custom-hooks";
 import { SearchBox, TypeChips } from "./AssignmentsTab";
 import { filterPeople, pluralize, unassignedOf, type Person, type TypeFilter } from "./shift-logic";
@@ -15,7 +15,7 @@ export default function UnassignedTab({ onAssign }: { onAssign: (people: Person[
   const [type, setType] = useState<TypeFilter>("all");
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<Set<number>>(new Set());
-  const { data: employees = [], isLoading } = useListEmployees({ status: "active" });
+  const { data: employees = [], isLoading } = useListEmployeesLite({ status: "active" });
   const { data: assignments = [], isLoading: assignmentsLoading } = useListShiftAssignments({ activeOnly: true });
 
   const without = useMemo(() => unassignedOf<Person>(employees, assignments), [employees, assignments]);

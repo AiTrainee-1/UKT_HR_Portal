@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import html2canvas from "html2canvas-pro";
-import JSZip from "jszip";
 import { AlertTriangle, Camera, CheckCircle2, CreditCard, Download, Printer, RefreshCw, Users } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
@@ -18,8 +16,9 @@ import { cardFileName, keepKnown, removeIds, summarizeEmployees, summarizeSelect
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
-/** A card (the element holding its front and back) as a PNG. */
+/** A card (the element holding its front and back) as a PNG. html2canvas is loaded on first use, not with the page. */
 async function capture(el: HTMLElement): Promise<Blob | null> {
+  const { default: html2canvas } = await import("html2canvas-pro");
   const canvas = await html2canvas(el, { backgroundColor: "#ffffff", scale: 3, useCORS: true });
   return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
 }
@@ -94,6 +93,7 @@ export default function IdCards() {
     }
     setDownloading("all");
     try {
+      const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
       let captured = 0;
       for (const card of cards) {

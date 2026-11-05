@@ -32,7 +32,7 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
   const { branches, branchId, setBranchId } = useSelectedBranch(isBranchScoped);
   const effectiveBranchId = isBranchScoped ? undefined : branchId ? Number(branchId) : undefined;
 
-  const { data: qr } = useVisitorQr(effectiveBranchId);
+  const { data: qr } = useVisitorQr(effectiveBranchId, { enabled: isBranchScoped || effectiveBranchId !== undefined });
   const { data: summary, isLoading: summaryLoading } = useVisitorSummary();
   const { data: page_, isLoading: recordsLoading } = useVisitorRecords(range, page, PAGE_SIZE);
   const records: VisitorRecordRow[] = page_?.items ?? [];

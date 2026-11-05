@@ -68,7 +68,7 @@ function styleHeaderRow(headerRow: ExcelJS.Row) {
 }
 
 async function downloadPunchesAsExcel(rows: PunchRow[]) {
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet("Punches");
   ws.columns = PUNCH_HEADERS.map((h) => ({ key: h, width: Math.max(16, h.length + 4) }));
   styleHeaderRow(ws.getRow(1));

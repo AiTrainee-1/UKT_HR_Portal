@@ -39,7 +39,7 @@ EMAIL_SENT = "sent"
 EMAIL_FAILED = "failed"
 EMAIL_BLOCKED = "blocked"
 
-SMTP_TIMEOUT = 15
+SMTP_TIMEOUT = 10  # seconds per SMTP step (connect, hello, TLS, login, data); was 15 (app health audit 2026-11-05)
 SMTP_NOT_CONFIGURED = "SMTP settings not configured. Please save SMTP settings in Settings first."
 
 # email_catalog is the single source; kept under these names for callers that want the defaults.

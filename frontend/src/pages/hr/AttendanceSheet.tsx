@@ -12,6 +12,7 @@ import { AttendanceLoader } from "@/components/ui/AttendanceLoader";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Tooltip, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { useDebounced } from "@/hooks/use-debounced";
 import { useAuth } from "@/contexts/AuthContext";
 import { useListDepartments } from "@/lib/api-client";
 import {
@@ -183,10 +184,12 @@ export function AttendanceSheetContent() {
     return { dateFrom: from, dateTo: to, rangeLabel: `${MONTH_NAMES[month - 1]} ${year}` };
   }, [rangeMode, anchorDate, month, year]);
 
+  // the box shows every letter; the grid is asked for once typing pauses
+  const debouncedSearch = useDebounced(search);
   const { data, isLoading } = useAttendanceReportSheet({
     dateFrom, dateTo,
     department: department ? Number(department) : undefined,
-    search: search || undefined,
+    search: debouncedSearch || undefined,
   });
 
   const dates = data?.dates ?? [];
@@ -249,7 +252,7 @@ export function AttendanceSheetContent() {
     if (employees.length === 0 || dates.length === 0) return;
     setExporting("excel");
     try {
-      const wb = newWorkbook();
+      const wb = await newWorkbook();
       const ws = wb.addWorksheet("Attendance Sheet");
       const fixedCols = 4; // S.No, Emp Code, Name, Department
       const summaryCols = 3; // P, A, Eff. Days

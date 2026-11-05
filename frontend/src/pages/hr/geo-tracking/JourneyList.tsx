@@ -18,7 +18,7 @@ import { Avatar, SectionCard } from "@/components/payroll/kit/parts";
 import { DataPagination } from "@/components/ui/DataPagination";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useListEmployees } from "@/lib/api-client";
+import { useListEmployeesLite } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import {
   isTrackingForbidden,
@@ -73,7 +73,7 @@ function EmployeePicker({
 }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
-  const { data: employees } = useListEmployees({ status: "active" });
+  const { data: employees } = useListEmployeesLite({ status: "active" });
 
   const matches = useMemo(() => {
     const q = text.trim().toLowerCase();

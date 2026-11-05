@@ -4,6 +4,7 @@ import { EmptyNote, KpiTile, SkeletonKpis } from "@/components/payroll/kit/parts
 import { FilterSelect, LoadError, ResetButton, SearchField } from "@/components/payroll/panels/issues/panel-kit";
 import { errorDetail } from "@/components/payroll/panels/issues/lists";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useDraft } from "@/hooks/use-debounced";
 import { useOvertimeList } from "@/lib/api-client/custom-hooks";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
 import { formatDuration } from "@/pages/hr/settings/compensation/time";
@@ -52,6 +53,9 @@ export default function OtTab({
 
   const groups = useMemo(() => groupOt(rows), [rows]);
   const kpis = useMemo(() => otKpis(rows), [rows]);
+  // The box shows every letter; the address (and the lists filtered from it) changes once typing pauses, so the page is
+  // not re-rendered per keystroke.
+  const [searchDraft, setSearchDraft] = useDraft(url.otq, (otq) => setUrl({ otq }));
   const filters = useMemo(() => ({ q: url.otq, dept: url.otdept }), [url.otq, url.otdept]);
   const departments = useMemo(() => otDepartments(rows), [rows]);
   const allowance = useMemo(() => filterOt(groups.allowance, filters), [groups.allowance, filters]);
@@ -122,8 +126,8 @@ export default function OtTab({
           className="w-full sm:w-52"
         />
         <SearchField
-          value={url.otq}
-          onChange={(v) => setUrl({ otq: v })}
+          value={searchDraft}
+          onChange={setSearchDraft}
           placeholder="Search by name, code or department"
           label="Search overtime records"
           testId="ot-search"

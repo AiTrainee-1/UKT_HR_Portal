@@ -488,7 +488,7 @@ export const useGeneratePayrollProgress = (enabled: boolean) =>
     queryKey: ["/api/payroll/generate-progress"],
     queryFn: () => customFetch<PayrollGenerateProgress>("/api/payroll/generate-progress"),
     enabled,
-    refetchInterval: enabled ? 600 : false,
+    refetchInterval: enabled ? 1500 : false,
     // The pipeline only cares about the freshest snapshot -never serve a stale one.
     staleTime: 0,
   });
@@ -512,7 +512,7 @@ export const useSalarySlipBulkProgress = (enabled: boolean) =>
     queryKey: ["/api/salary-slips/bulk-progress"],
     queryFn: () => customFetch<SalarySlipBulkProgress>("/api/salary-slips/bulk-progress"),
     enabled,
-    refetchInterval: enabled ? 600 : false,
+    refetchInterval: enabled ? 1500 : false,
     staleTime: 0,
   });
 
@@ -735,6 +735,9 @@ export const usePayrollSettings = () =>
   useQuery<PayrollSettingsItem>({
     queryKey: getPayrollSettingsQueryKey(),
     queryFn: () => customFetch<PayrollSettingsItem>("/api/payroll-settings"),
+    // read by many pages, changed rarely: every save (useUpdatePayrollSettings, the Settings tabs' setQueryData) updates
+    // this key, so it is not fetched again on every navigation
+    staleTime: 5 * 60_000,
   });
 
 export const useUpdatePayrollSettings = () => {

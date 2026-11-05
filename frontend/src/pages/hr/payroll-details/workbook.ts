@@ -88,7 +88,7 @@ function addTableSheet(
 const KIND_WORD = { earning: "Earning", deduction: "Deduction", info: "Information (not added)", subtotal: "Subtotal" };
 
 export async function exportDetailsWorkbook(details: PayrollDetails, company: string): Promise<void> {
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const { employee, period, money } = details;
   const subtitle = `${employee.name} (${employee.code}) · ${period.label}`;
 

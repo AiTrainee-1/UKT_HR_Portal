@@ -50,7 +50,7 @@ function Overview({
 }) {
   const { branches, branchId, setBranchId } = branch;
   const effectiveBranchId = isBranchScoped ? undefined : branchId ? Number(branchId) : undefined;
-  const { data: qr } = useOutpassQr(effectiveBranchId);
+  const { data: qr } = useOutpassQr(effectiveBranchId, { enabled: isBranchScoped || effectiveBranchId !== undefined });
   const { data: summary, isLoading: summaryLoading } = useOutpassSummary();
   const { data: records, isLoading: recordsLoading } = useOutpassRecords(range, page, PAGE_SIZE);
 

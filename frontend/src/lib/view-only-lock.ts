@@ -63,11 +63,87 @@ export function isMutatingControl(el: HTMLButtonElement): boolean {
   return words.some((w) => MUTATING_KEYWORDS.has(w));
 }
 
+function lockButton(btn: HTMLButtonElement): void {
+  if (isMutatingControl(btn) && !btn.disabled) btn.disabled = true;
+}
+
 /** Disables every mutating <button> under `root`, leaves everything else alone. */
 export function lockMutatingControls(root: HTMLElement): void {
-  root.querySelectorAll<HTMLButtonElement>("button").forEach((btn) => {
-    if (isMutatingControl(btn) && !btn.disabled) btn.disabled = true;
+  root.querySelectorAll<HTMLButtonElement>("button").forEach(lockButton);
+}
+
+/** Attributes that can make a button lockable again: its name (aria-label/title), React clearing its `disabled`, or an
+ *  ancestor losing the view-safe opt-out. */
+const WATCHED_ATTRIBUTES = ["disabled", "aria-label", "title", VIEW_SAFE_ATTR];
+
+/**
+ * Keeps `root` locked while the page changes: one full pass now (lockMutatingControls), then only what changed, batched
+ * to at most one pass per animation frame (which still runs before the next paint, so an unlocked button is never
+ * shown): every added subtree, the button around changed text or children, a button whose name or `disabled` changed,
+ * and a subtree that lost `data-view-safe`. The end state is the same as re-scanning the whole document after every
+ * mutation, which is what this replaces (that re-scan ran for every keystroke render, poll update and tooltip).
+ * Returns the function that stops watching.
+ */
+export function watchMutatingControls(root: HTMLElement): () => void {
+  lockMutatingControls(root);
+  if (typeof MutationObserver === "undefined") return () => {};
+
+  const schedule: (cb: () => void) => number =
+    typeof requestAnimationFrame === "function" ? (cb) => requestAnimationFrame(cb) : (cb) => window.setTimeout(cb, 16);
+  const cancel: (handle: number) => void =
+    typeof cancelAnimationFrame === "function" ? (h) => cancelAnimationFrame(h) : (h) => window.clearTimeout(h);
+
+  const pending = new Set<Element>();
+  let frame = 0;
+
+  const flush = () => {
+    frame = 0;
+    const changed = Array.from(pending);
+    pending.clear();
+    for (const el of changed) {
+      if (!root.contains(el)) continue; // removed again before the frame
+      if (el instanceof HTMLButtonElement) lockButton(el);
+      else el.querySelectorAll<HTMLButtonElement>("button").forEach(lockButton);
+    }
+  };
+  const queue = (el: Element | null | undefined) => {
+    if (!el) return;
+    pending.add(el);
+    if (!frame) frame = schedule(flush);
+  };
+
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      const target = record.target;
+      if (record.type === "attributes") {
+        // A name or `disabled` change matters on a button only; a lost opt-out matters for everything under it.
+        if (record.attributeName === VIEW_SAFE_ATTR || target instanceof HTMLButtonElement) queue(target as Element);
+      } else if (record.type === "characterData") {
+        queue(target.parentElement?.closest("button"));
+      } else {
+        record.addedNodes.forEach((node) => {
+          if (node instanceof Element) queue(node);
+          else queue(node.parentElement?.closest("button"));
+        });
+        // Children added to / removed from inside a button change its name.
+        if (target instanceof Element) queue(target.closest("button"));
+      }
+    }
   });
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: WATCHED_ATTRIBUTES,
+  });
+
+  return () => {
+    observer.disconnect();
+    if (frame) cancel(frame);
+    frame = 0;
+    pending.clear();
+  };
 }
 
 /**

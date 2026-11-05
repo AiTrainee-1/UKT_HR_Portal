@@ -22,10 +22,15 @@ from .models import (
 
 def _manager_json(m, include_assignments=False):
     emp = m.employee
-    dept_assignments = list(m.department_assignments.select_related("department").all())
-    emp_assignments = list(
-        m.employee_assignments.select_related("employee__department", "employee__designation").all()
-    )
+    if include_assignments:
+        dept_assignments = list(m.department_assignments.select_related("department").all())
+        emp_assignments = list(
+            m.employee_assignments.select_related("employee__department", "employee__designation").all()
+        )
+    else:
+        # Only counted and their department ids read: no join, and the list view's prefetch answers it with no query
+        # per manager.
+        dept_assignments = list(m.department_assignments.all())
     # An HOD covers employees two ways -a whole assigned DEPARTMENT (every
     # employee in it, automatically) and/or individually assigned employees
     # (ManagerEmployeeAssignment, for cross-department reports). Both count
@@ -138,9 +143,10 @@ def _get_manager_employee_ids(m):
 @require_hr
 def department_managers(request: Request) -> Response:
     if request.method == "GET":
+        # _manager_json reads the prefetched department assignments; never the HOD's photo (a base64 data URL).
         qs = DepartmentManager.objects.select_related(
             "employee__department", "employee__designation"
-        ).prefetch_related("department_assignments", "employee_assignments").order_by("-created_at")
+        ).defer("employee__photo_url").prefetch_related("department_assignments").order_by("-created_at")
         # An HOD is an employee, so they belong to that employee's branch.
         # Each branch runs its own heads and its own approval chain.
         qs = scope_to_branch(qs, request, field="employee__branch_id")
@@ -880,10 +886,10 @@ def manager_pending_requests(request: Request) -> Response:
         casual_qs = CasualLeaveRequest.objects.none()
     casual_qs = casual_qs.order_by("-created_at")
 
-    from .geo_attendance_views import _on_duty_session_dict
-    on_duty_qs = OnDutySession.objects.select_related(
+    from .geo_attendance_views import _on_duty_session_dict, with_pending_punch_count
+    on_duty_qs = with_pending_punch_count(OnDutySession.objects.select_related(
         "employee__department", "employee__designation", "branch"
-    ).filter(emp_filter)
+    ).filter(emp_filter))
     if m.can_approve_on_duty:
         if status_filter == "pending":
             on_duty_qs = on_duty_qs.filter(
@@ -928,10 +934,13 @@ def manager_pending_requests(request: Request) -> Response:
     on_duty_rows = mine("on_duty", on_duty_qs)
     on_duty_journeys = journey_ids([s.pk for s in on_duty_rows])
 
+    perm_rows = mine("permission", perm_qs)
+    _cap_cache.prime(perm_rows)  # the monthly-cap positions of every listed permission in one query
+
     counts = _hod_pending_counts(m, emp_filter)
     return Response({
         "leaveRequests": [_leave_with_emp(r) for r in mine("leave", leave_qs)],
-        "permissions": [_perm_with_emp(p) for p in mine("permission", perm_qs)],
+        "permissions": [_perm_with_emp(p) for p in perm_rows],
         "resignations": [_resignation_json(r, cfgs["resignation"]) for r in mine("resignation", resign_qs)],
         "attendanceRequests": [
             _override_request_dict(r, cfgs["attendance_correction"]) for r in mine("attendance_correction", attendance_qs)

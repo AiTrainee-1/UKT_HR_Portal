@@ -70,7 +70,7 @@ def send_push_on_notification(sender, instance: Notification, created: bool, **k
         for token in tokens
     ]
     try:
-        resp = requests.post(EXPO_PUSH_URL, json=messages, timeout=5)
+        resp = requests.post(EXPO_PUSH_URL, json=messages, timeout=(3, 5))  # (connect, read)
         receipts = resp.json().get("data") if resp.ok else None
         _prune_dead_tokens(tokens, receipts)
         errors = [r for r in (receipts or []) if r.get("status") == "error"]

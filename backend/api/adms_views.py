@@ -139,7 +139,12 @@ def _parse_attlog_line(line: str) -> dict | None:
 def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
     """POST /iclock/cdata?table=ATTLOG -the actual attendance push."""
     body = request.body.decode("utf-8", errors="replace")
-    logger.warning("ADMS ATTLOG push: SN=%s stamp=%s body=%r", sn, request.GET.get("Stamp"), body)
+    # The size and the start only: a push can be megabytes (a device catching up), and the whole body used to be logged
+    # at WARNING on every push and again on every retry (app health audit, 2026-11-05).
+    logger.warning(
+        "ADMS ATTLOG push: SN=%s stamp=%s lines=%d bytes=%d start=%r",
+        sn, request.GET.get("Stamp"), len(body.splitlines()), len(body), body[:500],
+    )  # fmt: skip
 
     processed = 0
     skipped_unparsable = 0
@@ -151,6 +156,9 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
 
     rules = device_rules()
     device_id = device_id_for_serial(sn) if rules else None
+    # One lookup per employee code per push (a push carries many lines of the same people), without the photo column
+    # (base64, up to MBs): only the id is needed here.
+    employees_by_code: dict = {}
 
     for line in body.splitlines():
         if not line.strip():
@@ -163,7 +171,10 @@ def _handle_attlog(request: HttpRequest, sn: str) -> HttpResponse:
         if newest_punch is None or parsed["dt"] > newest_punch:
             newest_punch = parsed["dt"]
 
-        emp = Employee.objects.filter(employee_code=parsed["user_id"]).first()
+        code = parsed["user_id"]
+        if code not in employees_by_code:
+            employees_by_code[code] = Employee.objects.filter(employee_code=code).defer("photo_url").first()
+        emp = employees_by_code[code]
         if not emp:
             skipped_no_employee += 1
             # Recorded, not just logged: a log line is invisible in the portal,

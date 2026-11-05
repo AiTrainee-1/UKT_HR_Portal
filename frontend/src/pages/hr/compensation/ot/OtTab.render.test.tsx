@@ -509,7 +509,9 @@ describe("the filters", () => {
   it("search every list by name, code or department, and keep the search in the address and across the subtabs", async () => {
     await openOt();
     typeInto(input("ot-search"), "asha");
-    expect(params().otq).toBe("asha");
+    // the box shows the letters at once; the address and the lists follow once typing pauses
+    expect(input("ot-search").value).toBe("asha");
+    await waitFor(() => params().otq === "asha", "the search in the address");
     expect(ids("ot-type1-row-")).toEqual(["E11-2026-10-06"]);
     // the tiles still count the whole month
     expect(text(q("ot-kpi-earned-value"))).toBe("2");

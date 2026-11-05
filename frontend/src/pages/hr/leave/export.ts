@@ -9,7 +9,7 @@ export async function exportSheet(
   rows: (string | number)[][],
   widths?: number[],
 ): Promise<void> {
-  const wb = newWorkbook();
+  const wb = await newWorkbook();
   const ws = wb.addWorksheet(title.slice(0, 31));
   ws.addRow(headers);
   ws.getRow(1).eachCell((cell) => styleHeaderCell(cell, { fill: "FF1E3A8A" }));

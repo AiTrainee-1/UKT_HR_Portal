@@ -66,7 +66,7 @@ const SECTION_ICONS: Record<PageSection, ReactNode> = {
 };
 
 const SECTION_NOTES: Record<PageSection, string> = {
-  requests: "Every request employees and HR raise, and who it is waiting for - auto-refreshes every 30 s",
+  requests: "Every request employees and HR raise, and who it is waiting for - auto-refreshes every minute",
   hods: "What is waiting for each Department Head's approval, kind by kind - refreshes every minute",
   notify: "Automatic reminders to every HoD with requests waiting for their approval",
 };
@@ -258,7 +258,7 @@ export default function ApprovedRequests() {
           downloadBlob(new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8" }), `${name}.csv`);
           return;
         }
-        const wb = newWorkbook();
+        const wb = await newWorkbook();
         const ws = wb.addWorksheet("Requests");
         ws.columns = EXPORT_HEADERS.map((h) => ({ header: h, width: h === "Details" || h === "Reason" ? 34 : 18 }));
         ws.getRow(1).eachCell((cell) => styleHeaderCell(cell, { fill: "FF006496" }));

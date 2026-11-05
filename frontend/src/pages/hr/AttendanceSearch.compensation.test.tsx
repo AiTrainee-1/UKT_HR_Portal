@@ -15,7 +15,7 @@ vi.mock("@/lib/api-client/custom-hooks", () => ({
   useAttendanceOverrideRequests: () => ({ data: [] }),
   usePayrollSettings: () => ({ data: { halfDayFirstHalfEndTime: "13:30", halfDaySecondHalfStartTime: "14:30" } }),
 }));
-vi.mock("@/lib/api-client", () => ({ useListEmployees: () => ({ data: [] }) }));
+vi.mock("@/lib/api-client", () => ({ useListEmployeesLite: () => ({ data: [] }) }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: () => {} }) }));
 vi.mock("@/components/ui/AttendanceLoader", () => ({ AttendanceLoader: () => null }));
 
