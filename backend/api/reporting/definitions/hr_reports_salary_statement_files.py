@@ -18,10 +18,14 @@ headers"):
     designations may wrap, numbers never do. Amounts carry no ₹ on every cell (the title band says "Amounts in ₹"), zeros
     are grey so the real figures stand out, and the padding, margins and header block are tight.
 
-Each unit's page(s) end with that unit's total and its own summary: five cards (Total Employees, Fixed Salary, Earned
-Salary, Detection Amount = the Late Detection + Permission deduction, Net Pay) worked out from that unit's lines only
-(owner 2026-11-05). With several units a last page follows: the "All units" recap (every unit's total line and the grand
-TOTAL) with the same five cards for all units. Then the signature block with room to sign above Prepared By, Checked By,
+Each unit's page(s) end with that unit's total line and its own large totals block, "HO – Head Office Total": twelve
+cards in two rows -- Total Employees, Basic Salary, Other Allowance, Total Salary, Earned Salary, NET (highlighted) / PF,
+ESI, TDS, Advance, Others, Total Deduction -- every one worked out from that unit's lines only (owner 2026-11-05). With
+several units a last page follows: the "All units" recap (every unit's total line and the grand TOTAL) with the same
+block for all units ("All units Total"). Then the Final Summary (owner 2026-11-05): four large cards with the company's
+totals across all units -- Total Salary, Earned Salary, Total Deduction, Net Pay. With several units every unit also ends
+with its own Final Summary ("HO – Head Office: Final Summary", the same four cards for that unit alone) under its totals
+block. Then the signature block with room to sign above Prepared By, Checked By,
 HRM, Auditor and MD (kept on one page with the last summary), then the PF, ESI & TDS details on a page of their own, unit
 by unit the same way, at the very end. With one unit (a unit login) the unit's summary is the statement's, so there is no
 recap page. The files print no explanatory notes (the screen still
@@ -192,25 +196,47 @@ def section_lines(section, blocks, sum_keys) -> list[Line]:
     return _with_gaps(lines)
 
 
-def summary_figures(out, blocks) -> list[tuple[str, float, str]]:
-    """The five cards for the whole statement (every unit): (label, value, column type)."""
+def summary_figures(out, blocks) -> list[list[tuple[str, float, str]]]:
+    """The totals block for the whole statement (every unit): rows of (label, value, column type)."""
     return figures_for(sum(b.count for b in blocks), out.totals or {})
 
 
-def unit_figures(block) -> list[tuple[str, float, str]]:
-    """The five cards for one unit, from that unit's own lines only (its total line's sums)."""
+def unit_figures(block) -> list[list[tuple[str, float, str]]]:
+    """The totals block for one unit, from that unit's own lines only (its total line's sums)."""
     return figures_for(block.count, block.total)
 
 
-def figures_for(employees: int, totals: dict) -> list[tuple[str, float, str]]:
-    """Total Employees, Fixed Salary (the Total Salary column), Earned Salary, Detection Amount (the Others column: Late
-    Detection + Permission) and Net Pay, from a set of totals."""
+# The totals block (owner 2026-11-05): every column of the statement that adds up, and the head count. First row the pay
+# (with NET, highlighted, at its end), second row the deductions.
+FIGURE_ROWS = (
+    (("Total Employees", None), ("Basic Salary", "basic"), ("Other Allowance", "otherSalary"), ("Total Salary", "total"),
+     ("Earned Salary", "eSalary"), ("NET", "net")),
+    (("PF", "pf"), ("ESI", "esi"), ("TDS", "tds"), ("Advance", "advance"), ("Others", "others"),
+     ("Total Deduction", "totalDeduction")),
+)  # fmt: skip
+HIGHLIGHT = "NET"
+# The Final Summary under everything (owner 2026-11-05): the company's totals across all units, in four large cards.
+FINAL_TITLE = "Final Summary"
+FINAL_FIGURES = (("Total Salary", "total"), ("Earned Salary", "eSalary"), ("Total Deduction", "totalDeduction"),
+                 ("Net Pay", "net"))  # fmt: skip
+FINAL_HIGHLIGHT = "Net Pay"
+
+
+def final_figures(out) -> list[list[tuple[str, float, str]]]:
+    """The Final Summary's one row of cards: the statement's grand totals (every unit)."""
+    return final_figures_for(out.totals or {})
+
+
+def final_figures_for(totals: dict) -> list[list[tuple[str, float, str]]]:
+    """A Final Summary's one row of cards from a set of totals (a unit's, or the whole statement's)."""
+    return [[(label, totals.get(key) or 0, CURRENCY) for label, key in FINAL_FIGURES]]
+
+
+def figures_for(employees: int, totals: dict) -> list[list[tuple[str, float, str]]]:
+    """The totals block from a set of column totals: rows of (label, value, column type)."""
     return [
-        ("Total Employees", employees, INTEGER),
-        ("Fixed Salary", totals.get("total") or 0, CURRENCY),
-        ("Earned Salary", totals.get("eSalary") or 0, CURRENCY),
-        ("Detection Amount", totals.get("others") or 0, CURRENCY),
-        ("Net Pay", totals.get("net") or 0, CURRENCY),
+        [(label, employees, INTEGER) if key is None else (label, totals.get(key) or 0, CURRENCY) for label, key in row]
+        for row in FIGURE_ROWS
     ]
 
 
@@ -593,33 +619,39 @@ def _header(out, avail, regular, bold, rupee_ok, base_style) -> list:
     return story
 
 
-def _cards(figures, title: str, avail, bold, rupee_ok, base_style) -> list:
-    """A summary: its title, then one line of five cards."""
-    s_title = base_style("ct", fontName=bold, fontSize=10.5, leading=13, textColor=BRAND)
-    s_label = base_style("cl", fontSize=8.5, leading=11, textColor=MUTED)
-    s_value = base_style("cv", fontName=bold, fontSize=14, leading=17, textColor=BRAND)
-    cards = []
-    for label, value, kind in figures:
-        if kind == INTEGER:
-            text = indian_number(float(value), 0)
-        else:
-            text = ("₹ " if rupee_ok else "Rs. ") + indian_number(float(value))
-        cards.append([Paragraph(escape(label), s_label), Paragraph(escape(text), s_value)])
-    strip = Table([cards], colWidths=[avail / len(cards)] * len(cards))
-    strip.setStyle(
-        TableStyle(
-            [
-                ("BOX", (0, 0), (-1, -1), 0.6, GRID),
-                ("INNERGRID", (0, 0), (-1, -1), 0.6, GRID),
-                ("BACKGROUND", (0, 0), (-1, -1), BRAND_SOFT),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 9),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-            ]
-        )
+def _cards(rows, title: str, avail, bold, rupee_ok, base_style, size=15.0, highlight=HIGHLIGHT) -> list:
+    """A totals block: its large title, then the cards row by row (`highlight` shaded). `size` = the figures' type size
+    (the labels and title scale with it)."""
+    s_title = base_style("ct", fontName=bold, fontSize=size - 2, leading=size + 1, textColor=BRAND)
+    s_label = base_style("cl", fontSize=size * 0.6, leading=size * 0.77, textColor=MUTED)
+    s_value = base_style("cv", fontName=bold, fontSize=size, leading=size * 1.2, textColor=BRAND)
+    data, cmds = (
+        [],
+        [
+            ("BOX", (0, 0), (-1, -1), 0.8, BRAND),
+            ("INNERGRID", (0, 0), (-1, -1), 0.6, GRID),
+            ("BACKGROUND", (0, 0), (-1, -1), BRAND_SOFT),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 9),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ],
     )
-    return [Paragraph(escape(title), s_title), Spacer(1, 4), strip]
+    width = max(len(row) for row in rows)
+    for r, row in enumerate(rows):
+        cells = []
+        for c, (label, value, kind) in enumerate(row):
+            if kind == INTEGER:
+                text = indian_number(float(value), 0)
+            else:
+                text = ("₹ " if rupee_ok else "Rs. ") + indian_number(float(value))
+            cells.append([Paragraph(escape(label), s_label), Paragraph(escape(text), s_value)])
+            if label == highlight:
+                cmds.append(("BACKGROUND", (c, r), (c, r), TOTAL))
+        data.append(cells + [""] * (width - len(cells)))
+    block = Table(data, colWidths=[avail / width] * width)
+    block.setStyle(TableStyle(cmds))
+    return [Paragraph(escape(title), s_title), Spacer(1, 5), block]
 
 
 def _signatures(avail, bold, base_style) -> Table:
@@ -673,9 +705,17 @@ def statement_pdf(out, blocks) -> bytes:
             if i:
                 story.append(PageBreak())
             story += _table(cols, chunk, SUM_KEYS, avail, regular, bold, base_style, fit=fit)
-            title = f"{block.title}: unit summary" if several else f"{block.title}: summary"
+            title = f"{block.title} Total"  # e.g. "HO – Head Office Total"
             cards = [Spacer(1, 14), *_cards(unit_figures(block), title, avail, bold, rupee_ok, base_style)]
             if several:
+                # ... and the unit's own Final Summary (owner 2026-11-05), kept on one page with its totals block
+                cards += [
+                    Spacer(1, 14),
+                    *_cards(
+                        final_figures_for(block.total), f"{block.title}: {FINAL_TITLE}", avail, bold, rupee_ok,
+                        base_style, size=21, highlight=FINAL_HIGHLIGHT,
+                    ),
+                ]  # fmt: skip
                 story.append(KeepTogether(cards))
             else:
                 closing = cards
@@ -689,10 +729,18 @@ def statement_pdf(out, blocks) -> bytes:
             story += _table(cols, recap, SUM_KEYS, avail, regular, bold, base_style, fit=fit)
             closing = [
                 Spacer(1, 14),
-                *_cards(summary_figures(out, blocks), "All units: summary", avail, bold, rupee_ok, base_style),
+                *_cards(summary_figures(out, blocks), "All units Total", avail, bold, rupee_ok, base_style),
             ]
     else:
         story.append(Paragraph("No records match the selected filters.", base_style("e", fontSize=10, leading=13)))
+    if lines:
+        # the Final Summary: the company's totals across all units, in four large cards
+        closing += [
+            Spacer(1, 16),
+            *_cards(
+                final_figures(out), FINAL_TITLE, avail, bold, rupee_ok, base_style, size=21, highlight=FINAL_HIGHLIGHT
+            ),
+        ]
     story.append(KeepTogether([*closing, Spacer(1, 10), _signatures(avail, bold, base_style)]))
 
     for section in out.sections:
@@ -902,42 +950,50 @@ class _Sheet:
             start += size
         return out
 
-    def cards(self, figures, row: int, title: str, unit: str | None = None) -> int:
-        """A summary from `row` on: its title, then five cards (labels, values). `unit` goes in the Unit column, so
-        filtering the Unit column to a unit keeps its summary. Returns the last row written."""
+    def cards(
+        self, rows, row: int, title: str, unit: str | None = None, size: int = 15, highlight: str = HIGHLIGHT
+    ) -> int:
+        """A totals block from `row` on: its large title, then each row of cards as a labels row and a values row (NET
+        highlighted). `unit` goes in the Unit column, so filtering the Unit column to a unit keeps its block. Returns the
+        last row written."""
         ws = self.ws
         thin = Side(style="thin", color=X_GRID)
         head = ws.cell(row=row, column=1, value=title)
-        head.font = Font(name="Calibri", size=12, bold=True, color=X_BRAND)
+        head.font = Font(name="Calibri", size=size - 1, bold=True, color=X_BRAND)
         head.data_type = "s"
-        f_label = Font(name="Calibri", size=10, color="666666")
-        f_value = Font(name="Calibri", size=14, bold=True, color=X_BRAND)
-        first_row = row + 1
-        for (first, last), (label, value, kind) in zip(self._spans(len(figures)), figures):
-            for r, text, font in ((first_row, label, f_label), (first_row + 1, value, f_value)):
-                cell = ws.cell(row=r, column=first, value=text)
-                cell.font = font
-                cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-                if r == first_row + 1:
-                    cell.number_format = "#,##0" if kind == INTEGER else X_MONEY
-                for c in range(first, last + 1):
-                    piece = ws.cell(row=r, column=c)
-                    piece.fill = self.fill["soft"]
-                    piece.border = Border(
-                        left=thin if c == first else None,
-                        right=thin if c == last else None,
-                        top=thin if r == first_row else None,
-                        bottom=thin if r == first_row + 1 else None,
-                    )
-                if last > first:
-                    ws.merge_cells(start_row=r, start_column=first, end_row=r, end_column=last)
+        ws.row_dimensions[row].height = 24
+        f_label = Font(name="Calibri", size=max(10, round(size * 0.65)), color="666666")
+        f_value = Font(name="Calibri", size=size, bold=True, color=X_BRAND)
+        written = [row]
+        r0 = row + 1
+        for figures in rows:
+            for (first, last), (label, value, kind) in zip(self._spans(len(figures)), figures):
+                fill = self.fill["total"] if label == highlight else self.fill["soft"]
+                for r, text, font in ((r0, label, f_label), (r0 + 1, value, f_value)):
+                    cell = ws.cell(row=r, column=first, value=text)
+                    cell.font = font
+                    cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+                    if r == r0 + 1:
+                        cell.number_format = "#,##0" if kind == INTEGER else X_MONEY
+                    for c in range(first, last + 1):
+                        piece = ws.cell(row=r, column=c)
+                        piece.fill = fill
+                        piece.border = Border(
+                            left=thin if c == first else None,
+                            right=thin if c == last else None,
+                            top=thin if r == r0 else None,
+                            bottom=thin if r == r0 + 1 else None,
+                        )
+                    if last > first:
+                        ws.merge_cells(start_row=r, start_column=first, end_row=r, end_column=last)
+            ws.row_dimensions[r0].height = 18
+            ws.row_dimensions[r0 + 1].height = max(30, size * 2)
+            written += [r0, r0 + 1]
+            r0 += 2
         if unit and self.unit_col:
-            for r in (row, first_row, first_row + 1):
+            for r in written:
                 ws.cell(row=r, column=self.unit_col, value=unit).alignment = Alignment(horizontal="center")
-        ws.row_dimensions[row].height = 20
-        ws.row_dimensions[first_row].height = 18
-        ws.row_dimensions[first_row + 1].height = 28
-        return first_row + 1
+        return written[-1]
 
     def signatures(self, row: int) -> int:
         """Room to sign (row - 1, tall), then each title over its own line at `row` (the last column of each run is the
@@ -1042,9 +1098,17 @@ def statement_xlsx(out, blocks) -> bytes:
     for chunk, block in zip(chunks, blocks):
         for line in chunk:
             sheet.line(line)
-        title = f"{block.title}: unit summary" if several else f"{block.title}: summary"
+        title = f"{block.title} Total"  # e.g. "HO – Head Office Total"
         if several:
-            sheet.cards(unit_figures(block), ws.max_row + 2, title, unit=block.label)
+            end = sheet.cards(unit_figures(block), ws.max_row + 2, title, unit=block.label)
+            sheet.cards(
+                final_figures_for(block.total),
+                end + 2,
+                f"{block.title}: {FINAL_TITLE}",
+                unit=block.label,
+                size=20,
+                highlight=FINAL_HIGHLIGHT,
+            )  # the unit's own Final Summary
         else:
             closing = (unit_figures(block), title)
     if several:
@@ -1054,13 +1118,16 @@ def statement_xlsx(out, blocks) -> bytes:
             sheet.line(Line(UNIT_TOTAL, values=b.total, text=f"{b.title} total"))  # no Unit: hidden by a unit filter
         if grand:
             sheet.line(grand)
-        closing = (summary_figures(out, blocks), "All units: summary")
+        closing = (summary_figures(out, blocks), "All units Total")
     last_row = ws.max_row
     if not lines:
         sheet.text_row("No records match the selected filters.", sheet.f_note, merge=False)
-        closing = (summary_figures(out, blocks), "Summary")
+        closing = (summary_figures(out, blocks), "Total")
     figures, title = closing
     end = sheet.cards(figures, ws.max_row + 3, title)
+    if lines:
+        # the Final Summary: the company's totals across all units, in four large cards
+        end = sheet.cards(final_figures(out), end + 3, FINAL_TITLE, size=20, highlight=FINAL_HIGHLIGHT)
     sheet.signatures(end + 3)
     ws.freeze_panes = f"D{header_row + 1}"
     _print_setup(ws, header_row, last_row, len(cols), f"{co.name} - {out.spec.title}")

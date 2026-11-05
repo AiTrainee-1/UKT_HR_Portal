@@ -51,7 +51,15 @@ from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 from django.db.models import Exists, OuterRef
 
 from api.models import Employee, Payroll
-from api.payroll_insights import KIND_STAFF, ddmmyyyy, parse_iso_date, slip_key, slips_for, staff_period
+from api.payroll_insights import (
+    KIND_STAFF,
+    ddmmyyyy,
+    natural_key,
+    parse_iso_date,
+    slip_key,
+    slips_for,
+    staff_period,
+)
 from api.payroll_statement_views import NO_DEPARTMENT, _groups, statement_rows
 from api.unit_labels import NO_UNIT_KEY, OTHER_UNIT, unit_label, unit_sort_key
 
@@ -240,8 +248,7 @@ def unit_blocks(payrolls: list, values: dict[int, dict]) -> list[UnitBlock]:
         heads[key] = (label, branch)
     blocks = []
     for key in sorted(members, key=lambda k: unit_sort_key(k, *heads[k])):
-        groups = _groups(members[key], values, _GROUP_COLUMNS)
-        _tell_apart(groups, members[key])
+        groups = _merge_same_names(_groups(members[key], values, _GROUP_COLUMNS), members[key])
         rows = [r["values"] for g in groups for r in g["rows"]]
         total = {k: round(sum(r.get(k) or 0 for r in rows), 2) for k in SUM_KEYS}
         label, branch = heads[key]
@@ -249,26 +256,29 @@ def unit_blocks(payrolls: list, values: dict[int, dict]) -> list[UnitBlock]:
     return blocks
 
 
-def _tell_apart(groups: list[dict], payrolls: list) -> None:
-    """Two departments in one unit that print the same name (a department of another unit can have people working at
-    this one) get their own unit's name added: "PRODUCTION (Head Office)" and "PRODUCTION (Unit1)"."""
+def _merge_same_names(groups: list[dict], payrolls: list) -> list[dict]:
+    """One heading per department NAME inside a unit (owner 2026-11-05): two departments that print the same name (a
+    department of another unit can have people working at this one, e.g. Unit1's PRODUCTION with two Head Office staff)
+    are listed as one "PRODUCTION", their people together in employee-code order, the serial numbers running on again.
+    Names match ignoring case and surrounding spaces; the heading is the first one's spelling."""
     departments = {str(p.employee.department_id): p.employee.department for p in payrolls if p.employee.department_id}
-    seen: dict[str, int] = {}
-    for g in groups:
-        seen[g["label"]] = seen.get(g["label"], 0) + 1
-    if all(n == 1 for n in seen.values()):
-        return
+    merged: dict[str, dict] = {}
     for g in groups:
         dept = departments.get(g["key"])
-        if seen[g["label"]] > 1 and dept is not None:
-            g["label"] = f"{dept.name} ({dept.branch.name if dept.branch_id and dept.branch else 'no unit'})"
-    # back in name order (as _groups has them), the serial numbers running on again
-    groups.sort(key=lambda g: (g["label"].startswith(NO_DEPARTMENT), g["label"].lower()))
+        name = dept.name.strip() if dept is not None and dept.name else g["label"]
+        same = merged.get(name.upper())
+        if same is None:
+            merged[name.upper()] = {**g, "label": name, "rows": list(g["rows"])}
+        else:
+            same["rows"].extend(g["rows"])
+    out = sorted(merged.values(), key=lambda g: (g["label"].startswith(NO_DEPARTMENT), g["label"].lower()))
     sno = 0
-    for g in groups:
+    for g in out:
+        g["rows"].sort(key=lambda r: (natural_key(r["values"].get("code") or ""), r["payrollId"] or 0))
         for r in g["rows"]:
             sno += 1
             r["sno"] = r["values"]["sno"] = sno
+    return out
 
 
 def statement_lines(blocks: list[UnitBlock]) -> list[dict]:
