@@ -25,6 +25,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
+from django.db.models import Q
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -438,15 +439,48 @@ def _production_late_days(emp: Employee, records, ps, prod_config=None) -> tuple
     return late_count, reasons
 
 
-def _pending_advance_repayments(emp: Employee, month: int, year: int) -> tuple[Decimal, list[dict]]:
+def _deducted_before(**slip_key) -> list[int]:
+    """The advance repayments this same payroll deducted when it was generated before: the ids its slip recorded."""
+    slip = SalarySlip.objects.filter(**slip_key).only("breakdown_details").first()
+    deductions = ((slip.breakdown_details or {}).get("deductions") or {}) if slip is not None else {}
+    ids = []
+    for detail in deductions.get("advanceDetails") or []:
+        try:
+            ids.append(int(detail["repaymentId"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return ids
+
+
+def _pending_advance_repayments(
+    emp: Employee, month: int, year: int, again=(), whole_month: bool = False
+) -> tuple[Decimal, list[dict]]:
     """
-    Find all pending advance repayments due in this month and return
+    The advance repayments (General Advance and Term Advance / loan instalments alike) this payroll deducts for the month:
     (total_amount, list_of_details).
+
+    The month's repayments not deducted yet, PLUS the ones this same payroll already deducted when it was generated before.
+    Generation marks a repayment processed (and closes a repaid advance), so before 2026-11-05 a second run of the same
+    month found nothing and silently dropped the deduction: the advance showed "Completed" while the payroll, the slip and
+    the Salary Statement deducted 0 (defect pinned 2026-09-24 in tests_payroll_engine).
+
+    `whole_month` (staff): a staff payroll is the employee's only payroll of the month, so every payroll-deduction repayment
+    of the month is its own -- including one an earlier run (before this fix) already dropped. `again` (production): the
+    repayment ids this period's own slip recorded; a production month can hold several periods, and a repayment another
+    period deducted is never taken twice. Already-processed repayments are not added to the advance's repaid total again
+    (_mark_repayments_processed skips them).
     """
+    taken = Q(is_processed=False)
+    if whole_month:
+        taken |= Q(is_processed=True, payment_method=AdvanceRepayment.PAYMENT_PAYROLL)
+    again = [i for i in again if i]
+    if again:
+        taken |= Q(pk__in=again)
     repayments = (
         AdvanceRepayment.objects
         .select_related("advance")
-        .filter(advance__employee=emp, month=month, year=year, is_processed=False)
+        .filter(taken, advance__employee=emp, month=month, year=year)
+        .order_by("id")
     )
     total = Decimal("0")
     details = []
@@ -772,7 +806,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
         )
 
     # 9. Advances
-    advance_total, advance_details = _pending_advance_repayments(emp, month, year)
+    # the month's advance / term-loan repayments, kept when the month is generated again
+    advance_total, advance_details = _pending_advance_repayments(emp, month, year, whole_month=True)
 
     total_deductions = _d2(
         pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty + permission_penalty
@@ -1060,8 +1095,10 @@ def _generate_production_payroll(
     # ENDS in. If a company's period frequency ever produces two periods
     # ending in the same month, the second one simply finds nothing left
     # pending (the first already claimed it via _mark_repayments_processed).
+    # Generating THIS period again keeps what it deducted the first time.
     month, year = period_end.month, period_end.year
-    advance_total, advance_details = _pending_advance_repayments(emp, month, year)
+    again = _deducted_before(employee=emp, period_start=period_start, period_end=period_end)
+    advance_total, advance_details = _pending_advance_repayments(emp, month, year, again=again)
 
     total_deductions = _d2(pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty)
     net_salary = _d2(gross_amount - total_deductions)

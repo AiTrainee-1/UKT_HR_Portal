@@ -597,8 +597,9 @@ def _run_recon(ctx) -> ReportResult:
         f"Compares the Payroll rows with the salary slips for {month_label(year, month)}. Read-only: nothing is regenerated or "
         "corrected here. Slip net pay is the printed figure; Payroll final pay is what the payroll screens total.",
         "Known behaviours this report detects: a payroll row set to paid or edited before 31 Oct 2026 had its final pay "
-        "recomputed without overtime (fixed since; such rows are still found here); regenerating a month after its advance instalments were processed loses the slip's "
-        "advance deduction. Arithmetic checks use a Rs. 0.01 tolerance: total deductions must equal PF + ESI + TDS + advance + "
+        "recomputed without overtime (fixed since; such rows are still found here); a month generated again after its advance "
+        "instalments were processed lost the slip's advance deduction before 5 Nov 2026 (fixed since; such slips are still found "
+        "here until the month is generated again). Arithmetic checks use a Rs. 0.01 tolerance: total deductions must equal PF + ESI + TDS + advance + "
         "late (production late penalties sit inside total deductions).",
         "Variance (payroll - slip) is shown on the 'Net differs' finding only; the other findings of the same slip "
         "repeat its figures without a variance, so the Variance total and the 'Net variance' card count each "

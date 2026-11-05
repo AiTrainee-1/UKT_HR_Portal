@@ -9,15 +9,12 @@ Calendar used throughout: February 2026 -it starts on a Sunday, so it has
 exactly 24 Mon-Sat working days. A salary of 24,000 therefore has a daily
 rate of exactly 1,000, and every figure can be checked by hand.
 
-One test is marked expectedFailure. It pins a real defect found while
-writing this suite (see its comment); it turns into "unexpected success"
-the day the defect is fixed, which is the cue to drop the marker. (The
-second one, PATCH dropping OT pay, was fixed on 2026-10-31.)
+Two real defects found while writing this suite were pinned as expectedFailure tests until fixed: PATCH dropping
+OT pay (fixed 2026-10-31) and regeneration dropping the advance deduction (fixed 2026-11-05). None is pinned now.
 
 Run via: python manage.py test api.tests_payroll_engine -v 2
 """
 
-import unittest
 from datetime import date, time
 from decimal import Decimal
 from types import SimpleNamespace
@@ -818,19 +815,53 @@ class StaffPayrollTests(TestCase):
         self.assertEqual(b["earnings"]["grossSalary"], 24000.0)
         self.assertEqual(b["netSalary"], 24000.0)
 
-    @unittest.expectedFailure
     def test_regeneration_keeps_the_advance_deduction(self):
-        # KNOWN DEFECT. Generation marks the month's repayments processed, and
-        # the lookup only takes unprocessed ones, so re-running the same month
-        # (e.g. after correcting an attendance record) finds nothing to deduct:
-        # the slip's advance deduction silently drops to 0 and net pay goes up
-        # by the instalment. Expected: the second run still deducts 2000.
+        # Fixed 2026-11-05 (pinned as a known defect 2026-09-24): generation marks the month's repayments processed,
+        # and the lookup used to take unprocessed ones only, so re-running the same month (e.g. after correcting an
+        # attendance record) found nothing to deduct: the deduction silently dropped to 0 while the advance stayed
+        # "Completed". The second run still deducts 2000, and the advance is not counted as repaid twice.
         emp = _staff()
         _present_all(emp)
-        self._advance(emp, "5000.00", [(2, "2000.00")])
+        adv = self._advance(emp, "5000.00", [(2, "2000.00")])
         self._run(emp)
         again = self._run(emp)["payroll"]
         self.assertEqual(again.deductions, Decimal("2000.00"))
+        self.assertEqual(again.final_salary, Decimal("22000.00"))
+        slip = SalarySlip.objects.get(employee=emp, month=MONTH, year=YEAR)
+        self.assertEqual(slip.advance_deduction, Decimal("2000.00"))
+        adv.refresh_from_db()
+        self.assertEqual((adv.total_repaid, adv.outstanding), (Decimal("2000.00"), Decimal("3000.00")))
+
+    def test_a_general_advance_and_a_term_loan_instalment_are_deducted_together_on_every_run(self):
+        emp = _staff()
+        _present_all(emp)
+        general = self._advance(emp, "2500.00", [(2, "2500.00")])
+        loan = self._advance(emp, "6000.00", [(2, "1000.00"), (3, "1000.00")])
+        Advance.objects.filter(pk=loan.pk).update(advance_type="term", emi_amount=Decimal("1000.00"))
+        for _ in range(3):  # generated, then generated again twice
+            p = self._run(emp)["payroll"]
+            self.assertEqual(p.deductions, Decimal("3500.00"))
+            self.assertEqual(
+                SalarySlip.objects.get(employee=emp, month=MONTH, year=YEAR).advance_deduction, p.deductions
+            )
+        general.refresh_from_db()
+        loan.refresh_from_db()
+        self.assertEqual((general.total_repaid, general.status), (Decimal("2500.00"), "closed"))
+        self.assertEqual((loan.total_repaid, loan.outstanding), (Decimal("1000.00"), Decimal("5000.00")))
+        self.assertFalse(AdvanceRepayment.objects.get(advance=loan, month=3).is_processed)
+
+    def test_a_deduction_an_earlier_run_dropped_comes_back_on_the_next_run(self):
+        # What a run before the fix left behind: the repayment processed and the advance closed, the saved payroll
+        # without it. Generating the month again deducts it again (a staff payroll is the month's only payroll).
+        emp = _staff()
+        _present_all(emp)
+        adv = self._advance(emp, "2000.00", [(2, "2000.00")])
+        AdvanceRepayment.objects.filter(advance=adv).update(is_processed=True)
+        Advance.objects.filter(pk=adv.pk).update(total_repaid=Decimal("2000.00"), outstanding=0, status="closed")
+        p = self._run(emp)["payroll"]
+        self.assertEqual(p.deductions, Decimal("2000.00"))
+        adv.refresh_from_db()
+        self.assertEqual((adv.total_repaid, adv.status), (Decimal("2000.00"), "closed"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -952,6 +983,22 @@ class ProductionPayrollTests(TestCase):
             (p.tds_deduction, p.deductions, p.final_salary), (Decimal("156.25"),) * 2 + (Decimal("6093.75"),)
         )
         self.assertEqual(_breakdown_for_period(emp)["deductions"]["tds"], 156.25)
+
+    def test_regenerating_a_period_keeps_its_advance_and_another_period_never_takes_it_again(self):
+        emp = _production()
+        self._work(emp)
+        adv = Advance.objects.create(
+            employee=emp, advance_type="general", amount=Decimal("1000"), status="approved",
+            total_repaid=Decimal("0"), outstanding=Decimal("1000"),
+        )  # fmt: skip
+        AdvanceRepayment.objects.create(advance=adv, month=2, year=YEAR, amount=Decimal("1000"))
+        first = self._run(emp)["payroll"]
+        again = self._run(emp)["payroll"]  # the same period, generated again
+        self.assertEqual((first.deductions, again.deductions), (Decimal("1000.00"), Decimal("1000.00")))
+        later = _generate_production_payroll(emp, date(2026, 2, 16), date(2026, 2, 21))["payroll"]  # also ends in Feb
+        self.assertEqual(later.deductions, Decimal("0.00"))
+        adv.refresh_from_db()
+        self.assertEqual(adv.total_repaid, Decimal("1000.00"))
 
     def test_advance_is_attributed_to_the_month_the_period_ends_in(self):
         emp = _production()

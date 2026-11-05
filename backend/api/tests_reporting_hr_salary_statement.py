@@ -1105,3 +1105,42 @@ class ClosingTests(_World):
         self.assertEqual(wb.sheetnames[-1], "PF ESI TDS")  # the details stay last
         text = " ".join(str(v) for v in cells)
         self.assertNotIn("Salary Statement From", text)
+
+
+class AdvanceAndTermLoanTests(_World):
+    """Owner 2026-11-05: "the report is not fetching the Advance and Term Loan deductions". The Settlement page showed both
+    advances Completed (deducted in October) while the statement's Advance column was 0: generating the month again had
+    dropped the deduction (payroll_views._pending_advance_repayments, fixed 2026-11-05). The Advance column is the
+    General Advance + the Term Advance (loan) instalment the payroll deducted for the month."""
+
+    def test_a_general_advance_and_a_term_loan_show_together_under_advance_after_the_month_is_generated_again(self):
+        devi = self.staff_maker("6300", "DEVI", self.admin_d, self.b1, "26000")
+        for d in WORKING:
+            day(devi, d)
+        general = Advance.objects.create(
+            employee=devi, advance_type="general", amount=Decimal("3000"), status="approved",
+            total_repaid=Decimal("0"), outstanding=Decimal("3000"),
+        )  # fmt: skip
+        AdvanceRepayment.objects.create(advance=general, month=MONTH, year=YEAR, amount=Decimal("3000"))
+        loan = Advance.objects.create(
+            employee=devi, advance_type="term", amount=Decimal("6000"), status="approved", emi_amount=Decimal("1500"),
+            total_repaid=Decimal("0"), outstanding=Decimal("6000"),
+        )  # fmt: skip
+        AdvanceRepayment.objects.create(advance=loan, month=MONTH, year=YEAR, amount=Decimal("1500"))
+        AdvanceRepayment.objects.create(advance=loan, month=MONTH + 1, year=YEAR, amount=Decimal("1500"))
+        _generate_staff_payroll(devi, MONTH, YEAR)
+        general.refresh_from_db()
+        self.assertEqual(general.status, "closed")  # "Completed" on the Settlement page
+        _generate_staff_payroll(devi, MONTH, YEAR)  # the month generated again (it used to drop both deductions)
+        row = by_code(self.get())["6300"]
+        self.assertEqual(row["advance"], 4500.0)  # 3,000 advance + 1,500 loan instalment
+        self.assertEqual(row["totalDeduction"], row["pf"] + row["esi"] + row["tds"] + row["advance"] + row["others"])
+        self.assertAlmostEqual(row["net"], row["eSalary"] - row["totalDeduction"], 2)
+        self.assertEqual(row["net"], 26000.0 - 4500.0)
+        loan.refresh_from_db()
+        self.assertEqual((loan.total_repaid, loan.outstanding), (Decimal("1500.00"), Decimal("4500.00")))  # once
+        # the files carry it too
+        ws = load_workbook(io.BytesIO(self.export("xlsx").content)).active
+        labels = [c.value for c in ws[HEADER_ROW]]
+        line = next(r for r in ws.iter_rows(min_row=HEADER_ROW + 1, values_only=True) if r[1] == "6300")
+        self.assertEqual(line[labels.index("Advance")], 4500)

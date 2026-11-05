@@ -1938,6 +1938,14 @@ def _legacy_paid_without_ot(emp):
     return p
 
 
+def _regenerated_before_the_advance_fix(emp):
+    """The month generated again BEFORE the 2026-11-05 fix: the engine took unprocessed instalments only, so a second run
+    found the already-processed one gone and saved the slip without it. Slips like that can still exist (until the month
+    is generated again), so the reconciliation report must keep finding them."""
+    with mock.patch("api.payroll_views._pending_advance_repayments", return_value=(Decimal("0"), [])):
+        return _generate_staff_payroll(emp, MONTH, YEAR)
+
+
 class PayrollSlipReconciliationTests(_Base):
     def patch_payroll(self, emp, **body):
         p = Payroll.objects.get(employee=emp, month=MONTH, year=YEAR)
@@ -1985,8 +1993,16 @@ class PayrollSlipReconciliationTests(_Base):
             (net["slipNet"], net["payrollNet"], net["variance"], net["payrollBonus"]), (16785.0, 17285.0, 500.0, 500.0)
         )
 
-    def test_regenerating_after_instalments_were_processed_loses_the_advance(self):
-        _generate_staff_payroll(self.C, MONTH, YEAR)  # the known defect: instalment already processed
+    def test_regenerating_now_keeps_the_advance(self):
+        # fixed 2026-11-05: generating the month again after its instalment was processed still deducts it
+        _generate_staff_payroll(self.C, MONTH, YEAR)
+        self.assertEqual(SalarySlip.objects.get(employee=self.C, month=MONTH).advance_deduction, Decimal("1000.00"))
+        body = self.run_report("payroll-slip-reconciliation", **P)
+        self.assertNotIn(("3003", "Advance mismatch"), self.issues(body))
+        self.assertEqual(self.summary(body)["Advance mismatches"], 0)
+
+    def test_a_slip_regenerated_before_the_fix_without_its_advance_is_found(self):
+        _regenerated_before_the_advance_fix(self.C)  # instalment processed, slip saved without it
         self.assertEqual(SalarySlip.objects.get(employee=self.C, month=MONTH).advance_deduction, Decimal("0.00"))
         body = self.run_report("payroll-slip-reconciliation", **P)
         self.assertEqual(self.issues(body), [("3003", "Advance mismatch")])
@@ -2052,7 +2068,7 @@ class PayrollSlipReconciliationTests(_Base):
 
     def test_branch_isolation(self):
         _legacy_paid_without_ot(self.A)
-        _generate_staff_payroll(self.C, MONTH, YEAR)
+        _regenerated_before_the_advance_fix(self.C)
         self.assertEqual(
             self.issues(self.run_report("payroll-slip-reconciliation", **P)),
             [("3001", "Net differs"), ("3003", "Advance mismatch")],
@@ -2227,8 +2243,8 @@ class AdversarialReviewTests(_Base):
         self.assertEqual(body["totals"]["variance"], 500.0, "the Variance total row double counts the same 500")
 
     def test_recon_variance_is_not_repeated_on_the_advance_finding_of_the_same_employee(self):
-        # C: regenerated after the instalment was processed (advance finding) AND marked paid with a bonus
-        _generate_staff_payroll(self.C, MONTH, YEAR)
+        # C: regenerated (before the fix) after the instalment was processed (advance finding) AND given a bonus
+        _regenerated_before_the_advance_fix(self.C)
         self.patch_payroll(self.C, bonus=300)
         body = self.run_report("payroll-slip-reconciliation", **P)
         rows = [r for r in self.data_rows(body) if r["employeeCode"] == "3003"]
