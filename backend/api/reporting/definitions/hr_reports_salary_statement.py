@@ -14,7 +14,8 @@ LOP = Company Days (the payroll's days of the month: every day but Sundays, holi
 column is always printed, right after TDS (owner 2026-11-05; 0.00 when nobody repays an advance), so Total Deduction =
 PF + ESI + TDS + Advance + Others and NET = Earned Salary - Total Deduction always hold; Total Days and Remarks stay.
 PTRL, Others Allow and Lop& PSAmt are gone. ``report_values`` maps a statement row to these columns (no figure changes),
-except that ESI and NET are rounded UP to the next whole rupee (owner 2026-11-05: 89.11 -> 90, 13,489.76 -> 13,490):
+except that ESI and NET are rounded UP to the next whole rupee (owner 2026-11-05: 89.11 -> 90, 13,489.76 -> 13,490) and
+Total Deduction adds up the rounded ESI (PF + ESI + TDS + Advance + Others as printed). Active employees only.
 every employee's, so every sub total, unit total and the TOTAL (sums of whole rupees) are whole too. Nothing else is
 rounded, and the payroll's own figures are untouched (the files print what payroll saved, ESI and NET rounded up).
 
@@ -160,9 +161,9 @@ def report_values(v: dict, slip, company_days) -> dict:
     paid, cl = _dec(v.get("totalDays")), _dec(v.get("cl"))
     hd = min(holidays, max(paid - cl, Decimal("0")))
     present = max(paid - cl - hd, Decimal("0"))
+    esi = round_up(v.get("esi"))
     keep = (
-        "code", "name", "designation", "cl", "lop", "totalDays", "eSalary", "pf", "esi", "tds", "advance", "others",
-        "totalDeduction", "net", "remarks",
+        "code", "name", "designation", "cl", "lop", "totalDays", "eSalary", "pf", "tds", "advance", "others", "remarks",
     )  # fmt: skip
     return {
         **{k: v.get(k) for k in keep},
@@ -172,9 +173,11 @@ def report_values(v: dict, slip, company_days) -> dict:
         "present": float(present),
         "hd": float(hd),
         "companyDays": int(company_days or 0),
-        # owner 2026-11-05: ESI and NET always rounded UP to the next whole rupee (nothing else is)
-        "esi": round_up(v.get("esi")),
+        # owner 2026-11-05: ESI and NET always rounded UP to the next whole rupee (nothing else is) ...
+        "esi": esi,
         "net": round_up(v.get("net")),
+        # ... and Total Deduction adds up the ESI as printed: PF + rounded ESI + TDS + Advance + Others
+        "totalDeduction": float(_dec(v.get("totalDeduction")) - _dec(v.get("esi")) + Decimal(str(esi))),
     }
 
 
@@ -492,6 +495,8 @@ def _run(ctx) -> ReportResult:
         Payroll.objects.select_related(*PAYROLL_RELATIONS)
         .defer("employee__photo_url", "employee__password_hash")
         .filter(ctx.emp_q("employee__"), salary_mode=Payroll.SALARY_MODE_MONTHLY, month=month, year=year)
+        # active employees only (owner 2026-11-05): an inactive / deactivated employee is never on the statement
+        .filter(employee__status="active")
     )
     payment = ctx.params.get("paymentStatus")
     if payment:
@@ -521,8 +526,8 @@ def _run(ctx) -> ReportResult:
         "departments. The pay and deductions are the same figures as Payroll > Salary Statement.",
         "Sub totals, the unit totals and the total line add up the money columns (Basic Salary to NET); the day columns "
         "are not added up.",
-        "Only employees whose payroll has been generated for the month are listed (the saved payroll is read; nothing is "
-        "calculated or saved here). Production workers are paid per pay cycle and are on Production Payroll > Salary "
+        "Only ACTIVE employees whose payroll has been generated for the month are listed (inactive employees are left "
+        "out; the saved payroll is read; nothing is calculated or saved here). Production workers are paid per pay cycle and are on Production Payroll > Salary "
         "Statement.",
         *column_notes(),
     ]
@@ -570,8 +575,8 @@ def column_notes() -> list[str]:
         "month's pay).",
         "Others is the Late Detection and Permission deduction; Total Deduction = PF + ESI + TDS + Advance + Others; "
         "NET = Earned Salary - Total Deduction, the pay for the month.",
-        "ESI and NET are rounded up to the next whole rupee (89.11 -> 90); Total Deduction and every other column keep "
-        "the payroll's exact figure.",
+        "ESI and NET are rounded up to the next whole rupee (89.11 -> 90), and Total Deduction adds up the rounded ESI "
+        "(PF + ESI + TDS + Advance + Others as printed); every other column keeps the payroll's exact figure.",
     ]
 
 
@@ -601,7 +606,7 @@ register(
         ),
         filters=(
             F.period(default="lastMonth", label="Month"),
-            *F.scope(employment=False, status="all"),
+            *F.scope(employment=False),  # no employee-status filter: the statement lists active employees only
             F.select(
                 "paymentStatus",
                 "Payment status",

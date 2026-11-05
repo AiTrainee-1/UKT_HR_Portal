@@ -10,6 +10,7 @@ headers"):
   - per department a heading line, its rows (zebra) and its Sub total; per unit its total; at the end the TOTAL;
   - one blank row between departments (after a Sub total, before the next department's heading) and before each further
     unit's band (owner 2026-11-05: "leave one empty row before the next department, cleaner and easier to read");
+  - every unit after the first starts on a fresh page (owner 2026-11-05; the Excel file has a print page break there);
   - the column header repeats on every page; a band never ends a page (it travels with its first department heading and
     row), a sub total never starts one (it travels with the department's last row), and a unit that runs onto the next page
     starts it with a "(contd.)" band that also names the department carrying on;
@@ -17,10 +18,13 @@ headers"):
     designations may wrap, numbers never do. Amounts carry no ₹ on every cell (the title band says "Amounts in ₹"), zeros
     are grey so the real figures stand out, and the padding, margins and header block are tight.
 
-After the TOTAL (owner 2026-11-05): five summary cards (Total Employees, Fixed Salary, Earned Salary, Detection Amount =
-the Late Detection + Permission deduction, Net Pay), then a signature block with room to sign above Prepared By, Checked
-By, HRM, Auditor and MD (the cards and the signatures stay on one page together), then the PF, ESI & TDS details on a
-page of their own, unit by unit the same way, at the very end. The files print no explanatory notes (the screen still
+Each unit's page(s) end with that unit's total and its own summary: five cards (Total Employees, Fixed Salary, Earned
+Salary, Detection Amount = the Late Detection + Permission deduction, Net Pay) worked out from that unit's lines only
+(owner 2026-11-05). With several units a last page follows: the "All units" recap (every unit's total line and the grand
+TOTAL) with the same five cards for all units. Then the signature block with room to sign above Prepared By, Checked By,
+HRM, Auditor and MD (kept on one page with the last summary), then the PF, ESI & TDS details on a page of their own, unit
+by unit the same way, at the very end. With one unit (a unit login) the unit's summary is the statement's, so there is no
+recap page. The files print no explanatory notes (the screen still
 shows them).
 
 Excel: the company block, title and filters as every other export, then the same lines: a merged band per unit, the
@@ -44,6 +48,7 @@ from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XlImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.pagebreak import Break
 from openpyxl.worksheet.properties import PageSetupProperties
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
@@ -188,11 +193,20 @@ def section_lines(section, blocks, sum_keys) -> list[Line]:
 
 
 def summary_figures(out, blocks) -> list[tuple[str, float, str]]:
-    """The five cards under the statement: (label, value, column type). Detection Amount is the Others column's total, the
-    Late Detection + Permission deduction."""
-    totals = out.totals or {}
+    """The five cards for the whole statement (every unit): (label, value, column type)."""
+    return figures_for(sum(b.count for b in blocks), out.totals or {})
+
+
+def unit_figures(block) -> list[tuple[str, float, str]]:
+    """The five cards for one unit, from that unit's own lines only (its total line's sums)."""
+    return figures_for(block.count, block.total)
+
+
+def figures_for(employees: int, totals: dict) -> list[tuple[str, float, str]]:
+    """Total Employees, Fixed Salary (the Total Salary column), Earned Salary, Detection Amount (the Others column: Late
+    Detection + Permission) and Net Pay, from a set of totals."""
     return [
-        ("Total Employees", sum(b.count for b in blocks), INTEGER),
+        ("Total Employees", employees, INTEGER),
         ("Fixed Salary", totals.get("total") or 0, CURRENCY),
         ("Earned Salary", totals.get("eSalary") or 0, CURRENCY),
         ("Detection Amount", totals.get("others") or 0, CURRENCY),
@@ -383,9 +397,23 @@ def fit_columns(cols, lines, avail: float, regular: str, bold: str) -> tuple[flo
     return size, widths
 
 
-def _table(cols, lines, sum_keys, avail, regular, bold, base_style) -> list:
-    """The flowables of one unit-by-unit table."""
-    size, widths = fit_columns(cols, lines, avail, regular, bold)
+def unit_chunks(lines: list[Line]) -> list[list[Line]]:
+    """The lines unit by unit: a chunk starts at each unit's band (the blank row before a band is dropped: a page break
+    takes its place); the TOTAL stays at the end of the last chunk."""
+    chunks: list[list[Line]] = []
+    for line in lines:
+        if line.kind == BAND or not chunks:
+            if chunks and chunks[-1] and chunks[-1][-1].kind == GAP:
+                chunks[-1].pop()
+            chunks.append([])
+        chunks[-1].append(line)
+    return chunks
+
+
+def _table(cols, lines, sum_keys, avail, regular, bold, base_style, fit=None) -> list:
+    """The flowables of one unit-by-unit table. `fit` = (type size, column widths) shared by several tables, so every
+    unit's page has the same columns."""
+    size, widths = fit if fit is not None else fit_columns(cols, lines, avail, regular, bold)
     leading = round(size * 1.2, 2)
     aligns = [_align(c) for c in cols]
     first_sum = min((i for i, c in enumerate(cols) if c.key in sum_keys), default=len(cols))
@@ -565,12 +593,13 @@ def _header(out, avail, regular, bold, rupee_ok, base_style) -> list:
     return story
 
 
-def _closing(out, blocks, avail, bold, rupee_ok, base_style) -> list:
-    """The five summary cards and, under them, the signature boxes: kept together on one page."""
+def _cards(figures, title: str, avail, bold, rupee_ok, base_style) -> list:
+    """A summary: its title, then one line of five cards."""
+    s_title = base_style("ct", fontName=bold, fontSize=10.5, leading=13, textColor=BRAND)
     s_label = base_style("cl", fontSize=8.5, leading=11, textColor=MUTED)
     s_value = base_style("cv", fontName=bold, fontSize=14, leading=17, textColor=BRAND)
     cards = []
-    for label, value, kind in summary_figures(out, blocks):
+    for label, value, kind in figures:
         if kind == INTEGER:
             text = indian_number(float(value), 0)
         else:
@@ -590,8 +619,11 @@ def _closing(out, blocks, avail, bold, rupee_ok, base_style) -> list:
             ]
         )
     )
+    return [Paragraph(escape(title), s_title), Spacer(1, 4), strip]
 
-    # the signatures: room to sign, then a line with the title under it; a gap between two lines
+
+def _signatures(avail, bold, base_style) -> Table:
+    """Room to sign, then a line with the title under it, for each signature; a gap between two lines."""
     s_sign = base_style("sg", fontName=bold, fontSize=10, leading=13, alignment=TA_CENTER)
     gap = 1.4 * cm
     width = (avail - gap * (len(SIGNATURES) - 1)) / len(SIGNATURES)
@@ -605,7 +637,7 @@ def _closing(out, blocks, avail, bold, rupee_ok, base_style) -> list:
         labels.append(Paragraph(escape(title), s_sign))
     signatures = Table([[""] * len(widths), labels], colWidths=widths, rowHeights=[2.2 * cm, None])
     signatures.setStyle(TableStyle(cmds))
-    return [KeepTogether([Spacer(1, 18), strip, Spacer(1, 10), signatures])]
+    return signatures
 
 
 def statement_pdf(out, blocks) -> bytes:
@@ -628,12 +660,40 @@ def statement_pdf(out, blocks) -> bytes:
     cols = [c for c in out.columns if c.key != "unit"]
     story = _header(out, avail, regular, bold, rupee_ok, base_style)
     lines = statement_lines(blocks, SUM_KEYS, out.totals)
+    # no explanatory notes in the file (owner 2026-11-05); each unit ends with its own summary, the statement with the
+    # all-units summary (several units) and the signatures
+    closing = []
     if lines:
-        story += _table(cols, lines, SUM_KEYS, avail, regular, bold, base_style)
+        # each unit on a fresh page (owner 2026-11-05), every page with the same type size and columns
+        fit = fit_columns(cols, lines, avail, regular, bold)
+        chunks = unit_chunks(lines)
+        several = len(blocks) > 1
+        grand = chunks[-1].pop() if several and chunks[-1] and chunks[-1][-1].kind == GRAND else None
+        for i, (chunk, block) in enumerate(zip(chunks, blocks)):
+            if i:
+                story.append(PageBreak())
+            story += _table(cols, chunk, SUM_KEYS, avail, regular, bold, base_style, fit=fit)
+            title = f"{block.title}: unit summary" if several else f"{block.title}: summary"
+            cards = [Spacer(1, 14), *_cards(unit_figures(block), title, avail, bold, rupee_ok, base_style)]
+            if several:
+                story.append(KeepTogether(cards))
+            else:
+                closing = cards
+        if several:
+            # the last page: every unit's total and the grand TOTAL, then the summary of all units
+            story.append(PageBreak())
+            employees = sum(b.count for b in blocks)
+            recap = [Line(BAND, text="All units", title="All units", count=employees)]
+            recap += [Line(UNIT_TOTAL, values=b.total, text=f"{b.title} total") for b in blocks]
+            recap += [grand] if grand else []
+            story += _table(cols, recap, SUM_KEYS, avail, regular, bold, base_style, fit=fit)
+            closing = [
+                Spacer(1, 14),
+                *_cards(summary_figures(out, blocks), "All units: summary", avail, bold, rupee_ok, base_style),
+            ]
     else:
         story.append(Paragraph("No records match the selected filters.", base_style("e", fontSize=10, leading=13)))
-    # no explanatory notes in the file (owner 2026-11-05); the summary cards and the signatures close the statement
-    story += _closing(out, blocks, avail, bold, rupee_ok, base_style)
+    story.append(KeepTogether([*closing, Spacer(1, 10), _signatures(avail, bold, base_style)]))
 
     for section in out.sections:
         story.append(PageBreak())
@@ -731,6 +791,7 @@ class _Sheet:
             "unit": PatternFill("solid", fgColor=X_UNIT_BG),
         }
         self.keys = [c.key for c in cols]
+        self.first_band_row = 10**9  # set by header(): a band right under the header needs no page break
         self.label_col = self.keys.index("name") + 1 if "name" in self.keys else 1
         self.unit_col = self.keys.index("unit") + 1 if "unit" in self.keys else None
 
@@ -760,15 +821,20 @@ class _Sheet:
             cell.font, cell.fill, cell.border = self.f_head, self.fill["brand"], self.border
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws.row_dimensions[r].height = 32
+        self.first_band_row = r
         return r
 
     def line(self, line: Line):
         ws, cols = self.ws, self.cols
         last = self.n - (1 if self.unit_col else 0)
         if line.kind == GAP:
-            ws.append([])  # a blank row between departments (it hides with the furniture when a column is filtered)
+            # a blank row between departments (it hides with the furniture when a column is filtered); a real (empty) row,
+            # so a page break before the next unit's band falls after it
+            ws.append([None])
             return
         if line.kind == BAND:
+            if ws.max_row > self.first_band_row:  # a later unit: printed from a fresh page (owner 2026-11-05)
+                ws.row_breaks.append(Break(id=ws.max_row))
             values = [None] * self.n
             values[0] = _band_text(line)
             if self.unit_col:
@@ -836,18 +902,23 @@ class _Sheet:
             start += size
         return out
 
-    def closing(self, figures, row: int) -> int:
-        """The five summary cards from `row` on, then the signature boxes. Returns the last row written."""
+    def cards(self, figures, row: int, title: str, unit: str | None = None) -> int:
+        """A summary from `row` on: its title, then five cards (labels, values). `unit` goes in the Unit column, so
+        filtering the Unit column to a unit keeps its summary. Returns the last row written."""
         ws = self.ws
         thin = Side(style="thin", color=X_GRID)
+        head = ws.cell(row=row, column=1, value=title)
+        head.font = Font(name="Calibri", size=12, bold=True, color=X_BRAND)
+        head.data_type = "s"
         f_label = Font(name="Calibri", size=10, color="666666")
         f_value = Font(name="Calibri", size=14, bold=True, color=X_BRAND)
+        first_row = row + 1
         for (first, last), (label, value, kind) in zip(self._spans(len(figures)), figures):
-            for r, text, font in ((row, label, f_label), (row + 1, value, f_value)):
+            for r, text, font in ((first_row, label, f_label), (first_row + 1, value, f_value)):
                 cell = ws.cell(row=r, column=first, value=text)
                 cell.font = font
                 cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-                if r == row + 1:
+                if r == first_row + 1:
                     cell.number_format = "#,##0" if kind == INTEGER else X_MONEY
                 for c in range(first, last + 1):
                     piece = ws.cell(row=r, column=c)
@@ -855,29 +926,36 @@ class _Sheet:
                     piece.border = Border(
                         left=thin if c == first else None,
                         right=thin if c == last else None,
-                        top=thin if r == row else None,
-                        bottom=thin if r == row + 1 else None,
+                        top=thin if r == first_row else None,
+                        bottom=thin if r == first_row + 1 else None,
                     )
                 if last > first:
                     ws.merge_cells(start_row=r, start_column=first, end_row=r, end_column=last)
-        ws.row_dimensions[row].height = 18
-        ws.row_dimensions[row + 1].height = 28
+        if unit and self.unit_col:
+            for r in (row, first_row, first_row + 1):
+                ws.cell(row=r, column=self.unit_col, value=unit).alignment = Alignment(horizontal="center")
+        ws.row_dimensions[row].height = 20
+        ws.row_dimensions[first_row].height = 18
+        ws.row_dimensions[first_row + 1].height = 28
+        return first_row + 1
 
-        # room to sign, then each title over its own line (the run's last column is the gap to the next one)
-        sign_row = row + 5
-        ws.row_dimensions[sign_row - 1].height = 52
+    def signatures(self, row: int) -> int:
+        """Room to sign (row - 1, tall), then each title over its own line at `row` (the last column of each run is the
+        gap to the next one). Returns `row`."""
+        ws = self.ws
+        ws.row_dimensions[row - 1].height = 52
         line = Side(style="medium", color="111827")
         for (first, last), title in zip(self._spans(len(SIGNATURES)), SIGNATURES):
             end = last - 1 if last - first >= 2 else last
-            cell = ws.cell(row=sign_row, column=first, value=title)
+            cell = ws.cell(row=row, column=first, value=title)
             cell.font = Font(name="Calibri", size=11, bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="top")
             for c in range(first, end + 1):
-                ws.cell(row=sign_row, column=c).border = Border(top=line)
+                ws.cell(row=row, column=c).border = Border(top=line)
             if end > first:
-                ws.merge_cells(start_row=sign_row, start_column=first, end_row=sign_row, end_column=end)
-        ws.row_dimensions[sign_row].height = 20
-        return sign_row
+                ws.merge_cells(start_row=row, start_column=first, end_row=row, end_column=end)
+        ws.row_dimensions[row].height = 20
+        return row
 
     def widths(self, lines):
         for i, c in enumerate(self.cols, start=1):
@@ -955,13 +1033,35 @@ def statement_xlsx(out, blocks) -> bytes:
     sheet.text_row(stamp, sheet.f_note, merge=False)
     ws.append([])
     header_row = sheet.header()  # HEADER_ROW, as every other Report Center workbook
-    for line in lines:
-        sheet.line(line)
+    # no explanatory notes (owner 2026-11-05): each unit ends with its own summary; then (several units) a page with every
+    # unit's total, the grand TOTAL and the summary of all units; then the signatures
+    several = len(blocks) > 1
+    chunks = unit_chunks(lines) if lines else []
+    grand = chunks[-1].pop() if several and chunks and chunks[-1] and chunks[-1][-1].kind == GRAND else None
+    closing = None  # (figures, title) of the summary the signatures follow
+    for chunk, block in zip(chunks, blocks):
+        for line in chunk:
+            sheet.line(line)
+        title = f"{block.title}: unit summary" if several else f"{block.title}: summary"
+        if several:
+            sheet.cards(unit_figures(block), ws.max_row + 2, title, unit=block.label)
+        else:
+            closing = (unit_figures(block), title)
+    if several:
+        employees = sum(b.count for b in blocks)
+        sheet.line(Line(BAND, text="All units", count=employees))  # on a fresh printed page
+        for b in blocks:
+            sheet.line(Line(UNIT_TOTAL, values=b.total, text=f"{b.title} total"))  # no Unit: hidden by a unit filter
+        if grand:
+            sheet.line(grand)
+        closing = (summary_figures(out, blocks), "All units: summary")
     last_row = ws.max_row
     if not lines:
         sheet.text_row("No records match the selected filters.", sheet.f_note, merge=False)
-    # no explanatory notes (owner 2026-11-05): two empty rows, the summary cards, then the signatures
-    sheet.closing(summary_figures(out, blocks), ws.max_row + 3)
+        closing = (summary_figures(out, blocks), "Summary")
+    figures, title = closing
+    end = sheet.cards(figures, ws.max_row + 3, title)
+    sheet.signatures(end + 3)
     ws.freeze_panes = f"D{header_row + 1}"
     _print_setup(ws, header_row, last_row, len(cols), f"{co.name} - {out.spec.title}")
 
