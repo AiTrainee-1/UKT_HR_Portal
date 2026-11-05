@@ -5,7 +5,7 @@ The report must show exactly what Payroll > Salary Statement (GET /api/payroll/s
 the same builder. It lists the figures unit by unit (owner 2026-11-04: split the exports by unit, like the Report Log's Late
 exports): a band per unit, its departments, its total, serial numbers from 1 in every unit, a Unit column on every line.
 The columns are the owner's (2026-11-05): Basic / Other / Total Salary, Present / CL / LOP / HD (holidays) / Total Days,
-Earned Salary, PF / ESI / TDS / [Advance, only in a month with an advance recovered] / Others / Total Deduction, NET. Payrolls are made by the REAL engine (``_generate_staff_payroll``) from manual attendance day records,
+Earned Salary, PF / ESI / TDS / Advance / Others / Total Deduction, NET. Payrolls are made by the REAL engine (``_generate_staff_payroll``) from manual attendance day records,
 for April 2026 (26 working days, like the printed statement), with "today" frozen after the month.
 
 Run via: python manage.py test api.tests_reporting_hr_salary_statement -v 2
@@ -455,12 +455,9 @@ class ContentTests(_World):
         self.assertIn("Total Days = Present + CL + HD", text)
         self.assertIn("LOP = Company Days - Total Days", text)
         self.assertIn("Others is the Late Detection and Permission deduction", text)
-        self.assertIn("Total Deduction = PF + ESI + TDS + Advance + Others", text)  # this month has an advance
+        self.assertIn("Total Deduction = PF + ESI + TDS + Advance + Others", text)
         for gone in ("PTRL", "Others Allow", "Lop& PSAmt", "E salary"):
             self.assertNotIn(gone, text, gone)
-        # a month (here: a selection) without an advance leaves Advance out of the sum too
-        text = " ".join(self.get(branchIds=str(self.b2.id))["notes"])
-        self.assertIn("Total Deduction = PF + ESI + TDS + Others", text)
 
     def test_staff_without_a_payroll_are_counted_in_the_notes_not_listed(self):
         body = self.get()
@@ -1035,18 +1032,24 @@ class OwnerColumnTests(_World):
         row = by_code(self.get())["6200"]
         self.assertEqual((row["present"], row["cl"], row["lop"], row["hd"], row["totalDays"]), (25.0, 0.0, 0.0, 1.0, 26.0))
 
-    def test_the_advance_column_appears_only_with_an_advance(self):
-        with_advance = self.get()
-        self.assertIn("advance", [c["key"] for c in with_advance["columns"]])
-        self.assertIn("advance", with_advance["totals"])
+    def test_the_advance_column_is_always_there_right_after_tds(self):
+        # owner 2026-11-05: PF, ESI, TDS, Advance, Others, Total Deduction, whether or not anybody repays an advance
         none = self.get(branchIds=str(self.b2.id))  # Unit 2 repays no advance this month
-        self.assertEqual([c["key"] for c in none["columns"]], [k for k in KEYS if k != "advance"])
-        self.assertNotIn("advance", none["totals"])
-        ws = load_workbook(io.BytesIO(self.export("xlsx", branchIds=str(self.b2.id)).content)).active
-        self.assertNotIn("Advance", [c.value for c in ws[HEADER_ROW]])
-        labels = [c.value for c in ws[HEADER_ROW]]
-        self.assertEqual(labels[labels.index("TDS") + 1], "Others")  # PF, ESI, TDS, Others, Total Deduction
-        self.assertEqual(labels[labels.index("PF") : labels.index("NET")], ["PF", "ESI", "TDS", "Others", "Total Deduction"])
+        self.assertEqual([c["key"] for c in none["columns"]], KEYS)
+        self.assertEqual(none["totals"]["advance"], 0)
+        self.assertEqual({r["advance"] for r in data_rows(none)}, {0.0})
+        self.assertEqual(by_code(self.get())["2896"]["advance"], 2000.0)  # Lokesh repays 2,000 this month
+        for user_params in ({}, {"branchIds": str(self.b2.id)}):
+            ws = load_workbook(io.BytesIO(self.export("xlsx", **user_params).content)).active
+            labels = [c.value for c in ws[HEADER_ROW]]
+            self.assertEqual(
+                labels[labels.index("PF") : labels.index("NET")],
+                ["PF", "ESI", "TDS", "Advance", "Others", "Total Deduction"],
+            )
+        import pypdf
+
+        text = pypdf.PdfReader(io.BytesIO(self.export("pdf", branchIds=str(self.b2.id)).content)).pages[0].extract_text()
+        self.assertIn("Advance", text)
 
 
 class ClosingTests(_World):

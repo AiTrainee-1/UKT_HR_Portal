@@ -8,10 +8,11 @@ numbering (``_groups``), so the money can never disagree with Payroll > Salary S
 
 Its columns are the owner's (2026-11-05), not the Payroll page's: SNO, ID NO, Name, Designation | Basic Salary (50% of the
 monthly salary), Other Allowance (the other 50%), Total Salary | Present, CL, HD (holidays), Total Days, LOP, Company Days
-| Earned Salary | PF, ESI, TDS, [Advance], Others (late + permission), Total Deduction | NET | Remarks. Owner's choices: a
+| Earned Salary | PF, ESI, TDS, Advance, Others (late + permission), Total Deduction | NET | Remarks. Owner's choices: a
 half day counts 0.5 Present and its missing half 0.5 LOP, so Total Days = Present + CL + HD (the days paid) and Total Days +
-LOP = Company Days (the payroll's days of the month: every day but Sundays, holidays included, 26 or 27); the Advance column is printed only in a month in which somebody repays an advance (so Total Deduction
-= PF + ESI + TDS + Advance + Others and NET = Earned Salary - Total Deduction always hold); Total Days and Remarks stay.
+LOP = Company Days (the payroll's days of the month: every day but Sundays, holidays included, 26 or 27); the Advance
+column is always printed, right after TDS (owner 2026-11-05; 0.00 when nobody repays an advance), so Total Deduction =
+PF + ESI + TDS + Advance + Others and NET = Earned Salary - Total Deduction always hold; Total Days and Remarks stay.
 PTRL, Others Allow and Lop& PSAmt are gone. ``report_values`` maps a statement row to these columns (no figure changes).
 
 Only employees that HAVE a generated staff payroll for the month are listed. Nobody is invented for an employee payroll
@@ -96,7 +97,7 @@ def _money_col(key: str, label: str, width: float = 1.3) -> ColumnSpec:
     return ColumnSpec(key, label, CURRENCY, width, total="sum" if key in SUM_KEYS else None)
 
 
-# The owner's columns and order (2026-11-05). Advance is printed only in a month with an advance recovered (see _run).
+# The owner's columns and order (2026-11-05): the deductions are PF, ESI, TDS, Advance, Others, Total Deduction.
 COLUMNS = (
     ColumnSpec("sno", "SNO", INTEGER, 0.6, align="center"),
     ColumnSpec("code", "ID NO", TEXT, 1.1),
@@ -498,11 +499,6 @@ def _run(ctx) -> ReportResult:
     if ctx.purpose in ("xlsx", "pdf"):
         ctx._cache[PLAN_KEY] = blocks  # the files draw the units from these
 
-    data = [r for r in rows if r.get("_kind") is None]
-    # the Advance column only in a month in which somebody repays an advance (owner 2026-11-05)
-    has_advance = any(r.get("advance") for r in data)
-    columns = [c for c in COLUMNS if has_advance or c.key != "advance"]
-
     # no headline figures above the table (owner 2026-11-05): the report starts with its column headers
 
     notes = [
@@ -515,7 +511,7 @@ def _run(ctx) -> ReportResult:
         "Only employees whose payroll has been generated for the month are listed (the saved payroll is read; nothing is "
         "calculated or saved here). Production workers are paid per pay cycle and are on Production Payroll > Salary "
         "Statement.",
-        *column_notes(has_advance),
+        *column_notes(),
     ]
     if no_slip:
         notes.append(
@@ -539,13 +535,12 @@ def _run(ctx) -> ReportResult:
         notes.append(f"Employees with no department are listed under '{NO_DEPARTMENT}', last.")
     # the PF / ESI / TDS lines get a section of their own in the files (the screen keeps the statement as printed)
     sections = [statutory_section(payrolls, ordered, slips)] if ctx.purpose in ("xlsx", "pdf") else []
-    return ReportResult(rows=rows, columns=columns, notes=notes, sections=sections)
+    return ReportResult(rows=rows, notes=notes, sections=sections)
 
 
-def column_notes(has_advance: bool) -> list[str]:
+def column_notes() -> list[str]:
     """How each column is worked out."""
-    advance = " + Advance" if has_advance else ""
-    notes = [
+    return [
         "Total Salary is the monthly salary: Basic Salary is 50% of it and Other Allowance the other 50%.",
         "Present is the days paid as worked (a half day counts 0.5), without Casual Leave and holidays; CL is the approved "
         "Casual Leave days (a half-day CL counts 0.5); HD is the paid company holidays of the month (with any working day HR "
@@ -558,16 +553,11 @@ def column_notes(has_advance: bool) -> list[str]:
         "PF and ESI are deducted only from Co Emp employees (Employees > Co Emp), by the rules of Settings > PF & ESI, from "
         "Basic + DA + Retaining Allowance. TDS is deducted only from employees on the TDS list: the TDS percentage set for "
         "them of the pay earned (it is 0 for everybody else).",
-        f"Others is the Late Detection and Permission deduction; Total Deduction = PF + ESI + TDS{advance} + Others; "
+        "Advance is the advance recovered from this month's pay (an advance balance still owed is not part of this "
+        "month's pay).",
+        "Others is the Late Detection and Permission deduction; Total Deduction = PF + ESI + TDS + Advance + Others; "
         "NET = Earned Salary - Total Deduction, the pay for the month.",
     ]
-    if has_advance:
-        notes.insert(
-            4,
-            "Advance is the advance recovered from this month's pay (an advance balance still owed is not part of this "
-            "month's pay). The column is printed only in a month in which somebody repays an advance.",
-        )
-    return notes
 
 
 register(
