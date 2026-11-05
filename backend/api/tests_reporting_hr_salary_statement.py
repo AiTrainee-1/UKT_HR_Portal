@@ -14,7 +14,7 @@ Run via: python manage.py test api.tests_reporting_hr_salary_statement -v 2
 import io
 import re
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from unittest.mock import patch
 
 from django.apps import apps
@@ -65,9 +65,14 @@ PRINTED_TOTALS = [
 ]  # fmt: skip
 # the figures the report takes straight from the Payroll page's statement (Present / HD / Basic / Other Allowance are mapped)
 VALUE_KEYS = [
-    "code", "name", "designation", "total", "cl", "lop", "totalDays", "eSalary", "advance", "esi", "pf", "tds", "others",
-    "totalDeduction", "net", "remarks",
+    "code", "name", "designation", "total", "cl", "lop", "totalDays", "eSalary", "advance", "pf", "tds", "others",
+    "totalDeduction", "remarks",
 ]  # fmt: skip
+ROUNDED_UP = ["esi", "net"]  # owner 2026-11-05: rounded up to the next whole rupee
+
+
+def ceil_rupee(value) -> float:
+    return float(Decimal(str(value)).to_integral_value(rounding=ROUND_CEILING))
 
 # The attendance engine only computes days that have elapsed: with "today" fixed after the month the figures do not depend
 # on the date the suite runs on.
@@ -494,7 +499,7 @@ class ContentTests(_World):
         self.assertEqual(list(by_code(self.get(employeeIds=str(self.lokesh.id)))), ["2896"])
         self.assertEqual(set(by_code(self.get(branchIds=str(self.b2.id)))), {"3000", "5000"})
         statement = self.statement(f"&departmentId={self.accounts.id}")
-        self.assertEqual(by_code(dept)["2896"]["net"], self.statement_rows(statement)["2896"]["net"])
+        self.assertEqual(by_code(dept)["2896"]["net"], ceil_rupee(self.statement_rows(statement)["2896"]["net"]))
 
     def test_the_payment_status_filter(self):
         Payroll.objects.filter(pk=self.payrolls["2316"].pk).update(status=Payroll.STATUS_PAID)
@@ -518,7 +523,7 @@ class BranchTests(_World):
         self.assertEqual(unit_totals(body), {})
         expected = self.statement_rows(self.statement(user=self.branch_user))
         for code, row in by_code(body).items():
-            self.assertEqual(row["net"], expected[code]["net"], code)
+            self.assertEqual(row["net"], ceil_rupee(expected[code]["net"]), code)  # NET rounded up
         self.assertEqual([r["sno"] for r in data_rows(body)], [1, 2, 3, 4, 5])
 
     def test_a_branch_user_cannot_widen_their_scope_with_a_parameter(self):
@@ -605,7 +610,7 @@ class ExportTests(_World):
         self.assertEqual((ws.page_setup.paperSize, ws.page_setup.orientation), (8, "landscape"))
         self.assertEqual(ws.page_setup.fitToWidth, 1)
         money = ws.cell(row=HEADER_ROW + 3, column=KEYS.index("net") + 1)  # band, heading, then Meenatchi
-        self.assertIsInstance(money.value, float)
+        self.assertIsInstance(money.value, (int, float))  # a real number (NET is a whole rupee)
         self.assertNotIn("₹", money.number_format)  # no ₹ on every cell: the title row says "Amounts in ₹"
         self.assertEqual(ws.cell(row=HEADER_ROW + 3, column=1).font.sz, 11)
 
@@ -846,7 +851,7 @@ class StatutorySectionTests(TestCase):
         kavin = rows[0]
         self.assertEqual((kavin["Covered by"], kavin["PF %"], kavin["ESI %"]), ("Co Emp", 8, 10))
         self.assertAlmostEqual(kavin["PF"], float(slip.pf_deduction), 2)
-        self.assertAlmostEqual(kavin["ESI"], float(slip.esi_deduction), 2)
+        self.assertEqual(kavin["ESI"], ceil_rupee(slip.esi_deduction))  # rounded up, as on the statement
         self.assertGreater(kavin["PF"], 0)
         self.assertAlmostEqual(kavin["PF / ESI wages"], 10000, 2)  # the first 50% of 20,000, all days paid
         self.assertIn("PF 8% of Basic + DA + Retaining Allowance", kavin["How it was worked out"])
@@ -860,6 +865,7 @@ class StatutorySectionTests(TestCase):
         self.assertAlmostEqual(total["ESI"], kavin["ESI"], 2)
         self.assertAlmostEqual(total["TDS"], divya["TDS"], 2)
         self.assertAlmostEqual(total["PF + ESI + TDS"], kavin["PF"] + kavin["ESI"] + divya["TDS"], 2)
+        self.assertEqual(total["ESI"], int(total["ESI"]))
         notes = " ".join(str(v[0]) for v in values if v and isinstance(v[0], str))
         self.assertNotIn("2 of the 3 employees on this statement have PF, ESI or TDS", notes)  # no notes in the files
 
@@ -1019,7 +1025,7 @@ class OwnerColumnTests(_World):
             self.assertAlmostEqual(
                 row["pf"] + row["esi"] + row["tds"] + row["advance"] + row["others"], row["totalDeduction"], 2
             )
-            self.assertAlmostEqual(row["eSalary"] - row["totalDeduction"], row["net"], 2, row["code"])
+            self.assertEqual(row["net"], ceil_rupee(round(row["eSalary"] - row["totalDeduction"], 2)), row["code"])
 
     def test_a_company_holiday_is_hd_not_present(self):
         holiday = WORKING[5]
@@ -1135,7 +1141,7 @@ class AdvanceAndTermLoanTests(_World):
         row = by_code(self.get())["6300"]
         self.assertEqual(row["advance"], 4500.0)  # 3,000 advance + 1,500 loan instalment
         self.assertEqual(row["totalDeduction"], row["pf"] + row["esi"] + row["tds"] + row["advance"] + row["others"])
-        self.assertAlmostEqual(row["net"], row["eSalary"] - row["totalDeduction"], 2)
+        self.assertEqual(row["net"], ceil_rupee(round(row["eSalary"] - row["totalDeduction"], 2)))
         self.assertEqual(row["net"], 26000.0 - 4500.0)
         loan.refresh_from_db()
         self.assertEqual((loan.total_repaid, loan.outstanding), (Decimal("1500.00"), Decimal("4500.00")))  # once
@@ -1144,3 +1150,44 @@ class AdvanceAndTermLoanTests(_World):
         labels = [c.value for c in ws[HEADER_ROW]]
         line = next(r for r in ws.iter_rows(min_row=HEADER_ROW + 1, values_only=True) if r[1] == "6300")
         self.assertEqual(line[labels.index("Advance")], 4500)
+
+
+class RoundUpTests(_World):
+    """Owner 2026-11-05: ESI and NET always rounded UP to the next whole rupee (89.11 -> 90, 13,489.76 -> 13,490), for
+    every employee and the grand total; no other column changes."""
+
+    def test_each_employees_esi_and_net_are_the_statements_rounded_up(self):
+        body = self.get()
+        expected = self.statement_rows()
+        for code, row in by_code(body).items():
+            for key in ROUNDED_UP:
+                self.assertEqual(row[key], ceil_rupee(expected[code][key]), (code, key))
+                self.assertEqual(row[key], int(row[key]), (code, key))
+            for key in ("eSalary", "pf", "tds", "advance", "others", "totalDeduction"):  # untouched
+                self.assertEqual(row[key], expected[code][key], (code, key))
+        # the statement here has paise in NET: rounding up really moved it
+        self.assertTrue(any(expected[c]["net"] != int(expected[c]["net"]) for c in expected))
+
+    def test_the_totals_add_up_the_rounded_figures(self):
+        body = self.get()
+        rows = data_rows(body)
+        for key in ROUNDED_UP:
+            self.assertEqual(body["totals"][key], sum(r[key] for r in rows), key)
+            self.assertEqual(body["totals"][key], int(body["totals"][key]), key)
+        for unit, total in unit_totals(body).items():
+            self.assertEqual(total["net"], sum(r["net"] for r in rows if r["unit"] == unit))
+
+    def test_round_up_examples(self):
+        from .reporting.definitions.hr_reports_salary_statement import round_up
+
+        self.assertEqual([round_up(v) for v in (89.11, 89.66, 89.0, 13489.11, 13489.76, 0, None)],
+                         [90.0, 90.0, 89.0, 13490.0, 13490.0, 0.0, 0.0])  # fmt: skip
+        self.assertEqual(round_up(0.1 + 0.2), 1.0)
+        self.assertEqual(round_up(Decimal("1251.85")), 1252.0)
+
+    def test_the_files_print_the_rounded_figures(self):
+        ws = load_workbook(io.BytesIO(self.export("xlsx").content)).active
+        labels = [c.value for c in ws[HEADER_ROW]]
+        expected = self.statement_rows()
+        line = next(r for r in ws.iter_rows(min_row=HEADER_ROW + 1, values_only=True) if r[1] == "2896")
+        self.assertEqual(line[labels.index("NET")], ceil_rupee(expected["2896"]["net"]))

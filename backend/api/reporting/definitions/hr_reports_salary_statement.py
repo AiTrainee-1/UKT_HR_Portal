@@ -13,7 +13,10 @@ half day counts 0.5 Present and its missing half 0.5 LOP, so Total Days = Presen
 LOP = Company Days (the payroll's days of the month: every day but Sundays, holidays included, 26 or 27); the Advance
 column is always printed, right after TDS (owner 2026-11-05; 0.00 when nobody repays an advance), so Total Deduction =
 PF + ESI + TDS + Advance + Others and NET = Earned Salary - Total Deduction always hold; Total Days and Remarks stay.
-PTRL, Others Allow and Lop& PSAmt are gone. ``report_values`` maps a statement row to these columns (no figure changes).
+PTRL, Others Allow and Lop& PSAmt are gone. ``report_values`` maps a statement row to these columns (no figure changes),
+except that ESI and NET are rounded UP to the next whole rupee (owner 2026-11-05: 89.11 -> 90, 13,489.76 -> 13,490):
+every employee's, so every sub total, unit total and the TOTAL (sums of whole rupees) are whole too. Nothing else is
+rounded, and the payroll's own figures are untouched (the files print what payroll saved, ESI and NET rounded up).
 
 Only employees that HAVE a generated staff payroll for the month are listed. Nobody is invented for an employee payroll
 has not been run for: the notes say how many active staff in scope have none yet. Production pay is paid per pay cycle,
@@ -42,7 +45,7 @@ from __future__ import annotations
 import dataclasses
 from types import SimpleNamespace
 
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
 from django.db.models import Exists, OuterRef
 
@@ -146,7 +149,7 @@ def report_values(v: dict, slip, company_days) -> dict:
       the missing part of every half day; Company Days = the days of the month the payroll paid by (`company_days`, the
       payroll's total_working_days: every day but Sundays, company holidays included, so 26 or 27).
     - Earned Salary, PF, ESI, TDS, Advance, Others (the late + permission deduction), Total Deduction and NET are the
-      statement's own figures."""
+      statement's own figures; ESI and NET rounded up to the next whole rupee (round_up)."""
     total = _dec(v.get("total"))
     basic = (total * _HALF).quantize(_CENT, rounding=ROUND_HALF_UP)
     summary = ((slip.breakdown_details or {}).get("summary") or {}) if slip is not None else {}
@@ -169,7 +172,16 @@ def report_values(v: dict, slip, company_days) -> dict:
         "present": float(present),
         "hd": float(hd),
         "companyDays": int(company_days or 0),
+        # owner 2026-11-05: ESI and NET always rounded UP to the next whole rupee (nothing else is)
+        "esi": round_up(v.get("esi")),
+        "net": round_up(v.get("net")),
     }
+
+
+def round_up(value) -> float:
+    """The amount rounded up to the next whole rupee: 89.11 -> 90, 89.66 -> 90, 89.00 stays 89 (read through the text
+    of the number, so a float's binary noise never adds a rupee)."""
+    return float(_dec(value).to_integral_value(rounding=ROUND_CEILING))
 
 
 # ── Units ─────────────────────────────────────────────────────────────────────
@@ -343,7 +355,8 @@ def statutory_rows(payrolls: list, values: list[dict], slips: dict | None = None
         ded = ((slip.breakdown_details or {}).get("deductions") or {}) if slip is not None else {}
         stat = ded.get("statutory") if isinstance(ded.get("statutory"), dict) else {}
         pf = _num(slip.pf_deduction) if slip is not None else Decimal("0")
-        esi = _num(slip.esi_deduction) if slip is not None else Decimal("0")
+        # ESI rounded up to the next whole rupee, as on the statement (owner 2026-11-05)
+        esi = Decimal(str(round_up(slip.esi_deduction))) if slip is not None else Decimal("0")
         tds = _num(p.tds_deduction) or Decimal("0")
         category = stat.get("category") or (
             "co_emp" if getattr(emp, "co_emp_enabled", False) else "tds" if getattr(emp, "tds_enabled", False) else ""
@@ -557,6 +570,8 @@ def column_notes() -> list[str]:
         "month's pay).",
         "Others is the Late Detection and Permission deduction; Total Deduction = PF + ESI + TDS + Advance + Others; "
         "NET = Earned Salary - Total Deduction, the pay for the month.",
+        "ESI and NET are rounded up to the next whole rupee (89.11 -> 90); Total Deduction and every other column keep "
+        "the payroll's exact figure.",
     ]
 
 
