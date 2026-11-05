@@ -1,11 +1,18 @@
 """HR Reports (category ``hr``): hr-salary-statement, the company's printed Salary Statement.
 
 The printed register is one line per employee under a department heading, serial numbers running on across the
-departments, with the money of the whole statement added up at the end. The Payroll page already builds exactly that
-statement (GET /api/payroll/salary-statement, ``api.payroll_statement_views``). This report does NOT work any figure out
-itself: it reads the same payroll rows and calls the same builder (``statement_rows``), the same department grouping
-and serial numbering (``_groups``), the same column labels (``staff_columns``) and the same explanatory notes
-(``statement_notes``), so the Report Center and Payroll > Salary Statement can never disagree.
+departments, with the money of the whole statement added up at the end. The Payroll page already builds the statement's
+figures (GET /api/payroll/salary-statement, ``api.payroll_statement_views``). This report does NOT work any pay out itself:
+it reads the same payroll rows through the same builder (``statement_rows``) and the same department grouping and serial
+numbering (``_groups``), so the money can never disagree with Payroll > Salary Statement.
+
+Its columns are the owner's (2026-11-05), not the Payroll page's: SNO, ID NO, Name, Designation | Basic Salary (50% of the
+monthly salary), Other Allowance (the other 50%), Total Salary | Present, CL, HD (holidays), Total Days, LOP, Company Days
+| Earned Salary | PF, ESI, TDS, [Advance], Others (late + permission), Total Deduction | NET | Remarks. Owner's choices: a
+half day counts 0.5 Present and its missing half 0.5 LOP, so Total Days = Present + CL + HD (the days paid) and Total Days +
+LOP = Company Days (the payroll's days of the month: every day but Sundays, holidays included, 26 or 27); the Advance column is printed only in a month in which somebody repays an advance (so Total Deduction
+= PF + ESI + TDS + Advance + Others and NET = Earned Salary - Total Deduction always hold); Total Days and Remarks stay.
+PTRL, Others Allow and Lop& PSAmt are gone. ``report_values`` maps a statement row to these columns (no figure changes).
 
 Only employees that HAVE a generated staff payroll for the month are listed. Nobody is invented for an employee payroll
 has not been run for: the notes say how many active staff in scope have none yet. Production pay is paid per pay cycle,
@@ -34,13 +41,13 @@ from __future__ import annotations
 import dataclasses
 from types import SimpleNamespace
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db.models import Exists, OuterRef
 
 from api.models import Employee, Payroll
 from api.payroll_insights import KIND_STAFF, ddmmyyyy, parse_iso_date, slip_key, slips_for, staff_period
-from api.payroll_statement_views import NO_DEPARTMENT, _groups, staff_columns, statement_notes, statement_rows
+from api.payroll_statement_views import NO_DEPARTMENT, _groups, statement_rows
 from api.unit_labels import NO_UNIT_KEY, OTHER_UNIT, unit_label, unit_sort_key
 
 from .. import filters as F
@@ -56,21 +63,20 @@ CATEGORY = "hr"
 # salary structure: it does not grant the pay actually earned and deducted that this statement prints.)
 MODULES = ("payroll",)
 
-# The printed statement adds up these columns, and only these (its grand total prints no Basic, Total or day counts).
+# The statement adds up its money columns (sub totals, unit totals, TOTAL); the day counts are not added up.
 SUM_KEYS = (
-    "petrol",
-    "othersAllow",
+    "basic",
+    "otherSalary",
+    "total",
     "eSalary",
-    "advance",
-    "esi",
     "pf",
+    "esi",
     "tds",
+    "advance",
     "others",
     "totalDeduction",
     "net",
 )
-
-_TYPE_OF_FORMAT = {"int": INTEGER, "days": NUMBER, "money": CURRENCY, "text": TEXT}
 
 PAYROLL_RELATIONS = (
     "employee",
@@ -82,26 +88,87 @@ PAYROLL_RELATIONS = (
 PAYMENT_OPTIONS = ((Payroll.STATUS_PENDING, "Pending"), (Payroll.STATUS_PAID, "Cleared"))
 
 
-def _columns() -> tuple[ColumnSpec, ...]:
-    """The statement's own columns (labels, order, widths), typed for the Report Center."""
-    out = []
-    for c in staff_columns():
-        out.append(
-            ColumnSpec(
-                c["key"],
-                c["label"],
-                _TYPE_OF_FORMAT[c["format"]],
-                c["weight"],
-                total="sum" if c["key"] in SUM_KEYS else None,
-                align=c["align"],
-            )
-        )
-    return tuple(out)
-
-
 # The unit's short label on every line of the unit, for filtering (the Report Log's Late exports have the same column).
 UNIT_COLUMN = ColumnSpec("unit", "Unit", TEXT, 0.8, align="center")
-COLUMNS = (*_columns(), UNIT_COLUMN)
+
+
+def _money_col(key: str, label: str, width: float = 1.3) -> ColumnSpec:
+    return ColumnSpec(key, label, CURRENCY, width, total="sum" if key in SUM_KEYS else None)
+
+
+# The owner's columns and order (2026-11-05). Advance is printed only in a month with an advance recovered (see _run).
+COLUMNS = (
+    ColumnSpec("sno", "SNO", INTEGER, 0.6, align="center"),
+    ColumnSpec("code", "ID NO", TEXT, 1.1),
+    ColumnSpec("name", "Name", TEXT, 3),
+    ColumnSpec("designation", "Designation", TEXT, 2.2),
+    _money_col("basic", "Basic Salary"),
+    _money_col("otherSalary", "Other Allowance"),
+    _money_col("total", "Total Salary"),
+    ColumnSpec("present", "Present", NUMBER, 1),
+    ColumnSpec("cl", "CL", NUMBER, 1),
+    ColumnSpec("hd", "HD", NUMBER, 1),
+    ColumnSpec("totalDays", "Total Days", NUMBER, 1),
+    ColumnSpec("lop", "LOP", NUMBER, 1),
+    ColumnSpec("companyDays", "Company Days", INTEGER, 1),
+    _money_col("eSalary", "Earned Salary"),
+    _money_col("pf", "PF", 1.25),
+    _money_col("esi", "ESI", 1.25),
+    _money_col("tds", "TDS", 1.25),
+    _money_col("advance", "Advance", 1.1),
+    _money_col("others", "Others", 1.1),
+    _money_col("totalDeduction", "Total Deduction"),
+    _money_col("net", "NET"),
+    ColumnSpec("remarks", "Remarks", TEXT, 2),
+    UNIT_COLUMN,
+)
+# What _groups adds up for its own sub totals (unused here, but it must know the columns)
+_GROUP_COLUMNS = [{"key": c.key, "total": c.total} for c in COLUMNS]
+_HALF = Decimal("0.5")
+_CENT = Decimal("0.01")
+
+
+def _dec(value) -> Decimal:
+    try:
+        return Decimal(str(value)) if value is not None and not isinstance(value, bool) else Decimal("0")
+    except Exception:
+        return Decimal("0")
+
+
+def report_values(v: dict, slip, company_days) -> dict:
+    """One employee's line in the owner's columns, from the Salary Statement's own row `v` and the slip's day breakdown.
+
+    - Basic Salary = 50% of the monthly salary (Total Salary), Other Allowance = the rest.
+    - HD = the company holidays of the month that were paid (and any working day HR marked as a paid holiday); Present =
+      the days paid as worked, a half day counting 0.5, without Casual Leave and holidays; CL as on the statement; Total
+      Days = Present + CL + HD = the days paid; LOP = Company Days - Total Days, i.e. the absent and on-leave days plus
+      the missing part of every half day; Company Days = the days of the month the payroll paid by (`company_days`, the
+      payroll's total_working_days: every day but Sundays, company holidays included, so 26 or 27).
+    - Earned Salary, PF, ESI, TDS, Advance, Others (the late + permission deduction), Total Deduction and NET are the
+      statement's own figures."""
+    total = _dec(v.get("total"))
+    basic = (total * _HALF).quantize(_CENT, rounding=ROUND_HALF_UP)
+    summary = ((slip.breakdown_details or {}).get("summary") or {}) if slip is not None else {}
+    # a payroll from before 4 Nov 2026 (no workingDays) did not count the holidays among the days paid
+    holidays = (_dec(summary.get("holidayDays")) if "workingDays" in summary else Decimal("0")) + _dec(
+        summary.get("paidLeaveDays")
+    )
+    paid, cl = _dec(v.get("totalDays")), _dec(v.get("cl"))
+    hd = min(holidays, max(paid - cl, Decimal("0")))
+    present = max(paid - cl - hd, Decimal("0"))
+    keep = (
+        "code", "name", "designation", "cl", "lop", "totalDays", "eSalary", "pf", "esi", "tds", "advance", "others",
+        "totalDeduction", "net", "remarks",
+    )  # fmt: skip
+    return {
+        **{k: v.get(k) for k in keep},
+        "basic": float(basic),
+        "otherSalary": float(total - basic),
+        "total": float(total),
+        "present": float(present),
+        "hd": float(hd),
+        "companyDays": int(company_days or 0),
+    }
 
 
 # ── Units ─────────────────────────────────────────────────────────────────────
@@ -157,7 +224,7 @@ def unit_blocks(payrolls: list, values: dict[int, dict]) -> list[UnitBlock]:
         heads[key] = (label, branch)
     blocks = []
     for key in sorted(members, key=lambda k: unit_sort_key(k, *heads[k])):
-        groups = _groups(members[key], values, staff_columns())
+        groups = _groups(members[key], values, _GROUP_COLUMNS)
         _tell_apart(groups, members[key])
         rows = [r["values"] for g in groups for r in g["rows"]]
         total = {k: round(sum(r.get(k) or 0 for r in rows), 2) for k in SUM_KEYS}
@@ -258,12 +325,12 @@ def _plain(value: Decimal | None) -> str:
     return text
 
 
-def statutory_rows(payrolls: list, values: list[dict]) -> list[dict]:
+def statutory_rows(payrolls: list, values: list[dict], slips: dict | None = None) -> list[dict]:
     """One line per employee in Co Emp or on the TDS list (or with any PF / ESI / TDS on the slip), in the statement's
     order (unit by unit), with the wages, rates and amounts the payroll stored in the slip. `values` = the statement's
     own rows (for the order and the department), keyed by payroll id. Serial numbers start from 1 in every unit, as on the
-    statement. One query (the slips)."""
-    slips = slips_for(payrolls)
+    statement. One query (the slips) unless they are given."""
+    slips = slips_for(payrolls) if slips is None else slips
     by_id = {p.id: p for p in payrolls}
     out = []
     for v in values:
@@ -338,8 +405,8 @@ def statutory_rows(payrolls: list, values: list[dict]) -> list[dict]:
     return out
 
 
-def statutory_section(payrolls: list, values: list[dict]) -> ReportSection:
-    rows = statutory_rows(payrolls, values)
+def statutory_section(payrolls: list, values: list[dict], slips: dict | None = None) -> ReportSection:
+    rows = statutory_rows(payrolls, values, slips)
     co_emp = sum(1 for r in rows if r["category"] == "Co Emp")
     tds_list = sum(1 for r in rows if r["category"] == "TDS list")
     totals = {k: round(sum(r[k] for r in rows), 2) for k in STATUTORY_SUM_KEYS}
@@ -417,7 +484,9 @@ def _run(ctx) -> ReportResult:
         qs = qs.filter(status=payment)
     payrolls = list(qs.order_by("employee__first_name", "employee__last_name", "id")[: ctx.row_limit])
 
-    values, no_slip, mismatched = statement_rows(payrolls, KIND_STAFF, info)
+    statement, no_slip, mismatched = statement_rows(payrolls, KIND_STAFF, info)
+    slips = slips_for(payrolls)
+    values = {p.id: report_values(statement[p.id], slips.get(slip_key(p)), p.total_working_days) for p in payrolls}
     blocks = unit_blocks(payrolls, values)
     ordered = [
         {**r["values"], "_payrollId": r["payrollId"]}
@@ -430,34 +499,34 @@ def _run(ctx) -> ReportResult:
         ctx._cache[PLAN_KEY] = blocks  # the files draw the units from these
 
     data = [r for r in rows if r.get("_kind") is None]
-    paid = sum(1 for p in payrolls if p.status == Payroll.STATUS_PAID)
+    # the Advance column only in a month in which somebody repays an advance (owner 2026-11-05)
+    has_advance = any(r.get("advance") for r in data)
+    columns = [c for c in COLUMNS if has_advance or c.key != "advance"]
 
-    def total(key: str) -> float:
-        return round(sum(r[key] for r in data), 2)
-
-    summary = [
-        {"label": "Employees listed", "value": len(payrolls), "format": "integer"},
-        {"label": "Units", "value": len(blocks), "format": "integer"},
-        {"label": "Departments", "value": len({p.employee.department_id for p in payrolls}), "format": "integer"},
-        {"label": "E salary", "value": total("eSalary"), "format": "currency"},
-        {"label": "Total deduction", "value": total("totalDeduction"), "format": "currency"},
-        {"label": "Net pay", "value": total("net"), "format": "currency"},
-        {"label": "Cleared", "value": paid, "format": "integer"},
-        {"label": "Pending", "value": len(payrolls) - paid, "format": "integer"},
-    ]
+    # no headline figures above the table (owner 2026-11-05): the report starts with its column headers
 
     notes = [
         f"Salary Statement From {ddmmyyyy(parse_iso_date(info['start']))} To {ddmmyyyy(parse_iso_date(info['end']))}: "
         "staff monthly payroll, unit by unit (the head office first, employees with no unit last), one line per employee "
         "under the department heading, in employee-code order, with the serial number running on across the unit's "
-        "departments. These are the same figures as Payroll > Salary Statement.",
-        "Sub totals, the unit totals and the total line add up the money columns of the printed statement (PTRL to NET). "
-        "Basic, Total, the day columns and Lop& PSAmt are not added up, as on the printed sheet.",
+        "departments. The pay and deductions are the same figures as Payroll > Salary Statement.",
+        "Sub totals, the unit totals and the total line add up the money columns (Basic Salary to NET); the day columns "
+        "are not added up.",
         "Only employees whose payroll has been generated for the month are listed (the saved payroll is read; nothing is "
         "calculated or saved here). Production workers are paid per pay cycle and are on Production Payroll > Salary "
         "Statement.",
-        *statement_notes(KIND_STAFF, no_slip, mismatched),
+        *column_notes(has_advance),
     ]
+    if no_slip:
+        notes.append(
+            f"{no_slip} payroll(s) have no stored day-by-day breakdown, so their day counts come from the payroll record "
+            "instead (HD shows 0 for them)."
+        )
+    if mismatched:
+        notes.append(
+            f"For {mismatched} payroll(s) NET is the saved payroll figure, which differs from Earned Salary - Total "
+            "Deduction: the payroll was edited after it was generated (the saved net leaves overtime pay out)."
+        )
     missing = _no_payroll_count(ctx, year, month)
     if missing:
         notes.append(
@@ -469,16 +538,44 @@ def _run(ctx) -> ReportResult:
     if any(g["label"].startswith(NO_DEPARTMENT) for block in blocks for g in block.groups):
         notes.append(f"Employees with no department are listed under '{NO_DEPARTMENT}', last.")
     # the PF / ESI / TDS lines get a section of their own in the files (the screen keeps the statement as printed)
-    sections = [statutory_section(payrolls, ordered)] if ctx.purpose in ("xlsx", "pdf") else []
-    return ReportResult(rows=rows, summary=summary, notes=notes, sections=sections)
+    sections = [statutory_section(payrolls, ordered, slips)] if ctx.purpose in ("xlsx", "pdf") else []
+    return ReportResult(rows=rows, columns=columns, notes=notes, sections=sections)
+
+
+def column_notes(has_advance: bool) -> list[str]:
+    """How each column is worked out."""
+    advance = " + Advance" if has_advance else ""
+    notes = [
+        "Total Salary is the monthly salary: Basic Salary is 50% of it and Other Allowance the other 50%.",
+        "Present is the days paid as worked (a half day counts 0.5), without Casual Leave and holidays; CL is the approved "
+        "Casual Leave days (a half-day CL counts 0.5); HD is the paid company holidays of the month (with any working day HR "
+        "marked as a paid holiday); Total Days = Present + CL + HD, the days paid; LOP = Company Days - Total Days: the "
+        "absent and on-leave days plus the missing half of every half day; Company Days is the company's days of the month "
+        "that salary is paid by: every day but Sundays, company holidays included (27 in a 31-day month with 4 Sundays, 26 "
+        "in a 30-day one).",
+        "Earned Salary is the salary earned for the days paid (Total Salary x Total Days / Company Days) plus any "
+        "overtime pay and HR bonus.",
+        "PF and ESI are deducted only from Co Emp employees (Employees > Co Emp), by the rules of Settings > PF & ESI, from "
+        "Basic + DA + Retaining Allowance. TDS is deducted only from employees on the TDS list: the TDS percentage set for "
+        "them of the pay earned (it is 0 for everybody else).",
+        f"Others is the Late Detection and Permission deduction; Total Deduction = PF + ESI + TDS{advance} + Others; "
+        "NET = Earned Salary - Total Deduction, the pay for the month.",
+    ]
+    if has_advance:
+        notes.insert(
+            4,
+            "Advance is the advance recovered from this month's pay (an advance balance still owed is not part of this "
+            "month's pay). The column is printed only in a month in which somebody repays an advance.",
+        )
+    return notes
 
 
 register(
     ReportSpec(
         id="hr-salary-statement",
         title="Salary Statement",
-        description="The printed monthly Salary Statement, unit by unit: every employee's salary, days, allowances, "
-        "deductions and NET under their department, with sub totals, unit totals and a grand total.",
+        description="The monthly Salary Statement, unit by unit: every employee's salary (Basic, Other, Total), days, "
+        "earned salary, deductions and NET under their department, with sub totals, unit totals and a grand total.",
         category=CATEGORY,
         modules=MODULES,
         icon="FileSpreadsheet",

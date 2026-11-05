@@ -2,8 +2,9 @@
 exports, with bigger type in less space (owner 2026-11-04: "split the records by their units ... increase the font size,
 keep the layout, less border spacing, padding and empty space").
 
-PDF, A3 landscape as before: the letterhead, the title band (the month and "Amounts in ₹" on its right), one line of
-headline figures, then the table:
+PDF, A3 landscape as before: the letterhead, the title band (the month and "Amounts in ₹" on its right), then straight
+away the table (no headline figures above it: owner 2026-11-05, "the report should start directly with the column
+headers"):
 
   - per unit a full-width band ("HO – Head Office   119 employees") in the Report Log's indigo;
   - per department a heading line, its rows (zebra) and its Sub total; per unit its total; at the end the TOTAL;
@@ -61,7 +62,6 @@ from reportlab.platypus import Image as RLImage
 from ..branding import company
 from ..export_pdf import (
     BRAND,
-    BRAND_SOFT,
     GRID,
     INK,
     MUTED,
@@ -72,7 +72,6 @@ from ..export_pdf import (
     build_pdf,
     ensure_fonts,
 )
-from ..export_pdf import pdf_text as _kpi_text
 from ..export_xlsx import build_xlsx, safe_cell, sheet_title, typed_value
 from ..formatting import display_date, indian_number
 from ..types import CURRENCY, DATE, DATETIME, DURATION, HOURS, INTEGER, MINUTES, NUMBER, PERCENT, TIME, ColumnSpec
@@ -478,7 +477,7 @@ def _table(cols, lines, sum_keys, avail, regular, bold, base_style) -> list:
 
 
 def _header(out, avail, regular, bold, rupee_ok, base_style) -> list:
-    """The letterhead, the title band (title left; the filters and "Amounts in ₹" right) and one line of headline figures."""
+    """The letterhead and the title band (title left; the filters and "Amounts in ₹" right). No headline figures."""
     co = company()
     story: list = []
     name = Paragraph(escape(co.name), base_style("co", fontName=bold, fontSize=13, leading=15, textColor=BRAND))
@@ -540,33 +539,6 @@ def _header(out, avail, regular, bold, rupee_ok, base_style) -> list:
     )
     story.append(title)
 
-    if out.summary:
-        cards = []
-        for s in out.summary[:10]:
-            fake = ColumnSpec("v", s["label"], s.get("format", INTEGER))
-            cards.append(
-                [
-                    Paragraph(escape(str(s["label"])), base_style("kl", fontSize=7.5, leading=9, textColor=MUTED)),
-                    Paragraph(
-                        escape(_kpi_text(fake, s.get("value"), rupee_ok)),
-                        base_style("kv", fontName=bold, fontSize=11, leading=13, textColor=BRAND),
-                    ),
-                ]
-            )
-        strip = Table([cards], colWidths=[avail / len(cards)] * len(cards))
-        strip.setStyle(
-            TableStyle(
-                [
-                    ("BOX", (0, 0), (-1, -1), 0.5, GRID),
-                    ("INNERGRID", (0, 0), (-1, -1), 0.5, GRID),
-                    ("BACKGROUND", (0, 0), (-1, -1), BRAND_SOFT),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                    ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ]
-            )
-        )
-        story.append(strip)
     story.append(Spacer(1, 4))
     return story
 

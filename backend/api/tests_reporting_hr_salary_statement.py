@@ -3,7 +3,9 @@ Report Center - HR Reports (category ``hr``): hr-salary-statement, the printed S
 
 The report must show exactly what Payroll > Salary Statement (GET /api/payroll/salary-statement) shows, because both call
 the same builder. It lists the figures unit by unit (owner 2026-11-04: split the exports by unit, like the Report Log's Late
-exports): a band per unit, its departments, its total, serial numbers from 1 in every unit, a Unit column on every line. Payrolls are made by the REAL engine (``_generate_staff_payroll``) from manual attendance day records,
+exports): a band per unit, its departments, its total, serial numbers from 1 in every unit, a Unit column on every line.
+The columns are the owner's (2026-11-05): Basic / Other / Total Salary, Present / CL / LOP / HD (holidays) / Total Days,
+Earned Salary, PF / ESI / TDS / [Advance, only in a month with an advance recovered] / Others / Total Deduction, NET. Payrolls are made by the REAL engine (``_generate_staff_payroll``) from manual attendance day records,
 for April 2026 (26 working days, like the printed statement), with "today" frozen after the month.
 
 Run via: python manage.py test api.tests_reporting_hr_salary_statement -v 2
@@ -20,6 +22,7 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 from .jwt_utils import sign_token
 from .models import (
@@ -31,6 +34,7 @@ from .models import (
     Department,
     Designation,
     Employee,
+    Holiday,
     HRUser,
     Payroll,
     PayrollSettings,
@@ -49,19 +53,21 @@ WORKING = _build_working_days(MONTH, YEAR, False, set())  # 26 Mon-Sat days
 PERIOD = "2026-04"
 
 LABELS = [
-    "SNO", "ID NO", "Name", "Designation", "Basic salary", "Total", "Present", "CL", "LOP", "HD", "Total Days", "PTRL",
-    "Others Allow", "E salary", "Advance", "ESI", "PF", "TDS", "Others", "Lop& PSAmt", "Total Deduction",
-    "NET", "Remarks", "Unit",
+    "SNO", "ID NO", "Name", "Designation", "Basic Salary", "Other Allowance", "Total Salary", "Present", "CL", "HD",
+    "Total Days", "LOP", "Company Days", "Earned Salary", "PF", "ESI", "TDS", "Advance", "Others", "Total Deduction", "NET", "Remarks", "Unit",
 ]  # fmt: skip
 KEYS = [
-    "sno", "code", "name", "designation", "basic", "total", "present", "cl", "lop", "hd", "totalDays", "petrol",
-    "othersAllow", "eSalary", "advance", "esi", "pf", "tds", "others", "lopAmount", "totalDeduction", "net",
-    "remarks", "unit",
+    "sno", "code", "name", "designation", "basic", "otherSalary", "total", "present", "cl", "hd", "totalDays", "lop",
+    "companyDays", "eSalary", "pf", "esi", "tds", "advance", "others", "totalDeduction", "net", "remarks", "unit",
 ]  # fmt: skip
 PRINTED_TOTALS = [
-    "petrol", "othersAllow", "eSalary", "advance", "esi", "pf", "tds", "others", "totalDeduction", "net",
+    "basic", "otherSalary", "total", "eSalary", "pf", "esi", "tds", "advance", "others", "totalDeduction", "net",
 ]  # fmt: skip
-VALUE_KEYS = [k for k in KEYS if k not in ("sno", "unit")]  # the Payroll page's own statement has no unit column
+# the figures the report takes straight from the Payroll page's statement (Present / HD / Basic / Other Allowance are mapped)
+VALUE_KEYS = [
+    "code", "name", "designation", "total", "cl", "lop", "totalDays", "eSalary", "advance", "esi", "pf", "tds", "others",
+    "totalDeduction", "net", "remarks",
+]  # fmt: skip
 
 # The attendance engine only computes days that have elapsed: with "today" fixed after the month the figures do not depend
 # on the date the suite runs on.
@@ -283,10 +289,7 @@ class CatalogTests(_World):
             self.assertEqual(types[key], "text", key)
         for key in ("present", "cl", "lop", "hd", "totalDays"):
             self.assertEqual(types[key], "number", key)
-        for key in (
-            "basic", "total", "petrol", "othersAllow", "eSalary", "advance", "esi", "pf", "tds", "others",
-            "lopAmount", "totalDeduction", "net",
-        ):  # fmt: skip
+        for key in PRINTED_TOTALS:
             self.assertEqual(types[key], "currency", key)
         # exactly the printed statement's grand-total columns are added up
         self.assertEqual([c.key for c in spec.columns if c.total == "sum"], PRINTED_TOTALS)
@@ -405,9 +408,13 @@ class ContentTests(_World):
         self.assertEqual(
             (row["present"], row["cl"], row["lop"], row["hd"], row["totalDays"]), (22.0, 2.0, 2.0, 0.0, 24.0)
         )
-        self.assertEqual((row["petrol"], row["othersAllow"]), (2000.0, 12750.0))
+        self.assertEqual((row["basic"], row["otherSalary"]), (14750.0, 14750.0))  # 50% + 50% of the salary
         lokesh = by_code(self.get())["2896"]
-        self.assertEqual((lokesh["advance"], lokesh["hd"]), (2000.0, 1.0))
+        # 20 days + a half day + a Casual Leave day: Present 20.5 (the half day counts 0.5), its missing half is LOP
+        self.assertEqual(
+            (lokesh["present"], lokesh["cl"], lokesh["lop"], lokesh["hd"], lokesh["totalDays"]), (20.5, 1.0, 4.5, 0.0, 21.5)
+        )
+        self.assertEqual(lokesh["advance"], 2000.0)
         self.assertNotIn("tAdvance", lokesh)
         self.assertEqual(by_code(self.get())["30071"]["remarks"], "LEFT")
 
@@ -421,7 +428,7 @@ class ContentTests(_World):
             self.assertAlmostEqual(subs[("U2", "Cutting")][key], by_code(body)["3000"][key], 2, key)
             self.assertAlmostEqual(subs[("U2", "Admin")][key], by_code(body)["5000"][key], 2, key)
         # the money the printed sheet does not add up stays blank on the subtotal
-        for key in ("basic", "total", "present", "totalDays", "lopAmount"):
+        for key in ("present", "cl", "hd", "totalDays", "lop", "companyDays"):  # the day columns are not added up
             self.assertIsNone(subs[("U1", "Accounts")][key], key)
         self.assertIsNone(subs[("U1", "Accounts")]["sno"])
         self.assertEqual(len(subs), 4)
@@ -430,26 +437,30 @@ class ContentTests(_World):
         body = self.get()
         statement = self.statement()
         for key in PRINTED_TOTALS:
-            self.assertAlmostEqual(body["totals"][key], statement["total"]["values"][key], 2, key)
+            if key in VALUE_KEYS and statement["total"]["values"].get(key) is not None:  # the money both statements add
+                self.assertAlmostEqual(body["totals"][key], statement["total"]["values"][key], 2, key)
             self.assertAlmostEqual(body["totals"][key], round(sum(r[key] for r in data_rows(body)), 2), 2, key)
         # subtotal lines are not counted twice
         self.assertAlmostEqual(body["totals"]["net"], round(sum(s["net"] for s in subtotals(body).values()), 2), 2)
-        for key in ("basic", "total", "present", "lop", "lopAmount"):
+        for key in ("present", "cl", "hd", "totalDays", "lop", "companyDays"):
             self.assertNotIn(key, body["totals"])
         # ... nor are the unit totals
         self.assertAlmostEqual(body["totals"]["net"], round(sum(u["net"] for u in unit_totals(body).values()), 2), 2)
-        cards = {c["label"]: c["value"] for c in body["summary"]}
-        self.assertEqual((cards["Employees listed"], cards["Units"], cards["Departments"]), (7, 2, 4))
-        self.assertAlmostEqual(cards["Net pay"], body["totals"]["net"], 2)
+        # no headline figures above the table (owner 2026-11-05)
+        self.assertEqual(body["summary"], [])
 
-    def test_the_notes_explain_the_columns_as_the_payroll_statement_does(self):
-        body = self.get()
-        statement = self.statement()
-        for note in statement["notes"]:
-            self.assertIn(note, body["notes"])
-        text = " ".join(body["notes"])
-        self.assertIn("Basic is the first salary-split portion", text)
-        self.assertIn("Lop& PSAmt = Total - E salary", text)
+    def test_the_notes_explain_the_columns(self):
+        text = " ".join(self.get()["notes"])
+        self.assertIn("Basic Salary is 50% of it and Other Allowance the other 50%", text)
+        self.assertIn("Total Days = Present + CL + HD", text)
+        self.assertIn("LOP = Company Days - Total Days", text)
+        self.assertIn("Others is the Late Detection and Permission deduction", text)
+        self.assertIn("Total Deduction = PF + ESI + TDS + Advance + Others", text)  # this month has an advance
+        for gone in ("PTRL", "Others Allow", "Lop& PSAmt", "E salary"):
+            self.assertNotIn(gone, text, gone)
+        # a month (here: a selection) without an advance leaves Advance out of the sum too
+        text = " ".join(self.get(branchIds=str(self.b2.id))["notes"])
+        self.assertIn("Total Deduction = PF + ESI + TDS + Others", text)
 
     def test_staff_without_a_payroll_are_counted_in_the_notes_not_listed(self):
         body = self.get()
@@ -492,8 +503,6 @@ class ContentTests(_World):
         Payroll.objects.filter(pk=self.payrolls["2316"].pk).update(status=Payroll.STATUS_PAID)
         self.assertEqual(list(by_code(self.get(paymentStatus="paid"))), ["2316"])
         self.assertEqual(len(data_rows(self.get(paymentStatus="pending"))), 6)
-        cards = {c["label"]: c["value"] for c in self.get()["summary"]}
-        self.assertEqual((cards["Cleared"], cards["Pending"]), (1, 6))
         self.get(paymentStatus="nonsense", expect=400)
 
 
@@ -552,8 +561,10 @@ class ExportTests(_World):
         r = self.export("xlsx")
         self.assertRegex(r["Content-Disposition"], r'filename="salary_statement_\d{8}_\d{4}\.xlsx"')
         ws = load_workbook(io.BytesIO(r.content)).active
-        self.assertEqual([c.value for c in ws[HEADER_ROW]], LABELS)
+        self.assertEqual([c.value for c in ws[HEADER_ROW]], LABELS)  # April has an advance: the Advance column is there
+        self.assertEqual([c["label"] for c in screen["columns"]], LABELS)
         merged = {str(m) for m in ws.merged_cells.ranges}
+        band_end = get_column_letter(len(KEYS) - 1)  # a band spans every column but Unit
         # the file has the screen's lines in order, with a blank row between departments and before a further unit
         filled = [
             n
@@ -567,7 +578,7 @@ class ExportTests(_World):
                 # a unit's band: one merged, filled cell over the statement's columns, its unit in the Unit column
                 self.assertEqual(excel[0], row["name"], i)
                 self.assertEqual(excel[-1], row["unit"], i)
-                self.assertIn(f"A{n}:W{n}", merged)
+                self.assertIn(f"A{n}:{band_end}{n}", merged)
                 self.assertEqual(ws.cell(row=n, column=1).fill.fgColor.rgb[-6:], "E0E7FF")
                 continue
             for k, key in enumerate(KEYS):
@@ -585,12 +596,12 @@ class ExportTests(_World):
         cells = " ".join(str(c.value) for rw in ws.iter_rows() for c in rw if c.value is not None)
         self.assertIn("April 2026", cells)  # the filter echo in the sheet header
         self.assertIn("Amounts in ₹", cells)
-        self.assertIn("Basic is the first salary-split portion", cells)
+        self.assertIn("Basic Salary is 50% of it and Other Allowance the other 50%", cells)
 
     def test_the_excel_filters_by_unit_and_prints_a3_one_page_wide(self):
         ws = load_workbook(io.BytesIO(self.export("xlsx").content)).active
         last = next(n for n in range(HEADER_ROW, ws.max_row + 1) if ws.cell(row=n, column=1).value == "TOTAL")
-        self.assertEqual(ws.auto_filter.ref, f"A{HEADER_ROW}:X{last}")
+        self.assertEqual(ws.auto_filter.ref, f"A{HEADER_ROW}:{get_column_letter(len(KEYS))}{last}")
         self.assertEqual(ws.freeze_panes, f"D{HEADER_ROW + 1}")  # the header and SNO / ID NO / Name stay in view
         self.assertEqual((ws.page_setup.paperSize, ws.page_setup.orientation), (8, "landscape"))
         self.assertEqual(ws.page_setup.fitToWidth, 1)
@@ -663,6 +674,10 @@ class ExportTests(_World):
             self.assertIn(line, text)
         self.assertIn("TOTAL 7 employees in 2 units", text)
         self.assertIn("Amounts in ₹", text)
+        # the title band, then straight away the column headers: no summary cards
+        for card in ("Employees listed", "Total Salary ₹", "Earned Salary ₹", "Net Pay"):
+            self.assertNotIn(card, text, card)
+        self.assertLess(text.index("SALARY STATEMENT"), text.index("SNO"))
         self.assertNotIn("₹ 28,", text)  # amounts carry no ₹ on every cell
         # a seven-line statement gets the largest type (it used to be 6 pt for any statement)
         self.assertTrue(name)
@@ -988,3 +1003,43 @@ class ContinuedBandTests(TestCase):
         later = [p for p in pages[first + 1 :] if "U-1" in p and "(contd.)" in p]
         self.assertTrue(later)  # 70 people do not fit what is left of that page
         self.assertIn("TOTAL 220 employees in 2 units", pages[-1])
+
+
+class OwnerColumnTests(_World):
+    """The owner's columns (2026-11-05)."""
+
+    def test_the_days_add_up_to_the_month(self):
+        for row in data_rows(self.get()):
+            self.assertAlmostEqual(row["present"] + row["cl"] + row["hd"], row["totalDays"], 2, row["code"])
+            self.assertEqual(row["companyDays"], len(WORKING), row["code"])  # 26 company days in April (no Sundays)
+            self.assertAlmostEqual(row["totalDays"] + row["lop"], row["companyDays"], 2, row["code"])
+            self.assertEqual(row["basic"] * 2, row["total"], row["code"])
+            self.assertAlmostEqual(row["basic"] + row["otherSalary"], row["total"], 2, row["code"])
+            self.assertAlmostEqual(
+                row["pf"] + row["esi"] + row["tds"] + row["advance"] + row["others"], row["totalDeduction"], 2
+            )
+            self.assertAlmostEqual(row["eSalary"] - row["totalDeduction"], row["net"], 2, row["code"])
+
+    def test_a_company_holiday_is_hd_not_present(self):
+        holiday = WORKING[5]
+        Holiday.objects.create(name="Company day", date=holiday, holiday_type="company")
+        hari = self.staff_maker("6200", "HARI", self.accounts, self.b1, "26000")
+        for d in WORKING:
+            if d != holiday:
+                day(hari, d)
+        _generate_staff_payroll(hari, MONTH, YEAR)
+        row = by_code(self.get())["6200"]
+        self.assertEqual((row["present"], row["cl"], row["lop"], row["hd"], row["totalDays"]), (25.0, 0.0, 0.0, 1.0, 26.0))
+
+    def test_the_advance_column_appears_only_with_an_advance(self):
+        with_advance = self.get()
+        self.assertIn("advance", [c["key"] for c in with_advance["columns"]])
+        self.assertIn("advance", with_advance["totals"])
+        none = self.get(branchIds=str(self.b2.id))  # Unit 2 repays no advance this month
+        self.assertEqual([c["key"] for c in none["columns"]], [k for k in KEYS if k != "advance"])
+        self.assertNotIn("advance", none["totals"])
+        ws = load_workbook(io.BytesIO(self.export("xlsx", branchIds=str(self.b2.id)).content)).active
+        self.assertNotIn("Advance", [c.value for c in ws[HEADER_ROW]])
+        labels = [c.value for c in ws[HEADER_ROW]]
+        self.assertEqual(labels[labels.index("TDS") + 1], "Others")  # PF, ESI, TDS, Others, Total Deduction
+        self.assertEqual(labels[labels.index("PF") : labels.index("NET")], ["PF", "ESI", "TDS", "Others", "Total Deduction"])
