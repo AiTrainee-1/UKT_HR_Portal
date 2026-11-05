@@ -890,6 +890,12 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     }
 
     # 10. Upsert Payroll record
+    # A payroll HR marked Cleared ("I verified this employee's salary") STAYS Cleared when the month is generated again
+    # (owner 2026-11-05): the verification is kept independently of regeneration; only the figures are worked out again.
+    # Before, every run saved "pending" and the Mark as Cleared button came back.
+    cleared = Payroll.objects.filter(
+        employee=emp, month=month, year=year, week_number=None, status=Payroll.STATUS_PAID
+    ).exists()
     payroll, _ = Payroll.objects.update_or_create(
         employee=emp, month=month, year=year, week_number=None,
         defaults=dict(
@@ -907,7 +913,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             tds_percent=statutory.tds_percent,
             bonus=Decimal("0"),
             final_salary=net_salary,
-            status="pending",
+            status=Payroll.STATUS_PAID if cleared else Payroll.STATUS_PENDING,
             notes=(
                 f"Staff monthly: {present_count} present + {paid_leave_count} paid leave "
                 f"+ {holiday_count} paid holidays = {float(paid_days)} paid days / {company_days} days "

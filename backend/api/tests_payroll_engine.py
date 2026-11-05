@@ -815,6 +815,28 @@ class StaffPayrollTests(TestCase):
         self.assertEqual(b["earnings"]["grossSalary"], 24000.0)
         self.assertEqual(b["netSalary"], 24000.0)
 
+    def test_regenerating_keeps_a_cleared_payroll_cleared(self):
+        # owner 2026-11-05: Mark as Cleared = "I verified this salary"; generating the month again keeps it (the figures
+        # are worked out again), however many times
+        emp, other = _staff(), _staff("PAY_S2")
+        _present_all(emp)
+        _present_all(other)
+        first = self._run(emp)["payroll"]
+        self._run(other)
+        Payroll.objects.filter(pk=first.pk).update(status=Payroll.STATUS_PAID)
+        for _ in range(3):
+            again = self._run(emp)["payroll"]
+            self.assertEqual(again.pk, first.pk)
+            self.assertEqual(Payroll.objects.get(pk=first.pk).status, Payroll.STATUS_PAID)
+            self._run(other)
+            self.assertEqual(
+                Payroll.objects.get(employee=other).status, Payroll.STATUS_PENDING
+            )  # not verified: pending
+        # the figures still follow the attendance: a day changed after clearing is picked up, the status stays
+        AttendanceDayRecord.objects.filter(employee=emp, date=WORKING_DAYS[0]).update(status="absent", shifts_earned=0)
+        p = self._run(emp)["payroll"]
+        self.assertEqual((p.status, p.final_salary), (Payroll.STATUS_PAID, Decimal("23000.00")))
+
     def test_regeneration_keeps_the_advance_deduction(self):
         # Fixed 2026-11-05 (pinned as a known defect 2026-09-24): generation marks the month's repayments processed,
         # and the lookup used to take unprocessed ones only, so re-running the same month (e.g. after correcting an

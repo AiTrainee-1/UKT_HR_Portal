@@ -26,8 +26,8 @@ import { existingPayroll, yearOptions } from "./logic";
 
 /**
  * "Generate Staff Payroll": picks the month, says what the run will do and which rules it will use, warns when payroll
- * already exists for that month (a run recomputes every active staff member, and a record that was marked Paid goes back
- * to Pending), and can check beforehand who would be skipped. The run itself is the same fire-and-forget request as
+ * already exists for that month (a run recomputes every active staff member; a record marked Cleared stays Cleared, owner
+ * 2026-11-05), and can check beforehand who would be skipped. The run itself is the same fire-and-forget request as
  * before (PayrollGenerationContext owns it, so it keeps going after this dialog closes).
  */
 export function GenerateDialog({
@@ -191,7 +191,10 @@ export function GenerateDialog({
                 </p>
                 <p>
                   Generating again recomputes every active staff employee
-                  {found.paid > 0 ? " and puts the records marked Cleared back to Pending" : ""}.
+                  {found.paid > 0
+                    ? `; the ${found.paid} record${found.paid === 1 ? "" : "s"} marked Cleared stay Cleared (their figures are worked out again)`
+                    : ""}
+                  .
                 </p>
                 {needsConfirm && (
                   <label className="mt-1 flex cursor-pointer items-center gap-2 font-semibold">
