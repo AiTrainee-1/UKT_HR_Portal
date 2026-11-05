@@ -17,7 +17,11 @@ headers"):
     designations may wrap, numbers never do. Amounts carry no ₹ on every cell (the title band says "Amounts in ₹"), zeros
     are grey so the real figures stand out, and the padding, margins and header block are tight.
 
-Then the notes, and the PF, ESI & TDS details on a page of their own, unit by unit the same way.
+After the TOTAL (owner 2026-11-05): five summary cards (Total Employees, Fixed Salary, Earned Salary, Detection Amount =
+the Late Detection + Permission deduction, Net Pay), then a signature block with room to sign above Prepared By, Checked
+By, HRM, Auditor and MD (the cards and the signatures stay on one page together), then the PF, ESI & TDS details on a
+page of their own, unit by unit the same way, at the very end. The files print no explanatory notes (the screen still
+shows them).
 
 Excel: the company block, title and filters as every other export, then the same lines: a merged band per unit, the
 department headings, rows, sub totals, unit totals and the TOTAL, with the same blank rows. The Unit column (the last) is filled on every line of a
@@ -50,6 +54,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
+    KeepTogether,
     PageBreak,
     PageTemplate,
     Paragraph,
@@ -62,6 +67,7 @@ from reportlab.platypus import Image as RLImage
 from ..branding import company
 from ..export_pdf import (
     BRAND,
+    BRAND_SOFT,
     GRID,
     INK,
     MUTED,
@@ -75,6 +81,9 @@ from ..export_pdf import (
 from ..export_xlsx import build_xlsx, safe_cell, sheet_title, typed_value
 from ..formatting import display_date, indian_number
 from ..types import CURRENCY, DATE, DATETIME, DURATION, HOURS, INTEGER, MINUTES, NUMBER, PERCENT, TIME, ColumnSpec
+
+# Signed at the end of the statement, left to right (owner 2026-11-05)
+SIGNATURES = ("Prepared By", "Checked By", "HRM", "Auditor", "MD")
 
 # The Report Log's unit band (late.ts UNIT_BAND_COLORS)
 UNIT_BG = colors.HexColor("#E0E7FF")
@@ -176,6 +185,19 @@ def section_lines(section, blocks, sum_keys) -> list[Line]:
         count = len(section.rows)
         lines.append(Line(GRAND, values=section.totals, text=_grand_label(count, len(units)), count=count))
     return _with_gaps(lines)
+
+
+def summary_figures(out, blocks) -> list[tuple[str, float, str]]:
+    """The five cards under the statement: (label, value, column type). Detection Amount is the Others column's total, the
+    Late Detection + Permission deduction."""
+    totals = out.totals or {}
+    return [
+        ("Total Employees", sum(b.count for b in blocks), INTEGER),
+        ("Fixed Salary", totals.get("total") or 0, CURRENCY),
+        ("Earned Salary", totals.get("eSalary") or 0, CURRENCY),
+        ("Detection Amount", totals.get("others") or 0, CURRENCY),
+        ("Net Pay", totals.get("net") or 0, CURRENCY),
+    ]
 
 
 def _band_text(line: Line) -> str:
@@ -543,6 +565,49 @@ def _header(out, avail, regular, bold, rupee_ok, base_style) -> list:
     return story
 
 
+def _closing(out, blocks, avail, bold, rupee_ok, base_style) -> list:
+    """The five summary cards and, under them, the signature boxes: kept together on one page."""
+    s_label = base_style("cl", fontSize=8.5, leading=11, textColor=MUTED)
+    s_value = base_style("cv", fontName=bold, fontSize=14, leading=17, textColor=BRAND)
+    cards = []
+    for label, value, kind in summary_figures(out, blocks):
+        if kind == INTEGER:
+            text = indian_number(float(value), 0)
+        else:
+            text = ("₹ " if rupee_ok else "Rs. ") + indian_number(float(value))
+        cards.append([Paragraph(escape(label), s_label), Paragraph(escape(text), s_value)])
+    strip = Table([cards], colWidths=[avail / len(cards)] * len(cards))
+    strip.setStyle(
+        TableStyle(
+            [
+                ("BOX", (0, 0), (-1, -1), 0.6, GRID),
+                ("INNERGRID", (0, 0), (-1, -1), 0.6, GRID),
+                ("BACKGROUND", (0, 0), (-1, -1), BRAND_SOFT),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 9),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]
+        )
+    )
+
+    # the signatures: room to sign, then a line with the title under it; a gap between two lines
+    s_sign = base_style("sg", fontName=bold, fontSize=10, leading=13, alignment=TA_CENTER)
+    gap = 1.4 * cm
+    width = (avail - gap * (len(SIGNATURES) - 1)) / len(SIGNATURES)
+    widths, labels, cmds = [], [], [("TOPPADDING", (0, 1), (-1, 1), 4)]
+    for i, title in enumerate(SIGNATURES):
+        if i:
+            widths.append(gap)
+            labels.append("")
+        cmds.append(("LINEABOVE", (len(widths), 1), (len(widths), 1), 0.9, INK))
+        widths.append(width)
+        labels.append(Paragraph(escape(title), s_sign))
+    signatures = Table([[""] * len(widths), labels], colWidths=widths, rowHeights=[2.2 * cm, None])
+    signatures.setStyle(TableStyle(cmds))
+    return [KeepTogether([Spacer(1, 18), strip, Spacer(1, 10), signatures])]
+
+
 def statement_pdf(out, blocks) -> bytes:
     """The Salary Statement PDF, unit by unit (see the module docstring). Without the run's units (or for a list cut short
     by the row limit) the framework's own table is printed instead."""
@@ -560,7 +625,6 @@ def statement_pdf(out, blocks) -> bytes:
         values.update(kw)
         return ParagraphStyle(name, **values)
 
-    s_note = base_style("n", fontSize=8, leading=10, textColor=MUTED)
     cols = [c for c in out.columns if c.key != "unit"]
     story = _header(out, avail, regular, bold, rupee_ok, base_style)
     lines = statement_lines(blocks, SUM_KEYS, out.totals)
@@ -568,8 +632,8 @@ def statement_pdf(out, blocks) -> bytes:
         story += _table(cols, lines, SUM_KEYS, avail, regular, bold, base_style)
     else:
         story.append(Paragraph("No records match the selected filters.", base_style("e", fontSize=10, leading=13)))
-    for note in out.notes:
-        story += [Spacer(1, 2), Paragraph(escape(note), s_note)]
+    # no explanatory notes in the file (owner 2026-11-05); the summary cards and the signatures close the statement
+    story += _closing(out, blocks, avail, bold, rupee_ok, base_style)
 
     for section in out.sections:
         story.append(PageBreak())
@@ -601,8 +665,6 @@ def statement_pdf(out, blocks) -> bytes:
             story += _table(s_cols, s_lines, STATUTORY_SUM_KEYS, avail, regular, bold, base_style)
         else:
             story.append(Paragraph(escape(section.empty), base_style("se", fontSize=10, leading=13, textColor=MUTED)))
-        for note in section.notes:
-            story += [Spacer(1, 2), Paragraph(escape(note), s_note)]
 
     buf = io.BytesIO()
     doc = BaseDocTemplate(
@@ -764,6 +826,59 @@ class _Sheet:
             if line.kind == GRAND:
                 ws.cell(row=r, column=1).alignment = Alignment(horizontal="left", vertical="center")
 
+    def _spans(self, parts: int) -> list[tuple[int, int]]:
+        """The statement's columns (not Unit) shared out into `parts` runs: [(first, last)], 1-based."""
+        count = self.n - (1 if self.unit_col else 0)
+        out, start = [], 1
+        for i in range(parts):
+            size = count // parts + (1 if i < count % parts else 0)
+            out.append((start, start + size - 1))
+            start += size
+        return out
+
+    def closing(self, figures, row: int) -> int:
+        """The five summary cards from `row` on, then the signature boxes. Returns the last row written."""
+        ws = self.ws
+        thin = Side(style="thin", color=X_GRID)
+        f_label = Font(name="Calibri", size=10, color="666666")
+        f_value = Font(name="Calibri", size=14, bold=True, color=X_BRAND)
+        for (first, last), (label, value, kind) in zip(self._spans(len(figures)), figures):
+            for r, text, font in ((row, label, f_label), (row + 1, value, f_value)):
+                cell = ws.cell(row=r, column=first, value=text)
+                cell.font = font
+                cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+                if r == row + 1:
+                    cell.number_format = "#,##0" if kind == INTEGER else X_MONEY
+                for c in range(first, last + 1):
+                    piece = ws.cell(row=r, column=c)
+                    piece.fill = self.fill["soft"]
+                    piece.border = Border(
+                        left=thin if c == first else None,
+                        right=thin if c == last else None,
+                        top=thin if r == row else None,
+                        bottom=thin if r == row + 1 else None,
+                    )
+                if last > first:
+                    ws.merge_cells(start_row=r, start_column=first, end_row=r, end_column=last)
+        ws.row_dimensions[row].height = 18
+        ws.row_dimensions[row + 1].height = 28
+
+        # room to sign, then each title over its own line (the run's last column is the gap to the next one)
+        sign_row = row + 5
+        ws.row_dimensions[sign_row - 1].height = 52
+        line = Side(style="medium", color="111827")
+        for (first, last), title in zip(self._spans(len(SIGNATURES)), SIGNATURES):
+            end = last - 1 if last - first >= 2 else last
+            cell = ws.cell(row=sign_row, column=first, value=title)
+            cell.font = Font(name="Calibri", size=11, bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="top")
+            for c in range(first, end + 1):
+                ws.cell(row=sign_row, column=c).border = Border(top=line)
+            if end > first:
+                ws.merge_cells(start_row=sign_row, start_column=first, end_row=sign_row, end_column=end)
+        ws.row_dimensions[sign_row].height = 20
+        return sign_row
+
     def widths(self, lines):
         for i, c in enumerate(self.cols, start=1):
             words = max((len(w) for w in c.label.split()), default=4)
@@ -845,10 +960,8 @@ def statement_xlsx(out, blocks) -> bytes:
     last_row = ws.max_row
     if not lines:
         sheet.text_row("No records match the selected filters.", sheet.f_note, merge=False)
-    if out.notes:
-        ws.append([])
-        for note in out.notes:
-            sheet.text_row(note, sheet.f_note, merge=False)
+    # no explanatory notes (owner 2026-11-05): two empty rows, the summary cards, then the signatures
+    sheet.closing(summary_figures(out, blocks), ws.max_row + 3)
     ws.freeze_panes = f"D{header_row + 1}"
     _print_setup(ws, header_row, last_row, len(cols), f"{co.name} - {out.spec.title}")
 
@@ -879,10 +992,6 @@ def statement_xlsx(out, blocks) -> bytes:
         s_last = sws.max_row
         if not s_lines:
             s_sheet.text_row(section.empty, s_sheet.f_note, merge=False)
-        if section.notes:
-            sws.append([])
-            for note in section.notes:
-                s_sheet.text_row(note, s_sheet.f_note, merge=False)
         sws.freeze_panes = f"D{s_header + 1}"
         _print_setup(sws, s_header, s_last, len(s_cols), f"{co.name} - {section.title}")
 

@@ -596,7 +596,9 @@ class ExportTests(_World):
         cells = " ".join(str(c.value) for rw in ws.iter_rows() for c in rw if c.value is not None)
         self.assertIn("April 2026", cells)  # the filter echo in the sheet header
         self.assertIn("Amounts in ₹", cells)
-        self.assertIn("Basic Salary is 50% of it and Other Allowance the other 50%", cells)
+        # no explanations in the file (owner 2026-11-05): the screen keeps them
+        self.assertNotIn("Basic Salary is 50% of it", cells)
+        self.assertNotIn("Salary Statement From", cells)
 
     def test_the_excel_filters_by_unit_and_prints_a3_one_page_wide(self):
         ws = load_workbook(io.BytesIO(self.export("xlsx").content)).active
@@ -674,10 +676,11 @@ class ExportTests(_World):
             self.assertIn(line, text)
         self.assertIn("TOTAL 7 employees in 2 units", text)
         self.assertIn("Amounts in ₹", text)
-        # the title band, then straight away the column headers: no summary cards
-        for card in ("Employees listed", "Total Salary ₹", "Earned Salary ₹", "Net Pay"):
-            self.assertNotIn(card, text, card)
-        self.assertLess(text.index("SALARY STATEMENT"), text.index("SNO"))
+        # the title band, then straight away the column headers: no summary cards above the table (they close it)
+        head = text[: text.index("SNO")]
+        for card in ("Employees listed", "Total Employees", "Fixed Salary", "Net Pay"):
+            self.assertNotIn(card, head, card)
+        self.assertLess(text.index("TOTAL 7 employees"), text.index("Total Employees"))
         self.assertNotIn("₹ 28,", text)  # amounts carry no ₹ on every cell
         # a seven-line statement gets the largest type (it used to be 6 pt for any statement)
         self.assertTrue(name)
@@ -861,7 +864,7 @@ class StatutorySectionTests(TestCase):
         self.assertAlmostEqual(total["TDS"], divya["TDS"], 2)
         self.assertAlmostEqual(total["PF + ESI + TDS"], kavin["PF"] + kavin["ESI"] + divya["TDS"], 2)
         notes = " ".join(str(v[0]) for v in values if v and isinstance(v[0], str))
-        self.assertIn("2 of the 3 employees on this statement have PF, ESI or TDS: 1 in Co Emp", notes)
+        self.assertNotIn("2 of the 3 employees on this statement have PF, ESI or TDS", notes)  # no notes in the files
 
     def test_the_section_agrees_with_the_statements_own_columns(self):
         wb = load_workbook(io.BytesIO(self.export("xlsx").content))
@@ -1002,7 +1005,8 @@ class ContinuedBandTests(TestCase):
         self.assertIn("U-1001", pages[first])
         later = [p for p in pages[first + 1 :] if "U-1" in p and "(contd.)" in p]
         self.assertTrue(later)  # 70 people do not fit what is left of that page
-        self.assertIn("TOTAL 220 employees in 2 units", pages[-1])
+        self.assertIn("TOTAL 220 employees in 2 units", " ".join(pages))
+        self.assertIn("Prepared By", pages[-1])  # the cards and the signatures close the statement
 
 
 class OwnerColumnTests(_World):
@@ -1043,3 +1047,58 @@ class OwnerColumnTests(_World):
         labels = [c.value for c in ws[HEADER_ROW]]
         self.assertEqual(labels[labels.index("TDS") + 1], "Others")  # PF, ESI, TDS, Others, Total Deduction
         self.assertEqual(labels[labels.index("PF") : labels.index("NET")], ["PF", "ESI", "TDS", "Others", "Total Deduction"])
+
+
+class ClosingTests(_World):
+    """Under the statement (owner 2026-11-05): no explanations, five summary cards, the signature boxes, then the PF, ESI &
+    TDS details at the very end."""
+
+    def test_the_pdf_ends_with_the_cards_the_signatures_then_the_pf_esi_tds_details(self):
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(self.export("pdf").content))
+        pages = [re.sub(r"\s+", " ", p.extract_text().replace("\xa0", " ")) for p in reader.pages]
+        text = " ".join(pages)
+        body = self.get()
+        totals = body["totals"]
+        self.assertNotIn("Salary Statement From", text)
+        self.assertNotIn("Basic Salary is 50% of it", text)
+        order = ["TOTAL 7 employees in 2 units", "Total Employees", "Fixed Salary", "Earned Salary", "Detection Amount",
+                 "Net Pay", "Prepared By", "Checked By", "HRM", "Auditor", "MD", "PF, ESI & TDS DETAILS"]  # fmt: skip
+        at = [text.index(word, text.index("TOTAL 7 employees")) for word in order]
+        self.assertEqual(at, sorted(at), order)
+        self.assertIn("PF, ESI & TDS DETAILS", pages[-1])
+        self.assertNotIn("Prepared By", pages[-1])  # the details are on a page of their own, after the signatures
+        from .reporting.formatting import indian_number
+
+        for value in (totals["total"], totals["eSalary"], totals["others"], totals["net"]):
+            self.assertIn(f"₹ {indian_number(value)}", text)
+
+    def test_the_excel_ends_with_the_cards_and_the_signatures(self):
+        wb = load_workbook(io.BytesIO(self.export("xlsx").content))
+        ws = wb.active
+        total_row = next(r for r in range(1, ws.max_row + 1) if ws.cell(row=r, column=1).value == "TOTAL")
+        cells = {}  # what is written under the TOTAL (the column headers above share some words)
+        for row in ws.iter_rows(min_row=total_row + 1):
+            for c in row:
+                if c.value is not None:
+                    cells.setdefault(c.value, c)
+        totals = self.get()["totals"]
+        labels = ["Total Employees", "Fixed Salary", "Earned Salary", "Detection Amount", "Net Pay"]
+        rows = {cells[label].row for label in labels}
+        self.assertEqual(len(rows), 1)  # one line of cards ...
+        card_row = rows.pop()
+        self.assertEqual(card_row, total_row + 3)  # ... after two empty rows
+        values = [ws.cell(row=card_row + 1, column=cells[label].column).value for label in labels]
+        self.assertEqual(values[0], 7)
+        for got, want in zip(values[1:], (totals["total"], totals["eSalary"], totals["others"], totals["net"])):
+            self.assertAlmostEqual(got, want, 2)
+        signs = ["Prepared By", "Checked By", "HRM", "Auditor", "MD"]
+        self.assertEqual({cells[s].row for s in signs}, {card_row + 5})
+        self.assertEqual([cells[s].column for s in signs], sorted(cells[s].column for s in signs))
+        self.assertGreaterEqual(ws.row_dimensions[card_row + 4].height, 40)  # room to sign above the titles
+        self.assertEqual(cells["Prepared By"].border.top.style, "medium")
+        self.assertEqual(ws.auto_filter.ref.split(":")[1][1:], str(total_row))  # the filter stops at the TOTAL
+        self.assertEqual(wb.sheetnames[-1], "PF ESI TDS")  # the details stay last
+        text = " ".join(str(v) for v in cells)
+        self.assertNotIn("Salary Statement From", text)
