@@ -666,22 +666,32 @@ test("a photo saved again replaces the one on show, without reloading the page",
     await page.getByTestId("photo-capture-button").click();
     await expect(page.getByTestId("photo-preview")).toBeVisible();
   };
-  await page.getByTestId("push-edit-DC1001").click();
-  await capture();
-  await page.getByTestId("user-submit").click();
-  await expect(page.getByTestId("user-dialog")).toBeHidden();
-  const photo = row(page, "DC1001").getByTestId("person-photo");
-  await expect(photo).toBeVisible();
-  const first = await photo.getAttribute("src");
-  expect(first).toMatch(/^blob:/);
+  // The server answers a saved photo with its signed link (no token needed, app health audit 2026-11-05); the link
+  // carries the picture's digest, so a different picture gets a different link. The row must show the link of the
+  // photo just saved, without reloading the page. (Two captures of the fake camera can be the same picture, and then
+  // the same link: comparing with what the server answered, not with the previous link, is what proves the update.)
+  const save = async () => {
+    const saved = page.waitForResponse(
+      (r) => r.request().method() === "POST" && /\/employees\/\d+\/photo$/.test(new URL(r.url()).pathname),
+    );
+    await page.getByTestId("user-submit").click();
+    const { photoUrl } = (await (await saved).json()) as { photoUrl: string };
+    expect(photoUrl).toMatch(/\/api\/employees\/\d+\/photo\?v=[0-9a-f]+&s=[0-9a-f]+$/);
+    await expect(page.getByTestId("user-dialog")).toBeHidden();
+    return photoUrl;
+  };
+  const shown = () => row(page, "DC1001").getByTestId("person-photo");
 
   await page.getByTestId("push-edit-DC1001").click();
   await capture();
-  await page.getByTestId("user-submit").click();
-  await expect(page.getByTestId("user-dialog")).toBeHidden();
-  await expect
-    .poll(async () => await row(page, "DC1001").getByTestId("person-photo").getAttribute("src"))
-    .not.toBe(first);
+  const first = await save();
+  await expect(shown()).toBeVisible();
+  await expect.poll(async () => await shown().getAttribute("src")).toBe(first);
+
+  await page.getByTestId("push-edit-DC1001").click();
+  await capture();
+  const second = await save();
+  await expect.poll(async () => await shown().getAttribute("src")).toBe(second);
 });
 
 test("the search waits for a pause in typing, then narrows the list", async ({ page }) => {
