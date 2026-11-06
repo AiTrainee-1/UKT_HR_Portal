@@ -1203,6 +1203,6 @@ def idcard_whatsapp(request: Request) -> Response:
         body_params=[idcard["name"]], mime_type="image/png",
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
-    if log.status != "sent":
+    if not whatsapp_service.accepted(log):
         return Response({"error": log.error_message}, status=400)
-    return Response({"ok": True, "sentTo": log.phone_number})
+    return Response({"ok": True, "sentTo": log.phone_number, "status": log.status, "queued": log.status == "queued"})

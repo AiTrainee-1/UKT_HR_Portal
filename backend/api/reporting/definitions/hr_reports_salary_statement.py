@@ -21,7 +21,8 @@ rounded, and the payroll's own figures are untouched (the files print what payro
 
 Only employees that HAVE a generated staff payroll for the month are listed. Nobody is invented for an employee payroll
 has not been run for: the notes say how many active staff in scope have none yet. Production pay is paid per pay cycle,
-has its own columns and stays on Production Payroll > Salary Statement.
+has its own columns and its own report in the same printed format: hr-production-salary-statement
+(``hr_reports_production_statement``), which reuses the unit blocks, the PF / ESI / TDS section and the files here.
 
 Salary and deductions are printed, so the report is gated on the ``payroll`` module exactly like the statement endpoint.
 
@@ -237,9 +238,12 @@ def unit_of(emp) -> tuple[str, str, str | None]:
     return str(emp.branch_id), unit_label(branch) or OTHER_UNIT, branch.name
 
 
-def unit_blocks(payrolls: list, values: dict[int, dict]) -> list[UnitBlock]:
+def unit_blocks(
+    payrolls: list, values: dict[int, dict], sum_keys=SUM_KEYS, group_columns=_GROUP_COLUMNS
+) -> list[UnitBlock]:
     """The payrolls unit by unit (the head office first, the units in name order, no unit last), each unit's departments
-    grouped and numbered as the printed statement does."""
+    grouped and numbered as the printed statement does. `sum_keys` / `group_columns`: the statement's own (the Production
+    Salary Statement passes its columns)."""
     members: dict[str, list] = {}
     heads: dict[str, tuple[str, str | None]] = {}
     for p in payrolls:
@@ -248,9 +252,9 @@ def unit_blocks(payrolls: list, values: dict[int, dict]) -> list[UnitBlock]:
         heads[key] = (label, branch)
     blocks = []
     for key in sorted(members, key=lambda k: unit_sort_key(k, *heads[k])):
-        groups = _merge_same_names(_groups(members[key], values, _GROUP_COLUMNS), members[key])
+        groups = _merge_same_names(_groups(members[key], values, group_columns), members[key])
         rows = [r["values"] for g in groups for r in g["rows"]]
-        total = {k: round(sum(r.get(k) or 0 for r in rows), 2) for k in SUM_KEYS}
+        total = {k: round(sum(r.get(k) or 0 for r in rows), 2) for k in sum_keys}
         label, branch = heads[key]
         blocks.append(UnitBlock(key, label, branch, groups, len(rows), total))
     return blocks
@@ -281,7 +285,7 @@ def _merge_same_names(groups: list[dict], payrolls: list) -> list[dict]:
     return out
 
 
-def statement_lines(blocks: list[UnitBlock]) -> list[dict]:
+def statement_lines(blocks: list[UnitBlock], sum_keys=SUM_KEYS) -> list[dict]:
     """The report's rows: per unit its band, then per department the heading, the rows and the Sub total, then the unit's
     total (left out when there is one unit: it would repeat the grand total). Every line carries the unit's label."""
     rows: list[dict] = []
@@ -296,7 +300,7 @@ def statement_lines(blocks: list[UnitBlock]) -> list[dict]:
             for line in with_subtotals(
                 body,
                 group_by=lambda _r, band=band: band,
-                sum_keys=SUM_KEYS,
+                sum_keys=sum_keys,
                 label_key="name",
                 label=lambda g: f"{g} Sub total",
             ):
@@ -331,6 +335,9 @@ STATUTORY_COLUMNS = (
 )
 STATUTORY_SUM_KEYS = ("pf", "esi", "tds", "total")
 _COVER = {"co_emp": "Co Emp", "tds": "TDS list"}
+# What PF is taken from, in the "How it was worked out" column: staff and production (pf_esi.production_statutory)
+STAFF_PF_BASIS = "Basic + DA + Retaining Allowance (prorated)"
+PRODUCTION_PF_BASIS = "the first-portion share of the period pay"
 
 
 def _num(value) -> Decimal | None:
@@ -351,11 +358,13 @@ def _plain(value: Decimal | None) -> str:
     return text
 
 
-def statutory_rows(payrolls: list, values: list[dict], slips: dict | None = None) -> list[dict]:
+def statutory_rows(
+    payrolls: list, values: list[dict], slips: dict | None = None, pf_basis: str = STAFF_PF_BASIS
+) -> list[dict]:
     """One line per employee in Co Emp or on the TDS list (or with any PF / ESI / TDS on the slip), in the statement's
     order (unit by unit), with the wages, rates and amounts the payroll stored in the slip. `values` = the statement's
     own rows (for the order and the department), keyed by payroll id. Serial numbers start from 1 in every unit, as on the
-    statement. One query (the slips) unless they are given."""
+    statement. One query (the slips) unless they are given. `pf_basis`: what PF is a percentage of (staff / production)."""
     slips = slips_for(payrolls) if slips is None else slips
     by_id = {p.id: p for p in payrolls}
     out = []
@@ -393,9 +402,8 @@ def statutory_rows(payrolls: list, values: list[dict], slips: dict | None = None
 
         how = []
         if category == "co_emp":
-            basis = "Basic + DA + Retaining Allowance (prorated)"
             if pf_rule:
-                how.append(f"PF {_plain(pf_rate)}% of {basis}")
+                how.append(f"PF {_plain(pf_rate)}% of {pf_basis}")
             else:
                 how.append("No PF rule matched the salary")
             if esi_rule:
@@ -432,23 +440,33 @@ def statutory_rows(payrolls: list, values: list[dict], slips: dict | None = None
     return out
 
 
-def statutory_section(payrolls: list, values: list[dict], slips: dict | None = None) -> ReportSection:
-    rows = statutory_rows(payrolls, values, slips)
+def statutory_section(
+    payrolls: list, values: list[dict], slips: dict | None = None, *, production: bool = False
+) -> ReportSection:
+    """The PF, ESI & TDS details of a statement (staff, or `production` for the Production Salary Statement: PF from the
+    first-portion share of the period pay, "this period" instead of "this month")."""
+    rows = statutory_rows(payrolls, values, slips, PRODUCTION_PF_BASIS if production else STAFF_PF_BASIS)
     co_emp = sum(1 for r in rows if r["category"] == "Co Emp")
     tds_list = sum(1 for r in rows if r["category"] == "TDS list")
     totals = {k: round(sum(r[k] for r in rows), 2) for k in STATUTORY_SUM_KEYS}
+    period = "period" if production else "month"
+    taken_from = (
+        "the first-portion share of the period pay (the first 50% unless the worker's salary split says otherwise), "
+        "judged on the period pay scaled to a month"
+        if production
+        else "Basic + DA + Retaining Allowance (the first portion of the salary, prorated for the days paid)"
+    )
     notes = [
         f"{len(rows)} of the {len(payrolls)} employees on this statement have PF, ESI or TDS: {co_emp} in Co Emp "
         f"(Employees > Co Emp) and {tds_list} on the TDS list. Everybody else has none, so their ESI, PF and TDS "
         "columns on the statement are 0.",
-        "PF and ESI are taken from Co Emp employees only, by the rules of Settings > PF & ESI, from Basic + DA + Retaining "
-        "Allowance (the first portion of the salary, prorated for the days paid). TDS is taken from employees on the TDS "
-        "list only: their TDS percentage of the pay earned.",
+        f"PF and ESI are taken from Co Emp employees only, by the rules of Settings > PF & ESI, from {taken_from}. TDS is "
+        "taken from employees on the TDS list only: their TDS percentage of the pay earned.",
         "The figures are the ones payroll saved when it was generated. A change to Co Emp, the TDS list or the rules shows "
-        "here only after the month's payroll is generated again.",
+        f"here only after the {period}'s payroll is generated again.",
     ]
     if not any(r["tds"] for r in rows) and not tds_list:
-        notes.append("No employee is on the TDS list for this month, so no TDS was deducted.")
+        notes.append(f"No employee is on the TDS list for this {period}, so no TDS was deducted.")
     return ReportSection(
         title=STATUTORY_TITLE,
         columns=STATUTORY_COLUMNS,
@@ -456,7 +474,8 @@ def statutory_section(payrolls: list, values: list[dict], slips: dict | None = N
         totals=totals if rows else None,
         notes=notes,
         sheet="PF ESI TDS",
-        empty="No employee on this statement is in Co Emp or on the TDS list, so nobody has PF, ESI or TDS this month.",
+        empty="No employee on this statement is in Co Emp or on the TDS list, so nobody has PF, ESI or TDS this "
+        f"{period}.",
     )
 
 

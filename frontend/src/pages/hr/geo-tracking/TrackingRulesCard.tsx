@@ -44,6 +44,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { Field, ToggleField } from "@/pages/hr/settings/kit/Field";
 import { SaveBar } from "@/pages/hr/settings/kit/SaveBar";
+import DecisionDialog from "./DecisionDialog";
 import { fmtDateTime } from "./logic";
 import {
   NOTICE_MAX_CHARS,
@@ -111,6 +112,8 @@ export default function TrackingRulesCard() {
   const [form, setForm] = useState<RulesForm | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
   const [confirmPhotos, setConfirmPhotos] = useState(false);
+  // switching geo-tracking off for everyone is asked first (it stops every journey being recorded)
+  const [confirmOff, setConfirmOff] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const baseline = useRef<RulesForm | null>(null);
 
@@ -467,7 +470,13 @@ export default function TrackingRulesCard() {
             <SaveBar
               dirty={dirty}
               saving={update.isPending}
-              onSave={() => (needsPhotoConfirm(form, saved) ? setConfirmPhotos(true) : void save())}
+              onSave={() =>
+                saved.enabled && !form.enabled
+                  ? setConfirmOff(true)
+                  : needsPhotoConfirm(form, saved)
+                    ? setConfirmPhotos(true)
+                    : void save()
+              }
               onDiscard={() => {
                 setServerError(null);
                 setForm(toForm(saved));
@@ -479,6 +488,29 @@ export default function TrackingRulesCard() {
           </div>
         )}
       </CardContent>
+
+      <DecisionDialog
+        open={confirmOff}
+        onOpenChange={setConfirmOff}
+        tone="reject"
+        title="Switch geo-tracking off?"
+        confirmLabel="Switch it off"
+        description={
+          <>
+            <p>
+              The phones stop recording On-Duty journeys as soon as they next hear from the server: no new routes, stops
+              or live positions until it is switched on again.
+            </p>
+            <p>Journeys recorded so far, their maps and their reports are kept.</p>
+          </>
+        }
+        onConfirm={() => {
+          setConfirmOff(false);
+          if (needsPhotoConfirm(form, saved)) setConfirmPhotos(true);
+          else void save();
+        }}
+        testId="rules-off-confirm"
+      />
 
       <AlertDialog open={confirmPhotos} onOpenChange={setConfirmPhotos}>
         <AlertDialogContent>

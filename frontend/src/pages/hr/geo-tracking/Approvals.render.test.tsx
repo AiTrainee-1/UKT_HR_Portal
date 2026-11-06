@@ -3,8 +3,10 @@ import GeoAttendance from "../GeoAttendance";
 import { resetMap } from "./leafletMock";
 import {
   all,
+  apiError,
   buttonNamed,
   click,
+  clickId,
   css,
   installBrowserStubs,
   installWorld,
@@ -13,6 +15,7 @@ import {
   q,
   settle,
   text,
+  typeInto,
   unmount,
   waitFor,
   type Raw,
@@ -176,17 +179,57 @@ describe("On-Duty Approvals", () => {
     expect(text(q("approvals-count"))).toBe("2 pending requests");
   });
 
-  it("sends the decision the button says, and says what happened", async () => {
-    sessions.pending = [session(1, { approval: approval() })];
+  it("asks first, then sends the decision the button says (with the note), and says what happened", async () => {
+    sessions.pending = [session(1, { approval: approval(), isProvisional: true, pendingPunchCount: 2 })];
     await open();
     await waitFor(() => cards().length === 1, "the request");
     click(buttonNamed("Approve"));
+    await waitFor(() => q("approval-confirm") !== null, "the confirmation");
+    expect(text(q("approval-confirm"))).toContain("Approve this On-Duty request?");
+    expect(text(q("approval-confirm"))).toContain("Employee 1 (E1) may work at");
+    expect(patches).toHaveLength(0); // nothing is sent before the confirmation
+    clickId("approval-confirm-confirm");
     await waitFor(() => patches.length === 1, "the decision");
     expect(patches[0]).toEqual({ url: "/api/on-duty-sessions/1/status", body: { status: "approved" } });
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Session approved" }));
+    // a rejection says what it voids, and carries the note typed in the dialog
     click(buttonNamed("Reject"));
+    await waitFor(() => q("approval-confirm") !== null, "the second confirmation");
+    expect(text(q("approval-confirm"))).toContain("2 punches recorded under it are voided");
+    typeInto(q("approval-confirm-comment") as HTMLTextAreaElement, "Not a client visit");
+    clickId("approval-confirm-confirm");
     await waitFor(() => patches.length === 2, "the second decision");
-    expect(patches[1].body).toEqual({ status: "rejected" });
+    expect(patches[1].body).toEqual({ status: "rejected", comment: "Not a client visit" });
+  });
+
+  it("sends nothing when the confirmation is cancelled", async () => {
+    sessions.pending = [session(1, { approval: approval() })];
+    await open();
+    await waitFor(() => cards().length === 1, "the request");
+    click(buttonNamed("Reject"));
+    await waitFor(() => q("approval-confirm") !== null, "the confirmation");
+    clickId("approval-confirm-cancel");
+    await settle(10);
+    expect(q("approval-confirm")).toBeNull();
+    expect(patches).toHaveLength(0);
+  });
+
+  it("says so, with a way to try again, when the requests cannot be loaded", async () => {
+    let failing = true;
+    const base = h.fetch.getMockImplementation()!;
+    h.fetch.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (failing && url.startsWith("/api/on-duty-sessions?status=")) {
+        throw apiError(500, { error: "The server is busy." });
+      }
+      return base(url, options);
+    });
+    await open();
+    await waitFor(() => q("approvals-error") !== null, "the error");
+    expect(text(q("approvals-error"))).toContain("The On-Duty requests could not be loaded.");
+    expect(text(q("approvals-error"))).toContain("The server is busy.");
+    failing = false;
+    click(buttonNamed("Try again"));
+    await waitFor(() => q("approvals-error") === null, "the retry");
   });
 
   it("offers no decision when the approval pipeline says it is not HR's turn, and says whose turn it is", async () => {
@@ -278,10 +321,15 @@ describe("Punch Verifications", () => {
     await open("?tab=verifications");
     await waitFor(() => verificationCards().length === 1, "the request");
     click(buttonNamed(/^Approve all 2/));
+    await waitFor(() => q("punch-confirm") !== null, "the confirmation");
+    expect(text(q("punch-confirm"))).toContain("Approve all 2 punches into attendance?");
+    clickId("punch-confirm-confirm");
     await waitFor(() => patches.length === 1, "the decision");
     expect(patches[0]).toEqual({ url: "/api/on-duty-sessions/50/punches", body: { status: "approved" } });
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "2 punches approved" }));
     click(buttonNamed("Reject all"));
+    await waitFor(() => q("punch-confirm") !== null, "the second confirmation");
+    clickId("punch-confirm-confirm");
     await waitFor(() => patches.length === 2, "the rejection");
     expect(patches[1].body).toEqual({ status: "rejected" });
   });
@@ -292,6 +340,9 @@ describe("Punch Verifications", () => {
     await waitFor(() => all("punch-row").length === 2, "the punches");
     const row = all("punch-row")[1];
     click([...row.querySelectorAll("button")].find((b) => text(b) === "Reject"));
+    await waitFor(() => q("punch-confirm") !== null, "the confirmation");
+    expect(text(q("punch-confirm"))).toContain("Reject this punch?");
+    clickId("punch-confirm-confirm");
     await waitFor(() => patches.length === 1, "the decision");
     expect(patches[0]).toEqual({ url: "/api/on-duty-punch-verifications/2/status", body: { status: "rejected" } });
   });

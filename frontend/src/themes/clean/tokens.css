@@ -12,7 +12,7 @@
       follows a customised primary.
    3. Radii, elevation and the page's type: one scale for the whole theme.
 
-   Everything is declared on html[data-theme="clean"]:not([data-md-theme]): outside the MD portal, only when the theme is
+   Everything is declared on html[data-theme="clean"][data-clean-theme]:not([data-md-theme]): outside the MD portal, only when the theme is
    chosen. Nothing else in the application reads a --clean-* variable. Which Tailwind colour family maps to which ramp is
    written in tailwind-remap.css.
 
@@ -21,7 +21,7 @@
    status ramps' 600 on their 50 tints and 700 on 50 over 4.5:1, input borders 4.0:1 on white, cards 1.2:1 off the page.
    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-html[data-theme="clean"]:not([data-md-theme]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) {
   color-scheme: light;
 
   /* ── 1. the app's tokens ─────────────────────────────────────────────────────────────────────────────────────── */
@@ -206,7 +206,7 @@ html[data-theme="clean"]:not([data-md-theme]) {
    of the greys (#465161, 8:1 on white). Everything that reads --border (the default border of every element, hsl(var(--border)))
    or --muted-foreground (text-muted-foreground) takes them, and so do the roles worked out from them.
    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
-html[data-theme="clean"]:not([data-md-theme]) body {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) body {
   --border: 213.6 20.6% 80.5%; /* #bfc8d6 */
   --muted-foreground: 215.6 16.2% 32.7%; /* #465161 */
   --card-border: var(--border);

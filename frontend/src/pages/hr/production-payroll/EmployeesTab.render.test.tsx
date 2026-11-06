@@ -293,15 +293,82 @@ describe("generating from the roster", () => {
     expect(h.trigger).not.toHaveBeenCalled();
   });
 
-  it("a paid payslip offers no way to generate again", async () => {
+  it("a Cleared payslip can be generated again, and the confirmation says it stays Cleared", async () => {
     world.people = [
       person(1, "Asha Worker", "PC-W1", { payroll: payroll(11, 1, "Asha Worker", "PC-W1", { status: "paid" }) }),
     ];
     await openRoster();
     expect(text(q("pcp-roster-state-PC-W1"))).toBe("Cleared");
-    expect(q("pcp-regenerate-PC-W1")).toBeNull();
     expect(q("pcp-generate-PC-W1")).toBeNull();
     expect(q("pcp-roster-details-PC-W1")).not.toBeNull();
+    expect(must("pcp-regenerate-PC-W1").getAttribute("title")).toContain("it stays Cleared");
+    click(must("pcp-regenerate-PC-W1"));
+    expect(text(must("pcp-regenerate-cleared"))).toBe(
+      "This payslip is marked Cleared and stays Cleared: only its figures are worked out again.",
+    );
+    click(must("pcp-regenerate-confirm"));
+    expect(h.trigger).toHaveBeenCalledWith({
+      cycle: "weekly",
+      periodStart: "2026-02-02",
+      periodEnd: "2026-02-08",
+      employeeIds: [1],
+      regenerate: true,
+    });
+  });
+
+  it("says which days an employee who changed pay cycle is paid, and which another payroll already paid", async () => {
+    const coverage = {
+      periodStart: "2026-02-02",
+      periodEnd: "2026-02-08",
+      periodDays: 7,
+      payDays: 4,
+      catchUpDays: 3,
+      paidDays: 7,
+      payRanges: [{ from: "2026-02-05", to: "2026-02-08" }],
+      alreadyPaid: [
+        {
+          from: "2026-02-02",
+          to: "2026-02-04",
+          payrollId: 90,
+          cycle: "monthly" as const,
+          kind: "production" as const,
+          label: "Monthly",
+          status: "paid",
+          periodStart: "2026-01-05",
+          periodEnd: "2026-02-04",
+        },
+      ],
+      catchUp: [
+        {
+          from: "2026-01-29",
+          to: "2026-01-31",
+          days: 3,
+          fromCycle: "biweekly" as const,
+          fromKind: "production" as const,
+          fromLabel: "BiWeekly",
+          afterPayrollId: 80,
+        },
+      ],
+      legacyGap: null,
+      partial: true,
+      refused: false,
+      note: "",
+    };
+    world.people = [
+      person(2, "Bala Worker", "PC-W2", { coverage }),
+      person(1, "Asha Worker", "PC-W1", { payroll: payroll(11, 1, "Asha Worker", "PC-W1"), coverage }),
+    ];
+    await openRoster();
+    expect(text(must("pcp-roster-coverage-PC-W2"))).toBe(
+      "Pays 5–8 Feb only · 2–4 Feb already paid on Monthly+ catch-up 29–31 Jan from BiWeekly",
+    );
+    click(must("pcp-regenerate-PC-W1"));
+    expect(text(must("pcp-regenerate-coverage"))).toContain(
+      "Days already paid on another payslip are not paid again: Pays 5–8 Feb only · 2–4 Feb already paid on Monthly",
+    );
+    expect(text(must("pcp-regenerate-cleared"))).toBe(
+      "A payslip marked Cleared stays Cleared when it is generated again.",
+    );
   });
 
   it("several ready employees can be generated together, and only the ready ones can be selected", async () => {

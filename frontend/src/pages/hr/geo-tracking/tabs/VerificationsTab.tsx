@@ -22,10 +22,12 @@ import {
   useUpdateOnDutySessionPunchesHR,
   type OnDutyPunchVerificationItem,
 } from "@/lib/api-client/custom-hooks";
+import DecisionDialog from "../DecisionDialog";
 import PunchPhotosDialog from "../PunchPhotos";
 import {
+  CardSkeleton,
   CountText,
-  ListSkeleton,
+  LoadError,
   Note,
   PUNCH_STATUS_LABEL,
   PUNCH_TONE,
@@ -44,7 +46,8 @@ const FILTERS: { value: Filter; label: string }[] = [
 ];
 
 const EMPTY_HINT: Record<Filter, string> = {
-  pending: "Punches with a photo and a GPS position wait here until HR approves them into attendance.",
+  pending:
+    "Nothing to check. Punches with a photo and a GPS position taken during On-Duty work wait here until HR approves them into attendance.",
   approved: "Punches HR approved appear here.",
   rejected: "Punches HR rejected appear here.",
 };
@@ -159,10 +162,16 @@ function PunchRow({
   );
 }
 
+type Asking =
+  | { kind: "one"; v: OnDutyPunchVerificationItem; status: "approved" | "rejected" }
+  | { kind: "all"; head: OnDutyPunchVerificationItem; count: number; status: "approved" | "rejected" };
+
 export default function VerificationsTab() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<Filter>("pending");
-  const { data: verifications, isLoading } = useOnDutyPunchVerificationsHR(statusFilter);
+  const { data: verifications, isLoading, isError, error, refetch } = useOnDutyPunchVerificationsHR(statusFilter);
+  // the decision HR clicked, waiting for its confirmation
+  const [asking, setAsking] = useState<Asking | null>(null);
   const updateMutation = useUpdateOnDutyPunchVerificationHR();
   const bulkMutation = useUpdateOnDutySessionPunchesHR();
   const [photoOf, setPhotoOf] = useState<OnDutyPunchVerificationItem | null>(null);
@@ -171,9 +180,9 @@ export default function VerificationsTab() {
   const groups = useMemo(() => groupBySession(verifications ?? []), [verifications]);
   const punchTotal = (verifications ?? []).length;
 
-  const handleDecision = async (v: OnDutyPunchVerificationItem, status: "approved" | "rejected") => {
+  const handleDecision = async (v: OnDutyPunchVerificationItem, status: "approved" | "rejected", comment?: string) => {
     try {
-      await updateMutation.mutateAsync({ id: v.id, status });
+      await updateMutation.mutateAsync({ id: v.id, status, comment });
       toast({
         title: `Punch ${status}`,
         description: `${v.employeeName}'s punch #${v.punchNumber} (${v.punchType === "IN" ? "Check-In" : "Check-Out"}).`,
@@ -187,9 +196,9 @@ export default function VerificationsTab() {
     }
   };
 
-  const handleBulk = async (head: OnDutyPunchVerificationItem, status: "approved" | "rejected") => {
+  const handleBulk = async (head: OnDutyPunchVerificationItem, status: "approved" | "rejected", comment?: string) => {
     try {
-      const res = await bulkMutation.mutateAsync({ sessionId: head.sessionId, status });
+      const res = await bulkMutation.mutateAsync({ sessionId: head.sessionId, status, comment });
       toast({
         title: `${res.updated} punch${res.updated === 1 ? "" : "es"} ${status}`,
         description: `${head.employeeName} - On-Duty to "${head.sessionDestination}".`,
@@ -218,7 +227,14 @@ export default function VerificationsTab() {
       </ToolbarCard>
 
       {isLoading ? (
-        <ListSkeleton />
+        <CardSkeleton />
+      ) : isError && groups.length === 0 ? (
+        <LoadError
+          title="The punches could not be loaded."
+          error={error}
+          onRetry={() => void refetch()}
+          testId="verifications-error"
+        />
       ) : groups.length === 0 ? (
         <EmptyNote icon={Camera} title={`No ${statusFilter} punch verifications.`} hint={EMPTY_HINT[statusFilter]} />
       ) : (
@@ -263,14 +279,14 @@ export default function VerificationsTab() {
                   <div className="flex items-center gap-2" data-testid="verification-bulk">
                     <Button
                       size="sm"
-                      className="h-9 gap-1.5 bg-green-600 text-xs hover:bg-green-700"
+                      className="h-9 gap-1.5 bg-green-600 bg-none text-xs hover:bg-green-700"
                       disabled={busy || !head.sessionApproved}
                       title={
                         head.sessionApproved
                           ? undefined
                           : "The On-Duty request these punches belong to is still awaiting approval."
                       }
-                      onClick={() => void handleBulk(head, "approved")}
+                      onClick={() => setAsking({ kind: "all", head, count: pendingCount, status: "approved" })}
                     >
                       <CheckCircle2 size={13} /> Approve all {pendingCount}
                     </Button>
@@ -279,7 +295,7 @@ export default function VerificationsTab() {
                       variant="destructive"
                       className="h-9 gap-1.5 text-xs"
                       disabled={busy}
-                      onClick={() => void handleBulk(head, "rejected")}
+                      onClick={() => setAsking({ kind: "all", head, count: pendingCount, status: "rejected" })}
                     >
                       <XCircle size={13} /> Reject all
                     </Button>
@@ -295,7 +311,7 @@ export default function VerificationsTab() {
                     busy={busy}
                     onPhotos={setPhotoOf}
                     onMap={setMapPunch}
-                    onDecide={(p, s) => void handleDecision(p, s)}
+                    onDecide={(p, s) => setAsking({ kind: "one", v: p, status: s })}
                   />
                 ))}
               </div>
@@ -304,8 +320,82 @@ export default function VerificationsTab() {
         </div>
       )}
 
+      <DecisionDialog
+        open={asking !== null}
+        onOpenChange={(open) => !open && setAsking(null)}
+        tone={asking?.status === "rejected" ? "reject" : "approve"}
+        title={confirmTitle(asking)}
+        confirmLabel={
+          asking?.kind === "all"
+            ? asking.status === "rejected"
+              ? "Reject all"
+              : `Approve all ${asking.count}`
+            : asking?.status === "rejected"
+              ? "Reject punch"
+              : "Approve punch"
+        }
+        withComment
+        description={asking ? <ConfirmText asking={asking} /> : null}
+        onConfirm={(comment) => {
+          if (asking?.kind === "all") void handleBulk(asking.head, asking.status, comment);
+          else if (asking) void handleDecision(asking.v, asking.status, comment);
+          setAsking(null);
+        }}
+        testId="punch-confirm"
+      />
+
       <PunchPhotosDialog verification={photoOf} onClose={() => setPhotoOf(null)} />
       <PunchLocationDialog verification={mapPunch} onClose={() => setMapPunch(null)} />
     </div>
+  );
+}
+
+function confirmTitle(asking: Asking | null): string {
+  if (!asking) return "";
+  if (asking.kind === "all") {
+    return asking.status === "rejected"
+      ? `Reject all ${asking.count} punch${asking.count === 1 ? "" : "es"} of this request?`
+      : `Approve all ${asking.count} punch${asking.count === 1 ? "" : "es"} into attendance?`;
+  }
+  return asking.status === "rejected" ? "Reject this punch?" : "Approve this punch into attendance?";
+}
+
+/** What a punch decision does, said before it is sent. */
+function ConfirmText({ asking }: { asking: Asking }) {
+  const v = asking.kind === "all" ? asking.head : asking.v;
+  const who = (
+    <b className="text-gray-900">
+      {v.employeeName} ({v.employeeCode})
+    </b>
+  );
+  if (asking.kind === "all") {
+    return asking.status === "rejected" ? (
+      <p>
+        Every punch of {who} still waiting under the On-Duty request to &ldquo;{v.sessionDestination}&rdquo; is rejected
+        and never reaches attendance. The slots open again for new punches.
+      </p>
+    ) : (
+      <p>
+        Every punch of {who} still waiting under the On-Duty request to &ldquo;{v.sessionDestination}&rdquo; becomes a
+        real attendance punch at the time it was taken.
+      </p>
+    );
+  }
+  const what = `punch #${v.punchNumber} (${v.punchType === "IN" ? "check-in" : "check-out"}, ${v.punchTime.slice(0, 5)} on ${v.punchDate})`;
+  return asking.status === "rejected" ? (
+    <p>
+      {who}&rsquo;s {what} is rejected and does not count as attendance; the slot opens again for a new punch.
+    </p>
+  ) : (
+    <>
+      <p>
+        {who}&rsquo;s {what} becomes a real attendance punch at the time it was taken.
+      </p>
+      {v.isMocked && (
+        <p className="font-medium text-red-700">
+          The phone reported a simulated (fake GPS) location for this punch: check the photo and the map first.
+        </p>
+      )}
+    </>
   );
 }

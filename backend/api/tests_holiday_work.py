@@ -709,7 +709,7 @@ class DepartmentHeadTests(HolidayWorkBase):
         self.assertEqual(body["hodName"], "HWB Hw")
         # the employee is told, with the same wording WhatsApp carries (one notification, also pushed to the phone)
         note = Notification.objects.get(employee=self.asha, type="compensation")
-        self.assertEqual(note.title, "✅ Request Approved")
+        self.assertEqual(note.title, "Request Approved")
         self.assertIn("Holiday Work Compensation", note.message)
         self.assertIn("0.75 shift", note.message)
         self.assertIn("The shifts are now in your compensation balance", note.message)
@@ -754,7 +754,7 @@ class DepartmentHeadTests(HolidayWorkBase):
         self.assertEqual(claim.approval_trail[0]["comment"], "He was on leave")
         self.assertFalse(CompensationLedger.objects.exists())
         note = Notification.objects.get(employee=self.asha, type="compensation")
-        self.assertEqual(note.title, "❌ Request Rejected")
+        self.assertEqual(note.title, "Request Rejected")
         self.assertIn("He was on leave", note.message)
         self.assertIn("(Department Head)", note.message)
         # a rejection is final

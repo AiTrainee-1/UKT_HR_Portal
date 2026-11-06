@@ -314,7 +314,11 @@ class _TsContract:
         self.types = {}
         self._read(_read_frontend(_TS_FILES / "payroll-insights.ts"))
         # only the types the contract borrows from other files (their other declarations are outside this subset)
-        self._read(_read_frontend(_TS_FILES / "production-cycles.ts"), only={"PayCycle"})
+        self._read(
+            _read_frontend(_TS_FILES / "production-cycles.ts"),
+            # PayrollDetails.coverage (2026-11-06) borrows the day-range types of a pay-cycle change
+            only={"PayCycle", "DayRange", "AlreadyPaidPart", "CatchUpPart"},
+        )
         self._read(
             _read_frontend(_TS_FILES / "attendance.ts"), only={"DayCompensationMarker", "AttendanceCompensationKind"}
         )
@@ -1294,6 +1298,8 @@ DETAILS_KEYS = {
     "history",
     "neighbours",
     "context",
+    # production (2026-11-06): which days the payroll pays after a pay-cycle change; null for staff
+    "coverage",
 }
 
 
@@ -1869,7 +1875,10 @@ class ProductionDetailsTests(TestCase):
             },
         )
         self.assertEqual(d["money"]["net"], float(payroll.final_salary))
-        self.assertEqual(d["summary"], {"totalDays": 7, "daysWorked": 6, "daysAbsent": 1, "totalShifts": 6.0})
+        # periodDays (2026-11-06): the period's own length beside totalDays, the days paid (equal on an ordinary run)
+        self.assertEqual(
+            d["summary"], {"totalDays": 7, "periodDays": 7, "daysWorked": 6, "daysAbsent": 1, "totalShifts": 6.0}
+        )
         self.assertEqual(
             d["period"],
             {
@@ -2745,7 +2754,8 @@ class ProductionStatementTests(TestCase):
             [(c["key"], c["label"]) for c in columns],
             [
                 ("sno", "SNO"), ("code", "ID NO"), ("name", "Name"), ("designation", "Designation"),
-                ("rate", "Rate / shift"), ("worked", "Days worked"), ("absent", "Absent"), ("late", "Late"),
+                ("rate", "Rate / shift"), ("days", "Days paid"), ("worked", "Days worked"), ("absent", "Absent"),
+                ("late", "Late"),
                 ("shifts", "Shifts"), ("eSalary", "E salary"), ("advance", "Advance"),
                 ("esi", "ESI / EF"), ("pf", "PF"), ("tds", "TDS"), ("others", "Others"),
                 ("totalDeduction", "Total Deduction"),
@@ -2771,6 +2781,7 @@ class ProductionStatementTests(TestCase):
                 "name": "Raja Prod",
                 "designation": "",
                 "rate": 500.0,
+                "days": 7.0,
                 "worked": 6.0,
                 "absent": 1.0,
                 "late": 2,

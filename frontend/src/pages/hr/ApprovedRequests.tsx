@@ -295,22 +295,23 @@ export default function ApprovedRequests() {
       <div className="space-y-5" data-testid="requests-hub">
         {/* Header, with the page's three sections beside it */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3">
-            <div className="min-w-0">
-              <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900">
-                <Bell size={22} className="text-amber-500" />
-                Requests
-                {stats.waiting > 0 && (
-                  <Badge className="bg-amber-500 text-xs text-white">{stats.waiting} pending</Badge>
-                )}
-              </h2>
-              <p className="mt-0.5 text-sm text-muted-foreground" data-testid="requests-section-note">
-                {SECTION_NOTES[section]}
-              </p>
-            </div>
+          {/* The heading, its note and the section tabs are direct children of one block (a grid placing the tabs beside the
+              heading), so the MD portal's copy of this page can lay the title row out like its other tall-title pages. */}
+          <div className="grid min-w-0 items-center gap-x-6 gap-y-3 sm:grid-cols-[auto_minmax(0,1fr)]">
+            <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900 sm:col-start-1 sm:row-start-1">
+              <Bell size={22} className="text-amber-500" />
+              Requests
+              {stats.waiting > 0 && <Badge className="bg-amber-500 text-xs text-white">{stats.waiting} pending</Badge>}
+            </h2>
+            <p
+              className="-mt-2.5 text-sm text-muted-foreground sm:col-start-1 sm:row-start-2"
+              data-testid="requests-section-note"
+            >
+              {SECTION_NOTES[section]}
+            </p>
             <nav
               aria-label="Sections of the Requests page"
-              className="max-w-full overflow-x-auto"
+              className="min-w-0 max-w-full overflow-x-auto sm:col-start-2 sm:row-span-2 sm:row-start-1"
               data-testid="requests-sections"
             >
               <PillTabs

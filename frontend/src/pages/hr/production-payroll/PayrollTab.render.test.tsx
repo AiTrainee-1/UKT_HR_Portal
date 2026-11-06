@@ -18,18 +18,17 @@ import {
   here,
   type World,
 } from "./harness";
-import { PRODUCTION_REGISTER_COLUMNS } from "./logic";
 
 // The Payroll tab of a Production Payroll cycle page in jsdom, with a fake server behind customFetch: the dashboard of the
-// period, the four views (Records, Issues, Skipped, Rules), the filters, the Export menu, Mark as Cleared, the loaders and the
-// empty and error states, what a View Only role may touch, and the Generate Payroll dialog.
+// period, the four views (Records, Issues, Skipped, Rules), the records as a table one department at a time (as on Staff
+// Payroll), the filters, the Export menu (the Report Center's Production Salary Statement), Mark as Cleared, the loaders and
+// the empty and error states, what a View Only role may touch, and the Generate Payroll dialog.
 
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
   trigger: vi.fn(),
   toast: vi.fn(),
-  excel: vi.fn(),
-  csv: vi.fn(),
+  download: vi.fn(),
   bank: vi.fn(),
   generating: { current: false },
 }));
@@ -52,7 +51,7 @@ vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-fetch")>()),
   customFetch: h.fetch,
 }));
-vi.mock("@/components/payroll/kit/export-table", () => ({ exportTableToExcel: h.excel, exportTableToCsv: h.csv }));
+vi.mock("@/lib/report-download", () => ({ downloadReportFile: h.download }));
 vi.mock("@/lib/payrollExcelExport", () => ({ exportPayrollToExcel: h.bank }));
 
 let world: World;
@@ -63,7 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.generating.current = false;
   h.trigger.mockResolvedValue(null);
-  h.excel.mockResolvedValue(undefined);
+  h.download.mockResolvedValue("production_salary_statement.xlsx");
   world = installWorld(h.fetch);
 });
 
@@ -84,10 +83,14 @@ async function openPayroll(url = WEEKLY) {
   );
 }
 
+/** The payslips listed, as "payroll-record-<id>" whether they are cards or table rows. */
 const shownIds = () =>
   [...document.body.querySelectorAll('[data-testid^="payroll-record-"][data-status]')].map((a) =>
-    a.getAttribute("data-testid"),
+    a.getAttribute("data-testid")!.replace("payroll-record-row-", "payroll-record-"),
   );
+
+/** One payslip of the list: its card, or its table row. */
+const rec = (id: number) => q(`payroll-record-${id}`) ?? q(`payroll-record-row-${id}`);
 
 describe("the dashboard of the period", () => {
   it("counts who is in the payroll against the cycle's roster, and what is still to be released", async () => {
@@ -134,10 +137,10 @@ describe("the dashboard of the period", () => {
 
 describe("the Records view", () => {
   it("lists the payslips of the period as cards, with the issues and the rules of each employee", async () => {
-    await openPayroll();
-    await waitFor(() => !!q("payroll-record-11"), "the card");
+    await openPayroll(`${WEEKLY}?layout=cards`);
+    await waitFor(() => !!rec(11), "the card");
     expect(shownIds()).toEqual(["payroll-record-11"]); // Bala has no payslip yet
-    const card = text(q("payroll-record-11"));
+    const card = text(rec(11));
     expect(card).toContain("Asha Worker");
     expect(card).toContain("PC-W1 · Weaving");
     expect(card).toContain("7 shifts");
@@ -146,9 +149,9 @@ describe("the Records view", () => {
     expect(card).toContain("2 Feb - 8 Feb 2026");
     expect(card).toContain("3 Needs a look");
     expect(card).toContain("Absent ×1");
-    await waitFor(() => text(q("payroll-record-11")).includes("₹500 per shift"), "the rule chips");
-    expect(text(q("payroll-record-11"))).toContain("Weekly cycle");
-    expect(q("payroll-record-11")!.getAttribute("aria-label")).toBe("Payroll of Asha Worker");
+    await waitFor(() => text(rec(11)).includes("₹500 per shift"), "the rule chips");
+    expect(text(rec(11))).toContain("Weekly cycle");
+    expect(rec(11)!.getAttribute("aria-label")).toBe("Payroll of Asha Worker");
   });
 
   it("asks the server for this cycle and period only", async () => {
@@ -172,9 +175,9 @@ describe("the Records view", () => {
     await waitFor(() => !!q("pcp-records"), "the list");
     expect(q("pcp-records")!.getAttribute("aria-busy")).toBe("true");
     expect(q("skeleton-rows")).not.toBeNull();
-    expect(q("payroll-record-11")).toBeNull();
+    expect(rec(11)).toBeNull();
     release();
-    await waitFor(() => !!q("payroll-record-11"), "the cards");
+    await waitFor(() => !!rec(11), "the cards");
     expect(q("skeleton-rows")).toBeNull();
   });
 
@@ -185,14 +188,14 @@ describe("the Records view", () => {
     expect(text(q("pcp-records-error"))).toContain("The payroll records could not be loaded");
     world.failing.delete("/api/payroll/production");
     click(must("pcp-records-error").querySelector("button"));
-    await waitFor(() => !!q("payroll-record-11"), "the cards");
+    await waitFor(() => !!rec(11), "the cards");
     expect(q("pcp-records-error")).toBeNull();
   });
 
   it("filters by name and keeps the filter in the address", async () => {
     world.people = [...world.people.slice(0, 1), balaPaid(), world.people[2]];
     await openPayroll(`${WEEKLY}?q=bala`);
-    await waitFor(() => !!q("payroll-record-12"), "the cards");
+    await waitFor(() => !!rec(12), "the cards");
     expect(shownIds()).toEqual(["payroll-record-12"]);
     expect((must("pcp-pf-search") as HTMLInputElement).value).toBe("bala");
     expect(text(q("pcp-pf-count"))).toBe("Showing 1 of 2");
@@ -211,14 +214,18 @@ describe("the Records view", () => {
     await waitFor(() => shownIds().length === 2, "both cards again");
   });
 
-  it("offers Cards and Table, and keeps the choice in the address", async () => {
+  it("opens as a table, like Staff Payroll, offers Cards, and keeps the choice in the address", async () => {
     await openPayroll();
-    await waitFor(() => !!q("payroll-record-11"), "the card");
-    expect(must("pcp-records").dataset.layout).toBe("cards");
-    click(must("payroll-record-layout-table"));
-    expect(params().layout).toBe("table");
+    await waitFor(() => !!rec(11), "the row");
     expect(must("pcp-records").dataset.layout).toBe("table");
+    expect(q("payroll-record-row-11")).not.toBeNull();
+    expect(text(q("payroll-record-row-11"))).toContain("Asha Worker");
+    expect(text(q("payroll-record-row-11"))).toContain("₹3,000");
     click(must("payroll-record-layout-cards"));
+    expect(params().layout).toBe("cards");
+    expect(must("pcp-records").dataset.layout).toBe("cards");
+    expect(q("payroll-record-11")).not.toBeNull();
+    click(must("payroll-record-layout-table"));
     expect(params().layout).toBeUndefined();
   });
 
@@ -245,7 +252,7 @@ describe("the Records view", () => {
     expect(world.writes[0]).toMatchObject({ method: "PATCH", url: "/api/payroll/11", body: { status: "paid" } });
     expect(h.toast).toHaveBeenCalledWith({ title: "Asha Worker's salary marked as cleared" });
     await waitFor(() => !q("payroll-record-markpaid-11"), "the button to go");
-    expect(q("payroll-record-11")!.getAttribute("data-status")).toBe("paid");
+    expect(rec(11)!.getAttribute("data-status")).toBe("paid");
     await waitFor(() => text(q("pcp-dash-kpi-pending")).includes("Everything is released"), "the dashboard");
   });
 });
@@ -275,7 +282,7 @@ describe("the empty states", () => {
     expect(text(q("pcp-empty-filters"))).toContain("No payroll record matches these filters");
     click(must("pcp-empty-filters").querySelector("button"));
     expect(params().q).toBeUndefined();
-    await waitFor(() => !!q("payroll-record-11"), "the card");
+    await waitFor(() => !!rec(11), "the card");
   });
 
   it("a pay period the server cannot work out says so, and the picker is the way out", async () => {
@@ -401,56 +408,74 @@ describe("the Rules view", () => {
 describe("the Export menu", () => {
   const openMenu = async () => {
     press(must("pcp-export"), "Enter");
-    await waitFor(() => !!q("pcp-export-register-xlsx"), "the menu");
+    await waitFor(() => !!q("pcp-export-statement-xlsx"), "the menu");
   };
 
-  it("hands the payslips on screen to the Excel register, with the production columns", async () => {
+  it("offers the printed Production Salary Statement as Excel and PDF, and no longer the register or CSV", async () => {
     await openPayroll();
-    await waitFor(() => !!q("payroll-record-11") && world.requests().includes("/api/payroll-settings"), "the page");
-    await settle(20);
+    await waitFor(() => !!rec(11), "the records");
     await openMenu();
-    expect(text(q("pcp-export-register-xlsx"))).toContain("Payroll register (Excel)");
-    expect(text(q("pcp-export-register-xlsx"))).toContain("1 record on screen");
-    click(must("pcp-export-register-xlsx"));
+    expect(text(q("pcp-export-statement-xlsx"))).toContain("Production Salary Statement (Excel)");
+    expect(text(q("pcp-export-statement-pdf"))).toContain("Production Salary Statement (PDF)");
+    expect(text(q("pcp-export-statement-pdf"))).toContain("The printed statement for Weekly 2 Feb - 8 Feb 2026");
+    expect(q("pcp-export-register-xlsx")).toBeNull();
+    expect(q("pcp-export-register-csv")).toBeNull();
+  });
+
+  it("downloads the Report Center file for this cycle and pay period", async () => {
+    await openPayroll();
+    await waitFor(() => !!rec(11), "the records");
+    await openMenu();
+    click(must("pcp-export-statement-pdf"));
     await settle();
-    await waitFor(() => h.excel.mock.calls.length === 1, "the export");
-    const sent = h.excel.mock.calls[0][0];
-    expect(sent.rows.map((r: { id: number }) => r.id)).toEqual([11]);
-    expect(sent.columns).toBe(PRODUCTION_REGISTER_COLUMNS);
+    await waitFor(() => h.download.mock.calls.length === 1, "the download");
+    const sent = h.download.mock.calls[0][0];
     expect(sent).toMatchObject({
-      sheetName: "Payroll register",
-      company: "UK Textiles Ltd",
-      subtitle: "Production payroll · Weekly",
-      title: "Payroll register · 2 Feb - 8 Feb 2026",
+      reportId: "hr-production-salary-statement",
+      format: "pdf",
+      title: "Production Salary Statement Weekly 2 Feb - 8 Feb 2026",
     });
-    expect(sent.filename).toBe("Production_Payroll_Weekly_2026_02_02_2026_02_08_Register");
-  });
-
-  it("offers the same rows as CSV", async () => {
-    await openPayroll();
-    await waitFor(() => !!q("payroll-record-11"), "the card");
+    expect(sent.query.toString()).toBe("cycle=weekly&dateFrom=2026-02-02&dateTo=2026-02-08");
+    // the menu closes once the file is saved; Excel is the same report
+    await waitFor(() => !q("pcp-export-statement-pdf"), "the menu to close");
     await openMenu();
-    click(must("pcp-export-register-csv"));
+    click(must("pcp-export-statement-xlsx"));
     await settle();
-    await waitFor(() => h.csv.mock.calls.length === 1, "the export");
-    const sent = h.csv.mock.calls[0][0];
-    expect(sent.rows.map((r: { id: number }) => r.id)).toEqual([11]);
-    expect(sent.columns).toBe(PRODUCTION_REGISTER_COLUMNS);
-    expect(sent.filename).toBe("Production_Payroll_Weekly_2026_02_02_2026_02_08_Register");
+    await waitFor(() => h.download.mock.calls.length === 2, "the second download");
+    expect(h.download.mock.calls[1][0]).toMatchObject({ reportId: "hr-production-salary-statement", format: "xlsx" });
   });
 
-  it("exports what the filters leave, not the whole period", async () => {
+  it("covers every department, and only Cleared or only Pending when the page shows that", async () => {
     world.people = [...world.people.slice(0, 1), balaPaid(), world.people[2]];
     await openPayroll(`${WEEKLY}?status=paid`);
-    await waitFor(() => !!q("payroll-record-12"), "the card");
+    await waitFor(() => !!rec(12), "the record");
     await openMenu();
-    click(must("pcp-export-register-xlsx"));
+    click(must("pcp-export-statement-xlsx"));
     await settle();
-    await waitFor(() => h.excel.mock.calls.length === 1, "the export");
-    expect(h.excel.mock.calls[0][0].rows.map((r: { id: number }) => r.id)).toEqual([12]);
+    await waitFor(() => h.download.mock.calls.length === 1, "the download");
+    expect(h.download.mock.calls[0][0].query.toString()).toBe(
+      "cycle=weekly&dateFrom=2026-02-02&dateTo=2026-02-08&paymentStatus=paid",
+    );
   });
 
-  it("adds the TDS columns to the register only when a payslip on screen has TDS", async () => {
+  it("says why when the file cannot be made", async () => {
+    h.download.mockRejectedValueOnce(new Error("Your role does not have access to the data in this report."));
+    await openPayroll();
+    await waitFor(() => !!rec(11), "the records");
+    await openMenu();
+    click(must("pcp-export-statement-pdf"));
+    await settle();
+    await waitFor(() => h.toast.mock.calls.length > 0, "the toast");
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Could not export Production Salary Statement (PDF)",
+        description: "Your role does not have access to the data in this report.",
+        variant: "destructive",
+      }),
+    );
+  });
+
+  it("shows a TDS employee's TDS on the record", async () => {
     // Asha is on the TDS list: 10% of her 3,500 earned gross is TDS, and it is part of her 350 deductions
     world.people = [
       person(1, "Asha Worker", "PC-W1", {
@@ -464,30 +489,26 @@ describe("the Export menu", () => {
       world.people[1],
       world.people[2],
     ];
-    await openPayroll();
-    await waitFor(() => !!q("payroll-record-11"), "the card");
+    await openPayroll(`${WEEKLY}?layout=cards`);
+    await waitFor(() => !!rec(11), "the card");
     expect(text(q("payroll-record-tds-11"))).toBe("TDS (10%)₹350");
-    await openMenu();
-    click(must("pcp-export-register-xlsx"));
-    await settle();
-    await waitFor(() => h.excel.mock.calls.length === 1, "the export");
-    const labels = h.excel.mock.calls[0][0].columns.map((c: { label: string }) => c.label);
-    expect(labels.slice(labels.indexOf("Bonus"), labels.indexOf("Net payable") + 1)).toEqual([
-      "Bonus",
-      "TDS %",
-      "TDS",
-      "Deductions",
-      "Net payable",
-    ]);
   });
 
-  it("the bank transfer file is a button of its own, for the payslips on screen", async () => {
+  it("the bank transfer file is a button of its own, for the payslips of every department on screen", async () => {
+    world.people = [
+      world.people[0],
+      person(2, "Bala Worker", "PC-W2", {
+        departmentName: "Packing",
+        payroll: payroll(12, 2, "Bala Worker", "PC-W2", { departmentId: 7, departmentName: "Packing" }),
+      }),
+      world.people[2],
+    ];
     await openPayroll();
-    await waitFor(() => !!q("payroll-record-11"), "the card");
+    await waitFor(() => !!q("pcp-dept-tabs"), "the department tabs");
     click(must("pcp-export-bank"));
     expect(h.bank).toHaveBeenCalledTimes(1);
     const [rows, label, stem] = h.bank.mock.calls[0];
-    expect(rows.map((r: { id: number }) => r.id)).toEqual([11]);
+    expect(rows.map((r: { id: number }) => r.id).sort()).toEqual([11, 12]);
     expect(label).toBe("Production");
     expect(stem).toBe("Weekly_2026-02-02_2026-02-08");
   });
@@ -498,8 +519,70 @@ describe("the Export menu", () => {
     await waitFor(() => !!q("pcp-empty-period"), "the note");
     expect((must("pcp-export-bank") as HTMLButtonElement).disabled).toBe(true);
     await openMenu();
-    expect(must("pcp-export-register-xlsx").getAttribute("aria-disabled")).toBe("true");
-    expect(must("pcp-export-register-csv").getAttribute("aria-disabled")).toBe("true");
+    expect(must("pcp-export-statement-xlsx").getAttribute("aria-disabled")).toBe("true");
+    expect(must("pcp-export-statement-pdf").getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+describe("one department at a time", () => {
+  const twoDepartments = () => {
+    world.people = [
+      world.people[0],
+      person(2, "Bala Worker", "PC-W2", {
+        departmentName: "Packing",
+        payroll: payroll(12, 2, "Bala Worker", "PC-W2", { departmentId: 7, departmentName: "Packing" }),
+      }),
+      world.people[2],
+    ];
+  };
+
+  it("opens the first department by name, and the count still covers every department", async () => {
+    twoDepartments();
+    await openPayroll();
+    await waitFor(() => !!q("pcp-dept-tabs") && shownIds().length === 1, "the tabs");
+    expect(text(q("pcp-dept-tab-7"))).toContain("Packing");
+    expect(must("pcp-dept-tab-7").getAttribute("aria-pressed")).toBe("true");
+    expect(must("pcp-dept-tab-4").getAttribute("aria-pressed")).toBe("false");
+    expect(shownIds()).toEqual(["payroll-record-12"]);
+    expect(text(q("pcp-dept-summary"))).toContain("Packing · 1 employee");
+    expect(text(q("pcp-record-count"))).toBe("2 Feb - 8 Feb 2026 · 2 records");
+    expect(text(q("view-records-count"))).toBe("2");
+  });
+
+  it("switches department with a tab and keeps it in the address", async () => {
+    twoDepartments();
+    await openPayroll();
+    await waitFor(() => !!q("pcp-dept-tab-4"), "the tabs");
+    click(must("pcp-dept-tab-4"));
+    expect(params().pdept).toBe("4");
+    await waitFor(() => shownIds()[0] === "payroll-record-11", "Weaving");
+    expect(shownIds()).toEqual(["payroll-record-11"]);
+  });
+
+  it("opens the department the address names", async () => {
+    twoDepartments();
+    await openPayroll(`${WEEKLY}?pdept=4`);
+    await waitFor(() => shownIds().length === 1, "the records");
+    expect(shownIds()).toEqual(["payroll-record-11"]);
+    expect(must("pcp-dept-tab-4").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("has no department filter in the filter bar: the tabs pick the department", async () => {
+    twoDepartments();
+    await openPayroll(`${WEEKLY}?dept=4`);
+    await waitFor(() => !!q("pcp-dept-tabs"), "the tabs");
+    expect(q("pcp-pf-dept")).toBeNull();
+    // an old address naming a department filter is ignored: both departments are still there as tabs
+    expect(q("pcp-dept-tab-7")).not.toBeNull();
+    expect(q("pcp-dept-tab-4")).not.toBeNull();
+  });
+
+  it("the tabs follow the filters", async () => {
+    twoDepartments();
+    await openPayroll(`${WEEKLY}?q=asha`);
+    await waitFor(() => !!q("pcp-dept-tab-4"), "the tabs");
+    expect(q("pcp-dept-tab-7")).toBeNull();
+    expect(shownIds()).toEqual(["payroll-record-11"]);
   });
 });
 
@@ -522,11 +605,11 @@ describe("a View Only role", () => {
     expect((must("pcp-period") as HTMLButtonElement).disabled).toBe(false);
     // and the export menu works
     press(must("pcp-export"), "Enter");
-    await waitFor(() => !!q("pcp-export-register-xlsx"), "the menu");
+    await waitFor(() => !!q("pcp-export-statement-xlsx"), "the menu");
     lockMutatingControls(document.body);
-    click(must("pcp-export-register-xlsx"));
+    click(must("pcp-export-statement-xlsx"));
     await settle();
-    await waitFor(() => h.excel.mock.calls.length === 1, "the export");
+    await waitFor(() => h.download.mock.calls.length === 1, "the export");
   });
 });
 

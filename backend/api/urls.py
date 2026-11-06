@@ -64,7 +64,8 @@ from .otp_views import login_options, otp_activate, otp_login, otp_request, otp_
 from .whatsapp_control_views import (
     whatsapp_control_settings, whatsapp_control_template_preview, whatsapp_control_template_update,
     whatsapp_control_templates,
-    whatsapp_employees, whatsapp_messages, whatsapp_overview,
+    whatsapp_employee_opt_out, whatsapp_employees, whatsapp_messages, whatsapp_overview,
+    whatsapp_queue, whatsapp_queue_clear,
 )
 from .support_contact_views import support_contact
 from .sms_control_views import sms_messages, sms_overview, sms_settings, sms_test
@@ -154,6 +155,7 @@ from .reception_views import (
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
+    attendance_employee_punches, attendance_monthly_summary,
     sync_biometric_api, sync_biometric_progress, attendance_report_log, attendance_report_log_sheet,
     set_day_informed, compute_shift_logs,
     attendance_search, attendance_search_range,
@@ -198,7 +200,11 @@ from .missing_punch_views import (
     missing_punch_requests, missing_punch_request_hr_status,
 )
 from .auto_sync_views import auto_sync_rules, auto_sync_rule_detail
-from .production_employee_views import assign_production_pay_cycle, production_employees
+from .production_employee_views import (
+    assign_production_pay_cycle,
+    production_cycle_change_preview,
+    production_employees,
+)
 from .production_payroll_views import (
     production_cycles_summary, production_next_period, production_generate_payroll,
     production_period_status, production_periods,
@@ -284,6 +290,7 @@ urlpatterns = [
     path("employees", views.employees),
     path("employees/production", production_employees),
     path("employees/production/assign", assign_production_pay_cycle),
+    path("employees/production/cycle-change-preview", production_cycle_change_preview),
     path("employees/<int:pk>", views.employee_detail),
     path("employees/<int:pk>/photo", views.employee_photo),
     path("employees/<int:pk>/status", views.employee_status),
@@ -411,6 +418,9 @@ urlpatterns = [
     path("attendance/live-feed", attendance_live_feed),
     path("attendance/monthly-trend", attendance_monthly_trend),
     path("attendance/employee/<int:pk>", attendance_employee_history),
+    # every punch of one employee's month, and the per-employee monthly report (Staff / Production Attendance page)
+    path("attendance/employee-punches", attendance_employee_punches),
+    path("attendance/monthly-summary", attendance_monthly_summary),
     path("attendance/manual", manual_attendance),
     path("attendance/sync-status", attendance_sync_status),
     path("attendance/sync-biometric", sync_biometric_api),
@@ -617,7 +627,11 @@ urlpatterns = [
     path("whatsapp-control/overview", whatsapp_overview),
     path("whatsapp-control/messages", whatsapp_messages),
     path("whatsapp-control/employees", whatsapp_employees),
+    path("whatsapp-control/employees/<int:employee_id>/opt-out", whatsapp_employee_opt_out),
     path("whatsapp-control/settings", whatsapp_control_settings),
+    # the send queue (whatsapp_dispatcher.py)
+    path("whatsapp-control/queue", whatsapp_queue),
+    path("whatsapp-control/queue/clear", whatsapp_queue_clear),
     path("whatsapp-control/templates", whatsapp_control_templates),
     path("whatsapp-control/templates/<str:document_type>/preview", whatsapp_control_template_preview),
     path("whatsapp-control/templates/<str:document_type>", whatsapp_control_template_update),

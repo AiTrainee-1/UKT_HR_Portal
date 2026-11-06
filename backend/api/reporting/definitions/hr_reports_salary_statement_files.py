@@ -40,12 +40,17 @@ the sheet prints A3 landscape, one page wide. Amounts are real numbers (lakh gro
 
 Nothing here works a figure out: every number is the statement's own (``statement_rows`` through ``unit_blocks``); the
 sub totals and unit totals add up the same columns the screen's lines do.
+
+The Production Salary Statement (hr-production-salary-statement, 2026-11-06: "the same enhancements across all Production
+Payroll pages") is drawn by the very same builders. What differs is a ``StatementLayout``: which columns add up, the
+cards of the totals block and of the Final Summary. Staff is the default layout, so the staff files are unchanged.
 """
 
 from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from math import lcm
 from xml.sax.saxutils import escape
 
 from openpyxl import Workbook
@@ -196,14 +201,14 @@ def section_lines(section, blocks, sum_keys) -> list[Line]:
     return _with_gaps(lines)
 
 
-def summary_figures(out, blocks) -> list[list[tuple[str, float, str]]]:
+def summary_figures(out, blocks, rows=None) -> list[list[tuple[str, float, str]]]:
     """The totals block for the whole statement (every unit): rows of (label, value, column type)."""
-    return figures_for(sum(b.count for b in blocks), out.totals or {})
+    return figures_for(sum(b.count for b in blocks), out.totals or {}, rows)
 
 
-def unit_figures(block) -> list[list[tuple[str, float, str]]]:
+def unit_figures(block, rows=None) -> list[list[tuple[str, float, str]]]:
     """The totals block for one unit, from that unit's own lines only (its total line's sums)."""
-    return figures_for(block.count, block.total)
+    return figures_for(block.count, block.total, rows)
 
 
 # The totals block (owner 2026-11-05): every column of the statement that adds up, and the head count. First row the pay
@@ -222,22 +227,44 @@ FINAL_FIGURES = (("Total Salary", "total"), ("Earned Salary", "eSalary"), ("Tota
 FINAL_HIGHLIGHT = "Net Pay"
 
 
-def final_figures(out) -> list[list[tuple[str, float, str]]]:
+def final_figures(out, figures=None, employees: int = 0) -> list[list[tuple[str, float, str]]]:
     """The Final Summary's one row of cards: the statement's grand totals (every unit)."""
-    return final_figures_for(out.totals or {})
+    return final_figures_for(out.totals or {}, figures, employees)
 
 
-def final_figures_for(totals: dict) -> list[list[tuple[str, float, str]]]:
-    """A Final Summary's one row of cards from a set of totals (a unit's, or the whole statement's)."""
-    return [[(label, totals.get(key) or 0, CURRENCY) for label, key in FINAL_FIGURES]]
+def final_figures_for(totals: dict, figures=None, employees: int = 0) -> list[list[tuple[str, float, str]]]:
+    """A Final Summary's one row of cards from a set of totals (a unit's, or the whole statement's). A card without a
+    column key is the head count (`employees`)."""
+    return figures_for(employees, totals, (figures or FINAL_FIGURES,))
 
 
-def figures_for(employees: int, totals: dict) -> list[list[tuple[str, float, str]]]:
+def figures_for(employees: int, totals: dict, rows=None) -> list[list[tuple[str, float, str]]]:
     """The totals block from a set of column totals: rows of (label, value, column type)."""
     return [
         [(label, employees, INTEGER) if key is None else (label, totals.get(key) or 0, CURRENCY) for label, key in row]
-        for row in FIGURE_ROWS
+        for row in rows or FIGURE_ROWS
     ]
+
+
+@dataclass(frozen=True)
+class StatementLayout:
+    """What differs between the Salary Statement and the Production Salary Statement files: the columns that add up (sub
+    totals, unit totals, TOTAL), those of the PF / ESI / TDS section, the cards of each totals block (rows of (label,
+    column key); no key = the head count) and of the Final Summary, and the card each one highlights."""
+
+    sum_keys: tuple[str, ...]
+    statutory_sum_keys: tuple[str, ...]
+    figure_rows: tuple = FIGURE_ROWS
+    final_figures: tuple = FINAL_FIGURES
+    highlight: str = HIGHLIGHT
+    final_highlight: str = FINAL_HIGHLIGHT
+
+
+def staff_layout() -> StatementLayout:
+    """The Salary Statement's layout (the default of the builders)."""
+    from .hr_reports_salary_statement import STATUTORY_SUM_KEYS, SUM_KEYS
+
+    return StatementLayout(SUM_KEYS, STATUTORY_SUM_KEYS)
 
 
 def _band_text(line: Line) -> str:
@@ -621,7 +648,8 @@ def _header(out, avail, regular, bold, rupee_ok, base_style) -> list:
 
 def _cards(rows, title: str, avail, bold, rupee_ok, base_style, size=15.0, highlight=HIGHLIGHT) -> list:
     """A totals block: its large title, then the cards row by row (`highlight` shaded). `size` = the figures' type size
-    (the labels and title scale with it)."""
+    (the labels and title scale with it). Every row fills the width: rows of different lengths (three cards over six)
+    get wider cards."""
     s_title = base_style("ct", fontName=bold, fontSize=size - 2, leading=size + 1, textColor=BRAND)
     s_label = base_style("cl", fontSize=size * 0.6, leading=size * 0.77, textColor=MUTED)
     s_value = base_style("cv", fontName=bold, fontSize=size, leading=size * 1.2, textColor=BRAND)
@@ -637,8 +665,9 @@ def _cards(rows, title: str, avail, bold, rupee_ok, base_style, size=15.0, highl
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ],
     )
-    width = max(len(row) for row in rows)
+    width = lcm(*(len(row) for row in rows))
     for r, row in enumerate(rows):
+        span = width // len(row)
         cells = []
         for c, (label, value, kind) in enumerate(row):
             if kind == INTEGER:
@@ -646,9 +675,13 @@ def _cards(rows, title: str, avail, bold, rupee_ok, base_style, size=15.0, highl
             else:
                 text = ("₹ " if rupee_ok else "Rs. ") + indian_number(float(value))
             cells.append([Paragraph(escape(label), s_label), Paragraph(escape(text), s_value)])
+            cells += [""] * (span - 1)
+            first, last = c * span, c * span + span - 1
+            if span > 1:
+                cmds.append(("SPAN", (first, r), (last, r)))
             if label == highlight:
-                cmds.append(("BACKGROUND", (c, r), (c, r), TOTAL))
-        data.append(cells + [""] * (width - len(cells)))
+                cmds.append(("BACKGROUND", (first, r), (last, r), TOTAL))
+        data.append(cells)
     block = Table(data, colWidths=[avail / width] * width)
     block.setStyle(TableStyle(cmds))
     return [Paragraph(escape(title), s_title), Spacer(1, 5), block]
@@ -672,12 +705,13 @@ def _signatures(avail, bold, base_style) -> Table:
     return signatures
 
 
-def statement_pdf(out, blocks) -> bytes:
+def statement_pdf(out, blocks, layout: StatementLayout | None = None) -> bytes:
     """The Salary Statement PDF, unit by unit (see the module docstring). Without the run's units (or for a list cut short
-    by the row limit) the framework's own table is printed instead."""
+    by the row limit) the framework's own table is printed instead. `layout`: the staff statement's when not given."""
     if blocks is None or out.truncated:
         return build_pdf(out)
-    from .hr_reports_salary_statement import STATUTORY_SUM_KEYS, SUM_KEYS
+    layout = layout or staff_layout()
+    sum_keys = layout.sum_keys
 
     regular, bold, rupee_ok = ensure_fonts()
     co = company()
@@ -691,7 +725,7 @@ def statement_pdf(out, blocks) -> bytes:
 
     cols = [c for c in out.columns if c.key != "unit"]
     story = _header(out, avail, regular, bold, rupee_ok, base_style)
-    lines = statement_lines(blocks, SUM_KEYS, out.totals)
+    lines = statement_lines(blocks, sum_keys, out.totals)
     # no explanatory notes in the file (owner 2026-11-05); each unit ends with its own summary, the statement with the
     # all-units summary (several units) and the signatures
     closing = []
@@ -704,16 +738,23 @@ def statement_pdf(out, blocks) -> bytes:
         for i, (chunk, block) in enumerate(zip(chunks, blocks)):
             if i:
                 story.append(PageBreak())
-            story += _table(cols, chunk, SUM_KEYS, avail, regular, bold, base_style, fit=fit)
+            story += _table(cols, chunk, sum_keys, avail, regular, bold, base_style, fit=fit)
             title = f"{block.title} Total"  # e.g. "HO – Head Office Total"
-            cards = [Spacer(1, 14), *_cards(unit_figures(block), title, avail, bold, rupee_ok, base_style)]
+            cards = [
+                Spacer(1, 14),
+                *_cards(
+                    unit_figures(block, layout.figure_rows), title, avail, bold, rupee_ok, base_style,
+                    highlight=layout.highlight,
+                ),
+            ]  # fmt: skip
             if several:
                 # ... and the unit's own Final Summary (owner 2026-11-05), kept on one page with its totals block
                 cards += [
                     Spacer(1, 14),
                     *_cards(
-                        final_figures_for(block.total), f"{block.title}: {FINAL_TITLE}", avail, bold, rupee_ok,
-                        base_style, size=21, highlight=FINAL_HIGHLIGHT,
+                        final_figures_for(block.total, layout.final_figures, block.count),
+                        f"{block.title}: {FINAL_TITLE}", avail, bold, rupee_ok, base_style, size=21,
+                        highlight=layout.final_highlight,
                     ),
                 ]  # fmt: skip
                 story.append(KeepTogether(cards))
@@ -726,21 +767,26 @@ def statement_pdf(out, blocks) -> bytes:
             recap = [Line(BAND, text="All units", title="All units", count=employees)]
             recap += [Line(UNIT_TOTAL, values=b.total, text=f"{b.title} total") for b in blocks]
             recap += [grand] if grand else []
-            story += _table(cols, recap, SUM_KEYS, avail, regular, bold, base_style, fit=fit)
+            story += _table(cols, recap, sum_keys, avail, regular, bold, base_style, fit=fit)
             closing = [
                 Spacer(1, 14),
-                *_cards(summary_figures(out, blocks), "All units Total", avail, bold, rupee_ok, base_style),
-            ]
+                *_cards(
+                    summary_figures(out, blocks, layout.figure_rows), "All units Total", avail, bold, rupee_ok,
+                    base_style, highlight=layout.highlight,
+                ),
+            ]  # fmt: skip
     else:
         story.append(Paragraph("No records match the selected filters.", base_style("e", fontSize=10, leading=13)))
     if lines:
-        # the Final Summary: the company's totals across all units, in four large cards
+        # the Final Summary: the company's totals across all units, in large cards
+        employees = sum(b.count for b in blocks)
         closing += [
             Spacer(1, 16),
             *_cards(
-                final_figures(out), FINAL_TITLE, avail, bold, rupee_ok, base_style, size=21, highlight=FINAL_HIGHLIGHT
+                final_figures(out, layout.final_figures, employees), FINAL_TITLE, avail, bold, rupee_ok, base_style,
+                size=21, highlight=layout.final_highlight,
             ),
-        ]
+        ]  # fmt: skip
     story.append(KeepTogether([*closing, Spacer(1, 10), _signatures(avail, bold, base_style)]))
 
     for section in out.sections:
@@ -768,9 +814,9 @@ def statement_pdf(out, blocks) -> bytes:
         )
         story += [band, Spacer(1, 4)]
         s_cols = [c for c in section.columns if c.key != "unit"]
-        s_lines = section_lines(section, blocks, STATUTORY_SUM_KEYS)
+        s_lines = section_lines(section, blocks, layout.statutory_sum_keys)
         if s_lines:
-            story += _table(s_cols, s_lines, STATUTORY_SUM_KEYS, avail, regular, bold, base_style)
+            story += _table(s_cols, s_lines, layout.statutory_sum_keys, avail, regular, bold, base_style)
         else:
             story.append(Paragraph(escape(section.empty), base_style("se", fontSize=10, leading=13, textColor=MUTED)))
 
@@ -1066,11 +1112,12 @@ def _print_setup(ws, header_row: int, last_row: int, n: int, footer: str) -> Non
     ws.oddFooter.right.text = "Page &P of &N"
 
 
-def statement_xlsx(out, blocks) -> bytes:
-    """The Salary Statement workbook, unit by unit (see the module docstring)."""
+def statement_xlsx(out, blocks, layout: StatementLayout | None = None) -> bytes:
+    """The Salary Statement workbook, unit by unit (see the module docstring). `layout`: the staff statement's when not
+    given."""
     if blocks is None or out.truncated:
         return build_xlsx(out)
-    from .hr_reports_salary_statement import STATUTORY_SUM_KEYS, SUM_KEYS
+    layout = layout or staff_layout()
 
     co = company()
     money = "Amounts in ₹"
@@ -1081,7 +1128,7 @@ def statement_xlsx(out, blocks) -> bytes:
     ws.title = sheet_title(out.spec.title)
     cols = list(out.columns)
     sheet = _Sheet(ws, cols)
-    lines = statement_lines(blocks, SUM_KEYS, out.totals)
+    lines = statement_lines(blocks, layout.sum_keys, out.totals)
     sheet.widths(lines)
 
     _letterhead(ws, sheet, out, out.spec.title, money)
@@ -1100,34 +1147,40 @@ def statement_xlsx(out, blocks) -> bytes:
             sheet.line(line)
         title = f"{block.title} Total"  # e.g. "HO – Head Office Total"
         if several:
-            end = sheet.cards(unit_figures(block), ws.max_row + 2, title, unit=block.label)
+            end = sheet.cards(
+                unit_figures(block, layout.figure_rows), ws.max_row + 2, title, unit=block.label,
+                highlight=layout.highlight,
+            )  # fmt: skip
             sheet.cards(
-                final_figures_for(block.total),
+                final_figures_for(block.total, layout.final_figures, block.count),
                 end + 2,
                 f"{block.title}: {FINAL_TITLE}",
                 unit=block.label,
                 size=20,
-                highlight=FINAL_HIGHLIGHT,
+                highlight=layout.final_highlight,
             )  # the unit's own Final Summary
         else:
-            closing = (unit_figures(block), title)
+            closing = (unit_figures(block, layout.figure_rows), title)
+    employees = sum(b.count for b in blocks)
     if several:
-        employees = sum(b.count for b in blocks)
         sheet.line(Line(BAND, text="All units", count=employees))  # on a fresh printed page
         for b in blocks:
             sheet.line(Line(UNIT_TOTAL, values=b.total, text=f"{b.title} total"))  # no Unit: hidden by a unit filter
         if grand:
             sheet.line(grand)
-        closing = (summary_figures(out, blocks), "All units Total")
+        closing = (summary_figures(out, blocks, layout.figure_rows), "All units Total")
     last_row = ws.max_row
     if not lines:
         sheet.text_row("No records match the selected filters.", sheet.f_note, merge=False)
-        closing = (summary_figures(out, blocks), "Total")
+        closing = (summary_figures(out, blocks, layout.figure_rows), "Total")
     figures, title = closing
-    end = sheet.cards(figures, ws.max_row + 3, title)
+    end = sheet.cards(figures, ws.max_row + 3, title, highlight=layout.highlight)
     if lines:
-        # the Final Summary: the company's totals across all units, in four large cards
-        end = sheet.cards(final_figures(out), end + 3, FINAL_TITLE, size=20, highlight=FINAL_HIGHLIGHT)
+        # the Final Summary: the company's totals across all units, in large cards
+        end = sheet.cards(
+            final_figures(out, layout.final_figures, employees), end + 3, FINAL_TITLE, size=20,
+            highlight=layout.final_highlight,
+        )  # fmt: skip
     sheet.signatures(end + 3)
     ws.freeze_panes = f"D{header_row + 1}"
     _print_setup(ws, header_row, last_row, len(cols), f"{co.name} - {out.spec.title}")
@@ -1143,7 +1196,7 @@ def statement_xlsx(out, blocks) -> bytes:
         sws = wb.create_sheet(name)
         s_cols = list(section.columns)
         s_sheet = _Sheet(sws, s_cols)
-        s_lines = section_lines(section, blocks, STATUTORY_SUM_KEYS)
+        s_lines = section_lines(section, blocks, layout.statutory_sum_keys)
         s_sheet.widths(s_lines)
         s_sheet.text_row(
             section.title.upper(),

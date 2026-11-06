@@ -648,7 +648,18 @@ describe("one slip's actions", () => {
     expect(h.whatsappSlip).toHaveBeenCalledWith(1);
     expect(h.toast).toHaveBeenCalledWith({
       title: "WhatsApp sent to Asha Kumar",
-      description: "Salary slip delivered to +91 98765 43210",
+      description: "Sent (+91 98765 43210).",
+    });
+  });
+
+  it("a WhatsApp that waits in the send queue says it is queued, not delivered", async () => {
+    h.whatsappSlip.mockResolvedValue({ ok: true, sentTo: "+91 98765 43210", status: "queued", queued: true });
+    mount();
+    click(must("sp-slip-1-whatsapp"));
+    await settle();
+    expect(h.toast).toHaveBeenCalledWith({
+      title: "WhatsApp queued for Asha Kumar",
+      description: "It goes out in turn (+91 98765 43210), within the sending limits. See WhatsApp Control → Messages.",
     });
   });
 

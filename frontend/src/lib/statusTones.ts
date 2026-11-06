@@ -36,13 +36,18 @@ export const REQUEST_STATUS_TONE: Record<string, Tone> = {
   rejected: "danger",
 };
 
-/** WhatsApp message lifecycle: pending -> sent -> delivered -> read, or failed. */
+/** WhatsApp message lifecycle: queued -> sending -> pending -> sent -> delivered -> read, or failed; a queued message
+ *  can instead expire (too late to be useful, never sent) or be skipped (blocked by a rule). */
 export const WHATSAPP_STATUS_TONE: Record<string, Tone> = {
+  queued: "warning",
+  sending: "info",
   pending: "warning",
   sent: "info",
   delivered: "success",
   read: "accent",
   failed: "danger",
+  expired: "neutral",
+  skipped: "caution",
 };
 
 /** Email log: sent (the mail server accepted it), failed (could not complete), blocked (held back by a switch or the machine). */

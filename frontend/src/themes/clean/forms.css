@@ -9,7 +9,7 @@
    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
 /* A field with border-0 is part of a composite control (a search box inside a bordered row): it keeps its own look. */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"], [data-slot="input-group-control"]):not(
     [class~="border-0"],
     [class~="border-none"]
@@ -24,7 +24,7 @@ html[data-theme="clean"]:not([data-md-theme])
     border-color 0.15s ease,
     background-color 0.15s ease;
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
     [class~="border-0"],
     [class~="border-none"]
@@ -32,7 +32,7 @@ html[data-theme="clean"]:not([data-md-theme])
   border-color: var(--clean-n-500);
   background-color: var(--clean-surface);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
     [class~="border-0"],
     [class~="border-none"]
@@ -41,7 +41,7 @@ html[data-theme="clean"]:not([data-md-theme])
   border-color: var(--clean-focus);
   box-shadow: none;
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
     [class~="border-0"],
     [class~="border-none"]
@@ -49,12 +49,12 @@ html[data-theme="clean"]:not([data-md-theme])
   outline: 2px solid var(--clean-focus);
   outline-offset: 0;
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
     [class~="border-0"],
     [class~="border-none"]
   ):disabled,
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"]):not([class~="border-0"], [class~="border-none"]):read-only:not(
     [type="date"],
     [type="time"],
@@ -66,7 +66,7 @@ html[data-theme="clean"]:not([data-md-theme])
   color: var(--clean-n-600);
   border-color: var(--clean-line);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):not(
     [class~="border-0"],
     [class~="border-none"]
@@ -74,28 +74,28 @@ html[data-theme="clean"]:not([data-md-theme])
   opacity: 1;
   color: var(--clean-disabled-ink);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"])[aria-invalid="true"] {
   border-color: hsl(var(--destructive));
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"])[aria-invalid="true"]:focus-visible {
   outline-color: hsl(var(--destructive));
 }
 
-html[data-theme="clean"]:not([data-md-theme]) :is(input, textarea)::placeholder,
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="select-trigger"][data-placeholder],
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="select-trigger"] [data-placeholder] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is(input, textarea)::placeholder,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="select-trigger"][data-placeholder],
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="select-trigger"] [data-placeholder] {
   color: var(--clean-n-400);
   opacity: 1;
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="select-trigger"] > svg {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="select-trigger"] > svg {
   color: var(--clean-n-500);
   opacity: 1;
 }
 
 /* a field group (a field with an icon or a button attached): one box */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="input-group"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="input-group"] {
   border-color: var(--clean-line-strong);
   border-radius: var(--clean-radius);
   box-shadow: none;
@@ -103,7 +103,7 @@ html[data-theme="clean"]:not([data-md-theme]) [data-slot="input-group"] {
 }
 
 /* the old clay field and the hand-written controls in the pages: the same colours and corners */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     select,
     textarea,
@@ -128,14 +128,15 @@ html[data-theme="clean"]:not([data-md-theme])
 }
 /* a bare input that asks for no fill (bg-transparent) is the inside of a composite box (a search box with an icon, a
    bordered wrapper that shows the focus ring): the wrapper is the field, so the input keeps its transparent look */
-html[data-theme="clean"]:not([data-md-theme]) :is(select, textarea, input):not([data-slot])[class~="bg-transparent"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is(select, textarea, input):not([data-slot])[class~="bg-transparent"] {
   color: var(--clean-ink);
 }
 
 /* a native <select>: the browser's own arrow is drawn in the operating system's colours (and not at all on some displays), so
    it is hidden and the theme draws one (--clean-select-chevron, tokens.css). Not for a Radix Select's hidden twin
    (aria-hidden), a list box (multiple / size), or a select a page has already given its own arrow (appearance-none). */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   select:not([data-slot], [multiple], [size], [aria-hidden="true"], [class~="appearance-none"]) {
   -webkit-appearance: none;
   appearance: none;
@@ -147,7 +148,7 @@ html[data-theme="clean"]:not([data-md-theme])
 }
 
 /* the search row at the top of a popover list (the employee pickers): the row has its own line under it, the input has none */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-slot="popover-panel"]
   > div[class~="border-b"]
   > input[data-slot="input"] {
@@ -157,24 +158,25 @@ html[data-theme="clean"]:not([data-md-theme])
   box-shadow: none;
   outline: none;
 }
-html[data-theme="clean"]:not([data-md-theme]) :is(select, textarea, input):not([data-slot]):disabled {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is(select, textarea, input):not([data-slot]):disabled {
   background-color: var(--clean-disabled-bg);
   color: var(--clean-disabled-ink);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is(select, textarea, input):not([data-slot]):is(:focus, :focus-visible) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is(select, textarea, input):not([data-slot]):is(:focus, :focus-visible) {
   border-color: var(--clean-focus);
   box-shadow: none;
 }
 
 /* the browser's own date, time and month pickers */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"], input[type="week"]) {
   color-scheme: light;
   font-variant-numeric: tabular-nums;
 }
 
 /* a file field: its button is a secondary button */
-html[data-theme="clean"]:not([data-md-theme]) input[type="file"]::file-selector-button {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) input[type="file"]::file-selector-button {
   background: var(--clean-n-100);
   color: var(--clean-n-800);
   border: 1px solid var(--clean-line-mid);
@@ -184,17 +186,17 @@ html[data-theme="clean"]:not([data-md-theme]) input[type="file"]::file-selector-
   font-weight: 500;
   cursor: pointer;
 }
-html[data-theme="clean"]:not([data-md-theme]) input[type="file"]::file-selector-button:hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) input[type="file"]::file-selector-button:hover {
   background: var(--clean-n-200);
 }
 
 /* labels and the small text around a field */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="field-label"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="field-label"] {
   color: var(--clean-n-700);
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="field-description"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="field-description"] {
   color: var(--clean-muted);
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="field-error"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="field-error"] {
   color: hsl(var(--destructive));
 }

@@ -35,6 +35,7 @@ import {
   useListSalarySlips,
   usePayrollSettings,
   useWhatsAppSalarySlip,
+  whatsappSendToast,
   type PayCycle,
   type PayrollKind,
   type SalarySlipItem,
@@ -227,10 +228,7 @@ export function PayslipsPanel({ kind, cycle, accent, testIdPrefix, month, year, 
     setWhatsapping(slip.id);
     try {
       const result = await whatsappMutation.mutateAsync(slip.id);
-      toast({
-        title: `WhatsApp sent to ${slip.employeeName}`,
-        description: `Salary slip delivered to ${result.sentTo}`,
-      });
+      toast(whatsappSendToast(result, slip.employeeName));
     } catch (err) {
       toast({ title: "Failed to send via WhatsApp", description: errorText(err), variant: "destructive" });
     } finally {

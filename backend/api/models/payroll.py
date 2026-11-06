@@ -350,6 +350,11 @@ class Payroll(models.Model):
     # NULL for staff rows and for production rows generated before the cycles existed; those are shown with the
     # cycle their employee is assigned to now.
     pay_cycle = models.TextField(choices=CYCLE_CHOICES, null=True, blank=True, db_column="pay_cycle")
+    # The days a production period row actually pays (production_coverage.py), as a sorted, non-overlapping list of
+    # {"from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}. NULL = the whole period_start..period_end (every row generated before
+    # 2026-11-06 and every ordinary run). Set only when an employee moved between pay cycles: days another payroll already
+    # paid are left out, and days no cycle paid (catch-up days, before period_start) are added.
+    paid_ranges = models.JSONField(null=True, blank=True, db_column="paid_ranges")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 

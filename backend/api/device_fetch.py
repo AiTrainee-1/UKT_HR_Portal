@@ -224,7 +224,9 @@ def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict,
 
     matched = []
     unmatched: dict[str, dict] = {}
-    restricted = 0  # punches of employees limited to other devices (Device Control): not theirs, so not counted anywhere else
+    restricted = (
+        0  # punches of employees limited to other devices (Device Control): not theirs, so not counted anywhere else
+    )
     rules = device_rules()
     for p in punches:
         emp = by_code.get(p.user_id.strip())

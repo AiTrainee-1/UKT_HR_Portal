@@ -63,7 +63,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/shifts",
   // Outpass, Visitors and Tea Break (Outpass and Tea Break with tabs and nested tabs in the path)
   /^\/hr\/outpass-visitors(\/|$)/,
-  "/hr/geo-attendance",
+  // Geo Attendance (a section per address: /hr/geo-attendance/live-map, /journeys/12 ...): its title row has the Refresh button
+  /^\/hr\/geo-attendance(\/|$)/,
   "/hr/missing-punch",
 ];
 

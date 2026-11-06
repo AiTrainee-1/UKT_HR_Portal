@@ -96,11 +96,7 @@ export default function BiometricDeviceStatus() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
-              <Switch
-                checked={autoRefresh}
-                onCheckedChange={setAutoRefresh}
-                aria-label="Auto-refresh every minute"
-              />
+              <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} aria-label="Auto-refresh every minute" />
               Auto-refresh
             </label>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/hr/settings")}>

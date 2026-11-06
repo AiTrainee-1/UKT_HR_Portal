@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { AlertTriangle, ArrowRight, ArrowUpRight, CheckCircle2, Play, RefreshCcw } from "lucide-react";
+import { AlertTriangle, ArrowRight, ArrowUpRight, CalendarClock, CheckCircle2, Play, RefreshCcw } from "lucide-react";
 import { Link } from "wouter";
 import { inr, plural } from "@/components/payroll/kit/format";
 import { SEVERITY_META } from "@/components/payroll/kit/issue-meta";
@@ -13,6 +13,7 @@ import type { EmployeeRules, PeriodEmployee } from "@/lib/api-client/custom-hook
 import type { Tone } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
+import { coverageLines } from "./coverage";
 import { ROSTER_STATE_LABEL, rosterState, type RosterState } from "./logic";
 
 const STATE_TONE: Record<RosterState, Tone> = {
@@ -111,6 +112,8 @@ function RosterRowImpl({
   const code = e.employeeCode;
   const hasRate = e.salaryPerShift != null && e.salaryPerShift > 0;
   const fix = state === "blocked" ? classifySkipReason(e.blockedReason ?? "", e.employeeId) : null;
+  // after a pay-cycle change: which days this payslip pays (a blocked row already says why in its reason)
+  const coverage = state === "blocked" ? null : coverageLines(e.coverage);
 
   return (
     <li
@@ -159,6 +162,22 @@ function RosterRowImpl({
               <span className="font-semibold text-amber-700">Not set</span>
             )}
           </p>
+          {coverage && (
+            <div className="mt-1.5 space-y-0.5 text-[11px]" data-testid={`pcp-roster-coverage-${code}`}>
+              {coverage.paid && (
+                <p className="flex items-start gap-1 font-medium text-sky-800">
+                  <CalendarClock size={12} className="mt-px shrink-0" />
+                  <span>{coverage.paid}</span>
+                </p>
+              )}
+              {coverage.catchUp.map((line) => (
+                <p key={line} className="pl-4 font-medium text-violet-700">
+                  {line}
+                </p>
+              ))}
+              {coverage.legacy && <p className="pl-4 text-gray-500">{coverage.legacy}</p>}
+            </div>
+          )}
           {state === "blocked" && (
             <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-red-700">
               <span>{e.blockedReason}</span>
@@ -223,12 +242,16 @@ function RosterRowImpl({
               <Play size={11} /> Generate
             </Button>
           )}
-          {state === "pending" && (
+          {(state === "pending" || state === "paid") && (
             <Button
               size="icon"
               variant="ghost"
-              className="h-8 w-8 text-amber-700"
-              title={`Generate again for ${e.name}: recompute this payslip`}
+              className={cn("h-8 w-8", state === "paid" ? "text-emerald-700" : "text-amber-700")}
+              title={
+                state === "paid"
+                  ? `Generate again for ${e.name}: recompute this payslip (it stays Cleared)`
+                  : `Generate again for ${e.name}: recompute this payslip`
+              }
               aria-label={`Generate again for ${e.name}`}
               disabled={busy}
               onClick={() => onGenerateAgain(e)}

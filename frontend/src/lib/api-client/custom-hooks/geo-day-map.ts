@@ -1,6 +1,6 @@
 // geo-day-map: the On-Duty Map's one-request feed of a day's journeys (GET /api/tracking/journeys/day-map?date=YYYY-MM-DD): every
 // journey that was recording on that India day with its route (the segments: travel polylines, stops, gaps), so the map draws
-// every employee's journey without one detail request per journey. Read-only; refreshed every 20 s like the rest of the board.
+// every employee's journey without one detail request per journey. Read-only; refreshed every 30 s.
 import { useQuery } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
 import {
@@ -46,7 +46,8 @@ export const useJourneyDayMap = (date: string, enabled = true) =>
         await customFetch<unknown>(`/api/tracking/journeys/day-map?date=${encodeURIComponent(date)}`),
         date,
       ),
-    refetchInterval: 20_000,
+    // a day's routes, not a live board: every 30 s, like the On-Duty feed it is drawn with
+    refetchInterval: 30_000,
     retry: false,
     enabled,
   });

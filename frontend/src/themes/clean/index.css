@@ -1,5 +1,5 @@
 /* Clean Professional - the theme chosen in Settings -> Themes (id "clean", src/lib/themes.ts). Imported once, last, from
-   src/index.css. Everything here is scoped to html[data-theme="clean"]:not([data-md-theme]): it only applies when the theme
+   src/index.css. Everything here is scoped to html[data-theme="clean"][data-clean-theme]:not([data-md-theme]): it only applies when the theme
    is on, and never inside the Managing Director's portal (which keeps its own skin in every theme). clean-theme.test.ts
    fails when a rule is not scoped like that, when a colour is written anywhere but tokens.css, or when !important is
    used outside the places listed there. The default theme and every other theme are untouched.

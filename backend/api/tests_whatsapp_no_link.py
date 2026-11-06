@@ -111,8 +111,11 @@ class CatalogueTests(SimpleTestCase):
         self.assertFalse(hasattr(whatsapp_notifications, "portal_link"))
         self.assertNotIn("link_url", inspect.signature(svc.send_notification).parameters)
         self.assertEqual(list(inspect.signature(svc.send_text_message).parameters), ["to_phone", "text"])
+        # the send queue's sender is handed a row and nothing else (no link, no preview card)
+        from . import whatsapp_dispatcher
+
         self.assertEqual(
-            list(inspect.signature(svc._deliver).parameters), ["log_id", "phone", "text", "contact", "on_sent"]
+            list(inspect.signature(whatsapp_dispatcher._send).parameters), ["row", "fixed_now", "allow_retry"]
         )
 
     def test_no_backend_source_file_builds_or_reads_the_portal_link_again(self):
@@ -233,8 +236,8 @@ class StripLinkLinesTests(SimpleTestCase):
 
     def test_the_default_wording_before_the_change_becomes_the_default_wording_now(self):
         for key, note_label in (
-            ("approval_approved", "💬 Note: {{comment}}"),
-            ("approval_rejected", "📝 Reason: {{comment}}"),
+            ("approval_approved", "Note: {{comment}}"),
+            ("approval_rejected", "Reason: {{comment}}"),
         ):
             now = catalog.get(key).body
             before = now.replace(f"{note_label}\n\n", f"{note_label}\n{OLD_LINK_LINE}\n\n")
@@ -366,5 +369,5 @@ class GateSenderTests(TestCase):
             self.assertEqual(payload["type"], "text")
             self.assertNotIn("url", payload)
             self.assertNotIn("http", payload["message"])
-        self.assertIn("Gate OUT Recorded", payloads[0]["message"])
-        self.assertIn("Gate IN Recorded", payloads[1]["message"])
+        self.assertIn("Gate Exit Recorded", payloads[0]["message"])
+        self.assertIn("Gate Return Recorded", payloads[1]["message"])

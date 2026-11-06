@@ -7,6 +7,8 @@ import {
   PAY_CYCLE_INFO,
   isPayCycle,
   type AssignProductionCycleResult,
+  type CycleChangePreview,
+  type CycleChangePreviewEmployee,
   type PayCycle,
   type ProductionEmployeeCounts,
   type ProductionEmployeeFilters,
@@ -166,8 +168,10 @@ export type Plan = {
   movingCount: number;
   /** Already on the target (or, for a removal, on no cycle): the server reports them as unchanged. */
   alreadyThere: number;
-  /** Unassigned people joining the target cycle: nothing to confirm. */
+  /** Unassigned people joining the target cycle: nothing to confirm, unless they were paid before. */
   fromNone: number;
+  /** Of those, the ones who already have payroll (they are warned that days already paid are never paid again). */
+  fromNoneWithHistory: number;
 };
 
 /** What assigning `rows` to `target` (null = take them off their cycle) would do. */
@@ -175,10 +179,13 @@ export function planAssignment(rows: readonly ProductionEmployeeRow[], target: P
   const byCycle = new Map<PayCycle, number>();
   let alreadyThere = 0;
   let fromNone = 0;
+  let fromNoneWithHistory = 0;
   for (const row of rows) {
     if (row.payCycle === target) alreadyThere++;
-    else if (row.payCycle === null) fromNone++;
-    else byCycle.set(row.payCycle, (byCycle.get(row.payCycle) ?? 0) + 1);
+    else if (row.payCycle === null) {
+      fromNone++;
+      if (row.lastPayroll) fromNoneWithHistory++;
+    } else byCycle.set(row.payCycle, (byCycle.get(row.payCycle) ?? 0) + 1);
   }
   const moving = PAY_CYCLES.filter((c) => byCycle.has(c)).map((c) => ({ from: c, count: byCycle.get(c)! }));
   return {
@@ -189,11 +196,16 @@ export function planAssignment(rows: readonly ProductionEmployeeRow[], target: P
     movingCount: moving.reduce((n, m) => n + m.count, 0),
     alreadyThere,
     fromNone,
+    fromNoneWithHistory,
   };
 }
 
-/** Moving someone off a cycle (or off all of them) is confirmed first; adding unassigned people is not. */
-export const needsConfirmation = (plan: Plan): boolean => plan.movingCount > 0;
+/**
+ * Moving someone off a cycle (or off all of them) is confirmed first, and so is putting an unassigned employee who was
+ * paid before on a cycle (the confirmation carries the payroll warning). Adding people with no payroll yet is not.
+ */
+export const needsConfirmation = (plan: Plan): boolean =>
+  plan.movingCount > 0 || (plan.target !== null && plan.fromNoneWithHistory > 0);
 
 export const employees = (n: number): string => `${n} ${n === 1 ? "employee" : "employees"}`;
 
@@ -215,16 +227,21 @@ export function confirmWording(plan: Plan): { title: string; lines: string[] } {
   }
   const to = PAY_CYCLE_INFO[plan.target].label;
   const title =
-    plan.moving.length === 1
-      ? `Move ${employees(n)} from ${PAY_CYCLE_INFO[plan.moving[0].from].label} to ${to}?`
-      : `Move ${employees(n)} to ${to}?`;
+    plan.moving.length === 0
+      ? `Assign ${employees(plan.fromNone)} to ${to}?`
+      : plan.moving.length === 1
+        ? `Move ${employees(n)} from ${PAY_CYCLE_INFO[plan.moving[0].from].label} to ${to}?`
+        : `Move ${employees(n)} to ${to}?`;
   if (plan.moving.length > 1) {
     lines.push(`${joinWithAnd(plan.moving.map((m) => `${m.count} from ${PAY_CYCLE_INFO[m.from].label}`))}.`);
   }
   lines.push(
-    `From the next ${to} period they are paid on the ${to} page. Payroll that was already generated on their previous cycle stays there until it is paid.`,
+    plan.moving.length === 0
+      ? `From the next ${to} period they are paid on the ${to} page.`
+      : `From the next ${to} period they are paid on the ${to} page. Payroll that was already generated on their previous cycle stays there until it is paid.`,
   );
-  if (plan.fromNone > 0) lines.push(`${employees(plan.fromNone)} with no cycle yet will simply join ${to}.`);
+  if (plan.fromNone > 0 && plan.moving.length > 0)
+    lines.push(`${employees(plan.fromNone)} with no cycle yet will simply join ${to}.`);
   if (plan.alreadyThere > 0) lines.push(`${employees(plan.alreadyThere)} already on ${to} stay as they are.`);
   return { title, lines };
 }
@@ -270,6 +287,19 @@ export function assignmentToast(
     );
   }
   return { title, lines, variant: result.skipped.length > 0 ? "destructive" : undefined };
+}
+
+// ── the payroll warning of a move (GET /api/employees/production/cycle-change-preview) ──
+
+/** The employees the move warns about: only those who change cycle AND already have payroll, in the order sent. */
+export const previewWarnings = (preview: CycleChangePreview | undefined | null): CycleChangePreviewEmployee[] =>
+  (preview?.employees ?? []).filter((e) => e.warn && !!e.message);
+
+/** "Payroll already generated for 3 of these employees" (the heading over the warnings). */
+export function warningsHeading(count: number, total: number): string {
+  if (total <= 1 || count === total)
+    return count === 1 ? "Payroll already generated" : `Payroll already generated for ${count} employees`;
+  return `Payroll already generated for ${count} of these ${total} employees`;
 }
 
 /** "Ravi Kumar (E0123)" for the toast and the confirmation. */

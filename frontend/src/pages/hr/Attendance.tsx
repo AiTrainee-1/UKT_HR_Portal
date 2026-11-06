@@ -2,25 +2,18 @@ import { useState, useRef, useEffect, useMemo, memo } from "react";
 import { useLocation } from "wouter";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import HrLayout from "@/components/HrLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { KpiRunningBorder } from "@/components/ui/KpiLoader";
 import { useToast } from "@/hooks/use-toast";
 import { TONE } from "@/lib/statusTones";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChartContainer } from "@/components/ui/chart";
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
-} from "recharts";
-import {
-  useAttendanceSummary, useAttendanceDaily, useAttendanceMonthlyTrend,
+  useAttendanceDaily,
   useAttendanceEmployeeHistory, useCreateManualAttendance, useListEmployeesLite,
   getAttendanceSummaryQueryKey, getAttendanceDailyQueryKey,
   getAttendanceMonthlyTrendQueryKey,
@@ -30,8 +23,8 @@ import {
   useListBiometricDevices, type SyncBiometricMode, type SyncDeviceId,
   useListAutoSyncRules, useCreateAutoSyncRule, useUpdateAutoSyncRule, useDeleteAutoSyncRule,
   type AutoSyncRuleItem, type AutoSyncRuleInput,
-  type BiometricDeviceItem, type TrendPoint, type TypedAttendanceSummary,
-  usePayrollSettings,
+  type BiometricDeviceItem,
+  usePayrollSettings, useListHolidays,
 } from "@/lib/api-client/custom-hooks";
 import type { Employee } from "@/lib/api-client";
 import { lateDetectionFlags } from "@/lib/late-detection";
@@ -45,17 +38,16 @@ import BiometricSyncPipeline from "@/components/BiometricSyncPipeline";
 import { SkippedPunchesButton } from "@/components/SkippedPunchesButton";
 import { SyncStatusIndicator } from "@/components/SyncStatusIndicator";
 import AttendanceSearchSection from "./AttendanceSearch";
-import { DataPagination } from "@/components/ui/DataPagination";
+import { RollCall } from "./attendance/RollCall";
+import { ArrivalsChart } from "./attendance/ArrivalsChart";
+import { DayList } from "./attendance/DayList";
+import { MonthPanel } from "./attendance/MonthPanel";
+import { PunchSources } from "./attendance/PunchSources";
+import { PunchTimeline } from "./attendance/PunchTimeline";
+import { arrivalCurve, arrivalStats, countBoard, parseStatusFilter, type StatusFilter } from "./attendance/logic";
 import {
-  Users, UserCheck, UserX, CalendarDays, Plus,
-  Factory, Briefcase, Fingerprint, PenLine, ChevronRight, RefreshCw,
-  Search, ChevronDown, CalendarClock, Trash2,
-  TrendingUp, Calendar, ChevronLeft, Radar,
+  Plus, Factory, Briefcase, Fingerprint, PenLine, Search, Radar, ChevronLeft, ChevronRight,
 } from "lucide-react";
-
-// ── Pagination ─────────────────────────────────────────────────────────────
-
-const PAGE_SIZE = 10;
 
 const HISTORY_STATUS_META: Record<string, { label: string; cls: string }> = {
   present:    { label: "Present",    cls: TONE.success },
@@ -66,35 +58,17 @@ const HISTORY_STATUS_META: Record<string, { label: string; cls: string }> = {
   future:     { label: "Upcoming",   cls: "bg-gray-50 text-gray-400 border-gray-200" },
 };
 
-
-/** Thin wrapper over the shared pagination bar, kept so this page's existing
- *  call sites and prop names don't have to change. */
-function Pagination({
-  page,
-  totalPages,
-  total,
-  onPage,
-}: {
-  page: number;
-  totalPages: number;
-  total: number;
-  onPage: (p: number) => void;
-}) {
-  return (
-    <DataPagination
-      page={page}
-      totalPages={totalPages}
-      totalItems={total}
-      pageSize={PAGE_SIZE}
-      onPageChange={onPage}
-      className="px-4 border-t bg-gray-50/60"
-    />
-  );
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-const today = () => new Date().toISOString().slice(0, 10);
+/** The local calendar date (YYYY-MM-DD): the factory's day, not the UTC one (which is still yesterday before 05:30 IST). */
+const localIso = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const today = () => localIso(new Date());
+const shiftDay = (iso: string, by: number) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return localIso(new Date(y, m - 1, d + by));
+};
+const nextIso = (iso: string) => shiftDay(iso, 1);
 
 /** What the page keeps in its address (?date=&month=&year=&status=), so coming back from another page (the Attendance Edit
  *  page, a details page) or reloading lands on the same day, month and filter. A value at its default stays out of it. */
@@ -103,169 +77,14 @@ const currentMonth = () => new Date().getMonth() + 1;
 const currentYear = () => new Date().getFullYear();
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const MONTH_FULL  = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-
-const STATUS_CFG: Record<string, { label: string; className: string }> = {
-  present:  { label: "Present",  className: TONE.success },
-  manual:   { label: "Manual",   className: TONE.accent },
-  on_leave: { label: "On Leave", className: TONE.info },
-  absent:   { label: "Absent",   className: TONE.danger },
-};
-
-// ── Summary Card ───────────────────────────────────────────────────────────
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  sub,
-  colorCls,
-  accent,
-  isLoading,
-}: {
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  label: string;
-  value: number | string;
-  sub?: React.ReactNode;
-  colorCls: string;
-  /** Real colour value for the loading tracer. `colorCls` is a Tailwind
-   *  class, which cannot be fed to a CSS custom property -so the hex is
-   *  passed separately, exactly as the Dashboard's KpiCard does. */
-  accent?: string;
-  isLoading?: boolean;
-}) {
-  return (
-    <Card className="relative border">
-      {isLoading && <KpiRunningBorder accent={accent} radius={12} />}
-      <CardContent className="p-5">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
-          <div className={`p-1.5 rounded-lg ${colorCls}`}>
-            <Icon size={14} className="text-white" />
-          </div>
-        </div>
-        <p className="mb-2 flex h-9 items-center text-3xl font-black text-gray-900 leading-none">
-          {isLoading ? "" : value}
-        </p>
-        {sub && !isLoading && <div className="text-xs text-gray-500">{sub}</div>}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ── Employee Table ─────────────────────────────────────────────────────────
-
-// memo: the page re-renders for things this table does not show (sync progress, dialogs opening); it only redraws when
-// its rows, loading state or click handler change.
-const EmployeeTable = memo(function EmployeeTable({
-  records,
-  isLoading,
-  onClickEmployee,
-}: {
-  records: ReturnType<typeof useAttendanceDaily>["data"];
-  isLoading: boolean;
-  onClickEmployee: (id: number) => void;
-}) {
-  const [page, setPage] = useState(1);
-  const all  = records ?? [];
-  const totalPages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
-  const safePage   = Math.min(page, totalPages);
-  const rows       = all.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
-
-  if (isLoading) {
-    return (
-      <div className="space-y-2 p-4">
-        {Array.from({ length: PAGE_SIZE }).map((_, i) => (
-          <div key={i} className="flex gap-3">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-5 w-20" />
-            <Skeleton className="h-5 w-24" />
-            <Skeleton className="h-5 w-16" />
-          </div>
-        ))}
-      </div>
-    );
-  }
-  if (all.length === 0) {
-    return (
-      <div className="text-center py-12 text-muted-foreground text-sm">
-        No employee records for this date.
-      </div>
-    );
-  }
-  return (
-    <>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b bg-gray-50">
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Employee</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Code</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Department</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">First IN</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Last OUT</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Source</th>
-              <th className="px-4 py-2.5" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((rec) => {
-              const cfg = STATUS_CFG[rec.status] ?? STATUS_CFG.absent;
-              return (
-                <tr
-                  key={rec.employeeId}
-                  className="border-b hover:bg-gray-50 cursor-pointer transition-colors"
-                  onClick={() => onClickEmployee(rec.employeeId)}
-                >
-                  <td className="px-4 py-3 font-medium text-gray-900">{rec.employeeName}</td>
-                  <td className="px-4 py-3 text-gray-500 text-xs font-mono">{rec.employeeCode}</td>
-                  <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{rec.department ?? "—"}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>
-                      <CompensationChip day={rec} size="sm" />
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-700">
-                    {rec.firstPunch ?? <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-700 hidden lg:table-cell">
-                    {rec.lastPunch ?? <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className="px-4 py-3 hidden lg:table-cell">
-                    {rec.sourceLabel ? (
-                      <span className="flex items-center gap-1 text-xs text-gray-400">
-                        {rec.sourceLabel === "Biometric" ? <Fingerprint size={11} /> : <PenLine size={11} />}
-                        {rec.sourceLabel}
-                      </span>
-                    ) : <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className="px-4 py-3">
-                    <ChevronRight size={14} className="text-gray-300" />
-                  </td>
-                </tr>
-              );
-            })}
-            {Array.from({ length: PAGE_SIZE - rows.length }).map((_, i) => (
-              <tr key={`fill-${i}`} className="border-b">
-                <td className="h-[53px]" colSpan={8} />
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <Pagination
-        page={safePage}
-        totalPages={totalPages}
-        total={all.length}
-        onPage={setPage}
-      />
-    </>
-  );
-});
 
 // ── Main Page ──────────────────────────────────────────────────────────────
+//
+// Staff / Production Attendance (2026-11-06 redesign). Top to bottom: the title row (the MD portal slots its own pieces into
+// it, so its shape stays: title block + one group of buttons), the day's roll call with the status cards that filter the
+// list, when people arrived, the list itself with every punch, the month with its report, where the day's punches came from,
+// and the employee search. Everything on it reads the same endpoints as before plus the additive daily keys (punches,
+// leaveState ...); nothing here computes or changes an attendance verdict.
 
 export default function AttendancePage() {
   const queryClient = useQueryClient();
@@ -288,10 +107,8 @@ export default function AttendancePage() {
 
   const [showManualDialog, setShowManualDialog] = useState(false);
 
-  const statusFilter: "all" | "present" | "absent" | "on_leave" = (
-    ["present", "absent", "on_leave"] as const
-  ).find((s) => s === urlState.status) ?? "all";
-  const setStatusFilter = (v: "all" | "present" | "absent" | "on_leave") => setUrlState({ status: v });
+  const statusFilter = parseStatusFilter(urlState.status);
+  const setStatusFilter = (v: StatusFilter) => setUrlState({ status: v });
   const [detailEmpId, setDetailEmpId] = useState<number | null>(null);
   const [syncMode, setSyncMode] = useState<SyncBiometricMode>("day");
   // Multi-select checklist: which specific devices to sync. Empty selection
@@ -392,48 +209,45 @@ export default function AttendancePage() {
   }, [isSyncing, detailEmpId, queryClient]);
 
   // Summary + trend are filtered server-side by the selected sub-section
-  const { data: summary, isLoading: summaryLoading } = useAttendanceSummaryTyped(selectedDate, view);
+  const { data: summary } = useAttendanceSummaryTyped(selectedDate, view);
   const { data: dailyList, isLoading: dailyLoading }  = useAttendanceDaily(selectedDate);
   const { data: monthlyTrend } = useAttendanceTrendTyped(selectedYear, selectedMonth, view);
+  const { data: holidays } = useListHolidays({ year: Number(selectedDate.slice(0, 4)) });
 
-  // Records for the active sub-section only, and the counts on the status pills -worked out once per day's list / view,
-  // not on every render of the page.
-  const { allRecords, presentCount, absentCount, onLeaveCount } = useMemo(() => {
+  // Records for the active sub-section, the card counts and the arrival curve -worked out once per day's list / view, not
+  // on every render of the page (a sync progress tick, a dialog opening).
+  const { allRecords, counts, curve, stats } = useMemo(() => {
     const records = (dailyList ?? []).filter((r) => r.employmentType === view);
     return {
       allRecords: records,
-      presentCount: records.filter(r => r.status === "present" || r.status === "manual").length,
-      absentCount: records.filter(r => r.status === "absent").length,
-      onLeaveCount: records.filter(r => r.status === "on_leave").length,
+      counts: countBoard(records),
+      curve: arrivalCurve(records),
+      stats: arrivalStats(records),
     };
   }, [dailyList, view]);
 
-  const filteredRecords = useMemo(
-    () => allRecords
-      .filter((r) => {
-        if (statusFilter === "all") return true;
-        if (statusFilter === "present") return r.status === "present" || r.status === "manual";
-        return r.status === statusFilter;
-      })
-      .sort((a, b) => a.employeeName.localeCompare(b.employeeName)),
-    [allRecords, statusFilter],
-  );
-
-  // Monthly trend data for chart
-  const trendData = monthlyTrend ?? [];
+  const holiday = useMemo(() => {
+    const h = (holidays ?? []).find((x) => x.date === selectedDate);
+    return h ? `${h.name}${h.branchName ? ` (${h.branchName})` : ""}` : null;
+  }, [holidays, selectedDate]);
+  const isSunday = useMemo(() => {
+    const [y, m, d] = selectedDate.split("-").map(Number);
+    return new Date(y, m - 1, d).getDay() === 0;
+  }, [selectedDate]);
 
   return (
     <HrLayout>
       <div className="space-y-5">
 
-        {/* ── Header ── */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="shrink-0">
-            <h2 className="text-2xl font-black text-gray-900">
+        {/* ── Header (the MD portal adopts this row: keep a title block + one group of buttons) ── */}
+        <div className="flex flex-wrap lg:flex-nowrap items-start justify-between gap-3">
+          {/* shrink-0 on wide screens only: on a phone the title block may not be wider than the screen */}
+          <div className="min-w-0 max-w-full lg:shrink-0">
+            <h2 className="text-2xl font-black tracking-tight text-gray-900">
               {view === "staff" ? "Staff Attendance" : "Production Attendance"}
             </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Real-time tracking · AiFace-Mars biometric integration
+              See who is in, check every punch, and export the day or the month.
             </p>
             {/* Staff / Production sub-section toggle */}
             <div className="mt-2">
@@ -447,7 +261,7 @@ export default function AttendancePage() {
               />
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex min-w-0 items-center gap-2 flex-wrap justify-end">
             {/* Manual Import, Sync Biometric and Auto Sync are hidden, not
                 deleted: all three worked by having the backend open a direct
                 connection to a device on the factory LAN, which is impossible
@@ -476,12 +290,45 @@ export default function AttendancePage() {
               <span className="text-[13px] font-semibold">Device Status</span>
             </Button>
             <SyncStatusIndicator />
-            <Input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="clay-input h-9 text-sm w-36 shrink-0 rounded-xl"
-            />
+            <div className="flex items-center gap-1 shrink-0" role="group" aria-label="Day">
+              <button
+                type="button"
+                onClick={() => setSelectedDate(shiftDay(selectedDate, -1))}
+                className="inline-flex h-9 w-8 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                aria-label="Previous day"
+                data-testid="attendance-prev-day"
+              >
+                <ChevronLeft size={16} aria-hidden="true" />
+              </button>
+              <Input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
+                aria-label="Attendance date"
+                className="clay-input h-9 text-sm w-36 shrink-0 rounded-xl"
+                data-testid="attendance-date"
+              />
+              <button
+                type="button"
+                onClick={() => setSelectedDate(shiftDay(selectedDate, 1))}
+                disabled={selectedDate >= today()}
+                className="inline-flex h-9 w-8 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-40 disabled:hover:bg-transparent"
+                aria-label="Next day"
+                data-testid="attendance-next-day"
+              >
+                <ChevronRight size={16} aria-hidden="true" />
+              </button>
+              {selectedDate !== today() && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate(today())}
+                  className="h-9 rounded-xl px-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                  data-testid="attendance-today"
+                >
+                  Today
+                </button>
+              )}
+            </div>
             <Button
               onClick={() => setShowManualDialog(true)}
               className="clay-btn gap-1.5 h-9 px-3.5 rounded-xl border-0 bg-gradient-to-br from-[#006496] to-[#0080bf] text-white hover:brightness-105 shrink-0"
@@ -495,207 +342,62 @@ export default function AttendancePage() {
         {/* ── Biometric Sync Pipeline (visible only while/just after syncing) ── */}
         <BiometricSyncPipeline active={showPipeline} data={progress} onDismiss={dismiss} />
 
-        {/* ── Summary Cards ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard
-            icon={Users}
-            label={view === "staff" ? "Total Staff" : "Total Production"}
-            value={summary?.totalEmployees ?? "—"}
-            colorCls="bg-gray-700" accent="#374151"
-            sub={
-              <span className="flex gap-3">
-                <span><strong className="text-gray-700">{summary?.staffTotal ?? "—"}</strong> Staff</span>
-                <span><strong className="text-gray-700">{summary?.productionTotal ?? "—"}</strong> Production</span>
-              </span>
-            }
-            isLoading={summaryLoading}
-          />
-          <StatCard
-            icon={UserCheck}
-            label="Present Today"
-            value={summary?.presentToday ?? "—"}
-            colorCls="bg-green-600" accent="#16a34a"
-            sub={
-              <span className="flex gap-3">
-                <span><strong className="text-gray-700">{summary?.biometricPresent ?? "—"}</strong> Biometric</span>
-                <span><strong className="text-gray-700">{summary?.manualPresent ?? "—"}</strong> Manual</span>
-              </span>
-            }
-            isLoading={summaryLoading}
-          />
-          <StatCard
-            icon={UserX}
-            label="Not Punched"
-            value={summary?.notPunched ?? "—"}
-            colorCls="bg-red-500" accent="#ef4444"
-            sub={
-              <span className="flex gap-3">
-                <span><strong className="text-gray-700">{summary?.productionNotPunched ?? "—"}</strong> Production</span>
-                <span><strong className="text-gray-700">{summary?.staffNotPunched ?? "—"}</strong> Staff</span>
-              </span>
-            }
-            isLoading={summaryLoading}
-          />
-          <StatCard
-            icon={CalendarDays}
-            label="On Leave Today"
-            value={onLeaveCount}
-            colorCls="bg-purple-500" accent="#a855f7"
-            sub={<span>from today's records</span>}
-            isLoading={dailyLoading}
-          />
-          {/* Yesterday snapshot */}
-          {summaryLoading ? (
-            <Card className="border lg:col-span-1">
-              <CardContent className="p-5 space-y-2">
-                <Skeleton className="h-3 w-24 mb-3" />
-                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
-              </CardContent>
-            </Card>
-          ) : (
-            <Card className="border bg-slate-50 lg:col-span-1">
-              <CardContent className="p-5">
-                <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
-                  Yesterday
-                  {summary?.yesterday?.date && (
-                    <span className="ml-1.5 normal-case font-normal text-gray-400">({summary.yesterday.date})</span>
-                  )}
-                </p>
-                <div className="space-y-1.5">
-                  {[
-                    { label: "Present",  value: summary?.yesterday?.present  ?? 0, color: "text-green-700" },
-                    { label: "Absent",   value: summary?.yesterday?.absent   ?? 0, color: "text-red-600" },
-                    { label: "Late",     value: summary?.yesterday?.late     ?? 0, color: "text-amber-600" },
-                    { label: "On Leave", value: summary?.yesterday?.onLeave  ?? 0, color: "text-purple-600" },
-                  ].map(({ label, value, color }) => (
-                    <div key={label} className="flex items-center justify-between">
-                      <span className="text-xs text-gray-500">{label}</span>
-                      <span className={`text-sm font-bold ${color}`}>{value}</span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-
-        {/* ── Charts ── */}
-        <div className="grid lg:grid-cols-2 gap-4">
-          {/* Monthly Trend */}
-          <Card className="border">
-            <CardHeader className="pb-2 pt-4 px-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <TrendingUp size={14} className="text-gray-400" />
-                  <div>
-                    <CardTitle className="text-sm font-semibold text-gray-700">Monthly Attendance Trend</CardTitle>
-                    <p className="text-xs text-muted-foreground">Daily present vs absent</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <select
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                    className="h-7 rounded-md border px-1.5 text-xs bg-background"
-                  >
-                    {MONTH_NAMES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-                  </select>
-                  <Input
-                    type="number"
-                    value={selectedYear}
-                    onChange={(e) => setSelectedYear(Number(e.target.value))}
-                    className="w-16 h-7 text-xs"
-                    min={2020} max={2030}
-                  />
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="px-4 pb-4">
-              {trendData.length > 0 ? (
-                <MonthlyTrendChart trendData={trendData} />
-              ) : (
-                <div className="h-52 flex items-center justify-center text-sm text-muted-foreground">
-                  No data for {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Today snapshot bar */}
-          <Card className="border">
-            <CardHeader className="pb-2 pt-4 px-4">
-              <div className="flex items-center gap-2">
-                <Calendar size={14} className="text-gray-400" />
-                <div>
-                  <CardTitle className="text-sm font-semibold text-gray-700">Today vs Yesterday</CardTitle>
-                  <p className="text-xs text-muted-foreground">Present · Absent · Leave comparison</p>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="px-4 pb-4">
-              {summary ? (
-                <TodayVsYesterdayChart summary={summary} onLeaveCount={onLeaveCount} />
-              ) : (
-                <div className="h-52 flex items-center justify-center text-sm text-muted-foreground">
-                  No data available
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* ── Employee Search + Manual Overrides ── */}
-        <AttendanceSearchPanel employmentType={view} />
+        {/* ── The day at a glance: the roll call, whose cards filter the list right under it ── */}
+        <RollCall
+          counts={counts}
+          loading={dailyLoading}
+          filter={statusFilter}
+          onFilter={setStatusFilter}
+          date={selectedDate}
+          isToday={selectedDate === today()}
+          holidayName={holiday}
+          isSunday={isSunday}
+          view={view}
+          summary={summary}
+        />
 
         {/* ── Production shift structure info ── */}
         {view === "production" && (
-          <Card className="border border-orange-100 bg-orange-50/40">
-            <CardContent className="p-4 flex items-start gap-3 text-xs text-orange-800">
-              <Factory size={16} className="shrink-0 mt-0.5 text-orange-500" />
-              <div className="space-y-1">
-                <p className="font-bold text-sm">Production 1.5-Shift Day</p>
-                <p>
-                  <strong>08:30–12:30</strong> First Half (0.5) ·{" "}
-                  <strong>13:30–17:30</strong> Second Half (0.5) ·{" "}
-                  <strong>17:50–20:00</strong> Additional Half (0.5) -up to{" "}
-                  <strong>1.5 shifts/day</strong>. Windows are set in Manage Shifts (Production).
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex items-start gap-3 rounded-2xl border border-orange-100 bg-orange-50/50 px-4 py-3 text-xs text-orange-900">
+            <Factory size={16} className="shrink-0 mt-0.5 text-orange-600" aria-hidden="true" />
+            <p className="leading-relaxed">
+              <strong className="font-bold">Production 1.5-shift day:</strong>{" "}
+              <strong>08:30–12:30</strong> first half (0.5), <strong>13:30–17:30</strong> second half (0.5),{" "}
+              <strong>17:50–20:00</strong> additional half (0.5), up to <strong>1.5 shifts a day</strong>. Windows are set in
+              Manage Shifts (Production). A night punch after midnight is shown on the day the shift began, marked +1.
+            </p>
+          </div>
         )}
 
-        {/* ── Employee Table ── */}
-        <Card className="border">
-          <CardHeader className="pb-0 pt-4 px-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <CardTitle className="text-sm font-semibold text-gray-700">
-                  Employee Attendance -{selectedDate}
-                </CardTitle>
-                <p className="text-xs text-muted-foreground mt-0.5">Click any row to view full attendance history</p>
-              </div>
-              <PillTabs
-                size="sm"
-                items={[
-                  { value: "all", label: "All", count: allRecords.length },
-                  { value: "present", label: "Present", count: presentCount, color: "#16a34a" },
-                  { value: "absent", label: "Absent", count: absentCount, color: "#dc2626" },
-                  { value: "on_leave", label: "On Leave", count: onLeaveCount, color: "#9333ea" },
-                ]}
-                value={statusFilter}
-                onChange={(v) => setStatusFilter(v as typeof statusFilter)}
-              />
-            </div>
-          </CardHeader>
-          <CardContent className="p-0 mt-3">
-            <EmployeeTable
-              records={filteredRecords}
-              isLoading={dailyLoading}
-              onClickEmployee={setDetailEmpId}
-            />
-          </CardContent>
-        </Card>
+        {/* ── Everyone on the day ── */}
+        <DayList
+          rows={allRecords}
+          loading={dailyLoading}
+          date={selectedDate}
+          view={view}
+          filter={statusFilter}
+          onFilter={setStatusFilter}
+          onOpen={setDetailEmpId}
+        />
+
+        {/* ── When people arrived, and where the day's punches came from ── */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <ArrivalsChart curve={curve} stats={stats} loading={dailyLoading} />
+          <PunchSources rows={allRecords} loading={dailyLoading} date={selectedDate} />
+        </div>
+
+        {/* ── The month, with its report ── */}
+        <MonthPanel
+          trend={monthlyTrend ?? []}
+          month={selectedMonth}
+          year={selectedYear}
+          onMonth={setSelectedMonth}
+          onYear={setSelectedYear}
+          view={view}
+        />
+
+        {/* ── Employee Search + Manual Overrides ── */}
+        <AttendanceSearchPanel employmentType={view} />
 
       </div>
 
@@ -736,84 +438,6 @@ export default function AttendancePage() {
     </HrLayout>
   );
 }
-
-// ── Charts ─────────────────────────────────────────────────────────────────
-
-/** Monthly present-vs-absent bars. memo: redrawn only when the trend data itself changes, not on every page render. */
-const MonthlyTrendChart = memo(function MonthlyTrendChart({ trendData }: { trendData: TrendPoint[] }) {
-  return (
-    <ChartContainer
-      config={{ present: { color: "#22c55e" }, absent: { color: "#ef4444" } }}
-      className="h-52"
-    >
-      <BarChart data={trendData} margin={{ top: 4, right: 8, left: -20, bottom: 4 }} barCategoryGap="20%">
-        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-        <XAxis dataKey="day" tick={{ fontSize: 10 }} interval={4} />
-        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-        <Tooltip
-          labelFormatter={(v) => {
-            const item = trendData.find((d) => d.day === v);
-            return item?.date ?? String(v);
-          }}
-        />
-        <Legend wrapperStyle={{ fontSize: 11 }} />
-        <Bar dataKey="present" stackId="a" fill="#22c55e" name="Present" />
-        <Bar dataKey="absent"  stackId="a" fill="#ef4444" name="Absent" radius={[3,3,0,0]} />
-      </BarChart>
-    </ChartContainer>
-  );
-});
-
-/** Today vs Yesterday bars. memo: redrawn only when the summary or today's leave count changes. */
-const TodayVsYesterdayChart = memo(function TodayVsYesterdayChart({
-  summary,
-  onLeaveCount,
-}: {
-  summary: TypedAttendanceSummary;
-  onLeaveCount: number;
-}) {
-  return (
-    <ChartContainer
-      config={{
-        present: { color: "#22c55e" },
-        absent:  { color: "#ef4444" },
-        late:    { color: "#f59e0b" },
-        onLeave: { color: "#a855f7" },
-      }}
-      className="h-52"
-    >
-      <BarChart
-        data={[
-          {
-            label: "Yesterday",
-            present: summary.yesterday.present,
-            absent:  summary.yesterday.absent,
-            late:    summary.yesterday.late,
-            onLeave: summary.yesterday.onLeave,
-          },
-          {
-            label: "Today",
-            present: summary.presentToday,
-            absent:  summary.notPunched,
-            late:    0,
-            onLeave: onLeaveCount,
-          },
-        ]}
-        margin={{ top: 4, right: 8, left: -20, bottom: 4 }}
-      >
-        <CartesianGrid strokeDasharray="3 3" vertical={false} />
-        <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-        <Tooltip />
-        <Legend wrapperStyle={{ fontSize: 11 }} />
-        <Bar dataKey="present"  fill="#22c55e" name="Present"  radius={[3,3,0,0]} />
-        <Bar dataKey="absent"   fill="#ef4444" name="Absent"   radius={[3,3,0,0]} />
-        <Bar dataKey="late"     fill="#f59e0b" name="Late"     radius={[3,3,0,0]} />
-        <Bar dataKey="onLeave"  fill="#a855f7" name="On Leave" radius={[3,3,0,0]} />
-      </BarChart>
-    </ChartContainer>
-  );
-});
 
 /** The Employee Attendance Search card. memo: it takes one prop, so the page's own re-renders skip it. */
 const AttendanceSearchPanel = memo(AttendanceSearchSection);
@@ -1356,19 +980,17 @@ function EmployeeHistoryDialog({
                         </td>
                         <td className="py-2.5 px-3">
                           {rec.punches.length > 0 ? (
-                            <div className="flex flex-wrap gap-1">
-                              {rec.punches.map((p, i) => (
-                                <span
-                                  key={i}
-                                  className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${
-                                    p.type === "IN" ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700"
-                                  }`}
-                                  title={`${p.type} · ${p.sourceLabel}`}
-                                >
-                                  {p.time}
-                                </span>
-                              ))}
-                            </div>
+                            <PunchTimeline
+                              size="sm"
+                              dayDate={rec.date}
+                              testId="history-punches"
+                              punches={rec.punches.map((p) => ({
+                                ...p,
+                                // the API lists a night's closing punch on its shift day with nextDay: true
+                                date: (p as { nextDay?: boolean }).nextDay ? nextIso(rec.date) : rec.date,
+                                nextDay: (p as { nextDay?: boolean }).nextDay,
+                              }))}
+                            />
                           ) : (
                             <span className="text-xs text-gray-300">
                               {rec.status === "on_leave" ? "—" : rec.status === "holiday" ? "Weekly off" : rec.status === "future" ? "—" : "No punches"}

@@ -10,7 +10,7 @@ Approval decisions for the other workflows (leave, permission, ...) live in what
 Everything here is best-effort by design: a failed or switched-off message must never stop the
 approval, gate scan or check-in that raised it, so callers just call these and move on. Every
 attempt (and its failure reason) lands in WhatsAppMessageLog for HR to see, and the message itself
-is delivered in the background so nobody waits on WhatsApp.
+is queued and sent by the paced dispatcher (whatsapp_dispatcher.py), so nobody waits on WhatsApp.
 """
 
 import functools
@@ -236,9 +236,10 @@ def notify_gate_record(record):
 
 
 @best_effort
-def notify_visitor_arrival(visit, host, on_sent=None):
+def notify_visitor_arrival(visit, host):
     """Tell `host` a visitor has arrived, with everything they need to know and the visitor's
-    contact card to tap and call. `on_sent(log)` runs once the message is really delivered."""
+    contact card to tap and call. Reception's "notified on WhatsApp" time is stamped once the
+    message is really sent (the dispatcher's "visitor_notified" hook)."""
     visitor = visit.visitor
     arrived = visit.visited_at or timezone.now()
     normalized = whatsapp_service.normalize_phone(visitor.phone)
@@ -265,5 +266,5 @@ def notify_visitor_arrival(visit, host, on_sent=None):
             "last_name": "",
             "phone": normalized or visitor.phone,
         },
-        on_sent=on_sent,
+        on_sent="visitor_notified",
     )

@@ -1,23 +1,50 @@
-// Geo Attendance (HR): Office Geo Punch, On-Duty approvals, punch verification, live tracking and the journeys of employees working
-// off the premises. This file is the page frame (title row, tab strip, which tab is open); each tab is in geo-tracking/tabs/, the
-// Journey History tab in geo-tracking/JourneyHistoryTab. The open tab and journey live in the address (?tab=journeys&journey=12).
-// The Managing Director's portal mounts this same component (components/md/MdHrApp.tsx), so it stays the default export of this
-// path and takes no props.
-import { useEffect, useRef } from "react";
+// Geo Attendance (HR): a module of its own for the work done away from the premises: On-Duty approvals, geo punch
+// verification, the Live Map, every journey (with its replay), the On-Duty Map and the tracking rules. Each section has its
+// own address (geo-tracking/routes.ts: /hr/geo-attendance/live-map, /journeys/12/simulate ...); the old single page's
+// addresses (?tab=map, ?tab=journeys&journey=12) are sent on to them. This file is the frame: the title row, the section
+// strip, and the section that is open. Each section is its own chunk (Leaflet only loads with a map), and only the open
+// section asks the server for anything: the frame itself reads the two pending lists the sidebar already reads (no extra
+// request) and the on-duty count once a minute (the Live Map refreshes it every 20 s).
+// The Managing Director's portal mounts this same component (components/md/MdHrApp.tsx, under /md/geo-attendance/...), so it
+// stays the default export of this path, takes no props and navigates through wouter (the MD router translates the address).
+import { lazy, Suspense, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { Redirect, useLocation, useSearch } from "wouter";
 import { Camera, MapPinned, Navigation, Radar, Route as RouteIcon, Users } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
-import { Chip } from "@/components/payroll/kit/parts";
 import { PillTabs, type PillTabItem } from "@/components/ui/pill-tabs";
 import { useLiveTracks, useOnDutyPunchVerificationsHR, useOnDutySessionsHR } from "@/lib/api-client/custom-hooks";
 import { useMdEmbedded } from "@/lib/md/embed";
-import { useGeoAddress, type GeoTab } from "./geo-tracking/address";
-import JourneyHistoryTab from "./geo-tracking/JourneyHistoryTab";
-import ApprovalsTab from "./geo-tracking/tabs/ApprovalsTab";
-import LiveMapTab from "./geo-tracking/tabs/LiveMapTab";
-import OnDutyMapTab from "./geo-tracking/tabs/OnDutyMapTab";
-import TrackingSettingsTab from "./geo-tracking/tabs/TrackingSettingsTab";
-import VerificationsTab from "./geo-tracking/tabs/VerificationsTab";
+import { cn } from "@/lib/utils";
+import { SectionSkeleton } from "./geo-tracking/kit";
+import {
+  GEO_SECTIONS,
+  GEO_SECTION_LABEL,
+  geoPath,
+  journeyPath,
+  readGeoRoute,
+  simulatePath,
+  type GeoSection,
+} from "./geo-tracking/routes";
+
+const ApprovalsTab = lazy(() => import("./geo-tracking/tabs/ApprovalsTab"));
+const VerificationsTab = lazy(() => import("./geo-tracking/tabs/VerificationsTab"));
+const LiveMapTab = lazy(() => import("./geo-tracking/tabs/LiveMapTab"));
+const JourneyHistoryTab = lazy(() => import("./geo-tracking/JourneyHistoryTab"));
+const OnDutyMapTab = lazy(() => import("./geo-tracking/tabs/OnDutyMapTab"));
+const TrackingSettingsTab = lazy(() => import("./geo-tracking/tabs/TrackingSettingsTab"));
+
+const ICONS: Record<GeoSection, ReactNode> = {
+  approvals: <MapPinned size={13} />,
+  verifications: <Camera size={13} />,
+  "live-map": <Radar size={13} />,
+  journeys: <RouteIcon size={13} />,
+  "on-duty-map": <Users size={13} />,
+  settings: <Navigation size={13} />,
+};
+
+/** The header chip reads the live board once a minute (the Live Map itself reads it every 20 s). */
+const HEADER_POLL_MS = 60_000;
 
 /** A tab's name with the number of things waiting for HR, as a small badge (the number is read as "pending" by a screen reader). */
 function TabLabel({ text, count }: { text: string; count?: number }) {
@@ -38,76 +65,95 @@ function TabLabel({ text, count }: { text: string; count?: number }) {
 }
 
 export default function GeoAttendance() {
-  const { tab, setTab, journeyId, setJourney } = useGeoAddress();
+  const [location, navigate] = useLocation();
+  const search = useSearch();
+  const parsed = readGeoRoute(location, search);
+  const section = parsed.route?.section ?? "approvals";
+
   const { data: pendingSessions } = useOnDutySessionsHR("pending");
   const { data: pendingPunches } = useOnDutyPunchVerificationsHR("pending");
-  // the same query as the Live Map's board: nothing extra is asked of the server
-  const live = useLiveTracks();
   // the Managing Director's copy has a Live chip and an "On duty now" figure of its own right beside the title
   const embedded = useMdEmbedded();
-  const onDuty = embedded ? undefined : live.data?.length;
+  const live = useLiveTracks(!embedded, HEADER_POLL_MS);
+  const onDuty = embedded || live.isError ? undefined : live.data?.length;
 
   const sessions = pendingSessions?.length ?? 0;
   const punches = pendingPunches?.length ?? 0;
 
-  // on a phone the strip scrolls: the open tab is brought into view (a link such as ?tab=onduty opens it out of sight otherwise)
+  const go = useCallback((to: string) => navigate(to), [navigate]);
+  const openJourney = useCallback((id: number | null) => go(id === null ? geoPath("journeys") : journeyPath(id)), [go]);
+  const simulate = useCallback((id: number) => go(simulatePath(id)), [go]);
+
+  // on a phone the strip scrolls: the open tab is brought into view (a link to a section opens it out of sight otherwise)
   const strip = useRef<HTMLDivElement>(null);
   useEffect(() => {
     strip.current
       ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
       ?.scrollIntoView?.({ inline: "center", block: "nearest" });
-  }, [tab, sessions, punches]);
-  const tabs: (PillTabItem & { value: GeoTab })[] = [
-    {
-      value: "approvals",
-      label: <TabLabel text="On-Duty Approvals" count={sessions} />,
-      icon: <MapPinned size={13} />,
-    },
-    {
-      value: "verifications",
-      label: <TabLabel text="Punch Verifications" count={punches} />,
-      icon: <Camera size={13} />,
-    },
-    { value: "map", label: "Live Map", icon: <Radar size={13} /> },
-    { value: "journeys", label: "Journey History", icon: <RouteIcon size={13} /> },
-    { value: "onduty", label: "On-Duty Map", icon: <Users size={13} /> },
-    { value: "tracking", label: "Tracking Settings", icon: <Navigation size={13} /> },
-  ];
+  }, [section, sessions, punches]);
+
+  if (parsed.redirect) return <Redirect to={parsed.redirect} replace />;
+  const route = parsed.route;
+
+  const tabs: (PillTabItem & { value: GeoSection })[] = GEO_SECTIONS.map((value) => ({
+    value,
+    label: (
+      <TabLabel
+        text={GEO_SECTION_LABEL[value]}
+        count={value === "approvals" ? sessions : value === "verifications" ? punches : undefined}
+      />
+    ),
+    icon: ICONS[value],
+  }));
 
   return (
     <HrLayout>
-      <div className="space-y-5" data-testid="geo-attendance">
+      <div className="space-y-5" data-testid="geo-attendance" data-section={section}>
         {/* The title row keeps the shape every HR page has (a block with the title and one line under it, the Refresh button
             beside it): the Managing Director's portal finds that row in the page and slots its own pieces into it. The
             "on duty now" chip sits inside the heading, like the "pending" badge of the Requests page. */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-2xl font-black text-gray-900">
-              <MapPinned size={22} className="text-[#006496]" />
-              Geo Attendance
-              {onDuty !== undefined && (
-                <button
-                  type="button"
-                  onClick={() => setTab("map")}
-                  title="Open the Live Map"
-                  data-testid="on-duty-now"
-                  data-count={onDuty}
-                  className="rounded-full text-base font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
-                >
-                  <Chip tone={onDuty > 0 ? "success" : "neutral"} className="cursor-pointer text-xs">
+          <div className="flex min-w-0 items-start gap-3">
+            <span
+              aria-hidden
+              className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-sky-50 text-[#006496] ring-1 ring-sky-100 sm:flex"
+            >
+              <MapPinned size={22} />
+            </span>
+            <div className="min-w-0">
+              <h2 className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-2xl font-black text-gray-900">
+                Geo Attendance
+                {onDuty !== undefined && (
+                  <button
+                    type="button"
+                    onClick={() => go(geoPath("live-map"))}
+                    title="Open the Live Map"
+                    data-testid="on-duty-now"
+                    data-count={onDuty}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300",
+                      onDuty > 0
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                        : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100",
+                    )}
+                  >
+                    {/* a still dot: an endless pulse here kept the browser recalculating styles on every frame */}
                     <span
                       aria-hidden
-                      className={`inline-block h-1.5 w-1.5 rounded-full bg-current ${onDuty > 0 ? "animate-pulse" : ""}`}
+                      className={cn(
+                        "inline-block h-1.5 w-1.5 rounded-full",
+                        onDuty > 0 ? "bg-emerald-500 ring-2 ring-emerald-200" : "bg-slate-400",
+                      )}
                     />
                     {onDuty > 0 ? `${onDuty} on duty now` : "No one on duty now"}
-                  </Chip>
-                </button>
-              )}
-            </h2>
-            <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">
-              Approve On-Duty requests, check geo punches, and follow employees working off the premises, live and by
-              journey.
-            </p>
+                  </button>
+                )}
+              </h2>
+              <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">
+                Approve On-Duty requests, verify geo punches, and follow employees working off the premises, live and
+                journey by journey.
+              </p>
+            </div>
           </div>
           <RefreshButton />
         </div>
@@ -115,15 +161,35 @@ export default function GeoAttendance() {
         {/* On a phone the six tabs scroll sideways inside their own box instead of pushing the page wider. The strip is made
             again when a count changes, so the pills measure themselves with the badge in place. */}
         <div ref={strip} className="overflow-x-auto pb-1" data-testid="geo-tabs">
-          <PillTabs key={`${sessions}-${punches}`} items={tabs} value={tab} onChange={(v) => setTab(v as GeoTab)} />
+          <PillTabs
+            key={`${sessions}-${punches}`}
+            items={tabs}
+            value={section}
+            onChange={(v) => go(geoPath(v as GeoSection))}
+          />
         </div>
 
-        {tab === "approvals" && <ApprovalsTab />}
-        {tab === "verifications" && <VerificationsTab />}
-        {tab === "map" && <LiveMapTab onOpenJourney={setJourney} />}
-        {tab === "journeys" && <JourneyHistoryTab journeyId={journeyId} onJourneyChange={setJourney} />}
-        {tab === "onduty" && <OnDutyMapTab />}
-        {tab === "tracking" && <TrackingSettingsTab />}
+        <div
+          key={section}
+          className="animate-in fade-in slide-in-from-bottom-1 duration-300 motion-reduce:animate-none"
+          data-testid="geo-section"
+        >
+          <Suspense fallback={<SectionSkeleton section={section} />}>
+            {section === "approvals" && <ApprovalsTab />}
+            {section === "verifications" && <VerificationsTab />}
+            {section === "live-map" && <LiveMapTab onOpenJourney={openJourney} />}
+            {section === "journeys" && route && (
+              <JourneyHistoryTab
+                journeyId={route.journey}
+                view={route.view}
+                onJourneyChange={openJourney}
+                onSimulate={simulate}
+              />
+            )}
+            {section === "on-duty-map" && <OnDutyMapTab />}
+            {section === "settings" && <TrackingSettingsTab />}
+          </Suspense>
+        </div>
       </div>
     </HrLayout>
   );

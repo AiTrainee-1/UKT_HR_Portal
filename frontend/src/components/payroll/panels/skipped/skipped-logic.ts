@@ -12,8 +12,9 @@ import type { SkipCategory, SkipClassification, SkipLink, SkippedItem } from "./
 //   staff       "No Salary Amount set on this employee's profile"
 //               "No working days found in 10/2026 for this employee's shift (check Holidays and Saturday-off configuration)"
 //   production  "No Salary Per Shift set on this employee's profile"
-//               "Already paid for this period."
-//               "Overlaps the payroll already generated for 2026-02-01 to 2026-02-14."
+//               "Already paid: every day of 2 Feb – 8 Feb 2026 is already in the Monthly payroll for ... (Cleared). ..."
+//               (since 2026-11-06; earlier servers said "Already paid for this period." /
+//               "Overlaps the payroll already generated for 2026-02-01 to 2026-02-14.")
 //               "Not a production employee in your scope."
 //               "Not an active employee."
 //               "Not assigned to the Weekly cycle (assigned to BiWeekly)." / "(assigned to no pay cycle)."
@@ -121,7 +122,7 @@ export const SKIP_GUIDE: Record<SkipCategory, Guide> = {
     label: "Already paid",
     tone: "info",
     blocksPay: false,
-    fix: "Nothing to fix: this period is already paid, and a paid payslip is never recomputed.",
+    fix: "Nothing to fix: every day of this period is already paid on another payslip, so it is not paid again.",
   },
   other: {
     label: "Other",

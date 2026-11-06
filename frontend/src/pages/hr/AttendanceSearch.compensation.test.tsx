@@ -11,6 +11,7 @@ const month = vi.hoisted(() => ({ data: null as unknown }));
 
 vi.mock("@/lib/api-client/custom-hooks", () => ({
   useEmployeeMonthlyAttendance: () => ({ data: month.data, isLoading: false, isError: false }),
+  useEmployeePunchMonth: () => ({ data: undefined, isLoading: false }),
   useSetPunchDayStatus: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useAttendanceOverrideRequests: () => ({ data: [] }),
   usePayrollSettings: () => ({ data: { halfDayFirstHalfEndTime: "13:30", halfDaySecondHalfStartTime: "14:30" } }),
@@ -96,9 +97,13 @@ async function open(days: FinalAttendanceDay[]): Promise<HTMLElement> {
   return host;
 }
 
+// the table's cells are found by the column they are in (data-col), not by position: the redesign (2026-11-06) added
+// the In / Out and Every punch columns
 const rowOf = (el: HTMLElement, date: string) =>
-  Array.from(el.querySelectorAll("tbody tr")).find((tr) => tr.querySelector("td")?.textContent === date)!;
-const cells = (tr: Element) => Array.from(tr.querySelectorAll("td"));
+  Array.from(el.querySelectorAll("tbody tr")).find(
+    (tr) => tr.querySelector('td[data-col="date"] span')?.textContent === date,
+  )!;
+const cell = (tr: Element, col: string) => tr.querySelector(`td[data-col="${col}"]`)!;
 
 const DAYS = [
   day("2026-10-05", {
@@ -133,20 +138,20 @@ const DAYS = [
 describe("Employee Attendance Search marks a day that used a compensation", () => {
   it("puts the chip and its note beside the day's status", async () => {
     const el = await open(DAYS);
-    const status = cells(rowOf(el, "2026-10-05"))[2];
+    const status = cell(rowOf(el, "2026-10-05"), "status");
     const chip = status.querySelector('[data-testid="compensation-chip-ot_allowance"]')!;
     expect(chip.textContent).toContain("OT allowance used (30 min)");
     expect(status.querySelector('[data-testid="compensation-note"]')?.textContent).toBe(NOTE);
     expect(
-      cells(rowOf(el, "2026-10-06"))[2].querySelector('[data-testid="compensation-chip-birthday"]'),
+      cell(rowOf(el, "2026-10-06"), "status").querySelector('[data-testid="compensation-chip-birthday"]'),
     ).not.toBeNull();
     // an ordinary day has none
-    expect(cells(rowOf(el, "2026-10-09"))[2].querySelector('[data-testid^="compensation-chip-"]')).toBeNull();
+    expect(cell(rowOf(el, "2026-10-09"), "status").querySelector('[data-testid^="compensation-chip-"]')).toBeNull();
   });
 
   it("does not mark an allowance-covered arrival as Late (the day is not flagged)", async () => {
     const el = await open(DAYS);
-    const flags = cells(rowOf(el, "2026-10-05"))[6];
+    const flags = cell(rowOf(el, "2026-10-05"), "flags");
     expect(flags.textContent).toBe("—");
     expect(flags.querySelector('[data-testid="day-flag-late"]')).toBeNull();
   });
@@ -171,7 +176,7 @@ describe("Employee Attendance Search marks a day that used a compensation", () =
   it("a relaxation day shows its chip and note, not a Half Day half", async () => {
     const el = await open(DAYS);
     const row = rowOf(el, "2026-10-07");
-    const status = cells(row)[2];
+    const status = cell(row, "status");
     expect(status.textContent).toContain("Half Shift"); // the day's real credit is still 0.50
     expect(status.querySelector('[data-testid="compensation-chip-relaxation"]')?.textContent).toContain(
       "Relaxation (compensation day)",
@@ -180,12 +185,12 @@ describe("Employee Attendance Search marks a day that used a compensation", () =
       "0.5 shift relaxation applied.",
     );
     // the Half column does not claim a Morning / Evening half was worked
-    expect(cells(row)[7].textContent).toBe("—");
+    expect(cell(row, "half").textContent).toBe("—");
   });
 
   it("still says which half a real half day was worked", async () => {
     const el = await open(DAYS);
-    expect(cells(rowOf(el, "2026-10-08"))[7].textContent).toContain("½");
-    expect(cells(rowOf(el, "2026-10-08"))[7].textContent).toContain("Morning");
+    expect(cell(rowOf(el, "2026-10-08"), "half").textContent).toContain("½");
+    expect(cell(rowOf(el, "2026-10-08"), "half").textContent).toContain("Morning");
   });
 });

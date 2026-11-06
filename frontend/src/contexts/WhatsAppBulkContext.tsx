@@ -49,11 +49,16 @@ export function WhatsAppBulkProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify(params),
       });
       setLastResult(result);
+      // The slips now wait in the send queue and go out one by one within the sending limits (2026-11-06), so the
+      // answer is "queued", not "delivered".
+      const queued = result.queued ?? 0;
       toast({
-        title: `Salary slips sent via WhatsApp -${result.sent} delivered`,
+        title: queued > 0
+          ? `Salary slips queued for WhatsApp -${queued} waiting`
+          : `Salary slips sent via WhatsApp -${result.sent} delivered`,
         description: result.failed > 0
-          ? `${result.failed} failed to send. See details below.`
-          : "Every matching employee was messaged successfully.",
+          ? `${result.failed} could not be queued. See details below.`
+          : result.message || "Every matching employee was messaged successfully.",
         variant: result.failed > 0 ? "destructive" : "default",
       });
       return result;

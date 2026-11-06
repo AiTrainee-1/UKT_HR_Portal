@@ -121,7 +121,9 @@ class OtpConfig:
         nothing about a cap or the circuit breaker (see paused_now)."""
         if self.channel == CHANNEL_SMS:
             return sms_service.is_available(purpose)
-        return whatsapp_service.is_configured()
+        # The WhatsApp master switch (WhatsApp Control) off = WhatsApp is not available: no code is offered or sent,
+        # password sign-in stays open and activation falls back to the open first-time setup, so nobody is locked out.
+        return whatsapp_service.is_configured() and whatsapp_service.engine_enabled()
 
     def paused_now(self) -> bool:
         """Is the channel configured but unable to send for the moment (SMS: the circuit breaker is paused or a global
@@ -334,8 +336,7 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
             _TYPE_FOR_PURPOSE[purpose],
             [code, str(minutes)],
             log_params=["••••••", str(minutes)],
-            asynchronous=False,
-        )
+        )  # a code is sent at once, never queued (whatsapp_catalog kind "code")
         if log is None or log.status == "failed":
             # Nothing usable reached the employee, so this code must not stay valid
             # (and shouldn't count against their hourly allowance); the previous one stays valid.

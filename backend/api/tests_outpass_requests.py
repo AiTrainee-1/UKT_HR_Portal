@@ -66,7 +66,7 @@ class OutpassRequestResolutionTests(TestCase):
 
         note = Notification.objects.filter(employee=self.emp, type="outpass").latest("created_at")
         # the notification is the WhatsApp rejection wording (also pushed to the phone)
-        self.assertEqual(note.title, "❌ Request Rejected")
+        self.assertEqual(note.title, "Request Rejected")
         self.assertIn("Market", note.message)
 
 

@@ -716,9 +716,9 @@ def resignation_whatsapp(request: Request, pk: int) -> Response:
         body_params=[emp_name, last_working],
         document_ref_id=r.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
-    if log.status != "sent":
+    if not whatsapp_service.accepted(log):
         return _error(log.error_message, 400)
-    return Response({"ok": True, "sentTo": log.phone_number})
+    return Response({"ok": True, "sentTo": log.phone_number, "status": log.status, "queued": log.status == "queued"})
 
 
 # ── Department Headcount / Required Roles ─────────────────────────────────────

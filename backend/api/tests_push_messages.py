@@ -33,6 +33,11 @@ class SplitMessageTests(TestCase):
         self.assertEqual(title, "✅ Request Approved")
         self.assertEqual(body, "Hello Asha,\n\nYour Leave request has been approved.\n\n📅 Date: 5 Oct 2026")
 
+    def test_the_sign_off_of_the_2026_11_06_wordings_is_dropped_too(self):
+        text = "*Salary Slip*\n\nDear Asha,\nYour salary slip for October 2026 is attached.\n\n- UK Textiles HR"
+        title, body = push_messages.split_message(text, "Salary Slip")
+        self.assertEqual((title, body), ("Salary Slip", "Dear Asha,\nYour salary slip for October 2026 is attached."))
+
     def test_a_message_without_a_bold_header_takes_the_catalog_label(self):
         title, body = push_messages.split_message(
             "Good morning, Asha 🌟\n\nPlease punch in.\n\nUK Textiles HRMS", "Punch Reminder"
@@ -146,7 +151,7 @@ class WhatsAppMessagesAreAnnouncedTests(TestCase):
             dedupe_key="late_alert:2026-10-05:1",
         )
         n = Notification.objects.get(employee=self.emp)
-        self.assertEqual((n.type, n.title), ("attendance", "⏰ Late Attendance"))
+        self.assertEqual((n.type, n.title), ("attendance", "Late Attendance"))
         self.assertIn("9:25 AM", n.message)
         self.assertNotIn("*", n.message)
 
@@ -172,7 +177,7 @@ class WhatsAppMessagesAreAnnouncedTests(TestCase):
             None, self.emp, "salary_slip", b"%PDF", "slip.pdf", ["Asha Kumar", "October 2026"]
         )
         n = Notification.objects.get(employee=self.emp)
-        self.assertEqual((n.type, n.title), ("salary_slip", "💰 Salary Slip"))
+        self.assertEqual((n.type, n.title), ("salary_slip", "Salary Slip"))
         self.assertIn("October 2026", n.message)
 
     def test_the_geo_and_gate_and_visitor_messages_are_announced(self):
@@ -202,7 +207,7 @@ class DecisionsAreAnnouncedOnceTests(TestCase):
             "leave", self.leave, "approved", approver="Meena", role="hr", comment="Enjoy"
         )
         n = Notification.objects.get(employee=self.emp)
-        self.assertEqual((n.type, n.title), ("leave", "✅ Request Approved"))
+        self.assertEqual((n.type, n.title), ("leave", "Request Approved"))
         for needle in ("Leave", "12 Oct 2026", "Meena (HR)", "Enjoy"):
             self.assertIn(needle, n.message)
         # deciding it again does not announce it again
@@ -214,7 +219,7 @@ class DecisionsAreAnnouncedOnceTests(TestCase):
             "leave", self.leave, "rejected", approver="Meena", role="hr", comment="Peak season"
         )
         n = Notification.objects.get(employee=self.emp)
-        self.assertEqual(n.title, "❌ Request Rejected")
+        self.assertEqual(n.title, "Request Rejected")
         self.assertIn("Peak season", n.message)
 
     def test_a_stage_notice_is_made_only_for_a_decision_that_passes_the_request_on(self):

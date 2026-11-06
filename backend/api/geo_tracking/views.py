@@ -116,9 +116,10 @@ def list_response(request: Request, qs, now: datetime, s: GeoTrackingSettings) -
     page, size = paging(request)
     total = qs.count()
     rows = list(
-        qs.select_related("employee__department", "branch", "session").order_by("-started_at", "-id")[
-            (page - 1) * size : page * size
-        ]
+        # never the employee's photo (a base64 data URL of up to ~2 MB each): no row shows it
+        qs.select_related("employee__department", "branch", "session")
+        .defer("employee__photo_url")
+        .order_by("-started_at", "-id")[(page - 1) * size : page * size]
     )
     punches = serializers.punch_counts([t.session_id for t in rows])
     return Response(
@@ -340,7 +341,8 @@ def journey_detail(request: Request, pk: int) -> Response:
     people /manager/pending-requests and /manager/requests?category=on_duty show them, never more. Anyone else gets the
     same 404 as a journey that does not exist. Every HR view and every Department Head view is audit-logged (module
     geo_tracking); an employee reading their own is not."""
-    qs = DutyTrack.objects.select_related("employee__department", "branch", "session")
+    # never the employee's photo (a base64 data URL of up to ~2 MB): the journey shows none, and a live one is read every 30 s
+    qs = DutyTrack.objects.select_related("employee__department", "branch", "session").defer("employee__photo_url")
     as_head = False
     if is_hr(request):
         track = scope_to_branch(qs, request).filter(pk=pk).first()

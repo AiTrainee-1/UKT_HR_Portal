@@ -19,7 +19,6 @@ import { SetupNeeded, UnassignedNotice, cycleSettingsHref, errorText } from "./C
 import { EmployeesTab } from "./EmployeesTab";
 import {
   PRODUCTION_TABS,
-  PRODUCTION_URL_DEFAULTS,
   cycleBlurb,
   defaultPeriod,
   isProductionTab,
@@ -29,6 +28,7 @@ import {
   type ProductionTab,
 } from "./logic";
 import { PayrollTab } from "./PayrollTab";
+import { PRODUCTION_PAGE_URL_DEFAULTS } from "./payroll-tab-logic";
 import { PayslipTab } from "./PayslipTab";
 import { PeriodPicker } from "./PeriodPicker";
 import { SalaryTab } from "./SalaryTab";
@@ -48,7 +48,7 @@ const TAB_LABEL: Record<ProductionTab, string> = {
  */
 export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
   const info = PAY_CYCLE_INFO[cycle];
-  const [url, setUrl] = useUrlParams(PRODUCTION_URL_DEFAULTS);
+  const [url, setUrl] = useUrlParams(PRODUCTION_PAGE_URL_DEFAULTS);
   const tab: ProductionTab = isProductionTab(url.tab) ? url.tab : "payroll";
   const slipMonth = useMemo(() => resolveSlipMonth({ month: url.month, year: url.year }), [url.month, url.year]);
   const refresh = useRefreshPayroll();

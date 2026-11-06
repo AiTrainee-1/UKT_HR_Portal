@@ -120,18 +120,19 @@ class GateMovementTests(WhatsAppBase):
         self.assertEqual(status, 200)
         text = self.texts()[0]
         for expected in (
-            "Gate OUT Recorded",
-            "Hello Asha Kumar",
+            "Gate Exit Recorded",
+            "Dear Asha Kumar",
             "Official / Mill Duty",
-            "Gate OUT:",
+            "Gate out:",
             "Destination: Bank",
             "Reason: Deposit cheque",
             "Gate: Gate 1",
             "Status: Verified",
             "scan your Return QR",
+            "- UK Textiles HR",
         ):
             self.assertIn(expected, text)
-        self.assertNotIn("Gate IN:", text)  # nothing to say about coming back yet
+        self.assertNotIn("Gate in:", text)  # nothing to say about coming back yet
         log = WhatsAppMessageLog.objects.get()
         self.assertEqual((log.document_type, log.related_module, log.status), ("outpass_gate_out", "outpass", "sent"))
         self.assertEqual(log.dedupe_key, f"gate:out:{self.req.id}")
@@ -146,10 +147,10 @@ class GateMovementTests(WhatsAppBase):
         self.assertEqual(status, 200)
         text = self.texts()[1]
         for expected in (
-            "Gate IN Recorded",
+            "Gate Return Recorded",
             "Welcome back",
-            "Gate OUT:",
-            "Gate IN:",
+            "Gate out:",
+            "Gate in:",
             "Time out: 1 hr 15 min",
             "Gate: Gate 2",
             "Verified",
@@ -196,7 +197,7 @@ class GateMovementTests(WhatsAppBase):
         self.assertEqual(outpass_gate_submit(request, qr.token).status_code, 201)
         text = self.texts()[0]
         for expected in (
-            "Gate OUT Recorded",
+            "Gate Exit Recorded",
             "Gate QR form",
             "Destination: Market",
             "Gate: Main Unit",
@@ -254,8 +255,8 @@ class VisitorMessageTests(WhatsAppBase):
         text = first.kwargs["json"]["message"]
         for expected in (
             "Visitor at Reception",
-            "Hello Meeting Target",
-            "Visitor: *Vishal Visitor*",
+            "Dear Meeting Target",
+            "Visitor: Vishal Visitor",
             "Contact: +91 70000 00001",
             "Purpose: Machine service",
             "Here to meet: Meeting Target",
@@ -263,7 +264,7 @@ class VisitorMessageTests(WhatsAppBase):
             "Branch: Tirupur",
             "Date:",
             "Time:",
-            "contact card",
+            "- UK Textiles HR",
         ):
             self.assertIn(expected, text)
         self.assertNotIn("Company:", text)  # nothing recorded, so no empty label

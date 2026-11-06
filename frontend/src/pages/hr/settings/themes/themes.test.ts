@@ -37,7 +37,7 @@ const SELECTOR: Record<string, string> = {
   mono: '[data-theme="mono"]',
   "mono-dark": '[data-theme="mono-dark"]',
   professional: '[data-theme="professional"]',
-  clean: 'html[data-theme="clean"]:not([data-md-theme])',
+  clean: 'html[data-theme="clean"][data-clean-theme]:not([data-md-theme])',
 };
 
 describe("theme palettes", () => {

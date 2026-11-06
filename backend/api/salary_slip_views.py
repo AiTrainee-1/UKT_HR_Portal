@@ -337,10 +337,24 @@ def whatsapp_salary_slip(request: Request, pk: int) -> Response:
         return Response({"error": "Slip not found"}, status=404)
 
     log = _send_slip_whatsapp(request, s, sent_by_id=request.jwt_user.get("hrUserId"))
-    if log.status != "sent":
+    if not whatsapp_service.accepted(log):
         logger.warning("Salary slip %s WhatsApp failed: %s", pk, log.error_message)
         return Response({"error": log.error_message}, status=400)
-    return Response({"ok": True, "sentTo": log.phone_number})
+    return Response({"ok": True, "sentTo": log.phone_number, "status": log.status, "queued": log.status == "queued"})
+
+
+def whatsapp_slip_pdf(slip_id: int) -> bytes:
+    """The salary slip PDF of a queued bulk WhatsApp message, built when the WhatsApp dispatcher's turn for it comes
+    (whatsapp_service.DOCUMENT_BUILDERS), so queueing a few hundred slips never builds a few hundred PDFs in one request."""
+    from .company_documents_views import build_salary_slip_pdf
+
+    s = (
+        SalarySlip.objects
+        .select_related("employee", "employee__department", "employee__designation")
+        .defer("employee__photo_url")
+        .get(pk=slip_id)
+    )
+    return build_salary_slip_pdf(s)
 
 
 @api_view(["POST"])
@@ -349,8 +363,13 @@ def salary_slip_bulk_whatsapp(request: Request) -> Response:
     """
     POST /api/salary-slips/bulk-whatsapp
     Body: { month, year, employmentType?, weekNumber? } -same filters as the
-    list endpoint and salary_slip_bulk_email. Sends every matching slip via
-    WhatsApp to its employee's phone number.
+    list endpoint and salary_slip_bulk_email. QUEUES every matching slip for
+    WhatsApp to its employee's phone number and answers at once: the paced
+    dispatcher (whatsapp_dispatcher.py) sends them one at a time, behind the
+    time-critical messages, and builds each PDF when its turn comes. Whatever
+    is not sent by the end of today expires and is never sent later (owner
+    rule, 2026-11-06); `message` says how much can go today. The progress
+    endpoint reads the batch's rows.
     """
     from . import whatsapp_bulk_progress as progress
     from . import whatsapp_service
@@ -359,36 +378,44 @@ def salary_slip_bulk_whatsapp(request: Request) -> Response:
     if not slips:
         return Response({"error": "No salary slips match the selected filters"}, status=404)
 
-    # Fail fast, before generating a single PDF, rather than burning time
-    # building one per slip (up to several hundred) only to have every one
-    # of them fail the same "not configured" check inside send_document.
+    # Fail fast, rather than writing one failed row per slip (up to several hundred) for the same reason.
     if not whatsapp_service.is_configured():
         return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
+    if not whatsapp_service.engine_enabled():
+        return Response(
+            {"error": "WhatsApp sending is switched off (master switch) on the WhatsApp Control page."}, status=400
+        )
 
     sent_by_id = request.jwt_user.get("hrUserId")
-    progress.start(len(slips), "salary_slip")
-    sent, failed = 0, 0
-    for i, s in enumerate(slips):
-        if i:
-            whatsapp_service.pace()
-        emp_name = f"{s.employee.first_name} {s.employee.last_name}".strip()
-        log = _send_slip_whatsapp(request, s, sent_by_id=sent_by_id)
-        ok = log.status == "sent"
-        if ok:
-            sent += 1
-        else:
-            failed += 1
-        progress.step(emp_name, s.employee.employee_code, ok, log.error_message)
-    progress.finish()
-
-    return Response({"ok": True, "sent": sent, "failed": failed, "failures": progress.snapshot()["failures"]})
+    batch_id = progress.new_batch("salary_slip")
+    for s in slips:
+        emp = s.employee
+        whatsapp_service.queue_document(
+            request, emp, "salary_slip",
+            [f"{emp.first_name} {emp.last_name}".strip(), f"{MONTHS[s.month]} {s.year}"],
+            build="salary_slip", build_args={"slip_id": s.id},
+            filename=f"salary_slip_{s.slip_number}.pdf",
+            document_ref_id=s.id, sent_by_id=sent_by_id, batch_id=batch_id,
+        )
+    snap = progress.snapshot(batch_id)
+    return Response({
+        "ok": True,
+        "batchId": batch_id,
+        "total": snap["total"],
+        "queued": snap["queued"],
+        # Already through (under tests a queued row is delivered at once; on a server nothing has gone yet).
+        "sent": snap["succeeded"],
+        "failed": snap["failed"],
+        "failures": snap["failures"],
+        "message": progress.queued_message(snap["queued"]),
+    })
 
 
 @api_view(["GET"])
 @require_hr
 def salary_slip_bulk_whatsapp_progress(request: Request) -> Response:
     from . import whatsapp_bulk_progress as progress
-    return Response(progress.snapshot())
+    return Response(progress.snapshot(request.query_params.get("batchId") or None))
 
 
 @api_view(["GET"])

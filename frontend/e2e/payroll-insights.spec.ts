@@ -214,7 +214,7 @@ test.describe("Salary Statement", () => {
       "PTRL",
       "Others Allow",
       "E salary",
-      "T.Advance",
+      // no T.Advance (owner 2026-11-04: the statement and the salary slip show only what applies to this month)
       "Advance",
       "ESI",
       "PF",
@@ -342,7 +342,9 @@ test.describe("Salary Statement", () => {
       .toBe("paid");
     await expect(page.getByTestId(`staff-salary-pay-${ravi.id}`)).toHaveCount(0);
 
-    // put the month back the way the other specs expect it: generating again recomputes it (and resets paid to pending)
+    // put the month back the way the other specs expect it. Cleared survives a regeneration (owner 2026-11-05), so it is
+    // taken back to Pending first; generating again then recomputes the figures (the bonus goes).
+    await api(request, adminToken, "PATCH", `/api/payroll/${ravi.id}`, { status: "pending" });
     await generateFebruary(request);
     const again = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body;
     expect(Number(again.find((r: { employeeCode: string }) => r.employeeCode === "E2E002").finalSalary)).toBe(15000);
@@ -743,7 +745,7 @@ test.describe("Details page", () => {
     );
   });
 
-  test("Mark as Cleared from the details page updates the status; generating again restores the month", async ({
+  test("Mark as Cleared from the details page updates the status, and generating again keeps it Cleared", async ({
     page,
     request,
   }) => {
@@ -755,7 +757,12 @@ test.describe("Details page", () => {
     await expect(page.getByTestId("pd-mark-paid")).toHaveCount(0);
     const list = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body;
     expect(list.find((r: { id: number }) => r.id === asha).status).toBe("paid");
+    // Cleared means HR checked this payroll: a regeneration recomputes it but keeps it Cleared (owner 2026-11-05)
     await generateFebruary(request);
+    const after = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body;
+    expect(after.find((r: { id: number }) => r.id === asha).status).toBe("paid");
+    // back to Pending for the tests after this one
+    await api(request, adminToken, "PATCH", `/api/payroll/${asha}`, { status: "pending" });
   });
 
   test("an unknown payroll says so, and a production-only role cannot open a staff payroll", async ({

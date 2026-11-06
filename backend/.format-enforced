@@ -187,6 +187,7 @@ api/tests_app_startup.py
 api/tests_approval_workflow.py
 api/tests_arrival_rules.py
 api/tests_attendance_day_kinds.py
+api/tests_attendance_daily_punches.py
 api/tests_compensation_page.py
 api/tests_device_connector.py
 api/tests_device_control.py
@@ -444,3 +445,11 @@ api/tests_notification_read_all.py
 api/employee_photo.py
 api/request_context.py
 api/tests_employee_photo_links.py
+api/whatsapp_dispatcher.py
+api/tests_whatsapp_dispatcher.py
+api/whatsapp_bulk_progress.py
+api/tests_geo_live_payload.py
+api/production_coverage.py
+api/tests_production_coverage.py
+api/reporting/definitions/hr_reports_production_statement.py
+api/tests_reporting_hr_production_statement.py

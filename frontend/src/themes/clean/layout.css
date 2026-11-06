@@ -16,52 +16,55 @@
 
 /* ── the shell ────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="root"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="root"] {
   background: var(--clean-page) !important; /* inline style: a blue-grey gradient */
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="main"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="main"] {
   background: transparent;
 }
 
 /* ── the left menu ────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] {
   background: hsl(var(--sidebar)) !important; /* inline style */
   border-right: 1px solid hsl(var(--sidebar-border)) !important; /* inline style */
   box-shadow: none !important; /* inline style: a blue glow */
   color: hsl(var(--sidebar-foreground));
 }
 /* the logo, name and collapse toggle row, and the lines between the menu's parts */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:first-child {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:first-child {
   border-bottom-color: hsl(var(--sidebar-border)) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child,
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:nth-child(2) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:nth-child(2) {
   border-top-color: hsl(var(--sidebar-border)) !important; /* inline style */
   border-bottom-color: hsl(var(--sidebar-border)) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] h1 {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] h1 {
   color: hsl(var(--sidebar-foreground)) !important; /* inline style */
   font-weight: 700;
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] h1 + p {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] h1 + p {
   color: var(--clean-muted) !important; /* inline style */
   opacity: 1 !important; /* inline style */
   font-weight: 600;
 }
 
 /* the "Search pages..." box */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="inset"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="inset"] {
   background: var(--clean-surface) !important; /* inline style */
   border: 1px solid var(--clean-line-strong);
   border-radius: var(--clean-radius);
   box-shadow: none !important; /* inline style: sunken clay */
   color: var(--clean-n-500) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="inset"]:hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="inset"]:hover {
   border-color: var(--clean-n-500);
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[style*="inset"] > span:last-child {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  button[style*="inset"]
+  > span:last-child {
   background: var(--clean-n-100) !important; /* inline style */
   color: var(--clean-n-500) !important; /* inline style */
   border: 1px solid var(--clean-line);
@@ -69,25 +72,25 @@ html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[s
 }
 
 /* menu rows: a group heading, a page, a sub-page */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav p {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] nav p {
   color: hsl(var(--sidebar-foreground) / 62%) !important; /* inline style */
   letter-spacing: 0.08em;
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cursor-pointer {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cursor-pointer {
   border-radius: var(--clean-radius);
   color: hsl(var(--sidebar-foreground));
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cursor-pointer svg {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .cursor-pointer svg {
   color: hsl(var(--sidebar-foreground) / 68%);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-ui-shell="sidebar"]
   nav
   .cursor-pointer:hover:not(.clay-nav-active) {
   background: hsl(var(--sidebar-foreground) / 8%);
   color: hsl(var(--sidebar-foreground));
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-ui-shell="sidebar"]
   nav
   .cursor-pointer:hover:not(.clay-nav-active)
@@ -95,27 +98,31 @@ html[data-theme="clean"]:not([data-md-theme])
   color: hsl(var(--primary));
 }
 /* the open page: the accent fill, the bar, the accent text; its icon and label follow */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active {
   background: hsl(var(--sidebar-accent));
   color: hsl(var(--sidebar-accent-foreground));
   box-shadow: inset 3px 0 0 hsl(var(--sidebar-primary));
   font-weight: 600;
 }
 /* (not the count bubble: a span with the inline gradient keeps its own white text on the red disc) */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-ui-shell="sidebar"]
   .clay-nav-active
   :is(span, svg):not([style*="linear-gradient"]) {
   color: inherit;
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active svg {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active svg {
   color: hsl(var(--sidebar-primary));
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active [class~="bg-white"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  .clay-nav-active
+  [class~="bg-white"] {
   background-color: hsl(var(--sidebar-primary));
 }
-/* a group that holds the open page is only marked by its colour: the sub-page carries the bar */
-html[data-theme="clean"]:not([data-md-theme])
+/* a group that holds the open page is only marked by its colour: the sub-page carries the bar (a group's own count bubble,
+   Geo Attendance's, keeps its white text on the red disc) */
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-ui-shell="sidebar"]
   nav
   .clay-nav-active:has(.lucide-chevron-right) {
@@ -123,43 +130,51 @@ html[data-theme="clean"]:not([data-md-theme])
   box-shadow: none;
   color: hsl(var(--sidebar-primary));
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-ui-shell="sidebar"]
   nav
   .clay-nav-active:has(.lucide-chevron-right)
-  span {
+  span:not([style*="linear-gradient"]) {
   color: inherit;
 }
 /* the thin line down the left of an opened group */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .border-l-2 {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] nav .border-l-2 {
   border-color: hsl(var(--sidebar-border)) !important; /* inline style */
 }
 /* the count bubbles (Requests, Settlement ...): one flat red, no amber gradient, no pulse */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] [style*="linear-gradient"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] [style*="linear-gradient"] {
   background: hsl(var(--destructive)) !important; /* inline style */
   color: var(--clean-on-primary);
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] [class~="ring-[#f6fafe]"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] [class~="ring-[#f6fafe]"] {
   --tw-ring-color: hsl(var(--sidebar));
 }
 /* Sign out */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-ui-shell="sidebar"]
   button:is([style^="color: rgba"], [style*=" color: rgba"]),
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child button {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  > div
+  > div:last-child
+  button {
   color: hsl(var(--sidebar-foreground) / 78%) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] > div > div:last-child button:hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  [data-ui-shell="sidebar"]
+  > div
+  > div:last-child
+  button:hover {
   background: hsl(var(--sidebar-foreground) / 8%);
   color: hsl(var(--sidebar-foreground)) !important; /* inline style */
 }
 /* the little close button of the phone drawer */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] button[class~="lg:hidden"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] button[class~="lg:hidden"] {
   color: var(--clean-n-500) !important; /* inline style */
 }
 
 /* the flyout of a group when the menu is collapsed to icons */
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="popover-panel"][style*="box-shadow"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="popover-panel"][style*="box-shadow"] {
   box-shadow: var(--clean-shadow-float) !important; /* inline style */
   border: 1px solid var(--clean-line);
   border-radius: var(--clean-radius-lg);
@@ -167,27 +182,27 @@ html[data-theme="clean"]:not([data-md-theme]) [data-slot="popover-panel"][style*
 
 /* ── the phone: a white top bar and the drawer's dim ──────────────────────────────────────────────────────────────── */
 
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="topbar"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="topbar"] {
   background: var(--clean-surface) !important; /* inline style */
   border-bottom: 1px solid var(--clean-line) !important; /* inline style */
   box-shadow: none !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="topbar"] button {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="topbar"] button {
   color: hsl(var(--primary)) !important; /* inline style */
   border-radius: var(--clean-radius);
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="topbar"] span {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="topbar"] span {
   color: var(--clean-ink) !important; /* inline style */
   font-weight: 700;
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="overlay"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="overlay"] {
   background: var(--clean-scrim) !important; /* inline style */
   -webkit-backdrop-filter: none !important; /* inline style */
   backdrop-filter: none !important; /* inline style */
 }
 
 /* "View only" notice at the top of a page */
-html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="view-only"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="view-only"] {
   background: var(--clean-w-50) !important; /* inline style */
   color: var(--clean-w-800) !important; /* inline style */
   border: 1px solid var(--clean-w-200);
@@ -198,7 +213,7 @@ html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="view-only"] {
 /* ── the page title row ───────────────────────────────────────────────────────────────────────────────────────────── */
 
 /* the pages write their title as an h1/h2 with text-2xl or text-3xl and font-black: one title size and weight */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-ui-shell="main"]
   :is(h1, h2):is([class*="text-2xl"], [class*="text-3xl"]):not([class*="text-white"]) {
   font-size: 22px;
@@ -207,7 +222,7 @@ html[data-theme="clean"]:not([data-md-theme])
   letter-spacing: -0.01em;
   color: var(--clean-ink);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [data-ui-shell="main"]
   :is(h1, h2):is([class*="text-2xl"], [class*="text-3xl"])
   + p {
@@ -216,7 +231,7 @@ html[data-theme="clean"]:not([data-md-theme])
 
 /* ── Windows High Contrast / forced colours: the open page keeps its marker (the fill is replaced by the system's colours) ── */
 @media (forced-colors: active) {
-  html[data-theme="clean"]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active {
+  html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-ui-shell="sidebar"] .clay-nav-active {
     border-left: 3px solid Highlight;
   }
 }

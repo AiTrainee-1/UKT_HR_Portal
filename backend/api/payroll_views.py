@@ -45,9 +45,7 @@ from .clock import ist_today
 from .compensation_shared import parse_join_date
 from .pf_esi import production_statutory, staff_statutory
 from .production_cycles import (
-    DEFAULT_MONTHLY_EQUIVALENT_FACTOR,
     LATE_SLAB_MAX_SHIFTS,
-    MONTHLY_EQUIVALENT_FACTOR,
     PLAIN_DECIMAL,
     PLAIN_WHOLE,
     cycle_late_rules,
@@ -993,7 +991,13 @@ def _session_completed(first_in: time, last_out: time | None, min_checkout: time
 
 
 def _generate_production_payroll(
-    emp: Employee, period_start: date, period_end: date, settings=None, pay_cycle: str | None = None, prod_config=None
+    emp: Employee,
+    period_start: date,
+    period_end: date,
+    settings=None,
+    pay_cycle: str | None = None,
+    prod_config=None,
+    pay_ranges=None,
 ) -> dict:
     """
     Shift-based payroll for production employees -completely separate from
@@ -1019,15 +1023,40 @@ def _generate_production_payroll(
     sum(shifts_earned) x salary_per_shift. `prod_config` (optional) is a
     ProductionShiftConfig a generating loop shares between employees so the
     rule tables are read once for the loop by the late detection below.
+
+    `pay_ranges` (2026-11-06, production_coverage.py): the days this row
+    pays when the employee changed pay cycle -a PeriodPlan, or a plain list
+    of (from, to) pairs. Days of the period another payroll already paid are
+    left out, and catch-up days before the period (paid by no cycle) are
+    added; records, late detection and every total cover exactly those days,
+    and Payroll.paid_ranges records them. None (every ordinary run) = the
+    whole period, computed exactly as before. A part period is judged for
+    PF / ESI on its month-equivalent (28 / days paid).
+
+    A payroll HR marked Cleared STAYS Cleared when it is generated again
+    (owner 2026-11-05/06, as on Staff Payroll): only the figures are worked
+    out again.
     """
     if not emp.salary_per_shift or emp.salary_per_shift <= 0:
         raise PayrollSkip("No Salary Per Shift set on this employee's profile")
 
     from .attendance_final import compute_range_records
+    from . import production_coverage as coverage
 
     ps = settings if settings is not None else settings_for_employee(emp)
-    date_from, date_to = period_start, period_end
-    records = compute_range_records(emp, date_from, date_to)
+    if isinstance(pay_ranges, coverage.PeriodPlan):
+        plan = pay_ranges
+    elif pay_ranges is not None:
+        plan = coverage.PeriodPlan.from_ranges(period_start, period_end, pay_ranges, pay_cycle)
+    else:
+        plan = coverage.PeriodPlan.plain(period_start, period_end, pay_cycle)
+    if plan.refused:
+        raise PayrollSkip(plan.refusal_reason())
+    paid = plan.paid_ranges
+    date_from, date_to = paid[0][0], paid[-1][1]
+    records = []
+    for range_from, range_to in paid:
+        records.extend(compute_range_records(emp, range_from, range_to))
 
     DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     days_detail = []
@@ -1090,7 +1119,9 @@ def _generate_production_payroll(
     # (Weekly x4, BiWeekly x2, Monthly x1) before the employee's Basic / first portion / total share of it is tested
     # against the PF and ESI rules. Only a Co Emp employee gets PF and ESI (rate x the period's first-portion share of
     # the gross); only a TDS employee gets TDS (tds_percent % of the period's gross).
-    monthly_factor = MONTHLY_EQUIVALENT_FACTOR.get(pay_cycle, DEFAULT_MONTHLY_EQUIVALENT_FACTOR)
+    # A row that pays a different number of days than its cycle has (days already paid on another cycle left out, or
+    # catch-up days added) is scaled by 28 / the days it pays instead (production_coverage.monthly_factor).
+    monthly_factor = coverage.monthly_factor(pay_cycle, None if plan.is_plain else plan.paid_days)
     monthly_equiv = _d2(gross_amount * monthly_factor)
     statutory = production_statutory(emp, ps, period_gross=gross_amount, monthly_factor=monthly_factor)
     pf_deduction = statutory.pf
@@ -1110,7 +1141,9 @@ def _generate_production_payroll(
     total_deductions = _d2(pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty)
     net_salary = _d2(gross_amount - total_deductions)
 
-    total_days = (date_to - date_from).days + 1
+    # The days this row pays: the whole period on an ordinary run; after a pay-cycle change the period's unpaid days plus
+    # any catch-up days (production_coverage.py). `periodDays` is always the period's own length.
+    total_days = plan.paid_days
 
     breakdown = {
         "type": "production",
@@ -1119,10 +1152,17 @@ def _generate_production_payroll(
         "periodEnd": period_end.isoformat(),
         "dateFrom": date_from.isoformat(),
         "dateTo": date_to.isoformat(),
+        "periodDays": plan.period_days,
+        # the days of the period this row pays, the days of it another payroll already paid, and the days before it that
+        # no cycle paid (added here because the employee changed cycle)
+        "payRanges": coverage.ranges_json(plan.pay_ranges),
+        "alreadyPaid": [part.json() for part in plan.already_paid],
+        "catchUp": [part.json() for part in plan.catch_up],
         "salaryPerShift": float(salary_per_shift),
         "days": days_detail,
         "summary": {
             "totalDays": total_days,
+            "periodDays": plan.period_days,
             "daysWorked": days_worked,
             "daysAbsent": days_absent,
             "totalShifts": float(total_shifts),
@@ -1141,7 +1181,7 @@ def _generate_production_payroll(
             "tdsPercent": float(statutory.tds_percent) if statutory.tds_percent is not None else None,
             "statutory": statutory.breakdown(),
             "monthlyEquivalent": float(monthly_equiv),
-            "monthlyEquivalentFactor": monthly_factor,
+            "monthlyEquivalentFactor": coverage.factor_json(monthly_factor),
             "advances": float(advance_total),
             "advanceDetails": advance_details,
             "lateShiftPenalty": float(late_penalty) if late_summary is not None else None,
@@ -1153,11 +1193,17 @@ def _generate_production_payroll(
 
     # Stamped only when a cycle is given, so regenerating a row from an older caller never wipes its cycle.
     cycle_stamp = {"pay_cycle": pay_cycle} if pay_cycle else {}
+    # Cleared stays Cleared on Generate again (as Staff Payroll does since 2026-11-05).
+    cleared = Payroll.objects.filter(
+        employee=emp, period_start=period_start, period_end=period_end, status=Payroll.STATUS_PAID
+    ).exists()
+    coverage_note = None if plan.is_plain else plan.note()  # an ordinary run keeps its note exactly as before
 
     payroll, _ = Payroll.objects.update_or_create(
         employee=emp, period_start=period_start, period_end=period_end,
         defaults=dict(
             **cycle_stamp,
+            paid_ranges=plan.stored_ranges(),
             salary_mode="shift",
             month=month, year=year, week_number=None,
             total_working_days=total_days,
@@ -1173,10 +1219,11 @@ def _generate_production_payroll(
             tds_percent=statutory.tds_percent,
             bonus=Decimal("0"),
             final_salary=net_salary,
-            status="pending",
+            status=Payroll.STATUS_PAID if cleared else Payroll.STATUS_PENDING,
             notes=(
                 f"Production period ({date_from} to {date_to}): "
                 f"{total_shifts} shifts x Rs{salary_per_shift} = Rs{gross_amount}."
+                + (f" {coverage_note}" if coverage_note else "")
             ),
         ),
     )
@@ -1288,6 +1335,9 @@ def _payroll_json(p: Payroll, employee_name: str | None = None, holidays_by_mont
         "periodStart": p.period_start.isoformat() if p.period_start else None,
         "periodEnd": p.period_end.isoformat() if p.period_end else None,
         "payCycle": p.pay_cycle,
+        # production only (2026-11-06): the days the row really pays when the employee changed pay cycle, as
+        # [{"from", "to"}]; null = the whole period (and always null for staff)
+        "paidRanges": p.paid_ranges,
         "totalWorkingDays": p.total_working_days,
         # added 2026-11-04, display only: the company's count of the month (holidays included), e.g. 27 beside 25 working
         # days; None for a production (shift / session) row

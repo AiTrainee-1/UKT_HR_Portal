@@ -35,6 +35,7 @@ from .models import (
     PayrollSettings,
     ShiftTemplate,
     WhatsAppMessageLog,
+    WhatsAppMessageTemplate,
     WhatsAppSettings,
 )
 from .shift_engine import _t2s
@@ -302,11 +303,11 @@ class ThirtyZeroTwentyRegressionTests(AlertBase):
         for expected in (
             "SURYA M",
             "26 Sep 2026",
-            "Shift Start: 9:00 AM",
-            "Grace Period: 11 minutes",
-            "Your First Punch: 9:14 AM",
-            "Late By: 3 minutes",  # 9:14:23 counts as 9:14, three minutes past the allowed 9:11 (seconds are ignored)
-            "maintain punctuality",
+            "Shift start: 9:00 AM",
+            "Grace period: 11 minutes",
+            "First punch: 9:14 AM",
+            "Late by: 3 minutes",  # 9:14:23 counts as 9:14, three minutes past the allowed 9:11 (seconds are ignored)
+            "marked as Late.",
         ):
             self.assertIn(expected, text)
         log = self.logs("late_alert").get()
@@ -322,10 +323,10 @@ class ThirtyZeroTwentyRegressionTests(AlertBase):
         self.run_at(SAT, 13, 27)
         log = self.logs("four_punch_alert").get(employee=self.surya)
         for expected in (
-            "Good afternoon, SURYA M",
+            "Dear SURYA M",
             "Lunch-out (2 of 4)",
-            "expected at 1:30 PM",
-            "lunch break is coming up in 3 minutes",
+            "due at 1:30 PM",
+            "in 3 minutes",
         ):
             self.assertIn(expected, log.message_text)
         self.assertEqual(log.dedupe_key, f"four2:{SAT.isoformat()}:{self.surya.id}")
@@ -349,7 +350,7 @@ class ThirtyZeroTwentyRegressionTests(AlertBase):
         self.run_at(SAT, 14, 25)  # back at 14:30
         log = self.logs("four_punch_alert").get(employee=self.surya)
         self.assertIn("Lunch-in (3 of 4)", log.message_text)
-        self.assertIn("lunch break ends in 5 minutes", log.message_text)
+        self.assertIn("due at 2:30 PM, in 5 minutes", log.message_text)
         # a missing LUNCH punch is not chased by a Missing Punch alert in simple mode
         self.run_at(SAT, 14, 55)
         self.assertFalse(self.logs("missing_punch_alert").filter(employee=self.surya).exists())
@@ -376,7 +377,7 @@ class ThirtyZeroTwentyRegressionTests(AlertBase):
         Attendance.objects.all().delete()
         self.punch(self.surya, SAT, "09:12:05")
         self.assertEqual(self.run_at(SAT, 9, 30), {"late_alert": 1})
-        self.assertIn("Late By: 1 minute\n", self.logs("late_alert").get().message_text + "\n")
+        self.assertIn("Late by: 1 minute\n", self.logs("late_alert").get().message_text + "\n")
 
     def trace(self, code, h, m):
         out = StringIO()
@@ -450,12 +451,13 @@ class AbsentAlertTests(AlertBase):
         self.run_at(WED, 10, 30)
         text = self.sent_texts()[0]
         for expected in (
-            "Hi Asha Kumar, we haven't received your attendance punch for today yet.",
-            "Are you absent today, or did you forget to punch in?",
-            "update your attendance or contact HR",
+            "Dear Asha Kumar,",
+            "We have not received your attendance punch today.",
+            "If you are at work, please punch in. If you are absent today, please inform HR.",
             "23 Sep 2026",
-            "9:00 AM",
-            "10:00 AM",
+            "Shift start: 9:00 AM",
+            "Punch allowed until: 10:00 AM",
+            "- UK Textiles HR",
         ):
             self.assertIn(expected, text)
         self.assertNotIn("marked as *Absent*", text)
@@ -559,15 +561,15 @@ class LateAlertTests(AlertBase):
         self.assertEqual(self.run_at(WED, 9, 26), {"late_alert": 1})
         text = self.sent_texts()[0]
         for expected in (
-            "Hi Bala Murugan, your attendance has been marked as *Late* today.",
-            "Shift Start: 9:00 AM",
-            "Grace Period: 10 minutes",
-            "Your First Punch: 9:25 AM",
-            "Late By: 15 minutes",
-            "maintain punctuality",
-            "Every minute contributes to a productive workday",
+            "Dear Bala Murugan,",
+            "Your attendance today has been marked as Late.",
+            "Shift start: 9:00 AM",
+            "Grace period: 10 minutes",
+            "First punch: 9:25 AM",
+            "Late by: 15 minutes",
         ):
             self.assertIn(expected, text)
+        self.assertNotIn("punctuality", text)  # no lecture in the default wording any more (2026-11-06)
 
     def test_a_first_punch_after_grace_is_late(self):
         self.punch(self.emp, WED, "09:40")
@@ -596,7 +598,7 @@ class LateAlertTests(AlertBase):
             self.punch(self.emp, WED, punch)
             self.run_at(WED, 9, 20)
             self.assertEqual(self.logs("late_alert").exists(), late, punch)
-        self.assertIn("Late By: 1 minute\n", self.logs("late_alert").get().message_text + "\n")
+        self.assertIn("Late by: 1 minute\n", self.logs("late_alert").get().message_text + "\n")
 
     def test_each_employees_own_grace_decides(self):
         strict = self.make_shift("Strict", "09:00", "18:00", grace=5)
@@ -607,7 +609,7 @@ class LateAlertTests(AlertBase):
         self.punch(b, WED, "09:20")
         self.assertEqual(self.run_at(WED, 9, 21), {"late_alert": 1})
         self.assertEqual(self.logs("late_alert").get().employee.employee_code, "S1")
-        self.assertIn("Grace Period: 5 minutes", self.sent_texts()[0])
+        self.assertIn("Grace period: 5 minutes", self.sent_texts()[0])
 
     def test_each_employees_own_shift_start_decides(self):
         early = self.make_shift("Early", "06:00", "14:00", grace=10)
@@ -616,8 +618,8 @@ class LateAlertTests(AlertBase):
         self.punch(self.emp, WED, "06:30")  # far too early to be late for the 09:00 shift
         self.assertEqual(self.run_at(WED, 7), {"late_alert": 1})
         text = self.sent_texts()[0]
-        self.assertIn("Shift Start: 6:00 AM", text)
-        self.assertIn("Late By: 20 minutes", text)
+        self.assertIn("Shift start: 6:00 AM", text)
+        self.assertIn("Late by: 20 minutes", text)
 
     def test_the_status_always_just_says_late(self):
         # The old auto-detected "counted as Permission"/"Half Shift" zone wording is retired along
@@ -630,7 +632,7 @@ class LateAlertTests(AlertBase):
             Attendance.objects.all().delete()
             self.punch(self.emp, WED, punch)
             self.run_at(WED, *(int(part) for part in punch.split(":")))  # as it is seen, an alert must be fresh
-            self.assertIn("Late\n", self.logs("late_alert").get().message_text + "\n", punch)
+            self.assertIn("marked as Late.\n", self.logs("late_alert").get().message_text + "\n", punch)
 
     def test_sent_once(self):
         self.punch(self.emp, WED, "09:40")
@@ -781,12 +783,36 @@ class LateAlertTests(AlertBase):
         self.assertEqual(self.run_at(WED, 10), {})
 
 
+# The punch reminder's default wording before 2026-11-06. HR's own saved wording may still look like this: every variable
+# (greeting, action, quote, closing ...) is still filled in, so these tests run with it saved on the Message Text tab.
+LEGACY_REMINDER_WORDING = (
+    "{{greeting}}, {{employee_name}} \U0001f31f\n\n"
+    "Just a friendly reminder: {{action}}\n\n"
+    "\U0001f514 {{punch_name}} ({{punch_number}}), expected at {{expected_time}}\n"
+    "\U0001f4c5 Date: {{date}}\n\n"
+    "\U0001f4a1 \u201c{{quote}}\u201d\n\n"
+    "{{closing}}\n\n"
+    "UK Textiles HRMS"
+)
+
+
 class PunchReminderTests(AlertBase):
-    """A friendly heads-up 5 minutes before each punch is expected, only if that punch is still missing."""
+    """A friendly heads-up 5 minutes before each punch is expected, only if that punch is still missing. Run with the
+    pre-2026-11-06 wording saved by HR, which uses every variable the reminder offers."""
 
     def setUp(self):
         super().setUp()
         _switches(absent_alert_enabled=False, late_alert_enabled=False, missing_punch_alert_enabled=False)
+        WhatsAppMessageTemplate.objects.create(document_type="four_punch_alert", message_body=LEGACY_REMINDER_WORDING)
+
+    def test_the_default_wording_is_short_and_plain(self):
+        WhatsAppMessageTemplate.objects.all().delete()
+        self.assertEqual(self.run_at(WED, 8, 55), {"four_punch_alert": 1})
+        self.assertEqual(
+            self.sent_texts()[0],
+            "*Punch Reminder*\n\nDear Asha Kumar,\nYour Morning check-in (1 of 4) is due at 9:00 AM, in 5 minutes. "
+            "Please remember to punch.\n\n- UK Textiles HR",
+        )
 
     def test_check_in_reminder_five_minutes_before_the_shift_starts(self):
         self.assertEqual(self.run_at(WED, 8, 54), {})
@@ -961,12 +987,12 @@ class OnDutyReminderTests(AlertBase):
         text = self.sent_texts()[0]
         for expected in (
             "On-Duty Punch Reminder",
-            "Good morning, Asha Kumar",
+            "Dear Asha Kumar",
             "Geo Punch",
             "Tirupur Dyeing Unit",
             "1 of 4",
             "Morning check-in",
-            "coming up in 5 minutes",
+            "in 5 minutes",
         ):
             self.assertIn(expected, text)
         self.assertEqual(self.logs("on_duty_punch_reminder").get().dedupe_key, f"duty1:{WED.isoformat()}:{self.emp.id}")
@@ -1018,10 +1044,9 @@ class MissingPunchAlertTests(AlertBase):
         self.assertEqual(self.run_at(WED, 9, 20), {"missing_punch_alert": 1})
         text = self.sent_texts()[0]
         for expected in (
-            "Hi Asha Kumar, we noticed that your attendance punch is still missing.",
-            "Expected Punch: 9:00 AM",
-            "Current Status: Punch Not Recorded",
-            "complete your attendance punch as soon as possible",
+            "Dear Asha Kumar,\nWe noticed that your attendance punch is still missing.",
+            "Expected at: 9:00 AM",
+            "Please punch now.",
             "please contact HR",
         ):
             self.assertIn(expected, text)
@@ -1033,19 +1058,19 @@ class MissingPunchAlertTests(AlertBase):
         self.assertEqual(self.run_at(WED, 18, 20), {"missing_punch_alert": 1})
         text = self.sent_texts()[0]
         self.assertIn("your check-out punch is still missing", text)
-        self.assertIn("Expected Punch: 6:00 PM", text)
-        self.assertIn("Punch Not Recorded", text)
+        self.assertIn("Expected at: 6:00 PM", text)
+        self.assertIn("Punch: Evening check-out", text)
 
     def test_lunch_punches_get_their_own_alerts_at_their_own_times(self):
         self.punch(self.emp, WED, "09:00")
         self.assertEqual(self.run_at(WED, 13, 19), {})
         self.assertEqual(self.run_at(WED, 13, 20), {"missing_punch_alert": 1})
         self.assertIn("lunch-out punch is still missing", self.sent_texts()[0])
-        self.assertIn("Expected Punch: 1:00 PM", self.sent_texts()[0])
+        self.assertIn("Expected at: 1:00 PM", self.sent_texts()[0])
         self.punch(self.emp, WED, "13:05")
         self.assertEqual(self.run_at(WED, 14, 20), {"missing_punch_alert": 1})
         self.assertIn("lunch-in punch is still missing", self.sent_texts()[1])
-        self.assertIn("Expected Punch: 2:00 PM", self.sent_texts()[1])
+        self.assertIn("Expected at: 2:00 PM", self.sent_texts()[1])
 
     def test_no_alert_when_the_punch_was_made_in_time(self):
         self.punch(self.emp, WED, "09:10")
@@ -1090,7 +1115,7 @@ class MissingPunchAlertTests(AlertBase):
         self.make_employee("E1", "Early", "Bird", phone="9000000002", shift=early)
         self.assertEqual(self.run_at(WED, 6, 20), {"missing_punch_alert": 1})
         self.assertEqual(self.logs("missing_punch_alert").get().employee.employee_code, "E1")
-        self.assertIn("Expected Punch: 6:00 AM", self.sent_texts()[0])
+        self.assertIn("Expected at: 6:00 AM", self.sent_texts()[0])
 
     def test_simple_mode_only_chases_check_in_and_check_out(self):
         ps = PayrollSettings.get()
@@ -1377,15 +1402,46 @@ class ProviderFailureBreakerTests(AlertBase):
         self.failed(5, error="No phone number on file for this employee.")
         self.assertEqual(self.run_at(WED, 10), {"absent_alert": 1})
 
-    def test_only_alert_failures_count(self):
+    def test_any_messages_provider_failures_count(self):
+        # the circuit breaker is the send queue's (whatsapp_dispatcher.pause_state): a refused salary slip says as much
+        # about the number as a refused alert
         self.failed(5, kind="salary_slip")
-        self.assertEqual(self.run_at(WED, 10), {"absent_alert": 1})
+        self.assertEqual(self.run_at(WED, 10), {})
 
     def test_old_failures_are_forgotten_so_it_resumes_by_itself(self):
         self.failed(3)
         self.assertEqual(self.run_at(WED, 10), {})
-        WhatsAppMessageLog.objects.update(created_at=timezone.now() - timedelta(minutes=31))
+        long_ago = timezone.now() - timedelta(minutes=31)
+        WhatsAppMessageLog.objects.update(created_at=long_ago, updated_at=long_ago)
         self.assertEqual(self.run_at(WED, 10), {"absent_alert": 1})
+
+
+@override_settings(WHATSAPP_ASYNC_SEND=True)
+class AlertsAreQueuedTests(AlertBase):
+    """On a server the job only decides: a due alert is queued with the moment it stops being useful, and the send queue
+    (whatsapp_dispatcher.py) sends it or lets it expire."""
+
+    def setUp(self):
+        super().setUp()
+        _switches(four_punch_alert_enabled=False, missing_punch_alert_enabled=False, late_alert_enabled=False)
+
+    def test_a_due_alert_is_queued_with_its_expiry_not_sent(self):
+        with mock.patch("api.whatsapp_dispatcher.in_quiet_hours", return_value=False):
+            self.assertEqual(self.run_at(WED, 10, 0), {"absent_alert": 1})
+        log = self.logs("absent_alert").get()
+        self.assertEqual((log.status, log.kind), ("queued", "automatic"))
+        self.post.assert_not_called()
+        # due at 10:00 (9:00 + the 60-minute window), useful for an hour after that
+        self.assertEqual(log.expires_at, datetime.combine(WED, time(11, 0), tzinfo=FACTORY_TZ))
+        # the next minute's run does not queue it again
+        with mock.patch("api.whatsapp_dispatcher.in_quiet_hours", return_value=False):
+            self.assertEqual(self.run_at(WED, 10, 1), {})
+
+    def test_during_quiet_hours_it_is_recorded_as_skipped(self):
+        with mock.patch("api.whatsapp_dispatcher.in_quiet_hours", return_value=True):
+            self.assertEqual(self.run_at(WED, 10, 0), {})
+        log = self.logs("absent_alert").get()
+        self.assertEqual((log.status, log.error_message), ("skipped", "Quiet hours: not sent"))
 
 
 class FifteenMinuteLeadTests(AlertBase):
@@ -1405,7 +1461,7 @@ class FifteenMinuteLeadTests(AlertBase):
     def test_the_reminder_window_opens_fifteen_minutes_before_and_closes_at_the_punch(self):
         self.assertEqual(self.run_at(WED, 8, 44), {})
         self.assertEqual(self.run_at(WED, 8, 45), {"four_punch_alert": 1})
-        self.assertIn("coming up in 15 minutes", self.sent_texts()[0])
+        self.assertIn("in 15 minutes", self.sent_texts()[0])
         for m in range(46, 60):
             self.run_at(WED, 8, m)
         self.assertEqual(self.post.call_count, 1)  # once, however many minutes the window lasts

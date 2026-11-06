@@ -29,6 +29,7 @@ import {
   type PayCycle,
   type ProductionEmployeeRow,
 } from "@/lib/api-client/custom-hooks";
+import { ChangeWarnings } from "./production-employees/ChangeWarnings";
 import { EmployeeList } from "./production-employees/EmployeeList";
 import { useDebounced } from "./production-employees/hooks";
 import {
@@ -164,7 +165,8 @@ export default function ProductionEmployees() {
     }
   };
 
-  /** Moving someone between cycles, or off one, is confirmed first; adding unassigned people goes straight through. */
+  /** Moving someone between cycles, or off one, is confirmed first (with the payroll warning of anyone already paid);
+   *  adding unassigned people with no payroll yet goes straight through. */
   const start = (targets: ProductionEmployeeRow[], cycle: PayCycle | null) => {
     const plan = planAssignment(targets, cycle);
     if (plan.ids.length === 0) return;
@@ -408,7 +410,7 @@ export default function ProductionEmployees() {
       </div>
 
       <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
-        <AlertDialogContent data-testid="pe-confirm-dialog">
+        <AlertDialogContent className="max-h-[90vh] overflow-y-auto" data-testid="pe-confirm-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>{wording?.title}</AlertDialogTitle>
             <AlertDialogDescription asChild>
@@ -416,6 +418,7 @@ export default function ProductionEmployees() {
                 {wording?.lines.map((line) => (
                   <p key={line}>{line}</p>
                 ))}
+                {confirm && <ChangeWarnings ids={confirm.ids} target={confirm.target} open={confirm !== null} />}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -426,7 +429,7 @@ export default function ProductionEmployees() {
               className={confirm?.target === null ? "bg-red-600 text-white hover:bg-red-700" : undefined}
               data-testid="pe-confirm"
             >
-              {confirm?.target === null ? "Remove" : "Move"}
+              {confirm?.target === null ? "Remove" : confirm && confirm.movingCount === 0 ? "Assign" : "Move"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

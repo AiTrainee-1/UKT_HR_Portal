@@ -37,8 +37,9 @@ EXCLUDED_TYPES = frozenset({"otp_login", "otp_reset", "otp_activate"})
 # The `type` the mobile list uses for its icon and colour, where it differs from the workflow's own key.
 _APPROVAL_TYPE = {"attendance_correction": "attendance", "holiday_work": "compensation", "request": "employee_request"}
 
-# The sign-off lines of the WhatsApp wording: a phone notification does not need them.
-_SIGN_OFFS = ("uk textiles hrms", "uk textile hrms", "thank you,", "regards,")
+# The sign-off lines of the WhatsApp wording: a phone notification does not need them. ("- UK Textiles HR" is the
+# sign-off of the default wordings since 2026-11-06; the others are HR's older saved wording.)
+_SIGN_OFFS = ("uk textiles hrms", "uk textile hrms", "- uk textiles hr", "thank you,", "regards,")
 
 _BOLD = re.compile(r"(?<!\w)\*([^*\n]+)\*(?!\w)")
 _HEADER = re.compile(r"^\W*\*([^*\n]+)\*")

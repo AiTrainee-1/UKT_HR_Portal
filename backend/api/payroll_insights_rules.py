@@ -1364,7 +1364,8 @@ def production_rule_groups(inp: ProductionRuleInput, company: bool = True) -> li
                 text=f"x{factor}",
                 detail="A period's pay is multiplied by this before it is compared with the ranges of the monthly PF and ESI rules",
                 applied=_got(bd, "deductions", "monthlyEquivalentFactor"),
-                applied_fmt=lambda v: f"x{int(v)}",
+                # 28 / the days paid on a row that paid part of its period after a pay-cycle change (x1.3333)
+                applied_fmt=lambda v: f"x{int(v)}" if float(v).is_integer() else f"x{float(v):g}",
             )
         )
 

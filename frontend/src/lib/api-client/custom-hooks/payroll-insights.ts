@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
 import type { DayCompensationMarker } from "./attendance";
-import type { PayCycle } from "./production-cycles";
+import type { AlreadyPaidPart, CatchUpPart, DayRange, PayCycle } from "./production-cycles";
 
 // ── Which payroll ─────────────────────────────────────────────────────────────
 
@@ -380,6 +380,18 @@ export type PayrollDetails = {
   summary: Record<string, number | null>;
   /** The employee's whole monthly salary split into components (staff only). */
   salary?: PayrollSalaryBreakup | null;
+  /** Production (2026-11-06): which days this payroll pays. `partial` false = the whole period, as usual; after a
+   *  pay-cycle change it pays `payRanges` of the period (`alreadyPaid` names the payroll that paid the rest) plus any
+   *  catch-up days before it. Null for staff; absent from an older server. */
+  coverage?: {
+    periodDays: number;
+    paidDays: number | null;
+    paidRanges: DayRange[];
+    payRanges: DayRange[];
+    alreadyPaid: AlreadyPaidPart[];
+    catchUp: CatchUpPart[];
+    partial: boolean;
+  } | null;
   /** The other days of the period (Sundays, holidays) with the real attendance when somebody worked one. */
   offDays?: OffDay[];
   /** Whether the days were just re-read from the attendance records (the Sync button), and how many changed. */

@@ -17,16 +17,15 @@ import { Link, useLocation } from "wouter";
 import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import { Button } from "@/components/ui/button";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
-import { dateTime, fileStem, plural } from "@/components/payroll/kit/format";
-import { exportTableToCsv, exportTableToExcel } from "@/components/payroll/kit/export-table";
+import { dateTime, plural } from "@/components/payroll/kit/format";
 import { addSkipped } from "@/components/payroll/kit/issue-summary";
 import { EmptyNote, PayrollLoader, SectionCard } from "@/components/payroll/kit/parts";
-import { withTdsColumns } from "@/components/payroll/kit/statutory";
 import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { ViewSwitch, type ViewOption } from "@/components/payroll/kit/ViewSwitch";
 import { PayrollDashboard } from "@/components/payroll/panels/dashboard";
 import {
+  ALL,
   DEFAULT_FILTERS,
   PayrollFilterBar,
   applyPayrollFilters,
@@ -37,7 +36,14 @@ import {
   hasChanges,
 } from "@/components/payroll/panels/filters";
 import { IssuesPanel } from "@/components/payroll/panels/issues";
-import { PayrollRecordList, type RecordLayout } from "@/components/payroll/panels/records";
+import {
+  DepartmentTabs,
+  PayrollRecordList,
+  departmentGroups,
+  pickDepartment,
+  runsOfDepartment,
+  type RecordLayout,
+} from "@/components/payroll/panels/records";
 import { RulesPanel } from "@/components/payroll/panels/rules";
 import { SkippedPanel } from "@/components/payroll/panels/skipped";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
@@ -47,16 +53,15 @@ import {
   useListProductionPayroll,
   usePayrollIssues,
   usePayrollRules,
-  usePayrollSettings,
   useProductionPeriodStatus,
   type CyclePeriod,
   type PayCycle,
 } from "@/lib/api-client/custom-hooks";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
+import { downloadReportFile } from "@/lib/report-download";
 import { NotEndedNote, PeriodError } from "./CycleNotices";
 import { GenerateDialog } from "./GenerateDialog";
 import {
-  PRODUCTION_REGISTER_COLUMNS,
   formatPeriod,
   isProductionView,
   issueFiltersFromUrl,
@@ -66,10 +71,13 @@ import {
   type ProductionView,
   type UrlSetter,
 } from "./logic";
+import { PRODUCTION_STATEMENT_REPORT_ID, productionStatementQuery } from "./payroll-tab-logic";
 
 /**
  * Payroll tab of a cycle page: the actions (Generate, Skipped Employees, Export), the dashboard of the period and its four
  * views - Records, Issues, Skipped and Rules - all about the one pay period the page chose and the employees on this cycle.
+ * Like Staff Payroll's (2026-11-06): the records are a table by default, listed one department at a time, and Export is
+ * the printed Production Salary Statement (Excel / PDF) of the Report Center.
  */
 export function PayrollTab({
   cycle,
@@ -93,12 +101,12 @@ export function PayrollTab({
   const scope = useMemo(() => productionScope(cycle, period), [cycle, period]);
   const periodLabel = formatPeriod(period);
   const view: ProductionView = isProductionView(url.view) ? url.view : "records";
-  const filters = useMemo(() => filtersFromUrl(url), [url]);
+  // The department is picked with the tabs above the records, never by the filter: an old address naming one is ignored.
+  const filters = useMemo(() => ({ ...filtersFromUrl(url), dept: ALL }), [url]);
   const issueFilters = useMemo(() => issueFiltersFromUrl(url), [url]);
 
   const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
   const departments = useListDepartments();
-  const settings = usePayrollSettings();
   // The roster answers "who is on this cycle, and who cannot be paid": it is also where the Skipped view comes from.
   const status = useProductionPeriodStatus(cycle, period);
   const runsQuery = useListProductionPayroll({
@@ -123,6 +131,10 @@ export function PayrollTab({
     () => applyPayrollFilters(runs, filters, issues ? issueIndex : undefined),
     [runs, filters, issues, issueIndex],
   );
+  // The records list one department at a time; the filters, the exports and the counts still cover every department.
+  const groups = useMemo(() => departmentGroups(shown), [shown]);
+  const activeDept = pickDepartment(groups, url.pdept);
+  const deptRuns = useMemo(() => runsOfDepartment(shown, activeDept), [shown, activeDept]);
   const roster = status.data?.employees.length;
   const skipped = useMemo(() => (status.data ? skippedFromRoster(status.data.employees) : undefined), [status.data]);
   const skippedCount = skipped?.length ?? 0;
@@ -132,37 +144,24 @@ export function PayrollTab({
   const setView = (next: ProductionView) => setUrl({ view: next });
   const resetFilters = () => setUrl(filtersToUrl(DEFAULT_FILTERS) as Record<string, string>);
 
-  const company = settings.data?.companyName ?? "UK Textiles";
-  const stem = fileStem("Production_Payroll", info.label, period.periodStart, period.periodEnd);
-  // the register gets its two TDS columns only when some employee on screen has TDS
-  const registerColumns = withTdsColumns(PRODUCTION_REGISTER_COLUMNS, shown);
-  const exportItems: ExportItem[] = [
-    {
-      key: "register-xlsx",
-      label: "Payroll register (Excel)",
-      hint: `${plural(shown.length, "record")} on screen, with shifts, earnings and deductions`,
-      icon: FileSpreadsheet,
-      disabled: shown.length === 0,
-      run: () =>
-        exportTableToExcel({
-          rows: shown,
-          columns: registerColumns,
-          filename: `${stem}_Register`,
-          sheetName: "Payroll register",
-          company,
-          subtitle: `Production payroll · ${info.label}`,
-          title: `Payroll register · ${periodLabel}`,
-        }),
+  // Both files are the Report Center's Production Salary Statement (Reports > HR Reports), so the two can never differ: the
+  // printed format of Staff's Salary Payroll Statement, unit by unit, with the production columns.
+  const statementItem = (format: "xlsx" | "pdf"): ExportItem => ({
+    key: `statement-${format}`,
+    label: `Production Salary Statement (${format === "pdf" ? "PDF" : "Excel"})`,
+    hint: `The printed statement for ${info.label} ${periodLabel}, unit by unit: every department with sub totals, a total per unit and a grand total`,
+    icon: format === "pdf" ? FileText : FileSpreadsheet,
+    disabled: runs.length === 0,
+    run: async () => {
+      await downloadReportFile({
+        reportId: PRODUCTION_STATEMENT_REPORT_ID,
+        title: `Production Salary Statement ${info.label} ${periodLabel}`,
+        format,
+        query: productionStatementQuery(cycle, period, filters.status),
+      });
     },
-    {
-      key: "register-csv",
-      label: "Payroll register (CSV)",
-      hint: "The same rows as a plain text file",
-      icon: FileText,
-      disabled: shown.length === 0,
-      run: () => exportTableToCsv({ rows: shown, columns: registerColumns, filename: `${stem}_Register` }),
-    },
-  ];
+  });
+  const exportItems: ExportItem[] = [statementItem("xlsx"), statementItem("pdf")];
 
   const options: ViewOption<ProductionView>[] = [
     { value: "records", label: "Records", icon: ListChecks, count: runsQuery.isLoading ? null : runs.length },
@@ -242,7 +241,7 @@ export function PayrollTab({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-gray-900" data-testid="pcp-record-count">
-            {periodLabel} · {plural(runs.length, "record")}
+            {runsQuery.isLoading ? periodLabel : `${periodLabel} · ${plural(runs.length, "record")}`}
           </p>
           <p className="text-xs text-muted-foreground">
             {issues?.detectedAt
@@ -259,7 +258,12 @@ export function PayrollTab({
           >
             <AlertTriangle size={14} /> Skipped Employees
           </Button>
-          <ExportMenu items={exportItems} label="Export" heading="Export what is on screen" testId="pcp-export" />
+          <ExportMenu
+            items={exportItems}
+            label="Export"
+            heading={`Export ${info.label} ${periodLabel} payroll`}
+            testId="pcp-export"
+          />
           <Button
             variant="outline"
             className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
@@ -337,9 +341,17 @@ export function PayrollTab({
             total={runs.length}
             disabled={runsQuery.isLoading}
             testIdPrefix="pcp-pf"
+            hideDepartment
+          />
+          <DepartmentTabs
+            groups={groups}
+            active={activeDept}
+            accent="amber"
+            onChange={(id) => setUrl({ pdept: id })}
+            testIdPrefix="pcp-dept"
           />
           <PayrollRecordList
-            runs={shown}
+            runs={deptRuns}
             kind="production"
             accent="amber"
             loading={runsQuery.isLoading}
@@ -351,7 +363,7 @@ export function PayrollTab({
             onOpenIssues={(run) => openPayrollDetails(navigate, "production", run.id, "issues")}
             onMarkPaid={(run) => void markPaid(run)}
             markingId={markingId}
-            layout={url.layout === "table" ? "table" : "cards"}
+            layout={url.layout === "cards" ? "cards" : "table"}
             onLayoutChange={(layout: RecordLayout) => setUrl({ layout })}
             empty={empty}
             testId="pcp-records"

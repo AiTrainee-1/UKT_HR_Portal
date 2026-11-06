@@ -1,14 +1,26 @@
 """
 The catalog of every WhatsApp message the HRMS can send.
 
-    HRMS module -> notification service -> TEMPLATE (this file) -> provider -> employee
+    HRMS module -> notification service -> TEMPLATE (this file) -> queue -> provider -> employee
 
 One entry per message type says what it is called, which HRMS module it belongs
 to, which switch on the WhatsApp Control page turns it off, its default wording
 and which {{variables}} that wording may use. Everything else -the control page,
-the template editor, the message log, the on/off checks- reads this catalog, so
-adding a new notification is one entry here plus one call to
+the template editor, the message log, the on/off checks, the send queue- reads this
+catalog, so adding a new notification is one entry here plus one call to
 `whatsapp_service.send_notification` from the module that raises it.
+
+Each type also says how the send queue treats it (whatsapp_dispatcher.py):
+
+  kind        code       a one-time code the employee is waiting for: sent at once, never queued
+              requested  about the employee's own request (approved / rejected, Geo decisions)
+              automatic  the system decided it (attendance alerts, reminders, gate, visitors, HoD
+                         reminders): at most WhatsAppSettings.max_per_employee_per_day of these per
+                         employee per day
+              document   a file HR sends
+  priority    lower goes first: code 0, document 3, requested 4, automatic 5
+  freshness   minutes after it was raised that it is still worth sending (None: until the end of the
+              day). Nothing is ever sent after the end of the day it was raised on (IST).
 
 Wording uses {{name}} placeholders. Older types also accept the numbered form
 ({{1}}, {{2}} ...) that HR's already-saved wording was written with: the number is
@@ -18,6 +30,11 @@ variables must never change (append new ones at the end).
 A line whose placeholders are all empty is dropped when a message is rendered,
 so optional details ("Note: {{comment}}") simply vanish when there is nothing to
 say instead of leaving an empty label behind.
+
+The default wordings were reviewed on 2026-11-06 to look like a company writing to its own
+staff, not a bulk sender: short, plain, no emojis or capitals, no motivational lines, signed
+"- UK Textiles HR", no link in an automatic message (only the Geo punch decisions carry a map
+link). Wording HR saved on the Message Text tab is never touched.
 
 No message carries a link to the Employee Web App (the owner does not want one), and the
 placeholder that used to hold it is gone: see RETIRED_VARIABLES for how wording HR saved
@@ -68,6 +85,29 @@ APPROVAL_MODULES = {
     "request": "Other Requests",
 }
 
+# ── how the send queue treats each kind (see the module docstring) ──────────────
+
+KIND_CODE = "code"
+KIND_REQUESTED = "requested"
+KIND_AUTOMATIC = "automatic"
+KIND_DOCUMENT = "document"
+KINDS = (KIND_CODE, KIND_REQUESTED, KIND_AUTOMATIC, KIND_DOCUMENT)
+
+# The kind a module's messages have unless the entry says otherwise.
+_KIND_OF_MODULE = {
+    "documents": KIND_DOCUMENT,
+    "otp": KIND_CODE,
+    "attendance": KIND_AUTOMATIC,
+    "approvals": KIND_REQUESTED,
+    "geo": KIND_REQUESTED,
+    "visitors": KIND_AUTOMATIC,
+    "outpass": KIND_AUTOMATIC,
+}
+PRIORITY_OF_KIND = {KIND_CODE: 0, KIND_DOCUMENT: 3, KIND_REQUESTED: 4, KIND_AUTOMATIC: 5}
+# A bulk send (every salary slip of a month) goes behind everything time-critical, so a few hundred documents never
+# starve an approval or an alert until it is too late to send.
+PRIORITY_BULK = 6
+
 
 @dataclass(frozen=True)
 class Variable:
@@ -83,13 +123,21 @@ class MessageType:
     module: str
     body: str
     variables: tuple = ()
-    # WhatsAppSettings column that switches just this message on/off, if any.
+    # WhatsAppSettings column that switches just this message on/off, if any. A type without one (or sharing one with
+    # another type) is switched one by one through WhatsAppSettings.disabled_message_types.
     switch: str | None = None
     # A one-time code that is missing from the wording would be a message nobody can log in with.
     must_contain_code: bool = False
     # Messages with no editable wording (a contact card carries no text).
     has_wording: bool = True
     description: str = ""
+    # The send queue (module docstring). Filled in by _add from the module when not given.
+    kind: str = ""
+    priority: int = 5
+    # Minutes after it was raised that it is still worth sending; None = until the end of that day.
+    fresh_minutes: int | None = None
+    # A WhatsAppSettings column holding the freshness in minutes instead (a punch reminder: its lead window).
+    fresh_setting: str | None = None
 
     @property
     def variable_names(self) -> list[str]:
@@ -104,10 +152,14 @@ _TYPES: list[MessageType] = []
 
 
 def _add(**kwargs) -> None:
+    kind = kwargs.get("kind") or _KIND_OF_MODULE.get(kwargs["module"], KIND_AUTOMATIC)
+    kwargs["kind"] = kind
+    kwargs.setdefault("priority", PRIORITY_OF_KIND[kind])
     _TYPES.append(MessageType(**kwargs))
 
 
-SIGN = "UK Textiles HRMS"
+# The sign-off of every default wording: who the message is from.
+SIGN = "- UK Textiles HR"
 
 # Placeholders no message type offers any more. Wording HR saved before they were retired (migration 0130 removes
 # them from the stored text; this is the second line of defence) can still name one: the editor refuses it as an
@@ -122,7 +174,7 @@ _add(
     label="Salary Slip",
     module="documents",
     description="The salary slip PDF, sent with a short caption.",
-    body=f"💰 *Salary Slip*\n\nHello {{{{employee_name}}}},\n\nYour salary slip for *{{{{month_year}}}}* is attached.\n\nRegards,\n{SIGN}",
+    body=f"*Salary Slip*\n\nDear {{{{employee_name}}}},\nYour salary slip for {{{{month_year}}}} is attached.\n\n{SIGN}",
     variables=(V("employee_name", "Employee name", "Asha Kumar"), V("month_year", "Month and year", "August 2026")),
 )
 _add(
@@ -130,7 +182,7 @@ _add(
     label="ID Card",
     module="documents",
     description="The employee ID card image, sent with a short caption.",
-    body=f"🪪 *Employee ID Card*\n\nHello {{{{employee_name}}}},\n\nYour employee ID card is attached.\n\nRegards,\n{SIGN}",
+    body=f"*Employee ID Card*\n\nDear {{{{employee_name}}}},\nYour employee ID card is attached.\n\n{SIGN}",
     variables=(V("employee_name", "Employee name", "Asha Kumar"),),
 )
 _add(
@@ -138,7 +190,10 @@ _add(
     label="Offer Letter",
     module="documents",
     description="The offer letter PDF, sent with a short caption.",
-    body=f"📄 *Offer Letter*\n\nHello {{{{employee_name}}}},\n\nPlease find your offer letter for the position of *{{{{designation}}}}* attached.\n\nRegards,\n{SIGN}",
+    body=(
+        f"*Offer Letter*\n\nDear {{{{employee_name}}}},\nYour offer letter for the position of {{{{designation}}}} "
+        f"is attached.\n\n{SIGN}"
+    ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
         V("designation", "Designation offered", "Line Supervisor"),
@@ -149,7 +204,7 @@ _add(
     label="Experience Letter",
     module="documents",
     description="The experience letter PDF, sent with a short caption.",
-    body=f"📄 *Experience Letter*\n\nHello {{{{employee_name}}}},\n\nYour experience letter is attached.\n\nRegards,\n{SIGN}",
+    body=f"*Experience Letter*\n\nDear {{{{employee_name}}}},\nYour experience letter is attached.\n\n{SIGN}",
     variables=(V("employee_name", "Employee name", "Asha Kumar"),),
 )
 _add(
@@ -157,7 +212,10 @@ _add(
     label="Resignation Letter",
     module="documents",
     description="The resignation letter PDF, sent with a short caption.",
-    body=f"📄 *Resignation Letter*\n\nHello {{{{employee_name}}}},\n\nYour resignation letter (last working day: *{{{{last_working_day}}}}*) is attached.\n\nRegards,\n{SIGN}",
+    body=(
+        f"*Resignation Letter*\n\nDear {{{{employee_name}}}},\nYour resignation letter is attached.\n"
+        f"Last working day: {{{{last_working_day}}}}\n\n{SIGN}"
+    ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
         V("last_working_day", "Last working day", "30 Sep 2026"),
@@ -168,14 +226,14 @@ _add(
     label="Other Document",
     module="documents",
     description="Any other employee document HR sends from the Documents page.",
-    body=f"📎 *Document*\n\nHello {{{{employee_name}}}},\n\nPlease find your *{{{{document_category}}}}* document attached.\n\nRegards,\n{SIGN}",
+    body=f"*Document*\n\nDear {{{{employee_name}}}},\nYour {{{{document_category}}}} document is attached.\n\n{SIGN}",
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
         V("document_category", "Document category", "Appointment Letter"),
     ),
 )
 
-# ── OTP & login (unchanged wording; the code is never stored in the history) ───
+# ── OTP & login (the code is never stored in the history; sent at once, never queued) ───
 
 _CODE_VARS = (
     V("code", "The 6-digit code (keep it in the text)", "123456"),
@@ -226,14 +284,15 @@ _add(
     module="attendance",
     description="Sent when no punch has been recorded within the permitted time after the employee's shift starts.",
     switch="absent_alert_enabled",
+    fresh_minutes=60,
     body=(
-        "🕐 *Attendance Check*\n\n"
-        "Hi {{employee_name}}, we haven't received your attendance punch for today yet.\n\n"
-        "Are you absent today, or did you forget to punch in? Please update your attendance or contact HR if there is an issue.\n\n"
-        "📅 Date: {{date}}\n"
-        "🕐 Shift start: {{shift_start}}\n"
-        "⏳ Punch allowed until: {{cutoff_time}}\n"
-        "📋 Status: {{status}}\n\n"
+        "*Attendance Check*\n\n"
+        "Dear {{employee_name}},\n"
+        "We have not received your attendance punch today.\n\n"
+        "Date: {{date}}\n"
+        "Shift start: {{shift_start}}\n"
+        "Punch allowed until: {{cutoff_time}}\n\n"
+        "If you are at work, please punch in. If you are absent today, please inform HR.\n\n"
         f"{SIGN}"
     ),
     variables=(
@@ -252,16 +311,16 @@ _add(
     module="attendance",
     description="Sent as soon as the first punch of the day is seen to be after the shift start plus the shift's own grace period.",
     switch="late_alert_enabled",
+    fresh_minutes=30,
     body=(
-        "⏰ *Late Attendance*\n\n"
-        "Hi {{employee_name}}, your attendance has been marked as *Late* today.\n\n"
-        "📅 Date: {{date}}\n"
-        "🕐 Shift Start: {{shift_start}}\n"
-        "⏳ Grace Period: {{grace_period}}\n"
-        "✅ Your First Punch: {{first_punch}}\n"
-        "⏱ Late By: {{late_by}}\n"
-        "📋 Status: {{status}}\n\n"
-        "Please try to arrive on time and maintain punctuality. Every minute contributes to a productive workday. Have a great day!\n\n"
+        "*Late Attendance*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your attendance today has been marked as {{status}}.\n\n"
+        "Date: {{date}}\n"
+        "Shift start: {{shift_start}}\n"
+        "Grace period: {{grace_period}}\n"
+        "First punch: {{first_punch}}\n"
+        "Late by: {{late_by}}\n\n"
         f"{SIGN}"
     ),
     variables=(
@@ -279,15 +338,17 @@ _add(
     key="four_punch_alert",
     label="Punch Reminder",
     module="attendance",
-    description="A friendly heads-up a few minutes before each of the day's punches (check-in, lunch-out, lunch-in, check-out) is expected, if it is still missing. Includes a short motivational line.",
+    description=(
+        "A short heads-up a few minutes before each of the day's punches (check-in, lunch-out, lunch-in, check-out) "
+        "is expected, if it is still missing. Off by default (owner decision, 2026-11-06)."
+    ),
     switch="four_punch_alert_enabled",
+    fresh_setting="four_punch_lead_minutes",
     body=(
-        "{{greeting}}, {{employee_name}} 🌟\n\n"
-        "Just a friendly reminder: {{action}}\n\n"
-        "🔔 {{punch_name}} ({{punch_number}}), expected at {{expected_time}}\n"
-        "📅 Date: {{date}}\n\n"
-        "💡 “{{quote}}”\n\n"
-        "{{closing}}\n\n"
+        "*Punch Reminder*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your {{punch_name}} ({{punch_number}}) is due at {{expected_time}}, in {{minutes_left}}. "
+        "Please remember to punch.\n\n"
         f"{SIGN}"
     ),
     variables=(
@@ -309,7 +370,7 @@ _add(
             "A short motivational line",
             "Great teams are built by people who show up, stay committed, and give their best every day.",
         ),
-        V("closing", "A friendly sign-off for this punch", "Enjoy your break, you've earned it! 🍽️"),
+        V("closing", "A friendly sign-off for this punch", "Enjoy your break, you've earned it!"),
     ),
 )
 _add(
@@ -318,14 +379,12 @@ _add(
     module="attendance",
     description="The same heads-up for employees working On-Duty, asking them to complete their Geo Punch.",
     switch="four_punch_alert_enabled",
+    fresh_setting="four_punch_lead_minutes",
     body=(
-        "📍 *On-Duty Punch Reminder*\n\n"
-        "{{greeting}}, {{employee_name}} 🌟\n\n"
-        "Just a friendly reminder: you are on duty today, so your Geo Punch for *{{punch_name}}* ({{punch_number}}) is coming up in {{minutes_left}}. Please complete it in the app.\n\n"
-        "📍 On-Duty at: {{destination}}\n"
-        "🕐 Expected at: {{expected_time}}\n"
-        "📅 Date: {{date}}\n\n"
-        "💡 “{{quote}}”\n\n"
+        "*On-Duty Punch Reminder*\n\n"
+        "Dear {{employee_name}},\n"
+        "You are on duty at {{destination}} today. Your Geo Punch for {{punch_name}} ({{punch_number}}) is due at "
+        "{{expected_time}}, in {{minutes_left}}. Please complete it in the app.\n\n"
         f"{SIGN}"
     ),
     variables=(
@@ -347,14 +406,15 @@ _add(
     module="attendance",
     description="Sent when a punch is still missing a set time after it was expected (20 minutes by default). One message per missing punch.",
     switch="missing_punch_alert_enabled",
+    fresh_minutes=60,
     body=(
-        "📝 *Missing Punch*\n\n"
-        "Hi {{employee_name}}, we noticed that {{intro}}\n\n"
-        "🔔 Punch: {{punch_name}}\n"
-        "🕐 Expected Punch: {{expected_time}}\n"
-        "📋 Current Status: {{status}}\n"
-        "📅 Date: {{date}}\n\n"
-        "Please complete your attendance punch as soon as possible. If you have already punched and the system has not updated your attendance, please contact HR.\n\n"
+        "*Missing Punch*\n\n"
+        "Dear {{employee_name}},\n"
+        "We noticed that {{intro}}\n\n"
+        "Punch: {{punch_name}}\n"
+        "Expected at: {{expected_time}}\n"
+        "Date: {{date}}\n\n"
+        "Please punch now. If you have already punched, please contact HR.\n\n"
         f"{SIGN}"
     ),
     variables=(
@@ -388,15 +448,15 @@ _add(
     module="approvals",
     description="Sent to the employee when a Leave, Permission, Casual Leave, Missing Punch, Outpass, Resignation, Advance or other request is approved.",
     body=(
-        "✅ *Request Approved*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Your *{{request_type}}* request has been approved successfully.\n\n"
-        "📅 Date: {{date}}\n"
-        "🕐 Time: {{time}}\n"
-        "📋 Request: {{details}}\n"
-        "👤 Approved by: {{approver}}\n"
-        "💬 Note: {{comment}}\n\n"
-        f"Thank you,\n{SIGN}"
+        "*Request Approved*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your *{{request_type}}* request has been approved.\n\n"
+        "Date: {{date}}\n"
+        "Time: {{time}}\n"
+        "Request: {{details}}\n"
+        "Approved by: {{approver}}\n"
+        "Note: {{comment}}\n\n"
+        f"{SIGN}"
     ),
     variables=_APPROVAL_VARS,
 )
@@ -406,15 +466,16 @@ _add(
     module="approvals",
     description="Sent to the employee when one of those requests is rejected, with the reason if one was given.",
     body=(
-        "❌ *Request Rejected*\n\n"
-        "Hello {{employee_name}},\n\n"
+        "*Request Rejected*\n\n"
+        "Dear {{employee_name}},\n"
         "Your *{{request_type}}* request has been rejected.\n\n"
-        "📅 Date: {{date}}\n"
-        "🕐 Time: {{time}}\n"
-        "📋 Request: {{details}}\n"
-        "👤 Rejected by: {{approver}}\n"
-        "📝 Reason: {{comment}}\n\n"
-        f"Please contact HR if you need further clarification.\n{SIGN}"
+        "Date: {{date}}\n"
+        "Time: {{time}}\n"
+        "Request: {{details}}\n"
+        "Rejected by: {{approver}}\n"
+        "Reason: {{comment}}\n\n"
+        "Please contact HR if you have any questions.\n"
+        f"{SIGN}"
     ),
     variables=_APPROVAL_VARS,
 )
@@ -425,6 +486,7 @@ _add(
     key="hod_pending_reminder",
     label="HoD Pending Approvals Reminder",
     module="approvals",
+    kind=KIND_AUTOMATIC,
     description=(
         "Reminds a Department Head of the requests waiting for their approval, at the times HR set on Requests -> "
         "Notify. The text itself is written on that tab."
@@ -452,16 +514,16 @@ _add(
     module="geo",
     description="Sent when HR gives the final approval of a Geo Attendance (On-Duty) request.",
     switch="geo_approval_enabled",
+    fresh_minutes=120,
     body=(
-        "✅ *Geo Attendance Request Approved*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Your Geo Attendance (On-Duty) request has been approved.\n\n"
-        "📍 Destination: {{destination}}\n"
-        "📅 Requested on: {{requested_on}}\n"
-        "👤 Approved by: {{approved_by}}\n"
-        "💬 Note: {{comment}}\n\n"
-        "You can now do your on-duty work and punch from the app.\n\n"
-        f"Thank you,\n{SIGN}"
+        "*Geo Attendance Request Approved*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your Geo Attendance (On-Duty) request has been approved. You can now punch from the app.\n\n"
+        "Destination: {{destination}}\n"
+        "Requested on: {{requested_on}}\n"
+        "Approved by: {{approved_by}}\n"
+        "Note: {{comment}}\n\n"
+        f"{SIGN}"
     ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
@@ -478,16 +540,18 @@ _add(
     module="geo",
     description="Sent when a Geo Attendance (On-Duty) request is rejected, by the Department Head or by HR.",
     switch="geo_approval_enabled",
+    fresh_minutes=120,
     body=(
-        "❌ *Geo Attendance Request Rejected*\n\n"
-        "Hello {{employee_name}},\n\n"
+        "*Geo Attendance Request Rejected*\n\n"
+        "Dear {{employee_name}},\n"
         "Your Geo Attendance (On-Duty) request has been rejected.\n\n"
-        "📍 Destination: {{destination}}\n"
-        "📅 Requested on: {{requested_on}}\n"
-        "👤 Rejected by: {{rejected_by}}\n"
-        "📝 Reason: {{comment}}\n"
-        "⚠️ {{punches_note}}\n\n"
-        f"Please contact HR if you need further clarification.\n{SIGN}"
+        "Destination: {{destination}}\n"
+        "Requested on: {{requested_on}}\n"
+        "Rejected by: {{rejected_by}}\n"
+        "Reason: {{comment}}\n"
+        "{{punches_note}}\n\n"
+        "Please contact HR if you have any questions.\n"
+        f"{SIGN}"
     ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
@@ -508,16 +572,17 @@ _add(
     module="geo",
     description="Sent when HR approves one captured Geo Attendance punch.",
     switch="geo_approval_enabled",
+    fresh_minutes=120,
     body=(
-        "✅ *Geo Punch Approved*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Your Geo Attendance *{{punch_name}}* has been approved.\n\n"
-        "📅 Date: {{date}}\n"
-        "🕐 Time: {{time}}\n"
-        "📍 Location: {{location}}\n"
-        "👤 Approved by: {{approved_by}}\n"
-        "💬 Note: {{comment}}\n\n"
-        f"Thank you,\n{SIGN}"
+        "*Geo Punch Approved*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your Geo Attendance {{punch_name}} has been approved.\n\n"
+        "Date: {{date}}\n"
+        "Time: {{time}}\n"
+        "Location: {{location}}\n"
+        "Approved by: {{approved_by}}\n"
+        "Note: {{comment}}\n\n"
+        f"{SIGN}"
     ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
@@ -535,16 +600,18 @@ _add(
     module="geo",
     description="Sent when HR rejects one captured Geo Attendance punch.",
     switch="geo_approval_enabled",
+    fresh_minutes=120,
     body=(
-        "❌ *Geo Punch Rejected*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Your Geo Attendance *{{punch_name}}* has been rejected and does not count as attendance.\n\n"
-        "📅 Date: {{date}}\n"
-        "🕐 Time: {{time}}\n"
-        "📍 Location: {{location}}\n"
-        "👤 Rejected by: {{rejected_by}}\n"
-        "📝 Reason: {{comment}}\n\n"
-        f"You can punch again from the app. Please contact HR if you need help.\n{SIGN}"
+        "*Geo Punch Rejected*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your Geo Attendance {{punch_name}} has been rejected and does not count as attendance. "
+        "You can punch again from the app.\n\n"
+        "Date: {{date}}\n"
+        "Time: {{time}}\n"
+        "Location: {{location}}\n"
+        "Rejected by: {{rejected_by}}\n"
+        "Reason: {{comment}}\n\n"
+        f"{SIGN}"
     ),
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
@@ -564,20 +631,20 @@ _add(
     label="Visitor Notification",
     module="visitors",
     description="Tells an employee who has arrived at reception to meet them, and why.",
+    fresh_minutes=30,
     body=(
-        "🚪 *Visitor at Reception*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "You have a visitor.\n\n"
-        "👤 Visitor: *{{visitor_name}}*\n"
-        "📞 Contact: {{visitor_phone}}\n"
-        "🏢 Company: {{company}}\n"
-        "🎯 Purpose: {{purpose}}\n"
-        "🙋 Here to meet: {{host_name}}\n"
-        "🏬 Department: {{department}}\n"
-        "📅 Date: {{visit_date}}\n"
-        "🕐 Time: {{visit_time}}\n"
-        "📍 Branch: {{branch}}\n\n"
-        "Tap the visitor's contact card below to call them and guide them to you.\n\n"
+        "*Visitor at Reception*\n\n"
+        "Dear {{employee_name}},\n"
+        "A visitor is waiting for you at reception.\n\n"
+        "Visitor: {{visitor_name}}\n"
+        "Contact: {{visitor_phone}}\n"
+        "Company: {{company}}\n"
+        "Purpose: {{purpose}}\n"
+        "Here to meet: {{host_name}}\n"
+        "Department: {{department}}\n"
+        "Date: {{visit_date}}\n"
+        "Time: {{visit_time}}\n"
+        "Branch: {{branch}}\n\n"
         f"{SIGN}"
     ),
     variables=(
@@ -600,6 +667,7 @@ _add(
     module="visitors",
     description="The visitor's contact card, sent right after the visitor message so the employee can tap to call.",
     has_wording=False,
+    fresh_minutes=30,
     body="",
 )
 
@@ -624,17 +692,18 @@ _add(
     label="Outpass - Gate OUT",
     module="outpass",
     description="Sent when the gate records an employee going out (a verified outpass scan, or a gate QR form entry).",
+    fresh_minutes=30,
     body=(
-        "🚪 *Gate OUT Recorded*\n\n"
-        "Hello {{employee_name}},\n\n"
-        "Your gate movement has been recorded.\n\n"
-        "🏷 Outpass type: {{pass_type}}\n"
-        "📅 Date: {{date}}\n"
-        "🕐 Gate OUT: {{gate_out_time}}\n"
-        "📍 Destination: {{destination}}\n"
-        "📋 Reason: {{reason}}\n"
-        "🚧 Gate: {{gate_name}}\n"
-        "✅ Status: {{status}}\n\n"
+        "*Gate Exit Recorded*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your gate exit has been recorded.\n\n"
+        "Outpass type: {{pass_type}}\n"
+        "Date: {{date}}\n"
+        "Gate out: {{gate_out_time}}\n"
+        "Destination: {{destination}}\n"
+        "Reason: {{reason}}\n"
+        "Gate: {{gate_name}}\n"
+        "Status: {{status}}\n\n"
         "{{next_step}}\n\n"
         f"{SIGN}"
     ),
@@ -645,18 +714,19 @@ _add(
     label="Outpass - Gate IN",
     module="outpass",
     description="Sent when the gate records an employee coming back in, with the time they were out.",
+    fresh_minutes=30,
     body=(
-        "🏠 *Gate IN Recorded*\n\n"
-        "Hello {{employee_name}},\n\n"
+        "*Gate Return Recorded*\n\n"
+        "Dear {{employee_name}},\n"
         "Welcome back. Your return has been recorded.\n\n"
-        "🏷 Outpass type: {{pass_type}}\n"
-        "📅 Date: {{date}}\n"
-        "🕐 Gate OUT: {{gate_out_time}}\n"
-        "🕑 Gate IN: {{gate_in_time}}\n"
-        "⏱ Time out: {{duration}}\n"
-        "📍 Destination: {{destination}}\n"
-        "🚧 Gate: {{gate_name}}\n"
-        "✅ Status: {{status}}\n\n"
+        "Outpass type: {{pass_type}}\n"
+        "Date: {{date}}\n"
+        "Gate out: {{gate_out_time}}\n"
+        "Gate in: {{gate_in_time}}\n"
+        "Time out: {{duration}}\n"
+        "Destination: {{destination}}\n"
+        "Gate: {{gate_name}}\n"
+        "Status: {{status}}\n\n"
         f"{SIGN}"
     ),
     variables=_GATE_VARS,
@@ -682,6 +752,12 @@ def module_of(key: str) -> str:
     return t.module if t else "other"
 
 
+def kind_of(key: str) -> str:
+    """The queue kind of a message type (code | requested | automatic | document); an unknown type is automatic."""
+    t = TYPES.get(key)
+    return t.kind if t else KIND_AUTOMATIC
+
+
 def types_in(module: str) -> tuple[str, ...]:
     return tuple(t.key for t in _TYPES if t.module == module)
 
@@ -692,6 +768,17 @@ def choices() -> tuple[tuple[str, str], ...]:
 
 def categories() -> dict[str, tuple[str, ...]]:
     return {module: types_in(module) for module in MODULES if types_in(module)}
+
+
+def individually_switched() -> tuple[str, ...]:
+    """The types that need an entry in WhatsAppSettings.disabled_message_types to be switched off one by one: those with
+    no boolean switch of their own, and those whose boolean is shared with another type (the two punch reminders, the
+    four Geo decisions)."""
+    shared: dict[str, int] = {}
+    for t in _TYPES:
+        if t.switch:
+            shared[t.switch] = shared.get(t.switch, 0) + 1
+    return tuple(t.key for t in _TYPES if not t.switch or shared[t.switch] > 1)
 
 
 def variable_help(key: str) -> str:

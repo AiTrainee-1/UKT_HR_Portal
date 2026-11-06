@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import {
   ArrowLeft,
+  CalendarClock,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -33,6 +34,7 @@ import {
   type PayrollKind,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
+import { coverageLines } from "../production-payroll/coverage";
 import type { Accent } from "./accent";
 
 const titleCase = (text: string): string => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
@@ -78,6 +80,8 @@ export function DetailsHeader({
   const pending = details.status === "pending";
   const computed = details.generatedAt;
   const regenerated = !!details.firstGeneratedAt && details.firstGeneratedAt !== details.generatedAt;
+  // production, after a pay-cycle change: the days this payroll pays, and the ones another payroll already paid
+  const coverage = kind === "production" ? coverageLines(details.coverage) : null;
 
   // While the next payroll loads the page is inert, which drops the keyboard focus from the button that was pressed:
   // give it back once the new payroll is in, so a reviewer can keep pressing Next without reaching for the mouse.
@@ -216,6 +220,26 @@ export function DetailsHeader({
                 <RefreshCw size={11} className={cn(refreshing && "animate-spin")} /> Refresh
               </button>
             </p>
+            {coverage && (
+              <div className="mt-2 space-y-0.5 text-xs" data-testid="pd-coverage">
+                {coverage.paid && (
+                  <p className="flex items-start gap-1.5 font-semibold text-sky-800">
+                    <CalendarClock size={13} className="mt-px shrink-0" />
+                    <span>{coverage.paid}</span>
+                  </p>
+                )}
+                {coverage.catchUp.map((line) => (
+                  <p key={line} className="pl-5 font-semibold text-violet-700">
+                    {line}
+                  </p>
+                ))}
+                <p className="pl-5 text-muted-foreground">
+                  {coverage.paid
+                    ? "The employee changed pay cycle: days another payroll paid are not paid again."
+                    : "The employee changed pay cycle: days no payroll paid are added to this one."}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>

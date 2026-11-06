@@ -611,19 +611,27 @@ STATUS_TDS = "tds"
 STATUS_NOT_CO_EMP = "not_co_emp"
 
 
-def _latest_production_gross(employee_ids: list[int]) -> dict[int, tuple[Decimal, str | None]]:
-    """employee id -> (gross, pay cycle) of that production employee's latest generated period slip."""
+def _latest_production_gross(employee_ids: list[int]) -> dict[int, tuple[Decimal, str | None, Decimal | int | None]]:
+    """employee id -> (gross, pay cycle, the monthly-equivalent factor the slip itself stored, or None) of that production
+    employee's latest generated period slip. A slip that paid part of its period after a pay-cycle change (2026-11-06)
+    stored 28 / days paid; every other slip stored its cycle's own factor, so the stored one is always the right one."""
     from .models import SalarySlip
 
-    latest: dict[int, tuple[Decimal, str | None]] = {}
+    latest: dict[int, tuple[Decimal, str | None, Decimal | int | None]] = {}
     rows = (
         SalarySlip.objects.filter(employee_id__in=employee_ids, period_start__isnull=False)
         .order_by("employee_id", "-period_end", "-id")
         .distinct("employee_id")
-        .values_list("employee_id", "gross_salary", "pay_cycle")
+        .values_list("employee_id", "gross_salary", "pay_cycle", "breakdown_details")
     )
-    for employee_id, gross, cycle in rows:
-        latest[employee_id] = (Decimal(str(gross)), cycle)
+    for employee_id, gross, cycle, breakdown in rows:
+        stored = (((breakdown or {}) if isinstance(breakdown, dict) else {}).get("deductions") or {}).get(
+            "monthlyEquivalentFactor"
+        )
+        factor = None
+        if isinstance(stored, (int, float)) and not isinstance(stored, bool) and stored > 0:
+            factor = Decimal(str(stored))
+        latest[employee_id] = (Decimal(str(gross)), cycle, factor)
     return latest
 
 
@@ -677,8 +685,8 @@ def coverage_rows(employees) -> list[dict]:
             if emp_class == CLASS_STAFF:
                 amounts = monthly_amounts(emp)
             elif emp.id in latest:
-                gross, cycle = latest[emp.id]
-                factor = MONTHLY_EQUIVALENT_FACTOR.get(cycle, DEFAULT_MONTHLY_EQUIVALENT_FACTOR)
+                gross, cycle, part_factor = latest[emp.id]
+                factor = part_factor or MONTHLY_EQUIVALENT_FACTOR.get(cycle, DEFAULT_MONTHLY_EQUIVALENT_FACTOR)
                 amounts = production_amounts(emp, d2(gross * factor))
             else:
                 pending = True

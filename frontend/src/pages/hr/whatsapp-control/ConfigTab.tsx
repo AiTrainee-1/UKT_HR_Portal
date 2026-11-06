@@ -145,7 +145,7 @@ export default function ConfigTab() {
           </Row>
           <Row label="Delivery">
             {c.backgroundSending
-              ? "Approvals, visitor and gate messages are sent by a background worker, so nobody waits on WhatsApp. Codes and attendance alerts are sent immediately."
+              ? "Messages wait their turn in one sending queue and go out one at a time within the sending limits (Feature Controls), so nobody waits on WhatsApp. One-time login codes are sent immediately."
               : "Every message is sent immediately, while the request is being processed."}
           </Row>
         </CardContent>

@@ -3,6 +3,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AssignProductionCycleResult,
+  CycleChangePreview,
+  CycleChangePreviewEmployee,
+  PayCycle,
   ProductionEmployeeFilters,
   ProductionEmployeeRow,
 } from "@/lib/api-client/custom-hooks";
@@ -10,7 +13,8 @@ import ProductionEmployees from "../ProductionEmployees";
 
 // The Production Employees page in jsdom with the hooks faked: the first load opening on Unassigned, the counts on the
 // cards and tabs, what the list request carries as the filters change, ticking people and assigning them in bulk, the
-// "move between cycles" confirmation, a row's Assign menu, and the chips of someone with no cycle or no rate.
+// "move between cycles" confirmation with the payroll warning of anyone already paid, a row's Assign menu, and the chips
+// of someone with no cycle or no rate.
 
 const h = vi.hoisted(() => ({
   list: vi.fn(),
@@ -19,6 +23,7 @@ const h = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   refetch: vi.fn(),
   toast: vi.fn(),
+  preview: vi.fn(),
 }));
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
@@ -28,6 +33,7 @@ vi.mock("@/lib/api-client/custom-hooks", async (original) => ({
   useProductionEmployees: (filters?: ProductionEmployeeFilters) => h.list(filters),
   useProductionCycles: () => h.cycles(),
   useAssignProductionCycle: () => ({ mutateAsync: h.mutateAsync, isPending: false }),
+  useCycleChangePreview: (ids: number[], cycle: PayCycle | null, enabled: boolean) => h.preview(ids, cycle, enabled),
 }));
 vi.mock("@/lib/api-client", async (original) => ({
   ...(await original<typeof import("@/lib/api-client")>()),
@@ -109,6 +115,40 @@ const assigned = (updated: number, over: Partial<AssignProductionCycleResult> = 
   ...over,
 });
 
+const previewEmployee = (over: Partial<CycleChangePreviewEmployee>): CycleChangePreviewEmployee => ({
+  employeeId: 3,
+  employeeCode: "P003",
+  name: "Selvi Rani",
+  fromCycle: "biweekly",
+  toCycle: "weekly",
+  changes: true,
+  warn: false,
+  lastPayroll: null,
+  nextPeriod: { start: "2026-02-16", end: "2026-02-22" },
+  payRanges: [],
+  alreadyPaid: [],
+  catchUp: [],
+  legacyGap: null,
+  refused: false,
+  message: null,
+  ...over,
+});
+
+const previewOf = (employees: CycleChangePreviewEmployee[], configError: string | null = null): CycleChangePreview => ({
+  cycle: "weekly",
+  label: "Weekly",
+  nextPeriod: { start: "2026-02-16", end: "2026-02-22" },
+  configError,
+  warnCount: employees.filter((e) => e.warn).length,
+  employees,
+  skipped: [],
+});
+
+const SELVI_WARNING =
+  "This employee was previously assigned to BiWeekly Payroll, and payroll has already been generated for the previous " +
+  "period (2 Feb – 15 Feb 2026). If you change the payroll category to Weekly, the system will calculate salary only " +
+  "for the remaining unpaid days (16 Feb – 22 Feb 2026). Previously generated salary will not be calculated or paid again.";
+
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
@@ -123,6 +163,7 @@ beforeEach(() => {
     ],
   });
   h.mutateAsync.mockResolvedValue(assigned(1));
+  h.preview.mockReturnValue({ isLoading: false, isError: false, data: previewOf([]) });
 });
 
 afterEach(() => {
@@ -323,6 +364,72 @@ describe("the Production Employees page", () => {
     expect(h.mutateAsync).toHaveBeenCalledTimes(1);
     expect(h.mutateAsync.mock.calls[0][0]).toEqual({ employeeIds: [3, 1], cycle: "weekly" });
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "2 employees assigned to Weekly" }));
+  });
+
+  it("the confirmation lists the payroll warning of each employee already paid, and nobody else's", async () => {
+    h.preview.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: previewOf([
+        previewEmployee({ warn: true, message: SELVI_WARNING }),
+        previewEmployee({ employeeId: 1, employeeCode: "P001", name: "Ravi Kumar", fromCycle: null }),
+      ]),
+    });
+    mount();
+    click(tabButton("all"));
+    click(q("pe-select-P003"));
+    click(q("pe-select-P001"));
+    click(q("pe-bulk-weekly"));
+    expect(h.preview).toHaveBeenLastCalledWith([3, 1], "weekly", true);
+    expect(text(q("pe-preview-warnings"))).toContain("Payroll already generated for 1 of these 2 employees");
+    expect(text(q("pe-preview-warning-P003"))).toContain(SELVI_WARNING);
+    expect(text(q("pe-preview-warning-P003"))).toContain("Selvi Rani (P003)");
+    expect(q("pe-preview-warning-P001")).toBeNull();
+    click(q("pe-confirm"));
+    await settle();
+    expect(h.mutateAsync).toHaveBeenCalledWith({ employeeIds: [3, 1], cycle: "weekly" });
+  });
+
+  it("shows no warning when nobody has payroll yet, says when it is checking, and still allows the move if the check fails", async () => {
+    mount();
+    click(tabButton("biweekly"));
+    click(q("pe-select-P003"));
+    click(q("pe-bulk-monthly"));
+    expect(q("pe-preview-warnings")).toBeNull();
+    expect(q("pe-preview-error")).toBeNull();
+    click(q("pe-confirm-cancel"));
+    await settle();
+    h.preview.mockReturnValue({ isLoading: true, isError: false, data: undefined });
+    click(q("pe-bulk-monthly"));
+    expect(q("pe-preview-loading")).not.toBeNull();
+    click(q("pe-confirm-cancel"));
+    await settle();
+    h.preview.mockReturnValue({ isLoading: false, isError: true, data: undefined });
+    click(q("pe-bulk-monthly"));
+    expect(text(q("pe-preview-error"))).toContain("a day that was already paid is never paid again");
+    click(q("pe-confirm"));
+    await settle();
+    expect(h.mutateAsync).toHaveBeenCalledWith({ employeeIds: [3], cycle: "monthly" });
+  });
+
+  it("asks first when an unassigned employee who was paid before joins a cycle, but not for one never paid", async () => {
+    const paidBefore = row(5, "Devi Lakshmi", {
+      lastPayroll: { periodStart: "2026-01-05", periodEnd: "2026-02-01", status: "paid", payCycle: "monthly" },
+    });
+    serve([...ROWS, paidBefore]);
+    mount();
+    click(q("pe-select-P005"));
+    click(q("pe-bulk-weekly"));
+    expect(text(dialog())).toContain("Assign 1 employee to Weekly?");
+    expect(text(q("pe-confirm"))).toBe("Assign");
+    click(q("pe-confirm-cancel"));
+    await settle();
+    click(q("pe-select-P005")); // untick
+    click(q("pe-select-P002")); // never paid
+    click(q("pe-bulk-weekly"));
+    await settle();
+    expect(dialog()).toBeNull();
+    expect(h.mutateAsync).toHaveBeenCalledWith({ employeeIds: [2], cycle: "weekly" });
   });
 
   it("asks before removing someone from their cycle", async () => {

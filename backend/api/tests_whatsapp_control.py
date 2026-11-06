@@ -98,7 +98,19 @@ class OverviewTests(ControlBase):
         body = self.get("overview").json()
         self.assertEqual(
             body["totals"],
-            {"pending": 1, "sent": 1, "delivered": 1, "read": 1, "failed": 1, "total": 5, "accepted": 3},
+            {
+                "pending": 1,
+                "queued": 0,
+                "sending": 0,
+                "sent": 1,
+                "delivered": 1,
+                "read": 1,
+                "failed": 1,
+                "expired": 0,
+                "skipped": 0,
+                "total": 5,
+                "accepted": 3,
+            },
         )
         self.assertEqual(body["byCategory"]["documents"]["total"], 2)
         self.assertEqual(body["byCategory"]["otp"]["sent"], 1)

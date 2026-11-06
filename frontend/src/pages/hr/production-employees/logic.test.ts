@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { AssignProductionCycleResult, ProductionEmployeeRow } from "@/lib/api-client/custom-hooks";
+import type {
+  AssignProductionCycleResult,
+  CycleChangePreview,
+  CycleChangePreviewEmployee,
+  ProductionEmployeeRow,
+} from "@/lib/api-client/custom-hooks";
 import {
   ALL_DEPARTMENTS,
   NO_FILTERS,
@@ -24,6 +29,7 @@ import {
   paginate,
   payrollStatus,
   planAssignment,
+  previewWarnings,
   requestFilters,
   selectRows,
   selectedRows,
@@ -32,6 +38,7 @@ import {
   tabCount,
   tabLabel,
   toggleRow,
+  warningsHeading,
 } from "./logic";
 
 const row = (id: number, over: Partial<ProductionEmployeeRow> = {}): ProductionEmployeeRow => ({
@@ -218,6 +225,67 @@ describe("planning an assignment", () => {
     expect(words.lines[0]).toBe("They will not be included in any payroll until they are assigned again.");
     expect(words.lines).toContainEqual("1 employee in the selection was not on a cycle.");
     expect(needsConfirmation(planAssignment([none1, none2], null))).toBe(false);
+  });
+
+  it("asks before putting an unassigned employee who was paid before on a cycle, worded as an assignment", () => {
+    const paidBefore = row(7, {
+      lastPayroll: { periodStart: "2026-01-05", periodEnd: "2026-02-01", status: "paid", payCycle: "monthly" },
+    });
+    const plan = planAssignment([paidBefore, none1], "weekly");
+    expect(plan.fromNoneWithHistory).toBe(1);
+    expect(plan.fromNone).toBe(2);
+    expect(needsConfirmation(plan)).toBe(true);
+    const words = confirmWording(plan);
+    expect(words.title).toBe("Assign 2 employees to Weekly?");
+    expect(words.lines).toEqual(["From the next Weekly period they are paid on the Weekly page."]);
+    // taking them off a cycle they are not on asks nothing
+    expect(needsConfirmation(planAssignment([paidBefore], null))).toBe(false);
+  });
+});
+
+describe("the payroll warning of a move", () => {
+  const employee = (over: Partial<CycleChangePreviewEmployee>): CycleChangePreviewEmployee => ({
+    employeeId: 1,
+    employeeCode: "P1",
+    name: "Worker 1",
+    fromCycle: "weekly",
+    toCycle: "monthly",
+    changes: true,
+    warn: false,
+    lastPayroll: null,
+    nextPeriod: null,
+    payRanges: [],
+    alreadyPaid: [],
+    catchUp: [],
+    legacyGap: null,
+    refused: false,
+    message: null,
+    ...over,
+  });
+  const preview = (employees: CycleChangePreviewEmployee[]): CycleChangePreview => ({
+    cycle: "monthly",
+    label: "Monthly",
+    nextPeriod: null,
+    configError: null,
+    warnCount: employees.filter((e) => e.warn).length,
+    employees,
+    skipped: [],
+  });
+
+  it("warns only about the employees who change cycle and already have payroll", () => {
+    const list = preview([
+      employee({ employeeId: 1, warn: true, message: "This employee was previously assigned to Weekly Payroll ..." }),
+      employee({ employeeId: 2 }),
+      employee({ employeeId: 3, warn: true, message: null }),
+    ]);
+    expect(previewWarnings(list).map((e) => e.employeeId)).toEqual([1]);
+    expect(previewWarnings(undefined)).toEqual([]);
+  });
+
+  it("heads the list for one, all, or some of the employees", () => {
+    expect(warningsHeading(1, 1)).toBe("Payroll already generated");
+    expect(warningsHeading(3, 3)).toBe("Payroll already generated for 3 employees");
+    expect(warningsHeading(1, 4)).toBe("Payroll already generated for 1 of these 4 employees");
   });
 });
 

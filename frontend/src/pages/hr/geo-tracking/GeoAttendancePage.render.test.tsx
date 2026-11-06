@@ -70,6 +70,10 @@ const open = async (search = "") => {
   mount(`/hr/geo-attendance${search}`, GeoAttendance);
   await settle(30);
 };
+const openAt = async (path: string) => {
+  mount(path, GeoAttendance);
+  await settle(30);
+};
 // the page's own tab strip (the Approvals tab has a second one of its own below it); a tab's label is drawn twice by the pills
 const tabs = () => [...document.body.querySelector('[role="tablist"]')!.querySelectorAll<HTMLElement>('[role="tab"]')];
 const labelOf = (el: Element) => text(el.querySelector(".ptab-label"));
@@ -168,34 +172,66 @@ describe("the tabs", () => {
     ]);
   });
 
-  it("opens the journeys list from the tab and writes the tab into the address", async () => {
+  it("gives every section its own address: a tab opens it, and the bare address opens On-Duty Approvals", async () => {
     await open();
+    await settle(10);
+    expect(here()).toBe("/hr/geo-attendance/approvals");
     click(tab("Journey History"));
     await waitFor(() => all("journey-row").length === 3, "the journeys");
-    expect(here()).toBe("/hr/geo-attendance?tab=journeys");
+    expect(here()).toBe("/hr/geo-attendance/journeys");
     click(tab("Live Map"));
     await settle(20);
-    expect(here()).toBe("/hr/geo-attendance?tab=map");
+    expect(here()).toBe("/hr/geo-attendance/live-map");
+    click(tab("Tracking Settings"));
+    await settle(20);
+    expect(here()).toBe("/hr/geo-attendance/settings");
     click(tab("On-Duty Approvals"));
     await settle(20);
-    expect(here()).toBe("/hr/geo-attendance");
+    expect(here()).toBe("/hr/geo-attendance/approvals");
   });
 
-  it("opens a journey straight from its address, and Back returns to the list (and the address)", async () => {
-    await open("?tab=journeys&journey=7");
+  it("opens a journey straight from its address, and Back returns to the list (and its address)", async () => {
+    await openAt("/hr/geo-attendance/journeys/7");
     await waitFor(() => q("journey-detail") !== null, "the journey");
     expect(text(q("journey-detail"))).toContain("Asha Kumar");
     clickId("journey-back");
     await waitFor(() => all("journey-row").length === 3, "the list");
-    expect(here()).toBe("/hr/geo-attendance?tab=journeys");
+    expect(here()).toBe("/hr/geo-attendance/journeys");
   });
 
-  it("opens the tab the address names and falls back to the first for an unknown one", async () => {
+  it("keeps the old single page's links working: ?tab= and ?tab=journeys&journey= go to their sections", async () => {
+    const lands = (path: string) => waitFor(() => here() === path, path);
+    // the On-Duty Map section reads the day's feeds once it has loaded
+    answer({
+      "/api/on-duty-map": { date: "2026-10-28", employees: [] },
+      "/api/tracking/journeys/day-map": { date: "2026-10-28", journeys: [] },
+    });
+    await open("?tab=journeys&journey=7");
+    await waitFor(() => q("journey-detail") !== null, "the journey");
+    expect(here()).toBe("/hr/geo-attendance/journeys/7");
+    unmount();
     await open("?tab=map");
-    expect(tab("Live Map").getAttribute("aria-selected")).toBe("true");
+    await lands("/hr/geo-attendance/live-map");
+    await waitFor(() => tab("Live Map")?.getAttribute("aria-selected") === "true", "the Live Map tab");
+    unmount();
+    await open("?tab=onduty");
+    await lands("/hr/geo-attendance/on-duty-map");
+    unmount();
+    await open("?tab=tracking");
+    await lands("/hr/geo-attendance/settings");
     unmount();
     await open("?tab=nonsense");
+    await lands("/hr/geo-attendance/approvals");
     expect(tab(/^On-Duty Approvals/).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("opens a journey's replay from its address, and the journey page offers it", async () => {
+    await openAt("/hr/geo-attendance/journeys/7");
+    await waitFor(() => q("journey-simulate") !== null, "the Simulate button");
+    clickId("journey-simulate");
+    await waitFor(() => q("journey-simulation") !== null, "the replay");
+    expect(here()).toBe("/hr/geo-attendance/journeys/7/simulate");
+    expect(tab("Journey History").getAttribute("aria-selected")).toBe("true");
   });
 });
 
@@ -257,7 +293,7 @@ describe("the Live Map", () => {
     await waitFor(() => q("journey-detail") !== null, "the journey");
     expect(q("journey-detail")!.dataset.journeyId).toBe("7");
     expect(tab("Journey History").getAttribute("aria-selected")).toBe("true");
-    expect(here()).toBe("/hr/geo-attendance?tab=journeys&journey=7");
+    expect(here()).toBe("/hr/geo-attendance/journeys/7");
   });
 
   it("opens the journey from a pin's popup too", async () => {
@@ -379,7 +415,7 @@ describe("the page frame", () => {
     click(q("on-duty-now"));
     await settle(20);
     expect(tab("Live Map").getAttribute("aria-selected")).toBe("true");
-    expect(here()).toBe("/hr/geo-attendance?tab=map");
+    expect(here()).toBe("/hr/geo-attendance/live-map");
   });
 
   it("shows no chip when the board cannot be read (a role that may not see the tracks)", async () => {

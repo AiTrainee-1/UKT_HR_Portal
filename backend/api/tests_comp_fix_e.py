@@ -445,7 +445,7 @@ class CompensationAlertTests(alerts_base.AlertBase):
         )  # plain: after the Late window (10:15); shifted: Late until 10:45
         self.run_at(alerts_base.WED, 10, 21)
         self.assertEqual(self.logs("late_alert").count(), 1)
-        self.assertIn("Late By: 35 minutes", self.logs("late_alert").get().message_text)  # 10:20 vs the shifted 09:45
+        self.assertIn("Late by: 35 minutes", self.logs("late_alert").get().message_text)  # 10:20 vs the shifted 09:45
 
 
 # ── #61: the allowance also covers an afternoon Half-Day Leave ──────────────

@@ -54,6 +54,11 @@ describe("statusTones", () => {
     expect(whatsappStatusClass("delivered")).toBe(TONE.success);
     expect(whatsappStatusClass("read")).toBe(TONE.accent);
     expect(whatsappStatusClass("failed")).toBe(TONE.danger);
+    // The sending queue's states: never sent is not a failure.
+    expect(whatsappStatusClass("queued")).toBe(TONE.warning);
+    expect(whatsappStatusClass("sending")).toBe(TONE.info);
+    expect(whatsappStatusClass("expired")).toBe(TONE.neutral);
+    expect(whatsappStatusClass("skipped")).toBe(TONE.caution);
     expect(whatsappStatusClass("mystery")).toBe(TONE.neutral);
   });
 

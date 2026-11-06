@@ -21,6 +21,7 @@ import {
   useDeleteEmployeeDocument,
   useUploadEmployeeDocument,
   useWhatsAppEmployeeDocument,
+  whatsappSendToast,
   type EmployeeDocumentCategory,
   type EmployeeDocumentItem,
 } from "@/lib/api-client/custom-hooks";
@@ -110,7 +111,7 @@ export default function CategoryDialog({ employeeId, employeeName, category, doc
     setWhatsappBusyId(doc.id);
     try {
       const result = await whatsappMutation.mutateAsync(doc.id);
-      toast({ title: "Sent via WhatsApp", description: `Delivered to ${result.sentTo}` });
+      toast(whatsappSendToast(result));
     } catch (err) {
       toast({ title: "Failed to send via WhatsApp", description: errorText(err), variant: "destructive" });
     } finally {

@@ -137,6 +137,7 @@ from .whatsapp import (
     WhatsAppMediaAsset,
     WhatsAppMessageLog,
     WhatsAppMessageTemplate,
+    WhatsAppOptOut,
     WhatsAppSettings,
 )
 from .mail import (

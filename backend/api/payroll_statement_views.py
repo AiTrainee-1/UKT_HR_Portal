@@ -41,6 +41,7 @@ from .payroll_insights import (
     money,
     natural_key,
     parse_iso_date,
+    plain,
     slip_key,
     slips_for,
 )
@@ -107,6 +108,7 @@ def production_columns() -> list[dict]:
         _column("name", "Name", "text", 3, "identity"),
         _column("designation", "Designation", "text", 2.2, "identity"),
         _column("rate", "Rate / shift", "money", 1.1, "earnings", total=False),
+        _column("days", "Days paid", "days", 1, "attendance"),
         _column("worked", "Days worked", "days", 1, "attendance"),
         _column("absent", "Absent", "days", 1, "attendance"),
         _column("late", "Late", "int", 0.8, "attendance"),
@@ -221,9 +223,18 @@ def _production_values(payroll: Payroll, slip, bd, start, end) -> dict:
     advance = dec(slip.advance_deduction) if slip is not None else Decimal("0")
     tds = dec(payroll.tds_deduction)
     total_deduction = dec(payroll.deductions)
+    # Days paid: the days this payslip pays (the breakdown's totalDays: the whole period on an ordinary run; after a change
+    # of pay cycle only the days no other payroll paid, plus any catch-up days before the period - production_coverage.py;
+    # `periodDays` is the period's own length).
+    days = money(payroll.total_working_days or 0)
+    period_days = None
     if bd is not None:
         summary = bd.get("summary") or {}
         rate = dec(bd["salaryPerShift"]) if "salaryPerShift" in bd else dec(emp.salary_per_shift)
+        if "totalDays" in summary:
+            days = money(summary.get("totalDays"))
+        if "periodDays" in summary:
+            period_days = money(summary.get("periodDays"))
         worked = money(summary.get("daysWorked")) if "daysWorked" in summary else None
         absent = money(summary.get("daysAbsent")) if "daysAbsent" in summary else None
         late = sum(1 for d in bd.get("days") or [] if d.get("isLate"))
@@ -231,11 +242,21 @@ def _production_values(payroll: Payroll, slip, bd, start, end) -> dict:
     else:
         rate = dec(emp.salary_per_shift)
         worked, absent, late, shifts = None, money(payroll.absent_days), None, money(payroll.present_days)
+    remarks = _remarks(emp, start, end)
+    if period_days is not None and days != period_days:
+        # after a change of pay cycle: fewer days (some were paid by another payroll) or more (catch-up days added)
+        part = (
+            f"PART PERIOD {plain(days)} OF {plain(period_days)} DAYS"
+            if days < period_days
+            else f"{plain(days)} DAYS INCL. CATCH-UP"
+        )
+        remarks = f"{remarks}, {part}" if remarks else part
     return {
         "code": emp.employee_code,
         "name": full_name(emp),
         "designation": emp.designation.title if emp.designation_id else "",
         "rate": money(rate),
+        "days": days,
         "worked": worked,
         "absent": absent,
         "late": late,
@@ -248,7 +269,7 @@ def _production_values(payroll: Payroll, slip, bd, start, end) -> dict:
         "others": money(total_deduction - pf - esi - tds - advance),
         "totalDeduction": money(total_deduction),
         "net": money(payroll.final_salary),
-        "remarks": _remarks(emp, start, end),
+        "remarks": remarks,
     }
 
 
@@ -342,8 +363,11 @@ def _staff_notes() -> list[str]:
 
 def _production_notes() -> list[str]:
     return [
-        "Rate / shift is the worker's salary per shift; Shifts is the total shifts earned in the period (a day earns 0.25 to "
-        "1.5); Days worked and Absent count the days of the period; Late counts the days marked late.",
+        "Rate / shift is the worker's salary per shift; Days paid is the days this payslip pays (the whole period; after a "
+        "change of pay cycle only the days no other payroll paid, plus any catch-up days before the period: Remarks then "
+        "says PART PERIOD or INCL. CATCH-UP); Shifts is the total shifts "
+        "earned in the period (a day earns 0.25 to 1.5); Days worked and Absent count the days of the period; Late counts "
+        "the days marked late.",
         "E salary is the pay for the shifts earned (Shifts x Rate / shift) plus any HR bonus.",
         "Advance is the advance recovered from this period's pay (an advance balance still owed is not listed).",
         "ESI / EF is the ESI deduction. ESI and PF are deducted only from Co Emp workers (Employees > Co Emp), by the rules "

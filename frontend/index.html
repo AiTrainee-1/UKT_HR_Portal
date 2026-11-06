@@ -29,6 +29,9 @@
           var theme = dev || org;
           var root = document.documentElement;
           root.dataset.theme = theme;
+          /* the Clean theme's own presence attribute (its stylesheet is scoped to it: see ThemeContext.tsx) */
+          if (theme === "clean") root.setAttribute("data-clean-theme", "");
+          else root.removeAttribute("data-clean-theme");
           if (theme === "dark") root.classList.add("dark");
           if (!dev || dev === org) {
             var custom = JSON.parse(localStorage.getItem("uk_textile_theme_custom") || "{}");

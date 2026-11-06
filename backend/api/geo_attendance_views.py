@@ -1181,7 +1181,11 @@ def on_duty_session_hr_status(request: Request, pk: int) -> Response:
 def on_duty_punch_verifications_hr(request: Request) -> Response:
     """GET /api/on-duty-punch-verifications?status=pending|approved|rejected|all -branch-scoped."""
     status_filter = request.query_params.get("status", "pending")
-    qs = OnDutyPunchVerification.objects.select_related("employee__department", "employee__designation", "session")
+    # Never the employee's photo (a base64 data URL, up to ~2 MB each): no row shows it, and the sidebar's badge reads the
+    # pending list on every HR page.
+    qs = OnDutyPunchVerification.objects.select_related(
+        "employee__department", "employee__designation", "session"
+    ).defer("employee__photo_url")
     qs = scope_to_branch(qs, request, field="employee__branch_id")
     if status_filter != "all":
         qs = qs.filter(status=status_filter)
@@ -1305,9 +1309,10 @@ def live_location_team(request: Request) -> Response:
     """GET /api/live-location/team -latest ping per tracking-enabled employee, branch-scoped.
     Also flags whether each employee has an active On-Duty session today, so
     the Live Map can render On-Duty staff in a distinct color."""
-    employees = scope_to_branch(
-        Employee.objects.select_related("department", "branch"), request
-    ).filter(location_tracking_enabled=True, status="active")
+    # Never the photo (a base64 data URL of up to ~2 MB each): the Live Map reads this every 20 s and shows no photo.
+    employees = list(scope_to_branch(
+        Employee.objects.select_related("department", "branch").defer("photo_url"), request
+    ).filter(location_tracking_enabled=True, status="active"))
 
     cutoff = timezone.now() - timedelta(hours=PING_RETENTION_HOURS)
     on_duty_emp_ids = set(
@@ -1315,9 +1320,18 @@ def live_location_team(request: Request) -> Response:
             status__in=PUNCHABLE_STATUSES, employee_ended_at__isnull=True,
         ).values_list("employee_id", flat=True)
     )
+    # Every employee's newest ping in ONE query (Postgres DISTINCT ON), not one query per employee.
+    latest_by_employee = {
+        ping.employee_id: ping
+        for ping in LiveLocationPing.objects.filter(
+            employee_id__in=[e.id for e in employees], recorded_at__gte=cutoff,
+        ).order_by("employee_id", "-recorded_at").distinct("employee_id").only(
+            "employee_id", "latitude", "longitude", "is_mocked", "recorded_at",
+        )
+    }
     out = []
     for emp in employees:
-        latest = emp.location_pings.filter(recorded_at__gte=cutoff).order_by("-recorded_at").first()
+        latest = latest_by_employee.get(emp.id)
         out.append({
             "employeeId": emp.id,
             "employeeCode": emp.employee_code,

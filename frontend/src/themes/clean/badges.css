@@ -11,15 +11,15 @@
    What is left is the shape: a badge is a small flat label with a 4px corner and no shadow, a status badge keeps its pill.
    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="badge"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="badge"] {
   border-radius: var(--clean-radius-sm);
   box-shadow: none;
   letter-spacing: 0;
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([data-slot="badge"], [data-slot="status-badge"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([data-slot="badge"], [data-slot="status-badge"]) {
   line-height: 1.3;
 }
-html[data-theme="clean"]:not([data-md-theme]) [data-slot="status-badge"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-slot="status-badge"] {
   box-shadow: none;
 }
 /* a count or a tag that is a pill by its classes stays one; a chip with a ring (ring-1 ring-black/5) keeps its thin edge */

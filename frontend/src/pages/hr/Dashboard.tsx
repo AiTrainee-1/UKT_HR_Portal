@@ -672,7 +672,7 @@ export default function HrDashboard() {
                   { label: "Permission Requests",  value: pendingPermCount, color: "#8b5cf6", icon: Clock,         path: "/hr/requests" },
                   { label: "Missing Punch",        value: missingPunchPending, color: "#0ea5e9", icon: UserMinus,  path: "/hr/missing-punch" },
                   { label: "Casual Leave Requests", value: casualLeavePending, color: "#16a34a", icon: Calendar,   path: "/hr/casual-leave" },
-                  { label: "On-Duty Approvals",    value: onDutyPending,    color: "#d97706", icon: MapPinned,     path: "/hr/geo-attendance" },
+                  { label: "On-Duty Approvals",    value: onDutyPending,    color: "#d97706", icon: MapPinned,     path: "/hr/geo-attendance/approvals" },
                   { label: "Production Payroll Pending", value: productionPayrollPending, color: "#b45309", icon: Factory, path: "/hr/production-payroll" },
                   { label: "Open Advances",        value: openAdvances,     color: "#ef4444", icon: CreditCard,    path: "/hr/settlement" },
                   { label: "Notifications",        value: (summary as any)?.unreadNotifications ?? 0, color: "#006496", icon: AlertCircle, path: "/hr/notifications" },
@@ -759,16 +759,17 @@ export default function HrDashboard() {
           </SectionTitle>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {[
-              { label: "Office Geo Punches", value: geoPunchesToday, color: "#006496", icon: MapPinned },
-              { label: "On-Duty Sessions Pending", value: onDutyPending, color: "#f59e0b", icon: Clock },
-              { label: "Punches Awaiting Verification", value: pendingPunchVerifications, color: "#dc2626", icon: Camera },
-              { label: "On-Duty Completed", value: onDutyCompletedToday, color: "#059669", icon: ShieldCheck },
-              { label: "Employees On-Duty", value: employeesOnDutyToday, color: "#d97706", icon: Users },
-              { label: "Live Tracking Enabled", value: liveTrackingEnabled, color: "#7c3aed", icon: Radar },
-            ].map(({ label, value, color, icon: Icon }) => (
+              // each tile opens the Geo Attendance section it counts (the module has an address per section)
+              { label: "Office Geo Punches", value: geoPunchesToday, color: "#006496", icon: MapPinned, to: "approvals" },
+              { label: "On-Duty Sessions Pending", value: onDutyPending, color: "#f59e0b", icon: Clock, to: "approvals" },
+              { label: "Punches Awaiting Verification", value: pendingPunchVerifications, color: "#dc2626", icon: Camera, to: "verifications" },
+              { label: "On-Duty Completed", value: onDutyCompletedToday, color: "#059669", icon: ShieldCheck, to: "journeys" },
+              { label: "Employees On-Duty", value: employeesOnDutyToday, color: "#d97706", icon: Users, to: "live-map" },
+              { label: "Live Tracking Enabled", value: liveTrackingEnabled, color: "#7c3aed", icon: Radar, to: "settings" },
+            ].map(({ label, value, color, icon: Icon, to }) => (
               <button
                 key={label}
-                onClick={() => navigate("/hr/geo-attendance")}
+                onClick={() => navigate(`/hr/geo-attendance/${to}`)}
                 className="text-left rounded-xl p-3 transition-all hover:scale-[1.02]"
                 style={{ background: color + "0d" }}
               >

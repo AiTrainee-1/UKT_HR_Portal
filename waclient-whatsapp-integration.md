@@ -13,30 +13,71 @@ Django backend ──POST https://api.waclient.com/send (JSON)──▶ WAClient
 
 - **A WhatsApp number is linked to a WAClient "instance" once, by scanning a QR code** in the WAClient dashboard. After that, every message is sent as that number. There are **no Meta templates and nothing to get approved** -the wording is plain text you can edit (Settings → WhatsApp).
 - **Documents are sent by URL.** WAClient downloads the PDF/PNG from a public link, so the backend stores each generated file for 24 hours (`WhatsAppMediaAsset`) and gives WAClient `GET /api/whatsapp/media/<token>` (random, unguessable, no login). This endpoint must be reachable from the internet.
-- **Every attempt is logged** in `WhatsAppMessageLog` (sent / delivered / read / failed, with the reason).
+- **Every attempt is logged** in `WhatsAppMessageLog` (queued / sending / sent / delivered / read / failed / expired / skipped, with the reason).
 
-### One central layer
+### One central layer, one paced sender (the send queue, 2026-11-06)
 
 ```
-HRMS module ──▶ send_notification() ──▶ template (whatsapp_catalog) ──▶ WAClient ──▶ employee
- (leave, geo,        │  checks the switches, renders the wording,
-  visitor, gate…)    │  logs a row, delivers (in the background)
+HRMS module ──▶ send_notification() / send_document() ──▶ template (whatsapp_catalog)
+ (leave, geo,        │  checks the switches (master, module, type, opt-out), renders the wording,
+  visitor, gate…)    │  writes the WhatsAppMessageLog row as "queued" (codes: sent at once)
                      ▼
-              WhatsAppMessageLog  ──▶  WhatsApp Control page
+              WhatsAppMessageLog (the outbox) ──▶ whatsapp_dispatcher.tick() every 10 s ──▶ WAClient ──▶ employee
+                     │                              one message per tick, paced, capped, quiet at night
+                     ▼
+              WhatsApp Control page
 ```
 
-No module talks to WAClient itself. To add a notification: add one entry to `whatsapp_catalog.py` (name, module, default wording, variables, switch) and call `whatsapp_service.send_notification(...)` from the place that raises it. The control page, template editor, message log and on/off checks pick it up from the catalog with no other change (and no migration). To cover a **new approval workflow**, add a builder to `whatsapp_approvals.py` and its key to `APPROVAL_MODULES`.
+No module talks to WAClient itself, and since 2026-11-06 **nothing but a one-time code is sent from the request or job that raised it**. Everything else is written as a `queued` row and leaves when the dispatcher's pacing allows (see *The send queue* below). To add a notification: add one entry to `whatsapp_catalog.py` (name, module, default wording, variables, switch, and for the queue its kind and freshness) and call `whatsapp_service.send_notification(...)` from the place that raises it. The control page, template editor, message log, per-type switch and on/off checks pick it up from the catalog with no other change (and no migration). To cover a **new approval workflow**, add a builder to `whatsapp_approvals.py` and its key to `APPROVAL_MODULES`.
 
-- **Failures never break the workflow.** Not configured, no phone, switched off, WAClient down, even a bug in the messaging code: the approval / gate scan / check-in still happens, and HR sees the failed row with its reason.
-- **Delivered in the background.** Approval, visitor and gate messages are handed to a single worker (`WHATSAPP_ASYNC_SEND`), so nobody waits on WhatsApp and a burst is spread out (`WHATSAPP_MIN_SEND_GAP_SECONDS`). Codes and the attendance job send immediately. A message left "pending" by a server restart is marked failed after 10 minutes.
-- **Exactly once.** Automatic messages reserve a log row under a unique key before sending, so a double click, a retry or overlapping jobs never send twice.
+- **Failures never break the workflow.** Not configured, no phone, switched off, WAClient down, even a bug in the messaging code: the approval / gate scan / check-in still happens, and HR sees the row with its status and reason.
+- **Nobody waits on WhatsApp.** A queued row is written in the request and the dispatcher sends it later, from its own scheduler thread. A message left "sending" (or a code left "pending") by a server restart is marked failed after 10 minutes, never retried.
+- **Exactly once.** Automatic messages reserve a log row under a unique key, so a double click, a retry or overlapping jobs never queue twice.
+
+## The send queue: why the number stopped getting restricted
+
+WAClient is an unofficial WhatsApp Web link. WhatsApp restricts a number for automated, high-volume, repetitive messaging: the same text to many people within minutes, several messages a day to one person, recipients who never reply. The cure is fewer messages, fewer per person, a steady pace, quiet nights and no catch-up bursts. There is deliberately **no random jitter**: it would only disguise the pattern, not change it.
+
+Every message type in `whatsapp_catalog.py` has a **kind**, a **priority** (lower goes first) and a **freshness**:
+
+| Kind | Types | Priority | Freshness (after it was raised) |
+|---|---|---|---|
+| `code` | login / reset / activation codes | 0 | sent at once, never queued |
+| `document` | salary slip, ID card, letters, other documents | 3 (a **bulk** send: 6, behind everything time-critical) | until the end of the day |
+| `requested` | approval / rejection of the employee's own request, Geo / On-Duty decisions | 4 | approvals: end of day; Geo: 120 min |
+| `automatic` | absent (60 min), late (30), missing punch (60), punch reminders (the lead window, 15 min), visitor + contact card (30), gate out / in (30), HoD pending reminders (end of day) | 5 | as listed |
+
+The alert job knows exactly when each alert stops being useful (a reminder: the punch time; absent: an hour after it became due; late: 30 min after the punch; missing: its window), and passes that. **A row expires at the earliest of: raised + freshness, the alert's own moment, and the end of that day (IST).** Nothing from an earlier day is ever sent.
+
+**The dispatcher** (`api/whatsapp_dispatcher.py`, an APScheduler job every 10 seconds registered in `apps.py`, `max_instances=1`, `coalesce`, skipped under `manage.py test`) does, on each tick:
+
+1. **Expire**: queued rows past `expires_at`, or created before today, become `expired` ("Too late to be useful: not sent"). Never sent, never retried.
+2. **Nothing is sent** while the master switch is off, WhatsApp isn't configured on this machine, or it is **quiet hours** (default 21:00 to 07:00 IST).
+3. **Circuit breaker**: 3 provider failures within 30 minutes (any message type; a missing phone number or a switch doesn't count) pause sending until 15 minutes after the last failure. Then one message is tried; a failure pauses again.
+4. **Pacing**, measured in the database so it holds across processes and restarts: fewer than `max_per_hour` sent in the last 60 minutes (default **60**), fewer than `max_per_day` sent today (default **200**), and at least `min_gap_seconds` since the last message of any kind (default **30 s**; a code counts as the last message too).
+5. **The next row** (lowest priority, then oldest) is taken under a row lock (`select_for_update(skip_locked=True)`, plus a lock on the settings row so two processes never decide at once). Per row: switched off since it was queued, or the employee **opted out** → `skipped`; an **automatic** message for an employee who already got `max_per_employee_per_day` automatic messages today (default **3**) → `skipped` ("Daily limit for this employee"); the same employee got the **same type with the same text in the last 24 hours** → `skipped` ("Duplicate"; for documents also the same file). Otherwise it is marked `sending`, sent (text, document or the visitor's contact card right after its message) and becomes `sent` with `sent_at`, or `failed`.
+6. **Retries**: a temporary failure (network error, timeout, HTTP 5xx or 429) goes back to `queued` **once**, 60 seconds later, if it is still fresh and still today. Anything else (a refused number, a disconnected instance, a bad token) is final. Failed messages never re-enter the queue by themselves.
+
+**One message per tick** at most, so even a burst of approvals or a month of salary slips leaves at the configured pace, one at a time.
+
+**Codes** (`otp_*`) are sent immediately and synchronously, as before: they bypass the gap, the caps and quiet hours (an employee signing in at 22:00 still gets the code), but they count as the last message for the gap and in the hour / day totals. Only the **master switch** blocks them; with it off the apps treat WhatsApp as unavailable (`otp_service.OtpConfig.available`): no code is offered, password sign-in stays open, first-time activation falls back to the open set-password route and SMS keeps working, so nobody is locked out.
+
+**Quiet hours**: a non-code message raised during quiet hours is recorded `skipped` ("Quiet hours: not sent") instead of queued; it is not sent in the morning. A row already queued when quiet hours begin waits, and expires at midnight if still unsent.
+
+**Opt-out**: HR can opt an employee out (WhatsApp Control → Employees). They get no WhatsApp notifications or documents (each attempt is a `skipped` row); codes they ask for themselves still go. Their phone push / in-app notification (`push_messages.py`) is a separate channel and is not affected.
+
+**Bulk sends** (Payslips → Bulk WhatsApp) queue one document row per employee with a batch id in its payload, build each PDF only when its turn comes, and answer at once with a sentence saying how many can go out today at the current limits. **Anything not sent by the end of the day expires** (owner rule): send the rest again the next day. The progress endpoint reads the batch's rows (queued / sent / failed / expired / skipped).
+
+**Under tests** (`WHATSAPP_ASYNC_SEND=false`, always under `manage.py test`) a newly queued row is delivered inline at once: switches, opt-out, dedupe and kinds still apply; the gap, caps, duplicate check and quiet hours don't, and a temporary failure isn't retried. The dispatcher itself is tested by calling `tick(now=...)` with a frozen clock (`tests_whatsapp_dispatcher.py`). **Never set `WHATSAPP_ASYNC_SEND=false` on a real server**: it bypasses all of the above. (The e2e stack needs it, see Tests.)
 
 ### Code map
 
 | File | Role |
 |---|---|
-| `backend/api/whatsapp_catalog.py` | **Every message type**: label, module, default wording, variables, switch. The single source the rest reads. |
-| `backend/api/whatsapp_service.py` | The notification service (`send_notification()`), switches, wording and rendering, the background worker, the log, and all WAClient calls (text, documents, contact cards). Documents use `send_document()`. |
+| `backend/api/whatsapp_catalog.py` | **Every message type**: label, module, default wording, variables, switch, and its queue kind / priority / freshness. The single source the rest reads. |
+| `backend/api/whatsapp_service.py` | The notification service (`send_notification()`), switches (master, module, type, opt-out), wording and rendering, writing the queued rows, codes (sent at once), and all WAClient calls (text, documents, contact cards). Documents use `send_document()`, bulk documents `queue_document()`. |
+| `backend/api/whatsapp_dispatcher.py` | **The send queue's one paced sender** (every 10 s): expiry, quiet hours, circuit breaker, gap / hourly / daily / per-employee caps, duplicate check, one retry for a temporary failure; also the queue status and "clear" behind the WhatsApp Control page. |
+| `backend/api/whatsapp_bulk_progress.py` | Progress of a bulk send, read from its batch's queued rows. |
 | `backend/api/whatsapp_approvals.py` | Approve / reject messages for every workflow (`notify_decision()` + one builder per workflow). |
 | `backend/api/whatsapp_format.py` | Shared date / time / duration / phone formatting for the messages. |
 | `backend/api/whatsapp_views.py` | Settings → WhatsApp endpoints (status, message wording), the public media link, and the delivery-status webhook. |
@@ -60,19 +101,22 @@ No module talks to WAClient itself. To add a notification: add one entry to `wha
 | `WACLIENT_ACCESS_TOKEN` | yes | Access token from the dashboard |
 | `BACKEND_PUBLIC_URL` | recommended on Railway | Public origin WAClient uses to download documents, e.g. `https://api.uktextiles.in` |
 | `WHATSAPP_DEFAULT_COUNTRY_CODE` | no | Defaults to `91` |
-| `WHATSAPP_SEND_DELAY_SECONDS` | no | Pause between messages in a bulk send. Default `2`; `0` disables |
 | `WHATSAPP_WEBHOOK_TOKEN` | no | If set, the webhook URL must end with `?token=<value>` |
 | `WACLIENT_API_URL` | no | Defaults to `https://api.waclient.com/send` |
 | `WACLIENT_CONTACT_API_URL` | no | Contact cards; defaults to the send URL with `/send_contact` |
-| `WHATSAPP_ASYNC_SEND` | no | Default `true`: approval / visitor / gate messages go from a background worker. `false` = inline |
-| `WHATSAPP_MIN_SEND_GAP_SECONDS` | no | Minimum pause between two background messages. Default `1` |
+| `WHATSAPP_ASYNC_SEND` | no | Default `true`: every non-code message is queued and sent by the dispatcher. **`false` delivers each one inline at once, bypassing the pacing, caps and quiet hours: tests and the e2e stack only, never a real server** |
+| `WHATSAPP_ALERTS_MAX_PER_RUN` / `_PER_HOUR` / `_PER_DAY` | no | Upper guard on how many attendance alerts the alert job may queue (8 / 200 / 700); the real pacing is the queue's (WhatsApp Control) |
+
+`WHATSAPP_SEND_DELAY_SECONDS` and `WHATSAPP_MIN_SEND_GAP_SECONDS` no longer do anything: the gap between messages is the queue's `min_gap_seconds`, set on the WhatsApp Control page (default 30 s).
 
 4. Restart the backend. **Settings → WhatsApp** should show *Configured -instance ending in …xxxx*.
 5. Send one salary slip to a test employee (a different phone from the linked number) and confirm it arrives.
 
 ## Message wording
 
-**WhatsApp Control → Message Text** lists every message the HRMS sends (grouped by module) with its wording, the variables it can use, a live preview with sample values, and Default / Customised. Wording is plain WhatsApp text (`*bold*`, `_italic_`, emojis) with `{{variable}}` placeholders. Click a variable chip to insert it; a placeholder the message doesn't have is refused (a typo would otherwise send a blank). A line whose placeholders are all empty is left out, so optional details (a note, a reason) vanish instead of leaving an empty label. Wording HR saved earlier with numbered placeholders (`{{1}}`, `{{2}}`) keeps working: the number is the variable's position in the list.
+**WhatsApp Control → Message Text** lists every message the HRMS sends (grouped by module) with its wording, the variables it can use, a live preview with sample values, and Default / Customised. Wording is plain WhatsApp text (`*bold*`, `_italic_`, emojis) with `{{variable}}` placeholders.
+
+**The default wordings were rewritten on 2026-11-06** to read like a company writing to its own staff rather than a bulk sender: short, plain, a bold title, no emojis or capitals, no motivational lines or lectures, every message signed `- UK Textiles HR`, and no link in any automatic message (only the Geo punch decisions keep their map link). Every variable is still filled in, so wording HR saved earlier (with greetings, quotes, emojis) keeps working unchanged; customised wording is never touched. The phone notification drops the `- UK Textiles HR` sign-off like the old one. Click a variable chip to insert it; a placeholder the message doesn't have is refused (a typo would otherwise send a blank). A line whose placeholders are all empty is left out, so optional details (a note, a reason) vanish instead of leaving an empty label. Wording HR saved earlier with numbered placeholders (`{{1}}`, `{{2}}`) keeps working: the number is the variable's position in the list.
 
 ### Messages at a glance
 
@@ -96,19 +140,21 @@ No module talks to WAClient itself. To add a notification: add one entry to `wha
 
 | Tab | What it is for |
 |---|---|
-| Overview | **Today** and **this month** (total / sent / delivered / failed / pending), the chosen range's totals, a card per module, an activity chart, recent failures with the reason. Refreshes every 30 s. |
-| Messages | Every message, newest first: employee, **mobile number**, message type, **module and workflow** ("Approvals - Leave"), status and the message text or **failure reason**. Filter by status, module, workflow, employee, date. Open a row for the full text and the WAClient id. Login/reset codes are always shown as `••••••`. |
-| Employees | Per-employee history: last message, counts, and that employee's whole log. |
-| Feature Controls | One ON/OFF switch per feature (below), plus the timing knobs. Changes apply immediately; the alert job re-reads them every run. |
+| Overview | **Today** and **this month** (counts per status: queued / sending / sent / delivered / read / failed / expired / skipped / pending), the chosen range's totals, a card per module, an activity chart, recent failures with the reason, and the **send queue** (`GET /api/whatsapp-control/queue`: master switch, paused by the circuit breaker and why, quiet hours, how many are waiting, sent today / in the last hour, failed / expired / skipped today, when the next message may leave, the limits) with **Clear queue** (every waiting message becomes skipped, "Cleared by HR"). |
+| Messages | Every message, newest first: employee, **mobile number**, message type, **module and workflow** ("Approvals - Leave"), its kind (code / requested / automatic / document), status and the message text or **reason** (failure, expiry, skip). Filter by status (any of the nine), module, workflow, employee, date. Open a row for the full text, the WAClient id, attempts, when it was sent and when it would have expired. Login/reset codes are always shown as `••••••`. |
+| Employees | Per-employee history: last message, counts, that employee's whole log, and the **opt-out** switch (with a reason). `all=1` lists every employee, to find someone to opt out. |
+| Feature Controls | The **master switch** (stops every WhatsApp message, codes included), one ON/OFF switch per feature and **per message type** (below), the timing knobs, the **queue limits** (gap, per hour, per day, per employee per day) and **quiet hours**. Changes apply immediately; the alert job and the dispatcher re-read them every run. |
 | Message Text | The wording of every message type, grouped by module, with a live preview and variable chips. |
 | Configuration | Connection status (instance shown as `…1234`), the webhook URL to paste into WAClient, the Employee Web App address, how messages are delivered. **Credentials are never shown or editable here** -they live in the server environment only. |
 
 ### Switches and defaults
 
-A message goes out only when its own switch **and** its module's switch are on.
+A message goes out only when the **master switch**, its module's switch **and** its own switch are on, and (for anything but a code) the employee hasn't opted out. Its own switch is its boolean below where it has one; every other type (the documents, approved / rejected, the HoD reminder, each Geo decision, visitor message and contact card, gate out / in, and the two punch reminders, which share one boolean) has its own `type:<key>` switch on Feature Controls, stored in `WhatsAppSettings.disabled_message_types`.
 
 | Switch | Default | Effect when OFF |
 |---|---|---|
+| **WhatsApp sending (master)** | **ON** | No WhatsApp message at all, codes included. The apps treat WhatsApp as unavailable: password sign-in stays, activation falls back to the open first-time setup, SMS keeps working. Queued messages wait and expire at midnight. |
+| One switch per message type (`type:<key>`) | **ON** | Just that message type stays quiet. |
 | WhatsApp OTP - login / password reset / new-account activation | **ON** | That code can't be requested (the apps hide the option). Activation OFF brings back the old open first-time setup. |
 | Password login | **ON** | Employees can only sign in with a WhatsApp code. Keep ON until OTP delivery is proven in production. |
 | Document notifications | **ON** | Documents can't be sent (the attempt shows as a failed row saying why). |
@@ -120,7 +166,11 @@ A message goes out only when its own switch **and** its module's switch are on.
 | Visitor notification | **ON** | No visitor message or contact card; check-in still works. |
 | Outpass gate IN / OUT | **ON** | No gate confirmation; the scan still works. |
 
-Timings: OTP validity 1-30 min (default 5); extra minutes on top of the shift's punctuality window before "absent" (default 0); wait after a punch is due before its reminder (default 10); minutes after shift end before the end-of-day missing-punch message (default 30).
+**The punch reminders (Punch Reminder and On-Duty Punch Reminder) are OFF** by owner decision (2026-11-06): migration `0143_whatsapp_send_queue` switched `four_punch_alert_enabled` off on the existing settings row, and it stays OFF by default. They were the most repetitive messages (up to four a day per person, the same text to a whole shift at once).
+
+Timings: OTP validity 1-30 min (default 5); extra minutes on top of the shift's punctuality window before "absent" (default 0); how long before a punch its reminder goes (default 15); minutes after a punch was due before its Missing Punch message (default 20).
+
+Queue limits ("careful" defaults, owner 2026-11-06): **at least 30 s between messages** (5-600), **at most 60 an hour** (1-1000), **at most 200 a day** (1-5000), **at most 3 automatic messages per employee per day** (1-20); **quiet hours 21:00 to 07:00** (IST, on by default; no message but a code goes out).
 
 ## WhatsApp OTP sign-in, password reset and first-time activation
 
@@ -143,7 +193,7 @@ An employee **without a phone number on file cannot activate** - the app tells t
 
 ## Automatic attendance alerts and punch reminders
 
-A background job (every minute, `Asia/Kolkata`) looks at **today** for staff employees and sends, each **at most once per employee per day** (the log row is reserved before sending, so restarts and overlapping runs can't double-send). Everything is judged against **the employee's own assigned shift** (start, end, grace, lunch times), never one company-wide time.
+A background job (every minute, `Asia/Kolkata`) looks at **today** for staff employees and **queues** whatever is due, each **at most once per employee per day** (the log row is reserved under a unique key, so restarts and overlapping runs can't double-queue). It only decides; the send queue sends (or lets the alert expire the moment it stops being useful). Everything is judged against **the employee's own assigned shift** (start, end, grace, lunch times), never one company-wide time.
 
 | Message | When |
 |---|---|
@@ -160,10 +210,10 @@ Nobody is messaged on Sundays, holidays, Saturday-off, approved leave (full or h
 **Safeguards against a restricted number** (an unofficial WhatsApp Web connection can be restricted for automated bulk-looking sending, and once was):
 
 - *A development machine never sends.* With `DEBUG=true`, or running under `runserver`, WhatsApp sending is refused (the WhatsApp Control page's config shows `sendingBlockedReason`), so a laptop connected to the live database and live number can't message anyone. `WHATSAPP_ALLOW_SENDING=true` overrides it deliberately; a real server (DEBUG off) sends normally. **Check that production has `DEBUG=false`** or it will not send.
-- *Alerts are about now.* An absent alert is dropped an hour after it became due, a late alert 30 minutes after the punch, a missing-punch alert an hour after it became due. A bug fix, an outage or a limit can therefore never release a backlog of stale messages at once.
-- *Reminders start early and drain at a fixed rate.* A punch reminder opens **15 minutes** before the punch (HR can change it on the WhatsApp Control page), and each minute's run sends at most `WHATSAPP_ALERTS_MAX_PER_RUN` (8), so a crowd who share a punch time (about a hundred people on the 9:00 shift, and again at 1:30, 2:30 and 8:00) is reminded across the window instead of in one burst. The window's capacity is the per-run limit times its minutes (8 x 15 = 120 people); a crowd larger than that loses the rest when the window closes, so raise the lead time or the per-run limit if the workforce grows. `..._PER_HOUR` (200) and `..._PER_DAY` (700) are runaway backstops above a normal day (about four reminders per person), not pacing. An alert over a limit is held back, retried next minute only while still fresh, then dropped. Raise or lower them in `.env`; 0 turns one off. Spacing between messages is fixed (`WHATSAPP_SEND_DELAY_SECONDS`); there is deliberately no random jitter, which would only be disguising the pattern.
-- *Pause on provider failure.* If 3 alerts fail with a provider error in 30 minutes (a disconnected or restricted number), the alert job stops and resumes by itself once things recover. A missing phone number doesn't count.
-- *Once per employee per alert per day* (already true) and one reminder per punch.
+- *Alerts are about now.* Each queued alert carries the moment it stops being useful: an absent alert an hour after it became due, a late alert 30 minutes after the punch, a missing-punch alert an hour after it became due, a reminder at the punch time. Past it, or past midnight, it expires unsent. A bug fix, an outage or a limit can therefore never release a backlog of stale messages at once.
+- *Everything is paced by the send queue* (see *The send queue*): at least 30 s apart, at most 60 an hour, 200 a day, 3 automatic messages per employee per day, nothing between 21:00 and 07:00. The alert job's own limits (`WHATSAPP_ALERTS_MAX_PER_RUN` 8 / `_PER_HOUR` 200 / `_PER_DAY` 700) remain as an upper guard on how much it may queue. With a 30 s gap the queue sends about two messages a minute, so a crowd of alerts due at the same time is partly sent and the rest expires when it stops being useful: that is by design (fewer messages). There is deliberately no random jitter, which would only be disguising the pattern.
+- *Pause on provider failure.* The queue's circuit breaker: 3 provider failures of any message in 30 minutes (a disconnected or restricted number) stop all sending, and the alert job stops queueing, until 15 minutes after the last failure. A missing phone number doesn't count.
+- *Once per employee per alert per day* (already true) and one reminder per punch; the punch reminders themselves are OFF (owner decision, 2026-11-06).
 
 None of this makes an unofficial connection compliant or restriction-proof; for a workforce this size, WhatsApp's official Business Platform (approved templates) is the durable route.
 
@@ -194,7 +244,7 @@ The message says the request type, date and time, what was requested, who approv
 
 ## Visitors
 
-When a visitor checks in to meet an employee, the employee gets the visitor's **name, contact number, company (if recorded), purpose, whom they came to meet, department, date, time and branch**, followed by the visitor's **contact card**. WAClient's WhatsApp Web API has no native buttons, so the tap-to-call action is that contact card (tap it to call, message or save the visitor) plus the number, which WhatsApp also makes tappable. The message is sent in the background, so the visitor's check-in never waits, and Reception's "notified" time is stamped once it is really delivered. There is no company field on the visitor form today, so that line is left out until one is added.
+When a visitor checks in to meet an employee, the employee gets the visitor's **name, contact number, company (if recorded), purpose, whom they came to meet, department, date, time and branch**, followed by the visitor's **contact card**. WAClient's WhatsApp Web API has no native buttons, so the tap-to-call action is that contact card (tap it to call, message or save the visitor) plus the number, which WhatsApp also makes tappable. The message is queued, so the visitor's check-in never waits, and Reception's "notified" time is stamped once it is really sent (the contact card goes right after the message, as part of it). There is no company field on the visitor form today, so that line is left out until one is added.
 
 ## Outpass gate IN / OUT
 
@@ -206,7 +256,7 @@ Denied scans (expired, already used) send nothing.
 
 ## Deploying these features
 
-1. Run migrations (`0097_waclient_whatsapp`, `0098_whatsapp_control_otp_alerts`, `0099_whatsapp_otp_activation`, `0100_whatsapp_central_layer`).
+1. Run migrations (`0097_waclient_whatsapp`, `0098_whatsapp_control_otp_alerts`, `0099_whatsapp_otp_activation`, `0100_whatsapp_central_layer`, and `0143_whatsapp_send_queue`: the queue columns on the log, the master switch / per-type switches / limits / quiet hours on the settings, the opt-out table, and the punch reminders switched off; additive only, every new column has a database default so the previous release keeps working during a rolling deploy). The dispatcher starts with the app (`apps.py`), as the other scheduled jobs do.
 2. The variables in **Setup** must be set on the server that answers (Railway → Variables).
 3. Open **WhatsApp Control → Configuration**: it should say credentials are set. Send yourself a sign-in code from the Employee Web App to prove delivery.
 4. Approval, visitor, gate and document messages are ON by default (approve a test request and check **Messages**); turn on the attendance alerts / punch reminders / Geo switches you want, one at a time, and watch **Messages** for the first run.
@@ -221,7 +271,7 @@ WAClient's webhook body format is not publicly documented, so the parser is deli
 
 ## Things to know
 
-- **This is the WhatsApp Web (linked device) route, not Meta's official Cloud API.** It's simple and needs no template approval, but WhatsApp can restrict a number that sends bulk or unsolicited messages. Send only to your own employees, keep the default pause between bulk messages, and use a number you can afford to lose access to. The linked phone must stay online, or sending stops until you relink.
+- **This is the WhatsApp Web (linked device) route, not Meta's official Cloud API.** It's simple and needs no template approval, but WhatsApp can restrict a number that sends bulk or unsolicited messages. Send only to your own employees, keep the send queue's careful limits (WhatsApp Control), and use a number you can afford to lose access to. The linked phone must stay online, or sending stops until you relink.
 - There is **no 250-customers-per-day style limit** here (that was Meta's Cloud API tier), but the ban risk above is the trade-off.
 - Documents are fetched by WAClient from `BACKEND_PUBLIC_URL`; if a message arrives without its file (or fails), check that this URL opens from the internet and isn't behind bot protection that blocks `/api/whatsapp/media/*`.
 
@@ -239,11 +289,15 @@ WAClient's webhook body format is not publicly documented, so the parser is deli
 | Employee gets "wait N seconds" | The 60 s resend cooldown or the 5-per-hour cap (both by design) |
 | An alert never went out | Its switch (or Attendance alerts (all)) is OFF, the employee is exempt (leave / holiday / On-Duty / no shift), or it already went out today |
 | An approval sent no message | Approval notifications (all), or that workflow's switch, is OFF; or the decision was a Department Head hand-over (only final decisions and rejections are sent); or it was already sent for that decision |
-| A message is stuck on Pending | The server restarted before delivering it; it is marked Failed within 10 minutes |
+| A message is stuck on Pending / Sending | The server restarted before recording the outcome; it is marked Failed within 10 minutes (never retried: it may have arrived) |
+| Messages stay **Queued** | WhatsApp Control → Overview → send queue: the master switch is off, it is quiet hours, the circuit breaker paused sending (the reason says why), or a limit is reached (`nextSendAt` says when the next one may go). Queued messages that never go out expire at midnight |
+| A message is **Expired** | It was too late to be useful (older than its freshness, or from an earlier day). By design it is never sent later |
+| A message is **Skipped** | The reason says which: quiet hours, the employee opted out, the employee's daily limit of automatic messages, a duplicate of a message sent in the last 24 h, switched off after it was queued, or cleared by HR |
+| A bulk salary-slip send only partly went out | The queue sends at most `max_per_day` messages a day and nothing during quiet hours; the rest expired at midnight. Send again the next day (the response of the bulk send says how many can go that day) |
 | No contact card after a visitor message | Contact cards are a separate WAClient call; a failed one shows as its own row ("Visitor Contact Card") with WAClient's reason |
 
 ## Tests
 
-`python manage.py test api.tests_whatsapp_service api.tests_whatsapp_webhook api.tests_otp api.tests_whatsapp_alerts api.tests_whatsapp_control api.tests_whatsapp_approvals api.tests_whatsapp_events api.tests_whatsapp_no_link` -covers the request shape, wording, variables and rendering, every approval workflow (approve, reject, two-stage hand-overs, switches, background delivery, failures that must not break the workflow), gate and visitor messages, punch reminders, phone handling, every failure path, the settings endpoints, that no message or sender carries an Employee Web App link (and that migration 0130 and the renderer clean old wording that did), the webhook parser, OTP security (expiry, single use, attempt limits, purpose separation, redaction), each alert rule and its exemptions, and the WhatsApp Control API. WAClient itself is mocked, and credentials are blanked while tests run, so nothing in the suite sends a real message.
+`python manage.py test api.tests_whatsapp_dispatcher api.tests_whatsapp_service api.tests_whatsapp_webhook api.tests_otp api.tests_whatsapp_alerts api.tests_whatsapp_control api.tests_whatsapp_approvals api.tests_whatsapp_events api.tests_whatsapp_no_link` -`tests_whatsapp_dispatcher` covers the send queue with a frozen clock (queueing, kinds / priorities / freshness, the gap, hourly and daily caps, codes counting for the gap, quiet hours, today-only expiry, one retry for a temporary failure and none for a rejection, the per-employee cap, the duplicate skip, the circuit breaker, the master switch blocking codes and making the apps fall back to passwords, the opt-out, per-type switches, documents and the visitor contact card, bulk batch progress, the WhatsApp Control queue / settings / opt-out endpoints, the migration's data step and the default wordings); the rest covers the request shape, wording, variables and rendering, every approval workflow (approve, reject, two-stage hand-overs, switches, background delivery, failures that must not break the workflow), gate and visitor messages, punch reminders, phone handling, every failure path, the settings endpoints, that no message or sender carries an Employee Web App link (and that migration 0130 and the renderer clean old wording that did), the webhook parser, OTP security (expiry, single use, attempt limits, purpose separation, redaction), each alert rule and its exemptions, and the WhatsApp Control API. WAClient itself is mocked, and credentials are blanked while tests run, so nothing in the suite sends a real message.
 
-The browser suite (`cd frontend && npx playwright test`) runs the real send path against a **fake WAClient** (`frontend/e2e/fake-waclient.mjs`, port 8190) so `whatsapp-control.spec.ts` can read the code an employee would have received.
+The browser suite (`cd frontend && npx playwright test`) runs the real send path against a **fake WAClient** (`frontend/e2e/fake-waclient.mjs`, port 8190) so `whatsapp-control.spec.ts` can read the code an employee would have received. Codes still arrive at once; a spec that reads a queued message (an approval, a HoD reminder) right after the action needs `WHATSAPP_ASYNC_SEND: "false"` in the e2e backend's environment (`frontend/playwright.config.ts`), or it has to wait for the dispatcher (up to 10 s per message, 30 s apart, and nothing during quiet hours).

@@ -312,7 +312,7 @@ test("approving and rejecting a request WhatsApps the employee, and HR sees it u
   await expect.poll(async () => (await decisions(request, "Request Approved")).length).toBe(1);
   const [approved] = await decisions(request, "Request Approved");
   expect(approved.number).toBe("919000000001");
-  for (const piece of ["Hello Asha Kumar", "Your *Leave* request has been approved", "Family function", "Enjoy"]) {
+  for (const piece of ["Dear Asha Kumar", "Your *Leave* request has been approved", "Family function", "Enjoy"]) {
     expect(approved.message).toContain(piece);
   }
   // No message carries a link to the Employee Web App: it goes out as plain text, with no address and no preview card.

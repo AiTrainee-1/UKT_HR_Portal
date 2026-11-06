@@ -21,6 +21,9 @@ export const mapSpy = {
   latLngToContainerPoint: vi.fn(() => ({ x: 0, y: 0 })),
   getContainer: vi.fn(() => document.createElement("div")),
   invalidateSize: vi.fn(),
+  // what the Journey Simulation's follow mode asks (the view holds everything: nothing to pan to)
+  getBounds: vi.fn(() => ({ pad: () => ({ contains: () => true }) })),
+  panTo: vi.fn(),
 };
 
 /** The handlers a component gave to useMapEvents: a test calls one to play a map event (e.g. baselayerchange). */

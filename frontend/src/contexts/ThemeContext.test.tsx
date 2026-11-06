@@ -93,6 +93,8 @@ describe("the device's own theme", () => {
     expect(seen[0]).toBe("clean");
     expect(seen.every((t) => t === "clean")).toBe(true);
     expect(html().dataset.theme).toBe("clean");
+    // the Clean theme's presence attribute (its stylesheet is scoped to it) goes with it
+    expect(html().hasAttribute("data-clean-theme")).toBe(true);
     // the server said "professional" for everyone: that is the org-wide theme, the device keeps its own
     expect(probe()).toBe("professional|clean|clean");
     expect(localStorage.getItem(THEME_DEVICE_STORAGE_KEY)).toBe("clean");

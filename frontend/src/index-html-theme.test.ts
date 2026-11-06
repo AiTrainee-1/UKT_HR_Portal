@@ -67,6 +67,14 @@ describe("the pre-React theme script in index.html", () => {
     expect(root().dataset.theme).toBe("mono");
   });
 
+  it("puts the Clean theme's presence attribute on <html> with it, and only with it (its stylesheet is scoped to it)", () => {
+    run({ org: "clean" });
+    expect(root().hasAttribute("data-clean-theme")).toBe(true);
+    localStorage.clear();
+    run({ org: "premium" });
+    expect(root().hasAttribute("data-clean-theme")).toBe(false);
+  });
+
   it("marks the dark theme with the dark class, like ThemeContext", () => {
     run({ org: "dark" });
     expect(root().dataset.theme).toBe("dark");

@@ -19,7 +19,7 @@ payroll_insights.py and payroll_insights_rules.py.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from django.db.models import Q
 from rest_framework.decorators import api_view
@@ -74,12 +74,8 @@ from .payroll_insights_rules import (
     staff_settings_groups,
 )
 from .payroll_views import company_month_days
-from .production_cycles import (
-    CYCLE_LABELS,
-    DEFAULT_MONTHLY_EQUIVALENT_FACTOR,
-    MONTHLY_EQUIVALENT_FACTOR,
-    normalize_cycle,
-)
+from .production_coverage import row_monthly_factor
+from .production_cycles import CYCLE_LABELS, normalize_cycle
 from .view_common import error_response as _error
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -283,9 +279,10 @@ def _rules_response(request: Request, kind: str) -> Response:
     else:
         assigned = assignments_on([e.id for e in employees], scope.period_end)
         settings_groups = production_settings_groups(caller, scope.cycle)
-        factor = MONTHLY_EQUIVALENT_FACTOR.get(scope.cycle, DEFAULT_MONTHLY_EQUIVALENT_FACTOR)
         for payroll in payrolls:
             emp = payroll.employee
+            # the cycle's factor, or 28 / the days paid for a row that pays part of its period after a cycle change
+            factor = row_monthly_factor(payroll, scope.cycle)
             inp = ProductionRuleInput(
                 emp=emp,
                 cycle=scope.cycle,
@@ -458,6 +455,27 @@ def _advances_of(bd: dict | None) -> list[dict]:
     ]
 
 
+def _coverage_of(payroll: Payroll, bd: dict | None) -> dict | None:
+    """Which days a production payroll pays, as its breakdown recorded them (2026-11-06, production_coverage.py): the
+    days of the period it pays, the days of it another payroll already paid, and catch-up days added after a pay-cycle
+    change. `partial` false = the whole period (every ordinary row, and every row from before). None for staff."""
+    if payroll.period_start is None or payroll.period_end is None:
+        return None
+    whole = [{"from": payroll.period_start.isoformat(), "to": payroll.period_end.isoformat()}]
+    bd = bd or {}
+    summary = bd.get("summary") or {}
+    period_days = (payroll.period_end - payroll.period_start).days + 1
+    return {
+        "periodDays": period_days,
+        "paidDays": summary.get("totalDays") if payroll.paid_ranges else period_days,
+        "paidRanges": payroll.paid_ranges or whole,
+        "payRanges": bd.get("payRanges") or whole,
+        "alreadyPaid": bd.get("alreadyPaid") or [],
+        "catchUp": bd.get("catchUp") or [],
+        "partial": bool(payroll.paid_ranges),
+    }
+
+
 def _details_response(request: Request, pk: int, wanted: str) -> Response:
     modes = (
         [Payroll.SALARY_MODE_MONTHLY]
@@ -507,10 +525,18 @@ def _details_response(request: Request, pk: int, wanted: str) -> Response:
     # stands now (so a HOD / HR approval given after the payroll was generated shows). Nothing is written and the
     # payroll's own money figures stay as generated.
     live = str(request.query_params.get("live") or "").lower() in ("1", "true", "yes")
+    coverage = _coverage_of(payroll, bd) if kind == KIND_PRODUCTION else None
+    # catch-up days (a pay-cycle change) come before the period: the calendar starts at the first of them
+    calendar_start = date.fromisoformat(period["start"])
+    for part in (coverage or {}).get("catchUp") or []:
+        try:
+            calendar_start = min(calendar_start, date.fromisoformat(str(part["from"])[:10]))
+        except (KeyError, TypeError, ValueError):
+            continue
     calendar_days, off_days, sync = (
         calendar_extras(
             emp,
-            date.fromisoformat(period["start"]),
+            calendar_start,
             date.fromisoformat(period["end"]),
             attach_marks(emp.id, normalized_days(bd, issues)),
             live=live,
@@ -518,6 +544,19 @@ def _details_response(request: Request, pk: int, wanted: str) -> Response:
         if kind != KIND_LEGACY and bd is not None
         else ([], [], {"live": False, "syncedAt": None, "changedDays": 0})
     )
+    # a day of the period another payroll already paid (pay-cycle change) says so on the calendar
+    paid_elsewhere = {}
+    for part in (coverage or {}).get("alreadyPaid") or []:
+        try:
+            day, last = date.fromisoformat(str(part["from"])[:10]), date.fromisoformat(str(part["to"])[:10])
+        except (KeyError, TypeError, ValueError):
+            continue
+        while day <= last:
+            paid_elsewhere[day.isoformat()] = f"Already paid on {part.get('label') or 'another payroll'}"
+            day += timedelta(days=1)
+    for off in off_days:
+        if off.get("date") in paid_elsewhere and off.get("kind") in ("off", "weekly_off"):
+            off["name"] = paid_elsewhere[off["date"]]
     return Response(
         {
             "payrollId": payroll.id,
@@ -544,6 +583,8 @@ def _details_response(request: Request, pk: int, wanted: str) -> Response:
                 **({"companyDays": company_month_days(payroll.year, payroll.month)} if staff else {}),
             },
             "salary": salary_breakup(emp, payroll, bd) if staff else None,
+            # production: which days this payroll pays (part of the period / catch-up days after a pay-cycle change)
+            "coverage": coverage,
             "earnings": earnings,
             "deductions": deductions,
             "rules": _rule_groups_of(payroll, kind, bd, resolver),

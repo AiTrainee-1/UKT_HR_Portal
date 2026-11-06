@@ -33,6 +33,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { whatsappSendToast } from "@/lib/api-client/custom-hooks";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import { ApprovalTrail, PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
 import {
@@ -491,7 +492,7 @@ export default function Resignations() {
     setWhatsappLoading(r.id);
     whatsappMutation.mutate(r.id, {
       onSuccess: (data) => {
-        toast({ title: "Sent via WhatsApp", description: `Sent to ${data.sentTo}` });
+        toast(whatsappSendToast(data));
         setWhatsappLoading(null);
       },
       onError: (err: any) => {

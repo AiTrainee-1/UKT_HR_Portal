@@ -434,7 +434,8 @@ describe("the day", () => {
     await waitFor(() => q("duty-empty") !== null, "the empty day");
     expect(calls).toContain("on-duty-map 2026-10-20");
     expect(calls).toContain("day-map 2026-10-20");
-    expect(text(q("duty-empty"))).toBe("No employees were On-Duty on 2026-10-20.");
+    expect(text(q("duty-empty"))).toContain("No employees were On-Duty on 2026-10-20.");
+    expect(text(q("duty-empty"))).toContain("Pick another day above.");
     expect(text(q("duty-map-empty"))).toContain("No live positions to show for On-Duty staff on 2026-10-20.");
     // the map is still there, on Tiruppur, so the page does not collapse
     expect(JSON.parse(css('[data-testid="leaflet-map"]')!.dataset.center!)).toEqual([11.1085, 77.3411]);

@@ -6,6 +6,7 @@ import {
   CalendarDays,
   Coffee,
   MapPinned,
+  Play,
   Radio,
   RotateCcw,
   Route as RouteIcon,
@@ -64,12 +65,18 @@ export const filtersAreSet = (f: JourneyFilters): boolean =>
 const SELECT_CLASS = "h-9 w-full rounded-md border bg-background px-3 text-sm";
 
 /** A search box over the active employees: pick one and the list shows only that person's journeys. */
-function EmployeePicker({
+export function EmployeePicker({
   value,
   onChange,
+  inputId = "journey-employee",
+  testIdPrefix = "employee-filter",
 }: {
   value: JourneyFilters["employee"];
   onChange: (next: JourneyFilters["employee"]) => void;
+  /** The id of the search box (for its label). */
+  inputId?: string;
+  /** The test ids: <prefix>-input, <prefix>-options, <prefix>-chosen. */
+  testIdPrefix?: string;
 }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
@@ -89,7 +96,7 @@ function EmployeePicker({
     return (
       <div
         className="flex h-9 items-center justify-between gap-2 rounded-md border bg-gray-50 px-3 text-sm"
-        data-testid="employee-filter-chosen"
+        data-testid={`${testIdPrefix}-chosen`}
       >
         <span className="truncate font-semibold">{value.label}</span>
         <button
@@ -119,17 +126,17 @@ function EmployeePicker({
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         placeholder="Search employee by name or code"
-        id="journey-employee"
+        id={inputId}
         aria-label="Search employee"
         className="h-9 pl-9 text-sm"
-        data-testid="employee-filter-input"
+        data-testid={`${testIdPrefix}-input`}
       />
       {open && text.trim() !== "" && (
         <ul
           role="listbox"
           aria-label="Matching employees"
           className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-white py-1 text-sm"
-          data-testid="employee-filter-options"
+          data-testid={`${testIdPrefix}-options`}
         >
           {matches.length === 0 ? (
             <li className="px-3 py-2 text-gray-500">No employee matches "{text.trim()}".</li>
@@ -204,7 +211,15 @@ function LiveNow({ items, onOpen }: { items: JourneyListItem[]; onOpen: (id: num
 const ROW_GRID =
   "lg:grid lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1.7fr)_minmax(0,0.9fr)_minmax(0,1.15fr)_minmax(0,1fr)] lg:items-center lg:gap-4";
 
-function Row({ item, onOpen }: { item: JourneyListItem; onOpen: (id: number) => void }) {
+function Row({
+  item,
+  onOpen,
+  onSimulate,
+}: {
+  item: JourneyListItem;
+  onOpen: (id: number) => void;
+  onSimulate?: (id: number) => void;
+}) {
   const active = item.status === "active";
   return (
     <div
@@ -293,6 +308,21 @@ function Row({ item, onOpen }: { item: JourneyListItem; onOpen: (id: number) => 
             <AlertTriangle size={11} /> Simulated
           </Chip>
         )}
+        {onSimulate && item.pointsCount > 0 && (
+          <button
+            type="button"
+            className="ml-auto inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800 transition-colors hover:bg-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 lg:ml-0"
+            aria-label={`Replay the journey of ${item.employeeName} on the map`}
+            title="Replay this journey on the map"
+            data-testid="journey-simulate"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSimulate(item.id);
+            }}
+          >
+            <Play size={11} /> Replay
+          </button>
+        )}
       </div>
     </div>
   );
@@ -302,10 +332,13 @@ export default function JourneyList({
   filters,
   onFilters,
   onOpen,
+  onSimulate,
 }: {
   filters: JourneyFilters;
   onFilters: (patch: Partial<JourneyFilters>) => void;
   onOpen: (id: number) => void;
+  /** Replay a journey on the map (Journey Simulation). */
+  onSimulate?: (id: number) => void;
 }) {
   const badRange = filters.from !== "" && filters.to !== "" && filters.from > filters.to;
   const query = useJourneys(
@@ -440,9 +473,24 @@ export default function JourneyList({
         bodyClassName="p-0 pt-3"
       >
         {loading ? (
-          <div className="space-y-2 p-4" data-testid="journey-loading">
+          <div className="divide-y divide-slate-100" data-testid="journey-loading" aria-busy="true">
             {Array.from({ length: 5 }).map((_, i) => (
-              <Skeleton key={i} className="h-14 rounded-xl" />
+              <div key={i} className={cn(ROW_GRID, "space-y-2.5 px-4 py-3.5 lg:space-y-0")}>
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-10 w-10 rounded-xl" />
+                  <div className="space-y-1.5">
+                    <Skeleton className="h-3.5 w-32" />
+                    <Skeleton className="h-3 w-24" />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Skeleton className="h-3.5 w-40" />
+                  <Skeleton className="h-3 w-52" />
+                </div>
+                <Skeleton className="h-3.5 w-20" />
+                <Skeleton className="h-3.5 w-28" />
+                <Skeleton className="h-5 w-24 rounded-full" />
+              </div>
             ))}
           </div>
         ) : query.isError && !query.data ? (
@@ -460,7 +508,18 @@ export default function JourneyList({
         ) : rows.length === 0 ? (
           <EmptyNote icon={<RouteIcon size={30} />} testId="journey-empty">
             {filtered ? (
-              <p>No journey matches these filters.</p>
+              <>
+                <p className="font-semibold text-gray-700">No journey matches these filters.</p>
+                <p className="mt-1">Widen the dates, pick another employee, or clear the filters.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 gap-1.5"
+                  onClick={() => onFilters({ ...DEFAULT_FILTERS, pageSize: filters.pageSize })}
+                >
+                  <RotateCcw size={12} /> Clear filters
+                </Button>
+              </>
             ) : (
               <>
                 <p className="font-semibold text-gray-700">No journeys yet.</p>
@@ -488,7 +547,7 @@ export default function JourneyList({
             </div>
             <div>
               {rows.map((item) => (
-                <Row key={item.id} item={item} onOpen={onOpen} />
+                <Row key={item.id} item={item} onOpen={onOpen} onSimulate={onSimulate} />
               ))}
             </div>
             {reasonOnPageOnly && (

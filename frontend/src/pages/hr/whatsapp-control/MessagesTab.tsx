@@ -16,9 +16,13 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import {
   CATEGORIES,
+  KindTag,
   MessageDetailDialog,
   categoryLabel,
+  reasonTone,
+  STATUS_HELP,
   STATUS_LABEL,
+  STATUS_ORDER,
   StatusPill,
   fmtDateTime,
   useDebounced,
@@ -31,10 +35,7 @@ export type MessageFilterPreset = {
 
 const STATUS_TABS = [
   { value: "all", label: "All" },
-  ...(["pending", "sent", "delivered", "read", "failed"] as WhatsAppMessageStatus[]).map((s) => ({
-    value: s,
-    label: STATUS_LABEL[s],
-  })),
+  ...STATUS_ORDER.map((s) => ({ value: s, label: STATUS_LABEL[s] })),
 ];
 
 /** The history table with its filters. Used on the Messages tab, and (locked to one
@@ -181,6 +182,12 @@ export function MessageList({
           </>
         )}
       </div>
+      {status && (
+        <p className="text-[11px] text-gray-500 -mt-1" data-testid="whatsapp-status-help">
+          <b className="text-gray-700">{STATUS_LABEL[status]}:</b> {STATUS_HELP[status]}
+          {status === "skipped" && " The rule that held it back is shown with each message."}
+        </p>
+      )}
 
       <div className="rounded-xl border bg-white overflow-x-auto">
         <table className="w-full text-xs">
@@ -192,7 +199,7 @@ export function MessageList({
               <th className="px-3 py-2 font-semibold">Message type</th>
               <th className="px-3 py-2 font-semibold">Module</th>
               <th className="px-3 py-2 font-semibold">Status</th>
-              <th className="px-3 py-2 font-semibold">Message / failure reason</th>
+              <th className="px-3 py-2 font-semibold">Message / reason</th>
             </tr>
           </thead>
           <tbody>
@@ -228,10 +235,14 @@ export function MessageList({
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{m.phone ? `+${m.phone}` : "—"}</td>
                   <td className="px-3 py-2">
                     <span className="font-medium text-gray-700">{m.typeLabel}</span>
-                    {m.automatic && (
-                      <Badge variant="outline" className="ml-1.5 text-[9px] px-1 py-0">
-                        Auto
-                      </Badge>
+                    {m.kind ? (
+                      <KindTag kind={m.kind} />
+                    ) : (
+                      m.automatic && (
+                        <Badge variant="outline" className="ml-1.5 text-[9px] px-1 py-0">
+                          Auto
+                        </Badge>
+                      )
                     )}
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap" data-testid="whatsapp-message-module">
@@ -242,7 +253,11 @@ export function MessageList({
                   </td>
                   <td className="px-3 py-2 max-w-[300px] text-gray-500">
                     <p className="truncate">{m.messageText.split("\n")[0]}</p>
-                    {m.error && <p className="truncate text-red-700">{m.error}</p>}
+                    {m.error && (
+                      <p className={`truncate ${reasonTone(m.status)}`} title={m.error}>
+                        {m.error}
+                      </p>
+                    )}
                   </td>
                 </tr>
               ))

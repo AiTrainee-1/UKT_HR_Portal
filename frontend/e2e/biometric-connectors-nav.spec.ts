@@ -73,7 +73,8 @@ test("Biometric Connectors sits below Gmail Control, above Settings, with the tw
   const at = (label: string) => text.indexOf(label);
   expect(at("Gmail Control")).toBeGreaterThan(-1);
   expect(at("Biometric Connectors")).toBeGreaterThan(at("Gmail Control"));
-  expect(at("Settings")).toBeGreaterThan(at("Biometric Connectors"));
+  // (the last "Settings": Geo Attendance's own section "Tracking Settings" comes earlier in the menu)
+  expect(text.lastIndexOf("Settings")).toBeGreaterThan(at("Biometric Connectors"));
 
   // it opens like the Attendance menu does, and its two sub-items go to the two pages
   await sidebar(page).getByText("Biometric Connectors", { exact: true }).click();

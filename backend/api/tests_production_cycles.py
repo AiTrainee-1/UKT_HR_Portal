@@ -859,7 +859,7 @@ class GenerateTests(CycleDbTestCase):
         r = self.post(GEN, {"cycle": "weekly", "employeeIds": [self.w2.id], **WEEK1}).json()
         self.assertIn("Not an active employee", r["skippedDetails"][0]["reason"])
 
-    def test_a_pending_payslip_is_recomputed_only_when_asked_and_a_paid_one_never(self):
+    def test_a_payslip_is_recomputed_only_when_asked_and_a_cleared_one_stays_cleared(self):
         self.post(GEN, {"cycle": "weekly", "employeeIds": [self.w1.id], **WEEK1})
         AttendanceDayRecord.objects.filter(employee=self.w1, date=date(2026, 2, 2)).update(
             shifts_earned=Decimal("1.50")
@@ -872,20 +872,39 @@ class GenerateTests(CycleDbTestCase):
         self.assertEqual(row.gross_salary, Decimal("3750.00"))  # 7.5 shifts x 500
         row.status = "paid"
         row.save()
-        paid = self.post(GEN, {"cycle": "weekly", "employeeIds": [self.w1.id], "regenerate": True, **WEEK1}).json()
-        self.assertEqual(paid["generated"], 0)
-        self.assertIn("Already paid", paid["skippedDetails"][0]["reason"])
+        # a bulk run leaves the Cleared payslip alone
+        bulk = self.post(GEN, {"cycle": "weekly", **WEEK1}).json()
+        self.assertEqual([d["employeeId"] for d in bulk["alreadyGeneratedDetails"]], [self.w1.id])
+        self.assertEqual(bulk["skipped"], 0)
         row.refresh_from_db()
         self.assertEqual((row.status, row.gross_salary), ("paid", Decimal("3750.00")))
+        # Generate again recomputes it and it STAYS Cleared (owner 2026-11-06, as on Staff Payroll)
+        AttendanceDayRecord.objects.filter(employee=self.w1, date=date(2026, 2, 3)).update(
+            shifts_earned=Decimal("0.50")
+        )
+        paid = self.post(GEN, {"cycle": "weekly", "employeeIds": [self.w1.id], "regenerate": True, **WEEK1}).json()
+        self.assertEqual((paid["generated"], paid["skipped"]), (1, 0))
+        row.refresh_from_db()
+        self.assertEqual((row.status, row.gross_salary), ("paid", Decimal("3500.00")))  # 7 shifts x 500
 
     def test_days_already_paid_in_another_payslip_are_never_paid_twice(self):
-        _row(self.w1, date(2026, 2, 1), date(2026, 2, 14))  # an older payslip (no cycle) covering most of the week
+        _row(self.w1, date(2026, 2, 1), date(2026, 2, 14))  # an older payslip (no cycle) covering the whole week
         r = self.post(GEN, {"cycle": "weekly", **WEEK1}).json()
         self.assertEqual(r["generated"], 1)  # w2 only
-        self.assertIn(
-            "Overlaps the payroll already generated for 2026-02-01 to 2026-02-14", r["skippedDetails"][0]["reason"]
+        self.assertEqual(
+            r["skippedDetails"][0]["reason"],
+            "Already paid: every day of 2 Feb – 8 Feb 2026 is already in the production payroll for "
+            "1 Feb – 14 Feb 2026 (pending). Nothing is paid twice.",
         )
         self.assertEqual(self.rows(employee=self.w1).count(), 1)
+
+    def test_a_week_partly_paid_by_another_payslip_pays_only_the_rest(self):
+        _row(self.w1, date(2026, 1, 26), date(2026, 2, 4))  # an older payslip (no cycle) covering 2-4 Feb
+        r = self.post(GEN, {"cycle": "weekly", "employeeIds": [self.w1.id], **WEEK1}).json()
+        self.assertEqual(r["generated"], 1)
+        self.assertEqual(r["partialDetails"][0]["coverage"]["payRanges"], [{"from": "2026-02-05", "to": "2026-02-08"}])
+        row = self.rows().get(employee=self.w1, period_start=date(2026, 2, 2))
+        self.assertEqual((row.gross_salary, row.total_working_days), (Decimal("2000.00"), 4))  # 5-8 Feb
 
     def test_an_employee_without_a_rate_per_shift_is_skipped_with_the_reason(self):
         self.w2.salary_per_shift = None
@@ -958,17 +977,17 @@ class ReadTests(CycleDbTestCase):
     def test_the_skip_check_changes_nothing_and_names_each_problem(self):
         self.w2.salary_per_shift = None
         self.w2.save()
-        _row(self.w1, date(2026, 2, 1), date(2026, 2, 4), cycle=None)  # overlaps the week
+        _row(self.w1, date(2026, 2, 1), date(2026, 2, 4), cycle=None)  # pays 2-4 Feb of the week already
         before = Payroll.objects.count()
         body = self.get(
             "/api/payroll/production/skip-check?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08"
         ).json()
         self.assertEqual(Payroll.objects.count(), before)
         self.assertEqual(SalarySlip.objects.count(), 0)
-        self.assertEqual((body["totalChecked"], body["skippedCount"]), (2, 2))
-        reasons = " | ".join(s["reason"] for s in body["skipped"])
-        self.assertIn("Overlaps", reasons)
-        self.assertIn("No Salary Per Shift", reasons)
+        self.assertEqual((body["totalChecked"], body["skippedCount"]), (2, 1))
+        self.assertIn("No Salary Per Shift", body["skipped"][0]["reason"])
+        # the week is paid for its remaining days only (5-8 Feb), not refused
+        self.assertEqual(body["partial"][0]["coverage"]["payRanges"], [{"from": "2026-02-05", "to": "2026-02-08"}])
 
     def test_the_skip_check_counts_payroll_that_already_exists(self):
         self.post(GEN, {"cycle": "weekly", **WEEK1})

@@ -123,6 +123,7 @@ class ApiConfig(AppConfig):
             overtime_scheduler,
             screening_cleanup_scheduler,
             whatsapp_alert_scheduler,
+            whatsapp_dispatcher,
         )
 
         if not auto_sync.is_available():
@@ -162,6 +163,12 @@ class ApiConfig(AppConfig):
             whatsapp_alert_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("WhatsApp attendance alert scheduler bootstrap skipped: %s", e)
+
+        try:
+            # the WhatsApp send queue's one paced sender (every 10 s): nothing but a one-time code leaves without it
+            whatsapp_dispatcher.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("WhatsApp dispatcher bootstrap skipped: %s", e)
 
         try:
             overtime_scheduler.start_scheduler_if_needed()

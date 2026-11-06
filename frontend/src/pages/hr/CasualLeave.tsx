@@ -208,7 +208,9 @@ export default function CasualLeave() {
     <HrLayout>
       <div className="space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+          {/* flex-1 + a small min width: the long note under the title wraps inside its block instead of pushing the Refresh
+              button and the month picker onto a line of their own under the title (a phone still wraps them) */}
+          <div className="min-w-[14rem] flex-1">
             <h2 className="text-2xl font-black text-gray-900">Casual Leave (CL)</h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
               Paid leave · staff only · {yearly ? `${entitlement} days a year (a half day counts 0.5)` : "1 per month"}{" "}

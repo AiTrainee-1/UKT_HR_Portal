@@ -307,7 +307,9 @@ export function HowItWorks() {
             </p>
             <p>
               Payroll that was already generated keeps the cycle it was generated on; moving an employee changes only
-              the periods that come next.
+              the periods that come next. A day that was already paid is never paid again: after a move, the new
+              cycle&apos;s first payroll pays only the days not paid yet, and adds any days neither cycle paid as
+              catch-up days.
             </p>
             <p>
               New production employees start Unassigned: until they are assigned, no cycle&apos;s payroll includes them.

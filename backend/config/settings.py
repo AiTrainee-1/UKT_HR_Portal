@@ -362,8 +362,8 @@ if len(sys.argv) > 1 and sys.argv[1] == "test":
     WACLIENT_INSTANCE_ID = ""
     WACLIENT_ACCESS_TOKEN = ""
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get("WHATSAPP_DEFAULT_COUNTRY_CODE", "91").strip()
-# Seconds to wait between messages in a bulk send. Blasting messages out of a
-# linked WhatsApp session back to back is what gets numbers flagged; 0 disables.
+# No longer read (2026-11-06): the pause between WhatsApp messages is the send queue's min_gap_seconds, set on the
+# WhatsApp Control page (whatsapp_dispatcher.py). Kept so an existing .env that sets it changes nothing.
 WHATSAPP_SEND_DELAY_SECONDS = float(os.environ.get("WHATSAPP_SEND_DELAY_SECONDS", "2") or 0)
 # Whether this machine may send WhatsApp messages at all. Blank (the default) decides automatically:
 # allowed on a real server (DEBUG off), never on a development machine (DEBUG on, or running under
@@ -402,9 +402,10 @@ if len(sys.argv) > 1 and sys.argv[1] == "test":
     TWOFACTOR_API_KEY = ""
     TWOFACTOR_TEMPLATE_NAME = ""
     SMS_ALLOW_SENDING = False
-# Limits on the AUTOMATIC attendance alerts. A crowd who share a punch time (a hundred people on the same
-# shift) is reminded over the reminder window (15 minutes by default) instead of in one burst: each minute's
-# run sends at most PER_RUN, the rest are picked up by the following runs while still inside their window.
+# Upper guard on how many AUTOMATIC attendance alerts the alert job may QUEUE (since 2026-11-06 the real pacing is the
+# send queue's: WhatsApp Control -> limits, whatsapp_dispatcher.py). A crowd who share a punch time (a hundred people on
+# the same shift) is queued over the reminder window (15 minutes by default) instead of in one burst: each minute's
+# run queues at most PER_RUN, the rest are picked up by the following runs while still inside their window.
 # Sized so a crowd fits: PER_RUN x the window must be at least the crowd (8 x 15 = 120 people). The hourly
 # and daily limits are runaway backstops (a bug, a shift change that makes everyone due at once), set above a
 # normal day (about four reminders per person), so they never cut a normal day short. An alert over a limit is
@@ -415,15 +416,16 @@ WHATSAPP_ALERTS_MAX_PER_DAY = int(os.environ.get("WHATSAPP_ALERTS_MAX_PER_DAY", 
 # Optional shared secret for the WAClient webhook URL (?token=...). Empty = open.
 WHATSAPP_WEBHOOK_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_TOKEN", "").strip()
 
-# Approval, visitor and gate messages are handed to a background worker so the person
-# pressing Approve never waits on WhatsApp (and a WhatsApp outage can never slow or break
-# the approval). Codes and the attendance job send inline. `manage.py test` sends inline too,
-# so tests can check the result straight away.
+# True (the default): every WhatsApp message but a one-time code is QUEUED and sent by the paced dispatcher
+# (whatsapp_dispatcher.py: gap, hourly / daily / per-employee caps, quiet hours, today-only expiry), so nobody waits on
+# WhatsApp and nothing goes out in a burst. False delivers each queued message inline at once, BYPASSING all of that:
+# only for `manage.py test` (forced below, so tests see the outcome straight away) and the e2e stack. Never on a real
+# server.
 WHATSAPP_ASYNC_SEND = os.environ.get("WHATSAPP_ASYNC_SEND", "true").strip().lower() not in ("0", "false", "no")
 if len(sys.argv) > 1 and sys.argv[1] == "test":
     WHATSAPP_ASYNC_SEND = False
-# Minimum pause between two messages leaving the background worker (a burst of approvals
-# is spread out rather than blasted, which is what gets a linked number flagged).
+# No longer read (2026-11-06): replaced by the send queue's min_gap_seconds (WhatsApp Control). Kept so an existing
+# .env that sets it changes nothing.
 WHATSAPP_MIN_SEND_GAP_SECONDS = float(os.environ.get("WHATSAPP_MIN_SEND_GAP_SECONDS", "1") or 0)
 
 # Optional override for the public origin WAClient's servers use to fetch a

@@ -305,8 +305,10 @@ test("Journey History lists the journey with its figures, a Live badge and its a
   page,
 }) => {
   await openAs(page, hr, "/hr/geo-attendance");
+  // the bare address opens On-Duty Approvals; every section has its own address
+  await expect(page).toHaveURL(/\/hr\/geo-attendance\/approvals$/);
   await tab(page, "Journey History").click();
-  await expect(page).toHaveURL(/tab=journeys/);
+  await expect(page).toHaveURL(/\/hr\/geo-attendance\/journeys$/);
   const row = journeyRow(page);
   await expect(row).toHaveCount(1);
   await expect(row).toContainText(EMPLOYEE_NAME);
@@ -337,7 +339,9 @@ test("Journey History lists the journey with its figures, a Live badge and its a
 });
 
 test("one journey: summary, map with a route, a stop, a gap and events, the timeline, the phone", async ({ page }) => {
+  // an old link (written before each section had its own address) still opens the journey, at its new address
   await openAs(page, hr, `/hr/geo-attendance?tab=journeys&journey=${trackId}`);
+  await expect(page).toHaveURL(new RegExp(`/hr/geo-attendance/journeys/${trackId}$`));
   const detail = page.getByTestId("journey-detail");
   await expect(detail).toContainText(EMPLOYEE_NAME);
   await expect(detail).toContainText(`"${DESTINATION}"`);
@@ -424,7 +428,7 @@ test("the journey map has a layer switch: street map first, satellite and satell
     return route.fulfill({ status: 200, contentType: "image/png", body: onePixel });
   });
 
-  await openAs(page, hr, `/hr/geo-attendance?tab=journeys&journey=${trackId}`);
+  await openAs(page, hr, `/hr/geo-attendance/journeys/${trackId}`);
   const map = page.getByTestId("journey-map-canvas");
   await expect(map.locator(".leaflet-container")).toBeVisible();
 
@@ -440,7 +444,12 @@ test("the journey map has a layer switch: street map first, satellite and satell
   const control = map.locator(".leaflet-control-layers");
   await control.hover();
   const options = control.locator("label");
-  await expect(options).toHaveText([/Street map/, /^\s*Satellite\s*$/, /Satellite \+ names/]);
+  await expect(options).toHaveText([
+    /^\s*Street map\s*$/,
+    /Street map \(Esri\)/,
+    /^\s*Satellite\s*$/,
+    /Satellite \+ names/,
+  ]);
   await expect(control.locator("input").first()).toBeChecked();
   await options.filter({ hasText: /^\s*Satellite\s*$/ }).click();
 
@@ -469,7 +478,10 @@ test("the journey map has a layer switch: street map first, satellite and satell
 
   // and back to the street map
   await map.locator(".leaflet-control-layers").hover();
-  await map.locator(".leaflet-control-layers label").filter({ hasText: "Street map" }).click();
+  await map
+    .locator(".leaflet-control-layers label")
+    .filter({ hasText: /^\s*Street map\s*$/ })
+    .click();
   await expect(street.first()).toBeAttached();
   await expect(satellite).toHaveCount(0);
 });
@@ -484,7 +496,7 @@ test("the journey map shows every recorded position: pick a dot, a stop and a ga
     return route.fulfill({ status: 200, contentType: "text/html", body: "<p>stub of Google Maps</p>" });
   });
 
-  await openAs(page, hr, `/hr/geo-attendance?tab=journeys&journey=${trackId}`);
+  await openAs(page, hr, `/hr/geo-attendance/journeys/${trackId}`);
   const map = page.getByTestId("journey-map-canvas");
   await expect(map.locator(".leaflet-container")).toBeVisible();
   await expect(page.locator('[data-testid="trail-controls"][data-trail="ready"]')).toBeVisible();
@@ -621,9 +633,69 @@ test("the Live Map lists the active track with its state and approval, and Open 
   // the pin is on the map
   await expect(page.locator('.leaflet-marker-icon [data-pin="person"]').first()).toBeVisible();
 
+  await expect(page).toHaveURL(/\/hr\/geo-attendance\/live-map$/);
   await row.getByTestId("open-journey").click();
-  await expect(page).toHaveURL(new RegExp(`tab=journeys&journey=${trackId}`));
+  await expect(page).toHaveURL(new RegExp(`/hr/geo-attendance/journeys/${trackId}$`));
   await expect(page.getByTestId("journey-detail")).toContainText(EMPLOYEE_NAME);
+});
+
+test("Journey Simulation: pick the employee and the day, replay the recorded route, pause, step and jump to a stop", async ({
+  page,
+}) => {
+  // the tile servers are never called: every tile is a 1 x 1 picture
+  const onePixel = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await page.route(/tile\.openstreetmap\.org|arcgisonline\.com/, (route) =>
+    route.fulfill({ status: 200, contentType: "image/png", body: onePixel }),
+  );
+  await openAs(page, hr, "/hr/geo-attendance/journeys");
+  const picker = page.getByTestId("sim-picker");
+  await expect(picker).toContainText("Journey simulation");
+  await picker.getByTestId("sim-employee-input").fill("Meena");
+  await picker.getByTestId("sim-employee-options").getByRole("button", { name: /Meena/ }).click();
+  // today's journey of that employee is offered (the only one: chosen already)
+  const option = picker.getByTestId("sim-journey-option").filter({ hasText: DESTINATION });
+  await expect(option).toHaveCount(1);
+  await option.click();
+  await picker.getByTestId("sim-start").click();
+  await expect(page).toHaveURL(new RegExp(`/hr/geo-attendance/journeys/${trackId}/simulate$`));
+
+  const sim = page.getByTestId("journey-simulation");
+  await expect(sim).toContainText(EMPLOYEE_NAME);
+  expect(Number(await sim.getAttribute("data-points"))).toBeGreaterThan(40);
+  await expect(page.getByTestId("sim-map").locator(".leaflet-container")).toBeVisible();
+  // the recorded route, the start and the end, the stop pin and the travelling marker are on the map
+  await expect(page.locator('[data-pin="sim-puck"]')).toHaveCount(1);
+  expect(await page.getByTestId("sim-map").locator('[data-pin="stop"]').count()).toBeGreaterThanOrEqual(1);
+  await expect(page.getByTestId("sim-stop-row").first()).toContainText("Arrived");
+  await expect(page.getByTestId("sim-summary")).toContainText(/\d+(\.\d+)? (km|m)/);
+
+  // play: the clock runs; pause holds it
+  const clock = page.getByTestId("sim-clock");
+  const before = await clock.innerText();
+  await page.getByTestId("sim-speed").selectOption("fit-30");
+  await page.getByTestId("sim-play").click();
+  await expect.poll(() => clock.innerText(), { timeout: 10_000 }).not.toBe(before);
+  await page.getByTestId("sim-pause").click();
+  const held = await clock.innerText();
+  await page.waitForTimeout(600);
+  expect(await clock.innerText()).toBe(held);
+  await expect(page.getByTestId("sim-play")).toContainText("Resume");
+
+  // a stop of the list jumps to its arrival; Stop goes back to the start
+  await page.getByTestId("sim-stop-row").first().click();
+  await expect(page.getByTestId("sim-status")).toContainText(/At stop 1/);
+  await page.getByTestId("sim-stop").click();
+  await expect(clock).toContainText(before.split("\n")[0]);
+  // step through the stops and gaps
+  await page.getByTestId("sim-step-forward").click();
+  await expect(page.getByTestId("sim-status")).not.toHaveText("Start");
+  // and back to the journey page
+  await page.getByTestId("sim-open-journey").click();
+  await expect(page.getByTestId("journey-detail")).toBeVisible();
+  await expect(page.getByTestId("journey-simulate")).toBeVisible();
 });
 
 test("the employee marks the duty Done: the journey ends with that reason and can be found by it", async ({
@@ -707,7 +779,7 @@ test("Punch Verifications shows both photos of a punch, each labelled, and enlar
   });
   expect(punch.status(), await punch.text()).toBeLessThan(300);
 
-  await openAs(page, hr, "/hr/geo-attendance?tab=verifications");
+  await openAs(page, hr, "/hr/geo-attendance/verifications");
   await expect(tab(page, "Punch Verifications")).toHaveAttribute("aria-selected", "true");
   const photos = page.getByRole("button", { name: "Photos (2)" });
   await expect(photos).toHaveCount(1);
@@ -733,7 +805,7 @@ test("Tracking Settings: the geo-tracking rules are read, checked in words and s
   page,
   request,
 }) => {
-  await openAs(page, hr, "/hr/geo-attendance?tab=tracking");
+  await openAs(page, hr, "/hr/geo-attendance/settings");
   const card = page.getByTestId("rules-card");
   await expect(card).toBeVisible();
   await expect(card).toContainText("Geo-tracking rules");
@@ -794,7 +866,7 @@ test("a role with View only reads journeys, exports and reads the rules, but can
   await expect(page.getByTestId("journey-export")).toBeEnabled();
 
   // the rules: readable, not editable
-  await page.goto("/hr/geo-attendance?tab=tracking");
+  await page.goto("/hr/geo-attendance/settings");
   await expect(page.getByTestId("rules-view-only")).toBeVisible();
   await expect(page.locator("#rule-stop-minutes")).toBeDisabled();
   await expect(page.getByTestId("save-bar")).toHaveCount(0);

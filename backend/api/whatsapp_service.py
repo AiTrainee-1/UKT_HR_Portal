@@ -1,15 +1,25 @@
 """
 WhatsApp notification service -the one place every HRMS module sends through
 ======================================================================
-    HRMS module -> send_notification() -> template (whatsapp_catalog) -> WAClient -> employee
+    HRMS module -> send_notification() / send_document() -> template (whatsapp_catalog)
+                -> queued WhatsAppMessageLog row -> whatsapp_dispatcher (paced) -> WAClient -> employee
 
-  * whatsapp_catalog   what each message is, its default wording and variables
-  * this module        switches, wording, the log, delivery (in the background for
-                       system messages), and the WAClient calls themselves
+  * whatsapp_catalog     what each message is, its default wording, variables and queue kind
+  * this module          switches (master, module, type, opt-out), wording, the log rows,
+                         and the WAClient calls themselves
+  * whatsapp_dispatcher  the one paced sender: at least `min_gap_seconds` between messages,
+                         hourly / daily / per-employee caps, quiet hours, today-only expiry,
+                         one retry for a temporary failure, a circuit breaker
   * whatsapp_approvals / whatsapp_notifications / whatsapp_alerts
-                       what to say for each HRMS event
+                         what to say for each HRMS event
 
-Every attempt -sent, failed, switched off by HR, or interrupted- ends up as a
+Since 2026-11-06 nothing but a one-time code is sent from the request (or job) that raised it:
+everything else is written as a `queued` row and leaves when the dispatcher's pacing allows,
+so a burst of approvals, a shift's worth of alerts or a month of salary slips can never go out
+as the burst that gets the linked number restricted. A code is sent at once (the employee is
+waiting for it), blocked only by the master switch.
+
+Every attempt -queued, sent, failed, expired, skipped, switched off by HR- ends up as a
 WhatsAppMessageLog row that HR sees on the WhatsApp Control page, and a failed
 message never raises into the workflow that triggered it.
 
@@ -36,17 +46,14 @@ import logging
 import re
 import secrets
 import sys
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
-from functools import partial
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import requests
 from django.conf import settings as dj_settings
-from django.db import connections, transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
+from django.utils.module_loading import import_string
 
 from . import push_messages
 from . import whatsapp_catalog as catalog
@@ -61,9 +68,26 @@ PLACEHOLDER_HELP = {key: catalog.variable_help(key) for key in catalog.TYPES}
 # Message type -> the WhatsAppSettings column that switches just that type on/off.
 FEATURE_SWITCHES = {t.key: t.switch for t in catalog.TYPES.values() if t.switch}
 
+# A row in one of these states was accepted for sending: it is queued, on its way, or the provider took it. An endpoint
+# that sends one document reports success for these (the message may still be waiting for its turn in the queue).
+ACCEPTED_STATUSES = ("queued", "sending", "sent", "delivered", "read")
+
+REASON_OPTED_OUT = "This employee has opted out of WhatsApp messages: not sent."
+REASON_QUIET = "Quiet hours: not sent"
+
+# Documents built only when their turn comes (a bulk send must answer at once, not build a few hundred PDFs inside one
+# web request): a name stored in the queued row's payload -> the function that returns the file's bytes.
+DOCUMENT_BUILDERS = {"salary_slip": "api.salary_slip_views.whatsapp_slip_pdf"}
+
 
 class WhatsAppServiceError(Exception):
-    pass
+    """A send that did not work. `temporary` is True for a failure worth ONE retry a minute later (the provider could
+    not be reached, timed out, answered 5xx or 429); everything else (a refused number, a disconnected instance, a bad
+    token) is final."""
+
+    def __init__(self, message: str = "", temporary: bool = False):
+        super().__init__(message)
+        self.temporary = temporary
 
 
 def has_credentials() -> bool:
@@ -231,7 +255,13 @@ def _store_media(file_bytes: bytes, filename: str, mime_type: str) -> str:
 
 
 def _media_url(request, token: str) -> str:
-    return f"{_backend_public_base_url(request)}/api/whatsapp/media/{token}"
+    return media_url_for_base(_backend_public_base_url(request), token)
+
+
+def media_url_for_base(base: str, token: str) -> str:
+    """The public link of a stored media asset, from a base address saved when the message was queued (the dispatcher
+    sends later, with no request at hand)."""
+    return f"{(dj_settings.BACKEND_PUBLIC_URL or base or '').rstrip('/')}/api/whatsapp/media/{token}"
 
 
 def _require_public_base_url(request) -> None:
@@ -273,7 +303,7 @@ def _post_send(payload: dict, url: str | None = None) -> dict:
         # may take on the server, so a slow WAClient made the click (an OTP login, sending a document) kill the worker.
         resp = requests.post(url or dj_settings.WACLIENT_API_URL, json=body, timeout=(5, 20))
     except requests.RequestException as exc:
-        raise WhatsAppServiceError(f"Could not reach WAClient: {exc}")
+        raise WhatsAppServiceError(f"Could not reach WAClient: {exc}", temporary=True)
 
     try:
         data = resp.json() if resp.content else {}
@@ -284,7 +314,9 @@ def _post_send(payload: dict, url: str | None = None) -> dict:
 
     if resp.status_code >= 400 or str(data.get("status", "")).lower() != "success":
         detail = data.get("message") or data.get("error") or resp.text[:200] or f"HTTP {resp.status_code}"
-        raise WhatsAppServiceError(f"Send failed: {detail}")
+        # The provider's own trouble (5xx) or "slow down" (429) may pass; a refusal of THIS message will not.
+        temporary = resp.status_code >= 500 or resp.status_code == 429
+        raise WhatsAppServiceError(f"Send failed: {detail}", temporary=temporary)
     return data
 
 
@@ -328,26 +360,29 @@ def send_contact_message(to_phone: str, first_name: str, last_name: str, contact
     return _post_send(payload, dj_settings.WACLIENT_CONTACT_API_URL)
 
 
-def pace() -> None:
-    """Sleep between messages in a bulk run. Sending over a linked WhatsApp
-    session in a tight loop is what gets numbers flagged, so bulk sends are
-    spread out (WHATSAPP_SEND_DELAY_SECONDS, default 2, 0 disables)."""
-    delay = dj_settings.WHATSAPP_SEND_DELAY_SECONDS
-    if delay > 0:
-        time.sleep(delay)
+def engine_enabled(s=None) -> bool:
+    """The master switch (WhatsApp Control): False stops EVERY WhatsApp message, one-time codes included."""
+    from .models import WhatsAppSettings
+
+    return bool((s or WhatsAppSettings.get()).engine_enabled)
 
 
-def switch_off_reason(document_type: str, related_module: str = "") -> str | None:
-    """Why HR's switches say this message must not go out, or None when it may. A message is
-    sent only when its own switch AND its module's switch (and, for the shared approval
-    wording, that approval workflow's switch) are on."""
+def switch_off_reason(document_type: str, related_module: str = "", s=None) -> str | None:
+    """Why HR's switches say this message must not go out, or None when it may. A message is sent only when the master
+    switch, its module's switch, and its own switch are all on: its own boolean where it has one, and it is not in the
+    list of types switched off one by one (WhatsAppSettings.disabled_message_types). The shared approval wording also
+    needs that approval workflow's switch."""
     t = catalog.get(document_type)
     if t is None:
         return None
     from .models import WhatsAppSettings
 
-    s = WhatsAppSettings.get()
+    s = s or WhatsAppSettings.get()
+    if not s.engine_enabled:
+        return "WhatsApp sending is switched off (master switch) on the WhatsApp Control page."
     if t.switch and not getattr(s, t.switch):
+        return f"'{t.label}' is switched off on the WhatsApp Control page."
+    if document_type in (s.disabled_message_types or []):
         return f"'{t.label}' is switched off on the WhatsApp Control page."
     master = catalog.MODULE_SWITCHES.get(t.module)
     if master and not getattr(s, master):
@@ -359,9 +394,30 @@ def switch_off_reason(document_type: str, related_module: str = "") -> str | Non
 
 
 def feature_enabled(document_type: str, related_module: str = "") -> bool:
-    """False when HR has switched this message type (or its whole module) off on the
+    """False when HR has switched this message type (or its whole module, or WhatsApp itself) off on the
     WhatsApp Control page."""
     return switch_off_reason(document_type, related_module) is None
+
+
+def opted_out(employee) -> bool:
+    """Has this employee opted out of WhatsApp notifications and documents (WhatsApp Control -> Employees)? A code they
+    ask for themselves still goes."""
+    from .models import WhatsAppOptOut
+
+    emp_id = employee if isinstance(employee, int) else getattr(employee, "pk", None)  # an employee or its id
+    return bool(emp_id) and WhatsAppOptOut.objects.filter(employee_id=emp_id).exists()
+
+
+def accepted(log) -> bool:
+    """Was this send accepted (queued, on its way, or taken by the provider)? See ACCEPTED_STATUSES."""
+    return log is not None and log.status in ACCEPTED_STATUSES
+
+
+def _inline_delivery() -> bool:
+    """settings.WHATSAPP_ASYNC_SEND False (always under `manage.py test`): a queued row is delivered at once, inside the
+    call that queued it, ignoring the pacing, caps and quiet hours, so a test sees the outcome straight away. Never set
+    it on a real server: it would bypass everything that keeps the number from being restricted."""
+    return not dj_settings.WHATSAPP_ASYNC_SEND
 
 
 def _log(
@@ -376,9 +432,12 @@ def _log(
     message_text: str = "",
     dedupe_key: str = "",
     related_module: str = "",
+    payload: dict | None = None,
+    priority: int | None = None,
 ):
     from .models import WhatsAppMessageLog
 
+    spec = catalog.get(document_type)
     return WhatsAppMessageLog.objects.create(
         employee=employee,
         document_type=document_type,
@@ -391,37 +450,77 @@ def _log(
         message_text=message_text,
         dedupe_key=dedupe_key,
         related_module=related_module,
+        kind=spec.kind if spec else catalog.KIND_AUTOMATIC,
+        priority=priority if priority is not None else (spec.priority if spec else 5),
+        payload=payload or {},
     )
 
 
-def _precheck(employee, document_type, document_ref_id, sent_by_id, params):
-    """Shared guard clauses for both send paths. Returns (phone, text, failed_log):
-    when failed_log is set, the send must stop and return it."""
+def _precheck(employee, document_type, document_ref_id, sent_by_id, params, payload=None, priority=None):
+    """Shared guard clauses for the document / text send paths. Returns (phone, text, stopped_log): when stopped_log is
+    set, the send must stop and return it (a failed row for a switch or a missing phone, a skipped row for an employee
+    who opted out or quiet hours)."""
     phone = normalize_phone(getattr(employee, "phone", None))
 
-    def fail(msg):
+    def stop(msg, status="failed", text=""):
         return _log(
             employee,
             document_type,
             document_ref_id,
             phone or "",
-            "failed",
+            status,
             error_message=msg,
             sent_by_id=sent_by_id,
+            message_text=text,
+            payload=payload,
+            priority=priority,
         )
 
     blocked = sending_block_reason()
     if blocked:
-        return phone, None, fail(blocked)
+        return phone, None, stop(blocked)
     if not phone:
-        return phone, None, fail("No phone number on file for this employee.")
+        return phone, None, stop("No phone number on file for this employee.")
     off = switch_off_reason(document_type)
     if off:
-        return phone, None, fail(off)
+        return phone, None, stop(off)
     text, disabled_reason = _message_for(document_type, params)
     if disabled_reason:
-        return phone, None, fail(disabled_reason)
+        return phone, None, stop(disabled_reason)
+    if opted_out(employee):
+        return phone, None, stop(REASON_OPTED_OUT, "skipped", text)
+    if not _inline_delivery():
+        from . import whatsapp_dispatcher
+
+        if whatsapp_dispatcher.in_quiet_hours():
+            return phone, None, stop(REASON_QUIET, "skipped", text)
     return phone, text, None
+
+
+def _queue_row(employee, document_type, phone, text, *, document_ref_id, sent_by_id, payload, priority):
+    """Write the queued row of a document / text send (no dedupe key), and deliver it at once in inline mode."""
+    from . import whatsapp_dispatcher
+    from .models import WhatsAppMessageLog, WhatsAppSettings
+
+    now = timezone.now()
+    spec = catalog.get(document_type)
+    log = WhatsAppMessageLog.objects.create(
+        employee=employee,
+        document_type=document_type,
+        document_ref_id=document_ref_id,
+        phone_number=phone,
+        status=WhatsAppMessageLog.STATUS_QUEUED,
+        sent_by_id=sent_by_id,
+        message_text=text,
+        kind=spec.kind if spec else catalog.KIND_DOCUMENT,
+        priority=priority if priority is not None else (spec.priority if spec else 3),
+        send_after=now,
+        expires_at=whatsapp_dispatcher.expiry_for(document_type, WhatsAppSettings.get(), now),
+        payload=payload,
+    )
+    if _inline_delivery():
+        return whatsapp_dispatcher.deliver_now(log)
+    return log
 
 
 def send_document(
@@ -436,29 +535,27 @@ def send_document(
     sent_by_id: int | None = None,
 ):
     """
-    The one entry point every document send endpoint (single or bulk) should
-    call. Normalizes the phone, builds the caption from the saved (or
-    default) wording, stores the document as a fetchable media asset, sends
-    it, and always writes a WhatsAppMessageLog row -on the "expected" failure
-    paths (not configured / no phone / switched off) just as much as on
-    success or an API error, so callers never need their own try/except to
-    get a uniform result to report back to the user.
+    The one entry point every single-document send endpoint calls. Normalizes the phone, builds the caption from the
+    saved (or default) wording, stores the document as a fetchable media asset and QUEUES it (the dispatcher sends it
+    when the pacing allows, usually within a minute). Always returns a WhatsAppMessageLog row: queued when accepted,
+    failed (not configured / no phone / switched off / wording off / unreachable link) or skipped (opted out, quiet
+    hours) otherwise, so callers never need their own try/except to get a uniform result to report back to the user.
+    Report success with `accepted(log)`.
 
-    `request` is needed to build the public media URL WAClient fetches the
-    document from -see _backend_public_base_url.
+    `request` is needed to build the public media URL WAClient fetches the document from -see
+    _backend_public_base_url.
     """
     # the caption of the document is also a phone notification and an in-app record (push_messages.py)
     push_messages.announce(
         employee, document_type, render_message(_template_body(document_type), body_params, _order_for(document_type))
     )
-    phone, caption, failed = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
-    if failed is not None:
-        return failed
+    phone, caption, stopped = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
+    if stopped is not None:
+        return stopped
 
     try:
         _require_public_base_url(request)
         token = _store_media(pdf_bytes, filename, mime_type)
-        result = send_document_message(phone, _media_url(request, token), filename, caption, mime_type)
     except WhatsAppServiceError as exc:
         return _log(
             employee,
@@ -470,37 +567,56 @@ def send_document(
             sent_by_id=sent_by_id,
             message_text=caption,
         )
-
-    return _log(
+    payload = {"media_url": _media_url(request, token), "filename": filename, "mime_type": mime_type}
+    return _queue_row(
         employee,
         document_type,
-        document_ref_id,
         phone,
-        "sent",
-        provider_message_id=_provider_message_id(result),
+        caption,
+        document_ref_id=document_ref_id,
         sent_by_id=sent_by_id,
-        message_text=caption,
+        payload=payload,
+        priority=None,
     )
 
 
-def send_text(
+def queue_document(
+    request,
     employee,
     document_type: str,
-    body_params: list[str],
+    body_params,
+    *,
+    build: str,
+    build_args: dict,
+    filename: str,
+    mime_type: str = "application/pdf",
     document_ref_id: int | None = None,
     sent_by_id: int | None = None,
+    batch_id: str = "",
 ):
-    """Same contract as send_document above (always returns a
-    WhatsAppMessageLog row, never raises) but a plain text message with no
-    attachment. Used for the visitor-arrival notification
-    (document_type="visitor_notification"), which has nothing to attach, so
-    it needs no media URL and therefore no `request`."""
-    phone, text, failed = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
-    if failed is not None:
-        return failed
-
+    """One document of a BULK send: queued without its file, which the dispatcher builds when the row's turn comes
+    (DOCUMENT_BUILDERS[build](**build_args)), so the request that queues a few hundred answers at once. Every row of
+    one bulk send carries `batch_id` in its payload (whatsapp_bulk_progress reads the batch's progress from the rows)
+    and goes behind everything time-critical (catalog.PRIORITY_BULK). Same return contract as send_document."""
+    if build not in DOCUMENT_BUILDERS:
+        raise ValueError(f"Unknown document builder: {build}")
+    push_messages.announce(
+        employee, document_type, render_message(_template_body(document_type), body_params, _order_for(document_type))
+    )
+    marker = {"batch": batch_id} if batch_id else {}
+    phone, caption, stopped = _precheck(
+        employee,
+        document_type,
+        document_ref_id,
+        sent_by_id,
+        body_params,
+        payload=marker,
+        priority=catalog.PRIORITY_BULK,
+    )
+    if stopped is not None:
+        return stopped
     try:
-        result = send_text_message(phone, text)
+        _require_public_base_url(request)
     except WhatsAppServiceError as exc:
         return _log(
             employee,
@@ -510,114 +626,80 @@ def send_text(
             "failed",
             error_message=str(exc),
             sent_by_id=sent_by_id,
-            message_text=text,
+            message_text=caption,
+            payload=marker,
+            priority=catalog.PRIORITY_BULK,
         )
-
-    return _log(
+    payload = {
+        **marker,
+        "build": build,
+        "build_args": build_args,
+        "base_url": _backend_public_base_url(request),
+        "filename": filename,
+        "mime_type": mime_type,
+    }
+    return _queue_row(
         employee,
         document_type,
-        document_ref_id,
         phone,
-        "sent",
-        provider_message_id=_provider_message_id(result),
+        caption,
+        document_ref_id=document_ref_id,
         sent_by_id=sent_by_id,
-        message_text=text,
+        payload=payload,
+        priority=catalog.PRIORITY_BULK,
     )
 
 
-_executor: ThreadPoolExecutor | None = None
-_executor_lock = threading.Lock()
-_last_send_at = 0.0
+def build_document(name: str, args: dict) -> bytes:
+    """The bytes of a document queued without its file (queue_document)."""
+    return import_string(DOCUMENT_BUILDERS[name])(**(args or {}))
 
 
-def _run_in_background(job) -> None:
-    """Hand `job` to the single delivery worker once the current transaction commits. One
-    worker means messages leave one at a time with a small gap, and a WhatsApp outage costs
-    the person clicking Approve nothing."""
-
-    def run():
-        global _last_send_at
-        try:
-            gap = dj_settings.WHATSAPP_MIN_SEND_GAP_SECONDS
-            wait = _last_send_at + gap - time.monotonic()
-            if wait > 0:
-                time.sleep(wait)
-            job()
-        except Exception:
-            logger.exception("WhatsApp background delivery failed unexpectedly")
-        finally:
-            _last_send_at = time.monotonic()
-            connections.close_all()
-
-    def submit():
-        global _executor
-        with _executor_lock:
-            if _executor is None:
-                _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whatsapp")
-        _executor.submit(run)
-
-    transaction.on_commit(submit)
+def send_text(
+    employee,
+    document_type: str,
+    body_params: list[str],
+    document_ref_id: int | None = None,
+    sent_by_id: int | None = None,
+):
+    """Same contract as send_document above (always returns a WhatsAppMessageLog row, never raises) but a plain text
+    message with no attachment, queued like every other non-code message."""
+    phone, text, stopped = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
+    if stopped is not None:
+        return stopped
+    return _queue_row(
+        employee,
+        document_type,
+        phone,
+        text,
+        document_ref_id=document_ref_id,
+        sent_by_id=sent_by_id,
+        payload={},
+        priority=None,
+    )
 
 
-def _deliver(log_id: int, phone: str, text: str, contact: dict | None, on_sent):
-    """Send the message a pending log row was reserved for, and record the outcome."""
+def _send_code_now(log, phone: str, text: str):
+    """A one-time code: sent from the request that asked for it (the employee is waiting), outcome recorded on its
+    pending row. It counts as the last message sent for the queue's gap."""
     from .models import WhatsAppMessageLog
 
-    log = WhatsAppMessageLog.objects.select_related("employee").get(pk=log_id)
+    log.attempts = 1
     try:
         result = send_text_message(phone, text)
     except WhatsAppServiceError as exc:
         log.status = WhatsAppMessageLog.STATUS_FAILED
         log.error_message = str(exc)
     except Exception as exc:  # never leave a row pending because of a bug in a helper
-        logger.exception("Unexpected error sending WhatsApp message %s", log_id)
+        logger.exception("Unexpected error sending WhatsApp code %s", log.id)
         log.status = WhatsAppMessageLog.STATUS_FAILED
         log.error_message = f"Unexpected error: {exc}"
     else:
         log.status = WhatsAppMessageLog.STATUS_SENT
         log.provider_message_id = _provider_message_id(result)
-    log.save(update_fields=["status", "error_message", "provider_message_id", "updated_at"])
-
-    if log.status == WhatsAppMessageLog.STATUS_SENT:
-        if contact:
-            _deliver_contact_card(log.employee, phone, contact, log.document_ref_id)
-        if on_sent is not None:
-            try:
-                on_sent(log)
-            except Exception:
-                logger.exception("WhatsApp on_sent hook failed for message %s", log_id)
+        log.sent_at = timezone.now()
+    log.save(update_fields=["status", "error_message", "provider_message_id", "sent_at", "attempts", "updated_at"])
     return log
-
-
-def _deliver_contact_card(employee, phone: str, contact: dict, ref_id) -> None:
-    """The follow-up contact card, logged as its own message so HR sees exactly what went out."""
-    from .models import WhatsAppMessageLog
-
-    name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
-    log = WhatsAppMessageLog.objects.create(
-        employee=employee,
-        document_type=contact.get("document_type", "visitor_contact"),
-        document_ref_id=ref_id,
-        phone_number=phone,
-        status=WhatsAppMessageLog.STATUS_PENDING,
-        message_text=f"Contact card: {name} ({contact.get('phone', '')})",
-        related_module=contact.get("related_module", ""),
-    )
-    try:
-        result = send_contact_message(
-            phone, contact.get("first_name", ""), contact.get("last_name", ""), contact.get("phone", "")
-        )
-    except WhatsAppServiceError as exc:
-        log.status = WhatsAppMessageLog.STATUS_FAILED
-        log.error_message = str(exc)
-    except Exception as exc:
-        logger.exception("Unexpected error sending WhatsApp contact card")
-        log.status = WhatsAppMessageLog.STATUS_FAILED
-        log.error_message = f"Unexpected error: {exc}"
-    else:
-        log.status = WhatsAppMessageLog.STATUS_SENT
-        log.provider_message_id = _provider_message_id(result)
-    log.save(update_fields=["status", "error_message", "provider_message_id", "updated_at"])
 
 
 def send_notification(
@@ -630,7 +712,8 @@ def send_notification(
     log_params=None,
     related_module: str = "",
     contact: dict | None = None,
-    on_sent=None,
+    on_sent: str | None = None,
+    expires_at: datetime | None = None,
     asynchronous: bool | None = None,
     announce: bool = True,
 ):
@@ -640,31 +723,31 @@ def send_notification(
 
     `params` are the template's variables, by name (a dict) or by position (a list).
     `related_module` names the workflow behind a shared message ("leave" for the Approved wording).
-    `contact` follows the message with a contact card (dict of first_name, last_name, phone);
-    `on_sent(log)` runs after a successful send.
+    `contact` follows the message with a contact card (dict of first_name, last_name, phone).
+    `on_sent` names a hook (whatsapp_dispatcher.ON_SENT_HOOKS) run once the message is really sent.
+    `expires_at` is a moment after which the message is no longer worth sending (the alert job knows it exactly); the
+    row expires at the earliest of that, the type's freshness and the end of today.
 
-    None -not a failed row- is returned when: HR has this type (or its module) switched off,
-    WhatsApp isn't configured on this server, the type's wording is disabled, or `dedupe_key` was
-    already used (the message already went out, or another worker is sending it right now). Those
-    aren't failures worth listing; a *failed* row is reserved for a real attempt that couldn't
-    complete (no phone on file, provider error).
+    None -not a failed row- is returned when: HR has this type (or its module, or WhatsApp itself) switched off,
+    WhatsApp isn't configured on this server, the type's wording is disabled, or `dedupe_key` was already used (the
+    message already went out, or is queued). Those aren't failures worth listing; a *failed* row is reserved for a real
+    attempt that couldn't complete (no phone on file, provider error).
 
-    The row is reserved as "pending" BEFORE the API call. With dedupe_key that reservation is what
-    makes the message exactly-once: the unique constraint rejects a second reservation, so two
-    overlapping runs cannot both send. `log_params` lets a caller store a redacted version of the
-    text (the one-time code must never sit in the history).
+    A one-time code is sent at once and the row comes back sent / failed. Everything else is QUEUED (the row comes back
+    "queued") and leaves when whatsapp_dispatcher's pacing allows; during quiet hours it is recorded "skipped" instead,
+    and for an employee who opted out it is recorded "skipped" too. With dedupe_key the reserved row is what makes the
+    message exactly-once: the unique constraint rejects a second reservation, so two overlapping runs cannot both queue
+    it. `log_params` lets a caller store a redacted version of the text (the one-time code must never sit in the
+    history).
 
-    `asynchronous` (default: settings.WHATSAPP_ASYNC_SEND) delivers from the background worker and
-    returns the pending row straight away; pass False when the caller needs the outcome now (codes,
-    the attendance job). Nothing in here raises into the calling workflow.
+    `asynchronous` is accepted for older callers and ignored: whether a message waits in the queue is decided by its kind
+    (whatsapp_catalog), never by the caller. Nothing in here raises into the calling workflow.
 
     `announce=False` skips the phone notification + in-app record this message would otherwise also make
     (push_messages.py): for a caller that makes its own, with its own on/off switch (the Department Head
     reminders, hod_reminders.py, whose push must still go when WhatsApp is off and never twice).
     """
-    from django.db import IntegrityError
-
-    from .models import WhatsAppMessageLog
+    from .models import WhatsAppMessageLog, WhatsAppSettings
 
     try:
         # The same message is also a phone notification and an in-app record (push_messages.py). That is the employee's
@@ -678,56 +761,95 @@ def send_notification(
                 related_module=related_module,
                 dedupe_key=dedupe_key,
             )
-        if not feature_enabled(document_type, related_module) or not is_configured():
+        settings_row = WhatsAppSettings.get()
+        if switch_off_reason(document_type, related_module, settings_row) or not is_configured():
             return None
         text, disabled_reason = _message_for(document_type, params)
         if disabled_reason:
             return None
 
+        spec = catalog.get(document_type)
+        kind = spec.kind if spec else catalog.KIND_AUTOMATIC
         phone = normalize_phone(getattr(employee, "phone", None))
         order = _order_for(document_type)
         logged_text = (
             render_message(_template_body(document_type), log_params, order) if log_params is not None else text
         )
+        now = timezone.now()
+        fields = {
+            "employee": employee,
+            "document_type": document_type,
+            "document_ref_id": document_ref_id,
+            "phone_number": phone or "",
+            "message_text": logged_text,
+            "dedupe_key": dedupe_key,
+            "related_module": related_module,
+            "kind": kind,
+            "priority": spec.priority if spec else 5,
+        }
+
+        if kind == catalog.KIND_CODE:
+            try:
+                with transaction.atomic():
+                    log = WhatsAppMessageLog.objects.create(status=WhatsAppMessageLog.STATUS_PENDING, **fields)
+            except IntegrityError:
+                return None
+            if not phone:
+                log.status = WhatsAppMessageLog.STATUS_FAILED
+                log.error_message = "No phone number on file for this employee."
+                log.save(update_fields=["status", "error_message", "updated_at"])
+                return log
+            return _send_code_now(log, phone, text)
+
+        from . import whatsapp_dispatcher
+
+        payload = {}
+        if logged_text != text:
+            payload["text"] = text
+        if contact:
+            payload["contact"] = contact
+        if on_sent:
+            payload["on_sent"] = on_sent
+        status, reason = WhatsAppMessageLog.STATUS_QUEUED, ""
+        if not phone:
+            status, reason = WhatsAppMessageLog.STATUS_FAILED, "No phone number on file for this employee."
+        elif opted_out(employee):
+            status, reason = WhatsAppMessageLog.STATUS_SKIPPED, REASON_OPTED_OUT
+        elif not _inline_delivery() and whatsapp_dispatcher.in_quiet_hours(settings_row, now):
+            status, reason = WhatsAppMessageLog.STATUS_SKIPPED, REASON_QUIET
         try:
             with transaction.atomic():
                 log = WhatsAppMessageLog.objects.create(
-                    employee=employee,
-                    document_type=document_type,
-                    document_ref_id=document_ref_id,
-                    phone_number=phone or "",
-                    status=WhatsAppMessageLog.STATUS_PENDING,
-                    message_text=logged_text,
-                    dedupe_key=dedupe_key,
-                    related_module=related_module,
+                    status=status,
+                    error_message=reason,
+                    send_after=now,
+                    expires_at=whatsapp_dispatcher.expiry_for(document_type, settings_row, now, until=expires_at),
+                    payload=payload,
+                    **fields,
                 )
         except IntegrityError:
             return None
-
-        if not phone:
-            log.status = WhatsAppMessageLog.STATUS_FAILED
-            log.error_message = "No phone number on file for this employee."
-            log.save(update_fields=["status", "error_message", "updated_at"])
-            return log
-
-        job = partial(_deliver, log.id, phone, text, contact, on_sent)
-        if dj_settings.WHATSAPP_ASYNC_SEND if asynchronous is None else asynchronous:
-            _run_in_background(job)
-            return log
-        return job()
+        if status == WhatsAppMessageLog.STATUS_QUEUED and _inline_delivery():
+            return whatsapp_dispatcher.deliver_now(log)
+        return log
     except Exception:
         logger.exception("WhatsApp notification %s could not be prepared", document_type)
         return None
 
 
 def expire_stale_pending(minutes: int = 10) -> int:
-    """A message still "pending" long after it was reserved never left (the server stopped
-    between reserving it and sending). Mark it failed so HR sees it instead of a forever-pending
-    row. Run from the 5-minute alert job."""
+    """A code still "pending" long after it was reserved, or a queued message still "sending" long after the dispatcher
+    took it, never left (the server stopped between taking it and recording the outcome). Mark it failed so HR sees it
+    instead of a forever-pending row; it is never retried (it may have reached the employee). Run from the alert job
+    and the dispatcher."""
+    from django.db.models import Q
+
     from .models import WhatsAppMessageLog
 
+    cutoff = timezone.now() - timedelta(minutes=minutes)
     return WhatsAppMessageLog.objects.filter(
-        status=WhatsAppMessageLog.STATUS_PENDING, created_at__lt=timezone.now() - timedelta(minutes=minutes)
+        Q(status=WhatsAppMessageLog.STATUS_PENDING, created_at__lt=cutoff)
+        | Q(status=WhatsAppMessageLog.STATUS_SENDING, updated_at__lt=cutoff)
     ).update(
         status=WhatsAppMessageLog.STATUS_FAILED,
         error_message="This message was never sent - the server stopped before it could be delivered.",

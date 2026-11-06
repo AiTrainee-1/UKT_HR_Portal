@@ -88,7 +88,7 @@ class PhoneAndWordingTests(TestCase):
     def test_custom_wording_wins_and_disabled_types_are_refused(self):
         self.assertEqual(
             svc._message_for("id_card", ["Asha"])[0],
-            "🪪 *Employee ID Card*\n\nHello Asha,\n\nYour employee ID card is attached.\n\nRegards,\nUK Textiles HRMS",
+            "*Employee ID Card*\n\nDear Asha,\nYour employee ID card is attached.\n\n- UK Textiles HR",
         )
         WhatsAppMessageTemplate.objects.create(document_type="id_card", message_body="ID for {{1}}")
         self.assertEqual(svc._message_for("id_card", ["Asha"]), ("ID for Asha", None))
@@ -121,7 +121,7 @@ class SendTests(TestCase):
                 "number": "918220015110",
                 "type": "document",
                 "filename": "slip.pdf",
-                "message": "💰 *Salary Slip*\n\nHello Asha Kumar,\n\nYour salary slip for *August 2026* is attached.\n\nRegards,\nUK Textiles HRMS",
+                "message": "*Salary Slip*\n\nDear Asha Kumar,\nYour salary slip for August 2026 is attached.\n\n- UK Textiles HR",
                 "instance_id": "INST1234",
                 "access_token": "tok-secret",
             },
@@ -144,7 +144,7 @@ class SendTests(TestCase):
             log = svc.send_text(self.emp, "visitor_notification", ["Asha", "Ravi", "9000000000", "Meeting"])
         body = post.call_args.kwargs["json"]
         self.assertEqual((body["type"], body["number"]), ("text", "918220015110"))
-        for expected in ("Visitor: *Ravi*", "Contact: 9000000000", "Purpose: Meeting", "Hello Asha"):
+        for expected in ("Visitor: Ravi", "Contact: 9000000000", "Purpose: Meeting", "Dear Asha"):
             self.assertIn(expected, body["message"])
         self.assertEqual(log.status, "sent")
 
@@ -194,14 +194,10 @@ class SendTests(TestCase):
         post.assert_not_called()
         self.assertIn("WACLIENT_INSTANCE_ID", log.error_message)
 
-    @override_settings(WHATSAPP_SEND_DELAY_SECONDS=1.5)
-    def test_pace_sleeps_only_when_a_delay_is_set(self):
-        with mock.patch("api.whatsapp_service.time.sleep") as sleep:
-            svc.pace()
-        sleep.assert_called_once_with(1.5)
-        with override_settings(WHATSAPP_SEND_DELAY_SECONDS=0), mock.patch("api.whatsapp_service.time.sleep") as sleep:
-            svc.pace()
-        sleep.assert_not_called()
+    def test_no_sender_sleeps_between_messages_any_more(self):
+        # pace() (a sleep inside the request or job that sent) is gone: the send queue's dispatcher spaces every
+        # message (whatsapp_dispatcher.py), so nothing waits on WhatsApp in between.
+        self.assertFalse(hasattr(svc, "pace"))
 
 
 @override_settings(**CONFIG)

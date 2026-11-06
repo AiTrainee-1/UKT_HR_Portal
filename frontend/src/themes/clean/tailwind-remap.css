@@ -15,7 +15,7 @@
    The ramps are in tokens.css. Generated once from the table above (shade for shade) and then edited like any CSS.
    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-html[data-theme="clean"]:not([data-md-theme]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) {
   /* slate -> neutral */
   --color-slate-50: var(--clean-n-50);
   --color-slate-100: var(--clean-n-100);
@@ -296,29 +296,29 @@ html[data-theme="clean"]:not([data-md-theme]) {
      animate-ping        the pulsing halo behind a count is off (animate-pulse and the spinners stay: they say "loading")
    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-html[data-theme="clean"]:not([data-md-theme]),
-html[data-theme="clean"]:not([data-md-theme]) *,
-html[data-theme="clean"]:not([data-md-theme]) *::before,
-html[data-theme="clean"]:not([data-md-theme]) *::after {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) *,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) *::before,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) *::after {
   --tw-shadow-color: transparent;
   --tw-drop-shadow-color: transparent;
 }
 
-html[data-theme="clean"]:not([data-md-theme]) [class*="backdrop-blur"],
-html[data-theme="clean"]:not([data-md-theme]) [class*="backdrop-saturate"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class*="backdrop-blur"],
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class*="backdrop-saturate"] {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([class*="bg-gradient-to-"], [class*="bg-linear-"]):not([class*="bg-clip-text"]) {
   background-image: none;
   background-color: var(--tw-gradient-from);
 }
 
 /* gradient text (a heading painted with a gradient) is one plain colour */
-html[data-theme="clean"]:not([data-md-theme]) [class*="bg-clip-text"],
-html[data-theme="clean"]:not([data-md-theme]) .text-ukt-gradient {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class*="bg-clip-text"],
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .text-ukt-gradient {
   background-image: none;
   -webkit-background-clip: border-box;
   background-clip: border-box;
@@ -326,25 +326,25 @@ html[data-theme="clean"]:not([data-md-theme]) .text-ukt-gradient {
   color: hsl(var(--primary));
 }
 
-html[data-theme="clean"]:not([data-md-theme]) .rounded-xl {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .rounded-xl {
   border-radius: var(--clean-radius-lg);
 }
 
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([class*="hover:-translate-y"], [class*="hover:translate-x"], [class*="hover:-translate-x"]):hover {
   translate: none;
 }
-html[data-theme="clean"]:not([data-md-theme]) [class*="hover:scale-"]:hover,
-html[data-theme="clean"]:not([data-md-theme]) [class*="active:scale-"]:active {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class*="hover:scale-"]:hover,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class*="active:scale-"]:active {
   scale: none;
 }
 
-html[data-theme="clean"]:not([data-md-theme]) [class*="animate-ping"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class*="animate-ping"] {
   display: none;
 }
 
 /* a decorative blurred blob (an absolutely placed, blurred coloured disc) is not drawn */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([class~="blur-3xl"], [class~="blur-2xl"], [class~="blur-xl"]):not([class~="relative"]) {
   display: none;
 }
@@ -359,7 +359,7 @@ html[data-theme="clean"]:not([data-md-theme])
    state's big icon) are 1.2 to 1.5:1 and take the 400 (an icon, the 500), except inside a dark box, where the lighter grey is
    the point. */
 
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-red-400"],
     [class~="text-red-500"],
@@ -368,7 +368,7 @@ html[data-theme="clean"]:not([data-md-theme])
     [class~="text-pink-400"],
     [class~="text-pink-500"]
   ):not([class*="hover:text-"]),
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-red-400"],
     [class~="text-red-500"],
@@ -379,7 +379,7 @@ html[data-theme="clean"]:not([data-md-theme])
   )[class*="hover:text-"]:not(:hover) {
   color: var(--clean-d-600);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-green-400"],
     [class~="text-green-500"],
@@ -388,7 +388,7 @@ html[data-theme="clean"]:not([data-md-theme])
     [class~="text-lime-400"],
     [class~="text-lime-500"]
   ):not([class*="hover:text-"]),
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-green-400"],
     [class~="text-green-500"],
@@ -399,7 +399,7 @@ html[data-theme="clean"]:not([data-md-theme])
   )[class*="hover:text-"]:not(:hover) {
   color: var(--clean-s-600);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-amber-400"],
     [class~="text-amber-500"],
@@ -408,7 +408,7 @@ html[data-theme="clean"]:not([data-md-theme])
     [class~="text-orange-400"],
     [class~="text-orange-500"]
   ):not([class*="hover:text-"]),
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-amber-400"],
     [class~="text-amber-500"],
@@ -419,7 +419,7 @@ html[data-theme="clean"]:not([data-md-theme])
   )[class*="hover:text-"]:not(:hover) {
   color: var(--clean-w-600);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-blue-400"],
     [class~="text-blue-500"],
@@ -438,7 +438,7 @@ html[data-theme="clean"]:not([data-md-theme])
     [class~="text-fuchsia-400"],
     [class~="text-fuchsia-500"]
   ):not([class*="hover:text-"]),
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-blue-400"],
     [class~="text-blue-500"],
@@ -459,7 +459,7 @@ html[data-theme="clean"]:not([data-md-theme])
   )[class*="hover:text-"]:not(:hover) {
   color: var(--clean-b-600);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-gray-200"],
     [class~="text-gray-300"],
@@ -480,7 +480,7 @@ html[data-theme="clean"]:not([data-md-theme])
     [class*="bg-zinc-9"] *,
     [class*="bg-black"] *
   ),
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-gray-200"],
     [class~="text-gray-300"],
@@ -503,7 +503,7 @@ html[data-theme="clean"]:not([data-md-theme])
   ) {
   color: var(--clean-n-400);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   svg:is(
     [class~="text-gray-200"],
     [class~="text-gray-300"],
@@ -529,7 +529,7 @@ html[data-theme="clean"]:not([data-md-theme])
     [class*="bg-zinc-9"] *,
     [class*="bg-black"] *
   ),
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   svg:is(
     [class~="text-gray-200"],
     [class~="text-gray-300"],
@@ -560,7 +560,7 @@ html[data-theme="clean"]:not([data-md-theme])
 
 /* text-blue-100 / 200 / 300 (and the other brand families) is a light blue written on a dark or brand panel: opaque light colours,
    not the tints (which are the primary at an opacity, and are the panel's own colour on the panel). */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-blue-100"],
     [class~="text-indigo-100"],
@@ -573,7 +573,7 @@ html[data-theme="clean"]:not([data-md-theme])
   ):not([class*="hover:text-"]) {
   color: var(--clean-on-brand-100);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-blue-200"],
     [class~="text-indigo-200"],
@@ -586,7 +586,7 @@ html[data-theme="clean"]:not([data-md-theme])
   ):not([class*="hover:text-"]) {
   color: var(--clean-on-brand-200);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="text-blue-300"],
     [class~="text-indigo-300"],
@@ -607,7 +607,7 @@ html[data-theme="clean"]:not([data-md-theme])
    ("ineligible", "past") is also in the words. Not for a thing that is meant to go (a skeleton, an animation, a reveal on
    hover, a disabled control, an overlay). */
 
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class~="opacity-20"],
     [class~="opacity-25"],
@@ -640,7 +640,7 @@ html[data-theme="clean"]:not([data-md-theme])
 /* A page writes a quiet line on a dark or brand panel as white at 20 to 80%: on the brand blue that is 2.5 to 4:1. It is solid
    white here (5 to 7:1): the hierarchy is the size and the weight, not the fading. */
 
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class*="text-white/20"],
     [class*="text-white/30"],
@@ -651,7 +651,7 @@ html[data-theme="clean"]:not([data-md-theme])
     [class*="text-white/75"],
     [class*="text-white/80"]
   ):not([class*="hover:text-"]),
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [class*="text-white/20"],
     [class*="text-white/30"],
@@ -675,285 +675,297 @@ html[data-theme="clean"]:not([data-md-theme])
    wrapped in :where(), so it has no specificity of its own: every other rule of the theme (the table's hover wash, a field's
    border) still wins over it, exactly as it won over the utility. */
 
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-primary/5"]),
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-primary/5"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :where([class~="has-data-[state=checked]:bg-primary/5"]:has([data-state="checked"])) {
   background-color: hsl(var(--primary) / 5%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-primary/10"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-primary/10"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-primary/10"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-primary/10"]:hover) {
   background-color: hsl(var(--primary) / 10%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-primary/20"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-primary/20"]) {
   background-color: hsl(var(--primary) / 20%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/20"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-muted/20"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-muted/20"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-muted/20"]:hover) {
   background-color: hsl(var(--muted) / 20%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/30"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-muted/30"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-muted/30"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-muted/30"]:hover) {
   background-color: hsl(var(--muted) / 30%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/40"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-muted/40"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-muted/40"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-muted/40"]:hover) {
   background-color: hsl(var(--muted) / 40%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/50"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-muted/50"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-muted/50"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-muted/50"]:hover) {
   background-color: hsl(var(--muted) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted/60"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-muted/60"]) {
   background-color: hsl(var(--muted) / 60%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-accent/50"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="data-[state=open]:bg-accent/50"][data-state="open"]),
-html[data-theme="clean"]:not([data-md-theme]) :where(a[class~="[a]:hover:bg-accent/50"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-accent/50"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :where([class~="data-[state=open]:bg-accent/50"][data-state="open"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where(a[class~="[a]:hover:bg-accent/50"]:hover) {
   background-color: hsl(var(--accent) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-muted-foreground/40"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-muted-foreground/40"]) {
   background-color: hsl(var(--muted-foreground) / 40%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-sidebar-foreground/50"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="text-sidebar-foreground/50"]) {
   color: hsl(var(--sidebar-foreground) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-sidebar-foreground/60"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="text-sidebar-foreground/60"]) {
   color: hsl(var(--sidebar-foreground) / 60%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-sidebar-foreground/70"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="text-sidebar-foreground/70"]) {
   color: hsl(var(--sidebar-foreground) / 70%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-muted-foreground/30"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="text-muted-foreground/30"]) {
   color: hsl(var(--muted-foreground) / 30%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-muted-foreground/70"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="text-muted-foreground/70"]) {
   color: hsl(var(--muted-foreground) / 70%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-foreground/50"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="text-foreground/50"]) {
   color: hsl(var(--foreground) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="text-foreground/70"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="text-foreground/70"]) {
   color: hsl(var(--foreground) / 70%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-primary/40"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="border-primary/40"]) {
   border-color: hsl(var(--primary) / 40%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-primary/50"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="border-primary/50"]) {
   border-color: hsl(var(--primary) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-destructive/50"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="border-destructive/50"]) {
   border-color: hsl(var(--destructive) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-border/50"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="border-border/50"]) {
   border-color: hsl(var(--border) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="ring-primary/30"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="ring-primary/30"]) {
   --tw-ring-color: hsl(var(--primary) / 30%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/5"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-white/5"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/5"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-white/5"]:hover) {
   background-color: rgb(var(--clean-white) / 5%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/10"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-white/10"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/10"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-white/10"]:hover) {
   background-color: rgb(var(--clean-white) / 10%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/15"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/15"]) {
   background-color: rgb(var(--clean-white) / 15%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/20"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/20"]) {
   background-color: rgb(var(--clean-white) / 20%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/50"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/50"]) {
   background-color: rgb(var(--clean-white) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/60"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-white/60"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/60"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-white/60"]:hover) {
   background-color: rgb(var(--clean-white) / 60%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/70"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-white/70"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/70"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-white/70"]:hover) {
   background-color: rgb(var(--clean-white) / 70%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/75"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/75"]) {
   background-color: rgb(var(--clean-white) / 75%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/80"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/80"]) {
   background-color: rgb(var(--clean-white) / 80%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/85"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/85"]) {
   background-color: rgb(var(--clean-white) / 85%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/90"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/90"]) {
   background-color: rgb(var(--clean-white) / 90%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-white/95"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-white/95"]) {
   background-color: rgb(var(--clean-white) / 95%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/5"]),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-black/5"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-black/5"]),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-black/5"]:hover) {
   background-color: rgb(var(--clean-black) / 5%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/10"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-black/10"]) {
   background-color: rgb(var(--clean-black) / 10%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/50"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-black/50"]) {
   background-color: rgb(var(--clean-black) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/60"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-black/60"]) {
   background-color: rgb(var(--clean-black) / 60%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="bg-black/80"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="bg-black/80"]) {
   background-color: rgb(var(--clean-black) / 80%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-white/10"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="border-white/10"]) {
   border-color: rgb(var(--clean-white) / 10%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="border-white/60"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="border-white/60"]) {
   border-color: rgb(var(--clean-white) / 60%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="ring-white/60"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="ring-white/60"]) {
   --tw-ring-color: rgb(var(--clean-white) / 60%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="ring-white/70"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="ring-white/70"]) {
   --tw-ring-color: rgb(var(--clean-white) / 70%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="ring-black/10"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="ring-black/10"]) {
   --tw-ring-color: rgb(var(--clean-black) / 10%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-sidebar-accent/50"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-sidebar-accent/50"]:hover) {
   background-color: hsl(var(--sidebar-accent) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:bg-destructive/90"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:bg-destructive/90"]:hover) {
   background-color: hsl(var(--destructive) / 90%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:text-destructive/80"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:text-destructive/80"]:hover) {
   color: hsl(var(--destructive) / 80%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="hover:ring-black/30"]:hover) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="hover:ring-black/30"]:hover) {
   --tw-ring-color: rgb(var(--clean-black) / 30%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="focus-within:border-primary/60"]:focus-within) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :where([class~="focus-within:border-primary/60"]:focus-within) {
   border-color: hsl(var(--primary) / 60%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="focus-within:ring-primary/15"]:focus-within) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :where([class~="focus-within:ring-primary/15"]:focus-within) {
   --tw-ring-color: hsl(var(--primary) / 15%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="focus-visible:ring-ring/50"]:focus-visible),
-html[data-theme="clean"]:not([data-md-theme]) :where([class~="has-focus:ring-ring/50"]:has(:focus)) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :where([class~="focus-visible:ring-ring/50"]:focus-visible),
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :where([class~="has-focus:ring-ring/50"]:has(:focus)) {
   --tw-ring-color: hsl(var(--ring) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :where([class~="data-[state=indeterminate]:bg-primary/60"][data-state="indeterminate"]) {
   background-color: hsl(var(--primary) / 60%);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :where([class~="has-[[data-slot][aria-invalid=true]]:ring-destructive/20"]:has([data-slot][aria-invalid="true"])) {
   --tw-ring-color: hsl(var(--destructive) / 20%);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :where([data-slot="tooltip-content"] [class~="[[data-slot=tooltip-content]_&]:bg-background/20"]) {
   background-color: hsl(var(--background) / 20%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :where(.destructive [class~="group-[.destructive]:border-muted/40"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :where(.destructive [class~="group-[.destructive]:border-muted/40"]) {
   border-color: hsl(var(--muted) / 40%);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :where(.destructive [class~="group-[.destructive]:hover:border-destructive/30"]:hover) {
   border-color: hsl(var(--destructive) / 30%);
 }
 
 /* ── the brand blue the code writes as a hex ──────────────────────────────────────────────────────────────────────── */
 
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#006496]"], [class~="text-[#004f78]"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([class~="text-[#006496]"], [class~="text-[#004f78]"]) {
   color: hsl(var(--primary));
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/80"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="text-[#006496]/80"] {
   color: hsl(var(--primary) / 80%);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/70"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="text-[#006496]/70"] {
   color: hsl(var(--primary) / 70%);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/60"],
-html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#006496]/55"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="text-[#006496]/60"],
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="text-[#006496]/55"] {
   color: var(--clean-n-500);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([class~="text-[#006496]/50"], [class~="text-[#006496]/40"], [class~="text-[#006496]/30"]) {
   color: var(--clean-n-400);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#006496]/25"], [class~="text-[#006496]/20"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([class~="text-[#006496]/25"], [class~="text-[#006496]/20"]) {
   color: var(--clean-n-400);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([class~="text-[#1a3a4a]"], [class~="text-[#1e4d6b]"], [class~="text-[#0d2a38]"]) {
   color: var(--clean-n-800);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="bg-[#006496]"] {
   background-color: hsl(var(--primary));
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/10"],
-html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/[0.08]"],
-html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/5"],
-html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/05"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="bg-[#006496]/10"],
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="bg-[#006496]/[0.08]"],
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="bg-[#006496]/5"],
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="bg-[#006496]/05"] {
   background-color: hsl(var(--primary) / 8%);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#006496]/25"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="bg-[#006496]/25"] {
   background-color: var(--clean-n-300);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="bg-[#f0f4f8]"], [class~="bg-[#eff6fb]"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([class~="bg-[#f0f4f8]"], [class~="bg-[#eff6fb]"]) {
   background-color: var(--clean-n-100);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([class~="border-[#006496]"], [class~="border-[#006496]/30"], [class~="border-[#006496]/20"]) {
   border-color: hsl(var(--primary));
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="border-[#006496]/15"], [class~="border-[#006496]/06"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([class~="border-[#006496]/15"], [class~="border-[#006496]/06"]) {
   border-color: var(--clean-line);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="ring-[#006496]"], [class~="ring-[#006496]/40"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([class~="ring-[#006496]"], [class~="ring-[#006496]/40"]) {
   --tw-ring-color: hsl(var(--primary));
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="from-[#006496]"], [class~="to-[#0080bf]"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([class~="from-[#006496]"], [class~="to-[#0080bf]"]) {
   background-color: hsl(var(--primary));
 }
 
 /* the hover and focus forms of the same hex colours */
-html[data-theme="clean"]:not([data-md-theme]) :is([class*="hover:text-[#006496]"]):hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([class*="hover:text-[#006496]"]):hover {
   color: hsl(var(--primary));
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([class*="hover:bg-[#006496]"]):hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([class*="hover:bg-[#006496]"]):hover {
   background-color: var(--clean-hover);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class*="hover:text-[#c0392b]"]:hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class*="hover:text-[#c0392b]"]:hover {
   color: hsl(var(--destructive));
 }
-html[data-theme="clean"]:not([data-md-theme]) [class*="hover:bg-[#c0392b]"]:hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class*="hover:bg-[#c0392b]"]:hover {
   background-color: hsl(var(--destructive) / 8%);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="text-[#c0392b]"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="text-[#c0392b]"] {
   color: hsl(var(--destructive));
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#c0392b]"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="bg-[#c0392b]"] {
   background-color: hsl(var(--destructive));
 }
 
 /* the amber / gold the code writes as a hex is the status colour for "watch" */
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#7a5410]"], [class~="text-[#8a5d00]"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([class~="text-[#7a5410]"], [class~="text-[#8a5d00]"]) {
   color: var(--clean-w-800);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([class~="bg-[#fffaf0]"], [class~="bg-[#fff1cc]"], [class~="bg-[#fbf3dc]"]) {
   background-color: var(--clean-w-50);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([class~="border-[#e0a83a]/60"], [class~="border-[#e0a83a]/50"], [class~="border-[#e0a83a]/40"]) {
   border-color: var(--clean-w-300);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="text-[#e0a83a]"], [class~="bg-[#e0a83a]"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([class~="text-[#e0a83a]"], [class~="bg-[#e0a83a]"]) {
   color: var(--clean-w-600);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#e0a83a]"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="bg-[#e0a83a]"] {
   background-color: var(--clean-w-500);
 }
 
@@ -965,7 +977,7 @@ html[data-theme="clean"]:not([data-md-theme]) [class~="bg-[#e0a83a]"] {
    ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
 /* a soft clay shadow or an inset one, set inline: a flat page has none (a floating layer's own shadow is kept) */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [style*="box-shadow"]:not(
     [data-slot="popover-panel"],
     [data-slot="dropdown-content"],
@@ -976,30 +988,31 @@ html[data-theme="clean"]:not([data-md-theme])
   ) {
   box-shadow: none !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([style*="backdrop-filter"], [style*="-webkit-backdrop-filter"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([style*="backdrop-filter"], [style*="-webkit-backdrop-filter"]) {
   -webkit-backdrop-filter: none !important; /* inline style */
   backdrop-filter: none !important; /* inline style */
 }
 
 /* the blue-teal gradient of a banner: the primary colour */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [style*="linear-gradient"]:is([style*="rgb(0, 100, 150)"], [style*="rgb(0, 150, 199)"], [style*="rgb(0, 128, 191)"]) {
   background: hsl(var(--primary)) !important; /* inline style */
 }
 /* an amber gradient (a count bubble) is the warning colour, flat */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   [style*="linear-gradient"]:is([style*="rgb(245, 158, 11)"], [style*="rgb(217, 119, 6)"]) {
   background: var(--clean-w-600) !important; /* inline style */
 }
 
 /* the bright amber (#f59e0b) the pages write for a warning icon or figure: 2.2:1 on white, the warning ramp's 600 is 5:1 */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([style^="color: rgb(245, 158, 11)"], [style*=" color: rgb(245, 158, 11)"]) {
   color: var(--clean-w-600) !important; /* inline style */
 }
 
 /* text in the UKT blue family */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     :is([style^="color: rgb(0, 100, 150)"], [style*=" color: rgb(0, 100, 150)"]),
     :is([style^="color: rgb(0, 150, 199)"], [style*=" color: rgb(0, 150, 199)"]),
@@ -1008,7 +1021,7 @@ html[data-theme="clean"]:not([data-md-theme])
   ) {
   color: hsl(var(--primary)) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     :is([style^="color: rgb(26, 58, 74)"], [style*=" color: rgb(26, 58, 74)"]),
     :is([style^="color: rgb(13, 42, 56)"], [style*=" color: rgb(13, 42, 56)"]),
@@ -1016,14 +1029,14 @@ html[data-theme="clean"]:not([data-md-theme])
   ) {
   color: var(--clean-n-800) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     :is([style^="color: rgb(30, 90, 122)"], [style*=" color: rgb(30, 90, 122)"]),
     :is([style^="color: rgba(0, 80, 120"], [style*=" color: rgba(0, 80, 120"])
   ) {
   color: var(--clean-n-600) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     :is([style^="color: rgba(0, 60, 100"], [style*=" color: rgba(0, 60, 100"]),
     :is([style^="color: rgba(0, 100, 150"], [style*=" color: rgba(0, 100, 150"])
@@ -1031,7 +1044,7 @@ html[data-theme="clean"]:not([data-md-theme])
   color: var(--clean-n-500) !important; /* inline style */
 }
 /* lines and washes in the same tint */
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [style*="solid rgba(0, 100, 150"],
     [style*="solid rgba(0, 60, 100"],
@@ -1040,7 +1053,7 @@ html[data-theme="clean"]:not([data-md-theme])
   ) {
   border-color: var(--clean-line) !important; /* inline style */
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is(
     [style*="background: rgba(0, 100, 150"],
     [style*="background: rgba(0, 60, 100"],
@@ -1051,42 +1064,45 @@ html[data-theme="clean"]:not([data-md-theme])
 }
 
 /* chart series in the UKT blues become the brand ramp; the status colours become the status ramps */
-html[data-theme="clean"]:not([data-md-theme]) :is([fill="#006496"], [fill="#023e8a"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([fill="#006496"], [fill="#023e8a"]) {
   fill: var(--clean-b-600);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([fill="#0080bf"], [fill="#0096c7"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([fill="#0080bf"], [fill="#0096c7"]) {
   fill: var(--clean-b-400);
 }
 /* the light blue of the UKT mark (the oval behind the letters, in the sidebar's logo and the phone top bar): the brand
    colour itself, not a washed-out tint of it */
-html[data-theme="clean"]:not([data-md-theme]) :is([fill="#4FB8F0"], [fill="#4fb8f0"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([fill="#4FB8F0"], [fill="#4fb8f0"]) {
   fill: var(--clean-b-600);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([fill="#00b4d8"], [fill="#48cae4"], [fill="#90e0ef"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([fill="#00b4d8"], [fill="#48cae4"], [fill="#90e0ef"]) {
   fill: var(--clean-b-300);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([stroke="#006496"], [stroke="#023e8a"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([stroke="#006496"], [stroke="#023e8a"]) {
   stroke: var(--clean-b-600);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([fill="#22c55e"], [fill="#10b981"], [fill="#059669"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([fill="#22c55e"], [fill="#10b981"], [fill="#059669"]) {
   fill: var(--clean-s-500);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([stroke="#22c55e"], [stroke="#10b981"], [stroke="#059669"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  :is([stroke="#22c55e"], [stroke="#10b981"], [stroke="#059669"]) {
   stroke: var(--clean-s-500);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([fill="#ef4444"], [fill="#dc2626"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([fill="#ef4444"], [fill="#dc2626"]) {
   fill: var(--clean-d-500);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([stroke="#ef4444"], [stroke="#dc2626"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([stroke="#ef4444"], [stroke="#dc2626"]) {
   stroke: var(--clean-d-500);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([fill="#f59e0b"], [fill="#d97706"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([fill="#f59e0b"], [fill="#d97706"]) {
   fill: var(--clean-w-500);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([stroke="#f59e0b"], [stroke="#d97706"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([stroke="#f59e0b"], [stroke="#d97706"]) {
   stroke: var(--clean-w-500);
 }
-html[data-theme="clean"]:not([data-md-theme])
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   :is([fill="#a855f7"], [fill="#7c3aed"], [fill="#4f46e5"], [fill="#0284c7"]) {
   fill: var(--clean-b-500);
 }
@@ -1096,21 +1112,21 @@ html[data-theme="clean"]:not([data-md-theme])
    on a sign-in link or a heading, border-accent on a selected card, bg-accent/10 behind an icon. In this theme the accent
    is a pale tint for hovered and selected rows, so those uses would vanish: they read the primary colour instead. ── */
 
-html[data-theme="clean"]:not([data-md-theme]) [class~="text-accent"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="text-accent"] {
   color: hsl(var(--primary));
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="border-accent"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="border-accent"] {
   border-color: hsl(var(--primary));
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="border-accent/30"] {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="border-accent/30"] {
   border-color: hsl(var(--primary) / 30%);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="hover:border-accent/50"]:hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="hover:border-accent/50"]:hover {
   border-color: hsl(var(--primary) / 50%);
 }
-html[data-theme="clean"]:not([data-md-theme]) :is([class~="bg-accent/5"], [class~="bg-accent/10"]) {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) :is([class~="bg-accent/5"], [class~="bg-accent/10"]) {
   background-color: hsl(var(--primary) / 7%);
 }
-html[data-theme="clean"]:not([data-md-theme]) [class~="hover:bg-accent/5"]:hover {
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [class~="hover:bg-accent/5"]:hover {
   background-color: hsl(var(--primary) / 7%);
 }

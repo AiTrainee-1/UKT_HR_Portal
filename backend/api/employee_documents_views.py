@@ -152,9 +152,9 @@ def whatsapp_employee_document(request: Request, pk: int) -> Response:
         body_params=[f"{doc.employee.first_name} {doc.employee.last_name}".strip(), doc.get_category_display()],
         mime_type=mime_type, document_ref_id=doc.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
-    if log.status != "sent":
+    if not whatsapp_service.accepted(log):
         return _error(log.error_message, 400)
-    return Response({"ok": True, "sentTo": log.phone_number})
+    return Response({"ok": True, "sentTo": log.phone_number, "status": log.status, "queued": log.status == "queued"})
 
 
 @api_view(["GET"])

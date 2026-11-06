@@ -12,7 +12,7 @@ today?", handy for checking a rule without waiting for the clock.
 from django.conf import settings as dj_settings
 from django.core.management.base import BaseCommand, CommandError
 
-from api import whatsapp_alerts, whatsapp_service
+from api import whatsapp_alerts, whatsapp_dispatcher, whatsapp_service
 from api.clock import FACTORY_TZ, ist_now
 from api.models import Employee, WhatsAppMessageLog, WhatsAppSettings
 
@@ -66,8 +66,12 @@ class Command(BaseCommand):
         )
         if whatsapp_alerts.provider_is_failing():
             blocked.append("the provider has been refusing alerts, so the job is paused")
+        if not switches.engine_enabled:
+            blocked.append("the 'WhatsApp sending' master switch is OFF")
         if not switches.attendance_alerts_enabled:
             blocked.append("the master 'Attendance Alerts (All)' switch is OFF")
+        if whatsapp_dispatcher.in_quiet_hours(switches):
+            out("It is quiet hours now: an alert that is due is recorded as skipped, not sent.")
         reason = whatsapp_alerts.non_working_reason(now.date())
         if reason:
             blocked.append(f"today is {reason}")

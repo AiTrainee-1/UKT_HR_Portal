@@ -196,12 +196,21 @@ describe("saving", () => {
     expect(text(bar())).toContain("Everything shown is saved.");
   });
 
-  it("sends the master switch", async () => {
+  it("asks before switching geo-tracking off, then sends the master switch", async () => {
     await open();
     click(css("#geo-enabled"));
     await settle();
     expect(text(q("rules-tracking"))).toContain("Geo-tracking is off");
     click(saveButton());
+    await waitFor(() => q("rules-off-confirm") !== null, "the confirmation");
+    expect(text(q("rules-off-confirm"))).toContain("Switch geo-tracking off?");
+    expect(puts()).toHaveLength(0); // nothing is saved before the confirmation
+    click(q("rules-off-confirm-cancel"));
+    await settle();
+    expect(puts()).toHaveLength(0);
+    click(saveButton());
+    await waitFor(() => q("rules-off-confirm") !== null, "the confirmation again");
+    click(q("rules-off-confirm-confirm"));
     await waitFor(() => puts().length === 1, "the save");
     expect(lastBody()).toEqual({ enabled: false });
   });

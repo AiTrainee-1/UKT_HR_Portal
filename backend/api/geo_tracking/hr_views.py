@@ -53,8 +53,13 @@ class _IgnoreFormatParam(BaseContentNegotiation):
         return renderers[0], renderers[0].media_type
 
 
+#: Never the employee's photo (a base64 data URL of up to ~2 MB each): no geo-tracking answer shows it, and the live board and
+#: the day map are read every 20 s, so loading it made every refresh drag megabytes out of the database.
+NO_PHOTO = "employee__photo_url"
+
+
 def _scoped_track(request: Request, pk: int) -> DutyTrack | None:
-    qs = DutyTrack.objects.select_related("employee__department", "branch", "session")
+    qs = DutyTrack.objects.select_related("employee__department", "branch", "session").defer(NO_PHOTO)
     return scope_to_branch(qs, request).filter(pk=pk).first()
 
 
@@ -106,7 +111,9 @@ def journeys_day_map(request: Request) -> Response:
     s = geo_settings.get()
     now = serializers.now_utc()
     tracks = list(
-        scope_to_branch(DutyTrack.objects.select_related("employee__department", "branch", "session"), request)
+        scope_to_branch(
+            DutyTrack.objects.select_related("employee__department", "branch", "session").defer(NO_PHOTO), request
+        )
         .filter(started_at__lt=day_end)
         .filter(
             Q(ended_at__gte=day_start)
@@ -360,6 +367,7 @@ def live_tracks(request: Request) -> Response:
     qs = (
         scope_to_branch(DutyTrack.objects.filter(status=DutyTrack.STATUS_ACTIVE), request)
         .select_related("employee__department", "branch", "session")
+        .defer(NO_PHOTO)
         .order_by("employee__first_name", "employee__last_name", "id")
     )
     return Response([serializers.live_row(t, now, s.signal_lost_seconds) for t in qs])

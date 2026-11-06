@@ -98,6 +98,9 @@ function readStoredCustom(): ThemeCustom {
 function applyToDocument(theme: ThemeId, custom: ThemeCustom, previousCustom: ThemeCustom) {
   const root = document.documentElement;
   root.dataset.theme = theme;
+  // the Clean theme's stylesheet is scoped to this presence attribute too (themes/clean/scan.ts SCOPE): the browser can then
+  // skip all of its rules at once under every other theme instead of matching them against every element
+  root.toggleAttribute("data-clean-theme", theme === "clean");
   // .dark is what the pre-existing stylesheet keys off; keep it in sync so
   // any component still checking for the class behaves correctly.
   root.classList.toggle("dark", theme === "dark");

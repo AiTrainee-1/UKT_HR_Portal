@@ -10,6 +10,7 @@ import {
   type WhatsAppCounts,
   type WhatsAppMessage,
 } from "@/lib/api-client/custom-hooks";
+import QueueCard from "./QueueCard";
 import { CATEGORY_HELP, MessageDetailDialog, StatCard, StatusPill, fmtDateTime } from "./shared";
 
 const RANGES = [
@@ -136,6 +137,8 @@ export default function OverviewTab({
           </span>
         </div>
       )}
+
+      <QueueCard />
 
       <div className="grid sm:grid-cols-2 gap-3">
         <PeriodCard title="Today" counts={data.today} />

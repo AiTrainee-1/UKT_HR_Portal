@@ -77,6 +77,9 @@ GIVE_UP_AFTER = timedelta(minutes=30)
 UNCLAIMED_AFTER = timedelta(minutes=1)
 # WhatsApp failures in one round after which the rest of the round's WhatsApp messages are held back (the number's health).
 MAX_WHATSAPP_FAILURES = 3
+# The note on a delivery whose WhatsApp message is waiting in the queue (it leaves when the pacing allows, or expires at the
+# end of the day: WhatsApp Control -> Messages shows which).
+QUEUED_NOTE = "Queued for WhatsApp: sent within the day's sending limits (see WhatsApp Control -> Messages)"
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _TIME = re.compile(r"^(\d{1,2}):(\d{2})$")
@@ -487,31 +490,33 @@ def _send_whatsapp(run, d, emp, state: _RoundState) -> tuple[str, str]:
         return D.STATUS_SKIPPED, "No phone number"
     if state.whatsapp_failures >= MAX_WHATSAPP_FAILURES:
         return D.STATUS_SKIPPED, f"Held back: WhatsApp failed {MAX_WHATSAPP_FAILURES} times in this round"
-    if state.whatsapp_sent:
-        wa.pace()  # a linked WhatsApp number that sends back to back gets flagged
     key = dedupe_key(run, d)
+    # Queued, not sent from here: the WhatsApp dispatcher paces every message the number sends (whatsapp_dispatcher.py).
     log = wa.send_notification(
         emp,
         SOURCE,
         {"message": d.text, "name": d.name, "total": d.pending, "date": day_text(run.run_date)},
         dedupe_key=key,
         document_ref_id=run.pk,
-        asynchronous=False,
         # its phone notification is the push channel's own (one push per round, and the push switch works alone)
         announce=False,
     )
-    if log is None:  # this round already sent it (the key is taken), or a switch changed a moment ago
+    if log is None:  # this round already queued it (the key is taken), or a switch changed a moment ago
         log = WhatsAppMessageLog.objects.filter(dedupe_key=key).first()
         if log is None:
             return D.STATUS_SKIPPED, "Not sent: WhatsApp is switched off or not set up"
-    if log.status == WhatsAppMessageLog.STATUS_FAILED:
+    if log.status in (WhatsAppMessageLog.STATUS_FAILED, WhatsAppMessageLog.STATUS_EXPIRED):
         state.whatsapp_failures += 1
         return D.STATUS_FAILED, log.error_message or "WhatsApp did not accept the message."
+    if log.status == WhatsAppMessageLog.STATUS_SKIPPED:
+        return D.STATUS_SKIPPED, log.error_message or "Not sent"
     state.whatsapp_sent += 1
+    if log.status in (WhatsAppMessageLog.STATUS_QUEUED, WhatsAppMessageLog.STATUS_SENDING):
+        return D.STATUS_SENT, QUEUED_NOTE
     return D.STATUS_SENT, ""
 
 
-# The order a head's channels are tried: the quick, local ones first; WhatsApp last (it is paced).
+# The order a head's channels are tried: the quick, local ones first; WhatsApp last (it is queued and paced).
 SENDERS = (("push", _send_push), ("email", _send_email), ("whatsapp", _send_whatsapp))
 
 

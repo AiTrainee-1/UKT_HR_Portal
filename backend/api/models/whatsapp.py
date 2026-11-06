@@ -1,5 +1,7 @@
 """WhatsApp (WAClient) send log, message wording and media assets."""
 
+import datetime
+
 from django.db import models
 
 from .. import whatsapp_catalog
@@ -16,10 +18,16 @@ class WhatsAppMessageLog(models.Model):
     ever sent via WhatsApp" with one join, bulk sends can report exactly who
     failed and why, and the WhatsApp Control page can show one history.
 
-    `status` moves: pending -> sent -> delivered -> read, or -> failed at any
-    point. "pending" is the brief window between reserving the row (which is
-    what makes an automatic alert exactly-once, see dedupe_key) and the
-    provider accepting the message.
+    `status` moves (2026-11-06 queue, see whatsapp_dispatcher.py):
+      queued -> sending -> sent -> delivered -> read     the normal life of a message
+      queued -> expired                                  too late to be useful (older than its freshness, or
+                                                         from an earlier day): never sent, never retried
+      queued -> skipped                                  quiet hours, opted out, the employee's daily limit,
+                                                         a duplicate, switched off, or cleared by HR
+      sending -> failed                                  the provider refused it (a temporary failure goes
+                                                         back to queued ONCE, a minute later)
+    A one-time code never queues: pending -> sent / failed while the employee waits.
+    "pending" is also what rows written before the queue existed carry.
     """
 
     # Every message type lives in whatsapp_catalog.py; nothing here needs editing (or a
@@ -28,10 +36,24 @@ class WhatsAppMessageLog(models.Model):
     CATEGORIES = whatsapp_catalog.categories()
 
     STATUS_PENDING = "pending"
+    STATUS_QUEUED = "queued"
+    STATUS_SENDING = "sending"
     STATUS_SENT = "sent"
     STATUS_DELIVERED = "delivered"
     STATUS_READ = "read"
     STATUS_FAILED = "failed"
+    STATUS_EXPIRED = "expired"
+    STATUS_SKIPPED = "skipped"
+    STATUSES = (
+        STATUS_PENDING, STATUS_QUEUED, STATUS_SENDING, STATUS_SENT, STATUS_DELIVERED, STATUS_READ,
+        STATUS_FAILED, STATUS_EXPIRED, STATUS_SKIPPED,
+    )
+
+    # What kind of message it is (whatsapp_catalog.MessageType.kind): decides the queue's rules for it.
+    KIND_CODE = "code"  # a one-time code the employee is waiting for: sent at once, never queued
+    KIND_REQUESTED = "requested"  # about the employee's own request (approved / rejected)
+    KIND_AUTOMATIC = "automatic"  # the system decided it (alerts, reminders, gate, visitors): capped per employee
+    KIND_DOCUMENT = "document"  # a file HR sends
 
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, db_column="employee_id",
@@ -45,7 +67,7 @@ class WhatsAppMessageLog(models.Model):
     # specific existing record rather than generated fresh (ID Card).
     document_ref_id = models.IntegerField(null=True, blank=True, db_column="document_ref_id")
     phone_number = models.TextField(db_column="phone_number")
-    status = models.TextField(default="sent", db_column="status")  # pending|sent|delivered|read|failed
+    status = models.TextField(default="sent", db_column="status")  # one of STATUSES above
     # WhatsApp's own id for the message; delivery/read webhooks refer to it.
     provider_message_id = models.TextField(blank=True, default="", db_column="provider_message_id")
     error_message = models.TextField(blank=True, default="", db_column="error_message")
@@ -59,6 +81,21 @@ class WhatsAppMessageLog(models.Model):
         HRUser, null=True, blank=True, on_delete=models.SET_NULL,
         db_column="sent_by_id", related_name="whatsapp_messages_sent",
     )
+    # ── the queue (migration 0143). Every column has a database default, so a backend still running the previous
+    # release during a rolling deploy keeps inserting rows without knowing these columns.
+    kind = models.TextField(blank=True, default="", db_default="", db_column="kind")  # code|requested|automatic|document
+    # Lower goes first: code 0, document 3, requested 4, automatic 5 (a bulk batch 6, behind everything time-critical).
+    priority = models.SmallIntegerField(default=5, db_default=5, db_column="priority")
+    # Not before this moment (a temporary failure is retried once, a minute later).
+    send_after = models.DateTimeField(null=True, blank=True, db_column="send_after")
+    # Never after this moment: min(created + the type's freshness, the end of that day in IST).
+    expires_at = models.DateTimeField(null=True, blank=True, db_column="expires_at")
+    # When the provider accepted it. The pacing (gap, per hour, per day) is measured on this.
+    sent_at = models.DateTimeField(null=True, blank=True, db_column="sent_at")
+    attempts = models.SmallIntegerField(default=0, db_default=0, db_column="attempts")
+    # What the dispatcher needs to send it later: a document's media link (or how to build it), a contact card to follow,
+    # an on-sent hook, the bulk batch it belongs to. Never a secret.
+    payload = models.JSONField(default=dict, blank=True, db_default={}, db_column="payload")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -69,6 +106,9 @@ class WhatsAppMessageLog(models.Model):
             models.Index(fields=["employee", "document_type"]),
             models.Index(fields=["status", "-created_at"]),
             models.Index(fields=["document_type", "-created_at"]),
+            # the dispatcher's "next queued row" and the pacing's "last sent" look-ups
+            models.Index(fields=["status", "priority", "send_after"], name="whatsapp_log_queue_idx"),
+            models.Index(fields=["sent_at"], name="whatsapp_log_sent_at_idx"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -122,6 +162,23 @@ class WhatsAppSettings(models.Model):
     four_punch_lead_minutes = models.IntegerField(default=15, db_column="four_punch_lead_minutes")
     missing_punch_after_minutes = models.IntegerField(default=20, db_column="missing_punch_after_minutes")
 
+    # ── the sending engine (migration 0143, whatsapp_dispatcher.py) ──
+    # Master switch for EVERY WhatsApp message, one-time codes included (off: the apps treat WhatsApp as unavailable,
+    # so password sign-in and SMS keep working and nobody is locked out of activation).
+    engine_enabled = models.BooleanField(default=True, db_default=True, db_column="engine_enabled")
+    # Message types HR switched off one by one (whatsapp_catalog keys), for the types without a boolean above.
+    disabled_message_types = models.JSONField(default=list, blank=True, db_default=[], db_column="disabled_message_types")
+    # "Careful" pacing (owner, 2026-11-06): what keeps a linked WhatsApp number from being restricted.
+    min_gap_seconds = models.IntegerField(default=30, db_default=30, db_column="min_gap_seconds")
+    max_per_hour = models.IntegerField(default=60, db_default=60, db_column="max_per_hour")
+    max_per_day = models.IntegerField(default=200, db_default=200, db_column="max_per_day")
+    # AUTOMATIC messages (alerts, reminders, gate, visitors) one employee may get in a day.
+    max_per_employee_per_day = models.IntegerField(default=3, db_default=3, db_column="max_per_employee_per_day")
+    # No message but a one-time code leaves between quiet_start and quiet_end (IST; the span may cross midnight).
+    quiet_hours_enabled = models.BooleanField(default=True, db_default=True, db_column="quiet_hours_enabled")
+    quiet_start = models.TimeField(default=datetime.time(21, 0), db_default=datetime.time(21, 0), db_column="quiet_start")
+    quiet_end = models.TimeField(default=datetime.time(7, 0), db_default=datetime.time(7, 0), db_column="quiet_end")
+
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
     class Meta:
@@ -131,6 +188,22 @@ class WhatsAppSettings(models.Model):
     def get(cls) -> "WhatsAppSettings":
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class WhatsAppOptOut(models.Model):
+    """An employee who must not get WhatsApp notifications or documents (they asked, or the number belongs to someone
+    else). A one-time code the employee asks for themselves still goes. Set from WhatsApp Control -> Employees."""
+
+    employee = models.OneToOneField(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="whatsapp_opt_out",
+    )
+    reason = models.TextField(blank=True, default="", db_column="reason")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    # Who set it (the HR user's name), for the history.
+    created_by = models.TextField(blank=True, default="", db_column="created_by")
+
+    class Meta:
+        db_table = "whatsapp_opt_out"
 
 
 class EmployeeOtp(models.Model):

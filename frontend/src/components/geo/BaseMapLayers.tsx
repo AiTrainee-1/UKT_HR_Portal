@@ -1,13 +1,18 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { LayerGroup, LayersControl, TileLayer, useMapEvents } from "react-leaflet";
 import { BASE_LAYERS, MAX_ZOOM, baseLayerIdForName, readBaseLayer, saveBaseLayer } from "./baseLayers";
 
 /**
- * The base map of every Leaflet map in the portal, with a switch (top right) between the street map, the satellite view and the
- * satellite view with road and area names. It replaces a lone <TileLayer> inside a <MapContainer>. The choice is remembered in
- * this browser, so the next map opens on the one that was used last.
+ * The base map of every Leaflet map in the portal, with a switch (top right) between the street map (OpenStreetMap, the
+ * default), Esri's street map, the satellite view and the satellite view with road and area names. It replaces a lone
+ * <TileLayer> inside a <MapContainer>. The choice is remembered in this browser, so the next map opens on the one that was
+ * used last.
+ *
+ * Memoised (it takes no props): a page that re-renders its map for new data never touches the tile layers. The tiles are not
+ * fetched while a zoom is still animating (only where the zoom lands), and a few more rows are kept around the view so a
+ * short pan does not reload them.
  */
-export function BaseMapLayers() {
+export const BaseMapLayers = memo(function BaseMapLayers() {
   // react-leaflet reads `checked` only when the layer is built, so the saved choice is read once
   const [initial] = useState(() => readBaseLayer());
 
@@ -31,6 +36,8 @@ export function BaseMapLayers() {
                 maxZoom={tile.maxZoom ?? MAX_ZOOM}
                 maxNativeZoom={tile.maxNativeZoom}
                 zIndex={i + 1}
+                updateWhenZooming={false}
+                keepBuffer={3}
               />
             ))}
           </LayerGroup>
@@ -38,4 +45,4 @@ export function BaseMapLayers() {
       ))}
     </LayersControl>
   );
-}
+});

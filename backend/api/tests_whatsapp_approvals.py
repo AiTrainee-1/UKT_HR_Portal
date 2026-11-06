@@ -84,7 +84,13 @@ class EveryWorkflowTests(ApprovalBase):
     """Each approval workflow tells the employee, on WhatsApp, what was decided."""
 
     def check_approved(self, module, text, *expected):
-        for piece in ("✅", "Request Approved", "Hello Asha Kumar", "Approved by: Meena (HR)", *expected):
+        for piece in (
+            "*Request Approved*",
+            "Dear Asha Kumar",
+            "Approved by: Meena (HR)",
+            "- UK Textiles HR",
+            *expected,
+        ):
             self.assertIn(piece, text)
         log = self.one("approval_approved")
         self.assertEqual((log.related_module, log.status, log.employee_id), (module, "sent", self.emp.id))
@@ -92,7 +98,13 @@ class EveryWorkflowTests(ApprovalBase):
         self.assert_plain_text_without_links()
 
     def check_rejected(self, module, text, *expected):
-        for piece in ("❌", "Request Rejected", "Hello Asha Kumar", "Rejected by: Meena (HR)", *expected):
+        for piece in (
+            "*Request Rejected*",
+            "Dear Asha Kumar",
+            "Rejected by: Meena (HR)",
+            "- UK Textiles HR",
+            *expected,
+        ):
             self.assertIn(piece, text)
         self.assertEqual(self.one("approval_rejected").related_module, module)
         self.assert_plain_text_without_links()
@@ -337,7 +349,7 @@ class SwitchesAndSafetyTests(ApprovalBase):
             self.call("patch", f"/api/leave-requests/{leave.id}/status", {"status": "rejected", "hrComment": "Clash"})
         self.assertEqual(len(self.texts()), 2)
         self.assert_plain_text_without_links()
-        self.assertTrue(self.texts()[0].endswith("Thank you,\nUK Textiles HRMS"))
+        self.assertTrue(self.texts()[0].endswith("\n- UK Textiles HR"))
         self.assertIn("Reason: Clash\n\nPlease contact HR", self.texts()[1])
 
     def test_the_text_sender_is_given_only_the_number_and_the_text(self):
@@ -396,7 +408,7 @@ class SwitchesAndSafetyTests(ApprovalBase):
 
 
 class BackgroundDeliveryTests(ApprovalBase):
-    """System messages are handed to a background worker so nobody waits on WhatsApp."""
+    """System messages are queued and sent by the paced dispatcher, so nobody waits on WhatsApp (2026-11-06)."""
 
     def emp_leave(self):
         return LeaveRequest.objects.create(
@@ -404,40 +416,27 @@ class BackgroundDeliveryTests(ApprovalBase):
         )
 
     @override_settings(WHATSAPP_ASYNC_SEND=True)
-    def test_the_caller_gets_a_pending_row_at_once_and_the_send_happens_later(self):
-        with mock.patch("api.whatsapp_service._run_in_background") as background:
+    def test_the_caller_gets_a_queued_row_at_once_and_the_dispatcher_sends_it(self):
+        from . import whatsapp_dispatcher
+
+        with mock.patch.object(
+            whatsapp_dispatcher, "in_quiet_hours", return_value=False
+        ):  # whatever the hour of the run
             log = whatsapp_approvals.notify_decision("leave", self.emp_leave(), "approved", approver="Meena", role="hr")
-        self.assertEqual(log.status, "pending")
-        self.post.assert_not_called()
-        background.call_args.args[0]()  # the worker runs the job
+            self.assertEqual((log.status, log.kind), ("queued", "requested"))
+            self.post.assert_not_called()
+            whatsapp_dispatcher.tick()
         log.refresh_from_db()
         self.assertEqual((log.status, log.provider_message_id), ("sent", "WAID"))
 
     @override_settings(WHATSAPP_ASYNC_SEND=True)
-    def test_codes_and_the_alert_job_ask_for_immediate_delivery(self):
+    def test_codes_are_sent_at_once_and_the_alert_job_queues(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"absent_alert_enabled": True})
-        with mock.patch("api.whatsapp_service._run_in_background") as background:
-            log = whatsapp_service.send_notification(self.emp, "absent_alert", ["A", "d", "t"], asynchronous=False)
-        background.assert_not_called()
-        self.assertEqual(log.status, "sent")
-
-    @override_settings(WHATSAPP_ASYNC_SEND=True)
-    def test_the_worker_runs_after_commit_and_a_broken_job_cannot_kill_it(self):
-        ran = []
-
-        class Inline:
-            def submit(self, fn):
-                fn()
-
-        with (
-            mock.patch("api.whatsapp_service._executor", Inline()),
-            mock.patch("api.whatsapp_service.connections"),
-            self.captureOnCommitCallbacks(execute=True),
-        ):
-            whatsapp_service._run_in_background(lambda: ran.append("ok"))
-            whatsapp_service._run_in_background(lambda: 1 / 0)
-            whatsapp_service._run_in_background(lambda: ran.append("still running"))
-        self.assertEqual(ran, ["ok", "still running"])
+        code = whatsapp_service.send_notification(self.emp, "otp_login", ["123456", "5"], log_params=["*", "5"])
+        self.assertEqual(code.status, "sent")
+        alert = whatsapp_service.send_notification(self.emp, "absent_alert", ["A", "d", "t"], asynchronous=False)
+        self.assertIn(alert.status, ("queued", "skipped"))  # "asynchronous" is ignored; skipped only in quiet hours
+        self.assertEqual(self.post.call_count, 1)
 
     def test_a_message_left_pending_by_a_restart_is_marked_failed(self):
         from datetime import timedelta

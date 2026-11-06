@@ -82,7 +82,7 @@ export default function MdHrApp() {
             <Route path="/hr/attendance/punch-view">{page(PunchView)}</Route>
             <Route path="/hr/attendance">{() => <Redirect to="/hr/attendance/staff" replace />}</Route>
             <Route path="/hr/Biometric-Connectors/device-status">{page(BiometricDeviceStatus)}</Route>
-            <Route path="/hr/geo-attendance">{page(GeoAttendance)}</Route>
+            <Route path="/hr/geo-attendance/*?">{page(GeoAttendance)}</Route>
 
             <Route path="/hr/outpass-visitors/outpass/*?">{page(OutpassVisitors)}</Route>
             <Route path="/hr/outpass-visitors/visitors/*?">{page(OutpassVisitors)}</Route>

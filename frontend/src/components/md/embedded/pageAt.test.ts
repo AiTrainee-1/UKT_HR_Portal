@@ -24,6 +24,18 @@ describe("the page an address is", () => {
     expect(pageAt("/hr/outpass-visitors/tea-break/rule?x=1")?.id).toBe("tea-break");
   });
 
+  it("is still Geo Attendance on every section, a journey and its replay (the module has an address per section)", () => {
+    for (const path of [
+      "/hr/geo-attendance",
+      "/hr/geo-attendance/approvals",
+      "/hr/geo-attendance/live-map",
+      "/hr/geo-attendance/journeys/12",
+      "/hr/geo-attendance/journeys/12/simulate",
+      "/hr/geo-attendance/settings",
+    ])
+      expect(pageAt(path)?.id, path).toBe("geo-attendance");
+  });
+
   it("is nothing on a deeper address of a page that has no tabs in its path, and for the MD's own dashboard", () => {
     expect(pageAt("/hr/employees/5")).toBeUndefined();
     expect(pageAt("/hr/outpass-visitors/visitors/anything")).toBeUndefined();

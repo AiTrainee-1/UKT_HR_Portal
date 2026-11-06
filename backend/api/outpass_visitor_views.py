@@ -192,16 +192,12 @@ def _send_visitor_email(visit: VisitorVisit, emp: Employee) -> None:
 
 
 def _send_visitor_whatsapp(visit: VisitorVisit, emp: Employee) -> None:
-    """The visitor message (name, contact, purpose, whom, department, date and time) plus the
-    visitor's contact card to tap and call. Delivered in the background so the visitor's check-in
-    never waits on WhatsApp; the Reception "notified" time is stamped once it is really delivered."""
+    """The visitor message (name, contact, purpose, department, date and time) plus the
+    visitor's contact card to tap and call. Queued, so the visitor's check-in never waits on
+    WhatsApp; the Reception "notified" time is stamped once it is really sent."""
     from . import whatsapp_notifications
 
-    def mark_notified(_log) -> None:
-        visit.notified_whatsapp_at = timezone.now()
-        visit.save(update_fields=["notified_whatsapp_at"])
-
-    whatsapp_notifications.notify_visitor_arrival(visit, emp, on_sent=mark_notified)
+    whatsapp_notifications.notify_visitor_arrival(visit, emp)
 
 
 def _notify_employee_of_visitor(visit: VisitorVisit) -> None:

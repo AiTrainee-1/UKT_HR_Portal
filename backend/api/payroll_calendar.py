@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+from django.db.models import Q
 from django.utils import timezone
 
 from .attendance_final import compute_range_records
@@ -102,53 +103,85 @@ def _compensation_type(rec_kind: str, note: str, d: date, claim_dates: set, ot_d
 def _on_duty_states(employee_id: int, start: date, end: date) -> dict[date, dict]:
     """{date: {state, label, destination}} for every day an On-Duty request touches. Approved means HR gave the final
     approval (active / completed); the day only counts as worked once an On-Duty punch of the day was approved too."""
+    return on_duty_states_by_employee([employee_id], start, end).get(employee_id, {})
+
+
+# The On-Duty states the attendance pages count as "On Duty" that day: HR gave the final approval (the session is active
+# or completed), whether or not the day's punches are verified yet. "pending" / "rejected" requests are not On Duty.
+ON_DUTY_APPROVED_STATES = ("verified", "punches_pending", "no_punches")
+
+
+def on_duty_states_by_employee(employee_ids, start: date, end: date) -> dict[int, dict[date, dict]]:
+    """{employee id: {date: {state, label, destination}}} for every day of [start, end] an On-Duty request of one of
+    `employee_ids` touches - the rules of _on_duty_states for a whole roster in three queries, whatever its size (the
+    Staff / Production Attendance list, its monthly report). Read only.
+
+    The session query is narrowed to the sessions that can touch the range (an approved session started before the range
+    ends and not over before it starts; a pending / rejected request made inside it); the rules below then decide
+    exactly as before."""
+    ids = list(employee_ids)
+    if not ids:
+        return {}
     today = ist_today()
+    start_dt = datetime.combine(start, datetime.min.time(), tzinfo=FACTORY_TZ)
+    end_dt = datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=FACTORY_TZ)
+    approved = (OnDutySession.STATUS_ACTIVE, OnDutySession.STATUS_COMPLETED)
+    requested = (OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR, OnDutySession.STATUS_REJECTED)
+    touching = Q(status__in=approved, started_at__isnull=False, started_at__lt=end_dt) & (
+        Q(status=OnDutySession.STATUS_ACTIVE)
+        | Q(started_at__gte=start_dt)
+        | Q(employee_ended_at__gte=start_dt)
+        | Q(completed_at__gte=start_dt)
+    )
+    touching |= Q(status__in=requested, created_at__gte=start_dt, created_at__lt=end_dt)
     sessions = list(
-        OnDutySession.objects.filter(employee_id=employee_id).values(
-            "id", "status", "destination", "created_at", "started_at", "employee_ended_at", "completed_at"
+        OnDutySession.objects.filter(touching, employee_id__in=ids).values(
+            "employee_id", "status", "destination", "created_at", "started_at", "employee_ended_at", "completed_at"
         )
     )
     punched = set(
         AttendanceLog.objects.filter(
-            employee_id=employee_id, date__range=(start, end), source=_ON_DUTY_PUNCH_SOURCE
-        ).values_list("date", flat=True)
+            employee_id__in=ids, date__range=(start, end), source=_ON_DUTY_PUNCH_SOURCE
+        ).values_list("employee_id", "date")
     )
     awaiting = set(
         OnDutyPunchVerification.objects.filter(
-            employee_id=employee_id,
+            employee_id__in=ids,
             punch_date__range=(start, end),
             status=OnDutyPunchVerification.STATUS_PENDING,
-        ).values_list("punch_date", flat=True)
+        ).values_list("employee_id", "punch_date")
     )
-    out: dict[date, dict] = {}
+    rank = list(ON_DUTY_STATES)
+    out: dict[int, dict[date, dict]] = {}
 
-    def put(day: date, state: str, destination: str) -> None:
+    def put(emp_id: int, day: date, state: str, destination: str) -> None:
         # the most advanced state of the day wins: verified > punches_pending > no_punches > pending > rejected
-        rank = list(ON_DUTY_STATES)
-        if day in out and rank.index(out[day]["state"]) <= rank.index(state):
+        days = out.setdefault(emp_id, {})
+        if day in days and rank.index(days[day]["state"]) <= rank.index(state):
             return
-        out[day] = {"state": state, "label": ON_DUTY_STATES[state], "destination": destination}
+        days[day] = {"state": state, "label": ON_DUTY_STATES[state], "destination": destination}
 
     for s in sessions:
-        if s["status"] in (OnDutySession.STATUS_ACTIVE, OnDutySession.STATUS_COMPLETED) and s["started_at"]:
+        emp_id = s["employee_id"]
+        if s["status"] in approved and s["started_at"]:
             first = _ist_day(s["started_at"])
             ended = s["employee_ended_at"] or s["completed_at"]
             last = _ist_day(ended) if ended else (today if s["status"] == OnDutySession.STATUS_ACTIVE else first)
             for day in _each_day(max(first, start), min(max(last, first), end)):
-                if day in punched:
-                    put(day, "verified", s["destination"])
-                elif day in awaiting:
-                    put(day, "punches_pending", s["destination"])
+                if (emp_id, day) in punched:
+                    put(emp_id, day, "verified", s["destination"])
+                elif (emp_id, day) in awaiting:
+                    put(emp_id, day, "punches_pending", s["destination"])
                 else:
-                    put(day, "no_punches", s["destination"])
+                    put(emp_id, day, "no_punches", s["destination"])
         elif s["status"] in (OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR):
             day = _ist_day(s["created_at"])
             if start <= day <= end:
-                put(day, "pending", s["destination"])
+                put(emp_id, day, "pending", s["destination"])
         elif s["status"] == OnDutySession.STATUS_REJECTED:
             day = _ist_day(s["created_at"])
             if start <= day <= end:
-                put(day, "rejected", s["destination"])
+                put(emp_id, day, "rejected", s["destination"])
     return out
 
 

@@ -8,8 +8,12 @@ import path from "node:path";
 
 export const CLEAN_DIR = import.meta.dirname;
 
-/** What every selector in the theme must start with: only when the theme is chosen, never inside the MD portal. */
-export const SCOPE = 'html[data-theme="clean"]:not([data-md-theme])';
+/** What every selector in the theme must start with: only when the theme is chosen, never inside the MD portal.
+ *  `data-clean-theme` is a presence attribute that only the Clean theme puts on <html> (ThemeContext.tsx, index.html): the
+ *  browser's quick ancestor check knows attribute NAMES, not values, and <html> always carries `data-theme`, so without it
+ *  every one of the theme's rules was matched against every element on every style recalculation under the other themes
+ *  (the Live Map spent ~5 s per minute of panning on it). With it, the theme costs the other themes nothing. */
+export const SCOPE = 'html[data-theme="clean"][data-clean-theme]:not([data-md-theme])';
 
 export type Block = {
   /** The text before the `{`: a selector list, or an at-rule such as `@media (max-width: 640px)`. */

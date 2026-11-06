@@ -31,6 +31,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { NotEndedNote, PeriodError } from "./CycleNotices";
+import { coverageText } from "./coverage";
 import {
   ROSTER_STATE_LABEL,
   ROSTER_STATES,
@@ -100,6 +101,8 @@ export function EmployeesTab({
   );
   const issuesState = dataState(issuesQuery);
   const rulesState = dataState(rulesQuery);
+  const againCleared = again?.payroll?.status === "paid";
+  const againCoverage = coverageText(again?.coverage);
 
   // Asks for exactly these employees of this cycle and period (a run never touches anybody else).
   const run = useCallback(
@@ -305,10 +308,24 @@ export function EmployeesTab({
         <AlertDialogContent data-testid="pcp-regenerate-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>Generate again for {again?.name}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This recomputes the payslip for {periodLabel} from the attendance as it is now. Anything you adjusted on
-              it (bonus or deductions) is replaced, and an advance instalment already taken from it is not taken again.
-              A payslip that is already paid is never recomputed.
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  This recomputes the payslip for {periodLabel} from the attendance as it is now. Anything you adjusted
+                  on it (bonus or deductions) is replaced, and an advance instalment already taken from it is not taken
+                  again.
+                </p>
+                <p data-testid="pcp-regenerate-cleared">
+                  {againCleared
+                    ? "This payslip is marked Cleared and stays Cleared: only its figures are worked out again."
+                    : "A payslip marked Cleared stays Cleared when it is generated again."}
+                </p>
+                {againCoverage && (
+                  <p className="font-medium text-sky-800" data-testid="pcp-regenerate-coverage">
+                    Days already paid on another payslip are not paid again: {againCoverage}.
+                  </p>
+                )}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

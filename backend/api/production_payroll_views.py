@@ -11,9 +11,12 @@ cycle's own periods. Without a period the next due one is used.
 
 Generating never silently overwrites what is already there:
   * an employee who already has payroll for the period is left alone and counted as "already generated";
-  * a payslip already marked paid is never recomputed;
-  * a period that overlaps days already paid in another payslip of the same employee is refused for that employee;
-  * only an explicit one-employee request with regenerate=true recomputes a payslip that is still pending.
+  * only an explicit request with regenerate=true ("Generate again") recomputes an existing payslip; one marked Cleared
+    is recomputed too and STAYS Cleared (owner 2026-11-06, as on Staff Payroll);
+  * no working day is paid twice (production_coverage.py, 2026-11-06): when the employee moved between cycles, the
+    days of the period another payroll already paid are left out and only the rest is paid; days that no cycle paid
+    because of the move are added to the first payroll on the new cycle as catch-up days. An employee with nothing
+    left to pay in the period is refused, naming the payroll(s) that already paid it.
 """
 
 from datetime import date
@@ -35,6 +38,7 @@ from .payroll_views import (
     _generate_production_payroll,
     _payroll_json,
 )
+from .production_coverage import PeriodPlan, plan_period, plans_for_employees, spans_for_employees
 from .production_cycles import CYCLE_DAYS, CYCLE_LABELS, CYCLES, cycle_config, normalize_cycle
 from .production_period import (
     InvalidPeriodConfig,
@@ -129,40 +133,47 @@ def _name(emp: Employee) -> str:
 # ── what would happen to one employee ──────────────────────────────────────────
 
 
-def _classify(emp: Employee, start: date, end: date, regenerate: bool) -> tuple[str, str | None]:
-    """('run', None) generate; ('existing', None) already has payroll for the period; ('blocked', why) refused."""
-    existing = Payroll.objects.filter(employee=emp, period_start=start, period_end=end).first()
-    if existing is not None:
-        if existing.status == Payroll.STATUS_PAID:
-            return "blocked", "Already paid for this period."
-        if not regenerate:
-            return "existing", None
-    clash = (
-        Payroll.objects.filter(employee=emp, period_start__isnull=False, period_start__lte=end, period_end__gte=start)
-        .exclude(period_start=start, period_end=end)
-        .order_by("period_start")
-        .first()
-    )
-    if clash is not None:
-        return "blocked", (
-            f"Overlaps the payroll already generated for {clash.period_start.isoformat()} to "
-            f"{clash.period_end.isoformat()}."
-        )
+def _who(emp: Employee) -> dict:
+    return {"employeeId": emp.id, "employeeCode": emp.employee_code, "name": _name(emp)}
+
+
+def _classify(plan: PeriodPlan, has_payroll: bool, regenerate: bool) -> tuple[str, str | None]:
+    """('run', None) generate the days `plan` pays; ('existing', None) the employee already has payroll for the period
+    and nobody asked to generate it again (pending or Cleared, it is left alone); ('blocked', why) refused: every day
+    of the period is already paid by another payroll."""
+    if has_payroll and not regenerate:
+        return "existing", None
+    if plan.refused:
+        return "blocked", plan.refusal_reason()
     return "run", None
 
 
-def _plan(employees, start: date, end: date, regenerate: bool):
-    """Sorts a roster into (to_run, already_generated, blocked) for one period."""
+def _plan(employees, start: date, end: date, regenerate: bool, cycle: str):
+    """Sorts a roster into (to_run, already_generated, blocked) for one period. `to_run` holds (employee, plan) pairs:
+    the plan says which days to pay (production_coverage.py). Two queries for the whole roster."""
+    ids = [e.id for e in employees]
+    has_payroll = set(
+        Payroll.objects.filter(employee_id__in=ids, period_start=start, period_end=end).values_list(
+            "employee_id", flat=True
+        )
+    )
+    spans = spans_for_employees(ids)
     to_run, existing, blocked = [], [], []
     for emp in employees:
-        verdict, why = _classify(emp, start, end, regenerate)
+        plan = plan_period(spans[emp.id], start, end, cycle)
+        verdict, why = _classify(plan, emp.id in has_payroll, regenerate)
         if verdict == "run":
-            to_run.append(emp)
+            to_run.append((emp, plan))
         elif verdict == "existing":
             existing.append(emp)
         else:
-            blocked.append({"employeeId": emp.id, "employeeCode": emp.employee_code, "name": _name(emp), "reason": why})
+            blocked.append({**_who(emp), "reason": why, "coverage": plan.json()})
     return to_run, existing, blocked
+
+
+def _partial(to_run) -> list[dict]:
+    """The employees of a run who are paid for part of the period only, or get catch-up days, with exactly which days."""
+    return [{**_who(emp), "coverage": plan.json()} for emp, plan in to_run if not plan.is_plain]
 
 
 def _select(request: Request, cycle: str, ids: list[int] | None):
@@ -357,23 +368,21 @@ def production_period_status(request: Request) -> Response:
         p.employee_id: p
         for p in Payroll.objects.filter(employee_id__in=[e.id for e in roster], period_start=start, period_end=end)
     }
-    clashes = {}
-    for clash in Payroll.objects.filter(
-        employee_id__in=[e.id for e in roster], period_start__isnull=False, period_start__lte=end, period_end__gte=start
-    ).exclude(period_start=start, period_end=end):
-        clashes.setdefault(clash.employee_id, clash)
+    # which days of the period each employee's payroll pays (or would pay): days other payroll already paid are left
+    # out, catch-up days after a cycle change are added (production_coverage.py)
+    plans = plans_for_employees([e.id for e in roster], start, end, cycle)
 
     employees = []
     counts = {"generated": 0, "paid": 0, "ready": 0, "blocked": 0}
     for emp in roster:
         payroll = existing.get(emp.id)
+        plan = plans[emp.id]
         blocked = None
         if payroll is None:
             if not emp.salary_per_shift or emp.salary_per_shift <= 0:
                 blocked = NO_RATE
-            elif emp.id in clashes:
-                c = clashes[emp.id]
-                blocked = f"Overlaps the payroll already generated for {c.period_start.isoformat()} to {c.period_end.isoformat()}."
+            elif plan.refused:
+                blocked = plan.refusal_reason()
         if payroll is not None:
             counts["paid" if payroll.status == Payroll.STATUS_PAID else "generated"] += 1
         elif blocked:
@@ -389,6 +398,9 @@ def production_period_status(request: Request) -> Response:
                 "salaryPerShift": float(emp.salary_per_shift) if emp.salary_per_shift is not None else None,
                 "payroll": _payroll_json(payroll, _name(emp)) if payroll is not None else None,
                 "blockedReason": blocked,
+                # the days the payslip pays (or would pay), the days of the period another payroll already paid, and any
+                # catch-up days after a pay-cycle change; `partial` false = the whole period, as usual
+                "coverage": plan.json(),
             }
         )
     return Response(
@@ -423,13 +435,13 @@ def production_skip_check(request: Request) -> Response:
     regenerate = _flag(request.query_params.get("regenerate"))
 
     employees, outside = _select(request, cycle, ids)
-    to_run, already, skipped = _plan(employees, start, end, regenerate)
+    to_run, already, skipped = _plan(employees, start, end, regenerate, cycle)
     skipped = outside + skipped
     prod_config = ProductionShiftConfig.get()  # one config object for the whole loop: the shift rules load once
-    for emp in to_run:
+    for emp, plan in to_run:
         try:
             with transaction.atomic():
-                _generate_production_payroll(emp, start, end, pay_cycle=cycle, prod_config=prod_config)
+                _generate_production_payroll(emp, start, end, pay_cycle=cycle, prod_config=prod_config, pay_ranges=plan)
                 raise _DryRunAbort()
         except _DryRunAbort:
             continue
@@ -448,6 +460,8 @@ def production_skip_check(request: Request) -> Response:
             "alreadyGenerated": len(already),
             "skippedCount": len(skipped),
             "skipped": skipped,
+            # who would be paid for part of the period only (days already paid on another cycle) or get catch-up days
+            "partial": _partial(to_run),
         }
     )
 
@@ -464,8 +478,11 @@ def production_generate_payroll(request: Request) -> Response:
     cycle         weekly | biweekly | monthly -required; only that cycle's assigned employees are ever paid.
     periodStart/End  one of the cycle's own periods; omit both for the next due one. It must already have ended.
     employeeIds   generate only for these (they must be on the cycle's roster); omit for the whole roster.
-    regenerate    recompute a payslip that is still pending (never a paid one). Without it an employee who already
-                  has payroll for the period is left alone."""
+    regenerate    recompute the payslip the employee already has for the period ("Generate again"); one marked Cleared
+                  stays Cleared. Without it an employee who already has payroll for the period is left alone.
+
+    Each employee is paid only the days no other payroll paid (production_coverage.py); `partialDetails` lists who was
+    paid for part of the period or got catch-up days, and someone with nothing left to pay is skipped with the reason."""
     ps = settings_for(request)
     try:
         cycle = _cycle_of(request.data)
@@ -480,22 +497,26 @@ def production_generate_payroll(request: Request) -> Response:
         return _error(f"Period {start.isoformat()} to {end.isoformat()} has not ended yet.")
 
     employees, outside = _select(request, cycle, ids)
-    to_run, already, blocked = _plan(employees, start, end, regenerate)
+    to_run, already, blocked = _plan(employees, start, end, regenerate, cycle)
 
     from . import payroll_progress
 
-    generated, skipped = [], list(outside) + blocked
+    generated, skipped, partial = [], list(outside) + blocked, []
     if not payroll_progress.try_begin_run():
         return _error("A payroll run is already in progress. Wait for it to finish, then try again.", 409)
     try:
         payroll_progress.start(len(to_run))
         prod_config = ProductionShiftConfig.get()  # one config object for the whole loop: the shift rules load once
-        for emp in to_run:
+        for emp, plan in to_run:
             emp_name = _name(emp)
             before = len(generated)
             try:
-                result = _generate_production_payroll(emp, start, end, pay_cycle=cycle, prod_config=prod_config)
+                result = _generate_production_payroll(
+                    emp, start, end, pay_cycle=cycle, prod_config=prod_config, pay_ranges=plan
+                )
                 generated.append(_payroll_json(result["payroll"], emp_name))
+                if not plan.is_plain:
+                    partial.append({**_who(emp), "coverage": plan.json()})
             except PayrollSkip as exc:
                 skipped.append(
                     {"employeeId": emp.id, "employeeCode": emp.employee_code, "name": emp_name, "reason": str(exc)}
@@ -526,6 +547,7 @@ def production_generate_payroll(request: Request) -> Response:
             "message": (
                 f"{label} production payroll for {start.isoformat()} to {end.isoformat()}: "
                 f"{len(generated)} computed, {len(already)} already generated, {len(skipped)} skipped."
+                + (f" {len(partial)} paid only the days no other payroll paid (pay-cycle change)." if partial else "")
             ),
             "cycle": cycle,
             "periodStart": start.isoformat(),
@@ -537,6 +559,7 @@ def production_generate_payroll(request: Request) -> Response:
             ],
             "skipped": len(skipped),
             "skippedDetails": skipped,
+            "partialDetails": partial,
         },
         status=201,
     )

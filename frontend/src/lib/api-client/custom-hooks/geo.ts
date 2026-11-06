@@ -114,7 +114,8 @@ export const useOnDutyPunchVerificationsHR = (
   useQuery<OnDutyPunchVerificationItem[]>({
     queryKey: ["/api/on-duty-punch-verifications", status],
     queryFn: () => customFetch<OnDutyPunchVerificationItem[]>(`/api/on-duty-punch-verifications?status=${status}`),
-    refetchInterval: 20_000,
+    // every 30 s like the other pending lists (the sidebar badge reads it on every HR page)
+    refetchInterval: 30_000,
     enabled,
   });
 
@@ -221,7 +222,8 @@ export const useLiveLocationTeam = (enabled = true) =>
   useQuery<LiveLocationTeamMember[]>({
     queryKey: ["/api/live-location/team"],
     queryFn: () => customFetch<LiveLocationTeamMember[]>("/api/live-location/team"),
-    refetchInterval: 20_000,
+    // the old feed's phones ping about once a minute: every 30 s shows every new position
+    refetchInterval: 30_000,
     enabled,
   });
 
@@ -232,7 +234,7 @@ export const useLiveLocationTrail = (employeeId: number | null) =>
     queryKey: ["/api/live-location/trail", employeeId],
     queryFn: () => customFetch<LiveLocationTrailPoint[]>(`/api/live-location/team/${employeeId}/trail`),
     enabled: employeeId != null,
-    refetchInterval: 20_000,
+    refetchInterval: 30_000,
   });
 
 export type LiveLocationRoute = {
@@ -268,7 +270,8 @@ export const useOnDutyMap = (date: string) =>
   useQuery<{ date: string; employees: OnDutyMapEmployee[] }>({
     queryKey: ["/api/on-duty-map", date],
     queryFn: () => customFetch<{ date: string; employees: OnDutyMapEmployee[] }>(`/api/on-duty-map?date=${date}`),
-    refetchInterval: 20_000,
+    // a day's routes, not a live board: every 30 s (the Live Map is the 20-second view)
+    refetchInterval: 30_000,
   });
 
 export const useUpdateEmployeeLocationTracking = () => {

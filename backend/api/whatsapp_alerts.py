@@ -3,8 +3,10 @@ Automatic WhatsApp attendance alerts and punch reminders (staff employees).
 
 `run_attendance_alerts()` runs every minute (see whatsapp_alert_scheduler) and looks at TODAY
 only. Each message is exactly-once per employee and day: the row in WhatsAppMessageLog is reserved
-under a dedupe key before sending (see whatsapp_service.send_notification), so overlapping runs or a
-restart can never double-send.
+under a dedupe key (see whatsapp_service.send_notification), so overlapping runs or a restart can
+never double-send. Since 2026-11-06 the job only DECIDES what is due: each due alert is queued with
+the exact moment it stops being useful (`Due.until_s` -> the row's expires_at), and the paced
+dispatcher (whatsapp_dispatcher.py) sends it, or lets it expire.
 
 Everything is judged against the employee's OWN assigned shift for today (start, end, grace, lunch
 timings), never a company-wide time. The four alerts, each with its own switch on the WhatsApp
@@ -124,11 +126,8 @@ LATE_FRESH_S = 30 * 60  # after the late punch
 MISSING_FRESH_S = 60 * 60  # after the Missing Punch alert became due
 
 ALERT_TYPES = ("absent_alert", "late_alert", "four_punch_alert", "on_duty_punch_reminder", "missing_punch_alert")
-# If this many alerts failed in the last BREAKER_WINDOW_S the provider is refusing us (a disconnected or restricted
-# number, an outage): stop sending until it recovers rather than hammering it. A missing phone number is the
-# employee's problem, not the provider's, and doesn't count.
-BREAKER_FAILURES = 3
-BREAKER_WINDOW_S = 30 * 60
+# When the provider is refusing messages (a disconnected or restricted number, an outage) the job stops queueing alerts
+# until it recovers: the dispatcher's circuit breaker decides that (whatsapp_dispatcher.pause_state).
 
 # Short lines for the friendly reminder, chosen per employee, day and punch so the same person
 # doesn't see the same one twice in a day but a re-run of the job never changes a message's text.
@@ -325,11 +324,13 @@ class DayData:
 
 @dataclass
 class Due:
-    """One message to send: what kind, the dedupe tag that makes it once-a-day, and its variables."""
+    """One message to send: what kind, the dedupe tag that makes it once-a-day, its variables, and the moment (seconds
+    since midnight, IST, today) after which it is no longer worth sending (None: the type's own freshness)."""
 
     doc_type: str
     tag: str
     params: dict
+    until_s: int | None = None
 
 
 def non_working_reason(today: date) -> str | None:
@@ -536,6 +537,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
                         "on_duty_punch_reminder",
                         f"duty{slot.number}",
                         _reminder_params(emp, day, slot, name, date_text) | {"destination": day.on_duty[emp.id]},
+                        until_s=reminder_window(slot, lead_s)[1],
                     )
                 )
                 say(f"DUE: On-Duty reminder for {slot.name}.")
@@ -568,6 +570,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
                     "shift_end": _fmt_time(shift.end_time),
                     "wait_minutes": str(window_s // 60 + sw.absent_extra_minutes),
                 },
+                until_s=absent_cutoff_s + ABSENT_FRESH_S,
             )
         )
         say("DUE: Absent alert.")
@@ -655,6 +658,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
                     "grace_minutes": str(shift.grace_period_minutes or 0),
                     "grace_period": _plural(shift.grace_period_minutes or 0, "minute"),
                 },
+                until_s=first_minute_s + LATE_FRESH_S,
             )
         )
         say(
@@ -673,7 +677,14 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
         elif tag_sent(f"four{slot.number}"):
             say(f"Punch reminder for {slot.name}: already sent today.")
         else:
-            due.append(Due("four_punch_alert", f"four{slot.number}", _reminder_params(emp, day, slot, name, date_text)))
+            due.append(
+                Due(
+                    "four_punch_alert",
+                    f"four{slot.number}",
+                    _reminder_params(emp, day, slot, name, date_text),
+                    until_s=reminder_window(slot, lead_s)[1],
+                )
+            )
             say(f"DUE: Punch reminder for {slot.name}.")
 
     # 4. A punch is still missing some time after it was expected.
@@ -703,6 +714,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
                         "recorded": f"{n} of {len(slots)}",
                         "missing": ", ".join(s.name for s in slots[n:]),
                     },
+                    until_s=missing_window(slot, slots, wait_s, lead_s, end_s)[1],
                 )
             )
             say(f"DUE: Missing punch alert for {slot.name}.")
@@ -728,13 +740,15 @@ def _reminder_params(emp, day: DayData, slot: Slot, name: str, date_text: str) -
 
 
 def _recently_sent() -> tuple[int, int]:
-    """How many alert messages went out in the last hour and since midnight (factory time)."""
+    """How many alert messages were queued or went out in the last hour and since midnight (factory time)."""
     now_utc = timezone.now()
     day_start = now_utc.astimezone(FACTORY_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
     attempted = WhatsAppMessageLog.objects.filter(
         document_type__in=ALERT_TYPES,
         status__in=(
             WhatsAppMessageLog.STATUS_PENDING,
+            WhatsAppMessageLog.STATUS_QUEUED,
+            WhatsAppMessageLog.STATUS_SENDING,
             WhatsAppMessageLog.STATUS_SENT,
             WhatsAppMessageLog.STATUS_DELIVERED,
             WhatsAppMessageLog.STATUS_READ,
@@ -747,22 +761,17 @@ def _recently_sent() -> tuple[int, int]:
 
 
 def provider_is_failing() -> bool:
-    """Have several alerts failed lately for a reason that is the provider's, not the employee's?"""
-    failed = (
-        WhatsAppMessageLog.objects.filter(
-            document_type__in=ALERT_TYPES,
-            status=WhatsAppMessageLog.STATUS_FAILED,
-            created_at__gte=timezone.now() - timedelta(seconds=BREAKER_WINDOW_S),
-        )
-        .exclude(error_message__startswith="No phone")
-        .count()
-    )
-    return failed >= BREAKER_FAILURES
+    """Is the provider refusing messages right now (the dispatcher's circuit breaker: several provider failures of any
+    message lately, not the employee's own problem such as a missing phone number)?"""
+    from . import whatsapp_dispatcher
+
+    return whatsapp_dispatcher.provider_is_failing()
 
 
 def run_attendance_alerts(now: datetime | None = None) -> dict:
-    """Evaluate today's attendance and send whichever alerts are due.
-    Returns {alert_type: number_sent} (empty when nothing was due)."""
+    """Evaluate today's attendance and queue whichever alerts are due.
+    Returns {alert_type: number_queued} (empty when nothing was due; under tests, where a queued row is delivered at
+    once, that is the number sent or attempted)."""
     sent: Counter = Counter()
     switches = WhatsAppSettings.get()
     if not switches.attendance_alerts_enabled:
@@ -774,7 +783,7 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
         or switches.missing_punch_alert_enabled
     ):
         return dict(sent)
-    if not whatsapp_service.is_configured():
+    if not whatsapp_service.is_configured() or not whatsapp_service.engine_enabled(switches):
         return dict(sent)
 
     now = now or ist_now()
@@ -782,10 +791,8 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
         return dict(sent)
     if provider_is_failing():
         logger.warning(
-            "WhatsApp attendance alerts paused: %s or more alerts failed in the last %s minutes, so the provider "
-            "is refusing messages (a disconnected or restricted number?). Fix that and they resume by themselves.",
-            BREAKER_FAILURES,
-            BREAKER_WINDOW_S // 60,
+            "WhatsApp attendance alerts paused: several messages failed at the provider lately (a disconnected or "
+            "restricted number?). Fix that and they resume by themselves."
         )
         return dict(sent)
     day = load_day(now, switches)
@@ -812,14 +819,16 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
                 held += 1  # not marked as sent: it is looked at again next minute while it is still fresh
                 continue
             day.already.add(key)
-            # Inline (not the background worker): this job is already a background thread, and running
-            # in order keeps the pause between messages meaningful.
-            log = whatsapp_service.send_notification(
-                emp, item.doc_type, item.params, dedupe_key=key, asynchronous=False
+            # Queued, not sent: the dispatcher paces every message the number sends. The alert expires the moment it
+            # stops being useful, so a held-up queue can never release a backlog of stale alerts.
+            until = (
+                datetime.combine(day.today, time_type(0, 0), tzinfo=FACTORY_TZ) + timedelta(seconds=item.until_s)
+                if item.until_s is not None
+                else None
             )
-            if log is not None:
+            log = whatsapp_service.send_notification(emp, item.doc_type, item.params, dedupe_key=key, expires_at=until)
+            if log is not None and log.status != WhatsAppMessageLog.STATUS_SKIPPED:
                 sent[item.doc_type] += 1
-                whatsapp_service.pace()
 
     if held:
         logger.warning(
@@ -831,5 +840,5 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
             per_day,
         )
     if sent:
-        logger.warning("WhatsApp attendance alerts sent: %s", dict(sent))
+        logger.warning("WhatsApp attendance alerts queued: %s", dict(sent))
     return dict(sent)

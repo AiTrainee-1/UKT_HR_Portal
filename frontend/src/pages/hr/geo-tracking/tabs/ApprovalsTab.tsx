@@ -10,8 +10,9 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import { explainsWaiting, hrCanAct, hrCanReject, waitingText } from "@/lib/approval-workflow";
 import { useOnDutySessionsHR, useUpdateOnDutySessionHR, type OnDutySessionItem } from "@/lib/api-client/custom-hooks";
+import DecisionDialog from "../DecisionDialog";
 import { fmtDateTime } from "../logic";
-import { CountText, Eyebrow, ListSkeleton, Note, PersonCell, SessionChip, ToolbarCard } from "../kit";
+import { CardSkeleton, CountText, Eyebrow, LoadError, Note, PersonCell, SessionChip, ToolbarCard } from "../kit";
 
 type Filter = "pending" | "active" | "completed" | "rejected";
 
@@ -23,7 +24,8 @@ const FILTERS: { value: Filter; label: string }[] = [
 ];
 
 const EMPTY_HINT: Record<Filter, string> = {
-  pending: "New On-Duty requests from employees appear here for a decision.",
+  pending:
+    "Nothing waits for you. New On-Duty requests from employees appear here for a decision. The sidebar shows a badge when one arrives.",
   active: "Approved requests that employees are working under now appear here.",
   completed: "Requests whose duty was marked Done, or ended with the 4th punch, appear here.",
   rejected: "Requests that were turned down appear here.",
@@ -166,7 +168,7 @@ function SessionCard({
             {canApprove && (
               <Button
                 size="sm"
-                className="h-9 flex-1 gap-1.5 bg-green-600 text-xs hover:bg-green-700 lg:flex-none"
+                className="h-9 flex-1 gap-1.5 bg-green-600 bg-none text-xs hover:bg-green-700 lg:flex-none"
                 disabled={busy}
                 onClick={() => onDecide(session, "approved")}
               >
@@ -194,13 +196,15 @@ function SessionCard({
 export default function ApprovalsTab() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<Filter>("pending");
-  const { data: sessions, isLoading } = useOnDutySessionsHR(statusFilter);
+  const { data: sessions, isLoading, isError, error, refetch } = useOnDutySessionsHR(statusFilter);
   const updateMutation = useUpdateOnDutySessionHR();
   const rows = sessions ?? [];
+  // the decision HR clicked, waiting for its confirmation
+  const [asking, setAsking] = useState<{ session: OnDutySessionItem; status: "approved" | "rejected" } | null>(null);
 
-  const handleDecision = async (session: OnDutySessionItem, status: "approved" | "rejected") => {
+  const handleDecision = async (session: OnDutySessionItem, status: "approved" | "rejected", comment?: string) => {
     try {
-      const result = await updateMutation.mutateAsync({ id: session.id, status });
+      const result = await updateMutation.mutateAsync({ id: session.id, status, comment });
       const passedOn =
         status === "approved" && result != null && (result.status === "pending_hod" || result.status === "pending_hr");
       toast({
@@ -231,16 +235,88 @@ export default function ApprovalsTab() {
       </ToolbarCard>
 
       {isLoading ? (
-        <ListSkeleton />
+        <CardSkeleton />
+      ) : isError && rows.length === 0 ? (
+        <LoadError
+          title="The On-Duty requests could not be loaded."
+          error={error}
+          onRetry={() => void refetch()}
+          testId="approvals-error"
+        />
       ) : rows.length === 0 ? (
         <EmptyNote icon={MapPinned} title={`No ${statusFilter} On-Duty sessions.`} hint={EMPTY_HINT[statusFilter]} />
       ) : (
         <div className="grid gap-3">
-          {rows.map((session) => (
-            <SessionCard key={session.id} session={session} busy={updateMutation.isPending} onDecide={handleDecision} />
+          {rows.map((session, i) => (
+            <div
+              key={session.id}
+              className="animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-300 motion-reduce:animate-none"
+              style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
+            >
+              <SessionCard
+                session={session}
+                busy={updateMutation.isPending}
+                onDecide={(s, status) => setAsking({ session: s, status })}
+              />
+            </div>
           ))}
         </div>
       )}
+
+      <DecisionDialog
+        open={asking !== null}
+        onOpenChange={(open) => !open && setAsking(null)}
+        tone={asking?.status === "rejected" ? "reject" : "approve"}
+        title={asking?.status === "rejected" ? "Reject this On-Duty request?" : "Approve this On-Duty request?"}
+        confirmLabel={asking?.status === "rejected" ? "Reject request" : "Approve request"}
+        withComment
+        description={asking ? <DecisionText session={asking.session} status={asking.status} /> : null}
+        onConfirm={(comment) => {
+          if (asking) void handleDecision(asking.session, asking.status, comment);
+          setAsking(null);
+        }}
+        testId="approval-confirm"
+      />
     </div>
+  );
+}
+
+/** What a decision on a request does, said before it is sent. */
+function DecisionText({ session, status }: { session: OnDutySessionItem; status: "approved" | "rejected" }) {
+  const punches = session.pendingPunchCount;
+  const who = (
+    <b className="text-gray-900">
+      {session.employeeName} ({session.employeeCode})
+    </b>
+  );
+  if (status === "rejected") {
+    return (
+      <>
+        <p>
+          {who}&rsquo;s request to work at &ldquo;{session.destination}&rdquo; is turned down and their location
+          tracking for it stops. Everything recorded until now is kept in Journey History.
+        </p>
+        {punches > 0 && (
+          <p className="font-medium text-red-700">
+            The {punches} punch{punches === 1 ? "" : "es"} recorded under it {punches === 1 ? "is" : "are"} voided and
+            never reach attendance.
+          </p>
+        )}
+      </>
+    );
+  }
+  return (
+    <>
+      <p>
+        {who} may work at &ldquo;{session.destination}&rdquo;
+        {session.approval && session.approval.waitingFor.length > 1 ? " once the remaining approval is given" : ""}.
+      </p>
+      {punches > 0 && (
+        <p>
+          The {punches} punch{punches === 1 ? "" : "es"} recorded under it then wait{punches === 1 ? "s" : ""} for your
+          check on Punch Verifications.
+        </p>
+      )}
+    </>
   );
 }

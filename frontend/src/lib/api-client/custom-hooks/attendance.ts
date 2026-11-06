@@ -77,7 +77,129 @@ export type AttendanceDailyRecord = DayCompensationMarker & {
   source?: string | null;
   sourceLabel?: string | null;
   totalPunches: number;
+  /** Production, once the shift-table rules judge the date: the shift day's credit, flags and the rule applied. */
+  shiftsEarned?: number;
+  isLate?: boolean;
+  isEarlyOut?: boolean;
+  ruleGroup?: string | null;
+  ruleNote?: string | null;
+  lastPunchNextDay?: boolean;
+  /** Every punch of the day with its source (2026-11-06; absent on an older backend). */
+  punches?: ListedPunch[];
+  /** The day's leave / Casual Leave / On-Duty state (2026-11-06; absent on an older backend). */
+  leaveState?: DayLeaveState | null;
+  leave?: DayLeaveRequest | null;
+  casualLeave?: DayCasualLeave | null;
+  onDuty?: DayOnDuty | null;
 };
+
+/**
+ * One punch as the Staff / Production Attendance page lists it (attendance_views._display_punches). `date` is the real
+ * calendar date: a night worker's closing punch made after midnight is listed on the shift day with the next date and
+ * `nextDay`. `counted: false` marks a punch the day's verdict is not built from: an On-Duty punch still held for HR
+ * (`verification: "pending"`) or turned down ("rejected"), the morning punch that closes the previous night's shift
+ * (`note: "previous_shift"`), or a double tap (`note: "double_tap"`). Absent `counted` = counted.
+ */
+export type ListedPunch = {
+  date: string;
+  /** HH:MM:SS */
+  time: string;
+  type: "IN" | "OUT" | string;
+  source: string;
+  sourceLabel: string;
+  nextDay?: boolean;
+  counted?: boolean;
+  verification?: "pending" | "rejected";
+  note?: "previous_shift" | "double_tap";
+};
+
+/** on_duty > cl > on_leave > leave_applied: see attendance_views._leave_state_fields. */
+export type DayLeaveState = "leave_applied" | "on_leave" | "cl" | "on_duty";
+
+export type DayLeaveRequest = {
+  status: "approved" | "pending";
+  type: string;
+  isHalfDay: boolean;
+  halfDaySlot?: "morning" | "afternoon" | null;
+  startDate: string;
+  endDate: string;
+  reason?: string | null;
+};
+
+export type DayCasualLeave = {
+  status: "approved" | "pending";
+  portion: "full" | "first_half" | "second_half" | string;
+  reason?: string | null;
+};
+
+export type DayOnDuty = {
+  state: "verified" | "punches_pending" | "no_punches" | "pending" | "rejected";
+  label: string;
+  destination?: string | null;
+};
+
+/** GET /api/attendance/employee-punches: every punch of one employee's month, by day. */
+export type EmployeePunchMonth = {
+  employee: { id: number; code: string; name: string; employmentType: string };
+  month: number;
+  year: number;
+  days: { date: string; shiftDay: boolean; punches: ListedPunch[] }[];
+  totalPunches: number;
+  countedPunches: number;
+  sources: { label: string; count: number }[];
+};
+
+export const getEmployeePunchMonthKey = (code: string, month: number, year: number) =>
+  ["/api/attendance/employee-punches", code, month, year] as const;
+
+export const useEmployeePunchMonth = (code: string, month: number, year: number, enabled = true) =>
+  useQuery<EmployeePunchMonth>({
+    queryKey: getEmployeePunchMonthKey(code, month, year),
+    queryFn: () =>
+      customFetch<EmployeePunchMonth>(
+        `/api/attendance/employee-punches?code=${encodeURIComponent(code)}&month=${month}&year=${year}`,
+      ),
+    enabled: enabled && !!code.trim(),
+    retry: false,
+  });
+
+/** GET /api/attendance/monthly-summary: one row per employee for the month up to today (the page's monthly report). */
+export type MonthlyAttendanceRow = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department?: string | null;
+  designation?: string | null;
+  employmentType: string;
+  workingDays: number;
+  present: number;
+  halfDay: number;
+  absent: number;
+  onLeave: number;
+  /** Approved Casual Leave days up to today (a half day = 0.5); also counted in `present`. */
+  cl: number;
+  /** Days an On-Duty request HR approved covers, up to today. */
+  onDuty: number;
+  late: number;
+  earlyOut: number;
+  holidays: number;
+  effectiveDays: number;
+  totalShifts: number;
+};
+
+export type MonthlyAttendanceSummary = {
+  year: number;
+  month: number;
+  employmentType: string | null;
+  asOf: string;
+  rows: MonthlyAttendanceRow[];
+};
+
+/** Read on demand (the export menu), not on page load: the server runs the attendance engine for every employee. */
+export const fetchMonthlyAttendanceSummary = (year: number, month: number, employmentType?: string) =>
+  customFetch<MonthlyAttendanceSummary>(
+    `/api/attendance/monthly-summary?year=${year}&month=${month}${employmentType ? `&employmentType=${employmentType}` : ""}`,
+  );
 
 export type AttendanceMonthlyTrendItem = {
   date: string;

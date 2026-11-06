@@ -41,6 +41,9 @@ const backendEnv = {
   WACLIENT_API_URL: `http://127.0.0.1:${FAKE_PORT}/send`,
   WHATSAPP_SEND_DELAY_SECONDS: "0",
   WHATSAPP_MIN_SEND_GAP_SECONDS: "0",
+  // The e2e stack delivers each WhatsApp message as soon as it is queued (no pacing, caps or quiet hours), so a spec can
+  // read the fake WAClient right after the action. The queue itself is tested in backend/api/tests_whatsapp_dispatcher.py.
+  WHATSAPP_ASYNC_SEND: "false",
   // SMS goes to a local fake of 2Factor (e2e/fake-twofactor.mjs), never to 2Factor: dummy credentials override whatever real
   // ones backend/.env holds (none of them looks like a placeholder, or the server would treat SMS as not set up), and the API
   // address can't leave the machine. A dev-mode backend (DEBUG) refuses to send SMS unless told otherwise; here it sends only

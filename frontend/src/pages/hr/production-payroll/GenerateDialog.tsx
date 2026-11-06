@@ -1,5 +1,15 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ClipboardList, Cog, Loader2, Play, ScanSearch, Wallet } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  CheckCircle2,
+  ClipboardList,
+  Cog,
+  Loader2,
+  Play,
+  ScanSearch,
+  Wallet,
+} from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,14 +36,17 @@ import {
   type ProductionPeriodStatus,
 } from "@/lib/api-client/custom-hooks";
 import { normalizeWeekStart, weekRunsText } from "../settings/production-payroll/cycles";
+import { coverageText, partialReady } from "./coverage";
 import { formatPeriod, skippedFromRoster } from "./logic";
 
 /**
  * "Generate payroll" for the whole roster of one cycle and one period: says what the run will do and which rules it will
  * use, who it will compute and who it leaves alone, and can check beforehand who would be skipped. Employees who already
  * have payroll for the period are left as they are, so it is safe to press again after paying or generating some people
- * one by one. The run itself is the same fire-and-forget request as before (PayrollGenerationContext owns it, so it keeps
- * going after this dialog closes).
+ * one by one ("Generate again" on the Employees tab recomputes one; a payslip marked Cleared stays Cleared, as on Staff
+ * Payroll). An employee who moved from another pay cycle is paid only the days no other payroll paid, and the dialog
+ * lists them with exactly which days. The run itself is the same fire-and-forget request as before
+ * (PayrollGenerationContext owns it, so it keeps going after this dialog closes).
  */
 export function GenerateDialog({
   cycle,
@@ -63,6 +76,8 @@ export function GenerateDialog({
   const existing = status.counts.generated + status.counts.paid;
   const blocked = status.counts.blocked;
   const blockedPeople = useMemo(() => skippedFromRoster(status.employees), [status.employees]);
+  const partPeople = useMemo(() => partialReady(status.employees), [status.employees]);
+  const clearedCount = status.counts.paid;
   const slabs = (own?.lateSlabs ?? ps?.prodLateDeductionSlabs ?? []).length;
 
   const handleGenerate = () => {
@@ -89,7 +104,7 @@ export function GenerateDialog({
           </DialogTitle>
           <DialogDescription>
             Production payroll of the {info.label} cycle for the period below, worked out from attendance. Payroll that
-            already exists is left as it is.
+            already exists is left as it is, and no day is ever paid twice.
           </DialogDescription>
         </DialogHeader>
 
@@ -115,18 +130,42 @@ export function GenerateDialog({
               {info.label} cycle will be computed.
             </p>
             {existing > 0 && (
-              <p className="text-gray-500">
+              <p className="text-gray-500" data-testid="pcp-generate-existing">
                 {plural(existing, "employee already has", "employees already have")} payroll for this period and{" "}
-                {existing === 1 ? "is" : "are"} left as {existing === 1 ? "it is" : "they are"}.
+                {existing === 1 ? "is" : "are"} left as {existing === 1 ? "it is" : "they are"}. To recompute one, use
+                Generate again on the Employees tab
+                {clearedCount > 0
+                  ? `; the ${clearedCount === 1 ? "payslip" : `${clearedCount} payslips`} marked Cleared stay${clearedCount === 1 ? "s" : ""} Cleared (only the figures are worked out again)`
+                  : " (a payslip marked Cleared stays Cleared)"}
+                .
               </p>
+            )}
+            {partPeople.length > 0 && (
+              <div className="text-sky-900" data-testid="pcp-generate-partial">
+                <p className="flex items-start gap-1.5">
+                  <CalendarClock size={13} className="mt-0.5 shrink-0 text-sky-600" />
+                  <span>
+                    {plural(partPeople.length, "employee changed", "employees changed")} pay cycle: only the days no
+                    other payroll paid are computed (catch-up days are added where no cycle paid them).
+                  </span>
+                </p>
+                <ul className="mt-1 max-h-28 space-y-0.5 overflow-y-auto pl-5 text-[11px] text-gray-600">
+                  {partPeople.map((p) => (
+                    <li key={p.employeeId} data-testid={`pcp-generate-partial-${p.employeeCode}`}>
+                      <span className="font-semibold text-gray-800">{p.name}</span>{" "}
+                      <span className="font-mono text-gray-400">{p.employeeCode}</span> - {coverageText(p.coverage)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
             {blocked > 0 && (
               <div className="text-amber-800">
                 <p className="flex items-start gap-1.5">
                   <AlertTriangle size={13} className="mt-0.5 shrink-0 text-amber-600" />
                   <span>
-                    {plural(blocked, "employee", "employees")} cannot be generated (no salary per shift, or the dates
-                    overlap payroll already paid): see Skipped Employees.
+                    {plural(blocked, "employee", "employees")} cannot be generated (no salary per shift, or every day of
+                    the period is already paid on another payslip): see Skipped Employees.
                   </span>
                 </p>
                 <ul className="mt-1 max-h-24 space-y-0.5 overflow-y-auto pl-5 text-[11px] text-gray-600">

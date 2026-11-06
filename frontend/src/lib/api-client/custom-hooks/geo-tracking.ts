@@ -822,12 +822,20 @@ export const useRebuildJourney = () => {
   });
 };
 
-/** Every active track, for the live board. Refreshed every 20 s. */
-export const useLiveTracks = (enabled = true) =>
+/** How often the Live Map reads the board. */
+export const LIVE_POLL_MS = 20_000;
+
+/**
+ * Every active track, for the live board. Refreshed every 20 s by the Live Map; a page that only shows how many are on duty
+ * passes a slower `pollMs` (the query is shared: while the Live Map is open the fastest observer sets the pace). Like every
+ * refresh of the portal it pauses while the browser tab is in the background.
+ */
+export const useLiveTracks = (enabled = true, pollMs: number = LIVE_POLL_MS) =>
   useQuery<LiveTrack[]>({
     queryKey: getLiveTracksQueryKey(),
     queryFn: async () => readLiveTracks(await customFetch<unknown>(`${PATH}/live`)),
-    refetchInterval: 20_000,
+    refetchInterval: pollMs,
+    refetchIntervalInBackground: false,
     retry: false,
     enabled,
   });

@@ -18,7 +18,8 @@ import {
 
 // Guards the Clean Professional theme (src/themes/clean/). The theme is an alternative to the glass-and-clay look and is
 // applied only when the owner picks it in Settings -> Themes, so these tests hold the rules that keep it from leaking:
-//   * every selector starts with the clean scope (html[data-theme="clean"]:not([data-md-theme])), so no other theme and
+//   * every selector starts with the clean scope (html[data-theme="clean"][data-clean-theme]:not([data-md-theme])), so no
+//     other theme and
 //     never the MD portal can match it; @keyframes steps are the one thing exempt, since they select nothing;
 //   * a colour value is written in tokens.css only, everything else reads a variable;
 //   * !important is rare, documented and capped;
@@ -71,6 +72,20 @@ describe("what the theme is made of", () => {
       .filter((f) => !/\.test\./.test(f))
       .filter((f) => /(?:\bfrom\s+|\bimport\s+|@import\s+)["'][^"']*themes\/clean/.test(fs.readFileSync(f, "utf8")));
     expect(users.map((f) => path.basename(f))).toEqual(["index.css"]);
+  });
+});
+
+describe("the theme costs the other themes nothing", () => {
+  it("its scope names a presence attribute only the Clean theme puts on <html>, so the browser skips it elsewhere", () => {
+    // <html> always carries data-theme (only its value changes) and the browser's quick ancestor check knows attribute names,
+    // not values: without a name of its own every rule of the theme was matched against every element under the other
+    // themes too (measured on the Live Map: ~5 s of style work per minute of panning, slow frames gone with it).
+    expect(SCOPE).toContain("[data-clean-theme]");
+    const root = path.join(import.meta.dirname, "../..");
+    const context = fs.readFileSync(path.join(root, "contexts/ThemeContext.tsx"), "utf8");
+    expect(context).toMatch(/toggleAttribute\("data-clean-theme", theme === "clean"\)/);
+    const indexHtml = fs.readFileSync(path.join(root, "../index.html"), "utf8");
+    expect(indexHtml).toContain('root.setAttribute("data-clean-theme", "")');
   });
 });
 

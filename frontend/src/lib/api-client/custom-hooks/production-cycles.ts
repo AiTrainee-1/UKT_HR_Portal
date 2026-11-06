@@ -155,6 +155,63 @@ export const useProductionPeriods = (cycle: PayCycle, around?: string | null) =>
     retry: false,
   });
 
+// ── Which days a payslip pays after a pay-cycle change (backend production_coverage.py) ──
+
+/** A run of days, both ends included (YYYY-MM-DD). */
+export type DayRange = { from: string; to: string };
+
+/** Days of the period that another payroll of the employee already paid. */
+export type AlreadyPaidPart = DayRange & {
+  payrollId: number;
+  /** The cycle that payroll was generated on; null for a staff month or a payroll from before the cycles. */
+  cycle: PayCycle | null;
+  kind: "staff" | "production";
+  /** "Weekly", "Staff Payroll", or "Production Payroll" (from before the cycles). */
+  label: string;
+  /** "pending" | "paid" (Cleared). */
+  status: string;
+  periodStart: string;
+  periodEnd: string;
+};
+
+/** Days before the period that no payroll paid because the employee changed cycle: added to this payslip. */
+export type CatchUpPart = DayRange & {
+  days: number;
+  /** The cycle the employee was on before (null for Staff Payroll). */
+  fromCycle: PayCycle | null;
+  fromKind: "staff" | "production";
+  fromLabel: string;
+  afterPayrollId: number;
+};
+
+/**
+ * What a payslip of one employee pays for one period. An ordinary payslip pays the whole period (`partial` false).
+ * After a pay-cycle change it pays only the days no other payroll paid (`payRanges`, `alreadyPaid` names the rest),
+ * plus any catch-up days (`catchUp`); `refused` = nothing is left to pay.
+ */
+export type PeriodCoverage = {
+  periodStart: string;
+  periodEnd: string;
+  periodDays: number;
+  /** Days of the period it pays. */
+  payDays: number;
+  catchUpDays: number;
+  /** Every day it pays (period days + catch-up days). */
+  paidDays: number;
+  payRanges: DayRange[];
+  alreadyPaid: AlreadyPaidPart[];
+  catchUp: CatchUpPart[];
+  /** Days after a payroll from before the cycles that no payroll paid: reported, never added. */
+  legacyGap: CatchUpPart | null;
+  partial: boolean;
+  refused: boolean;
+  /** The server's own sentence about it; null for an ordinary payslip. */
+  note: string | null;
+};
+
+/** One employee of a run who is paid for part of the period only, or gets catch-up days. */
+export type PartialEmployee = { employeeId: number; employeeCode: string; name: string; coverage: PeriodCoverage };
+
 export type PeriodEmployee = {
   employeeId: number;
   employeeCode: string;
@@ -163,8 +220,10 @@ export type PeriodEmployee = {
   salaryPerShift: number | null;
   /** The payslip the employee already has for the period, if any. */
   payroll: PayrollRunItem | null;
-  /** Why a payslip cannot be generated for them (no rate, or it overlaps days already paid). */
+  /** Why a payslip cannot be generated for them (no rate, or every day of the period is already paid elsewhere). */
   blockedReason: string | null;
+  /** Which days their payslip pays (or would pay); absent from an older server. */
+  coverage?: PeriodCoverage | null;
 };
 
 export type ProductionPeriodStatus = CyclePeriod & {
@@ -196,7 +255,13 @@ export type ProductionSkipCheckParams = CyclePeriod & {
   regenerate?: boolean;
 };
 
-export type ProductionSkipCheck = PayrollSkipCheckResult & CyclePeriod & { cycle: PayCycle; alreadyGenerated: number };
+export type ProductionSkipCheck = PayrollSkipCheckResult &
+  CyclePeriod & {
+    cycle: PayCycle;
+    alreadyGenerated: number;
+    /** Who would be paid for part of the period only, or get catch-up days (absent from an older server). */
+    partial?: PartialEmployee[];
+  };
 
 export const getProductionSkipCheckQueryKey = (params: ProductionSkipCheckParams | null) =>
   ["/api/payroll/production/skip-check", params] as const;
@@ -224,7 +289,7 @@ export type GenerateProductionArgs = {
   periodEnd?: string;
   /** Only these employees (they must be on the cycle's roster); leave out for the whole roster. */
   employeeIds?: number[];
-  /** Recompute a payslip that is still pending (a paid one is never recomputed). */
+  /** Recompute the payslip the employee already has ("Generate again"); one marked Cleared stays Cleared. */
   regenerate?: boolean;
 };
 
@@ -240,6 +305,8 @@ export type GenerateProductionResult = {
   alreadyGeneratedDetails: { employeeId: number; employeeCode: string; name: string }[];
   skipped: number;
   skippedDetails: SkippedEmployee[];
+  /** Who was paid for part of the period only, or got catch-up days (absent from an older server). */
+  partialDetails?: PartialEmployee[];
 };
 
 export const useGenerateProductionPayroll = () =>
@@ -359,6 +426,65 @@ export type AssignProductionCycleResult = {
   pendingOnOtherCycle: number;
   counts: ProductionEmployeeCounts;
 };
+
+// ── What a move would mean for pay (the warning shown before it) ──────────────
+
+export type CycleChangePreviewEmployee = {
+  employeeId: number;
+  employeeCode: string;
+  name: string;
+  fromCycle: PayCycle | null;
+  toCycle: PayCycle | null;
+  /** False when the employee is already on the target. */
+  changes: boolean;
+  /** True only when the employee really changes cycle AND has payroll history: nobody else is warned. */
+  warn: boolean;
+  lastPayroll: {
+    payrollId: number;
+    cycle: PayCycle | null;
+    kind: "staff" | "production";
+    label: string;
+    periodStart: string;
+    periodEnd: string;
+    status: string;
+  } | null;
+  /** The target cycle's next due period; null when taking them off a cycle or the cycle is not set up yet. */
+  nextPeriod: { start: string; end: string } | null;
+  payRanges: DayRange[];
+  alreadyPaid: AlreadyPaidPart[];
+  catchUp: CatchUpPart[];
+  legacyGap: CatchUpPart | null;
+  refused: boolean;
+  /** The owner's sentence with the real cycles and dates; null when `warn` is false. */
+  message: string | null;
+};
+
+export type CycleChangePreview = {
+  cycle: PayCycle | null;
+  label: string;
+  nextPeriod: { start: string; end: string } | null;
+  /** Why the target cycle cannot run yet (BiWeekly / Monthly need a first period start), or null. */
+  configError: string | null;
+  warnCount: number;
+  employees: CycleChangePreviewEmployee[];
+  skipped: { employeeId: number; reason: string }[];
+};
+
+export const getCycleChangePreviewQueryKey = (ids: readonly number[], cycle: PayCycle | null) =>
+  ["/api/employees/production/cycle-change-preview", [...ids], cycle ?? "unassigned"] as const;
+
+/** GET /api/employees/production/cycle-change-preview: read-only, asked while the move is being confirmed. */
+export const useCycleChangePreview = (ids: readonly number[], cycle: PayCycle | null, enabled: boolean) =>
+  useQuery<CycleChangePreview>({
+    queryKey: getCycleChangePreviewQueryKey(ids, cycle),
+    queryFn: () =>
+      customFetch<CycleChangePreview>(
+        `/api/employees/production/cycle-change-preview?ids=${ids.join(",")}&cycle=${cycle ?? "unassigned"}`,
+      ),
+    enabled: enabled && ids.length > 0,
+    staleTime: 0,
+    retry: false,
+  });
 
 export const useAssignProductionCycle = () => {
   const queryClient = useQueryClient();

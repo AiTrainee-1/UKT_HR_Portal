@@ -8,6 +8,7 @@ import { useAuth, canView, canViewRoute } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { hrCanAct } from '@/lib/approval-workflow';
 import { COMPENSATION_BASE, COMPENSATION_PAGES, pagePath } from '@/pages/hr/compensation/routes';
+import { GEO_BASE, GEO_SECTIONS, GEO_SECTION_LABEL, geoPath } from '@/pages/hr/geo-tracking/routes';
 import { useQuery } from '@tanstack/react-query';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
 import { customFetch } from '@/lib/api-client/custom-fetch';
@@ -18,7 +19,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText,
+  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText, MapPinned,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -74,11 +75,22 @@ export const navGroups: NavGroupData[] = [
         children: [
           { path: '/hr/attendance/staff', label: 'Staff Attendance' },
           { path: '/hr/attendance/production', label: 'Production Attendance' },
-          { path: '/hr/geo-attendance', label: 'Geo Attendance' },
           { path: '/hr/attendance/search', label: 'Attendance Search' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
           { path: '/hr/missing-punch', label: 'Missing Punch' },
         ],
+      },
+      {
+        // Work away from the premises is a module of its own (it used to be a page under Attendance): one address per
+        // section, a journey and its replay stay under Journey History. The pending On-Duty badge sits on this row.
+        path: GEO_BASE,
+        label: 'Geo Attendance',
+        icon: MapPinned,
+        children: GEO_SECTIONS.map((section) => ({
+          path: geoPath(section),
+          label: GEO_SECTION_LABEL[section],
+          matchSubpaths: section === 'journeys',
+        })),
       },
       {
         path: '/hr/outpass-visitors',
@@ -762,15 +774,8 @@ function HrSidebarView({
               : c
           ),
         }
-      : item.path === '/hr/attendance'
-      ? {
-          ...item,
-          children: item.children?.map((c) =>
-            c.path === '/hr/geo-attendance'
-              ? { ...c, badge: pendingOnDutyCount || undefined }
-              : c
-          ),
-        }
+      : item.path === GEO_BASE
+      ? { ...item, badge: pendingOnDutyCount || undefined }
       : item.path === '/hr/outpass-visitors'
       ? {
           ...item,

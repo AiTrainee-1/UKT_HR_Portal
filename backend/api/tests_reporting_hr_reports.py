@@ -45,6 +45,7 @@ HR_REPORT_IDS = {
     "production-daily-punches",
     "production-shift-rules",
     "hr-salary-statement",
+    "hr-production-salary-statement",
     "hr-daily-movement-register",
     "hr-punching-register",
     "hr-strength-register",
@@ -293,7 +294,7 @@ class CatalogAndAccessTests(_World):
             self.assertNotIn(RID, [r["id"] for r in catalog["reports"]], who.username)
             hr_group = [c for c in catalog["categories"] if c["id"] == "hr"]
             if who is self.employees_user:  # sees the attendance-gated reports, never the salary or payroll ones
-                visible = sorted(HR_REPORT_IDS - {RID, "hr-salary-statement"})
+                visible = sorted(HR_REPORT_IDS - {RID, "hr-salary-statement", "hr-production-salary-statement"})
                 self.assertEqual([c["count"] for c in hr_group], [len(visible)], who.username)
                 self.assertEqual(
                     sorted(r["id"] for r in catalog["reports"] if r["category"] == "hr"),

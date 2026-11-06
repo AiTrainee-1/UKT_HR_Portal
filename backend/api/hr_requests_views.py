@@ -105,7 +105,7 @@ KINDS: tuple[Kind, ...] = (
         "geo_attendance",
         "OnDutySession",
         "quick",
-        "/hr/geo-attendance",
+        "/hr/geo-attendance/approvals",
         "Geo Attendance",
         ("pending_hod", "pending_hr"),
         scope_field="branch_id",
@@ -117,7 +117,8 @@ KINDS: tuple[Kind, ...] = (
         "geo_attendance",
         "OnDutyPunchVerification",
         "link",
-        "/hr/geo-attendance",
+        # the section where the punches are decided (Geo Attendance has an address per section since 2026-11)
+        "/hr/geo-attendance/verifications",
         "Geo Attendance",
         ("pending",),
         select=("employee__department", "employee__designation", "employee__branch", "session"),

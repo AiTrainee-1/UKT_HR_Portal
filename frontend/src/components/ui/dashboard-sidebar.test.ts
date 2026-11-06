@@ -154,3 +154,55 @@ describe("the Outpass / Visitors group", () => {
       expect(navItemActive(gate(), path), path).toBe(true);
   });
 });
+
+describe("Geo Attendance is a module of its own", () => {
+  const geo = () => row("/hr/geo-attendance");
+  const lit = (path: string) =>
+    geo()
+      .children!.filter((c) => navChildActive(c, path))
+      .map((c) => c.label);
+
+  it("sits right after Attendance and before Outpass / Visitors, and is no longer inside Attendance", () => {
+    const top = navGroups[0].items.map((i) => i.label);
+    expect(top.indexOf("Geo Attendance")).toBe(top.indexOf("Attendance") + 1);
+    expect(top.indexOf("Outpass / Visitors")).toBe(top.indexOf("Geo Attendance") + 1);
+    expect(geo().icon).toBeTruthy();
+    expect(row("/hr/attendance").children!.map((c) => c.path)).not.toContain("/hr/geo-attendance");
+    expect(row("/hr/attendance").children!.map((c) => c.label)).toEqual([
+      "Staff Attendance",
+      "Production Attendance",
+      "Attendance Search",
+      "Report Log",
+      "Missing Punch",
+    ]);
+  });
+
+  it("lists its six sections, in the order of the page's tabs, each at its own address", () => {
+    expect(geo().children?.map((c) => [c.label, c.path])).toEqual([
+      ["On-Duty Approvals", "/hr/geo-attendance/approvals"],
+      ["Punch Verifications", "/hr/geo-attendance/verifications"],
+      ["Live Map", "/hr/geo-attendance/live-map"],
+      ["Journey History", "/hr/geo-attendance/journeys"],
+      ["On-Duty Map", "/hr/geo-attendance/on-duty-map"],
+      ["Tracking Settings", "/hr/geo-attendance/settings"],
+    ]);
+  });
+
+  it("is lit on every section, a journey and its replay, and lights exactly the section being viewed", () => {
+    for (const path of [
+      "/hr/geo-attendance/approvals",
+      "/hr/geo-attendance/live-map",
+      "/hr/geo-attendance/journeys/12",
+      "/hr/geo-attendance/journeys/12/simulate",
+      "/hr/geo-attendance/settings",
+    ])
+      expect(navItemActive(geo(), path), path).toBe(true);
+    expect(lit("/hr/geo-attendance/journeys")).toEqual(["Journey History"]);
+    expect(lit("/hr/geo-attendance/journeys/12")).toEqual(["Journey History"]);
+    expect(lit("/hr/geo-attendance/journeys/12/simulate")).toEqual(["Journey History"]);
+    expect(lit("/hr/geo-attendance/live-map")).toEqual(["Live Map"]);
+    expect(lit("/hr/geo-attendance/on-duty-map")).toEqual(["On-Duty Map"]);
+    expect(navItemActive(row("/hr/attendance"), "/hr/geo-attendance/live-map")).toBe(false);
+    expect(navItemActive(geo(), "/hr/attendance/staff")).toBe(false);
+  });
+});

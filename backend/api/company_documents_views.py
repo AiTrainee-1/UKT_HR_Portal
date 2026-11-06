@@ -339,9 +339,9 @@ def offer_letter_whatsapp(request: Request, employee_id: int) -> Response:
         body_params=[full_name(emp), desig_title],
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
-    if log.status != "sent":
+    if not whatsapp_service.accepted(log):
         return Response({"error": log.error_message}, status=400)
-    return Response({"ok": True, "sentTo": log.phone_number})
+    return Response({"ok": True, "sentTo": log.phone_number, "status": log.status, "queued": log.status == "queued"})
 
 
 # ── Experience Letter ───────────────────────────────────────────────────
@@ -452,9 +452,9 @@ def experience_letter_whatsapp(request: Request, employee_id: int) -> Response:
         body_params=[full_name(emp)],
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
-    if log.status != "sent":
+    if not whatsapp_service.accepted(log):
         return Response({"error": log.error_message}, status=400)
-    return Response({"ok": True, "sentTo": log.phone_number})
+    return Response({"ok": True, "sentTo": log.phone_number, "status": log.status, "queued": log.status == "queued"})
 
 
 # ── Salary Slip ──────────────────────────────────────────────────────────

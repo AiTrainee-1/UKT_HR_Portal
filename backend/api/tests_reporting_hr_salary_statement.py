@@ -74,6 +74,7 @@ ROUNDED_UP = ["esi", "net"]  # owner 2026-11-05: rounded up to the next whole ru
 def ceil_rupee(value) -> float:
     return float(Decimal(str(value)).to_integral_value(rounding=ROUND_CEILING))
 
+
 # The attendance engine only computes days that have elapsed: with "today" fixed after the month the figures do not depend
 # on the date the suite runs on.
 _FROZEN_TODAY = patch("api.attendance_final.ist_today", return_value=date(2026, 12, 31))
@@ -417,7 +418,8 @@ class ContentTests(_World):
         lokesh = by_code(self.get())["2896"]
         # 20 days + a half day + a Casual Leave day: Present 20.5 (the half day counts 0.5), its missing half is LOP
         self.assertEqual(
-            (lokesh["present"], lokesh["cl"], lokesh["lop"], lokesh["hd"], lokesh["totalDays"]), (20.5, 1.0, 4.5, 0.0, 21.5)
+            (lokesh["present"], lokesh["cl"], lokesh["lop"], lokesh["hd"], lokesh["totalDays"]),
+            (20.5, 1.0, 4.5, 0.0, 21.5),
         )
         self.assertEqual(lokesh["advance"], 2000.0)
         self.assertNotIn("tAdvance", lokesh)
@@ -955,7 +957,9 @@ class UnitTests(_World):
             day(velu, d)
         _generate_staff_payroll(velu, MONTH, YEAR)
         body = self.get()
-        self.assertEqual(headings(body), ["Accounts", "Admin", "Admin", "Cutting"])  # Unit 1: Accounts, Admin; Unit 2: ...
+        self.assertEqual(
+            headings(body), ["Accounts", "Admin", "Admin", "Cutting"]
+        )  # Unit 1: Accounts, Admin; Unit 2: ...
         u2 = [r for r in data_rows(body) if r["unit"] == "U2"]
         self.assertEqual([(r["code"], r["sno"]) for r in u2], [("5000", 1), ("6000", 2), ("3000", 3)])
         admin_u2 = subtotals(body)[("U2", "Admin")]
@@ -1063,7 +1067,9 @@ class OwnerColumnTests(_World):
                 day(hari, d)
         _generate_staff_payroll(hari, MONTH, YEAR)
         row = by_code(self.get())["6200"]
-        self.assertEqual((row["present"], row["cl"], row["lop"], row["hd"], row["totalDays"]), (25.0, 0.0, 0.0, 1.0, 26.0))
+        self.assertEqual(
+            (row["present"], row["cl"], row["lop"], row["hd"], row["totalDays"]), (25.0, 0.0, 0.0, 1.0, 26.0)
+        )
 
     def test_the_advance_column_is_always_there_right_after_tds(self):
         # owner 2026-11-05: PF, ESI, TDS, Advance, Others, Total Deduction, whether or not anybody repays an advance
@@ -1081,7 +1087,9 @@ class OwnerColumnTests(_World):
             )
         import pypdf
 
-        text = pypdf.PdfReader(io.BytesIO(self.export("pdf", branchIds=str(self.b2.id)).content)).pages[0].extract_text()
+        text = (
+            pypdf.PdfReader(io.BytesIO(self.export("pdf", branchIds=str(self.b2.id)).content)).pages[0].extract_text()
+        )
         self.assertIn("Advance", text)
 
 
@@ -1143,7 +1151,9 @@ class ClosingTests(_World):
         final = card_row + 6  # the All units block ends at card_row + 3; two empty rows
         self.assertEqual(ws.cell(row=final, column=1).value, "Final Summary")
         final_labels = [ws.cell(row=final + 1, column=c).value for c in range(1, ws.max_column + 1)]
-        self.assertEqual([v for v in final_labels if v], ["Total Salary", "Earned Salary", "Total Deduction", "Net Pay"])
+        self.assertEqual(
+            [v for v in final_labels if v], ["Total Salary", "Earned Salary", "Total Deduction", "Net Pay"]
+        )
         for label, key in (("Total Salary", "total"), ("Earned Salary", "eSalary"), ("Total Deduction", "totalDeduction"),
                            ("Net Pay", "net")):  # fmt: skip
             self.assertAlmostEqual(ws.cell(row=final + 2, column=final_labels.index(label) + 1).value, totals[key], 2)
@@ -1251,7 +1261,9 @@ class TotalDeductionActivePageBreakTests(_World):
         row = report_values(v, None, 27)
         self.assertEqual((row["esi"], row["net"]), (1252.0, 22784.0))
         self.assertAlmostEqual(row["totalDeduction"], 2253.48, 2)  # 1,001.48 + 1,252 (not 1,251.85)
-        self.assertAlmostEqual(row["pf"] + row["esi"] + row["tds"] + row["advance"] + row["others"], row["totalDeduction"], 2)
+        self.assertAlmostEqual(
+            row["pf"] + row["esi"] + row["tds"] + row["advance"] + row["others"], row["totalDeduction"], 2
+        )
         self.assertEqual((row["pf"], row["eSalary"]), (1001.48, 25037.04))  # nothing else moves
         # and on the statement every line adds up as printed
         for r in data_rows(self.get()):
@@ -1269,8 +1281,14 @@ class TotalDeductionActivePageBreakTests(_World):
 
     def test_each_unit_starts_a_fresh_printed_page_in_excel(self):
         ws = load_workbook(io.BytesIO(self.export("xlsx").content)).active
-        band = next(r for r in range(HEADER_ROW + 1, ws.max_row + 1) if str(ws.cell(row=r, column=1).value).startswith("U2"))
-        recap = next(r for r in range(HEADER_ROW + 1, ws.max_row + 1) if str(ws.cell(row=r, column=1).value).startswith("All units"))
+        band = next(
+            r for r in range(HEADER_ROW + 1, ws.max_row + 1) if str(ws.cell(row=r, column=1).value).startswith("U2")
+        )
+        recap = next(
+            r
+            for r in range(HEADER_ROW + 1, ws.max_row + 1)
+            if str(ws.cell(row=r, column=1).value).startswith("All units")
+        )
         self.assertEqual([b.id for b in ws.row_breaks.brk], [band - 1, recap - 1])  # before Unit 2, before All units
 
 
@@ -1295,7 +1313,9 @@ class UnitSummaryTests(_World):
             mine = self.unit_lines(unit)
             for i, cards in enumerate(self.KEYS_IN_BLOCK):
                 labels_row = head + 1 + 2 * i
-                columns = [c for c in range(1, ws.max_column + 1) if ws.cell(row=labels_row, column=c).value is not None]
+                columns = [
+                    c for c in range(1, ws.max_column + 1) if ws.cell(row=labels_row, column=c).value is not None
+                ]
                 columns = [c for c in columns if c != ws.max_column]  # not the Unit column
                 self.assertEqual([ws.cell(row=labels_row, column=c).value for c in columns], [lab for lab, _k in cards])
                 for c, (label, key) in zip(columns, cards):
@@ -1382,7 +1402,9 @@ class UnitFinalSummaryTests(_World):
             for label, key in self.FINAL:
                 self.assertIn(label, after)
                 self.assertIn(f"₹ {indian_number(round(sum(r[key] for r in mine), 2))}", after, (unit, key))
-            self.assertLess(page.index(f"{title[:-len(': Final Summary')]} Total"), page.index(title))  # after its block
+            self.assertLess(
+                page.index(f"{title[: -len(': Final Summary')]} Total"), page.index(title)
+            )  # after its block
         self.assertIn("Final Summary", next(p for p in pages if "All units Total" in p))  # and the company's at the end
 
     def test_every_unit_has_its_own_final_summary_in_excel(self):

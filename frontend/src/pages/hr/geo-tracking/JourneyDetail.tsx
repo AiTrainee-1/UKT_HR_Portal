@@ -12,6 +12,7 @@ import {
   Loader2,
   FileText,
   MapPinned,
+  PlayCircle,
   RefreshCw,
   Wrench,
 } from "lucide-react";
@@ -49,7 +50,16 @@ import { buildActivities, journeyStats } from "./activity";
 import { buildTimeline, endReasonLabel, fmtDate, fmtDateTime, istDay, mapModel, trailModel } from "./logic";
 import { ApprovalChip, Chip, EmptyNote, LiveBadge, StatePill } from "./ui";
 
-export default function JourneyDetail({ id, onBack }: { id: number; onBack: () => void }) {
+export default function JourneyDetail({
+  id,
+  onBack,
+  onSimulate,
+}: {
+  id: number;
+  onBack: () => void;
+  /** Replay the journey on the map (Journey Simulation). */
+  onSimulate?: () => void;
+}) {
   const { toast } = useToast();
   const { token, user } = useAuth();
   const query = useJourney(id);
@@ -161,6 +171,19 @@ export default function JourneyDetail({ id, onBack }: { id: number; onBack: () =
       <div className="flex flex-wrap items-center justify-between gap-2">
         {back}
         <div className="flex flex-wrap items-center gap-2">
+          {onSimulate && (
+            <Button
+              size="sm"
+              className="h-9 gap-1.5 text-xs"
+              onClick={onSimulate}
+              disabled={track.pointsCount === 0 && detail.path.length === 0}
+              title="Replay the recorded route on the map: play, pause, change the speed, jump to a stop"
+              data-testid="journey-simulate"
+              data-view-safe
+            >
+              <PlayCircle size={14} /> Simulate journey
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"

@@ -130,6 +130,159 @@ def _shift_day_punch_dicts(resolved: list, d: date_type, seconds: bool = False) 
     return out
 
 
+# ── Every punch of a day, for display (Staff / Production Attendance) ────────────────────────────────────────────────
+#
+# The list and the employee search show EVERY punch an employee made, not only the ones a day's verdict is built from:
+#   * the counted punches (AttendanceLog, any source: biometric device / ADMS / connector / Excel import, Office Geo Punch,
+#     approved On-Duty and Missing Punch, HR entries, Punch View edits, Auto Attendance), IN / OUT by position exactly as
+#     the other pages label them;
+#   * on a production day the shift-table rules judge, the two raw punches the engine does not count on that day, marked
+#     counted: false - the morning punch that closes the PREVIOUS day's night shift (it is listed there, nextDay) and a
+#     double tap within the engine's tap gap;
+#   * On-Duty punches still held for HR (OnDutyPunchVerification "pending") or turned down ("rejected"): they are not in
+#     AttendanceLog until HR approves them, so they are added from there, counted: false.
+# Display only: nothing here feeds a verdict, and every list is built from rows the caller already loaded.
+
+VERIFICATION_LABELS = {"pending": "On-Duty (awaiting HR)", "rejected": "On-Duty (rejected)"}
+
+
+def _punch_entry(log, d: date_type, ptype: str) -> dict:
+    item = {
+        "date": log.date.isoformat(),
+        "time": log.punch_time.strftime("%H:%M:%S"),
+        "type": ptype,
+        "source": log.source,
+        "sourceLabel": source_label(log.source),
+    }
+    if log.date > d:
+        item["nextDay"] = True
+    return item
+
+
+def _verification_entry(v) -> dict:
+    return {
+        "date": v.punch_date.isoformat(),
+        "time": v.punch_time.strftime("%H:%M:%S"),
+        "type": v.punch_type,
+        "source": f"on_duty:{v.status}",
+        "sourceLabel": VERIFICATION_LABELS.get(v.status, "On-Duty"),
+        "counted": False,
+        "verification": v.status,
+    }
+
+
+def _display_punches(d: date_type, counted: list, raw: list | None = None, verifications=()) -> list[dict]:
+    """Every punch of day `d` (see above), oldest first. `counted` = the punches the day is judged on, in order (the raw
+    punches of the date, or the resolved shift day of a production worker); `raw` = the date's own AttendanceLog rows when
+    `counted` is a resolved shift day (None otherwise: then every raw punch is already counted)."""
+    out = [_punch_entry(log, d, "IN" if i % 2 == 0 else "OUT") for i, log in enumerate(counted)]
+    if raw:
+        counted_ids = {log.id for log in counted}
+        extras = [log for log in raw if log.id not in counted_ids]
+        if extras:
+            # the resolver drops a double tap first and then, when the previous night took it, the date's first kept punch
+            ordered = sorted(raw, key=lambda log: (log.punch_time, log.id))
+            first_kept = ordered[0].punch_time
+            counted_times = {log.punch_time for log in counted if log.date == d}
+            closes_previous = first_kept not in counted_times
+            for log in extras:
+                item = _punch_entry(log, d, log.punch_type)
+                item["counted"] = False
+                item["note"] = "previous_shift" if closes_previous and log.punch_time == first_kept else "double_tap"
+                out.append(item)
+    out.extend(_verification_entry(v) for v in verifications)
+    out.sort(key=lambda p: (p["date"], p["time"]))
+    return out
+
+
+def _held_verifications(employee_ids, d_from: date_type, d_to: date_type) -> dict:
+    """{(employee id, date): [OnDutyPunchVerification]} of the On-Duty punches still waiting for HR or turned down, in
+    one query."""
+    from .models import OnDutyPunchVerification
+
+    out: dict = defaultdict(list)
+    qs = OnDutyPunchVerification.objects.filter(
+        punch_date__gte=d_from,
+        punch_date__lte=d_to,
+        status__in=[OnDutyPunchVerification.STATUS_PENDING, OnDutyPunchVerification.STATUS_REJECTED],
+    ).only("employee_id", "punch_date", "punch_time", "punch_type", "status")
+    if employee_ids is not None:
+        qs = qs.filter(employee_id__in=list(employee_ids))
+    for v in qs.order_by("punch_date", "punch_time", "id"):
+        out[(v.employee_id, v.punch_date)].append(v)
+    return out
+
+
+# ── Leave / Casual Leave / On-Duty of a day (Staff / Production Attendance) ──────────────────────────────────────────
+
+LEAVE_STATES = ("on_duty", "cl", "on_leave", "leave_applied")
+
+
+def _day_leave_facts(d: date_type, employee_ids) -> tuple[dict, dict, dict]:
+    """({employee id: LeaveRequest}, {employee id: CasualLeaveRequest}, {employee id: On-Duty state}) for day `d`, in
+    five queries for the whole roster: a leave request (approved first, then pending; a full day before a half day) and a
+    Casual Leave request (approved first, then pending) that cover `d`, and where an On-Duty request stands that day
+    (payroll_calendar.on_duty_states_by_employee: the same rules the payroll calendar shows)."""
+    from .models import CasualLeaveRequest
+    from .payroll_calendar import on_duty_states_by_employee
+
+    rank = {"approved": 0, "pending": 1}
+    leave_by_emp: dict = {}
+    for lr in LeaveRequest.objects.filter(
+        status__in=["approved", "pending"], start_date__lte=str(d), end_date__gte=str(d)
+    ).only("employee_id", "type", "status", "is_half_day", "half_day_slot", "reason", "start_date", "end_date"):
+        held = leave_by_emp.get(lr.employee_id)
+        if held is None or (rank[lr.status], lr.is_half_day) < (rank[held.status], held.is_half_day):
+            leave_by_emp[lr.employee_id] = lr
+    cl_by_emp: dict = {}
+    for cl in CasualLeaveRequest.objects.filter(date=d, status__in=["approved", "pending"]).only(
+        "employee_id", "status", "portion", "reason"
+    ):
+        held = cl_by_emp.get(cl.employee_id)
+        if held is None or rank[cl.status] < rank[held.status]:
+            cl_by_emp[cl.employee_id] = cl
+    od_by_emp = {emp_id: days[d] for emp_id, days in on_duty_states_by_employee(employee_ids, d, d).items() if d in days}
+    return leave_by_emp, cl_by_emp, od_by_emp
+
+
+def _leave_state_fields(leave, cl, od) -> dict:
+    """The additive leave keys of a daily-list row. leaveState: "on_duty" (an On-Duty request HR approved covers the day)
+    > "cl" (approved Casual Leave) > "on_leave" (approved leave, a half day included) > "leave_applied" (a leave or
+    Casual Leave request for the day still waiting for approval) > null. Descriptive only: `status` is untouched."""
+    from .payroll_calendar import ON_DUTY_APPROVED_STATES
+
+    if od is not None and od["state"] in ON_DUTY_APPROVED_STATES:
+        state = "on_duty"
+    elif cl is not None and cl.status == "approved":
+        state = "cl"
+    elif leave is not None and leave.status == "approved":
+        state = "on_leave"
+    elif (leave is not None and leave.status == "pending") or (cl is not None and cl.status == "pending"):
+        state = "leave_applied"
+    else:
+        state = None
+    return {
+        "leaveState": state,
+        "leave": (
+            {
+                "status": leave.status,
+                "type": leave.type,
+                "isHalfDay": bool(leave.is_half_day),
+                "halfDaySlot": leave.half_day_slot,
+                "startDate": str(leave.start_date)[:10],
+                "endDate": str(leave.end_date)[:10],
+                "reason": leave.reason,
+            }
+            if leave is not None
+            else None
+        ),
+        "casualLeave": (
+            {"status": cl.status, "portion": cl.portion, "reason": cl.reason} if cl is not None else None
+        ),
+        "onDuty": od,
+    }
+
+
 def _today() -> date_type:
     return ist_today()
 
@@ -679,13 +832,21 @@ def attendance_daily(request: Request) -> Response:
         [e.id for e in employees if e.employment_type == "production"], d,
     )
 
+    # Additive (2026-11-06): every punch of the day with its source, and the day's leave / Casual Leave / On-Duty state.
+    # A fixed handful of queries for the whole roster (On-Duty punches held for HR, leave, Casual Leave, On-Duty); the
+    # keys below never change `status` or any other existing key.
+    held = _held_verifications(None, d, d)
+    leave_by_emp, cl_by_emp, od_by_emp = _day_leave_facts(d, [e.id for e in employees])
+
     results = []
     for emp in employees:
         emp_logs = logs_by_emp.get(emp.id, [])
+        raw_logs = None
         manual = manual_by_emp.get(emp.id)
         shift_day = None
         if prod_ruleset is not None and emp.id in prod_days:
             resolved = prod_days[emp.id]
+            raw_logs = emp_logs
             emp_logs = [log for _secs, log in resolved]
             shift_day = psr.evaluate_day(prod_ruleset, d, [secs for secs, _log in resolved]) if resolved else None
 
@@ -737,6 +898,8 @@ def attendance_daily(request: Request) -> Response:
             "totalPunches": len(emp_logs),
             **compensation_marker_json(comp_rec),
             **_shift_day_fields(shift_day, emp_logs, d),
+            "punches": _display_punches(d, emp_logs, raw_logs, held.get((emp.id, d), ())),
+            **_leave_state_fields(leave_by_emp.get(emp.id), cl_by_emp.get(emp.id), od_by_emp.get(emp.id)),
         })
 
     return Response(results)
@@ -955,6 +1118,188 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
         "totalPresent": summary["present"] + summary["halfShift"],
         "totalAbsent":  summary["absent"],
         "records": records,
+    })
+
+
+# ── Every punch of one employee's month (Staff / Production Attendance: employee search) ────────────────────────────
+
+def _month_param(request: Request) -> tuple[int, int] | None:
+    today = ist_today()
+    try:
+        month = int(request.query_params.get("month") or today.month)
+        year = int(request.query_params.get("year") or today.year)
+    except (TypeError, ValueError):
+        return None
+    if not (1 <= month <= 12 and 2000 <= year <= 2100):
+        return None
+    return year, month
+
+
+@api_view(["GET"])
+@require_hr
+def attendance_employee_punches(request: Request) -> Response:
+    """
+    GET /api/attendance/employee-punches?code=<employee code>|employeeId=<id>&month=&year=
+
+    Every punch of one employee's month, day by day, with its source (see _display_punches): biometric (device, ADMS,
+    connector, Excel import), Office Geo Punch, approved On-Duty and Missing Punch, HR entries, Punch View edits, Auto
+    Attendance, plus On-Duty punches still waiting for HR (or turned down), which are not attendance punches yet. A
+    production day the shift-table rules judge is the SHIFT day: a night's closing punch made after midnight is listed on
+    the day the night began, with its own date and nextDay: true. Read only, branch-scoped, and a fixed number of queries
+    whatever the number of days.
+    """
+    parsed = _month_param(request)
+    if parsed is None:
+        return Response({"error": "Invalid month / year"}, status=400)
+    year, month = parsed
+    qs = scope_to_branch(Employee.objects, request).defer("photo_url")
+    emp_id = request.query_params.get("employeeId")
+    code = (request.query_params.get("code") or "").strip()
+    if emp_id:
+        try:
+            emp = qs.filter(pk=int(emp_id)).first()
+        except (TypeError, ValueError):
+            emp = None
+    elif code:
+        emp = qs.filter(employee_code__iexact=code).first()
+    else:
+        return Response({"error": "code or employeeId is required"}, status=400)
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+
+    d_from = date_type(year, month, 1)
+    d_to = date_type(year, month, calendar.monthrange(year, month)[1])
+    logs_by_date: dict = defaultdict(list)
+    for log in AttendanceLog.objects.filter(employee=emp, date__gte=d_from, date__lte=d_to).order_by(
+        "date", "punch_time", "id"
+    ):
+        logs_by_date[log.date].append(log)
+    _prod_rules, prod_days = _production_shift_days(emp, d_from, d_to)
+    held = _held_verifications([emp.id], d_from, d_to)
+
+    days = []
+    by_source: dict[str, dict] = {}
+    total = counted_total = 0
+    day = d_from
+    while day <= d_to:
+        raw = logs_by_date.get(day, [])
+        verifications = held.get((emp.id, day), ())
+        if day in prod_days:
+            punches = _display_punches(day, [log for _secs, log in prod_days[day]], raw, verifications)
+        else:
+            punches = _display_punches(day, raw, None, verifications)
+        if punches:
+            days.append({"date": day.isoformat(), "shiftDay": day in prod_days, "punches": punches})
+            for p in punches:
+                total += 1
+                counted_total += p.get("counted", True) is not False
+                slot = by_source.setdefault(p["sourceLabel"], {"label": p["sourceLabel"], "count": 0})
+                slot["count"] += 1
+        day += timedelta(days=1)
+
+    return Response({
+        "employee": {
+            "id": emp.id,
+            "code": emp.employee_code,
+            "name": f"{emp.first_name} {emp.last_name}",
+            "employmentType": emp.employment_type,
+        },
+        "month": month,
+        "year": year,
+        "days": days,
+        "totalPunches": total,
+        "countedPunches": counted_total,
+        "sources": sorted(by_source.values(), key=lambda s: (-s["count"], s["label"])),
+    })
+
+
+# ── Monthly report per employee (Staff / Production Attendance: Export) ──────────────────────────────────────────────
+
+@api_view(["GET"])
+@require_hr
+def attendance_monthly_summary(request: Request) -> Response:
+    """
+    GET /api/attendance/monthly-summary?year=&month=[&employmentType=staff|production]
+
+    One row per active employee (branch-scoped) for the month up to today: present, half day, absent, on leave, Casual
+    Leave, On-Duty and late days - the monthly report the Staff / Production Attendance page exports as Excel / PDF. The
+    day verdicts are the attendance engine's own (compute_month_records with one shared compensation prefetch, exactly as
+    the Report Log summary reads them; like every attendance page, the engine keeps its stored day records current while
+    it reads). Casual Leave = approved Casual Leave days (a half day = 0.5) and On-Duty = days an On-Duty request HR
+    approved covers, both up to today and both also counted in Present when the engine paid the day as present.
+    Nothing else is written.
+    """
+    from .attendance_final import compensation_prefetch_for_range, compute_month_records, month_summary_from_records
+    from .models import CasualLeaveRequest
+    from .payroll_calendar import ON_DUTY_APPROVED_STATES, on_duty_states_by_employee
+
+    parsed = _month_param(request)
+    if parsed is None:
+        return Response({"error": "Invalid month / year"}, status=400)
+    year, month = parsed
+    emp_type = request.query_params.get("employmentType")
+    if emp_type not in (None, "", "staff", "production"):
+        return Response({"error": "employmentType must be staff or production"}, status=400)
+
+    settings = settings_for(request)
+    m_start = date_type(year, month, 1)
+    m_end = date_type(year, month, calendar.monthrange(year, month)[1])
+    as_of = min(m_end, ist_today())
+
+    qs = (
+        scope_to_branch(Employee.objects, request)
+        .filter(status="active")
+        .select_related("department", "designation")
+        .defer("photo_url")
+        .order_by("department__name", "employee_code")
+    )
+    if emp_type:
+        qs = qs.filter(employment_type=emp_type)
+    employees = list(qs)
+    ids = [e.id for e in employees]
+
+    cl_days: dict[int, float] = defaultdict(float)
+    od_days: dict[int, int] = defaultdict(int)
+    if as_of >= m_start:
+        for row in CasualLeaveRequest.objects.filter(
+            employee_id__in=ids, status="approved", date__gte=m_start, date__lte=as_of
+        ).values("employee_id", "portion"):
+            cl_days[row["employee_id"]] += 1.0 if row["portion"] in (None, "", "full") else 0.5
+        for emp_id, states in on_duty_states_by_employee(ids, m_start, as_of).items():
+            od_days[emp_id] = sum(1 for s in states.values() if s["state"] in ON_DUTY_APPROVED_STATES)
+
+    comp_prefetch = compensation_prefetch_for_range(settings, m_start, m_end)
+    rows = []
+    for emp in employees:
+        records = compute_month_records(emp, year, month, settings, comp_prefetch=comp_prefetch)
+        s = month_summary_from_records(records)
+        rows.append({
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "employeeName": f"{emp.first_name} {emp.last_name}",
+            "department": emp.department.name if emp.department_id and emp.department else None,
+            "designation": emp.designation.title if emp.designation_id and emp.designation else None,
+            "employmentType": emp.employment_type,
+            "workingDays": s["workingDays"],
+            "present": s["present"],
+            "halfDay": s["halfShift"],
+            "absent": s["absent"],
+            "onLeave": s["onLeave"],
+            "cl": cl_days.get(emp.id, 0.0),
+            "onDuty": od_days.get(emp.id, 0),
+            "late": s["late"],
+            "earlyOut": sum(1 for r in records if r.early_leave),
+            "holidays": s["holidays"],
+            "effectiveDays": float(Decimal(s["effectiveDays"])),
+            "totalShifts": float(Decimal(s["totalShifts"])),
+        })
+
+    return Response({
+        "year": year,
+        "month": month,
+        "employmentType": emp_type or None,
+        "asOf": as_of.isoformat(),
+        "rows": rows,
     })
 
 

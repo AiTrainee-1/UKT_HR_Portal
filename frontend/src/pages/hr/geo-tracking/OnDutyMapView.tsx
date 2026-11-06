@@ -85,6 +85,12 @@ export default function OnDutyMapView({
       zoom={TIRUPPUR_ZOOM}
       style={{ height: "100%", width: "100%" }}
       scrollWheelZoom
+      // every route on one canvas (dozens of lines with casings), no tile fade, pins that do not animate their zoom: the
+      // same settings as the Live Map, which keep a busy day's map smooth to pan and zoom
+      preferCanvas
+      fadeAnimation={false}
+      markerZoomAnimation={false}
+      wheelPxPerZoomLevel={90}
     >
       <BaseMapLayers />
       <MapBridge onMap={onMap} />

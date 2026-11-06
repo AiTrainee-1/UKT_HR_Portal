@@ -408,7 +408,9 @@ function Router() {
         <Route path="/hr/missing-punch">
           {() => <ProtectedRoute component={MissingPunch} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/geo-attendance">
+        {/* Geo Attendance is a module with an address per section (/hr/geo-attendance/live-map, /journeys/12/simulate ...):
+          the whole prefix is the one geo_attendance module, and the page sends the old ?tab= addresses to their sections. */}
+        <Route path="/hr/geo-attendance/*?">
           {() => <ProtectedRoute component={GeoAttendance} allowedRoles={["hr"]} />}
         </Route>
         <Route path="/hr/chat">{() => <ProtectedRoute component={HrChat} allowedRoles={["hr"]} />}</Route>

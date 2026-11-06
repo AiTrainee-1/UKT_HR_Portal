@@ -24,6 +24,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useListEmployeesLite, type Employee } from "@/lib/api-client";
 import { useBulkUpdateLocationTracking, useUpdateEmployeeLocationTracking } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
+import DecisionDialog from "../DecisionDialog";
 import { PersonCell, ToolbarCard } from "../kit";
 import TrackingRulesCard from "../TrackingRulesCard";
 
@@ -36,6 +37,8 @@ export default function TrackingSettingsTab() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [bulkConfirm, setBulkConfirm] = useState<null | boolean>(null);
+  // switching one employee's live tracking OFF is asked first (switching it on is not: nothing is lost)
+  const [stopping, setStopping] = useState<Employee | null>(null);
   const { data: employees, isLoading } = useListEmployeesLite({ status: "active" });
   const toggleMutation = useUpdateEmployeeLocationTracking();
   const bulkMutation = useBulkUpdateLocationTracking();
@@ -207,6 +210,30 @@ export default function TrackingSettingsTab() {
           </AlertDialogContent>
         </AlertDialog>
 
+        <DecisionDialog
+          open={stopping !== null}
+          onOpenChange={(open) => !open && setStopping(null)}
+          tone="reject"
+          title="Stop live tracking for this employee?"
+          confirmLabel="Stop tracking"
+          description={
+            stopping ? (
+              <p>
+                <b className="text-gray-900">
+                  {stopping.firstName} {stopping.lastName} ({stopping.employeeCode})
+                </b>{" "}
+                drops off &ldquo;Tracking-Enabled Employees&rdquo; on the Live Map and their phone stops sending live
+                positions. On-Duty journeys are recorded as before; the positions already received are kept.
+              </p>
+            ) : null
+          }
+          onConfirm={() => {
+            if (stopping) void handleToggle(stopping, false);
+            setStopping(null);
+          }}
+          testId="tracking-stop-confirm"
+        />
+
         <div className="overflow-hidden rounded-2xl border bg-white" data-testid="tracking-list">
           {isLoading ? (
             <div className="space-y-2 p-4">
@@ -246,7 +273,7 @@ export default function TrackingSettingsTab() {
                     </span>
                     <Switch
                       checked={emp.trackingEnabled}
-                      onCheckedChange={(v) => handleToggle(emp, v)}
+                      onCheckedChange={(v) => (v ? void handleToggle(emp, true) : setStopping(emp))}
                       disabled={toggleMutation.isPending}
                       aria-label="Toggle live location tracking"
                     />

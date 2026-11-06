@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { trackingErrorMessage, useJourneyDayMap, useOnDutyMap } from "@/lib/api-client/custom-hooks";
 import { assignDutyColors, dutyColor } from "../dutyColors";
 import { buildDutyEntries, hasRoute, summarize, todayIst } from "../dutyMap";
-import { ListSkeleton, Note, ToolbarCard } from "../kit";
+import { ListSkeleton, LoadError, Note, ToolbarCard } from "../kit";
 import { fmtDistance } from "../logic";
 import { MapCardHeader, MapOverlayNote, MapViewButtons, useMapView } from "../mapKit";
 import OnDutyLegend from "../OnDutyLegend";
@@ -41,7 +41,7 @@ export default function OnDutyMapTab() {
   const slots = useRef(new Map<number, number>());
 
   const today = todayIst();
-  const { data: mapData, isLoading: mapLoading } = useOnDutyMap(date);
+  const { data: mapData, isLoading: mapLoading, error: mapError, refetch: refetchMap } = useOnDutyMap(date);
   const { data: dayMap, isLoading: dayLoading, error: dayError } = useJourneyDayMap(date);
   const loading = mapLoading || dayLoading;
 
@@ -197,13 +197,23 @@ export default function OnDutyMapTab() {
             )}
             {loading ? (
               <ListSkeleton rows={3} height="h-28" />
+            ) : mapError && dayError ? (
+              <LoadError
+                title="The day's On-Duty work could not be loaded."
+                error={mapError}
+                onRetry={() => void refetchMap()}
+                testId="duty-error"
+              />
             ) : entries.length === 0 ? (
-              <p
-                className="rounded-xl border border-dashed px-3 py-8 text-center text-xs text-gray-500"
+              <div
+                className="rounded-xl border border-dashed px-3 py-8 text-center text-xs leading-relaxed text-gray-500"
                 data-testid="duty-empty"
               >
-                No employees were On-Duty on {date}.
-              </p>
+                <p className="font-semibold text-gray-700">No employees were On-Duty on {date}.</p>
+                <p className="mt-1">
+                  Pick another day above. A day appears here once an employee submits an On-Duty request for it.
+                </p>
+              </div>
             ) : (
               <OnDutyLegend
                 entries={entries}
