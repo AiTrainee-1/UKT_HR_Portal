@@ -13,6 +13,7 @@ from .auth import is_master_admin, require_master_admin, require_super_admin, re
 from .branch_scope import scope_to_branch
 from .models import HRUser, Role, AuditLog
 from .audit_utils import log_action
+from .super_admin_sync import env_controls_super_admin
 
 
 def role_json(r):
@@ -40,6 +41,9 @@ def hr_user_json(u):
         "branchName": u.branch.name if u.branch else None,
         "isActive": u.is_active,
         "isSuperAdmin": u.is_super_admin,
+        # The Super Admin's username and password come from ADMIN_USERNAME / ADMIN_PASSWORD in the backend .env (synced
+        # at every start, api/super_admin_sync.py): the portal shows them as read-only for that account.
+        "credentialsFromEnv": bool(u.is_super_admin and env_controls_super_admin()),
         "isHidden": u.is_hidden,
         "masterFeatures": u.master_features or {},
         # The Managing Director identity (see HRUser.is_md): at most one account has it.
@@ -254,6 +258,15 @@ def hr_user_detail(request: Request, pk: int) -> Response:
 
     if request.method == "PUT":
         data = request.data
+        if data.get("password") and u.is_super_admin and env_controls_super_admin():
+            # it would be put back to the .env value at the next start anyway (owner 2026-11-10: .env has priority)
+            return Response(
+                {
+                    "error": "The Super Admin's username and password come from the backend .env (ADMIN_USERNAME and "
+                    "ADMIN_PASSWORD). Change them there and restart the backend."
+                },
+                status=400,
+            )
         was_md = u.is_md
         with transaction.atomic():
             for field, attr in [

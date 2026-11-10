@@ -457,3 +457,5 @@ api/tests_payroll_rounding_active.py
 api/payroll_month_workflow.py
 api/payroll_month_workflow_views.py
 api/tests_payroll_month_workflow.py
+api/super_admin_sync.py
+api/tests_super_admin_sync.py

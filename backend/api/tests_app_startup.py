@@ -10,6 +10,8 @@ Run via: python manage.py test api.tests_app_startup -v 2
 
 import sys
 import threading
+
+import bcrypt
 import time
 from unittest import mock
 
@@ -94,8 +96,11 @@ class AdminBootstrapTests(TestCase):
             self.config()._bootstrap_admin_account()
         self.assertFalse(HRUser.objects.exists())
 
-    def test_an_existing_super_admin_is_left_alone(self):
+    def test_an_existing_super_admin_takes_the_env_login(self):
+        # owner 2026-11-10: the .env is the single source of truth for the Super Admin's login (api/super_admin_sync.py)
         HRUser.objects.create(username="someone", password_hash="x", is_super_admin=True)
         with mock.patch.object(sys, "argv", ["manage.py", "runserver"]):
             self.config()._bootstrap_admin_account()
-        self.assertEqual(list(HRUser.objects.values_list("username", flat=True)), ["someone"])
+        admin = HRUser.objects.get()
+        self.assertEqual((admin.username, admin.is_super_admin), ("boot_admin", True))
+        self.assertTrue(bcrypt.checkpw(b"Boot-Strap-1!", admin.password_hash.encode()))

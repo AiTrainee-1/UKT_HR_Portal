@@ -50,12 +50,13 @@ class ApiConfig(AppConfig):
 
     def _bootstrap_admin_account(self):
         """
-        Ensure exactly one super-admin HRUser exists, sourced from
-        ADMIN_USERNAME/ADMIN_PASSWORD in .env. Idempotent -only inserts when
-        no super-admin row exists yet, so editing the admin's password later
-        is done from Account Management, not by touching .env again.
-        Wrapped defensively: this runs on every app load, including before
-        the hr_users table exists (e.g. during the very first `migrate`).
+        Keep the Super Admin's login equal to ADMIN_USERNAME / ADMIN_PASSWORD from the backend .env (the Railway
+        Variables in production): the .env is the single source of truth for it (owner 2026-11-10). On every process
+        start the Super Admin in hr_users is compared with the .env values and updated when they differ; when they
+        already match nothing is written. With no Super Admin yet one is made from the .env, as before. Only the Super
+        Admin is ever touched, and blank .env values change nothing. See api/super_admin_sync.py.
+        Wrapped defensively: this runs on every app load, including before the hr_users table exists (e.g. during the
+        very first `migrate`).
         """
         from django.conf import settings
 
@@ -64,33 +65,10 @@ class ApiConfig(AppConfig):
         if len(sys.argv) > 1 and sys.argv[1] == "test":
             return
 
-        username = getattr(settings, "ADMIN_USERNAME", "")
-        password = getattr(settings, "ADMIN_PASSWORD", "")
-        if not username or not password:
-            return
-
         try:
-            import bcrypt
-            from .models import HRUser
+            from .super_admin_sync import sync_super_admin
 
-            if HRUser.objects.filter(is_super_admin=True).exists():
-                return
-
-            pwd_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
-            existing = HRUser.objects.filter(username__iexact=username).first()
-            if existing:
-                existing.password_hash = pwd_hash
-                existing.is_super_admin = True
-                existing.is_active = True
-                existing.save(update_fields=["password_hash", "is_super_admin", "is_active"])
-            else:
-                HRUser.objects.create(
-                    username=username,
-                    full_name="Administrator",
-                    password_hash=pwd_hash,
-                    is_super_admin=True,
-                )
-            logger.info("Admin account bootstrapped from ADMIN_USERNAME/.env: %s", username)
+            sync_super_admin(getattr(settings, "ADMIN_USERNAME", ""), getattr(settings, "ADMIN_PASSWORD", ""))
         except Exception as e:
             # DB not migrated yet, or unavailable at boot -safe to skip,
             # this is retried on every subsequent process start.
