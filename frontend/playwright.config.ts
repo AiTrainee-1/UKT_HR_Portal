@@ -30,6 +30,11 @@ const backendEnv = {
   // in hundreds of times from 127.0.0.1, so every rate is lifted to 100000/min. Never set it on a real server.
   THROTTLE_RELAXED: "true",
   JWT_SECRET: "e2e-only-jwt-secret-at-least-32-bytes-long",
+  // The Super Admin's login follows ADMIN_USERNAME / ADMIN_PASSWORD at every backend start (api/super_admin_sync.py), and
+  // backend/.env holds the owner's real ones: blank here (an empty variable wins over .env) so the stack keeps the
+  // e2e_admin account seed_e2e makes instead of renaming it to the owner's login.
+  ADMIN_USERNAME: "",
+  ADMIN_PASSWORD: "",
   DJANGO_SECRET_KEY: "e2e-only-django-secret",
   ALLOWED_HOSTS: "localhost,127.0.0.1",
   // WhatsApp goes to a local fake (e2e/fake-waclient.mjs), never to WAClient: dummy credentials

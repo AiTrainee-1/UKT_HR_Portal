@@ -28,6 +28,9 @@ export type HrUserItem = {
   branchName?: string | null;
   isActive: boolean;
   isSuperAdmin: boolean;
+  /** The Super Admin's username and password come from ADMIN_USERNAME / ADMIN_PASSWORD in the backend .env (synced at
+   *  every backend start): the portal cannot change them for that account. */
+  credentialsFromEnv?: boolean;
   /** The Managing Director: the one account with the executive MD portal and the AI assistant. */
   isMd?: boolean;
   mdAssignedAt?: string | null;
