@@ -667,12 +667,13 @@ class EsiStatementTests(_Base):
         rows = self.by_code(body)
         self.assertEqual(list(rows), ["3001", "3003", "3006", "P001"])
         # ESI is taken from the same base as PF (the first portion, half of the pay), and the 3.25% employer estimate
-        # is worked on those ESI wages.
+        # is worked on those ESI wages. The employee's ESI on each slip is rounded UP to the next rupee by the engine (owner
+        # 2026-11-10); the employer's 3.25% estimate keeps its paise.
         expect = {  # esiWages, eeShare, erShare, total, days
             "3001": (10200, 153.00, 331.50, 484.50, 28),
-            "3003": (7500, 112.50, 243.75, 356.25, 28),
+            "3003": (7500, 113.00, 243.75, 356.75, 28),  # 1.5% of 7,500 = 112.50 -> 113
             "3006": (9000, 135.00, 292.50, 427.50, 28),
-            "P001": (4125, 61.88, 134.06, 195.94, 14),  # 46.88 + 15.00 ; 3.25% of 4125 = 134.0625 -> 134.06
+            "P001": (4125, 62.00, 134.06, 196.06, 14),  # 46.88 -> 47 + 15.00 ; 3.25% of 4125 = 134.0625 -> 134.06
         }
         for code, (wages, ee, er, total, days) in expect.items():
             r = rows[code]
@@ -685,14 +686,15 @@ class EsiStatementTests(_Base):
 
     def test_totals_and_summary(self):
         body = self.run_report("esi-statement", **P)
+        # eeShare 153 + 113 + 135 + 62 (each slip's ESI rounded up, owner 2026-11-10); erShare unchanged
         self.assertEqual(
-            body["totals"], {"esiWages": 30825.0, "eeShare": 462.38, "erShare": 1001.81, "totalContribution": 1464.19}
+            body["totals"], {"esiWages": 30825.0, "eeShare": 463.0, "erShare": 1001.81, "totalContribution": 1464.81}
         )
         self.assert_totals(body, ["esiWages", "eeShare", "erShare", "totalContribution"])
         s = self.summary(body)
         self.assertEqual(s["ESI covered employees"], 4)
-        self.assertEqual(s["Employee contribution"], 462.38)
-        self.assertEqual(s["Total contribution"], 1464.19)
+        self.assertEqual(s["Employee contribution"], 463.0)
+        self.assertEqual(s["Total contribution"], 1464.81)
         self.assertEqual(s["Co Emp, no ESI rule matched"], 2)  # B (24,000) and D (60,000): over the rule's 21,000
         self.assertEqual(s["Covered, IP number missing"], 2)
         slips = sum(float(x.esi_deduction) for x in SalarySlip.objects.filter(month=MONTH, year=YEAR))
@@ -1685,10 +1687,11 @@ class PayrollExceptionsTests(_Base):
         self.assertEqual(
             by[("3003", "PF ID missing")]["detail"], "PF of Rs. 900.00 deducted but UAN and PF no. not on the profile."
         )
-        self.assertEqual(by[("3003", "ESI ID missing")]["netPay"], 12987.5)
+        # 15,000 - (PF 900 + ESI 113 + advance 1,000): ESI 112.50 rounded up, so the net is a whole rupee (owner 2026-11-10)
+        self.assertEqual(by[("3003", "ESI ID missing")]["netPay"], 12987.0)
         self.assertEqual(by[("P001", "ESI ID missing")]["period"], "02-Feb-2026 to 11-Feb-2026")
-        self.assertEqual(
-            by[("P001", "ESI ID missing")]["detail"], "ESI of Rs. 61.88 deducted but no ESI IP number on the profile."
+        self.assertEqual(  # 47 + 15: each slip's ESI rounded up (46.88 -> 47)
+            by[("P001", "ESI ID missing")]["detail"], "ESI of Rs. 62.00 deducted but no ESI IP number on the profile."
         )
         self.assertIsNone(by[("3007", "No slip")]["netPay"])
         self.assertEqual(

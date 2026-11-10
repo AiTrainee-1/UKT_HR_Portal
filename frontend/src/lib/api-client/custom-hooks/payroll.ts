@@ -389,6 +389,23 @@ export type PayrollRunItem = {
   status: string;
   notes?: string | null;
   createdAt?: string | null;
+  // ── Staff month workflow (2026-11-10, backend payroll_month_workflow.py). Absent from an older server. ──
+  /** The salary is On Hold: on the Salary Statement (HOLD), never in the records' bank file. */
+  onHold?: boolean;
+  holdChangedAt?: string | null;
+  holdChangedBy?: string | null;
+  /** A new joiner of the month kept out of the payroll until HR presses "Add to payroll". */
+  newJoinerParked?: boolean;
+  addedToPayrollAt?: string | null;
+  addedToPayrollBy?: string | null;
+  /** Paid as the employee sees it: "paid" only after the month's Mark as Paid (or a release and pay). */
+  paymentStatus?: "not_paid" | "paid";
+  paymentPaidAt?: string | null;
+  paymentPaidBy?: string | null;
+  /** Released from hold / new joiner and paid on its own after the month was finalized. */
+  releasedFrom?: "hold" | "new_joiner" | null;
+  /** The employee's joining date as the profile holds it (Skipped Employees rows only). */
+  joinDate?: string | null;
 };
 
 export const getListPayrollRunsQueryKey = (params?: {
@@ -447,6 +464,8 @@ export type PayrollSkipCheckResult = {
   totalChecked: number;
   skippedCount: number;
   skipped: PayrollSkipReason[];
+  /** Staff (2026-11-10): the month is finalized, so "skipped" = active staff with no payroll for it. */
+  locked?: boolean;
 };
 
 export const getPayrollSkipCheckQueryKey = (params: {

@@ -23,7 +23,7 @@ import tempfile
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import date, time, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -102,6 +102,12 @@ def throwaway_name(name: str = SAFE_NAME):
     """Stand in for a database called ``*_e2e``: the test database itself is not named like one."""
     with mock.patch.object(common, "active_database_name", return_value=name):
         yield
+
+
+def rupee_up(value) -> Decimal:
+    """The engine's ESI / NET rounding, worked out by hand (owner 2026-11-10): to the paisa, then UP to the next rupee."""
+    paise = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return paise.to_integral_value(rounding=ROUND_CEILING).quantize(Decimal("0.01"))
 
 
 def run(*args: str, manifest_dir: Path) -> str:
@@ -717,7 +723,10 @@ class DemoDataTests(TestCase):
             self.assertEqual(sum(s.net_salary for s in slips), run.total_net)
             self.assertEqual(run.total_employees, len({s.employee_id for s in slips}))
             for s in slips:
-                self.assertEqual(s.gross_salary + s.ot_amount - s.total_deductions, s.net_salary, s.slip_number)
+                # NET rounded up to the next rupee, as the engine stores it (owner 2026-11-10)
+                self.assertEqual(
+                    rupee_up(s.gross_salary + s.ot_amount - s.total_deductions), s.net_salary, s.slip_number
+                )
                 # the lines on a slip add up to its gross (overtime is outside it): the payroll page's "what the money
                 # is made of" has nothing to hide under "not itemised"
                 self.assertEqual(
@@ -825,9 +834,10 @@ class DemoDataTests(TestCase):
                     d2(wages * Decimal(str(stat["pfRule"]["ratePercent"])) / 100) if stat["pfRule"] else 0,
                     label,
                 )
+                # the employee's ESI is rounded up to the next rupee (owner 2026-11-10); PF keeps its paise
                 self.assertEqual(
                     slip.esi_deduction,
-                    d2(wages * Decimal(str(stat["esiRule"]["ratePercent"])) / 100) if stat["esiRule"] else 0,
+                    rupee_up(wages * Decimal(str(stat["esiRule"]["ratePercent"])) / 100) if stat["esiRule"] else 0,
                     label,
                 )
                 if slip.pf_deduction:

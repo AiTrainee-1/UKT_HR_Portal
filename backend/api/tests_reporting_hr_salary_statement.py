@@ -315,6 +315,8 @@ class CatalogTests(_World):
                 ("designation", "designation"),
                 ("employee", "employee"),
                 ("paymentStatus", "select"),
+                # Payroll > Skipped Employees > Export (2026-11-10): unset = the month's statement
+                ("section", "select"),
             ],
         )
         # no employee-status filter: the statement lists active employees only (owner 2026-11-05)
@@ -375,7 +377,8 @@ class ContentTests(_World):
         body = self.get()
         expected = self.statement_rows()
         got = by_code(body)
-        expected.pop("30071")  # inactive: not on this statement (the Payroll page's lists everybody with a payroll)
+        # inactive: on neither statement (the Payroll page's lists active employees only too since owner 2026-11-10)
+        self.assertNotIn("30071", expected)
         self.assertEqual(sorted(got), sorted(expected))
         self.assertEqual(len(got), 6)
         for code, row in got.items():
@@ -1220,8 +1223,13 @@ class RoundUpTests(_World):
                 self.assertEqual(row[key], int(row[key]), (code, key))
             for key in ("eSalary", "pf", "tds", "advance", "others", "totalDeduction"):  # untouched
                 self.assertEqual(row[key], expected[code][key], (code, key))
-        # the statement here has paise in NET: rounding up really moved it
-        self.assertTrue(any(expected[c]["net"] != int(expected[c]["net"]) for c in expected))
+        # since owner 2026-11-10 the engine itself stores ESI and NET as whole rupees, so on these new payrolls the
+        # round-up moves nothing ...
+        self.assertTrue(all(expected[c][key] == int(expected[c][key]) for c in expected for key in ROUNDED_UP))
+        # ... but a payroll stored before then still has paise in NET (Lokesh: 14,471.15 - 2,000 advance = 12,471.15),
+        # and the printed statement still rounds that up
+        Payroll.objects.filter(pk=self.payrolls["2896"].pk).update(final_salary=Decimal("12471.15"))
+        self.assertEqual(by_code(self.get())["2896"]["net"], 12472.0)
 
     def test_the_totals_add_up_the_rounded_figures(self):
         body = self.get()

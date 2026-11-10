@@ -73,6 +73,7 @@ from .payroll_insights_rules import (
     staff_rule_groups,
     staff_settings_groups,
 )
+from .payroll_month_workflow import ON_STATEMENT_Q
 from .payroll_views import company_month_days
 from .production_coverage import row_monthly_factor
 from .production_cycles import CYCLE_LABELS, normalize_cycle
@@ -170,11 +171,17 @@ def scope_payrolls(request: Request, scope: Scope):
     qs = Payroll.objects.select_related(*_PAYROLL_RELATIONS).defer("employee__photo_url")
     if scope.kind == KIND_STAFF:
         qs = qs.filter(salary_mode=Payroll.SALARY_MODE_MONTHLY, month=scope.month, year=scope.year)
+        # a new joiner parked until HR adds them to the payroll is not in it (owner 2026-11-10): not on the statement,
+        # the issues or the rules; a held salary still is (the statement prints HOLD in its Remarks)
+        qs = qs.filter(ON_STATEMENT_Q)
     else:
         qs = qs.filter(
             salary_mode=Payroll.SALARY_MODE_SHIFT, period_start=scope.period_start, period_end=scope.period_end
         ).filter(Q(pay_cycle=scope.cycle) | Q(pay_cycle__isnull=True, employee__production_pay_cycle=scope.cycle))
     qs = scope_to_branch(qs, request, field="employee__branch_id")
+    # active employees only (owner 2026-11-10): the issues, rules and Salary Statement of the payroll pages never list a
+    # deactivated employee's payroll, as the Payroll list and the exports do not
+    qs = qs.filter(employee__status="active")
     if scope.department_id is not None:
         qs = qs.filter(employee__department_id=scope.department_id)
     if scope.employee_id is not None:

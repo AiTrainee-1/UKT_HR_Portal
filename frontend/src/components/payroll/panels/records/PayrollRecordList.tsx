@@ -36,7 +36,8 @@ export type PayrollRecordListProps = {
   onOpenDetails: (run: PayrollRunItem) => void;
   /** Opens the details page at its issues section. */
   onOpenIssues?: (run: PayrollRunItem) => void;
-  onMarkPaid: (run: PayrollRunItem) => void;
+  /** Leave out to show no "Mark as Cleared" at all (a finalized staff month is locked). */
+  onMarkPaid?: (run: PayrollRunItem) => void;
   /** The row whose "Mark as Cleared" is running. */
   markingId?: number | null;
   /** Shown instead of the list when there are no rows (the page knows whether a filter or no payroll is the reason). */

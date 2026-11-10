@@ -359,6 +359,16 @@ describe("the table", () => {
   });
 });
 
+describe("hideExport (Staff Payroll's Skipped Employees has its own statement and bank-file exports)", () => {
+  it("leaves the table's Export out, and keeps it everywhere else", () => {
+    mount({ hideExport: true });
+    expect(q("skipped-table")).not.toBeNull();
+    expect(q("skipped-export")).toBeNull();
+    rerender({ hideExport: false });
+    expect(q("skipped-export")).not.toBeNull();
+  });
+});
+
 describe("the filters", () => {
   it("search finds employees by name, code, department or reason, and Reset clears it", () => {
     mount();

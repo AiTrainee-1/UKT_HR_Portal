@@ -69,6 +69,8 @@ export type SkippedPanelProps = {
   periodLabel: string;
   kind: "staff" | "production";
   accent: PanelAccent;
+  /** No Export menu on the table (Staff Payroll's Skipped Employees has its own statement and bank-file exports). */
+  hideExport?: boolean;
 };
 
 export const SKIPPED_PAGE_SIZE = 25;
@@ -170,6 +172,7 @@ export function SkippedPanel({
   periodLabel,
   kind,
   accent,
+  hideExport = false,
 }: SkippedPanelProps) {
   const { data: settings } = usePayrollSettings();
   const rows = useMemo(() => classifySkipped(skipped), [skipped]);
@@ -376,12 +379,14 @@ export function SkippedPanel({
                 {active > 0 && (
                   <ResetButton count={active} onClick={() => setFilters(NO_SKIP_FILTERS)} testId="skipped-reset" />
                 )}
-                <ExportMenu
-                  items={exportItems}
-                  testId="skipped-export"
-                  heading="Export the employees shown (every page)"
-                  className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                />
+                {!hideExport && (
+                  <ExportMenu
+                    items={exportItems}
+                    testId="skipped-export"
+                    heading="Export the employees shown (every page)"
+                    className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                  />
+                )}
               </div>
             </header>
 

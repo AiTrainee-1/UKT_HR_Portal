@@ -43,7 +43,8 @@ from .permission_registry import resolve_permission
 from .support_contact_views import FIELDS as SUPPORT_CONTACT_FIELDS, clean_updates
 from .clock import ist_today
 from .compensation_shared import parse_join_date
-from .pf_esi import production_statutory, staff_statutory
+from . import payroll_month_workflow as month_workflow
+from .pf_esi import production_statutory, round_up_rupee, staff_statutory
 from .production_cycles import (
     LATE_SLAB_MAX_SHIFTS,
     PLAIN_DECIMAL,
@@ -498,13 +499,18 @@ def _pending_advance_repayments(
 #  STAFF payroll engine
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None) -> dict:
+def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None, *, allow_locked: bool = False) -> dict:
     """
     Pro-rated monthly payroll for a staff employee.
     Returns a dict with 'payroll' and 'slip' keys (model instances).
     Raises PayrollSkip with a precise reason if this employee can't be paid
     for this month (no salary configured, no working days, etc).
+
+    A month finalized with Payroll Done (payroll_month_workflow.py) is locked: this raises MonthLocked and writes
+    nothing. `allow_locked` is only for the skip check's dry run, which is always rolled back.
     """
+    if not allow_locked:
+        month_workflow.assert_open(month, year)
     if not emp.salary_amount:
         raise PayrollSkip("No Salary Amount set on this employee's profile")
 
@@ -811,7 +817,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
     total_deductions = _d2(
         pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty + permission_penalty
     )
-    net_salary = _d2(base_gross + ot_amount - total_deductions)
+    # NET rounded UP to the next whole rupee (owner 2026-11-10): the stored net is what the statement prints and the bank
+    # file pays, to the rupee. The ESI inside total_deductions is already a whole rupee (pf_esi.round_up_rupee).
+    net_salary = round_up_rupee(base_gross + ot_amount - total_deductions)
 
     # 9. Build breakdown JSON (full traceability)
     breakdown = {
@@ -928,6 +936,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None)
             ),
         ),
     )
+    # A new joiner (joined inside this month) is parked until HR adds them to the payroll (owner 2026-11-10); Hold, the
+    # payment status and "added to payroll" are not in the defaults above, so a regeneration keeps them. No figure moves.
+    month_workflow.park_if_new_joiner(payroll, emp, month, year)
 
     # 11. Upsert SalarySlip
     slip_number = f"SS/{emp.employee_code}/{year}/{str(month).zfill(2)}"
@@ -1139,7 +1150,8 @@ def _generate_production_payroll(
     advance_total, advance_details = _pending_advance_repayments(emp, month, year, again=again)
 
     total_deductions = _d2(pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty)
-    net_salary = _d2(gross_amount - total_deductions)
+    # NET rounded UP to the next whole rupee, as on staff payroll (owner 2026-11-10)
+    net_salary = round_up_rupee(gross_amount - total_deductions)
 
     # The days this row pays: the whole period on an ordinary run; after a pay-cycle change the period's unpaid days plus
     # any catch-up days (production_coverage.py). `periodDays` is always the period's own length.
@@ -1359,6 +1371,9 @@ def _payroll_json(p: Payroll, employee_name: str | None = None, holidays_by_mont
         "status": p.status,
         "notes": p.notes,
         "createdAt": p.created_at.isoformat() if p.created_at else None,
+        # Staff month workflow (2026-11-10): on hold, parked new joiner, paid as the employee sees it, released after the
+        # lock. Never figures; always false / "not_paid" / null on production rows.
+        **month_workflow.payroll_flags(p),
     }
 
 
@@ -1540,6 +1555,15 @@ def payroll_list(request: Request) -> Response:
     status_filter = request.query_params.get("status")
     if emp_id:
         qs = qs.filter(employee_id=int(emp_id))
+    else:
+        # The Payroll page (its records, totals, Salary tab and the bank file built from this list) shows active employees
+        # only (owner 2026-11-10): a payroll generated before someone was deactivated stays stored, but is not listed or
+        # paid from here. One employee's own history (employeeId) still lists every row.
+        qs = qs.filter(employee__status="active")
+        # ... and the month's MAIN payroll only (owner 2026-11-10): a held salary, a new joiner not added to the payroll
+        # yet and an employee released and paid on their own after the month was locked are listed under Skipped
+        # Employees (GET /api/payroll/month-skipped), never in the records, their totals or the month's bank file.
+        qs = qs.filter(month_workflow.MAIN_PAYROLL_Q)
     if month:
         qs = qs.filter(month=int(month))
     if year:
@@ -1549,24 +1573,32 @@ def payroll_list(request: Request) -> Response:
 
     holidays_by_month: dict = {}
 
-    def _row(p: Payroll) -> dict:
-        emp = p.employee
-        name = f"{emp.first_name} {emp.last_name}" if emp else None
-        row = _payroll_json(p, name, holidays_by_month)
-        # Include bank details for Excel export
-        row["bankAccount"] = emp.bank_account or ""
-        row["bankIfsc"] = emp.bank_ifsc or ""
-        row["bankName"] = emp.bank_name or ""
-        row["employeeCode"] = emp.employee_code or ""
-        row["email"] = emp.email or ""
-        row["departmentId"] = emp.department_id
-        row["departmentName"] = emp.department.name if emp.department_id and emp.department else None
-        return row
-
     # Ordered on a unique tiebreaker (id) so pages never overlap or skip rows.
     # A payroll export for one month is a few hundred to a few thousand rows,
     # so the legacy (no `page`) cap is set well above a whole-company month.
-    return paginate(request, qs.order_by("-year", "-month", "employee__first_name", "id"), _row, cap=5000)
+    return paginate(
+        request,
+        qs.order_by("-year", "-month", "employee__first_name", "id"),
+        lambda p: payroll_list_row(p, holidays_by_month),
+        cap=5000,
+    )
+
+
+def payroll_list_row(p: Payroll, holidays_by_month: dict | None = None) -> dict:
+    """One row of the Payroll list: the payroll with the employee's code, department and bank details (the bank file is
+    built from these rows). `p` must have its employee (and the employee's department) loaded."""
+    emp = p.employee
+    name = f"{emp.first_name} {emp.last_name}" if emp else None
+    row = _payroll_json(p, name, holidays_by_month)
+    # Include bank details for Excel export
+    row["bankAccount"] = emp.bank_account or ""
+    row["bankIfsc"] = emp.bank_ifsc or ""
+    row["bankName"] = emp.bank_name or ""
+    row["employeeCode"] = emp.employee_code or ""
+    row["email"] = emp.email or ""
+    row["departmentId"] = emp.department_id
+    row["departmentName"] = emp.department.name if emp.department_id and emp.department else None
+    return row
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1634,17 +1666,40 @@ def payroll_skip_check(request: Request) -> Response:
     # staff member (seconds of work, during which the single server worker served no one else). The answer is kept
     # and reused while nothing it depends on has changed: see _skip_check_fingerprint. "fresh=1" (the page's Re-check)
     # always works it out again.
-    key = (month, year, _skip_check_fingerprint(employees, month, year))
+    # A month finalized with Payroll Done (payroll_month_workflow.py) is never generated again, so its "not generated"
+    # list is simply the active staff with no payroll for it: each with the engine's reason when it would skip them, or
+    # the plain fact that the month was locked before their payroll was made. An open month is checked exactly as before.
+    locked = month_workflow.is_locked(month, year)
+    with_payroll: set = set()
+    if locked:
+        with_payroll = set(
+            Payroll.objects.filter(
+                salary_mode=Payroll.SALARY_MODE_MONTHLY, month=month, year=year, week_number=None,
+                employee_id__in=[e.id for e in employees],
+            ).values_list("employee_id", flat=True)
+        )
+    key = (month, year, _skip_check_fingerprint(employees, month, year), locked, tuple(sorted(with_payroll)))
     fresh = request.query_params.get("fresh") in ("1", "true")
     if not fresh:
         cached = _skip_check_cache_get(key)
         if cached is not None:
             return Response(cached)
 
+    # the dry run reads a locked month too (it is always rolled back, so it never writes into it)
+    def dry_engine(emp, month, year):
+        return _generate_staff_payroll(emp, month, year, allow_locked=True)
+
     skipped = []
     for emp in employees:
+        if locked and emp.id in with_payroll:
+            continue
         emp_name = f"{emp.first_name} {emp.last_name}".strip()
-        reason = _dry_run_skip_reason(_generate_staff_payroll, emp, month, year)
+        reason = _dry_run_skip_reason(dry_engine, emp, month, year)
+        if locked and not reason:
+            reason = (
+                f"No payroll was generated for this employee before {month_workflow.month_label(month, year)} was "
+                "finalized (Payroll Done), and a finalized month cannot be generated again"
+            )
         if reason:
             skipped.append({
                 "employeeId": emp.id,
@@ -1657,6 +1712,7 @@ def payroll_skip_check(request: Request) -> Response:
         "totalChecked": len(employees),
         "skippedCount": len(skipped),
         "skipped": skipped,
+        "locked": locked,
     }
     _skip_check_cache_put(key, result)
     return Response(result)
@@ -1750,6 +1806,11 @@ def generate_payroll(request: Request) -> Response:
     from . import payroll_progress
     if not payroll_progress.try_begin_run():
         return _error("A payroll run is already in progress. Wait for it to finish, then try again.", 409)
+    # A month finalized with Payroll Done is locked for good (checked while holding the run slot, which Payroll Done
+    # also takes, so a month can never be locked half way through a run).
+    if month_workflow.is_locked(month, year):
+        payroll_progress.end_run()
+        return _error(month_workflow.locked_message(month, year), 409)
     try:
         payroll_progress.start(len(employees))
 
@@ -1805,6 +1866,9 @@ def payroll_detail(request: Request, pk: int) -> Response:
     ).filter(pk=pk).first()
     if not p:
         return _error("Not found", 404)
+    # a staff month finalized with Payroll Done is locked: no bonus / deduction change, no Mark as Cleared (2026-11-10)
+    if month_workflow.is_staff_month_row(p) and month_workflow.is_locked(p.month, p.year):
+        return _error(month_workflow.locked_message(p.month, p.year), 409)
     d = request.data
     if "status" in d:
         p.status = d["status"]
@@ -1817,7 +1881,8 @@ def payroll_detail(request: Request, pk: int) -> Response:
     # Same net as the engine (gross + OT - deductions) plus HR's bonus. OT used to be left out here, so even marking a
     # payroll paid dropped the employee's overtime pay (owner approved the fix 2026-10-31). Production rows store
     # ot_amount 0 (their OT is inside the gross), so this is unchanged for them.
-    p.final_salary = _d2(p.gross_salary + p.ot_amount + p.bonus - p.deductions)
+    # ...rounded UP to the next whole rupee, exactly as the engine stores it (owner 2026-11-10)
+    p.final_salary = round_up_rupee(p.gross_salary + p.ot_amount + p.bonus - p.deductions)
     p.save()
     emp = p.employee
     return Response(_payroll_json(p, f"{emp.first_name} {emp.last_name}" if emp else None))

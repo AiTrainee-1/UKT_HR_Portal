@@ -27,7 +27,9 @@ from rest_framework.response import Response
 
 from .auth import require_hr
 from .branch_scope import get_branch_scope
+from .clock import FACTORY_TZ
 from .models import Branch, Payroll
+from .pf_esi import net_follows
 from .payroll_insights import (
     KIND_PRODUCTION,
     KIND_STAFF,
@@ -211,8 +213,24 @@ def _staff_values(payroll: Payroll, slip, bd, cl_days: dict, start, end) -> dict
         "lopAmount": money(max(Decimal("0"), total - gross)),
         "totalDeduction": money(total_deduction),
         "net": money(payroll.final_salary),
-        "remarks": _remarks(emp, start, end),
+        "remarks": _workflow_remarks(payroll, _remarks(emp, start, end)),
     }
+
+
+def _workflow_remarks(payroll: Payroll, remarks: str) -> str:
+    """The staff month workflow on the statement (owner 2026-11-10): a held salary says HOLD first; a new joiner not yet
+    added to the payroll NEW JOINER (only the Skipped Employees statement lists them); an employee released and paid on
+    their own after the month was finalized PAID SEPARATELY with the day (no figure changes)."""
+    if payroll.on_hold:
+        part = "HOLD"
+    elif payroll.new_joiner_parked:
+        part = "NEW JOINER"
+    elif payroll.released_from and payroll.payment_paid_at:
+        paid = payroll.payment_paid_at.astimezone(FACTORY_TZ)
+        part = f"PAID SEPARATELY {paid.day:02d}-{paid.month:02d}-{paid.year}"
+    else:
+        return remarks
+    return f"{part}, {remarks}" if remarks else part
 
 
 def _production_values(payroll: Payroll, slip, bd, start, end) -> dict:
@@ -408,9 +426,10 @@ def statement_rows(payrolls: list[Payroll], kind: str, info: dict) -> tuple[dict
             values = _staff_values(p, slip, bd, cl.get(p.employee_id, {}), start, end)
         else:
             values = _production_values(p, slip, bd, start, end)
-        # NET is the saved payroll figure; it equals E salary - Total Deduction unless the payroll was edited after
-        # overtime was added (the saved net leaves overtime out), which the notes then say.
-        if abs(dec(values["net"]) - (dec(values["eSalary"]) - dec(values["totalDeduction"]))) > Decimal("0.005"):
+        # NET is the saved payroll figure; it equals E salary - Total Deduction (rounded up to the next whole rupee since
+        # 2026-11-10, to the paisa before) unless the payroll was edited after overtime was added (the saved net leaves
+        # overtime out), which the notes then say. The rounding alone is not an edit.
+        if not net_follows(values["net"], dec(values["eSalary"]) - dec(values["totalDeduction"])):
             mismatched += 1
         rows[p.id] = values
     return rows, no_slip, mismatched
@@ -432,6 +451,24 @@ def statement_notes(kind: str, no_slip: int, mismatched: int) -> list[str]:
     return notes
 
 
+def workflow_notes(payrolls: list[Payroll]) -> list[str]:
+    """What the statement says about the staff month workflow (2026-11-10), only when it applies."""
+    notes = []
+    held = sum(1 for p in payrolls if p.on_hold)
+    released = sum(1 for p in payrolls if p.released_from)
+    if held:
+        notes.append(
+            f"{held} salary(ies) are ON HOLD (Remarks HOLD): they are listed and added up here, but they are not in the "
+            "bank file and are not paid until HR releases them."
+        )
+    if released:
+        notes.append(
+            f"{released} employee(s) were released and paid separately after the month was finalized (Remarks PAID "
+            "SEPARATELY with the day): they were paid with a bank file of their own, not the month's."
+        )
+    return notes
+
+
 def _statement_response(request: Request, kind: str) -> Response:
     try:
         scope = parse_scope(request, kind)
@@ -448,7 +485,7 @@ def _statement_response(request: Request, kind: str) -> Response:
     every_row = [row for group in groups for row in group["rows"]]
     company = SettingsResolver(()).base
     from_label, to_label = ddmmyyyy(start), ddmmyyyy(end)
-    notes = statement_notes(kind, no_slip, mismatched)
+    notes = statement_notes(kind, no_slip, mismatched) + (workflow_notes(payrolls) if staff else [])
     heading = "Salary Statement" if staff else "Production Salary Statement"
     paid = sum(1 for p in payrolls if p.status == Payroll.STATUS_PAID)
     return Response(

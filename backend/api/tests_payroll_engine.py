@@ -437,12 +437,13 @@ class StaffPayrollTests(TestCase):
         _present_all(emp)
         p = self._run(emp)["payroll"]
         # first portion = 50% of 20,400 = 10,200; Basic = 3,400 is inside both ranges
-        # PF 12% of 10,200 = 1,224.00; ESI 0.75% of 10,200 = 76.50 (the same first-portion base, not the whole pay)
+        # PF 12% of 10,200 = 1,224.00; ESI 0.75% of 10,200 = 76.50 (the same first-portion base, not the whole pay),
+        # rounded up to 77.00 (owner 2026-11-10): deductions 1,301.00, net 20,400 - 1,301 = 19,099.00
         slip = self._slip(emp)
         self.assertEqual(slip.basic, Decimal("10200.00"))
-        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (Decimal("1224.00"), Decimal("76.50")))
-        self.assertEqual(p.deductions, Decimal("1300.50"))
-        self.assertEqual(p.final_salary, Decimal("19099.50"))
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (Decimal("1224.00"), Decimal("77.00")))
+        self.assertEqual(p.deductions, Decimal("1301.00"))
+        self.assertEqual(p.final_salary, Decimal("19099.00"))
         statutory = _breakdown(emp)["deductions"]["statutory"]
         self.assertEqual(statutory["category"], "co_emp")
         self.assertEqual(statutory["pfWages"], 10200.0)
@@ -951,9 +952,10 @@ class ProductionPayrollTests(TestCase):
         self._work(emp)  # gross 6,250 -> monthly equivalent 12,500, inside both ranges
         p = self._run(emp)["payroll"]
         slip = self._slip(emp)
-        # first portion = 50% of 6,250 = 3,125 -> PF 12% = 375.00, ESI 0.75% = 23.4375 -> 23.44
-        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (Decimal("375.00"), Decimal("23.44")))
-        self.assertEqual(p.final_salary, Decimal("5851.56"))
+        # first portion = 50% of 6,250 = 3,125 -> PF 12% = 375.00, ESI 0.75% = 23.4375 -> 23.44 -> rounded up to 24.00
+        # (owner 2026-11-10); net 6,250 - 399 = 5,851.00
+        self.assertEqual((slip.pf_deduction, slip.esi_deduction), (Decimal("375.00"), Decimal("24.00")))
+        self.assertEqual(p.final_salary, Decimal("5851.00"))
         statutory = _breakdown_for_period(emp)["deductions"]["statutory"]
         self.assertEqual((statutory["pfWages"], statutory["pfRule"]["amountTested"]), (3125.0, 12500.0))
 
@@ -989,8 +991,9 @@ class ProductionPayrollTests(TestCase):
             self._run(emp)
         self.assertEqual(_breakdown_for_period(mid)["deductions"]["statutory"]["pfRule"]["label"], "Mid")  # 12,500
         self.assertEqual(_breakdown_for_period(top)["deductions"]["statutory"]["pfRule"]["label"], "Top")  # 25,000
+        # ESI 1% of 3,125 = 31.25, rounded up to the next rupee (owner 2026-11-10)
         self.assertEqual(
-            (self._slip(mid).pf_deduction, self._slip(mid).esi_deduction), (Decimal("375.00"), Decimal("31.25"))
+            (self._slip(mid).pf_deduction, self._slip(mid).esi_deduction), (Decimal("375.00"), Decimal("32.00"))
         )
         self.assertEqual((self._slip(top).pf_deduction, self._slip(top).esi_deduction), (Decimal("625.00"), 0))
 
@@ -1002,8 +1005,9 @@ class ProductionPayrollTests(TestCase):
         slip = self._slip(emp)
         self.assertEqual((slip.pf_deduction, slip.esi_deduction), (0, 0))
         self.assertEqual((slip.tds_deduction, slip.tds_percent), (Decimal("156.25"), Decimal("2.50")))  # 2.5% of 6,250
+        # TDS keeps its paise; the net 6,250 - 156.25 = 6,093.75 is rounded up to 6,094.00 (owner 2026-11-10)
         self.assertEqual(
-            (p.tds_deduction, p.deductions, p.final_salary), (Decimal("156.25"),) * 2 + (Decimal("6093.75"),)
+            (p.tds_deduction, p.deductions, p.final_salary), (Decimal("156.25"),) * 2 + (Decimal("6094.00"),)
         )
         self.assertEqual(_breakdown_for_period(emp)["deductions"]["tds"], 156.25)
 

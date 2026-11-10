@@ -215,6 +215,10 @@ from .payroll_insights_views import (
     production_payroll_details, production_payroll_issues, production_payroll_rules,
 )
 from .payroll_statement_views import staff_salary_statement, production_salary_statement
+from .payroll_month_workflow_views import (
+    payroll_month_status, payroll_month_skipped, payroll_hold, payroll_add_to_payroll, payroll_release_and_pay,
+    payroll_month_finalize, payroll_month_paid,
+)
 from .pf_esi_coverage_export import pf_esi_coverage_export
 from .pf_esi_views import pf_esi_coverage, pf_esi_settings
 from .tds_views import tds_employee_detail, tds_employees
@@ -708,6 +712,14 @@ urlpatterns = [
     path("payroll/skip-check", payroll_skip_check),
     path("payroll/generate", generate_payroll),
     path("payroll/generate-progress", generate_payroll_progress),
+    # Staff month workflow (2026-11-10): Hold / Unhold, new joiners, Payroll Done (lock), Mark as Paid, release & pay
+    path("payroll/month-status", payroll_month_status),
+    path("payroll/month-skipped", payroll_month_skipped),
+    path("payroll/month-finalize", payroll_month_finalize),
+    path("payroll/month-paid", payroll_month_paid),
+    path("payroll/<int:pk>/hold", payroll_hold),
+    path("payroll/<int:pk>/add-to-payroll", payroll_add_to_payroll),
+    path("payroll/<int:pk>/release-and-pay", payroll_release_and_pay),
     path("payroll/production", production_payroll_list),
     path("payroll/production/cycles", production_cycles_summary),
     path("payroll/production/periods", production_periods),

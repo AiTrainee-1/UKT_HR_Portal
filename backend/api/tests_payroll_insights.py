@@ -24,7 +24,7 @@ import json
 import re
 import time as clock
 from datetime import date, time
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -59,6 +59,7 @@ from .models import (
 )
 from .payroll_insights import all_setting_refs, inr, natural_key, normalized_days, period_label, plain, plural
 from .payroll_insights_rules import describe_slabs
+from .payroll_month_workflow import add_to_payroll
 from .payroll_views import (
     _build_working_days,
     _generate_production_payroll,
@@ -148,6 +149,11 @@ def _production(code, first="Test", per_shift="500.00", **kw) -> Employee:
     return Employee.objects.create(
         employee_code=code, first_name=first, last_name="Prod", employment_type="production", **fields
     )
+
+
+def _rupee_up(value: float) -> float:
+    """The engine's NET rounding, by hand (owner 2026-11-10): to the paisa, then UP to the next whole rupee."""
+    return float(Decimal(str(round(value, 2))).to_integral_value(rounding=ROUND_CEILING))
 
 
 def _day(emp, d, status="present", shifts="1.00", **kw):
@@ -571,11 +577,13 @@ def statement_world() -> SimpleNamespace:
     """April 2026: 26 working days, like the printed statement (which is September 2026, also 26).
 
     Accounts: 2316 MEENATCHI T (salary 29,500, split Basic 14,750 + Petrol 2,000 + Other 12,750): 22 days present + 2 approved
-    Casual Leave = 24 paid days, 2 absent, HR then set her deductions to 1,000 -> E salary 27,230.77, NET 26,230.77 (the
-    printed row, but for the paise); a pending CL request that must not count. 2896 LOKESH KANNAN (17,500, no split):
-    20 full days + 1 half day + 1 CL = 21.5 paid days, an advance of 6,000 with 2,000 recovered this month. 30071 SRIRAM D
-    (50,000, no longer active): 3 days.
-    Admin: 189, 226 and 2234 (joined on 15 April), all present every day."""
+    Casual Leave = 24 paid days, 2 absent, HR then set her deductions to 1,000 -> E salary 27,230.77, NET 26,231 (26,230.77
+    rounded up to the rupee, owner 2026-11-10); a pending CL request that must not count. 2896 LOKESH KANNAN (17,500, no
+    split): 20 full days + 1 half day + 1 CL = 21.5 paid days, an advance of 6,000 with 2,000 recovered this month. 30071
+    SRIRAM D (50,000, no longer active): 3 days; his payroll is stored but not listed (active employees only, owner
+    2026-11-10).
+    Admin: 189, 226 and 2234 (joined on 15 April), all present every day. 2234 is a new joiner of April, so payroll parks
+    him (owner 2026-11-10, payroll_month_workflow.py) until HR adds him to the payroll: HR does so here, as on the page."""
     _configure(
         attendance_mode="simple",
         late_deduction_slabs=[],
@@ -646,6 +654,9 @@ def statement_world() -> SimpleNamespace:
     payrolls = {}
     for emp in (meena, lokesh, sriram, *admin_rows):
         payrolls[emp.employee_code] = _generate_staff_payroll(emp, APRIL, YEAR)["payroll"]
+    # the new joiner is parked (not on the statement) until HR presses "Add to payroll" on Skipped Employees
+    assert payrolls["2234"].new_joiner_parked
+    add_to_payroll(payrolls["2234"], "HR")
     # HR sets Meena's deductions to 1,000 (the "Others" of the printed row).
     Client().patch(
         f"/api/payroll/{payrolls['2316'].id}", {"deductions": 1000}, content_type="application/json", **_admin()
@@ -2544,7 +2555,7 @@ class StaffStatementTests(TestCase):
             "others": 1000.0,
             "lopAmount": 2269.23,
             "totalDeduction": 1000.0,
-            "net": 26230.77,
+            "net": 26231.0,  # 27,230.77 - 1,000 = 26,230.77, rounded up to the next rupee (owner 2026-11-10)
             "remarks": "",
         }
         for key, value in expected.items():
@@ -2562,7 +2573,8 @@ class StaffStatementTests(TestCase):
             self.assertAlmostEqual(
                 v["esi"] + v["pf"] + v["tds"] + v["advance"] + v["others"], v["totalDeduction"], **near
             )
-            self.assertAlmostEqual(v["eSalary"] - v["totalDeduction"], v["net"], **near)
+            # NET = E salary - Total Deduction, rounded up to the next rupee (owner 2026-11-10)
+            self.assertEqual(_rupee_up(v["eSalary"] - v["totalDeduction"]), v["net"], code)
             self.assertEqual(v["tds"], 0.0)
 
     def test_a_half_day_an_advance_and_no_recorded_split(self):
@@ -2579,8 +2591,9 @@ class StaffStatementTests(TestCase):
         # 2026-11-04: no T.Advance balance column)
         self.assertEqual((row["advance"], row["others"]), (2000.0, 0.0))
         self.assertNotIn("tAdvance", row)
-        self.assertEqual((row["eSalary"], row["totalDeduction"], row["net"]), (14471.15, 2000.0, 12471.15))
-        self.assertEqual(float(Payroll.objects.get(pk=self.w.payrolls["2896"].pk).final_salary), 12471.15)
+        # NET 14,471.15 - 2,000 = 12,471.15, rounded up to the next rupee (owner 2026-11-10)
+        self.assertEqual((row["eSalary"], row["totalDeduction"], row["net"]), (14471.15, 2000.0, 12472.0))
+        self.assertEqual(float(Payroll.objects.get(pk=self.w.payrolls["2896"].pk).final_salary), 12472.0)
 
     def test_no_advance_balance_is_listed_only_what_this_month_recovered(self):
         # owner 2026-11-04: the Temporary Advance balance is not this month's pay, so it is not on the statement at all
@@ -2601,10 +2614,11 @@ class StaffStatementTests(TestCase):
         body = self.statement()
         self.assertEqual(
             [(g["label"], [r["values"]["code"] for r in g["rows"]]) for g in body["groups"]],
-            [("Accounts", ["2316", "2896", "30071"]), ("Admin", ["189", "226", "2234"])],
+            # 30071 SRIRAM is inactive: active employees only (owner 2026-11-10)
+            [("Accounts", ["2316", "2896"]), ("Admin", ["189", "226", "2234"])],
         )
-        self.assertEqual([r["sno"] for g in body["groups"] for r in g["rows"]], [1, 2, 3, 4, 5, 6])
-        self.assertEqual([r["values"]["sno"] for g in body["groups"] for r in g["rows"]], [1, 2, 3, 4, 5, 6])
+        self.assertEqual([r["sno"] for g in body["groups"] for r in g["rows"]], [1, 2, 3, 4, 5])
+        self.assertEqual([r["values"]["sno"] for g in body["groups"] for r in g["rows"]], [1, 2, 3, 4, 5])
         first = body["groups"][0]["rows"][0]
         self.assertEqual(
             (first["payrollId"], first["employeeId"], first["status"]),
@@ -2632,23 +2646,39 @@ class StaffStatementTests(TestCase):
                 total["values"][key], sum(g["subtotal"]["values"][key] for g in body["groups"]), delta=0.011, msg=key
             )
         accounts, admin = (g["subtotal"]["values"] for g in body["groups"])
+        # Accounts is Meena + Lokesh (inactive Sriram is not listed, owner 2026-11-10): totals 29,500 + 17,500, E salary
+        # 27,230.77 + 14,471.15, NET 26,231 + 12,472 (each rounded up to the rupee)
         self.assertEqual(
             (accounts["total"], accounts["eSalary"], accounts["totalDeduction"], accounts["net"]),
-            (97000.0, 47471.15, 3000.0, 44471.15),
+            (47000.0, 41701.92, 3000.0, 38703.0),
         )
         self.assertEqual((admin["total"], admin["eSalary"], admin["net"]), (182000.0, 182000.0, 182000.0))
         grand = total["values"]
+        # Lop& PSAmt: (29,500 - 27,230.77) + (17,500 - 14,471.15)
         self.assertEqual(
             (grand["total"], grand["eSalary"], grand["net"], grand["lopAmount"]),
-            (279000.0, 229471.15, 226471.15, 49528.85),
+            (229000.0, 223701.92, 220703.0, 5298.08),
         )
         self.assertEqual((grand["basic"] + grand["petrol"] + grand["othersAllow"], grand["tds"]), (grand["total"], 0.0))
 
     def test_remarks_say_left_and_joined_and_nothing_else(self):
         rows = self.rows()
-        self.assertEqual(rows["30071"]["remarks"], "LEFT")
+        # owner 2026-11-10: the statement lists active employees only, so the leaver (30071, inactive) is not on it at
+        # all and no row says LEFT; JOINED still marks the one who joined in the month
+        self.assertNotIn("30071", rows)
+        self.assertNotIn("LEFT", " ".join(v["remarks"] for v in rows.values()))
         self.assertEqual(rows["2234"]["remarks"], "JOINED 15-04")
         self.assertEqual([c for c, v in rows.items() if v["remarks"] == ""], ["2316", "2896", "189", "226"])
+
+    def test_a_new_joiner_not_added_to_the_payroll_is_not_on_the_statement(self):
+        # owner 2026-11-10: a new joiner of the month is calculated but parked until HR adds them to the payroll; parked,
+        # they are on no statement row and in no total (Payroll > Skipped Employees lists them)
+        Payroll.objects.filter(pk=self.w.payrolls["2234"].pk).update(new_joiner_parked=True)
+        body = self.statement()
+        self.assertNotIn("2234", self.rows(body))
+        self.assertEqual(body["counts"]["employees"], 4)
+        admin = next(g for g in body["groups"] if g["label"] == "Admin")
+        self.assertEqual(admin["subtotal"]["values"]["total"], 64000.0)  # 189 (50,000) + 226 (14,000)
 
     def test_company_period_title_and_counts(self):
         body = self.statement()
@@ -2670,7 +2700,8 @@ class StaffStatementTests(TestCase):
                 "toLabel": "30-04-2026",
             },
         )
-        self.assertEqual(body["counts"], {"employees": 6, "departments": 2, "paid": 0, "pending": 6})
+        # six payrolls, the inactive 30071's not counted (active employees only, owner 2026-11-10)
+        self.assertEqual(body["counts"], {"employees": 5, "departments": 2, "paid": 0, "pending": 5})
         self.assertTrue(body["generatedAt"])
 
     def test_the_notes_say_how_the_columns_are_worked_out_and_who_pays_tds(self):
@@ -2692,7 +2723,7 @@ class StaffStatementTests(TestCase):
         self.assertEqual(admin_only["total"]["values"]["total"], 182000.0)
         one = self.statement(f"&employeeId={self.w.payrolls['226'].employee_id}")
         self.assertEqual(list(self.rows(one)), ["226"])
-        self.assertEqual(self.statement("&status=pending")["counts"]["employees"], 5)
+        self.assertEqual(self.statement("&status=pending")["counts"]["employees"], 4)  # 5 active, 1 paid
 
     def test_a_payroll_without_a_slip_still_has_a_row_and_the_statement_says_so(self):
         SalarySlip.objects.filter(employee_id=self.w.payrolls["189"].employee_id).delete()
@@ -2725,7 +2756,8 @@ class StaffStatementTests(TestCase):
         body = self.statement()
         self.assertEqual([g["label"] for g in body["groups"]], ["Accounts", "Admin", "No department"])
         self.assertEqual(body["groups"][-1]["key"], "none")
-        self.assertEqual([r["sno"] for g in body["groups"] for r in g["rows"]], [1, 2, 3, 4, 5, 6, 7])
+        # five active employees + this one (the inactive 30071 is not listed, owner 2026-11-10)
+        self.assertEqual([r["sno"] for g in body["groups"] for r in g["rows"]], [1, 2, 3, 4, 5, 6])
 
     def test_a_month_with_no_payroll_is_an_empty_statement(self):
         body = _get(self, "/api/payroll/salary-statement?month=5&year=2026")
@@ -2842,8 +2874,10 @@ class ProductionStatementTests(TestCase):
     def test_the_remarks_mark_a_worker_who_joined_in_the_period(self):
         Employee.objects.filter(pk=self.w.raja.pk).update(join_date="2026-02-04")
         self.assertEqual(self.rows()["P100"]["remarks"], "JOINED 04-02")
+        # owner 2026-11-10: once deactivated he is not on the statement at all (active employees only), so no row ever
+        # reads "JOINED 04-02, LEFT"
         Employee.objects.filter(pk=self.w.raja.pk).update(status="inactive")
-        self.assertEqual(self.rows()["P100"]["remarks"], "JOINED 04-02, LEFT")
+        self.assertNotIn("P100", self.rows())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3132,7 +3166,7 @@ class TdsAndStatutoryInsightsTests(TestCase):
 
     February 2026, 24 working days, full attendance, salary 30,000 (so a daily rate of 1,250 and, with no split recorded, a
     first portion of 15,000): T1 Tara is on the TDS list at 10%, C1 Chitra is Co Emp (PF 12% and ESI 0.75% of the first
-    portion = 1,800 + 112.50), P1 Pooja is neither. Production, the Weekly period 2-8 February, 5 shifts at 500 = 2,500: PT1
+    portion = 1,800 + 112.50, the ESI rounded up to 113 by the engine, owner 2026-11-10), P1 Pooja is neither. Production, the Weekly period 2-8 February, 5 shifts at 500 = 2,500: PT1
     Tarun is on the TDS list at 12.5%, PC1 Chitra is Co Emp (PF 12% of the first 50% of the pay = 150)."""
 
     @classmethod
@@ -3182,15 +3216,16 @@ class TdsAndStatutoryInsightsTests(TestCase):
         )
         self.assertEqual(
             (c.deductions, c.tds_deduction, c.tds_percent, c.final_salary),
-            (Decimal("1912.50"), Decimal("0.00"), None, Decimal("28087.50")),
+            # PF 1,800 + ESI 112.50 rounded up to 113 (owner 2026-11-10); NET 30,000 - 1,913
+            (Decimal("1913.00"), Decimal("0.00"), None, Decimal("28087.00")),
         )
         self.assertEqual(
             (p.deductions, p.tds_deduction, p.final_salary), (Decimal("0.00"), Decimal("0.00"), Decimal("30000.00"))
         )
         w = Payroll.objects.get(pk=self.worker_payroll.pk)
-        self.assertEqual(
+        self.assertEqual(  # TDS keeps its paise; NET 2,500 - 312.50 = 2,187.50 rounded up (owner 2026-11-10)
             (w.gross_salary, w.tds_deduction, w.final_salary),
-            (Decimal("2500.00"), Decimal("312.50"), Decimal("2187.50")),
+            (Decimal("2500.00"), Decimal("312.50"), Decimal("2188.00")),
         )
 
     # ── the Salary Statement ──
@@ -3219,7 +3254,7 @@ class TdsAndStatutoryInsightsTests(TestCase):
                 rows["C1"]["others"],
                 rows["C1"]["totalDeduction"],
             ),
-            (0.0, 1800.0, 112.5, 0.0, 1912.5),
+            (0.0, 1800.0, 113.0, 0.0, 1913.0),  # ESI 112.50 rounded up (owner 2026-11-10)
         )
         self.assertEqual((rows["P1"]["tds"], rows["P1"]["totalDeduction"], rows["P1"]["net"]), (0.0, 0.0, 30000.0))
         for code, v in rows.items():
@@ -3228,7 +3263,7 @@ class TdsAndStatutoryInsightsTests(TestCase):
             )
             self.assertAlmostEqual(v["eSalary"] - v["totalDeduction"], v["net"], delta=0.011, msg=code)
         grand = body["total"]["values"]
-        self.assertEqual((grand["tds"], grand["pf"], grand["esi"], grand["others"]), (3000.0, 1800.0, 112.5, 0.0))
+        self.assertEqual((grand["tds"], grand["pf"], grand["esi"], grand["others"]), (3000.0, 1800.0, 113.0, 0.0))
         tds_column = next(c for c in body["columns"] if c["key"] == "tds")
         self.assertEqual((tds_column["label"], tds_column["total"], tds_column["group"]), ("TDS", True, "deductions"))
 
@@ -3253,7 +3288,7 @@ class TdsAndStatutoryInsightsTests(TestCase):
                 rows["PT1"]["totalDeduction"],
                 rows["PT1"]["net"],
             ),
-            (312.5, 0.0, 0.0, 312.5, 2187.5),
+            (312.5, 0.0, 0.0, 312.5, 2188.0),  # NET 2,500 - 312.50 = 2,187.50 rounded up (owner 2026-11-10)
         )
         self.assertEqual(
             (rows["PC1"]["tds"], rows["PC1"]["pf"], rows["PC1"]["others"], rows["PC1"]["totalDeduction"]),
@@ -3285,9 +3320,9 @@ class TdsAndStatutoryInsightsTests(TestCase):
 
     def test_a_co_emp_payroll_has_pf_and_esi_lines_and_no_tds_line(self):
         d, by_key = self.lines(self.payrolls["C1"])
-        self.assertEqual(
+        self.assertEqual(  # ESI 0.75% of 15,000 = 112.50, rounded up by the engine (owner 2026-11-10)
             [(k, line["amount"]) for k, line in by_key.items() if line["kind"] != "subtotal"],
-            [("pf", 1800.0), ("esi", 112.5)],
+            [("pf", 1800.0), ("esi", 113.0)],
         )
         self.assertNotIn("tds", by_key)
         self.assertEqual(
@@ -3313,7 +3348,7 @@ class TdsAndStatutoryInsightsTests(TestCase):
         self.assertEqual(
             sum(line["amount"] for line in d["deductions"] if line["kind"] == "deduction"), d["money"]["deductions"]
         )
-        self.assertEqual(d["money"]["net"], 2187.5)
+        self.assertEqual(d["money"]["net"], 2188.0)  # 2,500 - 312.50, rounded up (owner 2026-11-10)
         _d, co = self.lines(self.co_worker_payroll, "production")
         self.assertEqual((co["pf"]["amount"], "tds" in co), (150.0, False))
 
@@ -3349,9 +3384,9 @@ class TdsAndStatutoryInsightsTests(TestCase):
         bd["deductions"]["pfEfRule"] = None
         SalarySlip.objects.filter(pk=slip.pk).update(breakdown_details=bd)
         d, by_key = self.lines(self.payrolls["C1"])
-        self.assertEqual(
+        self.assertEqual(  # the stored (rounded-up) ESI, owner 2026-11-10
             [(k, line["amount"]) for k, line in by_key.items() if line["kind"] != "subtotal"],
-            [("pf", 1800.0), ("esi", 112.5)],
+            [("pf", 1800.0), ("esi", 113.0)],
         )
         self.assertEqual(by_key["pf"]["note"], "12% of Basic ₹15,000")
         self.assertIsNone(by_key["pf"]["ruleKey"])  # the old switches and bands no longer exist: nothing to link to
@@ -3361,7 +3396,7 @@ class TdsAndStatutoryInsightsTests(TestCase):
             self.assertFalse(items[key]["changed"], key)
         # and the statement still adds up for it
         _body, rows = self.statement()
-        self.assertEqual((rows["C1"]["pf"], rows["C1"]["esi"], rows["C1"]["tds"]), (1800.0, 112.5, 0.0))
+        self.assertEqual((rows["C1"]["pf"], rows["C1"]["esi"], rows["C1"]["tds"]), (1800.0, 113.0, 0.0))
 
     # ── the contract ──
 

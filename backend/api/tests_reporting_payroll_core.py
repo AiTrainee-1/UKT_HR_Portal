@@ -11,6 +11,12 @@ Calendar: February 2026 starts on a Sunday and has exactly 24 Mon-Sat working da
 rate of exactly 1,000. January 2026 / March 2026 slips exist for two employees so the financial-year reports (FY 2025-26,
 April start) have three months of data.
 
+Owner 2026-11-10: the engine rounds each slip's employee ESI and its NET UP to the next whole rupee (pf_esi.round_up_rupee),
+so the February slips with paise now read: Bala (1002) ESI 114.75 -> 115, deductions 1,458, NET 13,842; Zed (73) ESI
+112.50 -> 113, deductions 1,013, NET 13,987; Esha (2001) 2-8 Feb ESI 28.13 -> 29, deductions 1,479, NET 2,271 and 9-15 Feb
+ESI 22.50 -> 23, deductions 383, NET 2,617. Every total below is the sum of those rounded rows: February NET 95,412.00
+(was 95,414.12), deductions 10,638.00, employee ESI 385.00; FY 2025-26 NET 193,932.00; Unit 1 NET 65,467.00.
+
 Run via: python manage.py test api.tests_reporting_payroll_core -v 2   (or through the throw-away-DB harness)
 """
 
@@ -736,7 +742,7 @@ class RegistryAccessTests(PayrollCoreBase):
             self.assertTrue(any("production payroll only" in n for n in b["notes"]), rid)
         cost = self.body("department-salary-cost", self.prod_user, **FEB)
         self.assertEqual(cost["totals"]["headcount"], 2)  # P1 and P2 only
-        self.assertAlmostEqual(cost["totals"]["netPay"], 6634.37, places=2)
+        self.assertAlmostEqual(cost["totals"]["netPay"], 6633.0, places=2)  # 2,271 + 2,617 + 1,745
         # a payroll holder is not restricted
         self.assertEqual(len(_body_rows(self.body("salary-register", self.payroll_user, **FEB))), 8)
 
@@ -878,14 +884,16 @@ class SalarySlipTests(PayrollCoreBase):
         # 18 of 24 days paid, 3 late (2 billable -> half a shift of 850) - all from the stored slip
         c = _by_code(b, "1002")
         self.assertEqual((c["paidDays"], c["absentDays"], c["lateDays"], c["totalEarnings"]), (18.0, 6.0, 3, 15300.0))
-        self.assertEqual((c["pfDeduction"], c["esiDeduction"], c["otherDeductions"]), (918.0, 114.75, 425.0))
-        self.assertEqual((c["totalDeductions"], c["netPay"], c["paymentStatus"]), (1457.75, 13842.25, "Pending"))
+        # ESI 1.5% of 7,650 = 114.75 -> 115; NET 15,300 - 1,458 (owner 2026-11-10: ESI and NET rounded up)
+        self.assertEqual((c["pfDeduction"], c["esiDeduction"], c["otherDeductions"]), (918.0, 115.0, 425.0))
+        self.assertEqual((c["totalDeductions"], c["netPay"], c["paymentStatus"]), (1458.0, 13842.0, "Pending"))
         # production: one slip per pay period, paid days = shifts, heads that do not apply are blank
         p = _by_code(b, "2001", "02-Feb-2026 to 08-Feb-2026")
-        self.assertEqual(
-            (p["employmentType"], p["paidDays"], p["basic"], p["netPay"]), ("Production", 7.5, 3750.0, 2271.87)
+        self.assertEqual(  # 3,750 - 1,479
+            (p["employmentType"], p["paidDays"], p["basic"], p["netPay"]), ("Production", 7.5, 3750.0, 2271.0)
         )
-        self.assertEqual((p["esiDeduction"], p["advanceDeduction"], p["totalDeductions"]), (28.13, 1000.0, 1478.13))
+        # ESI 1.5% of 1,875 = 28.13 -> 29; PF 450 + 29 + advance 1,000
+        self.assertEqual((p["esiDeduction"], p["advanceDeduction"], p["totalDeductions"]), (29.0, 1000.0, 1479.0))
         self.assertIsNone(p["hra"])
         self.assertIsNone(p["otAmount"])
         # NULL department / designation and a leaver still appear
@@ -895,11 +903,11 @@ class SalarySlipTests(PayrollCoreBase):
     def test_totals_summary_and_notes(self):
         b = self.body("salary-slip", **FEB)
         _assert_totals_match(self, b)
-        self.assertEqual(b["totals"]["netPay"], 95414.12)
+        self.assertEqual(b["totals"]["netPay"], 95412.0)
         self.assertEqual(
             b["totals"]["totalEarnings"], 106050.0
         )  # gross + OT, not the slip's gross-only "Total Earnings"
-        self.assertEqual(b["totals"]["totalDeductions"], 10635.88)
+        self.assertEqual(b["totals"]["totalDeductions"], 10638.0)
         for r in _body_rows(b):  # every slip ties out: earnings - deductions = net
             self.assertAlmostEqual(r["totalEarnings"] - r["totalDeductions"], r["netPay"], places=2)
             self.assertAlmostEqual(
@@ -909,9 +917,7 @@ class SalarySlipTests(PayrollCoreBase):
             )
         s = {x["label"]: x["value"] for x in b["summary"]}
         self.assertEqual((s["Salary slips"], s["Employees"], s["Paid slips"], s["Pending slips"]), (8, 7, 2, 6))
-        self.assertEqual(
-            (s["Total earnings"], s["Total deductions"], s["Total net pay"]), (106050.0, 10635.88, 95414.12)
-        )
+        self.assertEqual((s["Total earnings"], s["Total deductions"], s["Total net pay"]), (106050.0, 10638.0, 95412.0))
         text = " ".join(b["notes"])
         self.assertIn("OT Hours", text)  # the printed-slip quirks are flagged, not silently copied
         self.assertIn("Date of Payment", text)
@@ -996,7 +1002,7 @@ class SalarySlipTests(PayrollCoreBase):
         self.assertEqual(self.body("salary-slip", u, **FEB, branchIds=str(self.b2.id))["rows"], [])
         self.assertEqual(self.body("salary-slip", u, **FEB, employeeIds=str(self.e3.id))["rows"], [])
         self.assertEqual(self.body("salary-slip", u, **FEB, departmentIds=str(self.finish.id))["rows"], [])
-        self.assertAlmostEqual(b["totals"]["netPay"], 65469.12, places=2)
+        self.assertAlmostEqual(b["totals"]["netPay"], 65467.0, places=2)
 
     def test_pdf_is_the_real_printable_slips_two_per_page(self):
         r = self.export("salary-slip", "pdf", **FEB)
@@ -1051,8 +1057,8 @@ class SalarySlipTests(PayrollCoreBase):
         self.assertEqual(first[0], "SS/73/2026/02")
         self.assertEqual(first[1], "73")
         net = header.index("Net pay")
-        self.assertEqual(first[net], 13987.5)
-        self.assertEqual(ws.cell(row=8 + 8, column=net + 1).value, 95414.12)  # totals row
+        self.assertEqual(first[net], 13987)  # 15,000 - 1,013 (ESI 112.50 rounded up)
+        self.assertEqual(ws.cell(row=8 + 8, column=net + 1).value, 95412)  # totals row
         codes = [ws.cell(row=r, column=2).value for r in range(8, 16)]
         self.assertEqual(codes, ["73", "1001", "1002", "1003", "1004", "2001", "2001", "2002"])
 
@@ -1097,15 +1103,15 @@ class SalaryRegisterTests(PayrollCoreBase):
             ],
         )
         subs = {r["employeeName"]: r for r in b["rows"] if r.get("_kind") == "subtotal"}
-        self.assertEqual(subs["CUTTING total"]["netPay"], 26449.37)  # 21560 + 2271.87 + 2617.50
+        self.assertEqual(subs["CUTTING total"]["netPay"], 26448.0)  # 21560 + 2271 + 2617 (rounded-up NETs)
         self.assertEqual(subs["FINISHING total"]["netPay"], 29945.0)
-        self.assertEqual(subs["SEWING total"]["netPay"], 27829.75)
+        self.assertEqual(subs["SEWING total"]["netPay"], 27829.0)  # 13842 + 13987
         self.assertEqual(subs["Unassigned total"]["netPay"], 11190.0)
         self.assertEqual(subs["CUTTING total"]["totalEarnings"], 31750.0)
         self.assertEqual(subs["SEWING total"]["lateDeduction"], 425.0)
         _assert_totals_match(self, b)
-        self.assertEqual(b["totals"]["netPay"], 95414.12)
-        self.assertEqual(round(sum(s["netPay"] for s in subs.values()), 2), 95414.12)
+        self.assertEqual(b["totals"]["netPay"], 95412.0)
+        self.assertEqual(round(sum(s["netPay"] for s in subs.values()), 2), 95412.0)
         self.assertEqual(
             {
                 k: b["totals"][k]
@@ -1113,7 +1119,7 @@ class SalaryRegisterTests(PayrollCoreBase):
             },
             {
                 "pfDeduction": 6828.0,
-                "esiDeduction": 382.88,
+                "esiDeduction": 385.0,  # 115 + 90 + 113 + 29 + 23 + 15, each slip's ESI rounded up
                 "advanceDeduction": 3000.0,
                 "lateDeduction": 425.0,
                 "otAmount": 1000.0,
@@ -1135,10 +1141,10 @@ class SalaryRegisterTests(PayrollCoreBase):
                 e2["lateDeduction"],
                 e2["netPay"],
             ),
-            (20400.0, 24, 18.0, 6.0, 7650.0, 3060.0, 4590.0, 425.0, 13842.25),
+            (20400.0, 24, 18.0, 6.0, 7650.0, 3060.0, 4590.0, 425.0, 13842.0),
         )
         p = _by_code(b, "2001", "02-Feb-2026 to 08-Feb-2026")
-        self.assertEqual((p["monthlyRate"], p["paidDays"], p["basic"], p["netPay"]), (500.0, 7.5, 3750.0, 2271.87))
+        self.assertEqual((p["monthlyRate"], p["paidDays"], p["basic"], p["netPay"]), (500.0, 7.5, 3750.0, 2271.0))
         self.assertIsNone(p["hra"])
         self.assertIsNone(p["lateDeduction"])  # production late detection was off: unknown, not zero
         self.assertEqual(p["paymentStatus"], "Paid")
@@ -1153,11 +1159,11 @@ class SalaryRegisterTests(PayrollCoreBase):
     def test_group_by_options(self):
         by_type = self.body("salary-register", **FEB, groupBy="employmentType")
         subs = {r["employeeName"]: r["netPay"] for r in by_type["rows"] if r.get("_kind") == "subtotal"}
-        self.assertEqual(subs, {"Production total": 6634.37, "Staff total": 88779.75})
+        self.assertEqual(subs, {"Production total": 6633.0, "Staff total": 88779.0})
         _assert_totals_match(self, by_type)
         flat = self.body("salary-register", **FEB, groupBy="none")
         self.assertFalse(any(r.get("_kind") for r in flat["rows"]))
-        self.assertEqual(flat["totals"]["netPay"], 95414.12)
+        self.assertEqual(flat["totals"]["netPay"], 95412.0)
         self.assertEqual([r["employeeCode"] for r in flat["rows"]][:3], ["73", "1001", "1002"])
 
     def test_every_filter_narrows(self):
@@ -1181,22 +1187,22 @@ class SalaryRegisterTests(PayrollCoreBase):
         s = {x["label"]: x["value"] for x in b["summary"]}
         self.assertEqual((s["Employees paid"], s["Salary slips"]), (7, 8))
         self.assertEqual(
-            (s["Total net pay"], s["PF + ESI (employee)"], s["Late deductions"]), (95414.12, 7210.88, 425.0)
-        )
+            (s["Total net pay"], s["PF + ESI (employee)"], s["Late deductions"]), (95412.0, 7213.0, 425.0)
+        )  # PF 6,828 + ESI 385
         self.assertTrue(any("Employees who have since left are included" in n for n in b["notes"]))
 
     def test_legacy_weekly_row_only_with_the_toggle(self):
         b = self.body("salary-register", **FEB, includeLegacyWeekly="true", groupBy="none")
         legacy = _by_code(b, "2001", "Feb 2026 - week 2")
         self.assertEqual((legacy["netPay"], legacy["paidDays"]), (1000.0, 2.0))
-        self.assertEqual(b["totals"]["netPay"], 96414.12)
+        self.assertEqual(b["totals"]["netPay"], 96412.0)
 
     def test_branch_isolation(self):
         u = self.branch_user
         b = self.body("salary-register", u, **FEB)
         self.assertNotIn("1003", {r["employeeCode"] for r in _body_rows(b)})
         self.assertNotIn("FINISHING total", [r["employeeName"] for r in b["rows"]])
-        self.assertAlmostEqual(b["totals"]["netPay"], 65469.12, places=2)
+        self.assertAlmostEqual(b["totals"]["netPay"], 65467.0, places=2)
         self.assertEqual(_body_rows(self.body("salary-register", u, **FEB, branchIds=str(self.b2.id))), [])
         self.assertEqual(_body_rows(self.body("salary-register", u, **FEB, employeeIds=str(self.p2.id))), [])
 
@@ -1208,7 +1214,7 @@ class SalaryRegisterTests(PayrollCoreBase):
         net = header.index("Net pay") + 1
         labels = [ws.cell(row=r, column=2).value for r in range(8, 21)]
         self.assertIn("CUTTING total", labels)
-        self.assertEqual(ws.cell(row=20, column=net).value, 95414.12)  # grand total row after 12 rows + subtotals
+        self.assertEqual(ws.cell(row=20, column=net).value, 95412)  # grand total row after 12 rows + subtotals
         r = self.export("salary-register", "pdf", **FEB)
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.content.startswith(b"%PDF"))
@@ -1408,11 +1414,11 @@ class ProductionWageSheetTests(PayrollCoreBase):
                 "ratePerShift": 500.0,
                 "grossWages": 3750.0,
                 "pfDeduction": 450.0,
-                "esiDeduction": 28.13,
+                "esiDeduction": 29.0,  # 1.5% of 1,875 = 28.13, rounded up (owner 2026-11-10)
                 "advanceDeduction": 1000.0,
                 "lateDeduction": None,
-                "totalDeductions": 1478.13,
-                "netPay": 2271.87,
+                "totalDeductions": 1479.0,
+                "netPay": 2271.0,  # 3,750 - 1,479
                 "pfRule": "PF: PF (24%); ESI: ESI (1.5%)",
                 "paymentStatus": "Paid",
             },
@@ -1426,7 +1432,7 @@ class ProductionWageSheetTests(PayrollCoreBase):
                 second["grossWages"],
                 second["netPay"],
             ),
-            ("2026-02-09", 6.0, 0.0, 3000.0, 2617.5),
+            ("2026-02-09", 6.0, 0.0, 3000.0, 2617.0),  # 3,000 - (PF 360 + ESI 22.50 -> 23)
         )
         third = _body_rows(b)[2]
         self.assertEqual(
@@ -1452,16 +1458,17 @@ class ProductionWageSheetTests(PayrollCoreBase):
         )
         self.assertEqual(
             (t["pfDeduction"], t["esiDeduction"], t["advanceDeduction"], t["totalDeductions"], t["netPay"]),
-            (1050.0, 65.63, 1000.0, 2115.63, 6634.37),
+            # ESI 29 + 23 + 15; NET 2,271 + 2,617 + 1,745 (each slip rounded up, owner 2026-11-10)
+            (1050.0, 67.0, 1000.0, 2117.0, 6633.0),
         )
         self.assertIsNone(t["lateDeduction"])  # detection was off everywhere: unknown, not 0.00
         cut = next(r for r in b["rows"] if r.get("employeeName") == "CUTTING total")
         self.assertIsNone(cut["lateDeduction"])
-        self.assertEqual((cut["totalShifts"], cut["netPay"]), (13.5, 4889.37))
+        self.assertEqual((cut["totalShifts"], cut["netPay"]), (13.5, 4888.0))  # 2,271 + 2,617
         s = {x["label"]: x["value"] for x in b["summary"]}
         self.assertEqual((s["Employees"], s["Total shifts"], s["Extra shifts (included)"]), (2, 18.5, 1.5))
         self.assertEqual(
-            (s["Gross wages"], s["Total net pay"], s["Average shifts per employee"]), (8750.0, 6634.37, 9.25)
+            (s["Gross wages"], s["Total net pay"], s["Average shifts per employee"]), (8750.0, 6633.0, 9.25)
         )
         notes = " ".join(b["notes"])
         self.assertIn("ALREADY inside total shifts", notes)
@@ -1570,7 +1577,7 @@ class ProductionWageSheetTests(PayrollCoreBase):
         u = self.branch_user
         b = self.body("production-wage-sheet", u, **FEB_RANGE)
         self.assertEqual({r["employeeCode"] for r in _body_rows(b)}, {"2001"})
-        self.assertEqual(b["totals"]["netPay"], 4889.37)
+        self.assertEqual(b["totals"]["netPay"], 4888.0)
         self.assertEqual(_body_rows(self.body("production-wage-sheet", u, **FEB_RANGE, branchIds=str(self.b2.id))), [])
         self.assertEqual(
             _body_rows(self.body("production-wage-sheet", u, **FEB_RANGE, employeeIds=str(self.p2.id))), []
@@ -1590,7 +1597,7 @@ class ProductionWageSheetTests(PayrollCoreBase):
         self.assertEqual(row[0], "2001")
         self.assertEqual(row[header.index("Total shifts")], 7.5)
         self.assertEqual(row[header.index("Extra shifts")], 1.5)
-        self.assertEqual(row[header.index("Net pay")], 2271.87)
+        self.assertEqual(row[header.index("Net pay")], 2271)
         self.assertEqual(self.export("production-wage-sheet", "pdf", **FEB_RANGE).status_code, 200)
 
 
@@ -1607,13 +1614,14 @@ class BankAdviceTests(PayrollCoreBase):
             [("1004", "Bank"), ("2001", "Bank"), ("1003", "Bank"), ("2002", "Cash"), ("73", "Cash"), ("1002", "Cash")],
         )
         subs = {r["employeeName"]: r["netPay"] for r in b["rows"] if r.get("_kind") == "subtotal"}
-        self.assertEqual(subs, {"Bank transfer total": 42007.5, "Cash salary total": 29574.75})
-        self.assertEqual(b["totals"]["netPay"], 71582.25)
+        # bank: 11,190 + 2,617 + 28,200; cash: 1,745 + 13,987 + 13,842 (rounded-up NETs, owner 2026-11-10)
+        self.assertEqual(subs, {"Bank transfer total": 42007.0, "Cash salary total": 29574.0})
+        self.assertEqual(b["totals"]["netPay"], 71581.0)
         _assert_totals_match(self, b)
         s = {x["label"]: x["value"] for x in b["summary"]}
-        self.assertEqual((s["Total net pay"], s["Payments"]), (71582.25, 6))
+        self.assertEqual((s["Total net pay"], s["Payments"]), (71581.0, 6))
         self.assertEqual(
-            (s["Bank transfers"], s["Bank payments"], s["Cash salaries"], s["Cash payments"]), (42007.5, 3, 29574.75, 3)
+            (s["Bank transfers"], s["Bank payments"], s["Cash salaries"], s["Cash payments"]), (42007.0, 3, 29574.0, 3)
         )
         self.assertEqual((s["Missing / invalid bank details"], s["Rows needing attention"]), (3, 2))
 
@@ -1667,34 +1675,33 @@ class BankAdviceTests(PayrollCoreBase):
         self.assertEqual(codes(employeeIds=str(self.e2.id)), ["1002"])
 
     def test_combine_periods_into_one_payment_line(self):
-        # Esha: 2-8 Feb is PAID, 9-15 Feb is pending. One line of 4,889.37 marked Pending would ask the bank to pay the
+        # Esha: 2-8 Feb is PAID, 9-15 Feb is pending. One line of 4,888 marked Pending would ask the bank to pay the
         # paid period a second time, so periods are folded together only within the same payment state.
         b = self.body("bank-advice", **FEB, paymentStatus="all", combinePeriods="true")
         esha = [r for r in _body_rows(b) if r["employeeCode"] == "2001"]
         self.assertEqual(
-            sorted((r["paymentStatus"], r["netPay"]) for r in esha), [("Paid", 2271.87), ("Pending", 2617.5)]
+            sorted((r["paymentStatus"], r["netPay"]) for r in esha), [("Paid", 2271.0), ("Pending", 2617.0)]
         )
-        self.assertEqual(b["totals"]["netPay"], 95414.12)  # nothing lost or added by the split
+        self.assertEqual(b["totals"]["netPay"], 95412.0)  # nothing lost or added by the split
         separate = self.body("bank-advice", **FEB, paymentStatus="all")
         self.assertEqual(len([r for r in _body_rows(separate) if r["employeeCode"] == "2001"]), 2)
         # the default (pending) view has just the unpaid period, i.e. exactly what still has to be transferred
         pending = self.body("bank-advice", **FEB, combinePeriods="true")
         (row,) = [r for r in _body_rows(pending) if r["employeeCode"] == "2001"]
-        self.assertEqual((row["netPay"], row["paymentStatus"]), (2617.5, "Pending"))
+        self.assertEqual((row["netPay"], row["paymentStatus"]), (2617.0, "Pending"))
         # two unpaid periods do fold into one payment line
         Payroll.objects.filter(employee=self.p1, period_start=date(2026, 2, 2)).update(status="pending")
         both = self.body("bank-advice", **FEB, combinePeriods="true")
         (row,) = [r for r in _body_rows(both) if r["employeeCode"] == "2001"]
-        self.assertEqual((row["netPay"], row["paymentStatus"]), (4889.37, "Pending"))  # 2271.87 + 2617.50
+        self.assertEqual((row["netPay"], row["paymentStatus"]), (4888.0, "Pending"))  # 2271 + 2617
         self.assertIn("+", row["period"])
 
     def test_amount_in_words_and_notes(self):
         b = self.body("bank-advice", **FEB)
         words = next(n for n in b["notes"] if n.startswith("Amount in words"))
-        self.assertIn("bank transfers): Rs. FORTY TWO THOUSAND SEVEN AND FIFTY PAISE ONLY", words)  # 42,007.50
-        self.assertIn(
-            "including cash: Rs. SEVENTY ONE THOUSAND FIVE HUNDRED EIGHTY TWO AND TWENTY FIVE PAISE ONLY", words
-        )
+        # 42,007 and 71,581: whole rupees since the engine rounds every NET up (owner 2026-11-10)
+        self.assertIn("bank transfers): Rs. FORTY TWO THOUSAND SEVEN ONLY", words)
+        self.assertIn("including cash: Rs. SEVENTY ONE THOUSAND FIVE HUNDRED EIGHTY ONE ONLY", words)
         self.assertTrue(any("HDFC Bulk Upload" in n for n in b["notes"]))
         self.assertTrue(any("no payment date" in n for n in b["notes"]))
 
@@ -1733,7 +1740,7 @@ class BankAdviceTests(PayrollCoreBase):
         self.assertEqual(
             rows[0], [None, None, "50100012345678", 11190.0, "DEEPAK TEST", "HDFC0001234", "HDFC BANK", None, None]
         )
-        self.assertEqual([r[3] for r in rows], [11190.0, 2617.5, 28200.0])
+        self.assertEqual([r[3] for r in rows], [11190.0, 2617.0, 28200.0])
         self.assertEqual(hdfc.cell(row=3, column=3).data_type, "s")  # an account number is text
         self.assertEqual(hdfc.cell(row=3, column=6).number_format, "@")
         # rows the bank would reject are kept out of the upload sheet
@@ -1765,7 +1772,7 @@ class BankAdviceTests(PayrollCoreBase):
         pages, text = _pdf(r.content)
         self.assertIn("Bank transfer", text)  # the subtotal label may wrap inside its cell
         self.assertIn("Cash salary total", text)
-        self.assertIn("42,007.50", text)
+        self.assertIn("42,007.00", text)
         self.assertIn("300011223344", text)
 
 
@@ -1789,15 +1796,15 @@ class PaymentStatusTests(PayrollCoreBase):
             (28200.0, 28000.0, -200.0, "Pending", "Net differs"),
         )
         p = _by_code(b, "2001", "02-Feb-2026 to 08-Feb-2026")
-        self.assertEqual((p["paymentStatus"], p["slipNet"]), ("Paid", 2271.87))
+        self.assertEqual((p["paymentStatus"], p["slipNet"]), ("Paid", 2271.0))
         self.assertEqual(sum(1 for r in b["rows"] if r["paymentStatus"] == "Paid"), 2)
-        self.assertEqual(b["totals"]["slipNet"], 95414.12)
-        self.assertEqual(b["totals"]["payrollNet"], 95214.12)
+        self.assertEqual(b["totals"]["slipNet"], 95412.0)
+        self.assertEqual(b["totals"]["payrollNet"], 95212.0)  # Chitra's payroll 200 below her slip
         self.assertEqual(b["totals"]["variance"], -200.0)
         _assert_totals_match(self, b)
         s = {x["label"]: x["value"] for x in b["summary"]}
         self.assertEqual(
-            (s["Paid amount"], s["Paid slips"], s["Pending amount"], s["Pending slips"]), (23831.87, 2, 71582.25, 6)
+            (s["Paid amount"], s["Paid slips"], s["Pending amount"], s["Pending slips"]), (23831.0, 2, 71581.0, 6)
         )
         self.assertEqual((s["Net variance (payroll - slip)"], s["Rows needing attention"]), (-200.0, 1))
 
@@ -1834,7 +1841,7 @@ class PaymentStatusTests(PayrollCoreBase):
         b = self.body("payroll-payment-status", **FEB)
         z = _by_code(b, "73")
         self.assertEqual(
-            (z["match"], z["slipNet"], z["payrollNet"], z["variance"]), ("Payroll only", None, 13987.5, None)
+            (z["match"], z["slipNet"], z["payrollNet"], z["variance"]), ("Payroll only", None, 13987.0, None)
         )
         c = _by_code(b, "1002")
         self.assertEqual(
@@ -1903,36 +1910,37 @@ class DeductionSummaryTests(PayrollCoreBase):
             {
                 "totalEarnings": 15300.0,
                 "pfDeduction": 918.0,
-                "esiDeduction": 114.75,
+                "esiDeduction": 115.0,  # 114.75 rounded up (owner 2026-11-10)
                 "advanceDeduction": 0.0,
                 "lateDeduction": 425.0,
                 "otherDeductions": 0.0,
-                "totalDeductions": 1457.75,
-                "deductionPct": 9.53,
-                "netPay": 13842.25,
+                "totalDeductions": 1458.0,
+                "deductionPct": 9.53,  # 1,458 / 15,300
+                "netPay": 13842.0,
             },
         )
         a = _by_code(b, "1001")
         self.assertEqual((a["advanceDeduction"], a["totalDeductions"], a["deductionPct"]), (2000.0, 3440.0, 13.76))
         p = _by_code(b, "2001", "02-Feb-2026 to 08-Feb-2026")
         self.assertIsNone(p["lateDeduction"])  # production late detection off: no figure
-        self.assertEqual((p["otherDeductions"], p["advanceDeduction"], p["totalDeductions"]), (0.0, 1000.0, 1478.13))
+        self.assertEqual((p["otherDeductions"], p["advanceDeduction"], p["totalDeductions"]), (0.0, 1000.0, 1479.0))
         sew = next(r for r in b["rows"] if r.get("employeeName") == "SEWING total")
-        self.assertEqual((sew["totalDeductions"], sew["totalEarnings"], sew["deductionPct"]), (2470.25, 30300.0, 8.15))
+        # Bala 1,458 + Zed 1,013 = 2,471 of 30,300 earned = 8.155% -> 8.16
+        self.assertEqual((sew["totalDeductions"], sew["totalEarnings"], sew["deductionPct"]), (2471.0, 30300.0, 8.16))
         _assert_totals_match(self, b)
-        self.assertEqual(b["totals"]["totalDeductions"], 10635.88)
-        self.assertEqual(b["totals"]["netPay"], 95414.12)
+        self.assertEqual(b["totals"]["totalDeductions"], 10638.0)
+        self.assertEqual(b["totals"]["netPay"], 95412.0)
 
     def test_summary_shares_and_notes(self):
         b = self.body("salary-deduction-summary", **FEB)
         s = {x["label"]: x["value"] for x in b["summary"]}
         self.assertEqual(
             (s["Total deductions"], s["PF"], s["ESI"], s["Advance recovery"], s["Late deduction"], s["Other / manual"]),
-            (10635.88, 6828.0, 382.88, 3000.0, 425.0, 0.0),
+            (10638.0, 6828.0, 385.0, 3000.0, 425.0, 0.0),  # ESI 385: each slip's ESI rounded up (owner 2026-11-10)
         )
         self.assertEqual((s["Employees with deductions"], s["Deductions as % of earnings"]), (7, 10.03))
         shares = next(n for n in b["notes"] if n.startswith("Share of total deductions"))
-        self.assertIn("PF 64.2%", shares)  # 6828 / 10635.88
+        self.assertIn("PF 64.18%", shares)  # 6828 / 10638 = 64.185% (was 64.20% of 10,635.88)
         self.assertTrue(any("NOT deduction lines" in n for n in b["notes"]))
         self.assertTrue(any("regenerated months" in n for n in b["notes"]))
 
@@ -1972,7 +1980,7 @@ class DeductionSummaryTests(PayrollCoreBase):
     def test_group_by_and_other_filters(self):
         b = self.body("salary-deduction-summary", **FEB, groupBy="employmentType")
         subs = {r["employeeName"]: r["totalDeductions"] for r in b["rows"] if r.get("_kind") == "subtotal"}
-        self.assertEqual(subs, {"Production total": 2115.63, "Staff total": 8520.25})
+        self.assertEqual(subs, {"Production total": 2117.0, "Staff total": 8521.0})  # ESI rounded up per slip
         _assert_totals_match(self, b)
         flat = self.body("salary-deduction-summary", **FEB, groupBy="none")
         self.assertFalse(any(r.get("_kind") for r in flat["rows"]))
@@ -1995,7 +2003,7 @@ class DeductionSummaryTests(PayrollCoreBase):
         self.assertNotIn("1003", {r["employeeCode"] for r in _body_rows(b)})
         self.assertEqual(_body_rows(self.body("salary-deduction-summary", u, **FEB, branchIds=str(self.b2.id))), [])
         self.assertEqual(_body_rows(self.body("salary-deduction-summary", u, **FEB, employeeIds=str(self.p2.id))), [])
-        self.assertAlmostEqual(b["totals"]["netPay"], 65469.12, places=2)
+        self.assertAlmostEqual(b["totals"]["netPay"], 65467.0, places=2)
 
     def test_xlsx_and_pdf(self):
         ws = self.xlsx("salary-deduction-summary", **FEB).active
@@ -2058,7 +2066,7 @@ class DepartmentCostTests(PayrollCoreBase):
                 "otAmount": 1000.0,
                 "totalEarnings": 31750.0,
                 "employeePf": 2250.0,
-                "employeeEsi": 50.63,
+                "employeeEsi": 52.0,  # Esha's 28.13 -> 29 + 22.50 -> 23 (each slip's ESI rounded up, owner 2026-11-10)
                 # PF wages are the first portion: Anita 12000 + Esha's half of each period wage (1875 + 1500) = 15375,
                 # employer PF 12% = 1845.00; ESI wages are the same first portion on the slips that have ESI
                 # (Esha's 1875 + 1500): 3.25% of 3375 = 109.6875 -> 109.69
@@ -2066,15 +2074,15 @@ class DepartmentCostTests(PayrollCoreBase):
                 "employerCost": 33704.69,
                 "advanceRecovered": 3000.0,
                 "lateDeduction": 0.0,
-                "totalDeductions": 5300.63,
-                "netPay": 26449.37,
-                "avgNetPerEmployee": 13224.68,
+                "totalDeductions": 5302.0,  # 3,440 + 1,479 + 383
+                "netPay": 26448.0,  # 21,560 + 2,271 + 2,617
+                "avgNetPerEmployee": 13224.0,
             },
         )
         s = _dept(b, "SEWING")
         self.assertEqual(
             (s["employmentType"], s["headcount"], s["grossEarned"], s["lateDeduction"], s["netPay"]),
-            ("Staff", 2, 30300.0, 425.0, 27829.75),
+            ("Staff", 2, 30300.0, 425.0, 27829.0),  # 13,842 + 13,987
         )
         # PF 12% of the first portion 15150 = 1818.00; ESI 3.25% of the same 15150 = 492.375 -> 492.38
         self.assertEqual((s["employerEstimate"], s["employerCost"]), (2310.38, 32610.38))
@@ -2091,9 +2099,9 @@ class DepartmentCostTests(PayrollCoreBase):
         self.assertEqual((t["headcount"], t["slips"]), (7, 8))  # each person once, even with two production slips
         self.assertEqual(
             (t["totalEarnings"], t["employerEstimate"], t["employerCost"], t["netPay"]),
-            (106050.0, 7132.57, 113182.57, 95414.12),
+            (106050.0, 7132.57, 113182.57, 95412.0),
         )
-        self.assertEqual((t["totalDeductions"], t["advanceRecovered"], t["lateDeduction"]), (10635.88, 3000.0, 425.0))
+        self.assertEqual((t["totalDeductions"], t["advanceRecovered"], t["lateDeduction"]), (10638.0, 3000.0, 425.0))
         # the three earning heads add up to gross pay (production wages sit under Basic)
         self.assertEqual((t["basic"], t["hra"], t["otherAllowances"]), (56900.0, 19260.0, 28890.0))
         self.assertEqual(round(t["basic"] + t["hra"] + t["otherAllowances"], 2), t["grossEarned"])
@@ -2102,10 +2110,8 @@ class DepartmentCostTests(PayrollCoreBase):
         self.assertAlmostEqual(sum(r["sharePct"] for r in b["rows"]), 100.0, delta=0.05)
         self.assertEqual(_dept(b, "CUTTING")["sharePct"], 29.78)
         s = {x["label"]: x["value"] for x in b["summary"]}
-        self.assertEqual((s["Employees paid"], s["Net pay"], s["Employer cost (estimate)"]), (7, 95414.12, 113182.57))
-        self.assertEqual(
-            (s["Staff net pay"], s["Production net pay"], s["Cost per head"]), (88779.75, 6634.37, 16168.94)
-        )
+        self.assertEqual((s["Employees paid"], s["Net pay"], s["Employer cost (estimate)"]), (7, 95412.0, 113182.57))
+        self.assertEqual((s["Staff net pay"], s["Production net pay"], s["Cost per head"]), (88779.0, 6633.0, 16168.94))
         self.assertEqual(s["Largest department share (FINISHING)"], 30.0)
         notes = " ".join(b["notes"])
         self.assertIn("CURRENT department", notes)
@@ -2129,15 +2135,15 @@ class DepartmentCostTests(PayrollCoreBase):
         )
         prod = _dept(b, "CUTTING", "Production")
         self.assertEqual(
-            (prod["headcount"], prod["slips"], prod["grossEarned"], prod["netPay"]), (1, 2, 6750.0, 4889.37)
-        )
+            (prod["headcount"], prod["slips"], prod["grossEarned"], prod["netPay"]), (1, 2, 6750.0, 4888.0)
+        )  # 2,271 + 2,617
         self.assertEqual(
             (prod["employerEstimate"], prod["otAmount"]), (514.69, 0.0)
         )  # PF 405.00 + ESI 109.6875 -> 109.69, both on the first portion (half of the wages)
         sub = _dept(b, "CUTTING total")
-        self.assertEqual((sub["headcount"], sub["netPay"]), (2, 26449.37))
+        self.assertEqual((sub["headcount"], sub["netPay"]), (2, 26448.0))
         self.assertEqual(b["totals"]["headcount"], 7)
-        self.assertEqual(b["totals"]["netPay"], 95414.12)  # subtotals are not double counted
+        self.assertEqual(b["totals"]["netPay"], 95412.0)  # subtotals are not double counted
         prod_only = self.body("department-salary-cost", **FEB, breakdown="department_type", employmentType="production")
         self.assertEqual(
             [(r["department"], r["employmentType"]) for r in prod_only["rows"]],
@@ -2146,16 +2152,16 @@ class DepartmentCostTests(PayrollCoreBase):
 
     def test_financial_year_replaces_the_month(self):
         b = self.body("department-salary-cost", **FY, period="2026-02")
-        self.assertEqual(b["totals"]["netPay"], 193934.12)
+        self.assertEqual(b["totals"]["netPay"], 193932.0)  # Jan / Mar have no paise: Feb's 2.12 less, nothing else
         self.assertEqual((b["totals"]["headcount"], b["totals"]["slips"]), (7, 12))
         c = _dept(b, "CUTTING")
-        self.assertEqual(
-            (c["slips"], c["grossEarned"], c["advanceRecovered"], c["netPay"]), (5, 78750.0, 6000.0, 68569.37)
+        self.assertEqual(  # Esha's two NETs rounded up: 2,271 + 2,617 instead of 2,271.87 + 2,617.50
+            (c["slips"], c["grossEarned"], c["advanceRecovered"], c["netPay"]), (5, 78750.0, 6000.0, 68568.0)
         )
         self.assertEqual(_dept(b, "FINISHING")["netPay"], 86345.0)
-        self.assertEqual(_dept(b, "SEWING")["netPay"], 27829.75)  # only Feb has slips for Bala and Zed
+        self.assertEqual(_dept(b, "SEWING")["netPay"], 27829.0)  # only Feb has slips for Bala and Zed
         same = self.body("department-salary-cost", **FY, period="2026-01")
-        self.assertEqual(same["totals"]["netPay"], 193934.12)
+        self.assertEqual(same["totals"]["netPay"], 193932.0)
         self.assertTrue(any("FY" in f["value"] or "2025" in f["value"] for f in b["filters"]))
         self.assertTrue(any("Apr 2025 to Mar 2026" in n for n in b["notes"]))
 
@@ -2175,12 +2181,12 @@ class DepartmentCostTests(PayrollCoreBase):
         self.assertEqual(depts(employeeStatus="inactive"), ["Unassigned"])
         self.assertEqual(depts(employeeStatus="active"), ["CUTTING", "FINISHING", "SEWING"])
         prod = self.body("department-salary-cost", **FEB, employmentType="production")
-        self.assertEqual(prod["totals"]["netPay"], 6634.37)
+        self.assertEqual(prod["totals"]["netPay"], 6633.0)
         self.assertEqual(prod["totals"]["headcount"], 2)
 
     def test_legacy_weekly_slip_only_with_the_toggle(self):
         b = self.body("department-salary-cost", **FEB, includeLegacyWeekly="true")
-        self.assertEqual(b["totals"]["netPay"], 96414.12)
+        self.assertEqual(b["totals"]["netPay"], 96412.0)
         self.assertEqual(b["totals"]["slips"], 9)
         self.assertEqual(b["totals"]["headcount"], 7)  # Esha is still one person
 
@@ -2188,7 +2194,7 @@ class DepartmentCostTests(PayrollCoreBase):
         u = self.branch_user
         b = self.body("department-salary-cost", u, **FEB)
         self.assertEqual([r["department"] for r in b["rows"]], ["CUTTING", "SEWING", "Unassigned"])
-        self.assertEqual((b["totals"]["headcount"], b["totals"]["netPay"]), (5, 65469.12))
+        self.assertEqual((b["totals"]["headcount"], b["totals"]["netPay"]), (5, 65467.0))
         self.assertEqual(self.body("department-salary-cost", u, **FEB, branchIds=str(self.b2.id))["rows"], [])
         self.assertEqual(self.body("department-salary-cost", u, **FEB, departmentIds=str(self.finish.id))["rows"], [])
 
@@ -2198,7 +2204,7 @@ class DepartmentCostTests(PayrollCoreBase):
         self.assertEqual(header[:3], ["Department", "Type", "Employees"])
         self.assertEqual([c.value for c in ws[8]][:3], ["CUTTING", "Staff + Production", 2])
         net = header.index("Net pay") + 1
-        self.assertEqual(ws.cell(row=12, column=net).value, 95414.12)  # totals row after four departments
+        self.assertEqual(ws.cell(row=12, column=net).value, 95412)  # totals row after four departments
         self.assertEqual(self.export("department-salary-cost", "pdf", **FEB).status_code, 200)
 
 
@@ -2232,29 +2238,30 @@ class MonthComparisonTests(PayrollCoreBase):
             self.assertEqual((rows[m]["slips"], rows[m]["netPay"], rows[m]["flag"]), (0, 0.0, "No payroll"))
         jan, feb, mar = rows["Jan 2026"], rows["Feb 2026"], rows["Mar 2026"]
         self.assertEqual((jan["employeesPaid"], jan["slips"], jan["netPay"]), (2, 2, 50760.0))
-        self.assertEqual((feb["employeesPaid"], feb["slips"], feb["netPay"]), (7, 8, 95414.12))
+        self.assertEqual((feb["employeesPaid"], feb["slips"], feb["netPay"]), (7, 8, 95412.0))
         self.assertEqual((mar["employeesPaid"], mar["slips"], mar["netPay"]), (2, 2, 47760.0))
-        self.assertEqual((feb["totalEarnings"], feb["otAmount"], feb["totalDeductions"]), (106050.0, 1000.0, 10635.88))
+        self.assertEqual((feb["totalEarnings"], feb["otAmount"], feb["totalDeductions"]), (106050.0, 1000.0, 10638.0))
         self.assertEqual((jan["totalEarnings"], jan["totalDeductions"]), (54000.0, 3240.0))  # 2 x PF (1440 + 1800)
-        self.assertEqual((feb["momChangeAmount"], feb["momChangePct"]), (44654.12, 87.97))
-        self.assertEqual((mar["momChangeAmount"], mar["momChangePct"]), (-47654.12, -49.94))
+        # 95,412 - 50,760 = 44,652 (87.97% of January); 47,760 - 95,412 = -47,652 (-49.94% of February)
+        self.assertEqual((feb["momChangeAmount"], feb["momChangePct"]), (44652.0, 87.97))
+        self.assertEqual((mar["momChangeAmount"], mar["momChangePct"]), (-47652.0, -49.94))
         self.assertEqual((jan["momChangeAmount"], jan["momChangePct"]), (50760.0, None))  # previous month is zero: no %
         self.assertIsNone(rows["Apr 2025"]["momChangeAmount"])  # first month has nothing before it
-        self.assertEqual(feb["avgNetPerEmployee"], 13630.59)
+        self.assertEqual(feb["avgNetPerEmployee"], 13630.29)  # 95,412 / 7
         self.assertIsNone(rows["Apr 2025"]["avgNetPerEmployee"])
 
     def test_totals_and_summary(self):
         b = self.body("payroll-month-comparison", **FY)
         t = b["totals"]
-        self.assertEqual((t["employeesPaid"], t["slips"], t["netPay"]), (7, 12, 193934.12))
+        self.assertEqual((t["employeesPaid"], t["slips"], t["netPay"]), (7, 12, 193932.0))
         self.assertEqual(round(sum(r["netPay"] for r in b["rows"]), 2), t["netPay"])
         self.assertEqual(round(sum(r["slips"] for r in b["rows"]), 2), t["slips"])
         _assert_totals_match(self, b, skip=("employeesPaid",))
         s = {x["label"]: x["value"] for x in b["summary"]}
-        self.assertEqual(s["Net pay for FY 2025-26"], 193934.12)
-        self.assertEqual(s["Highest month (Feb 2026)"], 95414.12)
+        self.assertEqual(s["Net pay for FY 2025-26"], 193932.0)
+        self.assertEqual(s["Highest month (Feb 2026)"], 95412.0)
         self.assertEqual(s["Lowest month (Mar 2026)"], 47760.0)
-        self.assertEqual(s["Average monthly net pay"], 64644.71)  # 193934.12 / 3 months with payroll
+        self.assertEqual(s["Average monthly net pay"], 64644.0)  # 193932 / 3 months with payroll
         self.assertEqual(s["Employees paid in the year"], 7)
 
     def test_current_month_is_marked_provisional(self):
@@ -2268,18 +2275,18 @@ class MonthComparisonTests(PayrollCoreBase):
         with mock.patch("api.reporting.filters.ist_today", return_value=date(2026, 3, 10)):
             b = self.body("payroll-month-comparison")
         self.assertEqual(b["rows"][0]["monthLabel"], "Apr 2025")
-        self.assertEqual(b["totals"]["netPay"], 193934.12)
+        self.assertEqual(b["totals"]["netPay"], 193932.0)
 
     def test_type_department_and_branch_filters(self):
         prod = self.body("payroll-month-comparison", **FY, employmentType="production")
         rows = {r["monthLabel"]: r for r in prod["rows"]}
         self.assertEqual(
-            (rows["Feb 2026"]["employeesPaid"], rows["Feb 2026"]["slips"], rows["Feb 2026"]["netPay"]), (2, 3, 6634.37)
+            (rows["Feb 2026"]["employeesPaid"], rows["Feb 2026"]["slips"], rows["Feb 2026"]["netPay"]), (2, 3, 6633.0)
         )
         self.assertEqual(rows["Jan 2026"]["slips"], 0)
-        self.assertEqual(prod["totals"]["netPay"], 6634.37)
+        self.assertEqual(prod["totals"]["netPay"], 6633.0)
         staff = self.body("payroll-month-comparison", **FY, employmentType="staff")
-        self.assertEqual(staff["totals"]["netPay"], 187299.75)
+        self.assertEqual(staff["totals"]["netPay"], 187299.0)  # Bala and Zed's NETs rounded up (-0.25, -0.50)
         dept = self.body("payroll-month-comparison", **FY, departmentIds=str(self.finish.id))
         self.assertEqual(dept["totals"]["netPay"], 28200 * 3 + 1745)
         branch = self.body("payroll-month-comparison", **FY, branchIds=str(self.b2.id))
@@ -2291,7 +2298,7 @@ class MonthComparisonTests(PayrollCoreBase):
         rows = {r["monthLabel"]: r for r in b["rows"]}
         self.assertEqual(
             (rows["Jan 2026"]["netPay"], rows["Feb 2026"]["netPay"], rows["Mar 2026"]["netPay"]),
-            (22560.0, 65469.12, 19560.0),
+            (22560.0, 65467.0, 19560.0),
         )
         self.assertEqual(rows["Feb 2026"]["employeesPaid"], 5)
         other = self.body("payroll-month-comparison", u, **FY, branchIds=str(self.b2.id))
@@ -2303,8 +2310,8 @@ class MonthComparisonTests(PayrollCoreBase):
         header = [c.value for c in ws[7]]
         self.assertEqual(header[:3], ["Month", "Employees paid", "Slips"])
         self.assertEqual([c.value for c in ws[8]][:3], ["Apr 2025", 0, 0])
-        self.assertEqual(ws.cell(row=18, column=header.index("Net pay") + 1).value, 95414.12)  # February
-        self.assertEqual(ws.cell(row=20, column=header.index("Net pay") + 1).value, 193934.12)  # totals row
+        self.assertEqual(ws.cell(row=18, column=header.index("Net pay") + 1).value, 95412)  # February
+        self.assertEqual(ws.cell(row=20, column=header.index("Net pay") + 1).value, 193932)  # totals row
         self.assertEqual(self.export("payroll-month-comparison", "pdf", **FY).status_code, 200)
 
 
@@ -2360,7 +2367,7 @@ class AnnualStatementTests(PayrollCoreBase):
         c = _by_code(b, "1002")
         self.assertEqual(
             (c["monthsPaid"], c["totalEarnings"], c["esiDeduction"], c["lateDeduction"], c["netPay"]),
-            (1, 15300.0, 114.75, 425.0, 13842.25),
+            (1, 15300.0, 115.0, 425.0, 13842.0),  # ESI and NET rounded up (owner 2026-11-10)
         )
         # production: two period slips in one month count as ONE month paid; Basic is the period wages
         p = _by_code(b, "2001")
@@ -2370,7 +2377,7 @@ class AnnualStatementTests(PayrollCoreBase):
         )
         self.assertEqual(
             (p["pfDeduction"], p["esiDeduction"], p["advanceDeduction"], p["lateDeduction"], p["netPay"]),
-            (810.0, 50.63, 1000.0, 0.0, 4889.37),
+            (810.0, 52.0, 1000.0, 0.0, 4888.0),  # ESI 29 + 23, NET 2,271 + 2,617
         )
         self.assertEqual(_by_code(b, "1003")["netPay"], 84600.0)
         self.assertEqual(_by_code(b, "1004")["department"], "Unassigned")
@@ -2380,11 +2387,12 @@ class AnnualStatementTests(PayrollCoreBase):
         _assert_totals_match(self, b)
         t = b["totals"]
         self.assertEqual(
-            (t["netPay"], t["monthsPaid"]), (193934.12, 11)
+            (t["netPay"], t["monthsPaid"]), (193932.0, 11)
         )  # 3 + 3 + five people with one month + Esha and Farook
         s = {x["label"]: x["value"] for x in b["summary"]}
-        self.assertEqual((s["Employees"], s["Total net pay"]), (7, 193934.12))
-        self.assertEqual(round(s["Total earnings"] - t["totalDeductions"], 2), 193934.12)
+        self.assertEqual((s["Employees"], s["Total net pay"]), (7, 193932.0))
+        # every slip's paise here sat in its ESI, so with the ESI rounded up each NET is still exactly earnings - deductions
+        self.assertEqual(round(s["Total earnings"] - t["totalDeductions"], 2), 193932.0)
         self.assertEqual(round(s["Total PF"] + s["Total ESI"], 2), round(t["pfDeduction"] + t["esiDeduction"], 2))
         notes = " ".join(b["notes"])
         self.assertIn("NOT a Form 16", notes)
@@ -2414,7 +2422,7 @@ class AnnualStatementTests(PayrollCoreBase):
         b = self.body(
             "annual-earnings-statement", financialYear="2026-27"
         )  # Jan-Dec 2026 when the year starts in January
-        self.assertEqual(b["totals"]["netPay"], 193934.12)
+        self.assertEqual(b["totals"]["netPay"], 193932.0)
         self.assertTrue(any("Jan 2026 to Dec 2026" in n for n in b["notes"]))
 
     def test_every_filter_narrows(self):
@@ -2435,7 +2443,7 @@ class AnnualStatementTests(PayrollCoreBase):
             employment_type="production"
         )  # Zed's staff slip is still a staff slip
         b = self.body("annual-earnings-statement", **FY, employeeIds=str(self.e5.id))
-        self.assertEqual([(r["employmentType"], r["netPay"]) for r in b["rows"]], [("Staff", 13987.5)])
+        self.assertEqual([(r["employmentType"], r["netPay"]) for r in b["rows"]], [("Staff", 13987.0)])
         self.assertEqual(
             self.body("annual-earnings-statement", **FY, employeeIds=str(self.e5.id), employmentType="production")[
                 "rows"
@@ -2447,7 +2455,7 @@ class AnnualStatementTests(PayrollCoreBase):
         u = self.branch_user
         b = self.body("annual-earnings-statement", u, **FY)
         self.assertNotIn("1003", [r["employeeCode"] for r in b["rows"]])
-        self.assertAlmostEqual(b["totals"]["netPay"], 63680.0 + 13842.25 + 11190.0 + 13987.5 + 4889.37, places=2)
+        self.assertAlmostEqual(b["totals"]["netPay"], 63680.0 + 13842.0 + 11190.0 + 13987.0 + 4888.0, places=2)
         self.assertEqual(self.body("annual-earnings-statement", u, **FY, branchIds=str(self.b2.id))["rows"], [])
         self.assertEqual(self.body("annual-earnings-statement", u, **FY, employeeIds=str(self.p2.id))["rows"], [])
 
@@ -2456,7 +2464,7 @@ class AnnualStatementTests(PayrollCoreBase):
         header = [c.value for c in ws[7]]
         self.assertEqual(header[:2], ["Emp Code", "Employee"])
         self.assertEqual([c.value for c in ws[8]][:2], ["73", "Zed Test"])
-        self.assertEqual(ws.cell(row=8 + 7, column=header.index("Net pay") + 1).value, 193934.12)
+        self.assertEqual(ws.cell(row=8 + 7, column=header.index("Net pay") + 1).value, 193932)
         self.assertEqual(self.export("annual-earnings-statement", "pdf", **FY).status_code, 200)
 
 
@@ -3439,7 +3447,7 @@ class ReviewFollowUpTests(PayrollCoreBase):
         ]
         for value in paid:
             self.assertNotIn(value, amounts)
-        self.assertIn(2617.5, amounts)  # Esha's unpaid week is still to be paid
+        self.assertIn(2617, amounts)  # Esha's unpaid week is still to be paid (NET 2,617.50 rounded up)
         self.assertNotIn("AC-12345", [ws.cell(row=r, column=3).value for r in range(3, ws.max_row + 1)])
 
 

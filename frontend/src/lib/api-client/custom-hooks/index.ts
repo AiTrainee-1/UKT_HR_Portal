@@ -24,6 +24,7 @@ export * from "./production-cycles";
 export * from "./production-shift-rules";
 export * from "./shared-endpoints";
 export * from "./payroll-insights";
+export * from "./payroll-month";
 export * from "./recruitment";
 export * from "./reports";
 export * from "./requests";

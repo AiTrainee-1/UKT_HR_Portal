@@ -28,6 +28,8 @@ const RULE = { id: "r", label: "Below 25,000", basis: "basic", minAmount: 0, max
 const world = {
   rules: {} as unknown,
   rulesStatus: 200,
+  /** The month was finalized with Payroll Done (2026-11-10). */
+  locked: false,
 };
 
 let root: Root | null = null;
@@ -50,6 +52,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   requested.length = 0;
   world.rulesStatus = 200;
+  world.locked = false;
   world.rules = {
     scope: { branchId: null, branchName: null, isOverride: false },
     canEdit: true,
@@ -61,6 +64,8 @@ beforeEach(() => {
     requested.push(url);
     const path = url.split("?")[0];
     if (path === "/api/payroll") return [];
+    if (path === "/api/payroll/month-status")
+      return { locked: world.locked, state: world.locked ? "finalized" : "open" };
     if (path === "/api/payroll-settings") {
       return {
         companyName: "UK Textiles",
@@ -162,5 +167,21 @@ describe("what Generate Staff Payroll says about PF, ESI and TDS", () => {
     await open();
     expect(requested.filter((r) => r === "/api/pf-esi-settings")).toHaveLength(1);
     expect(requested.some((r) => r.includes("/api/payroll-settings"))).toBe(true);
+  });
+});
+
+describe("a month finalized with Payroll Done", () => {
+  it("says it is locked and cannot be generated, and the button is off", async () => {
+    world.locked = true;
+    await open();
+    for (let i = 0; i < 50 && !q("staff-generate-locked"); i++) await settle(5);
+    expect(text(q("staff-generate-locked"))).toContain("October 2026 is finalized (Payroll Done).");
+    expect((q("staff-generate-confirm") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("an open month says nothing about a lock and can be generated", async () => {
+    await open();
+    expect(q("staff-generate-locked")).toBeNull();
+    expect((q("staff-generate-confirm") as HTMLButtonElement).disabled).toBe(false);
   });
 });

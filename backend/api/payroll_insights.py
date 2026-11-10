@@ -37,6 +37,7 @@ from .models import (
     PayrollSettings,
     SalarySlip,
 )
+from .pf_esi import round_up_rupee
 from .production_cycles import CYCLE_LABELS
 from .salary_split import COMPONENTS, FIRST_PORTION, JSON_KEYS, LABELS, breakup_of, effective_split
 from .user_settings import _SettingsOverlay
@@ -1572,7 +1573,18 @@ def money_lines(payroll: Payroll, slip: SalarySlip | None, bd: dict | None) -> t
     total_earned = gross + ot + bonus
     saved_net = dec(payroll.final_salary)
     owed = total_earned - dec(payroll.deductions)
-    if saved_net != owed:
+    if saved_net != owed and saved_net == round_up_rupee(owed):
+        # since 2026-11-10 payroll stores the NET rounded up to the next whole rupee (as the Salary Statement prints it)
+        earnings.append(
+            _line(
+                "net_rounding",
+                "Rounded up to the next whole rupee",
+                saved_net - owed,
+                "info",
+                "The net salary is rounded up to the next whole rupee, as the Salary Statement and the bank file pay it",
+            )
+        )
+    elif saved_net != owed:
         earnings.append(
             _line(
                 "net_difference",

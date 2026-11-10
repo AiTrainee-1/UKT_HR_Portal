@@ -24,6 +24,12 @@ has not been run for: the notes say how many active staff in scope have none yet
 has its own columns and its own report in the same printed format: hr-production-salary-statement
 (``hr_reports_production_statement``), which reuses the unit blocks, the PF / ESI / TDS section and the files here.
 
+Staff month workflow (owner 2026-11-10, ``api.payroll_month_workflow``): the month's statement lists the main payroll and
+the held salaries (Remarks HOLD), never a new joiner kept out of the payroll. ``section=skipped`` (the Skipped Employees
+view's own Export on the Payroll page) prints the SAME statement and files for the skipped employees only: on hold (HOLD),
+new joiners not added (NEW JOINER) and those released and paid separately after Payroll Done (PAID SEPARATELY dd-mm-yyyy).
+Employees with no payroll at all (not generated) have no figures and are on neither.
+
 Salary and deductions are printed, so the report is gated on the ``payroll`` module exactly like the statement endpoint.
 
 PF, ESI & TDS details (owner 2026-11-04: "the PF, ESI and TDS deduction details must be in the PDF and Excel"): the
@@ -61,7 +67,8 @@ from api.payroll_insights import (
     slips_for,
     staff_period,
 )
-from api.payroll_statement_views import NO_DEPARTMENT, _groups, statement_rows
+from api.payroll_month_workflow import ON_STATEMENT_Q, SKIPPED_Q
+from api.payroll_statement_views import NO_DEPARTMENT, _groups, statement_rows, workflow_notes
 from api.unit_labels import NO_UNIT_KEY, OTHER_UNIT, unit_label, unit_sort_key
 
 from .. import filters as F
@@ -100,6 +107,9 @@ PAYROLL_RELATIONS = (
     "employee__branch",
 )
 PAYMENT_OPTIONS = ((Payroll.STATUS_PENDING, "Pending"), (Payroll.STATUS_PAID, "Cleared"))
+# `section`: unset = the month's statement; "skipped" = the Skipped Employees' own statement (payroll_month_workflow.py)
+SECTION_SKIPPED = "skipped"
+SECTION_OPTIONS = ((SECTION_SKIPPED, "Skipped Employees only"),)
 
 
 # The unit's short label on every line of the unit, for filtering (the Report Log's Late exports have the same column).
@@ -527,6 +537,18 @@ def _run(ctx) -> ReportResult:
         # active employees only (owner 2026-11-05): an inactive / deactivated employee is never on the statement
         .filter(employee__status="active")
     )
+    # owner 2026-11-10 (payroll_month_workflow.py; the Remarks come from statement_rows):
+    #   the month's statement (the default) = the main payroll + the held salaries (Remarks HOLD); never a new joiner
+    #   (parked, or released and paid on their own): they are counted in a note instead;
+    #   section=skipped (Payroll > Skipped Employees > Export) = ONLY the skipped employees that have a payroll: on hold
+    #   (HOLD), new joiners not added (NEW JOINER) and those released and paid separately (PAID SEPARATELY dd-mm-yyyy).
+    skipped = ctx.params.get("section") == SECTION_SKIPPED
+    if skipped:
+        parked = 0
+        qs = qs.filter(SKIPPED_Q)
+    else:
+        parked = qs.exclude(ON_STATEMENT_Q).count()
+        qs = qs.filter(ON_STATEMENT_Q)
     payment = ctx.params.get("paymentStatus")
     if payment:
         qs = qs.filter(status=payment)
@@ -549,6 +571,16 @@ def _run(ctx) -> ReportResult:
     # no headline figures above the table (owner 2026-11-05): the report starts with its column headers
 
     notes = [
+        *(
+            [
+                "SKIPPED EMPLOYEES ONLY: the employees of the month who are not in its payroll but have one worked out - "
+                "salaries on hold (Remarks HOLD), new joiners not added to the payroll (NEW JOINER) and employees "
+                "released and paid separately after Payroll Done (PAID SEPARATELY with the day). Nobody from the month's "
+                "payroll is here; a held salary is on the month's statement too, with HOLD."
+            ]
+            if skipped
+            else []
+        ),
         f"Salary Statement From {ddmmyyyy(parse_iso_date(info['start']))} To {ddmmyyyy(parse_iso_date(info['end']))}: "
         "staff monthly payroll, unit by unit (the head office first, employees with no unit last), one line per employee "
         "under the department heading, in employee-code order, with the serial number running on across the unit's "
@@ -570,6 +602,13 @@ def _run(ctx) -> ReportResult:
             f"For {mismatched} payroll(s) NET is the saved payroll figure, which differs from Earned Salary - Total "
             "Deduction: the payroll was edited after it was generated (the saved net leaves overtime pay out)."
         )
+    notes.extend(workflow_notes(payrolls))
+    if parked:
+        notes.append(
+            f"{parked} new joiner(s) of this month are not listed: their payroll is worked out but kept aside until HR "
+            "adds them to the payroll (Payroll > Skipped Employees > Add to payroll); they are on the Skipped Employees "
+            "statement."
+        )
     missing = _no_payroll_count(ctx, year, month)
     if missing:
         notes.append(
@@ -577,7 +616,11 @@ def _run(ctx) -> ReportResult:
             "listed. Generate the month's payroll on Payroll to include them."
         )
     if not payrolls:
-        notes.append("No staff payroll has been generated for this month and selection.")
+        notes.append(
+            "No employee of this month and selection is on hold, a new joiner or paid separately."
+            if skipped
+            else "No staff payroll has been generated for this month and selection."
+        )
     if any(g["label"].startswith(NO_DEPARTMENT) for block in blocks for g in block.groups):
         notes.append(f"Employees with no department are listed under '{NO_DEPARTMENT}', last.")
     # the PF / ESI / TDS lines get a section of their own in the files (the screen keeps the statement as printed)
@@ -641,6 +684,14 @@ register(
                 "Payment status",
                 PAYMENT_OPTIONS,
                 placeholder="Cleared and pending",
+            ),
+            # Payroll > Skipped Employees > Export (owner 2026-11-10): the same statement of the skipped employees only
+            F.select(
+                "section",
+                "Employees",
+                SECTION_OPTIONS,
+                placeholder="The month's payroll",
+                help="Skipped Employees only: on hold, new joiners not added, and those paid separately.",
             ),
         ),
         columns=COLUMNS,

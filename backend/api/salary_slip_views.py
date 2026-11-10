@@ -154,6 +154,9 @@ def _filtered_slip_qs(request: Request, params=None):
     )
     qs = scope_to_branch(qs, request, field="employee__branch_id")
     if emp_id:   qs = qs.filter(employee_id=emp_id)
+    # The slip lists (the Payslip tabs, the bulk PDF / email / WhatsApp) cover active employees only (owner 2026-11-10);
+    # one employee's own slips (employeeId) are all listed.
+    else:        qs = qs.filter(employee__status="active")
     if month:    qs = qs.filter(month=int(month))
     if year:     qs = qs.filter(year=int(year))
     # Was `week_number__isnull=True/False` -that split predates period-based

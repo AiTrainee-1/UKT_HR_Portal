@@ -123,6 +123,9 @@ def _cycle_payrolls(request: Request, cycle: str):
         salary_mode="shift", period_start__isnull=False
     )
     qs = scope_to_branch(qs, request, field="employee__branch_id")
+    # active employees only (owner 2026-11-10), as on Staff Payroll: a deactivated employee's payroll stays stored but is
+    # not listed, counted or put in the bank file. (Coverage - which days are already paid - still reads every row.)
+    qs = qs.filter(employee__status="active")
     return qs.filter(Q(pay_cycle=cycle) | Q(pay_cycle__isnull=True, employee__production_pay_cycle=cycle))
 
 
@@ -593,6 +596,9 @@ def production_payroll_list(request: Request) -> Response:
         qs = qs.order_by("-period_start", "employee__first_name")
         if params.get("employeeId"):
             qs = qs.filter(employee_id=int(params["employeeId"]))
+        else:
+            # a payroll list is active employees only (owner 2026-11-10); one employee's own history lists every row
+            qs = qs.filter(employee__status="active")
         if params.get("status"):
             qs = qs.filter(status=params["status"])
         if params.get("periodStart") and params.get("periodEnd"):

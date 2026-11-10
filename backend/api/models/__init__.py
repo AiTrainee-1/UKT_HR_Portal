@@ -78,6 +78,7 @@ from .payroll import (
     SessionConfig,
     WorkSession,
     Payroll,
+    PayrollMonthClose,
     _default_late_deduction_slabs,
     PayrollSettings,
     BranchSettingsOverride,

@@ -31,7 +31,8 @@ type TableProps = {
   issuesLoading?: boolean;
   onOpenDetails: (run: PayrollRunItem) => void;
   onOpenIssues?: (run: PayrollRunItem) => void;
-  onMarkPaid: (run: PayrollRunItem) => void;
+  /** Leave out to show no "Mark as Cleared" (a finalized staff month is locked). */
+  onMarkPaid?: (run: PayrollRunItem) => void;
   markingId?: number | null;
 };
 
@@ -208,7 +209,7 @@ export function PayrollRecordTable({
                     >
                       Details <ArrowRight size={12} />
                     </button>
-                    {pending && (
+                    {pending && onMarkPaid && (
                       <Button
                         type="button"
                         size="sm"

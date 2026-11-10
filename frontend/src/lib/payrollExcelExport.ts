@@ -1,20 +1,46 @@
 import type ExcelJS from "exceljs";
 import type { PayrollRunItem } from "@/lib/api-client/custom-hooks";
 import { downloadWorkbook, newWorkbook, styleHeaderCell } from "@/lib/exportUtils";
+import { roundUpRupee } from "@/lib/round-up-rupee";
 
 // Shared by both the Payroll page and the Salary page -one implementation,
 // so "same Excel format" is a fact of the code, not a rule someone has to
 // remember to keep in sync by hand.
 
-// Bank transfer amounts must never carry stray floating-point noise (e.g. a
-// stored 8000 rupee salary surfacing as 7999.9999999998 after Decimal→float
-// JSON conversion). Round to the nearest paisa -real paise are preserved,
-// noise is not.
-function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
+// The amount paid is the NET rounded UP to the next whole rupee - exactly the NET the Salary Statement prints (owner
+// 2026-11-10: the two files must match to the rupee). Payroll generated since then already stores a whole rupee; an older
+// payroll with paise is paid as the statement shows it. Float noise never adds a rupee (round-up-rupee.ts).
+
+/**
+ * May this payroll be paid through a bank file? Never a salary On Hold, never a new joiner not yet added to the payroll
+ * (owner 2026-11-10): the server already leaves them out of the month's list, and the file leaves them out again even if
+ * it is handed them. A held / new employee released and paid on their own has neither flag any more, so their own
+ * one-person file still works.
+ */
+export const isBankFileEligible = (run: Pick<PayrollRunItem, "onHold" | "newJoinerParked">): boolean =>
+  !run.onHold && !run.newJoinerParked;
+
+/** Which payroll's bank file: the month's ("payroll") or the Skipped Employees' own ("skipped"). */
+export type BankFileSection = "payroll" | "skipped";
+
+/**
+ * The rows a bank file pays. The month's file: everyone handed over but a held salary or a parked new joiner. The Skipped
+ * Employees' file (owner 2026-11-10): ONLY a held salary or a parked new joiner that is not paid yet - never anybody from
+ * the month's payroll, never someone already paid (released and paid separately), so nobody is paid twice.
+ */
+export function bankFileRows(runs: PayrollRunItem[], section: BankFileSection = "payroll"): PayrollRunItem[] {
+  if (section === "skipped")
+    return runs.filter((r) => (r.onHold || r.newJoinerParked) && r.paymentStatus !== "paid" && !r.releasedFrom);
+  return runs.filter(isBankFileEligible);
 }
 
-export async function exportPayrollToExcel(runs: PayrollRunItem[], sheetLabel: string, monthYear: string) {
+export async function exportPayrollToExcel(
+  allRuns: PayrollRunItem[],
+  sheetLabel: string,
+  monthYear: string,
+  section: BankFileSection = "payroll",
+) {
+  const runs = bankFileRows(allRuns, section);
   const wb = await newWorkbook();
   const ws = wb.addWorksheet(sheetLabel.substring(0, 31));
 
@@ -77,7 +103,7 @@ export async function exportPayrollToExcel(runs: PayrollRunItem[], sheetLabel: s
       "", // Beneficiary Code -blank
       r.employeeCode || "", // Employee Code (as text, so a code like 0123 keeps its zero)
       (r.bankAccount || "").toUpperCase(), // Bene A/c No
-      roundMoney(r.finalSalary), // Amount (numeric, exact -no float noise)
+      roundUpRupee(r.finalSalary), // Amount: the NET up to the next whole rupee, as the Salary Statement prints it
       (r.employeeName || "").toUpperCase(), // Beneficiary Name
       (r.bankIfsc || "").toUpperCase(), // IFSC code
       (r.bankName || "").toUpperCase(), // Bene Bank Name

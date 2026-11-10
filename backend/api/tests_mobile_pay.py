@@ -191,13 +191,18 @@ class StaffInsightsTests(_Base):
         self.assertEqual(p["payroll"]["net"], 21750.0)
         self.assertFalse(p["payroll"]["matchesSlip"])
         self.assertTrue(p["payroll"]["hrChanged"])
-        # only marked paid (and the saved net drifted): not an HR change the phone shows
+        # only marked Cleared (and the saved net drifted): not an HR change the phone shows, and NOT paid either (owner
+        # 2026-11-10: Cleared is HR's own check; the employee sees Paid only once the month was marked paid)
         Payroll.objects.filter(pk=payroll.pk).update(
             bonus=Decimal("0"), status="paid", final_salary=Decimal("20000.00")
         )
         p = self.get(f"/api/my/salary-slips/{self.slip.id}/breakdown", _as(self.w.meena))
-        self.assertEqual(p["payroll"]["statusLabel"], "Paid")
+        self.assertEqual((p["payroll"]["status"], p["payroll"]["statusLabel"]), ("pending", "Not paid yet"))
         self.assertFalse(p["payroll"]["hrChanged"])
+        # Payroll > Mark as Paid (payroll_month_workflow.mark_paid) sets the payment status: now it is Paid
+        Payroll.objects.filter(pk=payroll.pk).update(payment_status=Payroll.PAYMENT_PAID)
+        p = self.get(f"/api/my/salary-slips/{self.slip.id}/breakdown", _as(self.w.meena))
+        self.assertEqual((p["payroll"]["status"], p["payroll"]["statusLabel"]), ("paid", "Paid"))
 
     def test_read_only(self):
         before = (SalarySlip.objects.count(), Payroll.objects.count(), PayrollSettings.objects.count())

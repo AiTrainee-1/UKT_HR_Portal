@@ -28,6 +28,14 @@ EXTRA_TYPES: dict[str, tuple[str, str, str]] = {
         "still waiting. Sent at most once a day per request.",
         "approvals",
     ),
+    # payroll_month_workflow.SALARY_PAID_SOURCE (kept as text here: that module imports the models)
+    "salary_paid": (
+        "Salary paid",
+        "Sent to each staff employee when HR marks the month's payroll as Paid (Payroll > Payment Pending > Mark as Paid), "
+        "and to an employee on hold or a new joiner released and paid on their own later. It names the month, never "
+        "the amount.",
+        "documents",
+    ),
 }
 
 

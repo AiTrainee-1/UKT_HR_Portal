@@ -2,6 +2,7 @@
 
 from .auth import get_token_employee_id, require_auth, require_hr
 from .models import Attendance, Employee, Payroll, SalaryRecord
+from .payroll_month_workflow import employee_sees_paid
 from .serializers import parse_decimal, salary_record_json
 from .view_common import _employee_name, _error
 from decimal import Decimal
@@ -19,7 +20,14 @@ def _salary_with_name(record: SalaryRecord) -> dict:
     return salary_record_json(record, name)
 
 
+def _employee_status(payroll: Payroll) -> str:
+    """The payroll's status as the EMPLOYEE sees it (owner 2026-11-10): a staff salary is "paid" only once HR marked the
+    month paid (payroll_month_workflow.py); Cleared alone is still "pending" to the employee."""
+    return Payroll.STATUS_PAID if employee_sees_paid(payroll) else Payroll.STATUS_PENDING
+
+
 def _salary_from_payroll(payroll: Payroll) -> dict:
+    """A payroll in the employee's dashboard (recent salaries): its status as the employee sees it."""
     return {
         "id": payroll.id,
         "employeeId": payroll.employee_id,
@@ -27,7 +35,7 @@ def _salary_from_payroll(payroll: Payroll) -> dict:
         "year": payroll.year,
         "amount": float(payroll.final_salary),
         "type": payroll.salary_mode,
-        "status": payroll.status,
+        "status": _employee_status(payroll),
         "notes": payroll.notes,
         "createdAt": payroll.created_at.isoformat() if payroll.created_at else None,
     }
@@ -70,7 +78,8 @@ def _salary_records_list(request: Request) -> Response:
             "year": p.year,
             "amount": float(p.final_salary),
             "type": p.salary_mode,
-            "status": p.status,
+            # an employee sees "paid" only once the month was marked paid; HR still sees the stored status (Cleared)
+            "status": _employee_status(p) if token_emp_id is not None else p.status,
             "notes": p.notes,
             "createdAt": p.created_at.isoformat() if p.created_at else None,
         })

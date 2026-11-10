@@ -4,7 +4,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route } from "wouter";
 import type { Mock } from "vitest";
 import { ApiError } from "@/lib/api-client/custom-fetch";
-import type { PayrollBreakdownResponse, PayrollDetails, PayrollKind } from "@/lib/api-client/custom-hooks";
+import type {
+  PayrollBreakdownResponse,
+  PayrollDetails,
+  PayrollKind,
+  PayrollRunItem,
+} from "@/lib/api-client/custom-hooks";
 import {
   CO_EMP_STATUTORY,
   NOT_CO_EMP_STATUTORY,
@@ -40,6 +45,12 @@ export type World = {
   /** Answers for this payroll only once the returned function is called (a request that is still on its way). */
   hold: (kind: PayrollKind, id: number) => () => void;
   requests: () => string[];
+  /** Staff month workflow (2026-11-10): each staff payroll's flags as GET /api/payroll?employeeId= lists them. */
+  flags: Map<number, Partial<PayrollRunItem>>;
+  /** GET /api/payroll/month-status: the month is finalized, and whether this login may change holds. */
+  month: { locked: boolean; canHold: boolean };
+  /** What was POSTed to /api/payroll/<id>/hold, in order. */
+  holds: { id: number; hold: boolean }[];
 };
 
 export const apiError = (status: number): ApiError =>
@@ -88,10 +99,45 @@ export function installWorld(fetchMock: Mock): World {
       return release;
     },
     requests: () => fetchMock.mock.calls.map((c) => String(c[0])),
+    flags: new Map<number, Partial<PayrollRunItem>>(),
+    month: { locked: false, canHold: true },
+    holds: [],
   };
   fetchMock.mockReset();
-  fetchMock.mockImplementation(async (url: string) => {
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/api/payroll-settings") return world.settings;
+    // the staff month workflow (Hold / Unhold, the Payroll Done lock)
+    if (url.startsWith("/api/payroll/month-status")) {
+      return {
+        label: "October 2026",
+        state: world.month.locked ? "finalized" : "open",
+        locked: world.month.locked,
+        can: { hold: world.month.canHold && !world.month.locked },
+      };
+    }
+    const own = /^\/api\/payroll\?employeeId=(\d+)/.exec(url);
+    if (own) {
+      const rows: Partial<PayrollRunItem>[] = [];
+      for (const [id, answer] of world.staff) {
+        if (answer instanceof Error || answer.employee.id !== Number(own[1])) continue;
+        rows.push({
+          id,
+          employeeId: answer.employee.id,
+          onHold: false,
+          newJoinerParked: false,
+          ...world.flags.get(id),
+        });
+      }
+      return rows;
+    }
+    const holding = /^\/api\/payroll\/(\d+)\/hold$/.exec(url);
+    if (holding && init?.method === "POST") {
+      const id = Number(holding[1]);
+      const hold = JSON.parse(String(init.body)).hold as boolean;
+      world.holds.push({ id, hold });
+      world.flags.set(id, { ...world.flags.get(id), onHold: hold });
+      return { id, onHold: hold };
+    }
     const stored = /^\/api\/payroll\/(\d+)\/breakdown$/.exec(url);
     if (stored) {
       const answer = world.breakdowns.get(Number(stored[1]));

@@ -26,6 +26,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from .models import Payroll, SalarySlip
+from .payroll_month_workflow import employee_sees_paid
 from .payroll_insights import (
     MONTH_ABBR,
     MONTH_NAMES,
@@ -311,9 +312,13 @@ def _payroll_block(slip: SalarySlip, payroll: Payroll | None) -> dict | None:
     bonus = dec(payroll.bonus)
     change = dec(payroll.deductions) - dec(slip.total_deductions)
     net = dec(payroll.final_salary)
+    # Paid as the EMPLOYEE sees it (owner 2026-11-10): a staff salary only once HR marked the month paid (Payroll > Mark
+    # as Paid, or a held / new employee released and paid on their own); "Cleared" (status "paid") is HR's own check and
+    # alone reads "Not paid yet". The keys the apps read ("status" == "paid", "statusLabel") are unchanged.
+    paid = employee_sees_paid(payroll)
     return {
-        "status": payroll.status,
-        "statusLabel": "Paid" if payroll.status == Payroll.STATUS_PAID else "Not paid yet",
+        "status": Payroll.STATUS_PAID if paid else Payroll.STATUS_PENDING,
+        "statusLabel": "Paid" if paid else "Not paid yet",
         "bonus": money(bonus),
         "deductionChange": money(change),
         "net": money(net),

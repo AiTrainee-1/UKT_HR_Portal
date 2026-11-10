@@ -329,7 +329,9 @@ class ContentTests(_World):
         )
         self.assertEqual(raja["eSalary"], 3000)
         self.assertEqual((raja["pf"], raja["esi"]), (180, 12))  # ESI 11.25 rounded up
-        self.assertEqual((raja["totalDeduction"], raja["net"]), (192, 2809))  # 180 + 12; 2808.75 rounded up
+        # 180 + 12; NET 3,000 - 192 = 2,808 (owner 2026-11-10: the engine rounds the ESI up BEFORE taking the deductions
+        # off, so the net no longer comes out of 2,808.75 as 2,809)
+        self.assertEqual((raja["totalDeduction"], raja["net"]), (192, 2808))
         self.assertEqual((mani["advance"], mani["net"]), (1000, 2000))
         self.assertEqual((kala["eSalary"], kala["tds"], kala["net"]), (2500, 250, 2250))
         self.assertEqual((velu["others"], velu["eSalary"], velu["net"]), (250, 3000, 2750))
@@ -362,7 +364,7 @@ class ContentTests(_World):
         packing = next(r for r in body["rows"] if r["name"] == "Packing Sub total")
         self.assertEqual(packing["net"], 2250 + 2750)
         unit = next(r for r in body["rows"] if r["name"] == "HO – Head Office total")
-        self.assertEqual(unit["net"], 2250 + 2750 + 2809 + 2000)
+        self.assertEqual(unit["net"], 2250 + 2750 + 2808 + 2000)  # Raja's NET 2,808 (owner 2026-11-10)
 
     def test_only_active_workers_of_the_cycle_and_the_notes_count_who_has_no_payroll(self):
         body = self.get()

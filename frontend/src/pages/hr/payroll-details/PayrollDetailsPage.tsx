@@ -35,6 +35,7 @@ import { SectionNav } from "./SectionNav";
 import { StatutoryCard } from "./StatutoryCard";
 import { useIssueFilters } from "./use-issue-filters";
 import { isMissingError, useMarkPaid, usePayrollDetailsView } from "./use-details";
+import { useDetailsWorkflow } from "./use-workflow";
 
 /**
  * One payroll, broken down: its dashboard, then the days (the calendar with the late, permission, On-Duty and missed-punch
@@ -165,6 +166,8 @@ function DetailsBody({
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const degraded = isDegraded(details);
   const { markPaid, busy } = useMarkPaid();
+  // staff only: Hold / Unhold beside Mark as Cleared, and the month's Payroll Done lock (2026-11-10)
+  const workflow = useDetailsWorkflow(details, kind);
   const settings = usePayrollSettings();
   const company = settings.data?.companyName || "UK Textiles";
   const { active, jump } = useSectionSpy(SECTION_IDS);
@@ -237,6 +240,7 @@ function DetailsBody({
         onRefresh={onRefresh}
         refreshing={refreshing}
         exportItems={exportItems}
+        workflow={workflow}
       />
 
       {degraded && <DegradedNotice legacy={details.kind === "legacy_session"} notes={details.notes} />}

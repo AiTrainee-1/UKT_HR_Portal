@@ -11,6 +11,7 @@ import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { SalaryStatementPanel } from "@/components/payroll/statement";
 import { Button } from "@/components/ui/button";
 import { useListPayrollRuns } from "@/lib/api-client";
+import { usePayrollMonthStatus } from "@/lib/api-client/custom-hooks";
 import { onlyStaff, staffPeriodLabel, staffScope } from "./logic";
 
 /**
@@ -39,6 +40,8 @@ export function SalaryTab({
   const runsQuery = useListPayrollRuns({ month, year });
   const runs = useMemo(() => onlyStaff(runsQuery.data), [runsQuery.data]);
   const runById = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs]);
+  // a month finalized with Payroll Done (2026-11-10) is locked: no bonus / deduction change, no Mark as Cleared
+  const locked = !!usePayrollMonthStatus(month, year).data?.locked;
   const uiState = useMemo(() => statementUiFromUrl(url), [url]);
   const branchId = branchIdOf(url.sbranch);
   const filters = useMemo(() => (branchId ? { branchId } : undefined), [branchId]);
@@ -80,7 +83,7 @@ export function SalaryTab({
         }}
         renderRowActions={(row) => {
           const run = row.payrollId ? runById.get(row.payrollId) : undefined;
-          if (!run) return null;
+          if (!run || locked) return null;
           const name = run.employeeName ?? run.employeeCode ?? "employee";
           return (
             <>

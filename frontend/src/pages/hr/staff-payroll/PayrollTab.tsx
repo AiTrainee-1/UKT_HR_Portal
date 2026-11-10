@@ -9,8 +9,8 @@ import {
   ListChecks,
   Play,
   RefreshCw,
+  Lock,
   SearchX,
-  Settings,
   Users,
 } from "lucide-react";
 import { useLocation } from "wouter";
@@ -44,13 +44,15 @@ import {
   type RecordLayout,
 } from "@/components/payroll/panels/records";
 import { RulesPanel } from "@/components/payroll/panels/rules";
-import { SkippedPanel, type SkippedItem } from "@/components/payroll/panels/skipped";
+import { type SkippedItem } from "@/components/payroll/panels/skipped";
 import { MONTH_NAMES } from "@/components/payroll/BreakdownDrawer";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useListDepartments, useListPayrollRuns } from "@/lib/api-client";
 import {
   getPayrollSkipCheckQueryKey,
   usePayrollIssues,
+  usePayrollMonthSkipped,
+  usePayrollMonthStatus,
   usePayrollRules,
   usePayrollSkipCheck,
   type PayrollSkipCheckResult,
@@ -60,7 +62,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import { downloadReportFile } from "@/lib/report-download";
 import { GenerateDialog } from "./GenerateDialog";
-import { SessionConfigPanel } from "./SessionConfigPanel";
+import { MonthStatusButton } from "./month-workflow/MonthStatusButton";
+import { MonthTimeline } from "./month-workflow/MonthTimeline";
+import { StaffSkippedView } from "./month-workflow/StaffSkippedView";
 import {
   STATEMENT_REPORT_ID,
   isStaffView,
@@ -95,8 +99,12 @@ export function PayrollTab({
 }) {
   const [, navigate] = useLocation();
   const [showGenerate, setShowGenerate] = useState(false);
-  const [showSessionConfig, setShowSessionConfig] = useState(false);
   const { markPaid, markingId } = useMarkPaid();
+  // The month's workflow (owner 2026-11-10): Payroll Done -> Payment Pending -> Paid, and the held / new-joiner lists of
+  // Skipped Employees. Once the month is finalized nothing in it can be generated, cleared or adjusted.
+  const monthStatus = usePayrollMonthStatus(month, year);
+  const monthSkipped = usePayrollMonthSkipped(month, year);
+  const locked = !!monthStatus.data?.locked;
 
   const scope = useMemo(() => staffScope({ month, year }), [month, year]);
   const periodLabel = staffPeriodLabel({ month, year });
@@ -164,6 +172,11 @@ export function PayrollTab({
     [skipQuery.data],
   );
 
+  // Skipped = not generated (the engine's check) + salaries on hold + new joiners not added to the payroll
+  const setAside = (monthSkipped.data?.onHold.length ?? 0) + (monthSkipped.data?.newJoiners.length ?? 0);
+  const skippedTotal = (skipQuery.data?.skippedCount ?? 0) + setAside;
+  const lockedTitle = `${periodLabel} is finalized (Payroll Done): its payroll is locked for good`;
+
   const setView = (next: StaffView) => setUrl({ view: next });
   const resetFilters = () => setUrl(filtersToUrl(DEFAULT_FILTERS) as Record<string, string>);
 
@@ -199,7 +212,7 @@ export function PayrollTab({
       value: "skipped",
       label: "Skipped",
       icon: CircleSlash,
-      count: skipQuery.isLoading ? null : (skipQuery.data?.skippedCount ?? 0),
+      count: skipQuery.isLoading || monthSkipped.isLoading ? null : skippedTotal,
       tone: "warning",
     },
     { value: "rules", label: "Rules", icon: BookOpenCheck },
@@ -213,7 +226,12 @@ export function PayrollTab({
         hint='Click "Generate Payroll" to compute payroll from attendance data.'
         testId="staff-empty-period"
         action={
-          <Button className="mt-2 gap-2 bg-indigo-600 hover:bg-indigo-700" onClick={() => setShowGenerate(true)}>
+          <Button
+            className="mt-2 gap-2 bg-indigo-600 hover:bg-indigo-700"
+            disabled={locked}
+            title={locked ? lockedTitle : undefined}
+            onClick={() => setShowGenerate(true)}
+          >
             <Play size={14} /> Generate Payroll
           </Button>
         }
@@ -239,10 +257,18 @@ export function PayrollTab({
           <p className="text-sm font-semibold text-gray-900" data-testid="staff-record-count">
             {runsQuery.isLoading ? periodLabel : `${periodLabel} · ${plural(runs.length, "record")}`}
           </p>
-          <p className="text-xs text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
             {issues?.detectedAt
               ? `Last computed ${dateTime(issues.detectedAt)}`
               : "Staff payroll for the month, worked out from attendance"}
+            {locked && (
+              <span
+                className="inline-flex items-center gap-1 font-semibold text-violet-700"
+                data-testid="staff-month-locked"
+              >
+                <Lock size={11} /> Finalized: locked
+              </span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -254,9 +280,7 @@ export function PayrollTab({
           >
             <AlertTriangle size={14} /> Skipped Employees
           </Button>
-          <Button variant="outline" className="h-9 gap-2" onClick={() => setShowSessionConfig((s) => !s)}>
-            <Settings size={14} /> Legacy Session Config
-          </Button>
+          <MonthStatusButton status={monthStatus.data} loading={monthStatus.isLoading} />
           <ExportMenu
             items={exportItems}
             label="Export"
@@ -272,18 +296,23 @@ export function PayrollTab({
           >
             <Download size={14} /> Export bank file
           </Button>
-          <Button
-            className="h-9 gap-2 bg-indigo-600 hover:bg-indigo-700"
-            onClick={() => setShowGenerate(true)}
-            data-testid="staff-generate-open"
-          >
-            <Play size={14} /> Generate Payroll
-          </Button>
+          <span title={locked ? lockedTitle : undefined}>
+            <Button
+              className="h-9 gap-2 bg-indigo-600 hover:bg-indigo-700"
+              disabled={locked}
+              onClick={() => setShowGenerate(true)}
+              data-testid="staff-generate-open"
+            >
+              <Play size={14} /> Generate Payroll
+            </Button>
+          </span>
         </div>
       </div>
 
       <PayrollGenerationPipeline active={showPipeline} data={progress} onDismiss={dismissPipeline} />
-      {showSessionConfig && <SessionConfigPanel />}
+      {monthStatus.data && (runs.length > 0 || monthStatus.data.state !== "open") && (
+        <MonthTimeline status={monthStatus.data} compact />
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ViewSwitch options={options} value={view} onChange={setView} accent="indigo" />
@@ -341,7 +370,7 @@ export function PayrollTab({
             rulesLoading={rulesQuery.isLoading}
             onOpenDetails={(run) => openPayrollDetails(navigate, "staff", run.id)}
             onOpenIssues={(run) => openPayrollDetails(navigate, "staff", run.id, "issues")}
-            onMarkPaid={(run) => void markPaid(run)}
+            onMarkPaid={locked ? undefined : (run) => void markPaid(run)}
             markingId={markingId}
             layout={url.layout === "cards" ? "cards" : "table"}
             onLayoutChange={(layout: RecordLayout) => setUrl({ layout })}
@@ -361,16 +390,19 @@ export function PayrollTab({
           }}
         />
       ) : view === "skipped" ? (
-        <SkippedPanel
-          skipped={skipped}
+        <StaffSkippedView
+          month={month}
+          year={year}
+          periodLabel={periodLabel}
+          status={monthStatus.data}
+          lists={monthSkipped.data}
+          listsLoading={monthSkipped.isLoading}
+          notGenerated={skipped}
           totalChecked={skipQuery.data?.totalChecked}
-          loading={skipQuery.isLoading}
-          error={skipQuery.error}
+          checkLoading={skipQuery.isLoading}
+          checkError={skipQuery.error}
           onRecheck={() => void recheckSkips()}
           rechecking={rechecking || (skipQuery.isFetching && !skipQuery.isLoading)}
-          periodLabel={periodLabel}
-          kind="staff"
-          accent="indigo"
         />
       ) : (
         <RulesPanel scope={scope} accent="indigo" />

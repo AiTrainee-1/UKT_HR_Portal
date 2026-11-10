@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ClipboardList, Cog, Loader2, Play, ScanSearch, Wallet } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardList, Cog, Loader2, Lock, Play, ScanSearch, Wallet } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +21,7 @@ import { MONTH_NAMES } from "@/components/payroll/BreakdownDrawer";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useToast } from "@/hooks/use-toast";
 import { useListPayrollRuns } from "@/lib/api-client";
-import { usePayrollSettings, usePayrollSkipCheck } from "@/lib/api-client/custom-hooks";
+import { usePayrollMonthStatus, usePayrollSettings, usePayrollSkipCheck } from "@/lib/api-client/custom-hooks";
 import { existingPayroll, yearOptions } from "./logic";
 
 /**
@@ -56,6 +56,8 @@ export function GenerateDialog({
   const found = useMemo(() => existingPayroll(existing.data), [existing.data]);
   const years = useMemo(() => yearOptions(new Date().getFullYear()), []);
   const needsConfirm = found.paid > 0;
+  // a month finalized with Payroll Done (2026-11-10) can never be generated again (the server refuses it too)
+  const locked = !!usePayrollMonthStatus(month, year).data?.locked;
   const s = settings.data;
 
   const setPeriod = (m: number, y: number) => {
@@ -175,6 +177,19 @@ export function GenerateDialog({
             />
           </div>
 
+          {locked && (
+            <div
+              className="flex items-start gap-2 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-900"
+              data-testid="staff-generate-locked"
+            >
+              <Lock size={14} className="mt-0.5 shrink-0 text-violet-600" />
+              <p>
+                <span className="font-semibold">{monthYear(month, year)} is finalized (Payroll Done).</span> Its payroll
+                is locked for good: it cannot be generated or recomputed again. Pick another month.
+              </p>
+            </div>
+          )}
+
           {existing.isLoading ? (
             <Skeleton className="h-12 w-full rounded-xl" />
           ) : found.total > 0 ? (
@@ -264,7 +279,7 @@ export function GenerateDialog({
           </Button>
           <Button
             onClick={start}
-            disabled={isGenerating || (needsConfirm && !understood)}
+            disabled={isGenerating || locked || (needsConfirm && !understood)}
             className="bg-indigo-600 font-bold text-white hover:bg-indigo-700"
             data-testid="staff-generate-confirm"
           >

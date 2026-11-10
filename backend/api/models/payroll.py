@@ -355,6 +355,33 @@ class Payroll(models.Model):
     # 2026-11-06 and every ordinary run). Set only when an employee moved between pay cycles: days another payroll already
     # paid are left out, and days no cycle paid (catch-up days, before period_start) are added.
     paid_ranges = models.JSONField(null=True, blank=True, db_column="paid_ranges")
+    # ── Staff month workflow (owner 2026-11-10, payroll_month_workflow.py) ──────────────────────────────────────────
+    # None of these is a payroll figure, and no figure is ever worked out from them: they only decide which LIST a staff
+    # payroll shows up in, and whether the employee has been told they were paid. Regeneration keeps every one of them.
+    # On Hold: still on the Salary Statement (Remarks HOLD), never in the bank file, listed under Skipped Employees.
+    on_hold = models.BooleanField(default=False, db_default=False, db_column="on_hold")
+    hold_changed_at = models.DateTimeField(null=True, blank=True, db_column="hold_changed_at")
+    hold_changed_by = models.TextField(null=True, blank=True, db_column="hold_changed_by")
+    # A new joiner (join date inside the payroll month) is calculated as usual but PARKED: out of the records, the bank
+    # file, the totals and the statement until HR presses "Add to payroll" (added_to_payroll_at, kept on regeneration).
+    new_joiner_parked = models.BooleanField(default=False, db_default=False, db_column="new_joiner_parked")
+    added_to_payroll_at = models.DateTimeField(null=True, blank=True, db_column="added_to_payroll_at")
+    added_to_payroll_by = models.TextField(null=True, blank=True, db_column="added_to_payroll_by")
+    # Paid or not, as the EMPLOYEE sees it (mobile app, Employee Web App). Only "Mark as Paid" of the month, or the
+    # release-and-pay of a held / parked employee, sets it. `status` = "paid" is HR's "Cleared" (verified), not paid.
+    PAYMENT_NOT_PAID = "not_paid"
+    PAYMENT_PAID = "paid"
+    PAYMENT_CHOICES = [(PAYMENT_NOT_PAID, "Not paid"), (PAYMENT_PAID, "Paid")]
+    payment_status = models.TextField(
+        choices=PAYMENT_CHOICES, default=PAYMENT_NOT_PAID, db_default=PAYMENT_NOT_PAID, db_column="payment_status"
+    )
+    payment_paid_at = models.DateTimeField(null=True, blank=True, db_column="payment_paid_at")
+    payment_paid_by = models.TextField(null=True, blank=True, db_column="payment_paid_by")
+    # Released and paid on their own after the month was finalized: "hold" or "new_joiner" (what they were released from);
+    # NULL for everybody else. They stay out of the month's own records / bank file (paid with a file of their own).
+    RELEASED_FROM_HOLD = "hold"
+    RELEASED_FROM_NEW_JOINER = "new_joiner"
+    released_from = models.TextField(null=True, blank=True, db_column="released_from")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -368,6 +395,28 @@ class Payroll(models.Model):
                 name="uniq_payroll_employee_period",
             ),
         ]
+
+
+class PayrollMonthClose(models.Model):
+    """One staff payroll month's close (owner 2026-11-10, payroll_month_workflow.py): "Payroll Done" (finalized, which
+    LOCKS the month for good) and "Mark as Paid". One row per month, made on finalization; there is no reopen. The
+    snapshot_* columns record what the month looked like when it was finalized (for its timeline)."""
+
+    month = models.IntegerField()
+    year = models.IntegerField()
+    finalized_at = models.DateTimeField(db_column="finalized_at")
+    finalized_by = models.TextField(blank=True, default="", db_column="finalized_by")
+    paid_at = models.DateTimeField(null=True, blank=True, db_column="paid_at")
+    paid_by = models.TextField(blank=True, default="", db_column="paid_by")
+    # the month as it was finalized: first generated / last computed, and how many payrolls were in each list
+    first_generated_at = models.DateTimeField(null=True, blank=True, db_column="first_generated_at")
+    last_computed_at = models.DateTimeField(null=True, blank=True, db_column="last_computed_at")
+    snapshot = models.JSONField(default=dict, blank=True, db_column="snapshot")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "payroll_month_closes"
+        constraints = [models.UniqueConstraint(fields=["month", "year"], name="uniq_payroll_month_close")]
 
 
 def _default_late_deduction_slabs() -> list[dict]:

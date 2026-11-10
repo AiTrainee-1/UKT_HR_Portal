@@ -2500,14 +2500,15 @@ class EngineStatutoryTests(PayrollBase):
         self.assertEqual(co.breakdown_details["deductions"]["statutory"]["pfWages"], 10000.0)
         self.assertEqual(tds.breakdown_details["deductions"]["statutory"]["category"], "tds")
         prod_co, prod_tds = self.slip(self.co_prod), self.slip(self.tds_prod)
-        self.assertEqual((prod_co.pf_deduction, prod_co.esi_deduction), (D("150.00"), D("9.38")))
+        # ESI 0.75% of 1,250 = 9.38, rounded up to the next rupee by the engine (owner 2026-11-10)
+        self.assertEqual((prod_co.pf_deduction, prod_co.esi_deduction), (D("150.00"), D("10.00")))
         self.assertEqual(prod_tds.tds_deduction, D("150.00"))  # 5% of 5 shifts x 600
 
     def test_deduction_lines_include_tds_and_the_residual_is_empty(self):
         body = self.api("components", month="2026-03")
         ded = {d["id"]: d for d in body["deductions"]}
         near(self, ded["pf"]["amount"], 1350.00)  # 1,200 + 150
-        near(self, ded["esi"]["amount"], 84.38)  # 75 + 9.38
+        near(self, ded["esi"]["amount"], 85.00)  # 75 + 10 (9.38 rounded up, owner 2026-11-10)
         near(self, ded["tds"]["amount"], 4150.00)  # 4,000 + 150
         self.assertEqual(set(ded), {"pf", "esi", "tds"})  # nothing falls in late / other
         slips_total = sum(s.total_deductions for s in SalarySlip.objects.filter(year=2026, month=3))
@@ -2523,7 +2524,8 @@ class EngineStatutoryTests(PayrollBase):
         # PF wages: 10,000 (Co Emp staff) + 1,250 (half of the Co Emp production worker's 2,500)
         near(self, emp["employer-pf"]["amount"], 1350.00)  # 12% of 11,250
         near(self, emp["employer-esi"]["amount"], 365.63)  # 3.25% of 11,250, to the paisa
-        near(self, body["statutoryDue"], 1350.00 + 84.38 + 1350.00 + 365.63)
+        # employee ESI 85.00 (each slip's ESI rounded up); the employer's 3.25% estimate keeps its paise
+        near(self, body["statutoryDue"], 1350.00 + 85.00 + 1350.00 + 365.63)
 
     def test_the_summary_agrees_with_the_slips(self):
         totals = self.api("summary", month="2026-03")["totals"]

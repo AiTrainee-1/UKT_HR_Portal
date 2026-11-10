@@ -10,6 +10,9 @@ import {
   Download,
   FileSearch,
   Loader2,
+  Lock,
+  PauseCircle,
+  PlayCircle,
   ReceiptText,
   RefreshCw,
   Settings as SettingsIcon,
@@ -24,7 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, BusyIcon, Chip, PayStatusChip } from "@/components/payroll/kit/parts";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
-import { ago, dateTime } from "@/components/payroll/kit/format";
+import { ago, dateShort, dateTime } from "@/components/payroll/kit/format";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -36,6 +39,7 @@ import {
 import { cn } from "@/lib/utils";
 import { coverageLines } from "../production-payroll/coverage";
 import type { Accent } from "./accent";
+import type { DetailsWorkflow } from "./use-workflow";
 
 const titleCase = (text: string): string => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
 
@@ -61,6 +65,7 @@ export function DetailsHeader({
   onRefresh,
   refreshing,
   exportItems,
+  workflow,
 }: {
   details: PayrollDetails;
   kind: PayrollKind;
@@ -75,9 +80,13 @@ export function DetailsHeader({
   onRefresh: () => void;
   refreshing: boolean;
   exportItems: ExportItem[];
+  /** Staff month workflow (2026-11-10): Hold / Unhold beside Mark as Cleared, and the month's lock. */
+  workflow?: DetailsWorkflow;
 }) {
   const { employee, period, neighbours } = details;
   const pending = details.status === "pending";
+  const wf = workflow?.applies ? workflow : null;
+  const locked = !!wf?.locked;
   const computed = details.generatedAt;
   const regenerated = !!details.firstGeneratedAt && details.firstGeneratedAt !== details.generatedAt;
   // production, after a pay-cycle change: the days this payroll pays, and the ones another payroll already paid
@@ -110,16 +119,44 @@ export function DetailsHeader({
           <div className="flex flex-wrap items-center gap-2 print:hidden" data-testid="pd-actions">
             {employee.phone && <PhoneButton phone={employee.phone} name={employee.name} />}
             {pending && (
-              <Button
-                size="sm"
-                className="h-9 gap-2 bg-emerald-600 bg-none text-white hover:bg-emerald-700"
-                disabled={switching || markingPaid}
-                onClick={onMarkPaid}
-                title="Update this payroll's status to Cleared"
-                data-testid="pd-mark-paid"
-              >
-                <BusyIcon busy={markingPaid} icon={CheckCircle2} /> Mark as Cleared
-              </Button>
+              <span title={locked ? "This month is finalized (Payroll Done): nothing on it can change" : undefined}>
+                <Button
+                  size="sm"
+                  className="h-9 gap-2 bg-emerald-600 bg-none text-white hover:bg-emerald-700"
+                  disabled={switching || markingPaid || locked}
+                  onClick={onMarkPaid}
+                  title="Update this payroll's status to Cleared"
+                  data-testid="pd-mark-paid"
+                >
+                  <BusyIcon busy={markingPaid} icon={CheckCircle2} /> Mark as Cleared
+                </Button>
+              </span>
+            )}
+            {wf && !wf.parked && !wf.releasedFrom && (
+              <span title={wf.holdBlocked || undefined}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className={cn(
+                    "h-9 gap-2 font-semibold",
+                    wf.onHold
+                      ? "border-sky-200 text-sky-700 hover:bg-sky-50"
+                      : "border-amber-300 text-amber-800 hover:bg-amber-50",
+                  )}
+                  disabled={switching || wf.busy || !!wf.holdBlocked}
+                  onClick={() => void wf.toggleHold()}
+                  title={
+                    wf.onHold
+                      ? "Take the hold off: back in the payroll and the bank file"
+                      : "Hold this salary: out of the bank file, HOLD on the Salary Statement"
+                  }
+                  data-testid="pd-hold"
+                  data-on-hold={wf.onHold ? "true" : "false"}
+                >
+                  <BusyIcon busy={wf.busy} icon={wf.onHold ? PlayCircle : PauseCircle} />
+                  {wf.onHold ? "Unhold" : "Hold"}
+                </Button>
+              </span>
             )}
             <PayslipMenu details={details} disabled={switching} />
             <ExportMenu items={exportItems} disabled={switching} />
@@ -197,6 +234,27 @@ export function DetailsHeader({
               <span data-testid="pd-status">
                 <PayStatusChip status={details.status} />
               </span>
+              {wf?.onHold && (
+                <Chip tone="warning" className="font-bold" title="Not in the bank file until released">
+                  <span data-testid="pd-on-hold">On hold</span>
+                </Chip>
+              )}
+              {wf?.parked && (
+                <Chip tone="info" title="Add them to the payroll on Payroll > Skipped Employees">
+                  <span data-testid="pd-new-joiner">New joiner: not in the payroll yet</span>
+                </Chip>
+              )}
+              {wf?.releasedFrom && <Chip tone="success">Paid separately</Chip>}
+              {wf?.paidAt && (
+                <Chip tone="success" title="Paid as the employee sees it">
+                  <span data-testid="pd-paid">Paid {dateShort(wf.paidAt.slice(0, 10))}</span>
+                </Chip>
+              )}
+              {locked && (
+                <Chip tone="accent" icon={Lock} title="Payroll Done: this month is locked for good">
+                  <span data-testid="pd-locked">Month finalized</span>
+                </Chip>
+              )}
             </div>
             <p
               className="mt-2 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground"

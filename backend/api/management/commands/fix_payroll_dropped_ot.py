@@ -19,7 +19,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 
-from api.models import AuditLog, Payroll
+from api.models import AuditLog, Payroll, PayrollMonthClose
 
 CENT = Decimal("0.01")
 ACTOR = "fix_payroll_dropped_ot"
@@ -40,8 +40,12 @@ def damaged_rows(year=None, month=None):
         qs = qs.filter(year=year)
     if month:
         qs = qs.filter(month=month)
+    # a staff month finalized with Payroll Done is locked for good (payroll_month_workflow.py): never corrected here
+    locked = set(PayrollMonthClose.objects.values_list("month", "year"))
     out = []
     for p in qs:
+        if p.salary_mode == Payroll.SALARY_MODE_MONTHLY and p.period_start is None and (p.month, p.year) in locked:
+            continue
         old_formula = _q(_q(p.gross_salary) + _q(p.bonus) - _q(p.deductions))
         right = _q(_q(p.gross_salary) + _q(p.ot_amount) + _q(p.bonus) - _q(p.deductions))
         if _q(p.final_salary) == old_formula and old_formula != right:

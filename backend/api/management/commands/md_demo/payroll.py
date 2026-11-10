@@ -285,7 +285,7 @@ def _staff_slip(world: World, p: Person, year: int, month: int, extras: dict) ->
     bonus = extras["bonus"].get((p.idx, year, month), Decimal(0))
     total_deductions = _d2(pf + esi + tds + advance + late_penalty + permission_penalty)
     gross = _d2(base_gross + bonus)
-    net = _d2(gross + ot_amount - total_deductions)
+    net = pf_esi.round_up_rupee(gross + ot_amount - total_deductions)  # up to the next rupee, as the engine stores it
     breakdown = {
         "type": "staff",
         "attendanceMode": "strict",
@@ -425,7 +425,7 @@ def _production_slip(
     bonus = extras["bonus"].get((p.idx, year, month), Decimal(0)) if second_in_month else Decimal(0)
     total_deductions = _d2(pf + esi + tds + advance)
     gross_with_bonus = _d2(gross + bonus)
-    net = _d2(gross_with_bonus - total_deductions)
+    net = pf_esi.round_up_rupee(gross_with_bonus - total_deductions)  # up to the next rupee, as the engine stores it
     total_days = (end - start).days + 1
     breakdown = {
         "type": "production",

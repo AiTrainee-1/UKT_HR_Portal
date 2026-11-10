@@ -17,13 +17,14 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useUpdatePayrollRecord } from "@/lib/api-client";
+import { roundUpRupee } from "@/lib/round-up-rupee";
 import { cn } from "@/lib/utils";
 import { inr2 } from "./kit/format";
 import { hasTds, tdsAmount, tdsLabel, type TdsFields } from "./kit/statutory";
 
 // One adjustment dialog for the Salary tabs of both payroll pages: HR can correct the bonus and the total deductions of a
-// payslip. The server recomputes the net as gross + overtime + bonus - deductions (PATCH /api/payroll/:id), so the live
-// "Net payable" below is the same sum.
+// payslip. The server recomputes the net as gross + overtime + bonus - deductions, rounded up to the next whole rupee
+// (PATCH /api/payroll/:id), so the live "Net payable" below is the same figure.
 
 const schema = z.object({
   bonus: z
@@ -92,7 +93,8 @@ export function AdjustPayrollDialog({
 
   const bonus = Number(form.watch("bonus")) || 0;
   const deductions = Number(form.watch("deductions")) || 0;
-  const net = target ? Math.round((target.grossSalary + (target.otAmount ?? 0) + bonus - deductions) * 100) / 100 : 0;
+  // rounded UP to the next whole rupee, exactly as the server stores it (owner 2026-11-10)
+  const net = target ? roundUpRupee(target.grossSalary + (target.otAmount ?? 0) + bonus - deductions) : 0;
   const changed = !!target && (bonus !== target.bonus || deductions !== target.deductions);
 
   const submit = async (data: z.infer<typeof schema>) => {

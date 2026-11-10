@@ -294,7 +294,10 @@ def _month_year(n) -> tuple[int, int] | None:
 
 
 def _is_salary_slip(n) -> bool:
-    return n.source == "salary_slip" or (not n.source and (n.type or "").strip().lower() == "salary_slip")
+    # "salary_paid": the Salary Paid notice of Payroll > Mark as Paid (payroll_month_workflow.py) opens that month's slip
+    return n.source in ("salary_slip", "salary_paid") or (
+        not n.source and (n.type or "").strip().lower() == "salary_slip"
+    )
 
 
 # ── building a target ──────────────────────────────────────────────────────────

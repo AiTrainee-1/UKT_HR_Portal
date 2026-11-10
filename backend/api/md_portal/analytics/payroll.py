@@ -244,9 +244,23 @@ def _sum(expr: Any) -> Sum:
 _PF_WAGES = Cast(KT("breakdown_details__deductions__statutory__pfWages"), DEC)
 
 
+# How much a slip's NET was rounded up (owner 2026-11-10: payroll stores the NET rounded UP to the next whole rupee): the
+# part of net - (gross + OT - deductions) strictly between 0 and 1 rupee. 0 on a slip from before (stored to the paisa).
+_NET_DIFF = ExpressionWrapper(
+    F("net_salary") - F("gross_salary") - F("ot_amount") + F("total_deductions"), output_field=DEC
+)
+_NET_ROUND = Case(
+    When(net_diff__gt=Decimal("0.005"), net_diff__lt=Decimal("0.995"), then=F("net_diff")),
+    default=Value(ZERO, output_field=DEC),
+    output_field=DEC,
+)
+
+
 def _annotated(qs: QuerySet) -> QuerySet:
     """The per-slip expressions the grouped queries sum over."""
-    return qs.annotate(stype=SLIP_TYPE_SQL, late_amt=LATE_SQL, eff_days=_EFFECTIVE_DAYS).annotate(lop_days=_LOP_DAYS)
+    return qs.annotate(stype=SLIP_TYPE_SQL, late_amt=LATE_SQL, eff_days=_EFFECTIVE_DAYS, net_diff=_NET_DIFF).annotate(
+        lop_days=_LOP_DAYS, net_round=_NET_ROUND
+    )
 
 
 def _aggs() -> dict[str, Any]:
@@ -269,6 +283,7 @@ def _aggs() -> dict[str, Any]:
         "late": _sum("late_amt"),
         "ded": _sum("total_deductions"),
         "net": _sum("net_salary"),
+        "net_round": _sum("net_round"),
         "lop_days": _sum("lop_days"),
         "tds_heads": Count("employee_id", distinct=True, filter=Q(tds_deduction__gt=0)),
         # the wages the employer estimates are worked on: the recorded PF wages, else the older slips' own basis (PF on
@@ -323,6 +338,7 @@ _SUM_KEYS = (
     "late",
     "ded",
     "net",
+    "net_round",
     "lop_days",
 )
 _EMPLOYER_KEYS = ("employer_pf", "employer_esi")
@@ -1648,7 +1664,8 @@ def _components(ctx: _Ctx) -> dict:
     cur = _with_derived(raw[ym])
     was = _with_derived(raw[prev]) if prev in raw else None
     states = _month_states(scope, [ym], ctx.today, ctx.available)[ym]
-    net_gap = cur["gross"] - cur["ded"] - cur["net"]
+    # the slips' rounding up of the NET to the whole rupee (2026-11-10) is not a gap
+    net_gap = cur["gross"] - cur["ded"] - cur["net"] + cur.get("net_round", ZERO)
     notes = []
     if states["provisionalSlips"]:
         notes.append(_provisional_note(states["provisionalSlips"], ym, ctx.ended))

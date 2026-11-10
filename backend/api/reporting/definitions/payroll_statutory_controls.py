@@ -13,6 +13,7 @@ from decimal import Decimal
 from django.db.models import Sum
 
 from api.models import AdvanceRepayment, Employee, Payroll, SalarySlip
+from api.pf_esi import net_follows
 
 from ..filters import boolean, period, scope, select
 from ..formatting import month_label, parse_date
@@ -544,7 +545,8 @@ def _run_recon(ctx) -> ReportResult:
         typ = slip_type(s)
         problems = []
         expected_net = dec(s.gross_salary) + dec(s.ot_amount) - dec(s.total_deductions)
-        if abs(expected_net - dec(s.net_salary)) > _TOL:
+        # since 2026-11-10 the NET is stored rounded up to the next whole rupee: that is not an arithmetic error
+        if not net_follows(s.net_salary, expected_net, _TOL):
             problems.append(f"net Rs. {dec(s.net_salary):,.2f} != gross + OT - deductions (Rs. {expected_net:,.2f})")
         late = dec(s.other_deductions) if typ == STAFF else dec(s.bd_penalty)
         parts = dec(s.pf_deduction) + dec(s.esi_deduction) + dec(s.tds_deduction) + dec(s.advance_deduction) + late

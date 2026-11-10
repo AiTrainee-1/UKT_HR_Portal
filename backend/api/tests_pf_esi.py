@@ -339,7 +339,8 @@ class StaffWorkedExampleTests(Base):
         _present_all(emp)
         slip = _generate(emp)
         self.assertEqual(slip.pf_deduction, Decimal("0.00"))
-        self.assertEqual(slip.esi_deduction, Decimal("607.50"))  # 0.75% of the 81,000 first portion
+        # 0.75% of the 81,000 first portion = 607.50, rounded up to the next rupee (owner 2026-11-10)
+        self.assertEqual(slip.esi_deduction, Decimal("608.00"))
 
     def test_a_non_co_emp_employee_gets_neither(self):
         emp = _staff("W4")
@@ -462,8 +463,9 @@ class ProductionWorkedExampleTests(Base):
             self.assertEqual(slip.pf_deduction, Decimal("210.00"))
         # ESI covers monthly earnings up to 12,000: weekly (14,000) is out, the other two are in
         self.assertEqual(weekly.esi_deduction, Decimal("0.00"))
-        self.assertEqual(biweekly.esi_deduction, Decimal("17.50"))  # 1% of 1,750
-        self.assertEqual(monthly.esi_deduction, Decimal("17.50"))
+        # 1% of 1,750 = 17.50, rounded up to the next rupee (owner 2026-11-10)
+        self.assertEqual(biweekly.esi_deduction, Decimal("18.00"))
+        self.assertEqual(monthly.esi_deduction, Decimal("18.00"))
 
     def test_the_first_portion_basis_is_half_of_the_monthly_equivalent(self):
         # 7 shifts x 1,000 = 7,000 for a week -> monthly equivalent 28,000, first portion 14,000

@@ -40,7 +40,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation
 
 from django.db.models import Q
 
@@ -118,6 +118,22 @@ COPORTAL_Q_VIA_EMPLOYEE = Q(employee__co_emp_enabled=True) | Q(employee__tds_ena
 def d2(value) -> Decimal:
     """Round to 2 decimal places (half up), the way payroll rounds every amount."""
     return Decimal(str(value)).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+def round_up_rupee(value) -> Decimal:
+    """Up to the next whole rupee (owner 2026-11-05 for the Salary Statement, 2026-11-10 for the payroll engine itself):
+    89.11 -> 90.00, 89.66 -> 90.00, 89.00 stays 89.00. Applied to the employee's ESI and to the NET pay, so what payroll
+    stores is exactly what the Salary Statement prints and the bank file pays. Rounded to the paisa first, so a value's
+    sub-paisa noise (89.0000001) never adds a rupee."""
+    return d2(value).to_integral_value(rounding=ROUND_CEILING).quantize(_CENT)
+
+
+def net_follows(saved, exact, tolerance=Decimal("0.005")) -> bool:
+    """Is a saved NET what payroll works out from earnings - deductions (`exact`)? Since 2026-11-10 the engine stores it
+    rounded UP to the next whole rupee; a payroll generated before that stored it to the paisa. Either is right, so the
+    checks that flag a payroll edited by hand accept both and never mistake the rounding for an edit."""
+    saved, exact = Decimal(str(saved)), Decimal(str(exact))
+    return abs(saved - exact) <= tolerance or abs(saved - round_up_rupee(exact)) <= tolerance
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -538,7 +554,8 @@ def _statutory(emp, ps, *, amounts, wages: Decimal, first_monthly, earned_gross:
     if result.pf_rule is not None:
         result.pf = d2(wages * result.pf_rule.rate_percent / _HUNDRED)
     if result.esi_rule is not None:
-        result.esi = d2(wages * result.esi_rule.rate_percent / _HUNDRED)
+        # the employee's ESI is rounded UP to the next whole rupee (owner 2026-11-10), as the Salary Statement prints it
+        result.esi = round_up_rupee(wages * result.esi_rule.rate_percent / _HUNDRED)
     if result.pf_rule is None and result.esi_rule is None:
         result.reason = "Co Emp employee, but no PF or ESI rule covers this salary"
     return result

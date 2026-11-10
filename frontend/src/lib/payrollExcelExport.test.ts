@@ -54,7 +54,8 @@ describe("bank file (Export bank file)", () => {
       "",
       "0123",
       "38083488840",
-      13481.48,
+      // a stored NET of 13,481.48 is paid as the Salary Statement prints it: up to the next whole rupee (owner 2026-11-10)
+      13482,
       "ABIRAMI T",
       "SBIN0007921",
       "STATE BANK OF INDIA",
