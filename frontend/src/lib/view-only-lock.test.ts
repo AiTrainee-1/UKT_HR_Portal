@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isMutatingControl, lockIconOnlyDeletes, lockMutatingControls, watchMutatingControls } from "./view-only-lock";
+import {
+  isMutatingControl,
+  lockIconOnlyDeletes,
+  lockMutatingControls,
+  setApprovalsSeparate,
+  watchMutatingControls,
+} from "./view-only-lock";
 
 function button(label: string, attrs: Record<string, string> = {}): HTMLButtonElement {
   const el = document.createElement("button");
@@ -29,6 +35,23 @@ describe("isMutatingControl", () => {
   it("also reads aria-label and title", () => {
     expect(isMutatingControl(button("", { "aria-label": "Delete row" }))).toBe(true);
     expect(isMutatingControl(button("", { title: "Edit" }))).toBe(true);
+  });
+});
+
+describe("approvals as a right of their own (HR Manager / HR Assistant accounts)", () => {
+  afterEach(() => setApprovalsSeparate(false));
+
+  it("keeps Approve / Reject usable on a view-only page, every other change still locked", () => {
+    setApprovalsSeparate(true);
+    expect(isMutatingControl(button("Approve"))).toBe(false);
+    expect(isMutatingControl(button("", { "aria-label": "Reject the request" }))).toBe(false);
+    expect(isMutatingControl(button("Edit"))).toBe(true);
+    expect(isMutatingControl(button("Approve and edit"))).toBe(true);
+  });
+
+  it("changes nothing for every other account", () => {
+    setApprovalsSeparate(false);
+    expect(isMutatingControl(button("Approve"))).toBe(true);
   });
 });
 

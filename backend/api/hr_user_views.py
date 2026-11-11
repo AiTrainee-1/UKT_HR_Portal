@@ -9,6 +9,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import hr_access
 from .auth import is_master_admin, require_master_admin, require_super_admin, require_super_admin_or_md
 from .branch_scope import scope_to_branch
 from .models import HRUser, Role, AuditLog
@@ -22,12 +23,66 @@ def role_json(r):
         "name": r.name,
         "description": r.description,
         "permissions": r.permissions,
+        # {request type: may approve} (hr_access.APPROVAL_KINDS), or null: the role keeps the old rule (approve = edit)
+        "approvals": r.approvals if isinstance(r.approvals, dict) else None,
+        # "" = for any account; "hr_manager" / "hr_assistant" = only for accounts of that category
+        "category": r.category or "",
         "isSystem": r.is_system,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
     }
 
 
+def _role_snapshot(r) -> dict:
+    """What the Activity Logs keep of a role before / after a change."""
+    return {
+        "name": r.name,
+        "category": r.category or "",
+        "permissions": r.permissions,
+        "approvals": r.approvals if isinstance(r.approvals, dict) else None,
+    }
+
+
+def _account_snapshot(u) -> dict:
+    """What the Activity Logs keep of an account before / after a change (never the password)."""
+    return {
+        "category": hr_access.category_of(u),
+        "roleId": u.role_id,
+        "branchId": u.branch_id,
+        "isActive": u.is_active,
+        "fullName": u.full_name,
+        "email": u.email,
+        "isMd": u.is_md,
+        "permissionOverrides": hr_access.overrides_of(u),
+    }
+
+
+def _changed(before: dict, after: dict) -> tuple[dict, dict]:
+    keys = [k for k in after if before.get(k) != after.get(k)]
+    return {k: before.get(k) for k in keys}, {k: after.get(k) for k in keys}
+
+
+def _invalid(problem: str) -> Response:
+    """400 for a refused change; `approval_locked` when it tried to give an HR Assistant an approval it may never have."""
+    code = "approval_locked" if problem in hr_access.ASSISTANT_LOCKED.values() else "invalid"
+    return Response({"error": problem, "code": code}, status=400)
+
+
+def _role_problem(role_id, category: str):
+    """(role, error message): the role an account is being given, and why it cannot have it."""
+    if role_id in (None, ""):
+        return None, None
+    role = Role.objects.filter(pk=role_id).first()
+    if role is None:
+        return None, "That role does not exist any more."
+    if not hr_access.role_fits(role, category):
+        wanted = hr_access.CATEGORY_LABEL.get(role.category, role.category)
+        mine = hr_access.CATEGORY_LABEL.get(category, category)
+        return role, f'"{role.name}" is a role for {wanted} accounts, and this is an {mine} account. Pick another role.'
+    return role, None
+
+
 def hr_user_json(u):
+    display = hr_access.display_category(u)
     return {
         "id": u.id,
         "username": u.username,
@@ -49,6 +104,13 @@ def hr_user_json(u):
         # The Managing Director identity (see HRUser.is_md): at most one account has it.
         "isMd": u.is_md,
         "mdAssignedAt": u.md_assigned_at.isoformat() if u.md_assigned_at else None,
+        # The account category (hr_access.py): "admin" | "hr_manager" | "hr_assistant"; displayCategory also tells the
+        # Super Admin ("super_admin") and the MD ("md") apart. permissionOverrides = the account's own changes on top of
+        # its role ({"modules": {...}, "approvals": {...}}, HR Manager / HR Assistant accounts only).
+        "category": hr_access.category_of(u),
+        "displayCategory": display,
+        "categoryLabel": hr_access.CATEGORY_LABEL.get(display, display),
+        "permissionOverrides": hr_access.overrides_of(u),
         "lastLogin": u.last_login.isoformat() if u.last_login else None,
         "createdAt": u.created_at.isoformat() if u.created_at else None,
     }
@@ -82,6 +144,9 @@ def _apply_md(request, user, want: bool, replace: bool):
         return Response(
             {"error": "A super administrator can't also be the MD. Use a separate account for the MD."}, status=400
         )
+    if hr_access.category_of(user) in hr_access.STAFF_CATEGORIES:
+        label = hr_access.CATEGORY_LABEL[hr_access.category_of(user)]
+        return Response({"error": f"An {label} account can't be the MD. Use a separate account for the MD."}, status=400)
     if user.branch_id is not None:
         return Response(
             {
@@ -121,6 +186,8 @@ def audit_log_json(log):
         "id": log.id,
         "userType": log.user_type,
         "userId": log.user_id,
+        # the HR portal account that acted (stamped from 2026-11-10 on; null on older rows and non-HR rows)
+        "hrUserId": log.hr_user_id,
         "userName": log.user_name,
         "action": log.action,
         "module": log.module,
@@ -135,6 +202,10 @@ def audit_log_json(log):
 
 # ── Roles ────────────────────────────────────────────────────────────────────
 
+#: What a role can be made for: any account (""), or only HR Manager / HR Assistant accounts.
+ROLE_CATEGORIES = ("", hr_access.HR_MANAGER, hr_access.HR_ASSISTANT)
+
+
 @api_view(["GET", "POST"])
 @require_super_admin
 def roles(request: Request) -> Response:
@@ -147,13 +218,24 @@ def roles(request: Request) -> Response:
         return Response({"error": "name is required"}, status=400)
     if Role.objects.filter(name__iexact=str(data["name"]).strip()).exists():
         return Response({"error": "Role already exists"}, status=400)
+    category = data.get("category") or ""
+    if category not in ROLE_CATEGORIES:
+        return Response({"error": "category must be empty (any account), hr_manager or hr_assistant."}, status=400)
+    approvals, error = hr_access.validate_approvals(data.get("approvals"), category=category)
+    if error:
+        return _invalid(error)
 
     role = Role.objects.create(
         name=data["name"],
         description=data.get("description"),
         permissions=data.get("permissions", {}),
+        approvals=approvals,
+        category=category,
     )
-    log_action(request, "create", "user_management", record_id=role.id, description=f"Created role: {role.name}")
+    log_action(
+        request, "create", "user_management", record_id=role.id, description=f"Created role: {role.name}",
+        new_values=_role_snapshot(role),
+    )  # fmt: skip
     return Response(role_json(role), status=201)
 
 
@@ -170,6 +252,7 @@ def role_detail(request: Request, pk: int) -> Response:
 
     if request.method == "PUT":
         data = request.data
+        before = _role_snapshot(role)
         if "name" in data:
             # Names are unique: renaming onto another role's name used to reach the database and come back as a 500.
             new_name = str(data["name"] or "").strip()
@@ -178,12 +261,40 @@ def role_detail(request: Request, pk: int) -> Response:
             if Role.objects.filter(name__iexact=new_name).exclude(pk=role.pk).exists():
                 return Response({"error": "Role already exists"}, status=400)
             role.name = new_name
+        if "category" in data:
+            category = data["category"] or ""
+            if category not in ROLE_CATEGORIES:
+                return Response({"error": "category must be empty (any account), hr_manager or hr_assistant."}, status=400)
+            if category:
+                others = role.users.exclude(category=category)
+                if others.exists():
+                    n = others.count()
+                    label = hr_access.CATEGORY_LABEL[category]
+                    return Response(
+                        {
+                            "error": f"{n} {'account that uses' if n == 1 else 'accounts that use'} this role "
+                            f"{'is not an' if n == 1 else 'are not'} {label} {'account' if n == 1 else 'accounts'}. "
+                            "Give them another role first, or keep the role for any account."
+                        },
+                        status=400,
+                    )
+            role.category = category
+        if "approvals" in data or "category" in data:
+            raw = data["approvals"] if "approvals" in data else role.approvals
+            approvals, error = hr_access.validate_approvals(raw, category=role.category or "")
+            if error:
+                return _invalid(error)
+            role.approvals = approvals
         if "description" in data:
             role.description = data["description"]
         if "permissions" in data:
             role.permissions = data["permissions"]
         role.save()
-        log_action(request, "update", "user_management", record_id=role.id, description=f"Updated role: {role.name}")
+        old, new = _changed(before, _role_snapshot(role))
+        log_action(
+            request, "update", "user_management", record_id=role.id, description=f"Updated role: {role.name}",
+            old_values=old or None, new_values=new or None,
+        )  # fmt: skip
         return Response(role_json(role))
 
     if role.is_system:
@@ -222,6 +333,16 @@ def hr_users(request: Request) -> Response:
         return Response({"error": "username and password are required"}, status=400)
     if HRUser.objects.filter(username=data["username"]).exists():
         return Response({"error": "Username already exists"}, status=400)
+    # The category is set here, by the Super Admin, and nowhere else (hr_access.py). Default: an Admin account as before.
+    category = data.get("category") or hr_access.ADMIN
+    if category not in hr_access.CATEGORIES:
+        return Response({"error": "category must be admin, hr_manager or hr_assistant."}, status=400)
+    _role, problem = _role_problem(data.get("roleId"), category)
+    if problem:
+        return Response({"error": problem}, status=400)
+    overrides, problem = hr_access.validate_overrides(data.get("permissionOverrides"), category)
+    if problem:
+        return _invalid(problem)
 
     pw_hash = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt()).decode()
     with transaction.atomic():
@@ -230,16 +351,23 @@ def hr_users(request: Request) -> Response:
             email=data.get("email"),
             full_name=data.get("fullName"),
             password_hash=pw_hash,
-            role_id=data.get("roleId"),
+            role_id=data.get("roleId") or None,
             department_id=data.get("departmentId"),
             branch_id=data.get("branchId"),
+            category=category,
+            permission_overrides=overrides,
         )
         if data.get("isMd"):
             error = _apply_md(request, user, True, bool(data.get("replaceMd")))
             if error is not None:
                 return error
         user.save()
-    log_action(request, "create", "user_management", record_id=user.id, description=f"Created HR user: {user.username}")
+    label = hr_access.CATEGORY_LABEL[category]
+    log_action(
+        request, "create", "user_management", record_id=user.id,
+        description=f"Created HR user: {user.username}" + (f" ({label})" if category != hr_access.ADMIN else ""),
+        new_values=_account_snapshot(user),
+    )  # fmt: skip
     if user.is_md:
         log_action(request, "update", "user_management", record_id=user.id, description=f"Assigned MD: {user.username}")
     return Response(hr_user_json(user), status=201)
@@ -268,6 +396,33 @@ def hr_user_detail(request: Request, pk: int) -> Response:
                 status=400,
             )
         was_md = u.is_md
+        before = _account_snapshot(u)
+        # The category (hr_access.py), set only here and on create, by the Super Admin. The Super Admin and the MD stay
+        # Admin accounts, so nothing about them can change.
+        category = hr_access.category_of(u)
+        if "category" in data and (data["category"] or hr_access.ADMIN) != category:
+            category = data["category"] or hr_access.ADMIN
+            if category not in hr_access.CATEGORIES:
+                return Response({"error": "category must be admin, hr_manager or hr_assistant."}, status=400)
+            if u.is_super_admin or u.is_md:
+                who = "the Super Admin" if u.is_super_admin else "the MD"
+                return Response({"error": f"This is {who}'s account: it stays an Admin account."}, status=400)
+        role_id = data["roleId"] if "roleId" in data else u.role_id
+        _role, problem = _role_problem(role_id, category)
+        if problem:
+            return Response({"error": problem}, status=400)
+        if "permissionOverrides" in data:
+            overrides, problem = hr_access.validate_overrides(data["permissionOverrides"], category)
+            if problem:
+                return _invalid(problem)
+        elif category != hr_access.category_of(u):
+            # a new category: the account's own changes stay only where they still make sense
+            kept = hr_access.overrides_of(u) if category in hr_access.STAFF_CATEGORIES else {}
+            if category == hr_access.HR_ASSISTANT and kept.get("approvals"):
+                kept["approvals"] = {k: v for k, v in kept["approvals"].items() if k not in hr_access.ASSISTANT_LOCKED}
+            overrides, _ = hr_access.validate_overrides({k: v for k, v in kept.items() if v}, category)
+        else:
+            overrides = None  # unchanged
         with transaction.atomic():
             for field, attr in [
                 ("email", "email"), ("fullName", "full_name"),
@@ -276,6 +431,11 @@ def hr_user_detail(request: Request, pk: int) -> Response:
             ]:
                 if field in data:
                     setattr(u, attr, data[field])
+            if "roleId" in data and data["roleId"] in ("", None):
+                u.role_id = None
+            u.category = category
+            if overrides is not None:
+                u.permission_overrides = overrides
             if data.get("password"):
                 u.password_hash = bcrypt.hashpw(data["password"].encode(), bcrypt.gensalt()).decode()
             if "isMd" in data:
@@ -288,7 +448,23 @@ def hr_user_detail(request: Request, pk: int) -> Response:
                     status=400,
                 )
             u.save()
-        log_action(request, "update", "user_management", record_id=u.id, description=f"Updated HR user: {u.username}")
+        old, new = _changed(before, _account_snapshot(u))
+        if data.get("password"):
+            new["password"] = "changed"
+        words = []
+        if "isActive" in old:
+            words.append("activated" if u.is_active else "deactivated")
+        if "category" in old:
+            words.append(f"category {hr_access.CATEGORY_LABEL[old['category']]} -> {hr_access.CATEGORY_LABEL[category]}")
+        if "roleId" in old:
+            words.append(f"role -> {u.role.name if u.role_id and u.role else 'none'}")
+        if "permissionOverrides" in old:
+            words.append("own access changes updated")
+        log_action(
+            request, "update", "user_management", record_id=u.id,
+            description=f"Updated HR user: {u.username}" + (f" ({', '.join(words)})" if words else ""),
+            old_values=old or None, new_values=new or None,
+        )  # fmt: skip
         if u.is_md and not was_md:
             log_action(request, "update", "user_management", record_id=u.id, description=f"Assigned MD: {u.username}")
         elif was_md and not u.is_md:

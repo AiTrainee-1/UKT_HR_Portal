@@ -2,7 +2,7 @@ import { CheckCircle2, ChevronRight, Clock, ShieldAlert, ShieldCheck, XCircle } 
 import { WaitingChip } from "@/components/ApprovalTrail";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { explainsWaiting, waitingText } from "@/lib/approval-workflow";
+import { explainsWaiting, hrBlockedForAccount, waitingText } from "@/lib/approval-workflow";
 import { REQUEST_STATUS_TONE } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { Chip, InitialsAvatar } from "../settlement/parts";
@@ -115,10 +115,18 @@ export default function RequestCard({ r, selected, onSelect, busy, onApprove, on
               No Department Head has acted yet: HR can only approve once the Department Head approves first.
             </p>
           )}
-          {r.approval && r.approval.currentStep !== null && !canApprove && (
-            <p className="text-[11px] text-amber-600">
-              {waitingText(r.approval)}: HR cannot decide this request until that step is done.
+          {hrBlockedForAccount(r.approval) ? (
+            <p className="text-[11px] text-gray-500" data-testid={`mp-locked-${r.id}`}>
+              Waiting for HR. Your account can't approve missing punches: an HR Manager or the Super Admin decides them.
             </p>
+          ) : (
+            r.approval &&
+            r.approval.currentStep !== null &&
+            !canApprove && (
+              <p className="text-[11px] text-amber-600">
+                {waitingText(r.approval)}: HR cannot decide this request until that step is done.
+              </p>
+            )
           )}
           {r.status === "approved" && (
             <p className="text-[11px] text-green-600">

@@ -154,7 +154,16 @@ export type ApprovalProgress = {
   /** Whether that role could reject it right now: canAct, plus a rejection allowed out of turn (a resignation's HR).
    *  An older backend does not send it. */
   canReject?: Record<ApprovalRole, boolean>;
+  /** HR's turn under the pipeline, whoever is looking (canAct.hr also needs the account to be allowed to approve). */
+  hrTurn?: boolean;
+  /** Whether the signed-in account may approve this kind of request at all (HR Manager / HR Assistant categories,
+   *  lib/hr-access.ts). false = it is HR's request but not this person's to decide. An older backend does not send it. */
+  hrPermitted?: boolean;
 };
+
+/** HR's turn, but the signed-in account may not approve this kind (an HR Assistant and a missing punch, for example). */
+export const hrBlockedForAccount = (approval: ApprovalProgress | null | undefined): boolean =>
+  !!approval && approval.hrPermitted === false && approval.hrTurn === true;
 
 // Requests a screen shows but does not let its user decide. The Managing Director's copies of the Leave, Requests and
 // Outpass pages (components/md/embedded) switch this on: the MD only views those requests (the server refuses the MD's

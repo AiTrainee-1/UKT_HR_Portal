@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Download, HandCoins, Hourglass, Plus, Search, UserMinus, Wallet } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -48,6 +49,9 @@ const FIRST_DIRECTION: Record<SortKey, Sort["dir"]> = {
 /** Settlement: salary advances and term loans: raise one, approve it, and follow what payroll has recovered. */
 export default function Settlement() {
   const { toast } = useToast();
+  // approving an advance is a right of its own (HR Manager / HR Assistant categories); unchanged for everyone else
+  const { user } = useAuth();
+  const canDecide = canApprove(user, "advance");
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -271,6 +275,7 @@ export default function Settlement() {
                 onReject={(row) => setDecision({ row, status: "rejected" })}
                 onDelete={setDeleteTarget}
                 busyId={busyId}
+                canDecide={canDecide}
               />
             )}
           </CardContent>
@@ -294,6 +299,7 @@ export default function Settlement() {
 
         <DetailSheet
           advanceId={selectedId}
+          canDecide={canDecide}
           onClose={() => setSelectedId(null)}
           onApprove={(row) => {
             setSelectedId(null);

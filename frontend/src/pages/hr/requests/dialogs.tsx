@@ -137,7 +137,10 @@ export function HandleDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {REQUEST_STATUSES.map((s) => (
+                {/* an account that may not approve general requests can still handle them, but not approve / reject */}
+                {REQUEST_STATUSES.filter(
+                  (s) => item?.approval?.hrPermitted !== false || (s.value !== "approved" && s.value !== "rejected"),
+                ).map((s) => (
                   <SelectItem key={s.value} value={s.value}>
                     {s.label}
                   </SelectItem>

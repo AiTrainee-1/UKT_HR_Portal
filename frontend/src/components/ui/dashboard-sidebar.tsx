@@ -4,7 +4,7 @@ import { Link, useLocation } from 'wouter';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SidebarToggle } from '@/components/ui/sidebar-toggle';
-import { useAuth, canView, canViewRoute } from '@/contexts/AuthContext';
+import { useAuth, canView, canViewRoute, canApprove } from '@/contexts/AuthContext';
 import { moduleForPath } from '@/lib/permission-modules';
 import { hrCanAct } from '@/lib/approval-workflow';
 import { COMPENSATION_BASE, COMPENSATION_PAGES, pagePath } from '@/pages/hr/compensation/routes';
@@ -19,7 +19,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText, MapPinned,
+  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText, MapPinned, ClipboardList, Briefcase,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -179,6 +179,8 @@ export const navGroups: NavGroupData[] = [
       { path: '/hr/account-management', label: 'Account Management', icon: UserCog },
       { path: '/hr/user-management', label: 'User Management', icon: Shield },
       { path: '/hr/activity-logs', label: 'Activity Logs', icon: Activity },
+      // The Super Admin and HR Managers: what the HR Assistants did (filtered out for everyone else below).
+      { path: '/hr/assistant-activity', label: 'Assistant Activity', icon: ClipboardList },
       { path: '/hr/chat', label: 'Chat', icon: MessageCircle },
       { path: '/hr/notifications', label: 'Notifications', icon: Bell },
       { path: '/hr/login-devices', label: 'Login Devices', icon: MonitorSmartphone },
@@ -699,14 +701,18 @@ function HrSidebarView({
     ((leaveData ?? []).filter((l: any) => l.status === 'pending' && hrActs(l)).length) +
     ((permData  ?? []).filter((p: any) => p.status === 'pending' && hrActs(p)).length) +
     pendingOutpassCount;
-  const activeResignationsCount = (resignData ?? []).filter(
-    (r: any) => r.status === 'pending' || r.status === 'dept_approved'
-  ).length;
-  const pendingAdvancesCount = (advanceData ?? []).filter(
-    (a: any) => a.status === 'pending'
-  ).length;
+  // These three count by status, not by the pipeline: an account that may not approve the kind (an HR Manager / HR
+  // Assistant whose role or own changes leave it off, lib/hr-access.ts) has nothing to act on, so no badge. Unchanged for
+  // every account on the original rule (canApprove is always true there).
+  const activeResignationsCount = canApprove(user, 'resignation')
+    ? (resignData ?? []).filter((r: any) => r.status === 'pending' || r.status === 'dept_approved').length
+    : 0;
+  const pendingAdvancesCount = canApprove(user, 'advance')
+    ? (advanceData ?? []).filter((a: any) => a.status === 'pending').length
+    : 0;
   const pendingOnDutyCount = canSeeGeoAttendance
-    ? (onDutySessionData ?? []).filter(hrActs).length + (onDutyPunchData ?? []).length
+    ? (onDutySessionData ?? []).filter(hrActs).length +
+      (canApprove(user, 'on_duty_punch') ? (onDutyPunchData ?? []).length : 0)
     : 0;
 
   const initials = (user?.name ?? 'H')
@@ -924,6 +930,7 @@ function HrSidebarView({
               if (item.path === '/md/dashboard') return !!user?.isMd;
               // Admin-only, same as Account Management -no per-role grant.
               if (item.path === '/hr/activity-logs') return !!user?.isSuperAdmin;
+              if (item.path === '/hr/assistant-activity') return !!user?.isSuperAdmin || user?.category === 'hr_manager';
               if (item.children) return item.children.length > 0;
               const moduleKey = moduleForPath(item.path);
               // canViewRoute (not canView): a flat single-route item like
@@ -971,6 +978,55 @@ function HrSidebarView({
           );
         })}
       </nav>
+
+      {/* ── Who is signed in, for an HR Manager / HR Assistant: their category, so a restricted login knows it is one ── */}
+      {(user?.category === 'hr_manager' || user?.category === 'hr_assistant') && (
+        collapsed ? (
+          <div className="flex justify-center pt-3" data-testid="profile-category">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="flex items-center justify-center w-9 h-9 rounded-full text-[11px] font-bold"
+                  style={user.category === 'hr_manager'
+                    ? { background: '#ccfbf1', color: '#115e59' }
+                    : { background: '#ede9fe', color: '#5b21b6' }}
+                >
+                  {initials}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={10}>{user.name} · {user.categoryLabel}</TooltipContent>
+            </Tooltip>
+          </div>
+        ) : (
+          <div className="px-3 pt-3" data-testid="profile-category">
+            <div className="flex items-center gap-2.5 rounded-xl px-3 py-2" style={{ background: '#f0f4f8' }}>
+              <span
+                className="flex items-center justify-center w-8 h-8 shrink-0 rounded-full text-[11px] font-bold"
+                style={user.category === 'hr_manager'
+                  ? { background: '#ccfbf1', color: '#115e59' }
+                  : { background: '#ede9fe', color: '#5b21b6' }}
+              >
+                {initials}
+              </span>
+              <div className="min-w-0">
+                <p className="text-[12.5px] font-semibold truncate" style={{ color: '#003c64' }}>{user.name}</p>
+                <span
+                  className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-[1px] rounded-full text-[10px] font-bold"
+                  style={user.category === 'hr_manager'
+                    ? { background: '#ccfbf1', color: '#115e59' }
+                    : { background: '#ede9fe', color: '#5b21b6' }}
+                  data-testid="profile-category-badge"
+                >
+                  {user.category === 'hr_manager'
+                    ? <Briefcase className="w-2.5 h-2.5" strokeWidth={2.2} />
+                    : <ClipboardList className="w-2.5 h-2.5" strokeWidth={2.2} />}
+                  {user.categoryLabel ?? (user.category === 'hr_manager' ? 'HR Manager' : 'HR Assistant')}
+                </span>
+              </div>
+            </div>
+          </div>
+        )
+      )}
 
       {/* ── Sign Out ── */}
       {collapsed ? (

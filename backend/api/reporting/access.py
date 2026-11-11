@@ -18,7 +18,7 @@ Role permissions are read once per request and reused, so a catalog of ~50 repor
 
 from __future__ import annotations
 
-from api.permission_registry import resolve_permission
+from api.permission_registry import effective_permissions, resolve_permission
 
 from .types import ReportSpec
 
@@ -67,7 +67,11 @@ def permission_level(request, module_key: str) -> str:
         return "edit"
     if user.is_md:
         return "view"  # the Managing Director: read-only access to everything a report can show
-    return resolve_permission(user.role.permissions if user.role else {}, module_key)
+    # the role, with an HR Manager / HR Assistant account's own changes on top (permission_registry.effective_permissions)
+    perms = getattr(request, "_report_permissions", None)
+    if perms is None:
+        perms = request._report_permissions = effective_permissions(user)
+    return resolve_permission(perms, module_key)
 
 
 def access_state(request, spec: ReportSpec) -> str:

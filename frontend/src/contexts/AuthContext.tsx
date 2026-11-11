@@ -4,6 +4,7 @@ import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PermissionLevel } from "@/lib/api-client/custom-hooks";
 import { resolvePermission, resolvePermissionOrChildren, ROUTE_OR_MODULES } from "@/lib/permission-modules";
+import { canApprove as canApproveKind, type Category, type DisplayCategory } from "@/lib/hr-access";
 
 type Role = "hr" | "employee";
 
@@ -23,9 +24,25 @@ interface UserInfo {
   rolePermissions?: Record<string, PermissionLevel>;
   branchId?: number | null;
   branchName?: string | null;
+  /** The account category (Admin / HR Manager / HR Assistant), read from the database by /auth/me (lib/hr-access.ts). */
+  category?: Category;
+  /** The category, or "super_admin" / "md" for those two accounts. */
+  displayCategory?: DisplayCategory;
+  categoryLabel?: string;
+  /** "explicit": the approvals below decide; "legacy": approve = edit on the module, as always (an older backend: unset). */
+  approvalMode?: "explicit" | "legacy";
+  /** {request kind: may approve / reject}, after role, the account's own changes and the HR Assistant locks. */
+  approvals?: Record<string, boolean>;
+  /** The kinds this account can never approve (HR Assistants: missing punches and attendance edits). */
+  lockedApprovals?: string[];
 }
 
 export type { PermissionLevel };
+
+/** May the signed-in account approve / reject this kind of request ("leave", "missing_punch", ...)? See lib/hr-access.ts. */
+export function canApprove(user: UserInfo | null, kind: string): boolean {
+  return canApproveKind(user, kind);
+}
 
 // Cascading + fail-closed, mirroring backend permission_middleware.py: a
 // submodule with no explicit entry inherits its parent's level, and a
@@ -92,6 +109,19 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+/** The category / approval fields of /auth/me (an older backend sends none of them: every field stays unset). */
+function accessOf(me: unknown): Partial<UserInfo> {
+  const m = me as Partial<UserInfo>;
+  return {
+    category: m.category,
+    displayCategory: m.displayCategory,
+    categoryLabel: m.categoryLabel,
+    approvalMode: m.approvalMode,
+    approvals: m.approvals,
+    lockedApprovals: m.lockedApprovals,
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(() => {
     if (typeof window !== "undefined") {
@@ -147,6 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     rolePermissions: (me as { rolePermissions?: Record<string, PermissionLevel> }).rolePermissions,
     branchId: (me as { branchId?: number | null }).branchId ?? null,
     branchName: (me as { branchName?: string | null }).branchName ?? null,
+    ...accessOf(me),
   } : null;
 
   const value = {

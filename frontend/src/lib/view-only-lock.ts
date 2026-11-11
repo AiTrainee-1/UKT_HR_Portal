@@ -53,6 +53,17 @@ const MUTATING_KEYWORDS = new Set([
  */
 export const VIEW_SAFE_ATTR = "data-view-safe";
 
+// For an account whose approvals are a right of their own (HR Manager / HR Assistant categories, lib/hr-access.ts) an
+// Approve / Reject button is not an edit: such an account may approve with View only, and the screens only draw those
+// buttons when the server says it may (approval.canAct). Off for every other account, so nothing changes for them.
+const DECISION_WORDS = new Set(["approve", "reject"]);
+let approvalsSeparate = false;
+
+/** HrLayout switches this on for an account on explicit approvals ("approvalMode": "explicit" in /auth/me). */
+export function setApprovalsSeparate(on: boolean): void {
+  approvalsSeparate = on;
+}
+
 export function isMutatingControl(el: HTMLButtonElement): boolean {
   if (el.closest(`[${VIEW_SAFE_ATTR}]`)) return false;
   const accessibleName = [el.textContent, el.getAttribute("aria-label"), el.getAttribute("title")]
@@ -60,7 +71,7 @@ export function isMutatingControl(el: HTMLButtonElement): boolean {
     .join(" ")
     .toLowerCase();
   const words = accessibleName.match(/[a-z]+/g) ?? [];
-  return words.some((w) => MUTATING_KEYWORDS.has(w));
+  return words.some((w) => MUTATING_KEYWORDS.has(w) && !(approvalsSeparate && DECISION_WORDS.has(w)));
 }
 
 function lockButton(btn: HTMLButtonElement): void {

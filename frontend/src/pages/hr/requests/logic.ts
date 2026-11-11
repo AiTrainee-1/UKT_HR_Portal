@@ -74,6 +74,9 @@ export type HubKind = {
   label: string;
   group: string;
   access: Access;
+  /** Whether this account may approve / reject this kind, apart from its access level (HR Manager / HR Assistant
+   *  categories, lib/hr-access.ts). An older backend does not send it: the access level decides, as before. */
+  canApprove?: boolean;
   mode: DecideMode;
   openPath: string | null;
   openLabel: string | null;
@@ -426,14 +429,22 @@ export function decisionsHere(item: HubItem, kind: HubKind | undefined): HereDec
     why,
   });
   if (item.status !== "pending") return none(null);
-  if (!kind || kind.access !== "edit") return none("You can view this kind of request but not decide it.");
+  // approving is a right of its own: an account may approve with View only, or edit without approving
+  const mayApprove = kind?.canApprove ?? kind?.access === "edit";
+  if (!kind || (kind.access !== "edit" && !mayApprove))
+    return none("You can view this kind of request but not decide it.");
   if (kind.mode === "link") return none(null);
   const pending = true;
   if (kind.mode === "notes") {
     // a general request is HR's alone: no pipeline to wait for, but the lock for a view-only viewer still applies
-    return hrCanAct(item.approval, pending)
+    return hrCanAct(item.approval, pending) || (kind.access === "edit" && !mayApprove)
       ? { approve: false, reject: false, needsType: false, notes: true, why: null }
       : none("You can view this request but not handle it.");
+  }
+  if (!mayApprove || item.approval?.hrPermitted === false) {
+    return none(
+      `Your account can't approve or reject ${kind.label} requests. An HR Manager or the Super Admin decides them.`,
+    );
   }
   const canApprove = hrCanAct(item.approval, pending);
   const canReject = hrCanReject(item.approval, pending);

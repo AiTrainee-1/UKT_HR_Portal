@@ -69,7 +69,14 @@ function MdIdentityCard({
   const queryClient = useQueryClient();
   const updateUser = useUpdateHrUser();
   const md = useMemo(() => users.find((u) => u.isMd) ?? null, [users]);
-  const candidates = useMemo(() => users.filter((u) => u.isActive && !u.isSuperAdmin && !u.isMd), [users]);
+  // HR Manager / HR Assistant accounts can't be the MD (the server refuses it)
+  const candidates = useMemo(
+    () =>
+      users.filter(
+        (u) => u.isActive && !u.isSuperAdmin && !u.isMd && u.category !== "hr_manager" && u.category !== "hr_assistant",
+      ),
+    [users],
+  );
   const [choice, setChoice] = useState("");
   const [confirmingChange, setConfirmingChange] = useState(false);
   const chosen = candidates.find((u) => String(u.id) === choice) ?? null;

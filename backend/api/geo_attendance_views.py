@@ -66,7 +66,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval, whatsapp_notifications
+from . import approval_workflow as approval, hr_access, whatsapp_notifications
 from .view_common import error_response as _error
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .biometric_sync import _ingest_punches
@@ -1167,12 +1167,15 @@ def on_duty_session_hr_status(request: Request, pk: int) -> Response:
     status_val = request.data.get("status")
     if status_val not in ("approved", "rejected") and approval.is_pending(WORKFLOW, session):
         return _error("status must be 'approved' or 'rejected'")
+    if refused := hr_access.approval_refusal(request, WORKFLOW):  # the approval right, not the edit right
+        return refused
 
     reviewer_name = request.jwt_user.get("name") or "HR"
     try:
         resolve_on_duty_session(session, approval.HR, status_val, reviewer_name, request.data.get("comment"))
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    hr_access.log_decision(request, WORKFLOW, session, status_val, f"On-Duty request for {session.destination}")
     return Response(_on_duty_session_dict(session))
 
 
@@ -1211,6 +1214,8 @@ def on_duty_punch_verification_hr_status(request: Request, pk: int) -> Response:
     status_val = request.data.get("status")
     if status_val not in ("approved", "rejected"):
         return _error("status must be 'approved' or 'rejected'")
+    if refused := hr_access.approval_refusal(request, "on_duty_punch"):  # the approval right, not the edit right
+        return refused
 
     # The invariant that makes provisional on-duty safe: a punch cannot
     # become real attendance before its session is approved. Without this,
@@ -1226,6 +1231,7 @@ def on_duty_punch_verification_hr_status(request: Request, pk: int) -> Response:
 
     reviewer_name = request.jwt_user.get("name") or "HR"
     resolve_on_duty_punch_hr(v, status_val, reviewer_name, request.data.get("comment"))
+    hr_access.log_decision(request, "on_duty_punch", v, status_val, f"On-Duty punch of {v.punch_date} {v.punch_time}")
     return Response(_on_duty_punch_verification_dict(v))
 
 
@@ -1252,6 +1258,8 @@ def on_duty_session_punches_hr_status(request: Request, pk: int) -> Response:
     status_val = request.data.get("status")
     if status_val not in ("approved", "rejected"):
         return _error("status must be 'approved' or 'rejected'")
+    if refused := hr_access.approval_refusal(request, "on_duty_punch"):  # the approval right, not the edit right
+        return refused
 
     # Same invariant as the single-punch endpoint: nothing becomes attendance
     # while the request it belongs to is unapproved. Decide the request first
@@ -1269,6 +1277,9 @@ def on_duty_session_punches_hr_status(request: Request, pk: int) -> Response:
         count = _void_session_punches(session, reviewer_name, "HR")
     if count:
         whatsapp_notifications.notify_geo_punches_decided(session, status_val, count, reviewer_name, request.data.get("comment"))
+        hr_access.log_decision(
+            request, "on_duty_punch", session, status_val, f"{count} On-Duty punch(es) for {session.destination}"
+        )
     session.refresh_from_db()
     return Response({"updated": count, "session": _on_duty_session_dict(session)})
 

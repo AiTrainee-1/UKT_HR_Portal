@@ -102,6 +102,7 @@ const ManagerDetail = lazy(() => import("@/pages/hr/ManagerDetail"));
 const AccountManagement = lazy(() => import("@/pages/hr/AccountManagement"));
 const AccountManagementMaster = lazy(() => import("@/pages/hr/AccountManagementMaster"));
 const ActivityLogs = lazy(() => import("@/pages/hr/ActivityLogs"));
+const AssistantActivity = lazy(() => import("@/pages/hr/AssistantActivity"));
 const LoginDevices = lazy(() => import("@/pages/hr/LoginDevices"));
 const MobileAppLogin = lazy(() => import("@/pages/hr/MobileAppLogin"));
 const WhatsAppControl = lazy(() => import("@/pages/hr/WhatsAppControl"));
@@ -236,6 +237,12 @@ function ProtectedRoute({
   // Account Management, and independent of Role.permissions. Branch users
   // do not review their own audit trail; that is an oversight tool.
   if (location.startsWith("/hr/activity-logs") && !user.isSuperAdmin) {
+    navigate(hrHome);
+    return null;
+  }
+
+  // HR Assistant activity: the Super Admin and HR Managers only (the API checks the same, from the database).
+  if (location.startsWith("/hr/assistant-activity") && !user.isSuperAdmin && user.category !== "hr_manager") {
     navigate(hrHome);
     return null;
   }
@@ -473,6 +480,9 @@ function Router() {
         </Route>
         <Route path="/hr/activity-logs">
           {() => <ProtectedRoute component={ActivityLogs} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/assistant-activity">
+          {() => <ProtectedRoute component={AssistantActivity} allowedRoles={["hr"]} />}
         </Route>
         <Route path="/hr/login-devices">
           {() => <ProtectedRoute component={LoginDevices} allowedRoles={["hr"]} />}

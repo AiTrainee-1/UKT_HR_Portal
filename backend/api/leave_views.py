@@ -4,7 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval, whatsapp_approvals
+from . import approval_workflow as approval, hr_access, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, is_hr, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .models import LeaveType, LeaveBalance, Holiday, Employee, Notification, EmployeePermission
@@ -312,12 +312,20 @@ def employee_request_action(request: Request, pk: int) -> Response:
     from .models import EmployeeRequest
     from datetime import datetime
     try:
-        er = EmployeeRequest.objects.get(pk=pk)
+        er = EmployeeRequest.objects.select_related("employee").get(pk=pk)
     except EmployeeRequest.DoesNotExist:
         return Response({"error": "Request not found"}, status=404)
 
     data = request.data
     prev_status = er.status
+    if data.get("status") in ("approved", "rejected") and data.get("status") != prev_status:
+        # approving / rejecting a general request is the approval right, not the edit right (hr_access.py)
+        if refused := hr_access.approval_refusal(request, "request"):
+            return refused
+        if hr_access.out_of_branch(request, er.employee.branch_id if er.employee_id else None):
+            return Response({"error": "Request not found"}, status=404)
+    elif refused := hr_access.decision_only_refusal(request):
+        return refused
     if "status" in data:
         er.status = data["status"]
     if "hrNotes" in data:
@@ -335,6 +343,7 @@ def employee_request_action(request: Request, pk: int) -> Response:
                 message=f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
             )
         if er.status in ("approved", "rejected"):
+            hr_access.log_decision(request, "request", er, er.status, f"request '{er.subject}'")
             whatsapp_approvals.notify_decision(
                 "request", er, er.status, approver=er.handled_by or request.jwt_user.get("name", ""), role="hr",
                 comment=er.hr_notes,
@@ -619,6 +628,10 @@ def employee_permissions(request: Request) -> Response:
     # An employee may only request a date in the current month (plus last month on its 1st to 5th); HR is never limited.
     if refused := enforce_employee_date(request, parsed_date.isoformat()):
         return refused
+    # HR recording a permission that is already decided is a decision too: it needs the approval right.
+    if is_hr(request) and data.get("status") in ("approved", "rejected"):
+        if refused := hr_access.approval_refusal(request, PERMISSION_WORKFLOW):
+            return refused
     p = EmployeePermission.objects.create(
         employee=emp,
         date=parsed_date,
@@ -667,6 +680,14 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
     hr_name = get_hr_display_name(request)  # always server-derived: a client-supplied name could be spoofed
     comment = data["hrComment"] if "hrComment" in data else None
     deciding = approval.is_pending(PERMISSION_WORKFLOW, p) and new_status in ("approved", "rejected")
+    if deciding or new_status != prev_status:
+        # a decision, or a revision of one: the approval right, not the edit right (hr_access.py)
+        if refused := hr_access.approval_refusal(request, PERMISSION_WORKFLOW):
+            return refused
+        if hr_access.out_of_branch(request, p.employee.branch_id):
+            return Response({"error": "Permission not found"}, status=404)
+    elif refused := hr_access.decision_only_refusal(request):
+        return refused  # a type / comment edit by an account that may only decide
     if new_status != prev_status and not deciding and not approval.role_takes_part(PERMISSION_WORKFLOW, approval.HR):
         return Response(
             {"error": "HR is not part of the approval pipeline for Permission, so it cannot change this decision."},
@@ -699,6 +720,7 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
             resolve_permission(p, approval.HR, new_status, hr_name, comment)
         except approval.ApprovalError as exc:
             return approval.refusal(exc)
+        hr_access.log_decision(request, PERMISSION_WORKFLOW, p, new_status)
         return Response(_permission_json(p))
 
     # A comment / type edit, or a correction of a decision already made (approved <-> rejected).
@@ -712,6 +734,8 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
             {"role": approval.HR, "decision": new_status, "by": hr_name, "comment": comment, "revised": True}
         ]
     p.save()
+    if new_status != prev_status:
+        hr_access.log_decision(request, PERMISSION_WORKFLOW, p, new_status, f"permission request #{p.pk} (revised)")
     if new_status != prev_status and new_status in ("approved", "rejected"):
         whatsapp_approvals.notify_decision(
             "permission", p, p.status, approver=p.approved_by or "", role="hr", comment=p.hr_comment

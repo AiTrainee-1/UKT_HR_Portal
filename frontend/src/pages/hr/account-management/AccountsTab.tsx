@@ -24,9 +24,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import type { Role, HrUserItem } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
+import { CATEGORY_LABEL, type DisplayCategory } from "@/lib/hr-access";
 import {
   NONE,
   NO_FILTERS,
+  displayCategoryOf,
   filterAccounts,
   filtersActive,
   relativeTime,
@@ -36,7 +38,9 @@ import {
   type SortDir,
   type SortKey,
 } from "./logic";
-import { AccountAvatar, Chip, MdChip, StatusDot } from "./parts";
+import { AccountAvatar, CategoryChip, Chip, MdChip, StatusDot } from "./parts";
+
+const CATEGORY_FILTERS: DisplayCategory[] = ["super_admin", "md", "admin", "hr_manager", "hr_assistant"];
 
 type Props = {
   users: HrUserItem[];
@@ -223,6 +227,19 @@ export default function AccountsTab({
             )}
           </div>
           <div className="grid grid-cols-2 gap-2 lg:flex">
+            <Select value={filters.category ?? "all"} onValueChange={(v) => set({ category: v })}>
+              <SelectTrigger className="h-10 lg:w-44" aria-label="Filter by category" data-testid="filter-category">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All categories</SelectItem>
+                {CATEGORY_FILTERS.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {CATEGORY_LABEL[c]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Select value={filters.role} onValueChange={(v) => set({ role: v })}>
               <SelectTrigger className="h-10 lg:w-44" aria-label="Filter by role" data-testid="filter-role">
                 <SelectValue />
@@ -322,6 +339,9 @@ export default function AccountsTab({
                   <TableHeader>
                     <TableRow>
                       <SortHead label="Account" column="username" sort={sort} onSort={onSort} />
+                      <TableHead className="text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
+                        Category
+                      </TableHead>
                       <SortHead label="Role" column="role" sort={sort} onSort={onSort} />
                       <SortHead label="Branch" column="branch" sort={sort} onSort={onSort} />
                       <SortHead label="Status" column="status" sort={sort} onSort={onSort} />
@@ -365,6 +385,9 @@ export default function AccountsTab({
                               </p>
                             </div>
                           </div>
+                        </TableCell>
+                        <TableCell>
+                          <CategoryChip category={displayCategoryOf(u)} />
                         </TableCell>
                         <TableCell>
                           <RoleChip name={u.roleName} admin={u.isSuperAdmin} md={u.isMd} />
@@ -425,6 +448,7 @@ export default function AccountsTab({
                       <StatusDot active={u.isActive} />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
+                      <CategoryChip category={displayCategoryOf(u)} />
                       <RoleChip name={u.roleName} admin={u.isSuperAdmin} md={u.isMd} />
                       <BranchChip name={u.branchName} />
                     </div>

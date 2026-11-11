@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { MODULE_TREE, allModuleKeys } from "@/lib/permission-modules";
-import type { HrUserItem } from "@/lib/api-client/custom-hooks";
+import type { HrUserItem, Role } from "@/lib/api-client/custom-hooks";
 import {
   NONE,
   NO_FILTERS,
+  accountsOf,
+  defaultRoleFor,
+  displayCategoryOf,
+  rolesFor,
   clearOverride,
   emptyPermissions,
   filterAccounts,
@@ -277,5 +281,52 @@ describe("searching the modules", () => {
   it("finds nothing for nonsense", () => {
     expect(filterModules("zzzzzz")).toEqual([]);
     expect(visibleModuleCount(filterModules("zzzzzz"))).toBe(0);
+  });
+});
+
+describe("HR Manager / HR Assistant categories", () => {
+  const people: HrUserItem[] = [
+    user({ username: "root", isSuperAdmin: true, category: "admin" }),
+    user({ username: "md", isMd: true, category: "admin" }),
+    user({ username: "clerk", category: "admin" }),
+    user({ username: "old" }), // an older backend: no category at all
+    user({ username: "mgr", category: "hr_manager", fullName: "Meena" }),
+    user({ username: "asst", category: "hr_assistant", displayCategory: "hr_assistant" }),
+  ];
+  const role = (id: number, category: Role["category"]): Role => ({
+    id,
+    name: `r${id}`,
+    permissions: {},
+    isSystem: false,
+    category,
+  });
+
+  it("names every account's category, the Super Admin and the MD apart", () => {
+    expect(people.map(displayCategoryOf)).toEqual([
+      "super_admin",
+      "md",
+      "admin",
+      "admin",
+      "hr_manager",
+      "hr_assistant",
+    ]);
+    expect(accountsOf(people, "hr_manager").map((u) => u.username)).toEqual(["mgr"]);
+  });
+
+  it("filters the Accounts tab by category, and a search finds the category's name", () => {
+    expect(filterAccounts(people, { ...NO_FILTERS, category: "hr_assistant" }).map((u) => u.username)).toEqual([
+      "asst",
+    ]);
+    expect(filterAccounts(people, { ...NO_FILTERS, query: "hr manager" }).map((u) => u.username)).toEqual(["mgr"]);
+    expect(filtersActive({ ...NO_FILTERS, category: "md" })).toBe(true);
+    expect(filtersActive({ ...NO_FILTERS, category: undefined })).toBe(false);
+  });
+
+  it("offers each category the roles made for it first, then the ones for any account", () => {
+    const roles = [role(1, ""), role(2, "hr_assistant"), role(3, "hr_manager"), role(4, undefined)];
+    expect(rolesFor(roles, "hr_assistant").map((r) => r.id)).toEqual([2, 1, 4]);
+    expect(rolesFor(roles, "hr_manager").map((r) => r.id)).toEqual([3, 1, 4]);
+    expect(defaultRoleFor(roles, "hr_manager")?.id).toBe(3);
+    expect(defaultRoleFor(roles, "admin")).toBeUndefined();
   });
 });

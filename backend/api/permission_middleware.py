@@ -69,6 +69,11 @@ class HrPermissionMiddleware:
 
     def __call__(self, request):
         request.hr_branch_id = None
+        # The HR account behind this request (None for every other caller), and whether it was let through only to decide
+        # a request on a module it may just view (hr_access.DECISION_ROUTES).
+        request.hr_actor = None
+        request.hr_decision_only = False
+        rel_path = None
         if request.path.startswith("/api/"):
             rel_path = request.path[len("/api/"):]
             if not rel_path.startswith(EXEMPT_PREFIXES) and rel_path not in EXEMPT_PATHS:
@@ -76,7 +81,22 @@ class HrPermissionMiddleware:
                 if denial is not None:
                     return denial
 
-        return self.get_response(request)
+        actor = request.hr_actor
+        if actor is None:
+            return self.get_response(request)
+        from . import hr_access
+        from .hr_activity_views import capture_write, record_write
+
+        # The approval engine and every request's `approval` block read who is deciding from here (hr_access.py).
+        token = hr_access.set_actor(actor)
+        captured = capture_write(request, actor, rel_path)
+        try:
+            response = self.get_response(request)
+        finally:
+            hr_access.reset_actor(token)
+        if captured is not None:
+            record_write(request, response, captured)
+        return response
 
     def _check(self, request, rel_path):
         token = get_bearer_token(request)
@@ -103,6 +123,7 @@ class HrPermissionMiddleware:
             # Token references an account that no longer exists or has been
             # disabled -reject immediately rather than waiting for JWT expiry.
             return JsonResponse({"error": "account_disabled", "message": "This account is disabled."}, status=401)
+        request.hr_actor = hr_user
 
         # The executive portal's API belongs to the Managing Director alone. The view decorator (auth.require_md) is the
         # real gate; this is a second lock for the case where someone adds a /api/md/ view and forgets it, because the
@@ -146,6 +167,21 @@ class HrPermissionMiddleware:
         only_reads = request.method in SAFE_METHODS or (request.method == "POST" and rel_path in READ_ONLY_POST_PATHS)
         if level == "view" and only_reads:
             return None
+        if level == "view":
+            # Approving is a right of its own (hr_access.py): an account whose approvals are explicit may DECIDE a request
+            # on a module it may only view, when it may approve that kind. The view refuses anything else it is asked.
+            from . import hr_access
+
+            kind = hr_access.decision_kind(rel_path, request.method)
+            if kind and hr_access.uses_explicit_approvals(hr_user):
+                if hr_access.may_approve(hr_user, kind):
+                    request.hr_decision_only = True
+                    return None
+                # the plain reason ("HR Assistants can't approve missing-punch requests ...") rather than "no access"
+                return JsonResponse(
+                    {"error": hr_access.refusal_text(hr_user, kind), "code": "approval_not_permitted", "kind": kind},
+                    status=403,
+                )
 
         message = "You do not have access to this section."
         if hr_user.is_md and level == "view":

@@ -655,6 +655,14 @@ def decide(
         raise ApprovalError(f"This request was already {getattr(obj, 'status', 'decided')}.")
     if decision not in ("approved", "rejected"):
         raise ApprovalError("status must be 'approved' or 'rejected'")
+    if role == HR:
+        # The HR account deciding must hold the approval right for this kind (hr_access.py: role, per-account changes, and
+        # the HR Assistant locks). Editing a module never implies it. None when no HR account is behind the call.
+        from .hr_access import actor_refusal
+
+        refused = actor_refusal(key)
+        if refused:
+            raise ApprovalError(refused, status=403, code="approval_not_permitted")
     defn = definition(key)
     cfg = cfg or get_config(key)
     trail = trail_of(key, obj)
@@ -699,14 +707,28 @@ def refusal(exc: ApprovalError):
     return Response({"error": exc.message, "code": exc.code}, status=exc.status)
 
 
-def can_act(key: str, obj, role: str, cfg: Config | None = None, decision: str = "approved") -> bool:
-    """Whether `role` could decide this request right now under the pipeline (not counting who the individual HOD is)."""
+def can_act(
+    key: str, obj, role: str, cfg: Config | None = None, decision: str = "approved", *, for_actor: bool = True
+) -> bool:
+    """Whether `role` could decide this request right now under the pipeline (not counting who the individual HOD is).
+
+    For HR it also asks whether the HR account behind the current request may approve this kind (hr_access.py), so the
+    "waiting for you" lists and counts leave out what that account can't decide. That is a no-op for accounts on the old
+    "edit = approve" rule and for callers with no HR account; `for_actor=False` asks about the role alone."""
     if not is_pending(key, obj):
+        return False
+    if role == HR and for_actor and not _hr_actor_may(key):
         return False
     cfg = cfg or get_config(key)
     approved = approved_roles(trail_of(key, obj))
     ok, *_ = check_can_act(cfg.steps, approved, role, decision, definition(key).early_reject_roles)
     return ok
+
+
+def _hr_actor_may(key: str) -> bool:
+    from .hr_access import actor_may_approve
+
+    return actor_may_approve(key)
 
 
 def filter_actionable(key: str, objs, role: str, cfg: Config | None = None) -> list:
@@ -770,6 +792,13 @@ def progress(key: str, obj, cfg: Config | None = None) -> dict:
             )
         steps_json.append(item)
     defn = definition(key)
+    # HR's turn under the pipeline alone, and whether the HR account viewing may approve this kind at all (hr_access.py;
+    # always true for an account on the old rule and for non-HR callers): canAct / canReject for HR need both.
+    hr_turn = bool(pending) and (can_act(key, obj, HR, cfg, for_actor=False) if a else HR in cfg.steps[0].roles)
+    hr_reject_turn = bool(pending) and (
+        can_act(key, obj, HR, cfg, "rejected", for_actor=False) if a else HR in cfg.steps[0].roles
+    )
+    hr_permitted = _hr_actor_may(key)
     return {
         "workflow": key,
         "label": defn.label,
@@ -779,13 +808,17 @@ def progress(key: str, obj, cfg: Config | None = None) -> dict:
         "waitingFor": list(cfg.steps[pos].roles) if pending and pos is not None else [],
         "canAct": {
             HOD: bool(pending) and (can_act(key, obj, HOD, cfg) if a else HOD in cfg.steps[0].roles),
-            HR: bool(pending) and (can_act(key, obj, HR, cfg) if a else HR in cfg.steps[0].roles),
+            HR: hr_turn and hr_permitted,
         },
         # Rejecting can be allowed out of turn (a resignation HR may always reject), so it is told apart from approving.
         "canReject": {
             HOD: bool(pending) and (can_act(key, obj, HOD, cfg, "rejected") if a else HOD in cfg.steps[0].roles),
-            HR: bool(pending) and (can_act(key, obj, HR, cfg, "rejected") if a else HR in cfg.steps[0].roles),
+            HR: hr_reject_turn and hr_permitted,
         },
+        # Added 2026-11-10 (older readers ignore them): HR's turn under the pipeline whoever is looking, and whether the
+        # account looking may approve this kind of request ("your account can't approve these" instead of no buttons).
+        "hrTurn": hr_turn,
+        "hrPermitted": hr_permitted,
     }
 
 

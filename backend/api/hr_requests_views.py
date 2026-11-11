@@ -254,7 +254,8 @@ def _queue(prog: dict | None) -> str | None:
     else (HR is not in the pipeline at all)."""
     if not prog or prog.get("currentStep") is None:
         return None
-    if prog["canAct"]["hr"]:
+    # HR's turn under the pipeline, whether or not the account looking may approve this kind (hr_access.py)
+    if prog.get("hrTurn", prog["canAct"]["hr"]):
         return "hr"
     if "hod" in prog["waitingFor"]:
         return "hod"
@@ -644,22 +645,27 @@ def _parse_params(request: Request) -> tuple[dict | None, str | None]:
     return out, None
 
 
-def _access_by_kind(request: Request) -> dict[str, str]:
-    """The level ("view" | "edit") the caller has on each kind's module; a kind they cannot open at all is absent."""
+def _access_by_kind(request: Request) -> tuple[dict[str, str], dict[str, bool]]:
+    """The level ("view" | "edit") the caller has on each kind's module (a kind they cannot open at all is absent), and
+    whether they may approve / reject each kind (hr_access.py: a right of its own, apart from the level)."""
+    from . import hr_access
     from .models import HRUser
 
     user_id = (getattr(request, "jwt_user", None) or {}).get("hrUserId")
     hr = HRUser.objects.select_related("role").filter(pk=user_id, is_active=True).first() if user_id else None
     if hr is None:
-        return {}
+        return {}, {}
     permissions = effective_permissions(hr)
+    approvals = hr_access.effective_approvals(hr, permissions)
     out: dict[str, str] = {}
+    may: dict[str, bool] = {}
     for kind in KINDS:
         level = "edit" if hr.is_super_admin else resolve_permission(permissions, kind.module)
         if level in ("view", "edit"):
             # the Managing Director only looks at requests; the decision endpoints refuse the MD anyway
             out[kind.key] = "view" if hr.is_md else level
-    return out
+            may[kind.key] = (not hr.is_md) and approvals.get(kind.key, False)
+    return out, may
 
 
 def _stats_and_waiting(kinds: list[Kind], request: Request, month_start: datetime) -> tuple[dict, dict]:
@@ -748,7 +754,7 @@ def hr_requests(request: Request) -> Response:
     if error:
         return Response({"error": error}, status=400)
 
-    access = _access_by_kind(request)
+    access, may_approve = _access_by_kind(request)
     allowed = [k for k in KINDS if k.key in access]
     month_start = _day_start(ist_today().replace(day=1))
     totals, waiting_by_kind = _stats_and_waiting(allowed, request, month_start)
@@ -779,6 +785,8 @@ def hr_requests(request: Request) -> Response:
                 "label": kind.label,
                 "group": defn.group,
                 "access": access[kind.key],
+                # added 2026-11-10: whether this account may approve / reject this kind (apart from its access level)
+                "canApprove": may_approve.get(kind.key, False),
                 "mode": kind.mode,
                 "openPath": kind.open_path,
                 "openLabel": kind.open_label,

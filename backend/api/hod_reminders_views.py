@@ -83,7 +83,7 @@ def _visible_categories(request: Request):
     """The categories whose kind of request this login may open (the Requests page drops the others the same way)."""
     from .hr_requests_views import _access_by_kind
 
-    access = _access_by_kind(request)
+    access, _may_approve = _access_by_kind(request)
     return [c for c in CATEGORIES if c.workflow in access]
 
 

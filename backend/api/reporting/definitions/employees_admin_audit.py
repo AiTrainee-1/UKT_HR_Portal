@@ -43,6 +43,22 @@ AUDIT_MODULES = (
     ("mobile_app_login", "Mobile app login"),
     ("mobile_app_version", "Mobile app version"),
     ("reports", "Reports"),
+    # 2026-11-10: HR approvals (hr_access.log_decision) and the HR Manager / HR Assistant activity rows
+    # (hr_activity_views.record_write) are filed under the sidebar module they belong to
+    ("leave", "Leave & Holiday"),
+    ("requests", "Requests"),
+    ("missing_punch", "Missing Punch"),
+    ("geo_attendance", "Geo Attendance"),
+    ("recruitment", "Recruitment"),
+    ("settlement", "Settlement"),
+    ("shifts", "Manage Shift"),
+    ("production_payroll", "Production Payroll"),
+    ("salary", "Salary"),
+    ("salary_slip", "Salary Slip"),
+    ("promotion", "Promotion"),
+    ("increment", "Increment"),
+    ("outpass_visitors", "Outpass / Visitors"),
+    ("general", "Other"),
 )
 AUDIT_ACTIONS = (
     ("login", "Login"),

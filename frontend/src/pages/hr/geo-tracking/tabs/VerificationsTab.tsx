@@ -15,6 +15,7 @@ import {
 import { Chip, EmptyNote } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import {
   useOnDutyPunchVerificationsHR,
@@ -77,12 +78,15 @@ function PunchRow({
   onPhotos,
   onMap,
   onDecide,
+  canDecide = true,
 }: {
   v: OnDutyPunchVerificationItem;
   busy: boolean;
   onPhotos: (v: OnDutyPunchVerificationItem) => void;
   onMap: (v: OnDutyPunchVerificationItem) => void;
   onDecide: (v: OnDutyPunchVerificationItem, status: "approved" | "rejected") => void;
+  /** false: this account may not approve On-Duty punches (an HR Manager / HR Assistant without it). */
+  canDecide?: boolean;
 }) {
   const waitingOnRequest = !v.sessionApproved;
   return (
@@ -132,7 +136,7 @@ function PunchRow({
         </Button>
         {/* Per-punch actions stay for the exception case: one bad punch in an otherwise good day. The bulk buttons in the
             header are the normal path. */}
-        {v.status === "pending" && (
+        {v.status === "pending" && canDecide && (
           <>
             <Button
               size="sm"
@@ -168,6 +172,9 @@ type Asking =
 
 export default function VerificationsTab() {
   const { toast } = useToast();
+  // approving On-Duty punches is a right of its own (HR Manager / HR Assistant categories); unchanged for everyone else
+  const { user } = useAuth();
+  const canDecide = canApprove(user, "on_duty_punch");
   const [statusFilter, setStatusFilter] = useState<Filter>("pending");
   const { data: verifications, isLoading, isError, error, refetch } = useOnDutyPunchVerificationsHR(statusFilter);
   // the decision HR clicked, waiting for its confirmation
@@ -275,7 +282,7 @@ export default function VerificationsTab() {
                     </Note>
                   )}
                 </div>
-                {pendingCount > 0 && (
+                {pendingCount > 0 && canDecide && (
                   <div className="flex items-center gap-2" data-testid="verification-bulk">
                     <Button
                       size="sm"
@@ -312,6 +319,7 @@ export default function VerificationsTab() {
                     onPhotos={setPhotoOf}
                     onMap={setMapPunch}
                     onDecide={(p, s) => setAsking({ kind: "one", v: p, status: s })}
+                    canDecide={canDecide}
                   />
                 ))}
               </div>

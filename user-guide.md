@@ -80,13 +80,17 @@ The system is split into two separate portal views:
 ```
 Super Admin
     │
-    └── Admin (Full HR access)
-            │
-            ├── HR Staff (access per assigned modules)
-            │
-            ├── Department Heads / Approvers (mobile app approval)
-            │
-            └── Employees (self-service portal only)
+    ├── Admin (Full HR access)
+    │       │
+    │       ├── HR Staff (access per assigned modules)
+    │       │
+    │       ├── Department Heads / Approvers (mobile app approval)
+    │       │
+    │       └── Employees (self-service portal only)
+    │
+    ├── HR Manager   (pages + approvals from its role; supervises HR Assistants)
+    │
+    └── HR Assistant (restricted; never approves missing punches or attendance edits)
 ```
 
 ### Role Descriptions
@@ -117,6 +121,26 @@ Super Admin
 - **Accounts tab:** search by username, name, email, role or branch (every word you type has to match), narrow by **Active / Disabled**, **role** or **branch** (including "Company-wide only"), and sort by any column heading. Each row shows who the person is, their role and branch, whether the login is active, and when they last signed in. Edit, disable/enable and delete sit at the end of the row; deleting asks for confirmation first. The administrator account can be edited but not disabled or deleted.
 - **Roles & Permissions tab:** each role shows how many accounts use it (click to see them) and a bar of how much it opens up: *edit*, *view* only and *hidden* modules. Deleting a role that is in use tells you how many accounts will be left without one.
 - **Role editor:** every module has a **Hidden / View / Edit** switch. A section with sub-modules (Employees, Settings...) folds open; a sub-module with no setting of its own **follows its section**, and shows a ↺ button to go back to following it once you have set it yourself. Use the search box to find a module, **Set every module to...** for a quick start, and **Copy from another role** to begin from an existing role (nothing is saved until you press **Save**). Closing the editor with unsaved changes asks first. Role names must be unique.
+- **Role editor → Made for:** *Any account*, *HR Managers only* or *HR Assistants only*. A role made for one category can only be given to accounts of that category.
+- **Role editor → Approvals tab:** one switch per request type (Leave, Permission, Casual Leave, Missing Punch, Attendance edits, On-Duty requests, On-Duty punches, Gate Outpass, Other requests, Resignation, Advance), **separate from the Hidden / View / Edit levels**: a role can edit a module without approving its requests, or approve them with View only. Every role made before November 2026 shows **"Approvals follow Edit (the original rule)"**: whoever can edit a module can approve its requests, exactly as before. Press **Set approvals separately** to switch to individual switches, or **Follow Edit again** to go back. In a role made for HR Assistants, *Missing Punch* and *Attendance edits* are shown **locked** and stay off.
+- **Activity Logs:** every account change (category, role, the person's own access changes, activation), every role change and every approval or rejection by HR is recorded, with the old and new values.
+
+##### HR Manager and HR Assistant accounts (Super Admin only)
+
+Account Management has five tabs: **Accounts, Roles & Permissions, MD profile, HR Manager, HR Assistant**. Only the Super Admin can open it; HR Managers and HR Assistants cannot create, edit or deactivate any account.
+
+- **HR Manager:** works inside the pages, actions and approvals its role (plus any changes for that person) gives it, approves the requests HR Assistants may not (missing punches, attendance edits), and reviews the assistants' activity. It never sees Account Management or Activity Logs.
+- **HR Assistant:** a restricted login for day-to-day work (permissions, leave, compensation, payroll and attendance editing, as the role allows). It **can never approve a missing-punch request or an attendance edit**, whatever its role says: the Approve buttons are not shown, and the server refuses a direct call. Its edits take effect at once, as anyone else's do; it can still propose attendance changes, which go to the Department Head and then to an HR Manager or the Super Admin.
+- **Each tab** lists the accounts of that category with search and Active / Disabled pills: role, **Access** ("Follows role" or "N custom"), branch, status, last login, and buttons for the person's **activity**, **edit** and **deactivate / activate**. **Create HR Manager / Create HR Assistant** opens a form with the login details, the role (the starter role is picked for you), the branch, and **Access for this person**: *Pages & actions* (every module at the level this person gets; change one to make it **Custom** for them only, ↺ to follow the role again) and *Approvals* (the same switches as the role; locked items stay off for assistants). **Reset all to the role** removes every change for that person. The summary at the bottom says what the person can approve.
+- **Starter roles** (editable like any other role; they are new, no existing role or account was changed):
+  - **HR Manager - default:** Edit on the HR operations pages (Dashboard, Employees, Attendance, Manage Shift, Leave, Casual Leave, Missing Punch, Requests, Promotion, Increment, Bonus, ID Cards, Recruitment, Staff and Production Payroll, Compensation, Salary, Salary Slip, Settlement, Reports, Geo Attendance, Outpass / Visitors, Notifications, Chat), Manage Branch view only; **Hidden:** Settings, User Management, Login Devices, Mobile App Login, WhatsApp / SMS / Gmail Control. Approves every request type.
+  - **HR Assistant - default:** Edit on Requests (permissions), Leave, Casual Leave, Compensation, Staff and Production Payroll, Attendance; View on Dashboard, Employees, Manage Shift, Missing Punch, Salary, Salary Slip; everything else hidden. Approves **Leave** and **Permission** only; Missing Punch and Attendance edits are locked off.
+- **Branch:** an HR Manager limited to one branch only approves that branch's requests and only reviews that branch's assistants. Every HR decision is now also refused for a request of another branch (the lists never showed those).
+- **Who is signed in:** an HR Manager or HR Assistant sees their name and a small **HR Manager / HR Assistant** badge in the sidebar.
+
+##### HR Assistant activity (Super Admin and HR Managers)
+
+Sidebar → **Administration → Assistant Activity** (also the activity buttons on the HR Manager / HR Assistant tabs). Every change, approval, rejection and sign-in by the HR Assistants, newest first: when, who, what (with old → new values where they were recorded), filtered by person, module, action, dates or a search, and **Download CSV** for the page on screen. An HR Manager sees the assistants of their own branch (all assistants for a company-wide manager), and only the modules they can open themselves. The Super Admin sees everyone and can switch to the **HR Managers'** activity too. What is sent is kept without passwords, codes, bank details, photos or files.
 #### 🏗️ Department Head / Approver (HOD)
 - Not a separate login type — these are **regular employees** who have been designated as approvers via **User Management**.
 - They use the **mobile app** to approve or reject:

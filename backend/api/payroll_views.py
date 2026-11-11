@@ -2371,7 +2371,10 @@ def _hr_role_permissions(request) -> tuple[dict, bool]:
     )
     if hr_user is None:
         return {}, False
-    return (hr_user.role.permissions if hr_user.role else {}) or {}, hr_user.is_super_admin
+    from .permission_registry import effective_permissions
+
+    # the role, with an HR Manager / HR Assistant account's own changes on top
+    return effective_permissions(hr_user), hr_user.is_super_admin
 
 
 _SMTP_HOST_FORBIDDEN = re.compile(r"[\s/\\@:]")

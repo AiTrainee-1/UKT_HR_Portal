@@ -1,5 +1,17 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Crown, Shield, ShieldPlus, UserCog, UserPlus, Users, UserX } from "lucide-react";
+import {
+  AlertTriangle,
+  Briefcase,
+  CheckCircle2,
+  ClipboardList,
+  Crown,
+  Shield,
+  ShieldPlus,
+  UserCog,
+  UserPlus,
+  Users,
+  UserX,
+} from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
@@ -29,11 +41,21 @@ import {
   type Role,
 } from "@/lib/api-client/custom-hooks";
 import AccountsTab from "./account-management/AccountsTab";
+import CategoryAccountDialog from "./account-management/CategoryAccountDialog";
+import CategoryTab from "./account-management/CategoryTab";
 import HrUserDialog from "./account-management/HrUserDialog";
 import MdProfileTab from "./account-management/MdProfileTab";
 import RoleDialog from "./account-management/RoleDialog";
 import RolesTab from "./account-management/RolesTab";
-import { NONE, NO_FILTERS, roleUsage, summarizeAccounts, type AccountFilters } from "./account-management/logic";
+import {
+  NONE,
+  NO_FILTERS,
+  accountsOf,
+  roleUsage,
+  summarizeAccounts,
+  type AccountFilters,
+  type StaffCategory,
+} from "./account-management/logic";
 import { StatCard } from "./account-management/parts";
 
 /** "3 custom · 1 built in" (the built-in part only when there is one). */
@@ -62,6 +84,8 @@ export default function AccountManagement() {
     user: null,
   });
   const [roleDialog, setRoleDialog] = useState<{ open: boolean; role: Role | null }>({ open: false, role: null });
+  // HR Manager / HR Assistant accounts have their own dialog (role + this person's own changes)
+  const [staffDialog, setStaffDialog] = useState<{ category: StaffCategory; user: HrUserItem | null } | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
@@ -116,6 +140,16 @@ export default function AccountManagement() {
     }
   };
 
+  /** An HR Manager / HR Assistant opens its own dialog; every other account the usual one. */
+  const editAccount = (user: HrUserItem) => {
+    if (user.category === "hr_manager" || user.category === "hr_assistant") {
+      setStaffDialog({ category: user.category, user });
+    } else {
+      setUserDialog({ open: true, user });
+    }
+  };
+  const staffTab = tab === "hr_manager" || tab === "hr_assistant" ? (tab as StaffCategory) : null;
+
   const showAccountsOf = (role: Role) => {
     setFilters({ ...NO_FILTERS, role: String(role.id) });
     setTab("accounts");
@@ -134,11 +168,19 @@ export default function AccountManagement() {
             <div>
               <h2 className="text-2xl font-black text-gray-900">Account Management</h2>
               <p className="mt-0.5 text-sm text-muted-foreground">
-                Admin only: create HR portal logins and control what each one can see and edit.
+                Admin only: create HR portal logins and control what each one can see, edit and approve.
               </p>
             </div>
           </div>
-          {tab === "accounts" || tab === "md" ? (
+          {staffTab ? (
+            <Button
+              onClick={() => setStaffDialog({ category: staffTab, user: null })}
+              className="gap-1.5"
+              data-testid={`create-${staffTab}`}
+            >
+              <UserPlus size={15} /> {staffTab === "hr_manager" ? "Create HR Manager" : "Create HR Assistant"}
+            </Button>
+          ) : tab === "accounts" || tab === "md" ? (
             <Button
               onClick={() => setUserDialog({ open: true, user: null })}
               className="gap-1.5"
@@ -193,15 +235,32 @@ export default function AccountManagement() {
         </div>
 
         <Tabs value={tab} onValueChange={setTab}>
-          <PillTabs
-            items={[
-              { value: "accounts", label: "Accounts", icon: <Users size={14} />, count: users.length },
-              { value: "roles", label: "Roles & Permissions", icon: <Shield size={14} />, count: roleList.length },
-              { value: "md", label: "MD profile", icon: <Crown size={14} />, color: "#b8801c" },
-            ]}
-            value={tab}
-            onChange={setTab}
-          />
+          {/* five tabs are wider than a phone: the strip scrolls on its own, the page never does */}
+          <div className="-mx-1 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <PillTabs
+              items={[
+                { value: "accounts", label: "Accounts", icon: <Users size={14} />, count: users.length },
+                { value: "roles", label: "Roles & Permissions", icon: <Shield size={14} />, count: roleList.length },
+                { value: "md", label: "MD profile", icon: <Crown size={14} />, color: "#b8801c" },
+                {
+                  value: "hr_manager",
+                  label: "HR Manager",
+                  icon: <Briefcase size={14} />,
+                  count: accountsOf(users, "hr_manager").length,
+                  color: "#0f766e",
+                },
+                {
+                  value: "hr_assistant",
+                  label: "HR Assistant",
+                  icon: <ClipboardList size={14} />,
+                  count: accountsOf(users, "hr_assistant").length,
+                  color: "#6d28d9",
+                },
+              ]}
+              value={tab}
+              onChange={setTab}
+            />
+          </div>
 
           <TabsContent value="accounts">
             {summary.noRole > 0 && (
@@ -233,18 +292,33 @@ export default function AccountManagement() {
               filters={filters}
               onFilters={setFilters}
               onCreate={() => setUserDialog({ open: true, user: null })}
-              onEdit={(user) => setUserDialog({ open: true, user })}
+              onEdit={editAccount}
               onToggleActive={toggleActive}
               onDelete={(user) => setConfirm({ kind: "user", user })}
               busyId={busyId}
             />
           </TabsContent>
 
+          {(["hr_manager", "hr_assistant"] as const).map((category) => (
+            <TabsContent key={category} value={category}>
+              <CategoryTab
+                category={category}
+                users={users}
+                roles={roleList}
+                loading={usersLoading}
+                onCreate={() => setStaffDialog({ category, user: null })}
+                onEdit={(user) => setStaffDialog({ category, user })}
+                onToggleActive={toggleActive}
+                busyId={busyId}
+              />
+            </TabsContent>
+          ))}
+
           <TabsContent value="md">
             <MdProfileTab
               users={users}
               onCreateMd={() => setUserDialog({ open: true, user: null, md: true })}
-              onEditUser={(user) => setUserDialog({ open: true, user })}
+              onEditUser={editAccount}
             />
           </TabsContent>
 
@@ -270,6 +344,16 @@ export default function AccountManagement() {
             defaultMd={userDialog.md}
             open={userDialog.open}
             onClose={() => setUserDialog({ open: false, user: null })}
+          />
+        )}
+        {staffDialog && (
+          <CategoryAccountDialog
+            key={`${staffDialog.category}-${staffDialog.user?.id ?? "new"}`}
+            category={staffDialog.category}
+            user={staffDialog.user}
+            roles={roleList}
+            open
+            onClose={() => setStaffDialog(null)}
           />
         )}
         {roleDialog.open && (

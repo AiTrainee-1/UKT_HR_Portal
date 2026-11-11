@@ -1,7 +1,8 @@
 // Account Management: the rules behind the page, kept apart from the screens so they can be tested on their own.
 
 import { MODULE_TREE, allModuleKeys, resolvePermission, type ModuleNode } from "@/lib/permission-modules";
-import type { HrUserItem, PermissionLevel } from "@/lib/api-client/custom-hooks";
+import type { HrUserItem, PermissionLevel, Role } from "@/lib/api-client/custom-hooks";
+import { CATEGORY_LABEL, type Category, type DisplayCategory } from "@/lib/hr-access";
 
 export type Permissions = Record<string, PermissionLevel>;
 
@@ -55,12 +56,26 @@ export type AccountFilters = {
   role: string;
   /** "all", NONE (company-wide), or a branch id. */
   branch: string;
+  /** "all" or a display category ("super_admin", "md", "admin", "hr_manager", "hr_assistant"). Optional: older callers. */
+  category?: string;
 };
 
-export const NO_FILTERS: AccountFilters = { query: "", status: "all", role: "all", branch: "all" };
+export const NO_FILTERS: AccountFilters = { query: "", status: "all", role: "all", branch: "all", category: "all" };
 
 export const filtersActive = (f: AccountFilters) =>
-  f.query.trim() !== "" || f.status !== "all" || f.role !== "all" || f.branch !== "all";
+  f.query.trim() !== "" ||
+  f.status !== "all" ||
+  f.role !== "all" ||
+  f.branch !== "all" ||
+  (f.category ?? "all") !== "all";
+
+/** What the screens call the account: the server's displayCategory, or worked out the same way (an older backend). */
+export function displayCategoryOf(u: HrUserItem): DisplayCategory {
+  if (u.displayCategory) return u.displayCategory;
+  if (u.isSuperAdmin) return "super_admin";
+  if (u.isMd) return "md";
+  return u.category ?? "admin";
+}
 
 /** Every word typed must appear somewhere in the account's username, name, email, role or branch. */
 export function filterAccounts(users: HrUserItem[], f: AccountFilters): HrUserItem[] {
@@ -68,6 +83,7 @@ export function filterAccounts(users: HrUserItem[], f: AccountFilters): HrUserIt
   return users.filter((u) => {
     if (f.status === "active" && !u.isActive) return false;
     if (f.status === "disabled" && u.isActive) return false;
+    if (f.category && f.category !== "all" && displayCategoryOf(u) !== f.category) return false;
     if (
       f.role === NONE
         ? u.roleId != null || u.isSuperAdmin || u.isMd
@@ -86,6 +102,7 @@ export function filterAccounts(users: HrUserItem[], f: AccountFilters): HrUserIt
       u.roleName,
       u.branchName,
       u.branchId == null ? "all branches" : "",
+      CATEGORY_LABEL[displayCategoryOf(u)],
     ]
       .filter(Boolean)
       .join(" ")
@@ -150,6 +167,33 @@ export function relativeTime(iso: string | null | undefined, now: Date = new Dat
   const d = new Date(then);
   return `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
+
+// ─── HR Manager / HR Assistant tabs ─────────────────────────────────────────────────
+
+export type StaffCategory = "hr_manager" | "hr_assistant";
+
+/** What each category is for, in the owner's words (shown on its tab and in its dialog). */
+export const CATEGORY_PURPOSE: Record<StaffCategory, string> = {
+  hr_manager:
+    "Works inside the pages and approvals its role gives it, approves what HR Assistants can't (missing punches, attendance edits) and reviews their activity. Can't create or change any account.",
+  hr_assistant:
+    "Restricted login for day-to-day work: permissions, leave, compensation, payroll and attendance editing, as its role allows. Never approves missing-punch requests or attendance edits.",
+};
+
+/** The accounts of one category (never the Super Admin or the MD, who stay Admin accounts). */
+export const accountsOf = (users: HrUserItem[], category: Category): HrUserItem[] =>
+  users.filter((u) => displayCategoryOf(u) === category);
+
+/** The roles an account of this category may be given: made for it, or for any account. Its own ones first. */
+export function rolesFor(roles: Role[], category: Category): Role[] {
+  const own = (r: Role) => (r.category ?? "") === (category === "admin" ? "" : category);
+  const fits = roles.filter((r) => !r.category || r.category === category);
+  return [...fits.filter(own), ...fits.filter((r) => !own(r))];
+}
+
+/** The role a new account of this category starts with: the first role made for it (the starter role), if any. */
+export const defaultRoleFor = (roles: Role[], category: Category): Role | undefined =>
+  category === "admin" ? undefined : roles.find((r) => r.category === category);
 
 /** How many of the listed accounts use each role. */
 export function roleUsage(users: HrUserItem[]): Record<number, number> {

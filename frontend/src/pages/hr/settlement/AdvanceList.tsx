@@ -26,6 +26,8 @@ type Props = {
   onDelete: (row: SettlementRow) => void;
   /** The advance whose decision is being saved: its buttons are disabled meanwhile. */
   busyId?: number | null;
+  /** false: this account may not approve advances (an HR Manager / HR Assistant without it), so no Approve / Reject. */
+  canDecide?: boolean;
 };
 
 const startOf = (a: SettlementRow) =>
@@ -169,7 +171,17 @@ function DeleteButton({
   );
 }
 
-export default function AdvanceList({ rows, sort, onSort, onOpen, onApprove, onReject, onDelete, busyId }: Props) {
+export default function AdvanceList({
+  rows,
+  sort,
+  onSort,
+  onOpen,
+  onApprove,
+  onReject,
+  onDelete,
+  busyId,
+  canDecide = true,
+}: Props) {
   return (
     <>
       {/* wide screens: a table */}
@@ -219,7 +231,14 @@ export default function AdvanceList({ rows, sort, onSort, onOpen, onApprove, onR
                 <TableCell className="whitespace-nowrap text-xs text-gray-500">{formatDate(a.createdAt)}</TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-1">
-                    <Decide a={a} busy={busyId === a.id} onApprove={() => onApprove(a)} onReject={() => onReject(a)} />
+                    {canDecide && (
+                      <Decide
+                        a={a}
+                        busy={busyId === a.id}
+                        onApprove={() => onApprove(a)}
+                        onReject={() => onReject(a)}
+                      />
+                    )}
                     <DeleteButton a={a} onDelete={() => onDelete(a)} />
                     <Button
                       variant="ghost"
@@ -271,7 +290,7 @@ export default function AdvanceList({ rows, sort, onSort, onOpen, onApprove, onR
                 </Button>
               </span>
             </div>
-            {a.status === "pending" && (
+            {a.status === "pending" && canDecide && (
               <div onClick={(e) => e.stopPropagation()}>
                 <Decide
                   prefix="advance-card"

@@ -100,6 +100,8 @@ def hr_login(request: Request) -> Response:
         "username": account.username,
         "hrUserId": account.id,
         "isSuperAdmin": account.is_super_admin,
+        # A hint for the screens only: every access check reads the category from the database (hr_access.py).
+        "category": account.category,
         "jti": jti,
     }
     token = sign_token(token_payload, expires_in=timedelta(hours=12))
@@ -244,4 +246,10 @@ def auth_me(request: Request) -> Response:
         payload["permissions"] = permissions
         payload["branchId"] = hr_user.branch_id if hr_user else None
         payload["branchName"] = hr_user.branch.name if hr_user and hr_user.branch else None
+        # The account category (Admin / HR Manager / HR Assistant) and what it may approve, read from the database on every
+        # call like the permissions (never from the token): category, categoryLabel, displayCategory, approvalMode,
+        # approvals {kind: bool}, lockedApprovals. The API enforces the same rules (hr_access.py).
+        from .hr_access import access_json
+
+        payload.update(access_json(hr_user) if hr_user else {})
     return Response(payload)

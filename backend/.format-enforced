@@ -459,3 +459,6 @@ api/payroll_month_workflow_views.py
 api/tests_payroll_month_workflow.py
 api/super_admin_sync.py
 api/tests_super_admin_sync.py
+api/hr_access.py
+api/hr_activity_views.py
+api/tests_hr_categories.py

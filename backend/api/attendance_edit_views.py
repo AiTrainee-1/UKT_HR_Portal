@@ -23,6 +23,7 @@ from rest_framework.response import Response
 
 from . import approval_workflow as approval
 from . import attendance_edit as edit
+from . import hr_access
 from . import cl_balance
 from .audit_utils import log_action
 from .auth import get_hr_display_name, require_hr
@@ -124,6 +125,10 @@ def attendance_override_decision(request: Request, pk: int) -> Response:
     )
     if req is None:
         return _error("Request not found", 404)
+    # HR's approval of an attendance edit is the approval right, not the edit right: an HR Assistant never has it
+    # (hr_access.py). The row below is the decision's Activity Logs entry.
+    if refused := hr_access.approval_refusal(request, KEY):
+        return refused
     status_val = request.data.get("status")
     comment = str(request.data.get("comment") or "").strip() or None
     reviewer = get_hr_display_name(request)

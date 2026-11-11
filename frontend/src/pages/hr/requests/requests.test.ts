@@ -431,6 +431,35 @@ describe("decisionsHere: what HR may press on this page", () => {
     expect(here.why).toContain("view");
   });
 
+  it("approving is its own right: View + approve decides, Edit without it does not (HR Manager / Assistant)", () => {
+    expect(decisionsHere(item(), kind({ key: "leave", access: "view", canApprove: true }))).toMatchObject({
+      approve: true,
+      reject: true,
+    });
+    const here = decisionsHere(item(), kind({ key: "leave", access: "edit", canApprove: false, label: "Leave" }));
+    expect(here).toMatchObject(nothing);
+    expect(here.why).toContain("can't approve or reject Leave requests");
+  });
+
+  it("nothing when the server says this account may not approve the kind, with the reason", () => {
+    const blocked = approval({
+      workflow: "missing_punch",
+      canAct: { hod: false, hr: false },
+      hrTurn: true,
+      hrPermitted: false,
+    });
+    const here = decisionsHere(
+      item({ kind: "missing_punch", approval: blocked }),
+      kind({ key: "missing_punch", label: "Missing Punch" }),
+    );
+    expect(here).toMatchObject(nothing);
+    expect(here.why).toContain("An HR Manager or the Super Admin");
+  });
+
+  it("an older backend (no canApprove) keeps the access level rule", () => {
+    expect(decisionsHere(item(), kind({ key: "leave", access: "edit" })).approve).toBe(true);
+  });
+
   it("nothing when the Managing Director's pages mark the workflow view-only", () => {
     setViewOnlyWorkflows(["leave"]);
     expect(decisionsHere(item(), quick)).toMatchObject(nothing);

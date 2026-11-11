@@ -27,7 +27,7 @@ const ACTIVE_TONE: Record<PermissionLevel, string> = {
 };
 
 /** Hidden | View | Edit for one module. */
-function LevelToggle({
+export function LevelToggle({
   value,
   onChange,
   label,

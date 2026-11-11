@@ -5,7 +5,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval, email_service, whatsapp_approvals
+from . import approval_workflow as approval, email_service, hr_access, whatsapp_approvals
 from .view_common import error_response as _error
 from .auth import get_token_employee_id, require_auth, require_hr
 from .user_settings import settings_for
@@ -398,17 +398,18 @@ def resignation_action(request: Request, pk: int) -> Response:
 
     if action not in ("approve", "reject"):
         return _error("action must be 'approve' or 'reject'", 400)
+    # the approval right, not the edit right (hr_access.py), and only for the HR user's own branch
+    if refused := hr_access.approval_refusal(request, WORKFLOW):
+        return refused
+    if r.employee_id and hr_access.out_of_branch(request, r.employee.branch_id):
+        return _error("Not found", 404)
 
+    decision = "approved" if action == "approve" else "rejected"
     try:
-        resolve_resignation(
-            r,
-            approval.HR,
-            "approved" if action == "approve" else "rejected",
-            request.jwt_user.get("name", "HR"),
-            hr_comment,
-        )
+        resolve_resignation(r, approval.HR, decision, request.jwt_user.get("name", "HR"), hr_comment)
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    hr_access.log_decision(request, WORKFLOW, r, decision)
     return Response(_resignation_json(r))
 
 

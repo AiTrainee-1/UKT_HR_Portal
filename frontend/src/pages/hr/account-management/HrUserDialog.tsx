@@ -214,11 +214,14 @@ export default function HrUserDialog({ user, roles, users, defaultMd = false, op
                 <SelectValue placeholder="Select a role" />
               </SelectTrigger>
               <SelectContent>
-                {roles.map((r) => (
-                  <SelectItem key={r.id} value={String(r.id)}>
-                    {r.name}
-                  </SelectItem>
-                ))}
+                {/* an Admin account takes the roles made for any account (HR Manager / HR Assistant roles have their tabs) */}
+                {roles
+                  .filter((r) => !r.category || String(r.id) === roleId)
+                  .map((r) => (
+                    <SelectItem key={r.id} value={String(r.id)}>
+                      {r.name}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
             <p className="text-xs text-gray-500">

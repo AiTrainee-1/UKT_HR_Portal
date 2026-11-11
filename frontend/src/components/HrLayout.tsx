@@ -7,7 +7,7 @@ import { pageHasRefresh } from "@/lib/page-refresh";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
-import { watchMutatingControls } from "@/lib/view-only-lock";
+import { setApprovalsSeparate, watchMutatingControls } from "@/lib/view-only-lock";
 import { useSidebarCollapsed, useIsDesktop, toggleSidebarCollapsed } from "@/lib/sidebar-state";
 import { useMdEmbedded } from "@/lib/md/embed";
 import MdLayout from "@/components/md/MdLayout";
@@ -66,6 +66,8 @@ function HrShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!isViewOnly) return;
+    // an HR Manager / HR Assistant may approve on a page it can only view: Approve / Reject stay usable there
+    setApprovalsSeparate(user?.approvalMode === "explicit");
 
     // Watching document.body (not just the page's own content div) on
     // purpose: Radix Dialog/Popover/Select content portals straight to
@@ -75,7 +77,7 @@ function HrShell({ children }: { children: React.ReactNode }) {
     // content -this is what catches it once it mounts. One full pass now,
     // then only what changes, at most once a frame (see watchMutatingControls).
     return watchMutatingControls(document.body);
-  }, [isViewOnly, location]);
+  }, [isViewOnly, location, user?.approvalMode]);
 
   useLayoutEffect(() => {
     const el = mainRef.current;

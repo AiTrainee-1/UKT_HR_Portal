@@ -19,9 +19,16 @@ def build_log_entry(
     employee and writes them together with save_log_entries."""
     from .models import AuditLog
     user = getattr(request, "jwt_user", {}) or {}
+    # The middleware's generic HR activity row (hr_activity_views.record_write) is skipped when the view wrote its own.
+    try:
+        setattr(getattr(request, "_request", request), "_audit_logged", True)
+    except Exception:
+        pass
+    hr_user_id = user.get("hrUserId") if user.get("role", "hr") == "hr" else None
     return AuditLog(
         user_type=user.get("role", "hr"),
         user_id=user.get("userId") or user.get("employeeId"),
+        hr_user_id=hr_user_id if isinstance(hr_user_id, int) else None,
         user_name=user.get("name") or user.get("username") or "system",
         action=action,
         module=module,

@@ -107,6 +107,10 @@ def hr_dashboard_summary(request: Request) -> Response:
     pending_punch_verifications = scope_to_branch(
         OnDutyPunchVerification.objects, request, field="employee__branch_id"
     ).filter(status=OnDutyPunchVerification.STATUS_PENDING).count()
+    from .hr_access import actor_may_approve
+
+    if not actor_may_approve("on_duty_punch"):
+        pending_punch_verifications = 0  # nothing for this account to act on (unchanged for the original rule)
     live_tracking_enabled = scoped_employees.filter(location_tracking_enabled=True, status="active").count()
     production_payroll_pending = scope_to_branch(
         Payroll.objects, request, field="employee__branch_id"

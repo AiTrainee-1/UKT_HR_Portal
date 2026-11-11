@@ -17,6 +17,16 @@ class Role(models.Model):
     # See api/permission_middleware.py MODULE_REGISTRY for the canonical module_key list
     # and how each is enforced against incoming requests.
     permissions = models.JSONField(default=dict)
+    # {approval kind: bool} -who may APPROVE / REJECT each kind of request (api/hr_access.py APPROVAL_KINDS), kept apart
+    # from the hidden/view/edit levels above so that editing and approving are separate rights. NULL = the role has no
+    # approvals of its own and keeps the rule every role had before (approve = edit on the module that owns the request),
+    # which is what every role made before 2026-11-10 has, so their accounts behave exactly as before.
+    approvals = models.JSONField(null=True, blank=True, default=None, db_column="approvals")
+    # Which accounts the role is made for: "" = any account (every role made before 2026-11-10), "hr_manager" or
+    # "hr_assistant" (HRUser.category). A role made for HR Assistants can never switch on the approvals an HR Assistant
+    # may not have (hr_access.ASSISTANT_LOCKED). db_default: a backend still running the previous release inserts roles
+    # without this column.
+    category = models.CharField(max_length=20, blank=True, default="", db_default="", db_column="category")
     is_system = models.BooleanField(default=False, db_column="is_system")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
@@ -76,6 +86,18 @@ class HRUser(models.Model):
     is_md = models.BooleanField(default=False, db_default=False, db_column="is_md")
     md_assigned_at = models.DateTimeField(null=True, blank=True, db_column="md_assigned_at")
 
+    # ── Account category (api/hr_access.py) ─────────────────────────────────
+    # "admin" (every account made before 2026-11-10, the Super Admin and the MD included: nothing changes for them),
+    # "hr_manager" or "hr_assistant". Only a super administrator sets it (hr_user_views.py), and access is always read
+    # from here, never from the token. An HR Assistant can never approve missing-punch requests or attendance edits,
+    # whatever its role or overrides say (hr_access.ASSISTANT_LOCKED).
+    category = models.CharField(max_length=20, default="admin", db_default="admin", db_column="category")
+    # Per-account changes on top of the role: {"modules": {module key: "hidden"|"view"|"edit"},
+    # "approvals": {approval kind: bool}}. Empty = the account follows its role exactly. Only HR Manager / HR Assistant
+    # accounts carry any (hr_user_views.py refuses them on the others). NULL is read as empty (a row inserted by the
+    # previous release).
+    permission_overrides = models.JSONField(null=True, blank=True, default=dict, db_column="permission_overrides")
+
     last_login = models.DateTimeField(null=True, blank=True, db_column="last_login")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
@@ -131,6 +153,10 @@ class AuditLog(models.Model):
 
     user_type = models.TextField(default="hr", db_column="user_type")  # hr/employee/erp
     user_id = models.IntegerField(null=True, blank=True, db_column="user_id")
+    # The HR portal account that acted (HRUser.id), stamped from the token from 2026-11-10 on: an HR token carries no
+    # userId, so user_id above stays NULL for HR rows as before. A bare integer like user_id (no foreign key), so deleting
+    # an account never rewrites the trail. Older rows are NULL and stay readable; the HR Assistant activity view needs it.
+    hr_user_id = models.IntegerField(null=True, blank=True, db_index=True, db_column="hr_user_id")
     # Stamped from the acting user's branch at write time. AuditLog has no
     # other foreign key -user_id is a bare integer -so there is no way to
     # derive the branch later. Rows written before this column stay null and

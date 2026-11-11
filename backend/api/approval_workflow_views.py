@@ -72,7 +72,8 @@ def _waiting(key: str) -> dict:
     return {
         "total": len(rows),
         "hod": sum(1 for r in rows if approval.can_act(key, r, approval.HOD, cfg)),
-        "hr": sum(1 for r in rows if approval.can_act(key, r, approval.HR, cfg)),
+        # how many the HR role could decide (whoever is looking: this page configures the role, not one account)
+        "hr": sum(1 for r in rows if approval.can_act(key, r, approval.HR, cfg, for_actor=False)),
     }
 
 

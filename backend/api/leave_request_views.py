@@ -1,6 +1,6 @@
 """Leave requests: list/create, approve/reject, delete."""
 
-from . import approval_workflow as approval, whatsapp_approvals
+from . import approval_workflow as approval, hr_access, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from .clock import ist_today
@@ -241,7 +241,7 @@ def _leave_requests_create(request: Request) -> Response:
 def update_leave_status(request: Request, pk: int) -> Response:
     """HR decides a pending leave request (under the "leave" pipeline), edits its comment, or revises a decision that was
     already made (approved <-> rejected), which is a correction outside the pipeline and needs HR to be part of it."""
-    record = LeaveRequest.objects.filter(pk=pk).first()
+    record = LeaveRequest.objects.select_related("employee").filter(pk=pk).first()
     if not record:
         return _error("Not found", 404)
 
@@ -252,11 +252,22 @@ def update_leave_status(request: Request, pk: int) -> Response:
     hr_name = get_hr_display_name(request)
     comment = request.data["hrComment"] if "hrComment" in request.data else None
 
-    if approval.is_pending(WORKFLOW, record) and new_status in ("approved", "rejected"):
+    deciding = approval.is_pending(WORKFLOW, record) and new_status in ("approved", "rejected")
+    if deciding or new_status != old_status:
+        # a decision, or a revision of one: the approval right, not the edit right (hr_access.py)
+        if refused := hr_access.approval_refusal(request, WORKFLOW):
+            return refused
+        if hr_access.out_of_branch(request, record.employee.branch_id):
+            return _error("Not found", 404)
+    elif refused := hr_access.decision_only_refusal(request):
+        return refused  # a comment edit by an account that may only decide
+
+    if deciding:
         try:
             resolve_leave(record, approval.HR, new_status, hr_name, comment)
         except approval.ApprovalError as exc:
             return approval.refusal(exc)
+        hr_access.log_decision(request, WORKFLOW, record, new_status)
         return Response(_leave_with_name(record))
 
     if new_status != old_status and not approval.role_takes_part(WORKFLOW, approval.HR):
@@ -273,6 +284,8 @@ def update_leave_status(request: Request, pk: int) -> Response:
             {"role": approval.HR, "decision": new_status, "by": hr_name, "comment": comment, "revised": True}
         ]
     record.save()
+    if new_status != old_status:
+        hr_access.log_decision(request, WORKFLOW, record, new_status, f"leave request #{record.pk} (revised)")
 
     if new_status == "approved" and old_status != "approved":
         _deduct_leave_balance(record)

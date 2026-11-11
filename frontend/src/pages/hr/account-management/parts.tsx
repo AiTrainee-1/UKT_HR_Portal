@@ -1,5 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
-import { Crown } from "lucide-react";
+import { Briefcase, ClipboardList, Crown, ShieldCheck, UserCog } from "lucide-react";
+import { CATEGORY_LABEL, type DisplayCategory } from "@/lib/hr-access";
 import { cn } from "@/lib/utils";
 import { initials } from "./logic";
 
@@ -57,6 +58,34 @@ export function MdChip({ label = "MD" }: { label?: string }) {
     <span data-testid="md-chip" className="inline-flex">
       <Chip className="border-[#e0a83a]/60 bg-[#fff1cc] text-[#7a5410]">
         <Crown size={11} /> {label}
+      </Chip>
+    </span>
+  );
+}
+
+const CATEGORY_TONE: Record<DisplayCategory, string> = {
+  super_admin: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  md: "border-[#e0a83a]/50 bg-[#fffaf0] text-[#7a5410]",
+  admin: "border-slate-200 bg-slate-50 text-slate-700",
+  hr_manager: "border-teal-200 bg-teal-50 text-teal-800",
+  hr_assistant: "border-violet-200 bg-violet-50 text-violet-800",
+};
+
+const CATEGORY_ICON: Record<DisplayCategory, IconType> = {
+  super_admin: ShieldCheck,
+  md: Crown,
+  admin: UserCog,
+  hr_manager: Briefcase,
+  hr_assistant: ClipboardList,
+};
+
+/** The account's category (Super Admin / Managing Director / Admin / HR Manager / HR Assistant). */
+export function CategoryChip({ category, className }: { category: DisplayCategory; className?: string }) {
+  const Icon = CATEGORY_ICON[category];
+  return (
+    <span data-testid={`category-chip-${category}`} className="inline-flex">
+      <Chip className={cn(CATEGORY_TONE[category], className)}>
+        <Icon size={11} /> {CATEGORY_LABEL[category]}
       </Chip>
     </span>
   );

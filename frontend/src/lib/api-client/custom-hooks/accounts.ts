@@ -11,8 +11,19 @@ export type Role = {
   name: string;
   description?: string | null;
   permissions: Record<string, PermissionLevel>;
+  /** {request kind: may approve}, or null: the role keeps the old rule (approve = edit on the module). An older
+   *  backend sends nothing (same as null). */
+  approvals?: Record<string, boolean> | null;
+  /** "" = for any account; "hr_manager" / "hr_assistant" = only for accounts of that category. */
+  category?: "" | "hr_manager" | "hr_assistant";
   isSystem: boolean;
   createdAt?: string | null;
+};
+
+/** An HR Manager / HR Assistant account's own changes on top of its role. */
+export type PermissionOverrides = {
+  modules?: Record<string, PermissionLevel>;
+  approvals?: Record<string, boolean>;
 };
 
 export type HrUserItem = {
@@ -39,6 +50,12 @@ export type HrUserItem = {
   isHidden?: boolean;
   /** Per-account capability grants, e.g. { co: true }. */
   masterFeatures?: Record<string, boolean>;
+  /** "admin" (every account made before categories existed) | "hr_manager" | "hr_assistant". */
+  category?: "admin" | "hr_manager" | "hr_assistant";
+  /** The category, or "super_admin" / "md" for those two accounts. */
+  displayCategory?: "admin" | "hr_manager" | "hr_assistant" | "super_admin" | "md";
+  categoryLabel?: string;
+  permissionOverrides?: PermissionOverrides;
   lastLogin?: string | null;
   createdAt?: string | null;
 };
@@ -83,7 +100,13 @@ export const useListRoles = <TData = Role[]>(options?: UseQueryOptions<Role[], u
 
 export const useCreateRole = () =>
   useMutation({
-    mutationFn: (data: { name: string; description?: string; permissions?: Record<string, PermissionLevel> }) =>
+    mutationFn: (data: {
+      name: string;
+      description?: string;
+      permissions?: Record<string, PermissionLevel>;
+      approvals?: Record<string, boolean> | null;
+      category?: "" | "hr_manager" | "hr_assistant";
+    }) =>
       customFetch<Role>("/api/roles", {
         method: "POST",
         body: JSON.stringify(data),
@@ -128,6 +151,9 @@ export const useCreateHrUser = () =>
       isMd?: boolean;
       /** Take the MD identity from the current MD in the same step. */
       replaceMd?: boolean;
+      /** Set only here and on update, by the Super Admin; default "admin". */
+      category?: "admin" | "hr_manager" | "hr_assistant";
+      permissionOverrides?: PermissionOverrides;
     }) =>
       customFetch<HrUserItem>("/api/hr-users", {
         method: "POST",
@@ -233,6 +259,76 @@ export const useListAuditLogs = <TData = AuditLogsResponse>(
     ...options,
   });
 };
+
+// ── HR Assistant activity (Super Admin + HR Managers) ─────────────────────────
+
+export type HrActivityRow = {
+  id: number;
+  at: string | null;
+  accountId: number | null;
+  username: string | null;
+  fullName: string | null;
+  action: string;
+  module: string;
+  moduleLabel: string;
+  recordId: number | null;
+  description: string | null;
+  oldValues?: unknown;
+  newValues?: unknown;
+  ipAddress?: string | null;
+};
+
+export type HrActivityAccount = {
+  id: number;
+  username: string;
+  fullName?: string | null;
+  roleName?: string | null;
+  branchName?: string | null;
+  isActive: boolean;
+  lastLogin?: string | null;
+};
+
+export type HrActivityResponse = {
+  category: "hr_assistant" | "hr_manager";
+  total: number;
+  page: number;
+  pageSize: number;
+  results: HrActivityRow[];
+  summary: { today: number; last7Days: number; approvals: number };
+  accounts: HrActivityAccount[];
+  modules: { key: string; label: string }[];
+  /** Only the Super Admin may switch to the HR Managers' activity. */
+  canSeeManagers: boolean;
+};
+
+export type HrActivityFilters = {
+  category?: "hr_assistant" | "hr_manager";
+  accountId?: string;
+  module?: string;
+  action?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export const hrActivityQuery = (f: HrActivityFilters): string => {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(f)) {
+    if (value !== undefined && value !== null && value !== "" && value !== "all") qs.set(key, String(value));
+  }
+  const q = qs.toString();
+  return `/api/hr-activity${q ? `?${q}` : ""}`;
+};
+
+export const useHrActivity = (filters: HrActivityFilters, enabled = true) =>
+  useQuery<HrActivityResponse>({
+    queryKey: ["/api/hr-activity", filters],
+    queryFn: ({ signal }) => customFetch<HrActivityResponse>(hrActivityQuery(filters), { signal }),
+    placeholderData: (previous) => previous,
+    enabled,
+  });
 
 // ── Login Devices ─────────────────────────────────────────────────────────────
 

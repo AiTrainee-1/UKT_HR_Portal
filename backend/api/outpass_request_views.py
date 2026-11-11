@@ -20,7 +20,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval, whatsapp_approvals
+from . import approval_workflow as approval, hr_access, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
 from . import gate_qr
@@ -247,11 +247,17 @@ def outpass_request_hr_status(request: Request, pk: int) -> Response:
     status = request.data.get("status")
     if status not in ("approved", "rejected"):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+    # the approval right, not the edit right (hr_access.py), and only for the HR user's own branch
+    if refused := hr_access.approval_refusal(request, WORKFLOW):
+        return refused
+    if hr_access.out_of_branch(request, req.employee.branch_id):
+        return Response({"error": "Outpass request not found"}, status=404)
 
     try:
         resolve_outpass_request(req, status, get_hr_display_name(request), "hr", request.data.get("comment"))
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    hr_access.log_decision(request, WORKFLOW, req, status, f"Outpass request for {req.destination}")
     return Response(_outpass_request_json(req))
 
 

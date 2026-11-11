@@ -25,7 +25,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval, whatsapp_approvals
+from . import approval_workflow as approval, hr_access, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .branch_scope import scope_to_branch
 from .hod_scope import managers_to_notify
@@ -254,10 +254,16 @@ def missing_punch_request_hr_status(request: Request, pk: int) -> Response:
     status_val = request.data.get("status")
     if status_val not in ("approved", "rejected") and approval.is_pending(WORKFLOW, req):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+    # the approval right, not the edit right: an HR Assistant never has it for missing punches (hr_access.py)
+    if refused := hr_access.approval_refusal(request, WORKFLOW):
+        return refused
+    if hr_access.out_of_branch(request, req.employee.branch_id):
+        return Response({"error": "Missing Punch request not found"}, status=404)
 
     reviewer = get_hr_display_name(request)
     try:
         resolve_missing_punch(req, approval.HR, status_val, reviewer, request.data.get("comment"))
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    hr_access.log_decision(request, WORKFLOW, req, status_val)
     return Response(_missing_punch_dict(req))

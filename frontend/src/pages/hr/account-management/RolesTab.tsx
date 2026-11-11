@@ -5,8 +5,20 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import type { HrUserItem, Role } from "@/lib/api-client/custom-hooks";
+import { APPROVAL_KINDS, approvalCount } from "@/lib/hr-access";
 import { levelCounts, roleUsage, type LevelCounts } from "./logic";
-import { Chip } from "./parts";
+import { CategoryChip, Chip } from "./parts";
+
+/** What the role lets its accounts approve: its own switches, or the original rule (edit = approve). */
+function ApprovalsLine({ role }: { role: Role }) {
+  return (
+    <p className="text-[11px] text-gray-500" data-testid={`role-approvals-${role.id}`}>
+      {role.approvals
+        ? `Approves ${approvalCount(role.approvals)} of ${APPROVAL_KINDS.length} request types`
+        : "Approvals follow Edit"}
+    </p>
+  );
+}
 
 type Props = {
   roles: Role[];
@@ -146,6 +158,7 @@ export default function RolesTab({ roles, users, loading, onCreate, onEdit, onDe
                                 {r.isSystem && (
                                   <Chip className="border-gray-200 bg-gray-100 text-gray-500">System</Chip>
                                 )}
+                                {r.category && <CategoryChip category={r.category} />}
                               </p>
                               <p className="max-w-[20rem] truncate text-xs text-gray-500">
                                 {r.description || "No description"}
@@ -156,6 +169,7 @@ export default function RolesTab({ roles, users, loading, onCreate, onEdit, onDe
                         <TableCell>{accountsLink(r)}</TableCell>
                         <TableCell>
                           <AccessBar counts={levelCounts(r.permissions)} id={r.id} />
+                          <ApprovalsLine role={r} />
                         </TableCell>
                         <TableCell className="text-right">{actions(r)}</TableCell>
                       </TableRow>
@@ -175,11 +189,13 @@ export default function RolesTab({ roles, users, loading, onCreate, onEdit, onDe
                         <p className="flex flex-wrap items-center gap-1.5 font-semibold">
                           {r.name}
                           {r.isSystem && <Chip className="border-gray-200 bg-gray-100 text-gray-500">System</Chip>}
+                          {r.category && <CategoryChip category={r.category} />}
                         </p>
                         <p className="text-xs text-gray-500">{r.description || "No description"}</p>
                       </div>
                     </div>
                     <AccessBar counts={levelCounts(r.permissions)} id={r.id} />
+                    <ApprovalsLine role={r} />
                     <div className="flex items-center justify-between">
                       {accountsLink(r)}
                       {actions(r)}

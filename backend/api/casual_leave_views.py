@@ -36,7 +36,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval, cl_balance, whatsapp_approvals
+from . import approval_workflow as approval, cl_balance, hr_access, whatsapp_approvals
 from .audit_utils import log_action
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name, is_hr
 from .branch_scope import scope_to_branch
@@ -465,12 +465,18 @@ def casual_leave_detail(request: Request, pk: int) -> Response:
     status_val = request.data.get("status")
     if status_val not in ("approved", "rejected"):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
+    # the approval right, not the edit right (hr_access.py), and only for the HR user's own branch
+    if refused := hr_access.approval_refusal(request, WORKFLOW):
+        return refused
+    if hr_access.out_of_branch(request, cl.employee.branch_id):
+        return Response({"error": "Casual leave request not found"}, status=404)
 
     reviewer = get_hr_display_name(request)
     try:
         resolve_casual_leave(cl, approval.HR, status_val, reviewer, request.data.get("comment"))
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    hr_access.log_decision(request, WORKFLOW, cl, status_val)
     return Response(_cl_dict(cl))
 
 

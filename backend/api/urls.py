@@ -77,6 +77,7 @@ from .email_control_views import (
     email_employees, email_messages, email_overview,
 )
 from .hr_requests_views import hr_requests
+from .hr_activity_views import hr_activity
 from .whatsapp_views import (
     whatsapp_status, whatsapp_templates, whatsapp_template_update, whatsapp_media, whatsapp_webhook,
 )
@@ -315,6 +316,8 @@ urlpatterns = [
 
     # ── Requests hub (read-only, every kind of request in one list) ─────────
     path("hr-requests", hr_requests),
+    # HR Assistant activity (Super Admin + HR Managers; the view checks who may look): hr_activity_views.py
+    path("hr-activity", hr_activity),
 
     # ── Leave & Holiday ─────────────────────────────────────────────────────
     path("leave-types", leave_types),

@@ -145,13 +145,33 @@ MD_VIEW_ONLY: frozenset[str] = frozenset({"leave", "requests"})
 _LEVEL_RANK = {"hidden": 0, "view": 1, "edit": 2}
 
 
+def apply_module_overrides(permissions: dict, overrides: dict) -> dict:
+    """The role's {module: level} with an account's own changes on top. A change on a section is a change of the whole
+    section: its sub-modules follow it, unless the account has a change of its own for that sub-module too."""
+    out = dict(permissions)
+    children = {node["key"]: [c["key"] for c in node.get("children", [])] for node in MODULE_TREE}
+    for key in sorted(overrides, key=lambda k: k.count(".")):  # sections before their sub-modules
+        out[key] = overrides[key]
+        for child in children.get(key, ()):
+            if child not in overrides:
+                out.pop(child, None)
+    return out
+
+
 def effective_permissions(hr_user) -> dict:
-    """What an HR account may do in each module: its role's permissions and, for the Managing Director, MD_HR_GRANTS.
+    """What an HR account may do in each module: its role's permissions, the account's own changes (HR Manager / HR
+    Assistant accounts, hr_access.py) and, for the Managing Director, MD_HR_GRANTS.
 
     A grant only ever raises a level, except that MD_VIEW_ONLY modules are held at "view". The result is a flat
     {module key: level} dict like Role.permissions, so every consumer (the permission middleware, /auth/me, the per-view
     checks) reads it the same way."""
     permissions = dict((hr_user.role.permissions if hr_user is not None and hr_user.role else {}) or {})
+    if hr_user is not None and getattr(hr_user, "permission_overrides", None):
+        from .hr_access import overrides_of  # (imports this module)
+
+        changes = overrides_of(hr_user)["modules"]
+        if changes:
+            permissions = apply_module_overrides(permissions, changes)
     if hr_user is None or not getattr(hr_user, "is_md", False) or not getattr(hr_user, "is_active", True):
         return permissions
     for key, level in MD_HR_GRANTS.items():
