@@ -927,6 +927,17 @@ def _early_out_run(ctx):
             "Early-Out detection is switched off in Attendance settings (it is off by default), so no new days are flagged; "
             "any rows shown were flagged while it was on."
         )
+    if settings.early_out_penalty_enabled:
+        notes.append(
+            f"Penalty Early Out is on: a day that left more than {settings.early_out_penalty_minutes} minutes early loses "
+            f"{Decimal(str(settings.early_out_penalty_deduction)):.2f} shift instead and is listed in the Penalty Early Out "
+            "report"
+            + (
+                " (and, as Settings asks, also here as an Early-Out mark)."
+                if settings.early_out_penalty_in_late_pool
+                else ", not here: it is not an Early-Out mark in the late pool."
+            )
+        )
     if sub_note:
         notes.append(sub_note)
     notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
@@ -953,6 +964,134 @@ register(
         ),
         columns=_EARLY_COLS,
         run=_early_out_run,
+    )
+)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  penalty-early-out (owner 2026-11-13)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_PENALTY_EARLY_OUT_COLS = (
+    *EMP_COLS_SHORT,
+    ColumnSpec("date", "Date", DATE, 1.4),
+    ColumnSpec("day", "Day", TEXT, 0.6),
+    ColumnSpec("shift", "Shift", TEXT, 1.4),
+    ColumnSpec("lastPunch", "Last punch", TIME, 0.9),
+    ColumnSpec("earlyMinutes", "Left early by (min)", MINUTES, 1.0, total="sum"),
+    ColumnSpec("permission", "Permission", BADGE, 1.3),
+    ColumnSpec("shiftDeducted", "Shift deducted", NUMBER, 0.9, total="sum"),
+    ColumnSpec("amount", "Amount (day rate x shift)", CURRENCY, 1.2, total="sum"),
+    ColumnSpec("shiftsEarned", "Day earned", NUMBER, 0.8),
+    ColumnSpec("inLatePool", "Late pool", BADGE, 1.0),
+    ColumnSpec("reason", "Engine reason", TEXT, 3.4),
+)
+
+
+def _penalty_early_out_run(ctx):
+    """Every stored day the engine judged a Penalty Early Out: the last punch more than the penalty minutes before the
+    day's effective end, so a part of a shift came off the day (already out of the shifts earned that payroll pays).
+    The amount is what that part of the day is worth at payroll's own day rate (salary / the company month)."""
+    from api.payroll_views import staff_daily_rate
+
+    d_from, d_to = ctx.date_from, ctx.date_to
+    settings = payroll_settings()
+    pcfg = production_config()
+    roster = Roster(ctx, d_from, d_to)
+    people_by_id = people(ctx)
+
+    qs = day_records(ctx, d_from, d_to, penalty_early_out=True)
+    records = [r for r in qs.order_by("date", "id")[: ctx.row_limit] if r.employee_id in people_by_id]
+
+    rates: dict[tuple[int, int, int], Decimal | None] = {}
+    built = []
+    for rec in records:
+        emp = people_by_id[rec.employee_id]
+        shift_name, _end, _grace = _evening_basis(emp, rec, roster, pcfg)
+        key = (emp.id, rec.date.year, rec.date.month)
+        if key not in rates:
+            rates[key] = staff_daily_rate(emp, rec.date.month, rec.date.year)
+        deducted = Decimal(str(rec.penalty_deduction or 0))
+        rate = rates[key]
+        built.append(
+            (
+                emp_sort_key(emp),
+                rec.date,
+                {
+                    **emp_cells(emp),
+                    "date": rec.date.isoformat(),
+                    "day": day_abbr(rec.date),
+                    "shift": shift_name or "No shift assigned",
+                    "lastPunch": hm(rec.last_punch),
+                    "earlyMinutes": int(rec.early_out_minutes or 0) or None,
+                    "permission": _permission_badge(rec.evening_permission_applied, rec.evening_permission_excess),
+                    "shiftDeducted": float(deducted),
+                    "amount": float(_d2(rate * deducted)) if rate is not None else None,
+                    "shiftsEarned": float(rec.shifts_earned or 0),
+                    "inLatePool": "Also counted" if rec.early_leave else "Not counted",
+                    "reason": rec.late_reason,
+                },
+            )
+        )
+    built.sort(key=lambda t: (t[0], t[1]))
+    rows = [t[2] for t in built]
+
+    minutes = [r["earlyMinutes"] for r in rows if r["earlyMinutes"] is not None]
+    summary = [
+        {"label": "Penalty Early Outs", "value": len(rows), "format": "integer"},
+        {"label": "Employees affected", "value": len({r["employeeCode"] for r in rows}), "format": "integer"},
+        {"label": "Shifts deducted", "value": r2(sum(r["shiftDeducted"] for r in rows)), "format": "number"},
+        {
+            "label": "Amount",
+            "value": r2(sum(r["amount"] for r in rows if r["amount"] is not None)),
+            "format": "currency",
+        },
+        {"label": "Average early (min)", "value": _avg(minutes), "format": "number"},
+    ]
+    rows, sub_note = subtotals_within_limit(
+        ctx, rows, lambda r: r["department"], ["earlyMinutes", "shiftDeducted", "amount"]
+    )
+
+    threshold = int(settings.early_out_penalty_minutes or 0)
+    deduction = Decimal(str(settings.early_out_penalty_deduction or 0))
+    measured = "the shift end minus its grace" if settings.early_out_penalty_from == "deadline" else "the shift end"
+    notes = [
+        f"Each row is a day whose last punch was more than {threshold} minutes before {measured} (an approved in-cap "
+        f"Evening Early-Out permission or a company-announced early-out moves that end first): {deduction:.2f} shift came "
+        "off the day. Leaving early by up to that many minutes is an ordinary Early-Out (see the Early Departure report).",
+        "The shift deducted is already out of the day's shifts earned, so payroll pays the reduced day; the amount is that "
+        "part of the day at payroll's own day rate (salary / the company month) and is NOT deducted a second time.",
+        "A Half Day (no punch in the second half), a compensation day, a birthday, a half-day leave or half-day CL is never "
+        "also a Penalty Early Out; today's day is judged only after the shift's end plus grace.",
+        "Late pool: 'Not counted' = charged only here (the default); 'Also counted' = Settings asks for it to be one "
+        "Early-Out mark as well.",
+    ]
+    if not settings.early_out_penalty_enabled:
+        notes.append(
+            "Penalty Early Out is switched off in Settings -> Attendance (off by default), so no new days are judged; any "
+            "rows shown were judged while it was on."
+        )
+    if sub_note:
+        notes.append(sub_note)
+    notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
+    return ReportResult(rows=rows, summary=summary, notes=notes)
+
+
+register(
+    ReportSpec(
+        id="penalty-early-out",
+        title="Penalty Early Out",
+        description="Days an employee left more than the penalty minutes before shift end: minutes early, shift deducted, amount.",
+        category="attendance",
+        icon="LogOut",
+        tags=("penalty early out", "early out penalty", "left early", "early departure", "deduction"),
+        modules=MODULES,
+        filters=(
+            date_range("thisMonth", max_days=_RANGE_DAYS),
+            *scope_filters(employment_default="staff"),
+        ),
+        columns=_PENALTY_EARLY_OUT_COLS,
+        run=_penalty_early_out_run,
     )
 )
 

@@ -698,6 +698,37 @@ class PayrollSettings(models.Model):
         help_text="Staff only. Flag a punch before (shift end - grace) as Evening Early-Out. Off by default.",
     )
 
+    # ── Penalty Early Out (staff only, owner 2026-11-13) ────────────────────
+    # Leaving MORE than early_out_penalty_minutes before the shift end is a Penalty Early Out: the day loses
+    # early_out_penalty_deduction of a shift (1.00 -> 0.75) and, unless early_out_penalty_in_late_pool is on, it is NOT
+    # a mark in the late pool (it is charged once, here). Leaving earlier than the end but within the minutes stays an
+    # ordinary Evening Early-Out (a late-pool mark, when that switch is on). Measured from the day's effective end: an
+    # approved in-cap Evening Early-Out permission or a company-announced early-out moves it first.
+    # early_out_penalty_from: "shift_end" (the shift's end time, the owner's rule) or "deadline" (shift end - grace, the
+    # Early-Out deadline). A Half Day (no punch in the second half) is never also a Penalty Early Out. Company-wide.
+    # db_default on all five: an old backend instance still running during a rolling deploy inserts rows without them.
+    early_out_penalty_enabled = models.BooleanField(
+        default=False, db_default=False, db_column="early_out_penalty_enabled",
+        help_text="Staff only. Leaving more than the penalty minutes before the shift end deducts a part of the day.",
+    )
+    early_out_penalty_minutes = models.IntegerField(
+        default=75, db_default=75, db_column="early_out_penalty_minutes",
+        help_text="Staff only. Leaving MORE than this many minutes before the shift end is a Penalty Early Out (1-720).",
+    )
+    early_out_penalty_deduction = models.DecimalField(
+        max_digits=3, decimal_places=2, default=Decimal("0.25"), db_default=Decimal("0.25"),
+        db_column="early_out_penalty_deduction",
+        help_text="Staff only. Shift taken off the day for each Penalty Early Out (0.01-1).",
+    )
+    early_out_penalty_from = models.CharField(
+        max_length=12, default="shift_end", db_default="shift_end", db_column="early_out_penalty_from",
+        help_text="Staff only. 'shift_end' = minutes before the shift end; 'deadline' = before shift end minus grace.",
+    )
+    early_out_penalty_in_late_pool = models.BooleanField(
+        default=False, db_default=False, db_column="early_out_penalty_in_late_pool",
+        help_text="Staff only. Also count a Penalty Early Out as one Early-Out mark in the late pool. Off by default.",
+    )
+
     # ── Half-Day Detection (staff) ─────────────────────────────────────────
     # Replaces the old punctuality-window escalation entirely: Full/Half/
     # Absent is now decided purely by whether the employee has a punch in

@@ -227,6 +227,11 @@ export type AttendanceEmployeeHistory = {
     status: string;
     isLate: boolean;
     isEarlyOut?: boolean;
+    /** Penalty Early Out (2026-11-13): left more than the penalty minutes early; penaltyDeduction is already out of the day. */
+    isPenaltyEarlyOut?: boolean;
+    penaltyDeduction?: number;
+    /** Minutes the last punch was before the shift end, on an Early Out or Penalty Early Out day. */
+    earlyOutMinutes?: number;
     isHalfShift: boolean;
     // Plain-language reason for a Late / Early Out flag -not sent by this endpoint today, read if it ever is.
     lateReason?: string | null;
@@ -488,6 +493,11 @@ export type EmployeeShiftMonthlyStats = {
     isHalfShift: boolean;
     isLate?: boolean;
     isEarlyOut?: boolean;
+    /** Penalty Early Out (2026-11-13): left more than the penalty minutes early; penaltyDeduction is already out of the day. */
+    isPenaltyEarlyOut?: boolean;
+    penaltyDeduction?: number;
+    /** Minutes the last punch was before the shift end, on an Early Out or Penalty Early Out day. */
+    earlyOutMinutes?: number;
     lateMorning: boolean;
     lateReturn: boolean;
     lateAfternoon?: boolean;
@@ -818,6 +828,11 @@ export type ReportLogDailyRow = DayPermissionFlags & {
   status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
   isLate: boolean;
   isEarlyOut?: boolean;
+  /** Penalty Early Out (2026-11-13): left more than the penalty minutes early; penaltyDeduction is already out of the day. */
+  isPenaltyEarlyOut?: boolean;
+  penaltyDeduction?: number;
+  /** Minutes the last punch was before the shift end, on an Early Out or Penalty Early Out day. */
+  earlyOutMinutes?: number;
   lateAfternoon: boolean;
   permissionAfternoon: boolean;
   isCompensationDay: boolean;
@@ -979,6 +994,11 @@ export type AttendanceSearchDay = DayPermissionFlags & {
   status: "present" | "half_shift" | "absent" | "on_leave" | "holiday";
   isLate: boolean;
   isEarlyOut?: boolean;
+  /** Penalty Early Out (2026-11-13): left more than the penalty minutes early; penaltyDeduction is already out of the day. */
+  isPenaltyEarlyOut?: boolean;
+  penaltyDeduction?: number;
+  /** Minutes the last punch was before the shift end, on an Early Out or Penalty Early Out day. */
+  earlyOutMinutes?: number;
   isHalfShift: boolean;
   lateAfternoon?: boolean;
   // Plain-language reason for a Late / Early Out flag -not sent by this endpoint today, read if it ever is.

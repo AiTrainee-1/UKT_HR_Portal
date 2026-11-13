@@ -587,6 +587,7 @@ function CalendarDay({
   const found = marksOf(day);
   const lateIn = !!day.isLate || found.includes("late");
   const earlyOut = !!day.isEarlyOut || flags.includes("early_out");
+  const penalty = !!day.isPenaltyEarlyOut;
   const marks = found.filter((m) => m !== "late");
   // a day with a permission, On-Duty or missed-punch category is filled in that category's colour (with a solid edge)
   const fill = fillMark(day);
@@ -599,6 +600,7 @@ function CalendarDay({
     kind === "holiday" ? (day.holidayName ?? "") : "",
     lateIn && kind !== "late" ? "Late In" : "",
     earlyOut && kind !== "early" ? "Early Out" : "",
+    penalty ? `Penalty Early Out, ${(day.penaltyDeduction ?? 0).toFixed(2)} shift deducted` : "",
     // the engine's note ends with a full stop and the parts are joined by one
     compensation ? compensation.title.replace(/\.$/, "") : "",
     [day.firstIn ? `first in ${timeText(day.firstIn)}` : "", day.lastOut ? `last out ${timeText(day.lastOut)}` : ""]
@@ -679,6 +681,14 @@ function CalendarDay({
                 Early Out
               </span>
               <span className="inline-block h-2 w-2 rounded-full bg-fuchsia-600 sm:hidden" />
+            </span>
+          )}
+          {penalty && (
+            <span data-mark="penalty_early_out" title="Penalty Early Out">
+              <span className="hidden whitespace-nowrap rounded bg-red-600 px-1 text-[9px] font-bold leading-4 text-white sm:inline-block">
+                Penalty EO
+              </span>
+              <span className="inline-block h-2 w-2 rounded-full bg-red-600 sm:hidden" />
             </span>
           )}
           {marks.map((mark) => (
@@ -789,13 +799,18 @@ function DayPanel({
           ))}
         </ul>
       )}
-      {(day.isLate || day.isEarlyOut) && (
+      {(day.isLate || day.isEarlyOut || day.isPenaltyEarlyOut) && (
         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" data-testid="pd-day-lateearly">
           {day.isLate && (
             <span className={cn("rounded px-1.5 text-[10px] font-bold leading-4", MARK_META.late.pill)}>Late In</span>
           )}
           {day.isEarlyOut && (
             <span className={cn("rounded px-1.5 text-[10px] font-bold leading-4", EARLY_OUT_PILL)}>Early Out</span>
+          )}
+          {day.isPenaltyEarlyOut && (
+            <span className="rounded bg-red-600 px-1.5 text-[10px] font-bold leading-4 text-white">
+              Penalty Early Out: -{(day.penaltyDeduction ?? 0).toFixed(2)} shift
+            </span>
           )}
         </p>
       )}

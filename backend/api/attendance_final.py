@@ -70,7 +70,7 @@ from .arrival_rules import (
     explain as explain_arrival, hhmm as arrival_hhmm, limits_for as arrival_limits_for, zone_of as arrival_zone_of,
 )
 from . import production_shift_rules as psr
-from .clock import ist_today
+from .clock import ist_now, ist_today
 from .models import (
     AttendanceDayRecord, AttendanceLog, Attendance, CompensationDayAnnouncement, Holiday,
     LeaveRequest, PayrollSettings, ProductionShiftConfig, ProductionShiftSegment,
@@ -326,6 +326,92 @@ def _half_day_status(
     if morning or evening:
         return "half_shift", Decimal("0.50"), True
     return "absent", Decimal("0"), False
+
+
+def _still_at_work(d, day_secs, shift, settings, second_half_start_override=None, limits=None) -> bool:
+    """True while TODAY's day of someone who attended the morning half has not been over long enough to judge its
+    evening half: no second-half punch yet and the shift's end (plus its grace) not yet passed. Never for another day,
+    an employee without a shift, or a shift that runs past midnight."""
+    if d != ist_today() or shift is None or not getattr(shift, "end_time", None) or not day_secs:
+        return False
+    start, end = getattr(shift, "start_time", None), shift.end_time
+    if start is not None and _t2s(end) <= _t2s(start):
+        return False
+    morning, evening = _halves_attended(
+        day_secs, settings, second_half_start_override=second_half_start_override,
+        first_half_limit_s=limits.first_half_until if limits else None,
+    )
+    if not morning or evening:
+        return False
+    grace = int(getattr(shift, "grace_period_minutes", 0) or 0)
+    # in whole minutes, like every other limit: the last minute of the grace still counts as the shift
+    return _t2s(ist_now().time()) // 60 * 60 <= _t2s(end) + grace * 60
+
+
+def _evening_open_until(d, shift):
+    """While TODAY's shift is still running, the moment its evening edge can first be judged: the minute after the
+    shift's end plus its grace (an aware datetime, IST). Until then a last punch is not yet the day's exit (a lunch
+    break, someone still at work), so no Early-Out or Penalty Early Out is decided and the stored day says it is
+    provisional (AttendanceDayRecord.provisional_until). None for any other day, once that moment has passed, with no
+    shift, or for a shift that runs past midnight - the same window as _still_at_work."""
+    if d != ist_today() or shift is None or not getattr(shift, "end_time", None):
+        return None
+    start, end = getattr(shift, "start_time", None), shift.end_time
+    if start is not None and _t2s(end) <= _t2s(start):
+        return None
+    grace = int(getattr(shift, "grace_period_minutes", 0) or 0)
+    judge_from = _t2s(end) + grace * 60 + 60
+    if _t2s(ist_now().time()) // 60 * 60 >= judge_from:
+        return None
+    from .clock import FACTORY_TZ
+
+    return (datetime.combine(d, datetime.min.time()) + timedelta(seconds=judge_from)).replace(tzinfo=FACTORY_TZ)
+
+
+def penalty_early_out_check(last_secs: int, shift, settings, window_early=None, applied_evening: bool = False):
+    """The Penalty Early Out rule for one staff day (owner 2026-11-13), pure: (is_penalty, minutes_early, reason).
+
+    `shift` is the day's EFFECTIVE shift (an approved in-cap Evening Early-Out permission and a company-announced
+    early-out already applied: see _effective_shift_for_day / _announced_end), `last_secs` the last punch in seconds
+    since the day's midnight. The reference is the shift end ("shift_end", the default) or the Early-Out deadline
+    = end - grace ("deadline"); an announced early-out has no grace, so there both are the announced time. A punch
+    counts as its own whole minute, like every other limit: minutes_early = reference - punch minute. Leaving MORE than
+    early_out_penalty_minutes before the reference is the penalty; exactly that many minutes is not. `minutes_early`
+    is returned whatever the switch says (0 when the punch is at or after the reference); a shift that runs past
+    midnight is never judged here (as with Evening Early-Out, its evening is the next morning)."""
+    if shift is None or not getattr(shift, "end_time", None):
+        return False, 0, None
+    start = getattr(shift, "start_time", None)
+    if start is not None and _t2s(shift.end_time) <= _t2s(start):
+        return False, 0, None
+    grace_s = int(getattr(shift, "grace_period_minutes", 0) or 0) * 60
+    deadline_s = _t2s(shift.end_time) - grace_s
+    end_s = deadline_s if window_early is not None else deadline_s + grace_s
+    from_deadline = getattr(settings, "early_out_penalty_from", "shift_end") == "deadline"
+    ref_s = deadline_s if from_deadline else end_s
+    minutes_early = max(0, (ref_s - last_secs // 60 * 60) // 60)
+    threshold = max(0, int(getattr(settings, "early_out_penalty_minutes", 75) or 0))
+    if not getattr(settings, "early_out_penalty_enabled", False) or minutes_early <= threshold:
+        return False, minutes_early, None
+    if window_early is not None:
+        what = "the company-announced early-out"
+    elif from_deadline:
+        what = "the Early-Out deadline (shift end - grace)"
+    else:
+        what = "the shift end"
+    if applied_evening and window_early is None:
+        what += " moved earlier by an approved Evening Early-Out permission"
+    deduction = early_out_penalty_deduction(settings)
+    return True, minutes_early, (
+        f"Penalty Early Out: last punch {arrival_hhmm(last_secs)} is {minutes_early} min before {what} "
+        f"{arrival_hhmm(ref_s)} (more than {threshold} min): {deduction:.2f} shift deducted"
+    )
+
+
+def early_out_penalty_deduction(settings) -> Decimal:
+    """The shift a Penalty Early Out takes off its day, kept between 0 and 1."""
+    raw = getattr(settings, "early_out_penalty_deduction", Decimal("0.25"))
+    return max(Decimal("0"), min(Decimal("1"), Decimal(str(raw if raw is not None else "0.25"))))
 
 
 def _halves_attended(
@@ -586,6 +672,17 @@ def _start_plus(shift, minutes: int):
     moved = copy(shift)
     moved.start_time = _s2t(_t2s(shift.start_time) + minutes * 60)
     return moved
+
+
+def penalty_early_out_json(rec) -> dict:
+    """The additive Penalty Early Out keys of one day (a stored or just-computed AttendanceDayRecord; None = no record):
+    whether it was one, the shift it took off (already out of shiftsCompleted / shifts earned), and how many minutes
+    early the last punch was on an Early-Out or Penalty Early Out day."""
+    return {
+        "isPenaltyEarlyOut": bool(getattr(rec, "penalty_early_out", False)) if rec is not None else False,
+        "penaltyDeduction": float(getattr(rec, "penalty_deduction", 0) or 0) if rec is not None else 0.0,
+        "earlyOutMinutes": int(getattr(rec, "early_out_minutes", 0) or 0) if rec is not None else 0,
+    }
 
 
 def compensation_marker_json(rec) -> dict:
@@ -1322,6 +1419,8 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         "first_punch": None, "last_punch": None,
         "compensation_kind": "", "compensation_minutes": 0, "compensation_note": "",
         "ot_extra_minutes": 0,
+        "penalty_early_out": False, "penalty_deduction": Decimal("0.00"), "early_out_minutes": 0,
+        "provisional_until": None,
     }
 
     # Every approved EmployeePermission of this day -each with its canonical
@@ -1531,6 +1630,17 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                 day_secs, settings, second_half_start_override=second_half_override,
                 first_half_limit_s=limits.first_half_until if limits else None,
             )
+            if (
+                status == AttendanceDayRecord.STATUS_HALF
+                and not half_day_slot
+                and not cl_portions
+                and _still_at_work(d, day_secs, effective_shift, settings, second_half_override, limits)
+            ):
+                # TODAY, while the shift is still running (owner 2026-11-13): someone who came in for the morning and has
+                # not punched out yet is at work, not a Half Day - the evening half cannot be judged before it is over.
+                # Present until the shift's end (+ its grace) has passed; then, still without a second-half punch, the
+                # day is a Half Day as before. The arrival zone, Late mark and quarter deduction below are unchanged.
+                status, shifts_earned, is_half = AttendanceDayRecord.STATUS_PRESENT, Decimal("1.00"), False
             computed["status"] = status
             computed["shifts_earned"] = shifts_earned
             computed["is_half_shift"] = is_half
@@ -1570,7 +1680,46 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                     deduction = max(Decimal("0"), min(Decimal("1"), Decimal(str(settings.arrival_quarter_deduction))))
                     computed["shifts_earned"] = Decimal("1.00") - deduction
 
-            if win_early is not None and not comp_day and settings.evening_early_out_enabled and len(day_times) > 1:
+            # The evening edge. TODAY, while the shift is still running, a last punch is not yet the day's exit (a
+            # lunch break, someone still at work): nothing is decided about leaving early until the shift's end plus
+            # its grace has passed, and the day is stored as provisional so the background refresh works it out again
+            # then (owner 2026-11-13: no Early-Out, and above all no Penalty Early Out deduction, for a lunch punch).
+            evening_open = _evening_open_until(d, effective_shift)
+            if evening_open is not None:
+                fields["provisional_until"] = evening_open
+                if computed.get("early_leave"):
+                    computed["early_leave"] = False
+                    computed["late_reason"] = _reason_without(computed.get("late_reason"), "Evening Early-Out")
+            elif len(day_secs) > 1 and not comp_day:
+                # Penalty Early Out: leaving MORE than the penalty minutes before the day's effective end takes a part
+                # of a shift off the day, separately from the late pool (the day is not also an Early-Out mark unless
+                # Settings says so). Only a day that is otherwise Present: one already cut to a Half Day (no punch in
+                # the second half) has lost its evening half and is not charged twice; a day with an approved half-day
+                # leave / half-day CL may leave early by right. Measured from the end an approved permission or an
+                # announced early-out moved. Works whatever the Evening Early-Out switch says.
+                is_penalty, minutes_early, why = penalty_early_out_check(
+                    day_secs[-1], effective_shift, settings, window_early=win_early, applied_evening=applied_evening,
+                )
+                if is_penalty and not leave_slot and computed.get("status") == AttendanceDayRecord.STATUS_PRESENT:
+                    deduction = early_out_penalty_deduction(settings)
+                    earned = Decimal(str(computed.get("shifts_earned") or 0))
+                    taken = min(deduction, earned)
+                    computed["shifts_earned"] = earned - taken
+                    computed["penalty_early_out"] = True
+                    computed["penalty_deduction"] = taken
+                    computed["early_leave"] = bool(getattr(settings, "early_out_penalty_in_late_pool", False))
+                    if computed["early_leave"]:
+                        why += "; also counted as one Early-Out mark in the late pool"
+                    computed["late_reason"] = "; ".join(
+                        [r for r in [_reason_without(computed.get("late_reason"), "Evening Early-Out"), why] if r]
+                    )
+                if computed.get("early_leave") or computed.get("penalty_early_out"):
+                    computed["early_out_minutes"] = minutes_early
+
+            if (
+                win_early is not None and not comp_day and settings.evening_early_out_enabled and len(day_times) > 1
+                and evening_open is None and not computed.get("penalty_early_out")
+            ):
                 # An announced early-out was USED when the same exit would have been an Early-Out against the shift's
                 # own end (with any approved permission) but is not one against the announced time.
                 real_end_shift, _m, _e = _effective_shift_for_day(shift, comp_day, day_perms)

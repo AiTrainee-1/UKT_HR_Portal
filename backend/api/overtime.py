@@ -320,15 +320,20 @@ def detect_overtime_for_month(
 # ── keeping the rows (and the days they come from) fresh without anybody opening the OT page ──
 
 
-def recompute_stale_days(date_from: date_type, date_to: date_type, employee_ids=None, settings=None) -> int:
+def recompute_stale_days(
+    date_from: date_type, date_to: date_type, employee_ids=None, settings=None, employment_types=("staff",)
+) -> int:
     """Re-derive the stored attendance day of every active staff member whose punches arrived AFTER that day was last
     computed (or that has punches and no stored day at all), for the days in [date_from, date_to]. A day's OT comes from
     its stored record, and a record is only ever written when somebody looks at that day: this is what makes the rows
     exist without anyone looking. Only those days are touched: a quiet roster costs two queries. A day HR set by hand
-    (source manual) is never recomputed. Returns how many employees were recomputed."""
+    (source manual) is never recomputed. Returns how many employees were recomputed.
+
+    `employment_types`: staff only for the OT job; the attendance refresh pass (attendance_refresh.py) passes production
+    too, so every stored day follows its punches whatever the OT switches say."""
     from .attendance_final import compute_range_records
 
-    staff = Employee.objects.filter(status="active", employment_type="staff")
+    staff = Employee.objects.filter(status="active", employment_type__in=list(employment_types))
     if employee_ids is not None:
         staff = staff.filter(pk__in=list(employee_ids))
     ids = list(staff.values_list("pk", flat=True))

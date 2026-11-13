@@ -432,3 +432,30 @@ describe("the monthly late pool", () => {
     expect(latePoolView({ shiftDeductions: "junk" })!.shifts).toBe(0);
   });
 });
+
+describe("Penalty Early Out badge", () => {
+  it("shows the penalty with its minutes and deduction instead of a plain Early Out", () => {
+    const flags = lateDetectionFlags({
+      status: "present",
+      isEarlyOut: false,
+      isPenaltyEarlyOut: true,
+      penaltyDeduction: 0.25,
+      earlyOutMinutes: 110,
+    });
+    expect(flags.map((f) => [f.kind, f.label, f.detail])).toEqual([
+      ["penaltyEarlyOut", "Penalty Early Out", "110 min early, -0.25 shift"],
+    ]);
+  });
+
+  it("keeps one badge when settings also count it in the late pool, and tells an ordinary Early Out how early", () => {
+    const both = lateDetectionFlags({
+      status: "present",
+      isEarlyOut: true,
+      isPenaltyEarlyOut: true,
+      penaltyDeduction: 0.25,
+    });
+    expect(both.map((f) => f.kind)).toEqual(["penaltyEarlyOut"]);
+    const ordinary = lateDetectionFlags({ status: "present", isEarlyOut: true, earlyOutMinutes: 59 });
+    expect(ordinary.map((f) => [f.kind, f.detail])).toEqual([["earlyOut", "59 min early"]]);
+  });
+});

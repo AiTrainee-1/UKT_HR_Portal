@@ -8,7 +8,9 @@ import {
   halfDayStatus,
   judgeStaffDay,
   lunchReturn,
+  penaltyEarlyOut,
   productionDay,
+  type PenaltySettings,
   type StaffDayInput,
 } from "./preview";
 
@@ -256,5 +258,32 @@ describe("a production day (default segments, grace 10, ₹600 a shift)", () => 
       shifts: 0.25,
       maxPossible: 1.5,
     });
+  });
+});
+
+describe("Penalty Early Out (shift end 18:00, grace 10; attendance_final.penalty_early_out_check)", () => {
+  const on: PenaltySettings = { enabled: true, minutes: 75, deduction: 0.25, from: "shift_end", inLatePool: false };
+
+  it("leaving exactly 75 minutes early is not a penalty, 76 is: 0.75 shift and no Early Out mark", () => {
+    expect(penaltyEarlyOut(m("16:45"), DEFAULT_EXAMPLE, on)).toMatchObject({ penalty: false, minutesEarly: 75 });
+    expect(penaltyEarlyOut(m("16:44"), DEFAULT_EXAMPLE, on)).toMatchObject({ penalty: true, minutesEarly: 76 });
+    const hit = day(["09:00", "16:30"], { eveningEarlyOut: true, penalty: on });
+    expect([hit.penalty, hit.shifts, hit.earlyOut]).toEqual([true, 0.75, false]);
+    const ordinary = day(["09:00", "16:45"], { eveningEarlyOut: true, penalty: on });
+    expect([ordinary.penalty, ordinary.shifts, ordinary.earlyOut]).toEqual([false, 1, true]);
+  });
+
+  it("follows the settings: off, the deadline, a permission, the late pool, a half day, a quarter arrival", () => {
+    expect(day(["09:00", "16:30"], { penalty: { ...on, enabled: false } }).shifts).toBe(1);
+    expect(penaltyEarlyOut(m("16:35"), DEFAULT_EXAMPLE, { ...on, from: "deadline" }).penalty).toBe(false);
+    expect(penaltyEarlyOut(m("16:34"), DEFAULT_EXAMPLE, { ...on, from: "deadline" }).penalty).toBe(true);
+    expect(clock(penaltyEarlyOut(m("18:00"), DEFAULT_EXAMPLE, on, true).latestFree)).toBe("15:45");
+    expect(day(["09:00", "16:30"], { penalty: { ...on, inLatePool: true } }).earlyOut).toBe(true);
+    expect(day(["09:00", "13:00"], { penalty: on })).toMatchObject({
+      status: "half_shift",
+      shifts: 0.5,
+      penalty: false,
+    });
+    expect(day(["10:40", "16:30"], { penalty: on })).toMatchObject({ zone: "quarter", shifts: 0.5, penalty: true });
   });
 });

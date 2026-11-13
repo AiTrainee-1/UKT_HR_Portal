@@ -460,6 +460,8 @@ def _bulk_writer(by_code: dict):
                 Attendance.objects.filter(employee_id=e, date__in=dates, present=False).update(present=True)
         counts = Counter((r.employee_id, r.date) for r in rows)
         suspicious = [{"employeeId": e, "date": str(d), "punches": n} for (e, d), n in counts.items() if n >= 6]
+        # the fetched days are judged again by the background attendance refresh within 5 minutes (attendance_refresh.py),
+        # not here: this catch-up must stay a handful of queries inside the request's 30 seconds
         return {
             "created": max(0, created),
             "skipped": len(punches) - len(rows),

@@ -105,6 +105,10 @@ def resolve_missing_punch(
             employee=req.employee, date=req.date, punch_time=req.punch_time, punch_type=req.punch_type,
             defaults={"source": "missing_punch:approved"},
         )
+        # the day is judged again with the approved punch at once (attendance_refresh.py)
+        from .attendance_refresh import refresh_after_punches
+
+        refresh_after_punches([(req.employee_id, req.date)])
     req.status = outcome.status
     req.save()
     what = f"Missing Punch request for {req.date.isoformat()}"

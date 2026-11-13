@@ -583,6 +583,10 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
     absent_count = 0
     late_count = 0
     early_out_count = 0
+    # Penalty Early Out (owner 2026-11-13): days that lost a part of a shift for leaving more than the penalty minutes
+    # early. Already inside the shifts earned (so inside paid_days); counted here only to show it separately.
+    penalty_early_out_count = 0
+    penalty_early_out_shifts = Decimal("0")
     half_shift_count = 0
     full_shift_count = 0
     effective_present = Decimal("0")  # accumulates 0.5 or 1.0 per present day
@@ -612,6 +616,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
                 "status": status,
                 "is_late": fr.is_late,
                 "is_early_out": fr.early_leave,
+                "is_penalty_early_out": bool(getattr(fr, "penalty_early_out", False)),
+                "penalty_deduction": Decimal(str(getattr(fr, "penalty_deduction", 0) or 0)),
+                "early_out_minutes": int(getattr(fr, "early_out_minutes", 0) or 0),
                 "late_reason": fr.late_reason,
                 "arrival_zone": fr.arrival_zone or None,
                 "first_in": fr.first_punch.strftime("%H:%M") if fr.first_punch else None,
@@ -627,6 +634,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             # recalculated once those days actually elapse.
             status = "absent"
             info = {"status": "absent", "is_late": False, "is_early_out": False, "late_reason": None, "first_in": None, "last_out": None, "leave_type": None}
+            info.update(is_penalty_early_out=False, penalty_deduction=Decimal("0"), early_out_minutes=0)
             forced_shifts = Decimal("0")
             forced_half = False
 
@@ -641,6 +649,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
                 late_count += 1
             if is_early_out:
                 early_out_count += 1
+            if info["is_penalty_early_out"]:
+                penalty_early_out_count += 1
+                penalty_early_out_shifts += info["penalty_deduction"]
             day_shifts = forced_shifts if forced_shifts > 0 else Decimal("1.00")
             if forced_half or day_shifts == Decimal("0.50"):
                 is_half = True
@@ -661,6 +672,10 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             "status": status,
             "isLate": is_late,
             "isEarlyOut": is_early_out,
+            # Penalty Early Out: the shift it took off this day is already out of shiftsCompleted
+            "isPenaltyEarlyOut": info["is_penalty_early_out"] if status == "present" else False,
+            "penaltyDeduction": float(info["penalty_deduction"]) if status == "present" else 0.0,
+            "earlyOutMinutes": info["early_out_minutes"],
             "lateReason": info["late_reason"],
             "arrivalZone": info.get("arrival_zone"),
             "firstIn": info["first_in"],
@@ -857,6 +872,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             "absentDays": absent_count,
             "lateDays": late_count,
             "earlyOutDays": early_out_count,
+            # Penalty Early Out days and the shifts they took off (already out of workedDays / effectivePaidDays)
+            "penaltyEarlyOutDays": penalty_early_out_count,
+            "penaltyEarlyOutShifts": float(penalty_early_out_shifts),
             "halfShiftDays": half_shift_count,
             "fullShiftDays": full_shift_count,
             "workedDays": float(effective_days),
@@ -892,6 +910,19 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             "permissionPenalty": float(permission_penalty),
             "permissionSummary": permission_summary,
             "total": float(total_deductions),
+        },
+        # Penalty Early Out (additive, information only): NOT part of `total` - the shifts it took off are already out
+        # of the paid days, so `amount` (shifts x daily rate) is what those days cost, shown so HR can explain it.
+        "penaltyEarlyOut": {
+            "enabled": bool(getattr(_settings, "early_out_penalty_enabled", False)),
+            "days": penalty_early_out_count,
+            "shifts": float(penalty_early_out_shifts),
+            "amount": float(_d2(daily_rate * penalty_early_out_shifts)),
+            "thresholdMinutes": int(getattr(_settings, "early_out_penalty_minutes", 75) or 0),
+            "deductionPerDay": float(getattr(_settings, "early_out_penalty_deduction", 0) or 0),
+            "measuredFrom": getattr(_settings, "early_out_penalty_from", "shift_end") or "shift_end",
+            "inLatePool": bool(getattr(_settings, "early_out_penalty_in_late_pool", False)),
+            "inPaidDays": True,
         },
         "netSalary": float(net_salary),
     }
@@ -2139,6 +2170,13 @@ def _ps_response(ps) -> dict:
         # Late Detection: Morning Late-In / Evening Early-Out
         "morningLateInEnabled": ps.morning_late_in_enabled,
         "eveningEarlyOutEnabled": ps.evening_early_out_enabled,
+        # Penalty Early Out (staff, company-wide): leaving more than N minutes before the shift end takes a part of a
+        # shift off the day, separately from the late pool (attendance_final.penalty_early_out_check).
+        "earlyOutPenaltyEnabled": bool(ps.early_out_penalty_enabled),
+        "earlyOutPenaltyMinutes": ps.early_out_penalty_minutes,
+        "earlyOutPenaltyDeduction": float(ps.early_out_penalty_deduction),
+        "earlyOutPenaltyFrom": ps.early_out_penalty_from or "shift_end",
+        "earlyOutPenaltyInLatePool": bool(ps.early_out_penalty_in_late_pool),
         # Half-Day Detection
         # The first-half limit is per shift now (shift start + grace + the windows below); this fixed time is
         # retired but still returned for older clients and for employees with no shift.
@@ -2210,6 +2248,12 @@ def _ps_response(ps) -> dict:
 COMPANY_WIDE_RULE_KEYS: tuple[str, ...] = (
     "morningLateInEnabled",
     "eveningEarlyOutEnabled",
+    # Penalty Early Out: the engine reads the company row only
+    "earlyOutPenaltyEnabled",
+    "earlyOutPenaltyMinutes",
+    "earlyOutPenaltyDeduction",
+    "earlyOutPenaltyFrom",
+    "earlyOutPenaltyInLatePool",
     "halfDayFirstHalfEndTime",
     "halfDaySecondHalfStartTime",
     "permissionMonthlyCap",
@@ -2248,6 +2292,11 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "simpleHalfShiftCutoff": ("settings.attendance.staff",),
     "morningLateInEnabled": ("settings.attendance.staff",),
     "eveningEarlyOutEnabled": ("settings.attendance.staff",),
+    "earlyOutPenaltyEnabled": ("settings.attendance.staff",),
+    "earlyOutPenaltyMinutes": ("settings.attendance.staff",),
+    "earlyOutPenaltyDeduction": ("settings.attendance.staff",),
+    "earlyOutPenaltyFrom": ("settings.attendance.staff",),
+    "earlyOutPenaltyInLatePool": ("settings.attendance.staff",),
     "halfDayFirstHalfEndTime": ("settings.attendance.staff",),
     "halfDaySecondHalfStartTime": ("settings.attendance.staff",),
     "arrivalLateWindowMinutes": ("settings.attendance.staff",),
@@ -2625,6 +2674,8 @@ def payroll_settings_view(request: Request) -> Response:
         "arrivalPermissionWindowMinutes": ("arrival_permission_window_minutes", int),
         "arrivalExtraMinutes": ("arrival_extra_minutes", int),
         "arrivalQuarterDeduction": ("arrival_quarter_deduction", Decimal),
+        "earlyOutPenaltyMinutes": ("early_out_penalty_minutes", int),
+        "earlyOutPenaltyDeduction": ("early_out_penalty_deduction", Decimal),
         "afternoonLateWindowMinutes": ("afternoon_late_window_minutes", int),
         "afternoonPermissionWindowMinutes": ("afternoon_permission_window_minutes", int),
         "defaultShiftGraceMinutes": ("default_shift_grace_minutes", int),
@@ -2698,6 +2749,25 @@ def payroll_settings_view(request: Request) -> Response:
         deduction = ps.arrival_quarter_deduction
         if not (Decimal("0") <= deduction <= Decimal("1")) or deduction != deduction.quantize(Decimal("0.01")):
             return _error("Quarter-shift deduction must be between 0 and 1 shift, with at most 2 decimals")
+    # Penalty Early Out: what leaving early costs, so a nonsensical value is refused before anything is saved.
+    if "earlyOutPenaltyMinutes" in data and not (1 <= int(ps.early_out_penalty_minutes) <= 720):
+        return _error("Penalty Early Out minutes must be between 1 and 720")
+    if "earlyOutPenaltyDeduction" in data:
+        deduction = ps.early_out_penalty_deduction
+        if not (Decimal("0.01") <= deduction <= Decimal("1")) or deduction != deduction.quantize(Decimal("0.01")):
+            return _error("Penalty Early Out deduction must be between 0.01 and 1 shift, with at most 2 decimals")
+    if "earlyOutPenaltyFrom" in data:
+        if data["earlyOutPenaltyFrom"] not in ("shift_end", "deadline"):
+            return _error("Penalty Early Out must be measured from 'shift_end' or 'deadline'")
+        ps.early_out_penalty_from = data["earlyOutPenaltyFrom"]
+    for key, attr, label in (
+        ("earlyOutPenaltyEnabled", "early_out_penalty_enabled", "Penalty Early Out"),
+        ("earlyOutPenaltyInLatePool", "early_out_penalty_in_late_pool", "Counting a Penalty Early Out in the late pool"),
+    ):
+        if key in data:
+            if not isinstance(data[key], bool):
+                return _error(f"{label} must be true (on) or false (off).")
+            setattr(ps, attr, data[key])
     if "permissionMonthlyCap" in data and not (0 <= int(ps.permission_monthly_cap) <= 31):
         return _error("Permission monthly cap must be between 0 and 31")
     if "lateFreeAllowance" in data and int(ps.late_free_allowance) < 0:

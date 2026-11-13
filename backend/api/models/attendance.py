@@ -1,5 +1,7 @@
 """Punches, daily attendance verdicts, on-duty / geo attendance, biometric devices."""
 
+from decimal import Decimal
+
 from django.db import models
 
 from .core import Branch, Employee
@@ -215,6 +217,21 @@ class AttendanceDayRecord(models.Model):
     # shift, production and rows computed before this existed. It says which half a Half Day was
     # worked and why a day earned 0.75 - shifts_earned, not this, is what payroll reads.
     arrival_zone = models.CharField(max_length=12, default="", blank=True, db_default="", db_column="arrival_zone")
+    # Penalty Early Out (PayrollSettings.early_out_penalty_*): the last punch was MORE than the penalty minutes before the
+    # day's effective end, so `penalty_deduction` of a shift came off shifts_earned (already applied there - payroll
+    # reads shifts_earned; this column only says how much of it was this penalty). Such a day is not an early_leave
+    # (late-pool) mark unless the setting says so. `early_out_minutes` = whole minutes the last punch was before the
+    # reference the penalty is measured from, on any Early-Out or Penalty Early Out day (0 otherwise). db_default: see
+    # the permission columns above.
+    penalty_early_out = models.BooleanField(default=False, db_default=False, db_column="penalty_early_out")
+    penalty_deduction = models.DecimalField(
+        max_digits=3, decimal_places=2, default=Decimal("0"), db_default=Decimal("0"), db_column="penalty_deduction"
+    )
+    early_out_minutes = models.IntegerField(default=0, db_default=0, db_column="early_out_minutes")
+    # Set while TODAY's day is still running (the shift's end + grace has not passed): the evening edge (Early-Out,
+    # Penalty Early Out, a missing second half) is not judged yet. The background attendance refresh
+    # (attendance_refresh.refresh_stale) works the day out again once this moment has passed. NULL = final.
+    provisional_until = models.DateTimeField(null=True, blank=True, db_column="provisional_until")
     # Display-only explanation of why is_late/is_half_shift ended up True this
     # day (e.g. "Late morning (Without Permission): arrived 09:40, deadline
     # 09:15"). Never read by any calculation — purely so Payroll/Attendance

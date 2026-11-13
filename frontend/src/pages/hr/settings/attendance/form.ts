@@ -16,6 +16,12 @@ export type StaffDraft = {
   /** null = the server did not report the switch (an older backend): it cannot be changed here. */
   morningLateInEnabled: boolean | null;
   eveningEarlyOutEnabled: boolean | null;
+  /** Penalty Early Out (null = not reported by the server: an older backend). */
+  earlyOutPenaltyEnabled: boolean | null;
+  earlyOutPenaltyMinutes: string;
+  earlyOutPenaltyDeduction: string;
+  earlyOutPenaltyFrom: "shift_end" | "deadline";
+  earlyOutPenaltyInLatePool: boolean;
   secondHalfStart: string;
   lateWindow: string;
   permissionWindow: string;
@@ -55,6 +61,7 @@ export type StaffAccess = {
   arrivalReported: boolean;
   morningReported: boolean;
   eveningReported: boolean;
+  penaltyReported: boolean;
 };
 
 export function staffAccess(data: Partial<PayrollSettingsItem> | undefined): StaffAccess {
@@ -64,16 +71,25 @@ export function staffAccess(data: Partial<PayrollSettingsItem> | undefined): Sta
     arrivalReported: data?.arrivalLateWindowMinutes != null,
     morningReported: data?.morningLateInEnabled != null,
     eveningReported: data?.eveningEarlyOutEnabled != null,
+    penaltyReported: data?.earlyOutPenaltyEnabled != null,
   };
 }
 
 const text = (value: number | null | undefined, fallback: number) => String(value ?? fallback);
+
+/** Penalty Early Out as the server ships it (PayrollSettings.early_out_penalty_*): off, 75 minutes, 0.25 shift. */
+export const PENALTY_DEFAULTS = { minutes: 75, deduction: 0.25, maxMinutes: 720 } as const;
 
 export function staffDraftFrom(data: Partial<PayrollSettingsItem>): StaffDraft {
   return {
     attendanceMode: data.attendanceMode === "simple" ? "simple" : "strict",
     morningLateInEnabled: data.morningLateInEnabled ?? null,
     eveningEarlyOutEnabled: data.eveningEarlyOutEnabled ?? null,
+    earlyOutPenaltyEnabled: data.earlyOutPenaltyEnabled ?? null,
+    earlyOutPenaltyMinutes: text(data.earlyOutPenaltyMinutes, PENALTY_DEFAULTS.minutes),
+    earlyOutPenaltyDeduction: text(data.earlyOutPenaltyDeduction, PENALTY_DEFAULTS.deduction),
+    earlyOutPenaltyFrom: data.earlyOutPenaltyFrom === "deadline" ? "deadline" : "shift_end",
+    earlyOutPenaltyInLatePool: data.earlyOutPenaltyInLatePool === true,
     secondHalfStart: data.halfDaySecondHalfStartTime || "14:30",
     lateWindow: text(data.arrivalLateWindowMinutes, DEFAULT_ARRIVAL.lateWindowMinutes),
     permissionWindow: text(data.arrivalPermissionWindowMinutes, DEFAULT_ARRIVAL.permissionWindowMinutes),
@@ -159,6 +175,22 @@ export function validateStaff(d: StaffDraft, access: StaffAccess): StaffErrors {
   if (grace) errors.forgottenExitHours = grace;
   const buffer = hours(d.earlyArrivalProtectionHours, "Next-day early-arrival protection");
   if (buffer) errors.earlyArrivalProtectionHours = buffer;
+  if (access.companyWideEditable && access.penaltyReported) {
+    const minutes = num(d.earlyOutPenaltyMinutes);
+    if (!(Number.isInteger(minutes) && minutes >= 1 && minutes <= PENALTY_DEFAULTS.maxMinutes)) {
+      errors.earlyOutPenaltyMinutes = `Penalty Early Out minutes must be a whole number from 1 to ${PENALTY_DEFAULTS.maxMinutes}.`;
+    }
+    const shift = num(d.earlyOutPenaltyDeduction);
+    if (!(
+      Number.isFinite(shift) &&
+      shift >= 0.01 &&
+      shift <= 1 &&
+      Math.abs(shift * 100 - Math.round(shift * 100)) < 1e-9
+    )) {
+      errors.earlyOutPenaltyDeduction =
+        "Penalty Early Out deduction must be from 0.01 to 1 shift, with at most two decimals (for example 0.25).";
+    }
+  }
   return errors;
 }
 
@@ -170,6 +202,8 @@ export const firstError = (errors: StaffErrors): string | null =>
   errors.lunchPermissionZone ??
   errors.forgottenExitHours ??
   errors.earlyArrivalProtectionHours ??
+  errors.earlyOutPenaltyMinutes ??
+  errors.earlyOutPenaltyDeduction ??
   null;
 
 type FieldInfo = {
@@ -193,6 +227,21 @@ export const STAFF_FIELDS: Record<keyof StaffDraft, FieldInfo> = {
   },
   morningLateInEnabled: { label: "Morning Late-In marks", show: onOff, number: false, money: true },
   eveningEarlyOutEnabled: { label: "Evening Early-Out marks", show: onOff, number: false, money: true },
+  earlyOutPenaltyEnabled: { label: "Penalty Early Out", show: onOff, number: false, money: true },
+  earlyOutPenaltyMinutes: { label: "Penalty Early Out after", show: plain("minutes early"), number: true, money: true },
+  earlyOutPenaltyDeduction: { label: "Penalty Early Out deduction", show: plain("shift"), number: true, money: true },
+  earlyOutPenaltyFrom: {
+    label: "Penalty Early Out measured from",
+    show: (v) => (v === "deadline" ? "the Early-Out deadline (end - grace)" : "the shift end"),
+    number: false,
+    money: true,
+  },
+  earlyOutPenaltyInLatePool: {
+    label: "Penalty Early Out also a late-pool mark",
+    show: (v) => (v ? "Yes" : "No"),
+    number: false,
+    money: true,
+  },
   secondHalfStart: { label: "Second Half Start Time", show: (v) => String(v), number: false, money: true },
   lateWindow: { label: "Late window", show: plain("minutes"), number: true, money: true },
   permissionWindow: { label: "Permission window", show: plain("minutes"), number: true, money: true },
@@ -260,6 +309,13 @@ export function staffPayload(
       draft.eveningEarlyOutEnabled !== saved.eveningEarlyOutEnabled
     ) {
       companyWide.eveningEarlyOutEnabled = draft.eveningEarlyOutEnabled;
+    }
+    if (access.penaltyReported && draft.earlyOutPenaltyEnabled !== null) {
+      companyWide.earlyOutPenaltyEnabled = draft.earlyOutPenaltyEnabled;
+      companyWide.earlyOutPenaltyMinutes = num(draft.earlyOutPenaltyMinutes);
+      companyWide.earlyOutPenaltyDeduction = num(draft.earlyOutPenaltyDeduction);
+      companyWide.earlyOutPenaltyFrom = draft.earlyOutPenaltyFrom;
+      companyWide.earlyOutPenaltyInLatePool = draft.earlyOutPenaltyInLatePool;
     }
     if (access.halfDayReported) companyWide.halfDaySecondHalfStartTime = draft.secondHalfStart;
     if (access.arrivalReported) {

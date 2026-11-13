@@ -98,6 +98,11 @@ export type DayLateState = {
   halfDayPeriod?: string | null;
   /** Where the first punch fell on the morning arrival timeline: on_time | late | excused | quarter | second_half. */
   arrivalZone?: string | null;
+  /** Penalty Early Out (2026-11-13): left more than the penalty minutes early; penaltyDeduction came off the day. */
+  isPenaltyEarlyOut?: boolean | null;
+  penaltyDeduction?: number | null;
+  /** Minutes the last punch was before the shift end, on an Early Out or Penalty Early Out day. */
+  earlyOutMinutes?: number | null;
 };
 
 export type HalfDayCutoffs = { firstHalfEnd?: string | null; secondHalfStart?: string | null };
@@ -107,6 +112,7 @@ export const isEarlyOutDay = (day: DayLateState): boolean => !!(day.isEarlyOut ?
 export type LateFlagKind =
   | "late"
   | "earlyOut"
+  | "penaltyEarlyOut"
   | "lateAfternoon"
   | "halfDay"
   | "quarterShift"
@@ -119,6 +125,7 @@ export type LateFlagKind =
 export const LATE_FLAG_CLASS: Record<LateFlagKind, string> = {
   late: TONE.caution,
   earlyOut: TONE.caution,
+  penaltyEarlyOut: TONE.danger,
   lateAfternoon: TONE.caution,
   halfDay: TONE.warning,
   quarterShift: TONE.warning,
@@ -175,11 +182,26 @@ export function lateDetectionFlags(day: DayLateState, cutoffs: HalfDayCutoffs = 
         "The first punch was after the Late window: a quarter shift is deducted (a small deduction instead of a Half Day). It is not also counted as Late.",
     });
   }
-  if (worked && isEarlyOutDay(day)) {
+  if (worked && day.isPenaltyEarlyOut) {
+    const minutes = day.earlyOutMinutes ? `${day.earlyOutMinutes} min early` : undefined;
+    const shift = typeof day.penaltyDeduction === "number" && day.penaltyDeduction > 0 ? day.penaltyDeduction : null;
+    flags.push({
+      key: "penaltyEarlyOut",
+      kind: "penaltyEarlyOut",
+      label: "Penalty Early Out",
+      detail:
+        [minutes, shift !== null ? `-${shift.toFixed(2)} shift` : undefined].filter(Boolean).join(", ") || undefined,
+      title:
+        reason ??
+        "Penalty Early Out: the last punch was more than the penalty minutes before the shift end, so part of the day was deducted (Settings → Attendance → Penalty Early Out). It is not a late-pool mark.",
+    });
+  }
+  if (worked && isEarlyOutDay(day) && !day.isPenaltyEarlyOut) {
     flags.push({
       key: "earlyOut",
       kind: "earlyOut",
       label: "Early Out",
+      detail: day.earlyOutMinutes ? `${day.earlyOutMinutes} min early` : undefined,
       title:
         reason ??
         "Evening Early-Out: the last punch was before the shift end minus grace (moved 60 minutes earlier on a day an Allowed Evening Early-Out permission applied).",

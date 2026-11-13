@@ -452,7 +452,7 @@ export const DAY_KIND_META: Record<DayKind, KindLook> = {
   early: {
     label: "Early Out",
     short: "EO",
-    hint: "Worked, but left before the shift end.",
+    hint: "Worked, but left before the shift end (a Penalty Early Out also loses part of the day).",
     cell: "border-fuchsia-300 bg-fuchsia-100 text-fuchsia-950",
     swatch: "bg-fuchsia-500",
     bar: "border-l-fuchsia-500",
@@ -599,6 +599,7 @@ type KindInput = Pick<PayrollDay, "status" | "flags"> &
       PayrollDay,
       | "isLate"
       | "isEarlyOut"
+      | "isPenaltyEarlyOut"
       | "isSunday"
       | "holidayName"
       | "casualLeave"
@@ -638,7 +639,7 @@ export function dayKind(day: KindInput): DayKind {
   if (status === "half_shift" || status === "half_day" || flags.includes("half_day") || day.shifts === 0.5)
     return "half";
   if (day.isLate || flags.includes("late_in")) return "late";
-  if (day.isEarlyOut || flags.includes("early_out")) return "early";
+  if (day.isEarlyOut || day.isPenaltyEarlyOut || flags.includes("early_out")) return "early";
   return "present";
 }
 

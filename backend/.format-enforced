@@ -4,6 +4,8 @@ api/approval_workflow_views.py
 api/apps.py
 api/arrival_rules.py
 api/attendance_records_views.py
+api/attendance_refresh.py
+api/attendance_refresh_scheduler.py
 api/auto_sync_views.py
 api/branch_scope.py
 api/clock.py
@@ -188,6 +190,7 @@ api/tests_approval_workflow.py
 api/tests_arrival_rules.py
 api/tests_attendance_day_kinds.py
 api/tests_attendance_daily_punches.py
+api/tests_attendance_refresh.py
 api/tests_compensation_page.py
 api/tests_device_connector.py
 api/tests_device_control.py
@@ -465,3 +468,4 @@ api/tests_hr_categories.py
 api/permission_tree.py
 api/tests_permission_tree.py
 api/tests_permission_snapshot.py
+api/tests_penalty_early_out.py

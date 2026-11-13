@@ -16,7 +16,7 @@ from .branch_scope import get_branch_scope, scope_to_branch
 from .geo_attendance_views import source_label
 from . import production_shift_rules as psr
 from .arrival_rules import ZONE_LATE, limits_for as arrival_limits_for, zone_of as arrival_zone_of
-from .attendance_final import compensation_marker_json, permission_flags_json
+from .attendance_final import compensation_marker_json, penalty_early_out_json, permission_flags_json
 from .clock import ist_today
 from .unit_labels import unit_label
 from .models import (
@@ -1061,6 +1061,7 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "status":       status,
             "isLate":       bool(rec.is_late) if rec else False,
             "isEarlyOut":   bool(rec.early_leave) if rec else False,
+            **penalty_early_out_json(rec),
             # Plain-language account of WHY the day was flagged (the exact deadline and how it was built).
             "lateReason":   (rec.late_reason if rec else None),
             "arrivalZone":  ((rec.arrival_zone or None) if rec else None),
@@ -1289,6 +1290,7 @@ def attendance_monthly_summary(request: Request) -> Response:
             "onDuty": od_days.get(emp.id, 0),
             "late": s["late"],
             "earlyOut": sum(1 for r in records if r.early_leave),
+            "penaltyEarlyOut": sum(1 for r in records if getattr(r, "penalty_early_out", False)),
             "holidays": s["holidays"],
             "effectiveDays": float(Decimal(s["effectiveDays"])),
             "totalShifts": float(Decimal(s["totalShifts"])),
@@ -1389,6 +1391,10 @@ def biometric_punch(request: Request) -> Response:
         date=str(punch_date),
         defaults={"present": True},
     )
+    # and the stored day judged again with this punch (attendance_refresh.py)
+    from .attendance_refresh import refresh_after_punches
+
+    refresh_after_punches([(emp.pk, punch_date)])
 
     return Response({
         "ok": True,
@@ -1457,6 +1463,10 @@ def manual_attendance(request: Request) -> Response:
             "notes": notes,
         },
     )
+    # the stored day judged again with this entry (attendance_refresh.py)
+    from .attendance_refresh import refresh_after_punches
+
+    refresh_after_punches([(emp.pk, d)])
 
     return Response({
         "ok": True,
@@ -1741,6 +1751,7 @@ def _full_day_row(emp, rec, shift, dsl, cl, perm, leave=None) -> dict:
         "isLate": bool(rec.is_late),
         "isHalfShift": bool(rec.is_half_shift),
         "earlyLeave": bool(rec.early_leave),
+        **penalty_early_out_json(rec),
         "shiftsCompleted": str(rec.shifts_earned),
         "lateMorning": bool(late_morning),
         "lateAfternoon": bool(rec.late_afternoon),
@@ -1962,6 +1973,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             "status": rec.status,
             "isLate": bool(rec.is_late),
             "isEarlyOut": bool(rec.early_leave),
+            **penalty_early_out_json(rec),
             "lateReason": rec.late_reason,
             "arrivalZone": rec.arrival_zone or None,
             "lateAfternoon": bool(rec.late_afternoon),
@@ -2239,6 +2251,7 @@ def attendance_report_log_sheet(request: Request) -> Response:
                 "status": r.status,
                 "isLate": r.is_late,
                 "isEarlyOut": r.early_leave,
+                **penalty_early_out_json(r),
                 "lateReason": r.late_reason,
                 "arrivalZone": r.arrival_zone or None,
                 "isHalfShift": r.is_half_shift,
@@ -2520,6 +2533,7 @@ def attendance_search_range(request: Request) -> Response:
             "status": rec.status,
             "isLate": bool(rec.is_late),
             "isEarlyOut": bool(rec.early_leave),
+            **penalty_early_out_json(rec),
             "lateReason": rec.late_reason,
             "arrivalZone": rec.arrival_zone or None,
             "isHalfShift": bool(rec.is_half_shift),
@@ -2871,6 +2885,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "isHalfShift": is_half,
             "isLate": is_late,
             "isEarlyOut": bool(rec.early_leave) if rec else False,
+            **penalty_early_out_json(rec),
             "lateReason": rec.late_reason if rec else None,
             "arrivalZone": (rec.arrival_zone or None) if rec else None,
             "lateMorning": late_am,

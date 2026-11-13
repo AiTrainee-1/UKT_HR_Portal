@@ -49,6 +49,12 @@ describe("loading", () => {
       attendanceMode: "strict",
       morningLateInEnabled: true,
       eveningEarlyOutEnabled: false,
+      // this server does not report Penalty Early Out (an older backend): defaults, and it cannot be changed
+      earlyOutPenaltyEnabled: null,
+      earlyOutPenaltyMinutes: "75",
+      earlyOutPenaltyDeduction: "0.25",
+      earlyOutPenaltyFrom: "shift_end",
+      earlyOutPenaltyInLatePool: false,
       secondHalfStart: "14:30",
       lateWindow: "60",
       permissionWindow: "60",
@@ -68,6 +74,7 @@ describe("loading", () => {
       arrivalReported: true,
       morningReported: true,
       eveningReported: true,
+      penaltyReported: false,
     });
     const old = staffAccess({ attendanceMode: "simple" });
     expect(old).toMatchObject({ halfDayReported: false, arrivalReported: false, morningReported: false });
@@ -205,5 +212,75 @@ describe("what changed", () => {
       { key: "attendanceMode", label: "Attendance calculation mode", from: "Strict", to: "Simple", money: false },
       { key: "lateWindow", label: "Late window", from: "60 minutes", to: "45 minutes", money: true },
     ]);
+  });
+});
+
+describe("Penalty Early Out", () => {
+  const server: Partial<PayrollSettingsItem> = {
+    ...SERVER,
+    earlyOutPenaltyEnabled: false,
+    earlyOutPenaltyMinutes: 75,
+    earlyOutPenaltyDeduction: 0.25,
+    earlyOutPenaltyFrom: "shift_end",
+    earlyOutPenaltyInLatePool: false,
+  };
+  const was = staffDraftFrom(server);
+  const can = staffAccess(server);
+
+  it("is sent with all five keys when the server reports it, and listed as a pay change", () => {
+    const draft = {
+      ...was,
+      earlyOutPenaltyEnabled: true,
+      earlyOutPenaltyMinutes: "90",
+      earlyOutPenaltyFrom: "deadline" as const,
+    };
+    const body = staffPayload(draft, was, carried, can);
+    expect(body).toMatchObject({
+      earlyOutPenaltyEnabled: true,
+      earlyOutPenaltyMinutes: 90,
+      earlyOutPenaltyDeduction: 0.25,
+      earlyOutPenaltyFrom: "deadline",
+      earlyOutPenaltyInLatePool: false,
+    });
+    const changes = staffChanges(draft, was);
+    expect(changes.map((c) => [c.label, c.from, c.to, c.money])).toEqual([
+      ["Penalty Early Out", "Off", "On", true],
+      ["Penalty Early Out after", "75 minutes early", "90 minutes early", true],
+      ["Penalty Early Out measured from", "the shift end", "the Early-Out deadline (end - grace)", true],
+    ]);
+  });
+
+  it("is never sent by a branch login or to a backend that does not know it", () => {
+    const draft = { ...was, earlyOutPenaltyEnabled: true };
+    expect("earlyOutPenaltyEnabled" in staffPayload(draft, was, carried, { ...can, companyWideEditable: false })).toBe(
+      false,
+    );
+    expect("earlyOutPenaltyEnabled" in staffPayload(saved, saved, carried, access)).toBe(false);
+  });
+
+  it("refuses minutes and deductions the server would refuse", () => {
+    for (const [minutes, ok] of [
+      ["0", false],
+      ["721", false],
+      ["7.5", false],
+      ["", false],
+      ["1", true],
+      ["720", true],
+    ] as const) {
+      expect(!validateStaff({ ...was, earlyOutPenaltyMinutes: minutes }, can).earlyOutPenaltyMinutes).toBe(ok);
+    }
+    for (const [shift, ok] of [
+      ["0", false],
+      ["1.5", false],
+      ["0.255", false],
+      ["0.01", true],
+      ["0.25", true],
+      ["1", true],
+    ] as const) {
+      expect(!validateStaff({ ...was, earlyOutPenaltyDeduction: shift }, can).earlyOutPenaltyDeduction).toBe(ok);
+    }
+    expect(firstError(validateStaff({ ...was, earlyOutPenaltyMinutes: "0" }, can))).toMatch(
+      /Penalty Early Out minutes/,
+    );
   });
 });

@@ -255,6 +255,9 @@ export type PayrollDay = DayCompensationMarker & {
   /** Late In and Early Out, apart (Late In = arrived after the shift start and grace; Early Out = left before the shift end). */
   isLate?: boolean;
   isEarlyOut?: boolean;
+  /** Penalty Early Out (2026-11-13): penaltyDeduction is already out of `shifts`. Absent on an older backend. */
+  isPenaltyEarlyOut?: boolean;
+  penaltyDeduction?: number;
   /** A Sunday (the default weekly holiday; production works Sundays, so false for them). */
   isSunday?: boolean;
   /** The declared holiday's own name, when the day is one. */

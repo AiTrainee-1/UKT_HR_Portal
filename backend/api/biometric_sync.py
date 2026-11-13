@@ -361,6 +361,12 @@ def _ingest_punches(punches: list[tuple[str, date_type, time_type, str]],
         if count >= 6
     ]
 
+    # the days these punches belong to are judged again now, not left Absent / Half Day until a screen recomputes them
+    if daily_punch_counts:
+        from .attendance_refresh import refresh_after_punches
+
+        refresh_after_punches(daily_punch_counts.keys())
+
     return {
         "created": created, "skipped": skipped, "restricted": restricted,
         "notFound": not_found, "suspiciousDays": suspicious,

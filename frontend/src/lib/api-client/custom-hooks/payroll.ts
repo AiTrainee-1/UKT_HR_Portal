@@ -131,6 +131,10 @@ export type PayrollBreakdownDay = DayCompensationMarker & {
   // Evening Early-Out (Settings → Attendance) — only ever true when that
   // switch is on.
   isEarlyOut?: boolean;
+  // Penalty Early Out (2026-11-13): penaltyDeduction is already out of shiftsCompleted
+  isPenaltyEarlyOut?: boolean;
+  penaltyDeduction?: number;
+  earlyOutMinutes?: number;
   // Legacy: payrolls generated before the Late/Permission rewrite flagged a
   // day "Without Permission" instead of ordinary Late. Never sent any more.
   withoutPermission?: boolean;
@@ -200,6 +204,9 @@ export type PayrollBreakdown = {
     absentDays?: number;
     lateDays?: number;
     earlyOutDays?: number;
+    // Penalty Early Out days and the shifts they took off (already out of the paid days); absent on older payrolls.
+    penaltyEarlyOutDays?: number;
+    penaltyEarlyOutShifts?: number;
     // Legacy (payrolls generated before the rewrite only).
     withoutPermissionDays?: number;
     halfShiftDays?: number;
@@ -274,6 +281,19 @@ export type PayrollBreakdown = {
     } | null;
     total: number;
   };
+  // Penalty Early Out (information only, NOT part of `total`: the shifts are already out of the paid days; `amount` is
+  // what those part-days are worth at the day rate). Absent on payrolls generated before it existed.
+  penaltyEarlyOut?: {
+    enabled: boolean;
+    days: number;
+    shifts: number;
+    amount: number;
+    thresholdMinutes: number;
+    deductionPerDay: number;
+    measuredFrom: "shift_end" | "deadline";
+    inLatePool: boolean;
+    inPaidDays: boolean;
+  } | null;
   netSalary: number;
 };
 
@@ -678,6 +698,14 @@ export type PayrollSettingsItem = {
   // shifted effective boundary. Morning ships on; Evening ships off.
   morningLateInEnabled?: boolean;
   eveningEarlyOutEnabled?: boolean;
+  // Penalty Early Out (staff, company-wide, 2026-11-13): leaving MORE than earlyOutPenaltyMinutes before the shift end
+  // ("shift_end") or the Early-Out deadline = end - grace ("deadline") takes earlyOutPenaltyDeduction of a shift off the
+  // day, separately from the late pool unless earlyOutPenaltyInLatePool. Off by default.
+  earlyOutPenaltyEnabled?: boolean;
+  earlyOutPenaltyMinutes?: number;
+  earlyOutPenaltyDeduction?: number;
+  earlyOutPenaltyFrom?: "shift_end" | "deadline";
+  earlyOutPenaltyInLatePool?: boolean;
   // Half-Day Detection (staff) -a punch at/after Second Half Start counts as the Evening Half. The fixed First Half
   // End time is retired (each shift's own first-half limit, from the arrival timeline below, replaces it); it is
   // still reported for older clients and for employees with no shift.

@@ -54,6 +54,12 @@ COMPANY_WIDE_FIELDS = frozenset(
         "permission_pricing_enabled",
         "permission_free_allowance",
         "permission_deduction_slabs",
+        # Penalty Early Out: the attendance engine reads the company row only, so a branch value could never apply.
+        "early_out_penalty_enabled",
+        "early_out_penalty_minutes",
+        "early_out_penalty_deduction",
+        "early_out_penalty_from",
+        "early_out_penalty_in_late_pool",
     }
 )
 

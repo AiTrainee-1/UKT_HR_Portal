@@ -20,6 +20,7 @@ import {
 } from "./attendance/form";
 import { HowItWorks, type Sample } from "./attendance/HowItWorks";
 import { LateMarksSection } from "./attendance/LateMarksSection";
+import { PenaltyEarlyOutSection } from "./attendance/PenaltyEarlyOutSection";
 import { LunchSection } from "./attendance/LunchSection";
 import { MidnightSection } from "./attendance/MidnightSection";
 import { ModeSection } from "./attendance/ModeSection";
@@ -37,6 +38,7 @@ const STAFF_CONTENTS = [
   { id: "attendance-mode-section", label: "Mode" },
   { id: "attendance-day", label: "Full / Half / Absent" },
   { id: "attendance-late-marks", label: "Late and Early Out" },
+  { id: "attendance-penalty-early-out", label: "Penalty Early Out" },
   { id: "attendance-lunch", label: "Lunch return" },
   { id: "attendance-midnight", label: "After midnight" },
 ];
@@ -148,9 +150,10 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
         >
           <Building size={15} className="mt-0.5 shrink-0" />
           <p>
-            You are signed in for a branch. The company-wide rules (Second Half Start, the arrival timeline and the Late
-            / Early Out switches) are shown but only an administrator can change them. Anything else you save here is
-            stored for your branch only: payroll, reports and WhatsApp alerts keep using the company-wide values.
+            You are signed in for a branch. The company-wide rules (Second Half Start, the arrival timeline, the Late /
+            Early Out switches and Penalty Early Out) are shown but only an administrator can change them. Anything else
+            you save here is stored for your branch only: payroll, reports and WhatsApp alerts keep using the
+            company-wide values.
           </p>
         </div>
       )}
@@ -194,6 +197,14 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
           arrival={arrival}
           arrivalValid={!errors.arrival}
           secondHalfStart={minutesOf(draft.secondHalfStart)}
+        />
+        <PenaltyEarlyOutSection
+          draft={draft}
+          patch={patch}
+          errors={errors}
+          access={access}
+          loaded={loaded}
+          shift={shift}
         />
         <LunchSection draft={draft} patch={patch} errors={errors} loaded={loaded} shift={shift} />
         <MidnightSection draft={draft} patch={patch} errors={errors} loaded={loaded} shift={shift} />

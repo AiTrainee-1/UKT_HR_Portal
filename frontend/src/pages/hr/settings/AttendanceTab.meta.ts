@@ -4,6 +4,7 @@ import type { ClassView } from "./kit/view";
 const MODE = "Attendance Calculation Mode";
 const DAY = "Full Day, Half Day or Absent";
 const MARKS = "Late and Early Out marks";
+const PENALTY = "Penalty Early Out";
 const LUNCH = "Late back from lunch (Strict mode only)";
 const MIDNIGHT = "Forgotten last punch after midnight";
 const PRODUCTION = "Production workers";
@@ -81,6 +82,42 @@ export const ATTENDANCE_SETTINGS: SettingMeta[] = [
     purpose:
       "Turns the Early Out mark on or off for a last punch before the shift end minus its grace. Each Early Out day is one mark in the same monthly pool as Late.",
     keywords: ["early out", "leave early", "switch", "mark", "pool"],
+  },
+  {
+    id: "penalty-early-out",
+    tab: "attendance",
+    section: PENALTY,
+    title: "Penalty Early Out",
+    purpose:
+      "Turns the penalty on or off. When on, a day whose last punch is more than the minutes below before the shift end loses the deduction below (a Full Day of 1.00 becomes 0.75). That day is not also an Early Out mark in the late pool.",
+    keywords: ["penalty", "early out", "leave early", "left early", "deduction", "0.25", "75 minutes", "quarter"],
+  },
+  {
+    id: "penalty-early-out-minutes",
+    tab: "attendance",
+    section: PENALTY,
+    title: "Penalty after (minutes before the shift end)",
+    purpose:
+      "Leaving MORE than this many minutes early is a Penalty Early Out. Leaving exactly this many minutes early, or less, is an ordinary Early Out mark (counted in the late pool while Evening Early-Out marks are on).",
+    keywords: ["penalty", "early out", "minutes", "threshold", "75", "shift end", "deadline", "grace"],
+  },
+  {
+    id: "penalty-early-out-deduction",
+    tab: "attendance",
+    section: PENALTY,
+    title: "Deduction per Penalty Early Out (shift)",
+    purpose:
+      "How much of the day is taken off for each Penalty Early Out. 0.25 turns a Full Day (1.00) into 0.75. If the same day also had a quarter-shift arrival, both come off (0.50).",
+    keywords: ["penalty", "early out", "deduction", "shift", "pay", "salary", "0.25"],
+  },
+  {
+    id: "penalty-early-out-late-pool",
+    tab: "attendance",
+    section: PENALTY,
+    title: "Also count it as an Early Out mark",
+    purpose:
+      "Off (the usual rule): a Penalty Early Out is charged once, by the deduction above, and is not a mark in the monthly late pool. On: it is also one Early Out mark, so it uses up the free allowance and can reach the late deduction slabs.",
+    keywords: ["penalty", "early out", "late pool", "free allowance", "slabs", "mark"],
   },
   {
     id: "night-late-window",

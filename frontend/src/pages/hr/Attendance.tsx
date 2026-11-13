@@ -945,6 +945,8 @@ function EmployeeHistoryDialog({
             ? Math.round((empDetail.totalPresent / elapsedWorkable) * 100)
             : 0;
           const earlyOutDays = empDetail.records.filter(r => r.isEarlyOut).length;
+          // Penalty Early Out days (left more than the penalty minutes early: part of the day deducted, not a late-pool mark)
+          const penaltyDays = empDetail.records.filter(r => r.isPenaltyEarlyOut).length;
           // Days on which the employee used a compensation (OT allowance, announced window, birthday, relaxation).
           const compensationCounts = countMarks(empDetail.records);
           return (
@@ -984,6 +986,12 @@ function EmployeeHistoryDialog({
                   <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Early Out</p>
                   <p className="text-lg font-black text-orange-600">{earlyOutDays}</p>
                 </div>
+                {penaltyDays > 0 && (
+                  <div className="bg-white rounded-lg px-3 py-2 border border-red-100" data-testid="history-penalty-early-out">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Penalty Early Out</p>
+                    <p className="text-lg font-black text-red-600">{penaltyDays}</p>
+                  </div>
+                )}
                 <div className="bg-white rounded-lg px-3 py-2 border border-red-100">
                   <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Absent</p>
                   <p className="text-lg font-black text-red-600">{empDetail.totalAbsent}</p>

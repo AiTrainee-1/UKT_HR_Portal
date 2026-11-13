@@ -239,6 +239,38 @@ describe("Settings -> Attendance", () => {
     expect("morningLateInEnabled" in puts[0]).toBe(false);
   });
 
+  it("sets Penalty Early Out: the example follows what is typed, then all five keys are sent", async () => {
+    await open({
+      ...SAVED,
+      earlyOutPenaltyEnabled: false,
+      earlyOutPenaltyMinutes: 75,
+      earlyOutPenaltyDeduction: 0.25,
+      earlyOutPenaltyFrom: "shift_end",
+      earlyOutPenaltyInLatePool: false,
+    });
+    const line = (id: string) => (byTestId(id)?.textContent ?? "").replace(/\s+/g, " ");
+    expect(line("penalty-preview-free")).toContain("Last punch 16:45 (75 min early)");
+    expect(line("penalty-preview-hit")).toContain("the penalty is off");
+    await page!.click("#penalty-early-out-switch");
+    expect(line("penalty-preview-hit")).toContain("Penalty Early Out: 0.75 shift, ₹250 less");
+    await page!.type("#penalty-early-out-minutes-input", "90");
+    expect(line("penalty-preview-free")).toContain("Last punch 16:30 (90 min early)");
+    await page!.type("#penalty-early-out-minutes-input", "0");
+    expect(byTestId("penalty-minutes-error")?.textContent).toContain("from 1 to 720");
+    expect(buttonNamed("Save Attendance Settings")?.disabled).toBe(true);
+    await page!.type("#penalty-early-out-minutes-input", "90");
+    await press("Save Attendance Settings");
+    expect(byTestId("confirm-save")?.textContent).toContain("Penalty Early Out");
+    await press("Confirm and save");
+    expect(puts[0]).toMatchObject({
+      earlyOutPenaltyEnabled: true,
+      earlyOutPenaltyMinutes: 90,
+      earlyOutPenaltyDeduction: 0.25,
+      earlyOutPenaltyFrom: "shift_end",
+      earlyOutPenaltyInLatePool: false,
+    });
+  });
+
   it("shows a branch login the company-wide rules read-only and never sends them", async () => {
     await open({ ...SAVED, companyWideRulesEditable: false });
     expect(input("arrival-late-window").disabled).toBe(true);

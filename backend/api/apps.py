@@ -97,6 +97,7 @@ class ApiConfig(AppConfig):
             geo_tracking_scheduler,
             hod_reminder_scheduler,
             md_auto_attendance_scheduler,
+            attendance_refresh_scheduler,
             on_duty_day_end_scheduler,
             overtime_scheduler,
             screening_cleanup_scheduler,
@@ -152,6 +153,12 @@ class ApiConfig(AppConfig):
             overtime_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("OT detection scheduler bootstrap skipped: %s", e)
+
+        try:
+            # every stored attendance day follows its punches: a late punch is re-judged within 5 minutes
+            attendance_refresh_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Attendance refresh scheduler bootstrap skipped: %s", e)
 
         try:
             hod_reminder_scheduler.start_scheduler_if_needed()

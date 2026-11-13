@@ -203,6 +203,9 @@ def _view_of_record(rec) -> dict:
         "shifts": shifts if status == "present" else 0.0,
         "isLate": bool(rec.is_late),
         "isEarlyOut": bool(rec.early_leave),
+        # Penalty Early Out (additive): the shift it took off is already out of `shifts`
+        "isPenaltyEarlyOut": bool(getattr(rec, "penalty_early_out", False)),
+        "penaltyDeduction": float(getattr(rec, "penalty_deduction", 0) or 0),
         "compensationKind": rec.compensation_kind or None,
         "compensationMinutes": int(rec.compensation_minutes or 0),
         "compensationNote": rec.compensation_note or None,
@@ -287,12 +290,18 @@ def calendar_extras(
                 differs += 1
             day["isLate"] = fresh["isLate"]
             day["isEarlyOut"] = fresh["isEarlyOut"]
+            day["isPenaltyEarlyOut"] = fresh["isPenaltyEarlyOut"]
+            day["penaltyDeduction"] = fresh["penaltyDeduction"]
         elif rec is not None:
             day["isLate"] = bool(rec.is_late)
             day["isEarlyOut"] = bool(rec.early_leave)
+            day["isPenaltyEarlyOut"] = bool(getattr(rec, "penalty_early_out", False))
+            day["penaltyDeduction"] = float(getattr(rec, "penalty_deduction", 0) or 0)
         else:
             day["isLate"] = "late_in" in (day.get("flags") or [])
             day["isEarlyOut"] = "early_out" in (day.get("flags") or [])
+            day["isPenaltyEarlyOut"] = bool(day.get("isPenaltyEarlyOut", False))
+            day["penaltyDeduction"] = float(day.get("penaltyDeduction") or 0)
         day.update(extras(d, day))
         if d in hr_edits:
             day["hrEdit"] = hr_edits[d]
@@ -321,7 +330,19 @@ def calendar_extras(
                 "flags": [],
                 "marks": [],
                 "note": view["note"],
-                **{k: view[k] for k in ("status", "firstIn", "lastOut", "shifts", "isLate", "isEarlyOut")},
+                **{
+                    k: view[k]
+                    for k in (
+                        "status",
+                        "firstIn",
+                        "lastOut",
+                        "shifts",
+                        "isLate",
+                        "isEarlyOut",
+                        "isPenaltyEarlyOut",
+                        "penaltyDeduction",
+                    )
+                },
                 "compensationKind": view["compensationKind"],
                 "compensationMinutes": view["compensationMinutes"],
                 "compensationNote": view["compensationNote"],

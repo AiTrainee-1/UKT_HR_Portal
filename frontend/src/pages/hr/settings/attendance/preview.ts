@@ -52,7 +52,45 @@ export type StaffDayInput = {
   morningPermission?: boolean;
   /** An approved Evening Early-Out permission within the monthly cap, that day. */
   eveningPermission?: boolean;
+  /** Penalty Early Out; omitted = switched off. */
+  penalty?: PenaltySettings;
 };
+
+/** The Penalty Early Out settings (PayrollSettings.early_out_penalty_*). */
+export type PenaltySettings = {
+  enabled: boolean;
+  /** Leaving MORE than this many minutes before the reference is a Penalty Early Out. */
+  minutes: number;
+  /** Shift taken off the day. */
+  deduction: number;
+  from: "shift_end" | "deadline";
+  /** Also one Early-Out mark in the late pool. */
+  inLatePool: boolean;
+};
+
+/**
+ * attendance_final.penalty_early_out_check: the reference is the (permission-moved) shift end, or that minus the grace
+ * ("deadline"); a punch counts as its own minute; MORE than `minutes` before it is the penalty. Returns the reference
+ * and how many minutes before it the last punch is (0 when at or after it).
+ */
+export function penaltyEarlyOut(
+  last: number,
+  shift: ExampleShift,
+  penalty: PenaltySettings,
+  eveningPermission = false,
+): { penalty: boolean; minutesEarly: number; reference: number; latestFree: number } {
+  const end = shift.end - (eveningPermission ? PERMISSION_MINUTES : 0);
+  const reference = penalty.from === "deadline" ? end - shift.grace : end;
+  const minutesEarly = Math.max(0, reference - Math.floor(last));
+  const minutes = Math.max(0, Math.trunc(penalty.minutes));
+  return {
+    penalty: penalty.enabled && minutesEarly > minutes,
+    minutesEarly,
+    reference,
+    /** The earliest clock minute that is NOT a penalty: leaving before it is. */
+    latestFree: reference - minutes,
+  };
+}
 
 export type StaffDay = {
   status: DayStatus;
@@ -64,6 +102,8 @@ export type StaffDay = {
   limits: ArrivalLimits | null;
   /** Shift end minus grace (after an Evening Early-Out permission moved the end): leaving before it is Early Out. */
   earlyOutBefore: number;
+  /** A Penalty Early Out (its deduction is already out of `shifts`). */
+  penalty: boolean;
 };
 
 const clamp01 = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0);
@@ -81,20 +121,39 @@ export function judgeStaffDay(input: StaffDayInput): StaffDay {
   const half = halfDayStatus(punches, input.secondHalfStart, limits ? limits.firstHalfUntil : null);
   const earlyOutBefore = shift.end - (input.eveningPermission ? PERMISSION_MINUTES : 0) - shift.grace;
   if (punches.length === 0) {
-    return { status: "absent", shifts: 0, zone: null, late: false, earlyOut: false, limits, earlyOutBefore };
+    return {
+      status: "absent",
+      shifts: 0,
+      zone: null,
+      late: false,
+      earlyOut: false,
+      limits,
+      earlyOutBefore,
+      penalty: false,
+    };
   }
   const zone = limits ? arrivalZone(clock(punches[0]), limits, !!input.morningPermission) : null;
   let shifts = half.shifts;
   if (zone === "quarter" && half.status === "present") shifts = 1 - clamp01(arrival.quarterDeduction);
   const last = punches.length > 1 ? punches[punches.length - 1] : null;
+  let earlyOut = input.eveningEarlyOut && last !== null && last < earlyOutBefore;
+  let penalty = false;
+  if (input.penalty && last !== null && half.status === "present") {
+    penalty = penaltyEarlyOut(last, shift, input.penalty, !!input.eveningPermission).penalty;
+    if (penalty) {
+      shifts = Math.max(0, shifts - Math.min(clamp01(input.penalty.deduction), shifts));
+      earlyOut = input.penalty.inLatePool;
+    }
+  }
   return {
     status: half.status,
     shifts,
     zone,
     late: input.morningLateIn && zone === "late",
-    earlyOut: input.eveningEarlyOut && last !== null && last < earlyOutBefore,
+    earlyOut,
     limits,
     earlyOutBefore,
+    penalty,
   };
 }
 

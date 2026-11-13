@@ -247,6 +247,33 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                       </p>
                     </div>
                   )}
+                  {(bd.summary.penaltyEarlyOutDays ?? 0) > 0 && (
+                    <div
+                      className="mt-2 rounded-md bg-red-50 border border-red-100 px-3 py-2 text-xs text-red-800 space-y-0.5"
+                      data-testid="breakdown-penalty-early-out"
+                    >
+                      <p className="font-semibold flex items-center gap-1">
+                        <AlertTriangle size={11} /> Penalty Early Out
+                      </p>
+                      <p>
+                        <strong>{bd.summary.penaltyEarlyOutDays}</strong> day
+                        {bd.summary.penaltyEarlyOutDays !== 1 ? "s" : ""} left more than{" "}
+                        {bd.penaltyEarlyOut?.thresholdMinutes ?? 75} minutes before the shift end:{" "}
+                        <strong>{(bd.summary.penaltyEarlyOutShifts ?? 0).toFixed(2)} shift</strong>
+                        {bd.penaltyEarlyOut
+                          ? ` (₹${bd.penaltyEarlyOut.amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })})`
+                          : ""}{" "}
+                        taken off
+                        those days.
+                      </p>
+                      <p className="text-red-700/80">
+                        Already out of the paid days above, so it is not deducted again below.
+                        {bd.penaltyEarlyOut?.inLatePool
+                          ? " These days were also counted as Early-Out marks in the late pool."
+                          : " These days are not counted in the late pool."}
+                      </p>
+                    </div>
+                  )}
                   {(bd.summary.withoutPermissionDays ?? 0) > 0 && (
                     // Legacy: payrolls generated before the Late/Permission rewrite; no new payroll has this.
                     <div className="mt-2 rounded-md bg-rose-50 border border-rose-100 px-3 py-2 text-xs text-rose-800 space-y-0.5">
@@ -568,7 +595,11 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                                   d.isHalfShift && halfDayRule
                                     ? halfDayWorked(d.firstIn, halfDayRule.firstHalfEnd, d.arrivalZone)
                                     : null;
-                                return d.isLate || d.isEarlyOut || d.isHalfShift || compensationMark(d) ? (
+                                return d.isLate ||
+                                  d.isEarlyOut ||
+                                  d.isPenaltyEarlyOut ||
+                                  d.isHalfShift ||
+                                  compensationMark(d) ? (
                                   <span className="flex flex-wrap gap-1">
                                     {d.isLate &&
                                       (d.withoutPermission ? (
@@ -586,6 +617,11 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                                         Early-Out
                                       </span>
                                     )}
+                                    {d.isPenaltyEarlyOut && (
+                                      <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold whitespace-nowrap">
+                                        Penalty Early Out -{(d.penaltyDeduction ?? 0).toFixed(2)}
+                                      </span>
+                                    )}
                                     {d.isHalfShift && (
                                       <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold whitespace-nowrap">
                                         Half Day{half ? ` · ${half === "morning" ? "Morning" : "Evening"} half` : ""}
@@ -600,7 +636,7 @@ export function BreakdownDrawer({ payrollId, onClose }: { payrollId: number; onC
                               })()}
                             </td>
                             <td className="px-3 py-1.5 text-gray-500 max-w-[280px]">
-                              {d.isLate || d.isEarlyOut
+                              {d.isLate || d.isEarlyOut || d.isPenaltyEarlyOut
                                 ? (d.lateReason ?? <span className="text-gray-300">—</span>)
                                 : null}
                             </td>
