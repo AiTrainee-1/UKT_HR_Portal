@@ -91,16 +91,19 @@ export function ClassPills({
   onChange,
   children,
   testId = "settings-class-pills",
+  values,
 }: {
   value: ClassView;
   onChange: (next: ClassView) => void;
   children?: ReactNode;
   testId?: string;
+  /** The pages the login may see (each has its own permission key, kit/subtabs.tsx); every one when left out. */
+  values?: readonly ClassView[];
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3" data-testid={testId}>
       <PillTabs
-        items={CLASS_PILLS}
+        items={values ? CLASS_PILLS.filter((p) => values.includes(p.value)) : CLASS_PILLS}
         value={value}
         onChange={(v) => onChange(v as ClassView)}
         baseColor="#0f172a"

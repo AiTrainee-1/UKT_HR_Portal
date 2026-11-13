@@ -15,6 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { Gate, useLevel } from "@/lib/tab-access";
 import {
   downloadDocumentPdf,
   previewDocumentPdf,
@@ -45,6 +46,10 @@ const errorText = (err: unknown): string => {
 export default function LettersTab({ employeeId, joinDate, designation, department, token }: Props) {
   const { toast } = useToast();
   const [lastWorkingDay, setLastWorkingDay] = useState(() => todayYmd());
+  // Offer and experience letters are a key of their own ("employees.letters", shared with the employee profile and New
+  // Joinees): hidden = their cards are not drawn; View = preview / download only (WhatsApp is not a word the view-only
+  // lock knows, so it is disabled here).
+  const canSendLetters = useLevel()("employees.letters") === "edit";
   const [offerBusy, setOfferBusy] = useState<Busy>(null);
   const [experienceBusy, setExperienceBusy] = useState<Busy>(null);
   const [resignationBusy, setResignationBusy] = useState<Busy>(null);
@@ -107,136 +112,142 @@ export default function LettersTab({ employeeId, joinDate, designation, departme
         {joinDate ? `, joined ${formatDate(joinDate)}` : ""}). Nothing is saved here.
       </p>
       <div className="grid gap-4 md:grid-cols-3">
-        <Card className="rounded-2xl">
-          <CardContent className="flex h-full flex-col gap-3 p-4">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50">
-              <FileSignature size={16} className="text-indigo-600" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-gray-800">Offer letter</p>
-              <p className="mt-0.5 text-xs text-gray-400">
-                Generated from current designation, department, and salary.
-              </p>
-            </div>
-            <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5"
-                onClick={() =>
-                  generate(
-                    `/api/employees/${employeeId}/offer-letter/pdf`,
-                    "preview",
-                    setOfferBusy,
-                    "Failed to generate Offer Letter",
-                  )
-                }
-                disabled={offerBusy !== null}
-                data-testid="offer-preview"
-              >
-                <Eye size={14} /> {generating(offerBusy, "preview", "Preview")}
-              </Button>
-              <Button
-                size="sm"
-                className="gap-1.5"
-                onClick={() =>
-                  generate(
-                    `/api/employees/${employeeId}/offer-letter/pdf`,
-                    "download",
-                    setOfferBusy,
-                    "Failed to generate Offer Letter",
-                  )
-                }
-                disabled={offerBusy !== null}
-                data-testid="offer-download"
-              >
-                <Download size={14} /> {generating(offerBusy, "download", "Download")}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-2xl">
-          <CardContent className="flex h-full flex-col gap-3 p-4">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50">
-              <FileClock size={16} className="text-indigo-600" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-gray-800">Experience letter</p>
-              <div className="mt-2 space-y-1">
-                <Label htmlFor="last-working-day" className="text-xs">
-                  Last working day
-                </Label>
-                <Input
-                  id="last-working-day"
-                  type="date"
-                  className="h-9"
-                  value={lastWorkingDay}
-                  onChange={(e) => setLastWorkingDay(e.target.value)}
-                  aria-invalid={!dateValid || beforeJoining}
-                  data-testid="last-working-day"
-                />
-                {!dateValid && (
-                  <p className="flex items-start gap-1 text-xs text-red-600" role="alert">
-                    <TriangleAlert size={12} className="mt-0.5 shrink-0" /> Pick the last working day.
-                  </p>
-                )}
-                {dateValid && beforeJoining && (
-                  <p className="flex items-start gap-1 text-xs text-amber-700" data-testid="before-joining-warning">
-                    <TriangleAlert size={12} className="mt-0.5 shrink-0" /> That is before the joining date (
-                    {formatDate(joinDate)}).
-                  </p>
-                )}
+        <Gate k="employees.letters">
+          <Card className="rounded-2xl">
+            <CardContent className="flex h-full flex-col gap-3 p-4">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50">
+                <FileSignature size={16} className="text-indigo-600" />
               </div>
-            </div>
-            <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5"
-                onClick={() =>
-                  generate(
-                    `/api/employees/${employeeId}/experience-letter/pdf?lastWorkingDate=${lastWorkingDay}`,
-                    "preview",
-                    setExperienceBusy,
-                    "Failed to generate Experience Letter",
-                  )
-                }
-                disabled={experienceBusy !== null || !dateValid}
-                data-testid="experience-preview"
-              >
-                <Eye size={14} /> {generating(experienceBusy, "preview", "Preview")}
-              </Button>
-              <Button
-                size="sm"
-                className="gap-1.5"
-                onClick={() =>
-                  generate(
-                    `/api/employees/${employeeId}/experience-letter/pdf?lastWorkingDate=${lastWorkingDay}`,
-                    "download",
-                    setExperienceBusy,
-                    "Failed to generate Experience Letter",
-                  )
-                }
-                disabled={experienceBusy !== null || !dateValid}
-                data-testid="experience-download"
-              >
-                <Download size={14} /> {generating(experienceBusy, "download", "Download")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                onClick={sendExperienceWhatsApp}
-                disabled={experienceWhatsAppBusy || !dateValid}
-                data-testid="experience-whatsapp"
-              >
-                {experienceWhatsAppBusy ? <Loader2 size={14} className="animate-spin" /> : <MessageCircle size={14} />}
-                {experienceWhatsAppBusy ? "Sending…" : "WhatsApp"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              <div>
+                <p className="text-sm font-semibold text-gray-800">Offer letter</p>
+                <p className="mt-0.5 text-xs text-gray-400">
+                  Generated from current designation, department, and salary.
+                </p>
+              </div>
+              <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5"
+                  onClick={() =>
+                    generate(
+                      `/api/employees/${employeeId}/offer-letter/pdf`,
+                      "preview",
+                      setOfferBusy,
+                      "Failed to generate Offer Letter",
+                    )
+                  }
+                  disabled={offerBusy !== null}
+                  data-testid="offer-preview"
+                >
+                  <Eye size={14} /> {generating(offerBusy, "preview", "Preview")}
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() =>
+                    generate(
+                      `/api/employees/${employeeId}/offer-letter/pdf`,
+                      "download",
+                      setOfferBusy,
+                      "Failed to generate Offer Letter",
+                    )
+                  }
+                  disabled={offerBusy !== null}
+                  data-testid="offer-download"
+                >
+                  <Download size={14} /> {generating(offerBusy, "download", "Download")}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-2xl">
+            <CardContent className="flex h-full flex-col gap-3 p-4">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50">
+                <FileClock size={16} className="text-indigo-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-800">Experience letter</p>
+                <div className="mt-2 space-y-1">
+                  <Label htmlFor="last-working-day" className="text-xs">
+                    Last working day
+                  </Label>
+                  <Input
+                    id="last-working-day"
+                    type="date"
+                    className="h-9"
+                    value={lastWorkingDay}
+                    onChange={(e) => setLastWorkingDay(e.target.value)}
+                    aria-invalid={!dateValid || beforeJoining}
+                    data-testid="last-working-day"
+                  />
+                  {!dateValid && (
+                    <p className="flex items-start gap-1 text-xs text-red-600" role="alert">
+                      <TriangleAlert size={12} className="mt-0.5 shrink-0" /> Pick the last working day.
+                    </p>
+                  )}
+                  {dateValid && beforeJoining && (
+                    <p className="flex items-start gap-1 text-xs text-amber-700" data-testid="before-joining-warning">
+                      <TriangleAlert size={12} className="mt-0.5 shrink-0" /> That is before the joining date (
+                      {formatDate(joinDate)}).
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5"
+                  onClick={() =>
+                    generate(
+                      `/api/employees/${employeeId}/experience-letter/pdf?lastWorkingDate=${lastWorkingDay}`,
+                      "preview",
+                      setExperienceBusy,
+                      "Failed to generate Experience Letter",
+                    )
+                  }
+                  disabled={experienceBusy !== null || !dateValid}
+                  data-testid="experience-preview"
+                >
+                  <Eye size={14} /> {generating(experienceBusy, "preview", "Preview")}
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() =>
+                    generate(
+                      `/api/employees/${employeeId}/experience-letter/pdf?lastWorkingDate=${lastWorkingDay}`,
+                      "download",
+                      setExperienceBusy,
+                      "Failed to generate Experience Letter",
+                    )
+                  }
+                  disabled={experienceBusy !== null || !dateValid}
+                  data-testid="experience-download"
+                >
+                  <Download size={14} /> {generating(experienceBusy, "download", "Download")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                  onClick={sendExperienceWhatsApp}
+                  disabled={experienceWhatsAppBusy || !dateValid || !canSendLetters}
+                  data-testid="experience-whatsapp"
+                >
+                  {experienceWhatsAppBusy ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <MessageCircle size={14} />
+                  )}
+                  {experienceWhatsAppBusy ? "Sending…" : "WhatsApp"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </Gate>
 
         <Card className="rounded-2xl">
           <CardContent className="flex h-full flex-col gap-3 p-4">

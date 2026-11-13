@@ -1870,6 +1870,13 @@ def payroll_detail(request: Request, pk: int) -> Response:
     if month_workflow.is_staff_month_row(p) and month_workflow.is_locked(p.month, p.year):
         return _error(month_workflow.locked_message(p.month, p.year), 409)
     d = request.data
+    if "status" in d and d["status"] != p.status:
+        # marking a payroll cleared (paid) is a decision of its own: Account Management -> Approvals -> "Mark a salary
+        # as cleared" (an extra right on top of payroll Edit; an account that never set it keeps "edit = may")
+        from . import hr_access
+
+        if refused := hr_access.approval_refusal(request, "payroll_mark_cleared"):
+            return refused
     if "status" in d:
         p.status = d["status"]
     if "bonus" in d:
@@ -2223,6 +2230,9 @@ COMPANY_WIDE_RULE_KEYS: tuple[str, ...] = (
     "otCompensationType",
 )
 
+# Since 2026-11-11 most groups name the Settings SUB-TAB a field is on (settings.payroll.bonus ...). A sub-tab key follows
+# its tab until a role sets it on its own (permission_registry.resolve_permission), so every role keeps the access it had,
+# and a role can now be given one sub-tab of a tab without the others.
 FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "companyName": ("settings.company",),
     "companyTagline": ("settings.company",),
@@ -2234,55 +2244,55 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "companyAddress": ("settings.company",),
     "companyRegistration": ("settings.company",),
     "companyLogo": ("settings.company", "settings.salary_slip"),
-    "attendanceMode": ("settings.attendance",),
-    "simpleHalfShiftCutoff": ("settings.attendance",),
-    "morningLateInEnabled": ("settings.attendance",),
-    "eveningEarlyOutEnabled": ("settings.attendance",),
-    "halfDayFirstHalfEndTime": ("settings.attendance",),
-    "halfDaySecondHalfStartTime": ("settings.attendance",),
-    "arrivalLateWindowMinutes": ("settings.attendance",),
-    "arrivalPermissionWindowMinutes": ("settings.attendance",),
-    "arrivalExtraMinutes": ("settings.attendance",),
-    "arrivalQuarterDeduction": ("settings.attendance",),
-    "lastPunchPostShiftGraceHours": ("settings.attendance",),
-    "firstPunchPreShiftBufferHours": ("settings.attendance",),
+    "attendanceMode": ("settings.attendance.staff",),
+    "simpleHalfShiftCutoff": ("settings.attendance.staff",),
+    "morningLateInEnabled": ("settings.attendance.staff",),
+    "eveningEarlyOutEnabled": ("settings.attendance.staff",),
+    "halfDayFirstHalfEndTime": ("settings.attendance.staff",),
+    "halfDaySecondHalfStartTime": ("settings.attendance.staff",),
+    "arrivalLateWindowMinutes": ("settings.attendance.staff",),
+    "arrivalPermissionWindowMinutes": ("settings.attendance.staff",),
+    "arrivalExtraMinutes": ("settings.attendance.staff",),
+    "arrivalQuarterDeduction": ("settings.attendance.staff",),
+    "lastPunchPostShiftGraceHours": ("settings.attendance.staff",),
+    "firstPunchPreShiftBufferHours": ("settings.attendance.staff",),
     "prodFirstHalfStart": ("settings.attendance",),
     "prodFirstHalfEnd": ("settings.attendance",),
     "prodSecondHalfStart": ("settings.attendance",),
     "prodSecondHalfEnd": ("settings.attendance",),
     "prodExtraStart": ("settings.attendance",),
     "prodExtraEnd": ("settings.attendance",),
-    "nightShiftEnabled": ("settings.attendance",),
-    "defaultShiftGraceMinutes": ("settings.attendance",),
-    "defaultShiftFirstHalfEnd": ("settings.attendance",),
-    "defaultShiftLunchDurationMinutes": ("settings.attendance",),
-    "defaultShiftLunchGraceMinutes": ("settings.attendance",),
-    "afternoonLateWindowMinutes": ("settings.attendance",),
-    "afternoonPermissionWindowMinutes": ("settings.attendance",),
+    "nightShiftEnabled": ("settings.attendance.staff",),
+    "defaultShiftGraceMinutes": ("settings.attendance.staff",),
+    "defaultShiftFirstHalfEnd": ("settings.attendance.staff",),
+    "defaultShiftLunchDurationMinutes": ("settings.attendance.staff",),
+    "defaultShiftLunchGraceMinutes": ("settings.attendance.staff",),
+    "afternoonLateWindowMinutes": ("settings.attendance.staff",),
+    "afternoonPermissionWindowMinutes": ("settings.attendance.staff",),
     # Late Detection is its own Settings tab, so it gets its own permission
     # group -HR can be given the attendance timings without the power to
     # change what a late actually costs an employee.
-    "lateFreeAllowance": ("settings.late_detection",),
-    "lateDeductionSlabs": ("settings.late_detection",),
-    "permissionMonthlyCap": ("settings.late_detection",),
-    "permissionPricingEnabled": ("settings.late_detection",),
-    "permissionFreeAllowance": ("settings.late_detection",),
-    "permissionDeductionSlabs": ("settings.late_detection",),
-    "basicPercent": ("settings.payroll",),
-    "hraPercent": ("settings.payroll",),
-    "bonusPercent": ("settings.payroll",),
-    "bonusWageCeiling": ("settings.payroll",),
-    "bonusEligibilityCeiling": ("settings.payroll",),
-    "bonusFyStartMonth": ("settings.payroll",),
-    "compensationFeatureEnabled": ("settings.payroll",),
-    "otDetectionEnabled": ("settings.payroll",),
-    "otThresholdMinutes": ("settings.payroll",),
-    "otCompensationType": ("settings.payroll",),
-    "payDay": ("settings.payroll",),
-    "productionPayType": ("settings.payroll",),
+    "lateFreeAllowance": ("settings.late_detection.staff",),
+    "lateDeductionSlabs": ("settings.late_detection.staff",),
+    "permissionMonthlyCap": ("settings.late_detection.staff",),
+    "permissionPricingEnabled": ("settings.late_detection.staff",),
+    "permissionFreeAllowance": ("settings.late_detection.staff",),
+    "permissionDeductionSlabs": ("settings.late_detection.staff",),
+    "basicPercent": ("settings.payroll.rates",),
+    "hraPercent": ("settings.payroll.rates",),
+    "bonusPercent": ("settings.payroll.bonus",),
+    "bonusWageCeiling": ("settings.payroll.bonus",),
+    "bonusEligibilityCeiling": ("settings.payroll.bonus",),
+    "bonusFyStartMonth": ("settings.payroll.bonus",),
+    "compensationFeatureEnabled": ("settings.payroll.ot_compensation",),
+    "otDetectionEnabled": ("settings.payroll.ot_compensation",),
+    "otThresholdMinutes": ("settings.payroll.ot_compensation",),
+    "otCompensationType": ("settings.payroll.ot_compensation",),
+    "payDay": ("settings.payroll.rates",),
+    "productionPayType": ("settings.payroll.rates",),
     # The suggested salary per shift is a PRODUCTION value that now sits on Production Payroll -> Pay & Bonus; the old
     # Payroll group stays valid so a role granted only that one keeps the access it always had.
-    "defaultSalaryPerShift": ("settings.production_payroll", "settings.payroll"),
+    "defaultSalaryPerShift": ("settings.production_payroll.pay_bonus", "settings.payroll.rates"),
     # Production payroll period is its own Settings tab -see the note on
     # settings.late_detection above for why this gets a separate group:
     # HR can be given the flat Payroll rates without the power to change
@@ -2293,16 +2303,16 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "prodPeriodAnchorDate": ("settings.production_payroll",),
     "prodPeriodCustomDays": ("settings.production_payroll",),
     "prodCycles": ("settings.production_payroll",),
-    "prodBonusPercent": ("settings.production_payroll",),
-    "prodBonusWageCeiling": ("settings.production_payroll",),
-    "prodBonusEligibilityCeiling": ("settings.production_payroll",),
+    "prodBonusPercent": ("settings.production_payroll.pay_bonus",),
+    "prodBonusWageCeiling": ("settings.production_payroll.pay_bonus",),
+    "prodBonusEligibilityCeiling": ("settings.production_payroll.pay_bonus",),
     # The production late rules were moved to Late Detection -> Production: the role that owns that tab can save them, and
     # the Production Payroll role keeps the access it had (either group is enough). prodCycles mixes period keys with late
     # keys in ONE json value, so it is judged key by key: see _denied_settings_fields.
-    "prodAttendanceMode": ("settings.late_detection", "settings.production_payroll"),
-    "prodLateDetectionEnabled": ("settings.late_detection", "settings.production_payroll"),
-    "prodLateFreeAllowance": ("settings.late_detection", "settings.production_payroll"),
-    "prodLateDeductionSlabs": ("settings.late_detection", "settings.production_payroll"),
+    "prodAttendanceMode": ("settings.late_detection.production", "settings.production_payroll"),
+    "prodLateDetectionEnabled": ("settings.late_detection.production", "settings.production_payroll"),
+    "prodLateFreeAllowance": ("settings.late_detection.production", "settings.production_payroll"),
+    "prodLateDeductionSlabs": ("settings.late_detection.production", "settings.production_payroll"),
     "slipCompanyName": ("settings.salary_slip",),
     "slipCompanyAddress": ("settings.salary_slip",),
     "minWageRate": ("settings.salary_slip",),
@@ -2324,7 +2334,9 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
 # start) belong to Production Payroll, the late rules (free late days, late slabs) also to Late Detection -> Production.
 _PROD_CYCLE_LATE_KEYS = ("lateFreeAllowance", "lateSlabs")
 _PROD_CYCLE_PERIOD_GROUPS = ("settings.production_payroll",)
-_PROD_CYCLE_LATE_GROUPS = ("settings.late_detection", "settings.production_payroll")
+_PROD_CYCLE_LATE_GROUPS = ("settings.late_detection.production", "settings.production_payroll")
+# Settings -> Production Payroll -> Weekly / BiWeekly / Monthly: one sub-tab per cycle (each follows the tab until set)
+_PROD_CYCLE_SUBTABS = ("weekly", "biweekly", "monthly")
 
 
 def _groups_needed(key: str, value) -> list[tuple[str, ...]]:
@@ -2335,12 +2347,16 @@ def _groups_needed(key: str, value) -> list[tuple[str, ...]]:
     if key != "prodCycles":
         return [FIELD_GROUPS[key]]
     needed: list[tuple[str, ...]] = []
-    for changes in value.values() if isinstance(value, dict) else ():
+    for cycle, changes in value.items() if isinstance(value, dict) else ():
+        period = (f"settings.production_payroll.{cycle}",) if cycle in _PROD_CYCLE_SUBTABS else _PROD_CYCLE_PERIOD_GROUPS
         if not isinstance(changes, dict):
-            needed.append(_PROD_CYCLE_PERIOD_GROUPS)
+            needed.append(period)
             continue
         for inner in changes:
-            needed.append(_PROD_CYCLE_LATE_GROUPS if inner in _PROD_CYCLE_LATE_KEYS else _PROD_CYCLE_PERIOD_GROUPS)
+            if inner in _PROD_CYCLE_LATE_KEYS:
+                needed.append(("settings.late_detection.production", period[0]))
+            else:
+                needed.append(period)
     return list(dict.fromkeys(needed)) or [FIELD_GROUPS["prodCycles"]]
 
 

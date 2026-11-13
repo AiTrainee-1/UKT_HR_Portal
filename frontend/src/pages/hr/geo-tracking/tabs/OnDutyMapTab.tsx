@@ -6,6 +6,7 @@
 //   * the journeys come from the new tracking (GET /api/tracking/journeys/day-map), joined by employee with the On-Duty feed
 //     (their request and punches); an employee without a journey keeps the old position pings as a plain line.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { CalendarDays, Eye, MapPinned, Route as RouteIcon, ScanSearch, Users } from "lucide-react";
 import { Chip } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,10 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { trackingErrorMessage, useJourneyDayMap, useOnDutyMap } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock } from "@/lib/tab-access";
 import { assignDutyColors, dutyColor } from "../dutyColors";
 import { buildDutyEntries, hasRoute, summarize, todayIst } from "../dutyMap";
 import { ListSkeleton, LoadError, Note, ToolbarCard } from "../kit";
@@ -27,8 +31,23 @@ import SingleEmployeeView from "./SingleEmployeeView";
 
 type Mode = "all" | "single";
 
+/** Each view's own permission key (Account Management -> Roles & Permissions); one without a setting follows the map. */
+const MODE_KEY: Record<Mode, string> = {
+  all: "geo_attendance.on_duty_map.all",
+  single: "geo_attendance.on_duty_map.single",
+};
+
 export default function OnDutyMapTab() {
-  const [mode, setMode] = useState<Mode>("all");
+  const [askedMode, setMode] = useState<Mode>("all");
+  // only the views this role may see are offered (a hidden one is never drawn), and one it may only view is locked
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  const modes = (["all", "single"] as const).filter((m) => level(MODE_KEY[m]) !== "hidden");
+  const mode = pickVisible(askedMode, modes);
+  const modeViewOnly =
+    modes.length > 0 && !isRouteViewOnly(user, location, moduleForPath(location)) && level(MODE_KEY[mode]) === "view";
+  useViewOnlyLock(modeViewOnly, mode);
   const [date, setDate] = useState(todayIst());
   const [focusId, setFocusId] = useState<number | null>(null);
   // changes only when a row of the list is picked: that moves the map to the employee (picking a pin on the map must not)
@@ -42,7 +61,7 @@ export default function OnDutyMapTab() {
 
   const today = todayIst();
   const { data: mapData, isLoading: mapLoading, error: mapError, refetch: refetchMap } = useOnDutyMap(date);
-  const { data: dayMap, isLoading: dayLoading, error: dayError } = useJourneyDayMap(date);
+  const { data: dayMap, isLoading: dayLoading, error: dayError } = useJourneyDayMap(date, modes.includes("all"));
   const loading = mapLoading || dayLoading;
 
   const entries = useMemo(() => buildDutyEntries(mapData?.employees ?? [], dayMap?.journeys ?? []), [mapData, dayMap]);
@@ -118,6 +137,17 @@ export default function OnDutyMapTab() {
     view.fit(entries.flatMap((e) => e.all));
   };
 
+  if (modes.length === 0) {
+    return (
+      <p
+        className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
+        data-testid="nothing-open"
+      >
+        Nothing on this page is open to your role.
+      </p>
+    );
+  }
+
   return (
     <div className="space-y-4" data-testid="tab-onduty-map">
       <ToolbarCard>
@@ -142,7 +172,7 @@ export default function OnDutyMapTab() {
             // the count goes in `count`: the pills measure themselves again when it changes
             { value: "all", label: "All On-Duty", count: entries.length || undefined, icon: <Users size={12} /> },
             { value: "single", label: "Single Employee", icon: <RouteIcon size={12} /> },
-          ]}
+          ].filter((item) => modes.includes(item.value as Mode))}
           value={mode}
           onChange={(v) => {
             setMode(v as Mode);
@@ -166,6 +196,8 @@ export default function OnDutyMapTab() {
           </div>
         )}
       </ToolbarCard>
+
+      <ViewOnlyTabNote show={modeViewOnly} />
 
       {mode === "single" ? (
         <SingleEmployeeView date={date} />

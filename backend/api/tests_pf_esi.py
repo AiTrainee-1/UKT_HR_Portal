@@ -1211,11 +1211,14 @@ class CtcTests(Base):
 
 class RegistryTests(SimpleTestCase):
     def test_the_new_endpoints_are_gated_the_way_the_spec_says(self):
-        from .permission_registry import resolve_module
+        from .permission_registry import resolve_module, resolve_permission
 
-        self.assertEqual(resolve_module("tds/employees"), "employees")
-        self.assertEqual(resolve_module("tds/employees/12"), "employees")
-        self.assertEqual(resolve_module("pf-esi/coverage"), "employees")
+        # Employees -> Co Emp and its TDS sub-tab have keys of their own since 2026-11-11 (they follow "employees" until a
+        # role sets them, so every role keeps exactly the access it had)
+        self.assertEqual(resolve_module("tds/employees"), "employees.co_emp.tds")
+        self.assertEqual(resolve_module("tds/employees/12"), "employees.co_emp.tds")
+        self.assertEqual(resolve_module("pf-esi/coverage"), "employees.co_emp")
+        self.assertEqual(resolve_permission({"employees": "view"}, "employees.co_emp.tds"), "view")
         self.assertIsNone(resolve_module("pf-esi-settings"))  # readable by every HR login; the view guards writes
 
 

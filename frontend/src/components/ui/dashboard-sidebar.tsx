@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SidebarToggle } from '@/components/ui/sidebar-toggle';
 import { useAuth, canView, canViewRoute, canApprove } from '@/contexts/AuthContext';
+import { kindFor } from '@/lib/hr-access';
 import { moduleForPath } from '@/lib/permission-modules';
 import { hrCanAct } from '@/lib/approval-workflow';
 import { COMPENSATION_BASE, COMPENSATION_PAGES, pagePath } from '@/pages/hr/compensation/routes';
@@ -664,7 +665,9 @@ function HrSidebarView({
   const canSeeRequests = canView(user, 'requests');
   const canSeeResignations = canView(user, 'recruitment.resignations');
   const canSeeSettlement = canView(user, 'settlement');
-  const canSeeGeoAttendance = canView(user, 'geo_attendance');
+  // Geo Attendance's two tabs that count what is waiting have keys of their own (they follow the page until set)
+  const canSeeOnDuty = canView(user, 'geo_attendance.approvals');
+  const canSeeVerifications = canView(user, 'geo_attendance.verifications');
   const canSeeNotifications = canView(user, 'notifications');
   const canSeeOutpass = canView(user, 'outpass_visitors');
 
@@ -675,8 +678,8 @@ function HrSidebarView({
   const { data: permData }   = useListPermissions({ status: 'pending' }, { refetchInterval: 30_000, enabled: canSeeRequests } as any);
   const { data: resignData } = useListResignations('pending,dept_approved', { refetchInterval: 30_000, enabled: canSeeResignations } as any);
   const { data: advanceData } = useListAdvances({ status: 'pending' }, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
-  const { data: onDutySessionData } = useOnDutySessionsHR('pending', canSeeGeoAttendance);
-  const { data: onDutyPunchData } = useOnDutyPunchVerificationsHR('pending', canSeeGeoAttendance);
+  const { data: onDutySessionData } = useOnDutySessionsHR('pending', canSeeOnDuty);
+  const { data: onDutyPunchData } = useOnDutyPunchVerificationsHR('pending', canSeeVerifications);
   // Outpass requests also show up in the general Requests queue (see
   // ApprovedRequests.tsx's unified list) AND get their own badge on the
   // Outpass / Visitors nav item, exactly like Geo Attendance's On-Duty badge
@@ -707,13 +710,15 @@ function HrSidebarView({
   const activeResignationsCount = canApprove(user, 'resignation')
     ? (resignData ?? []).filter((r: any) => r.status === 'pending' || r.status === 'dept_approved').length
     : 0;
+  // General and Term advances are separate approvals: count the ones this account may decide
   const pendingAdvancesCount = canApprove(user, 'advance')
-    ? (advanceData ?? []).filter((a: any) => a.status === 'pending').length
+    ? (advanceData ?? []).filter(
+        (a: any) => a.status === 'pending' && canApprove(user, kindFor('advance', { advanceType: a.advanceType })),
+      ).length
     : 0;
-  const pendingOnDutyCount = canSeeGeoAttendance
-    ? (onDutySessionData ?? []).filter(hrActs).length +
-      (canApprove(user, 'on_duty_punch') ? (onDutyPunchData ?? []).length : 0)
-    : 0;
+  const pendingOnDutyCount =
+    (canSeeOnDuty ? (onDutySessionData ?? []).filter(hrActs).length : 0) +
+    (canSeeVerifications && canApprove(user, 'on_duty_punch') ? (onDutyPunchData ?? []).length : 0);
 
   const initials = (user?.name ?? 'H')
     .split(' ')

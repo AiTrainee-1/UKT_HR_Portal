@@ -3,6 +3,7 @@ import { Clock, Factory, Pencil, Power, Trash2, UserPlus, Users } from "lucide-r
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { ShiftItem } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { durationLabel, timelineBar } from "./shift-logic";
 
@@ -172,16 +173,20 @@ export default function ShiftCard({
               <Users size={13} />
               {count === 0 ? "Nobody on it yet" : `${count} employee${count === 1 ? "" : "s"}`}
             </button>
-            <button
-              type="button"
-              onClick={onAssign}
-              disabled={!shift.isActive}
-              title={shift.isActive ? "Choose who works this shift" : "Enable the shift before assigning people to it"}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-              data-testid={`shift-assign-${shift.id}`}
-            >
-              <UserPlus size={13} /> Assign people
-            </button>
+            <Gate k="shifts.assign">
+              <button
+                type="button"
+                onClick={onAssign}
+                disabled={!shift.isActive}
+                title={
+                  shift.isActive ? "Choose who works this shift" : "Enable the shift before assigning people to it"
+                }
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                data-testid={`shift-assign-${shift.id}`}
+              >
+                <UserPlus size={13} /> Assign people
+              </button>
+            </Gate>
           </div>
         </div>
       </div>

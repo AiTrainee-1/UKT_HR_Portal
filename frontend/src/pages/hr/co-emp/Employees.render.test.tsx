@@ -15,7 +15,13 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
-vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: { branchId: null } }) }));
+// Every tab and button open (the per-tab permission keys, lib/tab-access.tsx, are tested on their own below).
+const access = vi.hoisted(() => ({ level: (() => "edit") as (key: string) => string }));
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({ user: { branchId: null } }),
+  permissionLevel: (_user: unknown, key: string) => access.level(key),
+  isRouteViewOnly: () => false,
+}));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }), toast: vi.fn() }));
 vi.mock("../co-emp/CoEmpTab", () => ({
   CoEmpTab: (props: { cls: PfEsiClass; filters: unknown; onClassChange: (c: PfEsiClass) => void }) =>
@@ -269,5 +275,64 @@ describe("the TDS panel", () => {
     mount("/hr/employees?tab=staff&view=tds");
     expect(q("mock-tds")).toBeNull();
     expect(q("button-add-employee")).not.toBeNull();
+  });
+});
+
+describe("the per-tab permission keys", () => {
+  const levels = (map: Record<string, string>) => {
+    access.level = (key) => map[key] ?? "edit";
+  };
+  afterEach(() => {
+    access.level = () => "edit";
+  });
+  const tabLabels = () =>
+    [...must("employees-tabs").querySelectorAll('[role="tab"]')].map((t) => text(t.querySelector(".ptab-label")));
+
+  it("drops a hidden tab, also when the address asks for it, and never mounts it", () => {
+    levels({ "employees.co_emp": "hidden" });
+    mount("/hr/employees?tab=coemp");
+    expect(tabLabels()).toEqual(["Staff(1)", "Production(0)"]);
+    expect(q("mock-coemp")).toBeNull();
+    expect(h.paginated).toHaveBeenLastCalledWith(expect.anything(), { enabled: true });
+  });
+
+  it("drops the TDS button and ignores view=tds when the TDS panel is hidden", () => {
+    levels({ "employees.co_emp.tds": "hidden" });
+    mount("/hr/employees?tab=coemp&view=tds");
+    expect(q("button-tds")).toBeNull();
+    expect(q("mock-tds")).toBeNull();
+    expect(q("mock-coemp")).not.toBeNull();
+  });
+
+  it("says so, and fetches nothing, when every tab is hidden", () => {
+    levels({ "employees.staff": "hidden", "employees.production": "hidden", "employees.co_emp": "hidden" });
+    mount("/hr/employees");
+    expect(text(must("employees-nothing-open"))).toBe("Nothing on this page is open to your role.");
+    expect(q("employees-tabs")).toBeNull();
+    expect(h.paginated).toHaveBeenLastCalledWith(expect.anything(), { enabled: false });
+  });
+
+  it("notes a View-only tab", () => {
+    levels({ "employees.staff": "view" });
+    mount("/hr/employees");
+    expect(q("tab-view-only")).not.toBeNull();
+    click(headerTab(1));
+    expect(q("tab-view-only")).toBeNull();
+  });
+
+  it("hides or locks the row and header buttons by their own keys", () => {
+    levels({
+      "employees.add": "hidden",
+      "employees.bulk_upload": "hidden",
+      "employees.edit": "hidden",
+      "employees.profile": "view",
+      "employees.status": "view",
+    });
+    mount("/hr/employees");
+    expect(q("button-add-employee")).toBeNull();
+    expect(q("button-bulk-upload")).toBeNull();
+    expect(q("button-edit-1")).toBeNull();
+    expect((must("button-view-1") as HTMLButtonElement).disabled).toBe(false);
+    expect((must("button-toggle-1") as HTMLButtonElement).disabled).toBe(true);
   });
 });

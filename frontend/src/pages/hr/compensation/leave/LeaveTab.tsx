@@ -1,6 +1,7 @@
 import { SubtabBar } from "@/components/ui/subtab-nav";
 import type { CompensationUrl } from "../logic";
-import { LEAVE_SUBS, LEAVE_SUB_LABEL, nestedOf, pagePath, type LeaveSub } from "../routes";
+import { LEAVE_SUBS, LEAVE_SUB_LABEL, pagePath, subPath, type LeaveSub } from "../routes";
+import { openDefaultNested, useCanOpen } from "../visible";
 import { BirthdaysPart } from "./BirthdaysPart";
 import { HolidayWorkPart } from "./HolidayWorkPart";
 import { WindowsPart } from "./WindowsPart";
@@ -32,14 +33,18 @@ export default function LeaveTab({
   url: CompensationUrl;
   setUrl: SetUrl;
 }) {
+  const canOpen = useCanOpen();
   return (
     <div className="space-y-4" data-testid="leave-tab">
       <SubtabBar
         base={LEAVE_BASE}
         value={sub}
         testId="leave-subtabs"
-        items={LEAVE_SUBS.map((p) => ({ value: p, label: LEAVE_SUB_LABEL[p] }))}
-        landing={(next) => nestedOf("leave", next)[0]?.value}
+        items={LEAVE_SUBS.filter((p) => p === sub || canOpen(subPath("leave", p))).map((p) => ({
+          value: p,
+          label: LEAVE_SUB_LABEL[p],
+        }))}
+        landing={(next) => openDefaultNested(canOpen, "leave", next)}
       />
 
       {sub === "announcements" && (

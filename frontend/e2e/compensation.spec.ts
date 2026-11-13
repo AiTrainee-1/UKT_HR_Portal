@@ -40,7 +40,8 @@ async function hrToken(page: Page) {
 
 async function openFeatureSwitch(page: Page) {
   await page.goto("/hr/settings");
-  await tab(page, "Payroll").click();
+  // (the Settings tab is called "Staff Payroll" since 2026-10-26)
+  await tab(page, "Staff Payroll").click();
   await tab(page, "OT / Compensation").click();
   const toggle = page.getByTestId("toggle-compensation-features");
   await expect(toggle).toBeVisible();
@@ -594,7 +595,15 @@ test("announcing a late-in window: add it, see it with who announced it, delete 
     expect(on.status).toBe(200);
   }
   const reason = `E2E rain ${Date.now()}`;
-  const when = new Date(Date.now() + (5 * 60 + 30) * 60_000 + 9 * 24 * 3600_000).toISOString().slice(0, 10);
+  // Only the current month can be announced (owner 2026-11-13: past days included, never another month). A later day of
+  // this month can still be deleted; on the month's last day there is none, so today is used and the delete step is left out.
+  const istNow = new Date(Date.now() + (5 * 60 + 30) * 60_000);
+  const today = istNow.toISOString().slice(0, 10);
+  const monthFirst = `${today.slice(0, 8)}01`;
+  const lastDay = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth() + 1, 0)).getUTCDate();
+  const monthLast = `${today.slice(0, 8)}${String(lastDay).padStart(2, "0")}`;
+  const when = today === monthLast ? today : new Date(istNow.getTime() + 24 * 3600_000).toISOString().slice(0, 10);
+  const deletable = when > today;
   try {
     await page.goto("/hr/compensation/compensation-leave/announcements");
     await expect(page).toHaveURL(/\/announcements\/announce$/);
@@ -605,6 +614,9 @@ test("announcing a late-in window: add it, see it with who announced it, delete 
     await page.getByTestId("window-submit").click();
     await expect(page.getByTestId("windows-form")).toContainText("Enter the latest arrival time.");
 
+    // the date picker offers the whole current month, the past days included
+    await expect(page.getByTestId("window-date")).toHaveAttribute("min", monthFirst);
+    await expect(page.getByTestId("window-date")).toHaveAttribute("max", monthLast);
     await page.getByTestId("window-date").fill(when);
     await page.getByTestId("window-time").fill("10:30");
     await page.getByTestId("window-reason").fill(reason);
@@ -622,7 +634,8 @@ test("announcing a late-in window: add it, see it with who announced it, delete 
     await expect(row).toContainText("E2E Admin");
     await expect(row).toContainText("staff");
 
-    // a future announcement can be deleted, after a question
+    // a future announcement can be deleted, after a question (today's cannot: it has already acted)
+    if (!deletable) return;
     await row.getByRole("button", { name: /^Delete the announcement of/ }).click();
     await expect(page.getByTestId("window-delete-dialog")).toContainText("normal shifts again");
     await page.getByTestId("window-delete-confirm").click();

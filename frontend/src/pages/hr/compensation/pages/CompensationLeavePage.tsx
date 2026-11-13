@@ -4,6 +4,7 @@ import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   CompensationPageShell,
+  NothingOpenPage,
   ToDefaultNested,
   useCompensationFeaturesOff,
   useNestedSubtab,
@@ -11,6 +12,7 @@ import {
 import LeaveTab from "../leave/LeaveTab";
 import { COMPENSATION_URL_DEFAULTS } from "../logic";
 import { LEAVE_SUBS, pagePath, type LeaveSub } from "../routes";
+import { openSubs, useCanOpen } from "../visible";
 
 const BASE = pagePath("leave");
 
@@ -43,7 +45,12 @@ function CompensationLeave({ sub, nested }: { sub: LeaveSub; nested: string }) {
 export default function CompensationLeavePage() {
   const sub = useSubtab(BASE, LEAVE_SUBS);
   const nested = useNestedSubtab("leave", sub);
-  if (!sub) return <ToFirstSubtab base={BASE} first={LEAVE_SUBS[0]} />;
+  const canOpen = useCanOpen();
+  if (!sub) {
+    // the first subtab the role may open
+    const first = openSubs(canOpen, "leave", LEAVE_SUBS)[0];
+    return first ? <ToFirstSubtab base={BASE} first={first} /> : <NothingOpenPage />;
+  }
   if (!nested) return <ToDefaultNested pageKey="leave" sub={sub} />;
   return <CompensationLeave sub={sub} nested={nested} />;
 }

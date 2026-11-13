@@ -25,8 +25,8 @@ type Props = {
   onApprove: (row: SettlementRow) => void;
   onReject: (row: SettlementRow) => void;
   onDelete: (row: SettlementRow) => void;
-  /** false: this account may not approve advances, so no Approve / Reject. */
-  canDecide?: boolean;
+  /** false: this account may not approve this type of advance (General / Term are separate switches), so no Approve / Reject. */
+  canDecide?: (row: SettlementRow) => boolean;
 };
 
 function Figure({ label, value, tone }: { label: string; value: string; tone: string }) {
@@ -49,7 +49,14 @@ function Detail({ label, value }: { label: string; value: string | null | undefi
 }
 
 /** One advance in full: what is owed, what is recovered, what is still scheduled, and every deduction. */
-export default function DetailSheet({ advanceId, onClose, onApprove, onReject, onDelete, canDecide = true }: Props) {
+export default function DetailSheet({
+  advanceId,
+  onClose,
+  onApprove,
+  onReject,
+  onDelete,
+  canDecide = () => true,
+}: Props) {
   const { data, isLoading, isError, refetch } = useAdvanceDetail(advanceId);
   const adv = data as SettlementRow | undefined;
   const repayments: AdvanceRepaymentItem[] = adv?.repayments ?? [];
@@ -187,7 +194,7 @@ export default function DetailSheet({ advanceId, onClose, onApprove, onReject, o
               <Detail label="Email" value={adv.employeeEmail} />
             </dl>
 
-            {adv.status === "pending" && canDecide && (
+            {adv.status === "pending" && canDecide(adv) && (
               <div className="flex gap-2">
                 <Button
                   size="sm"

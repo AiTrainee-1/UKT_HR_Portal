@@ -56,13 +56,14 @@ def _hr_user(request: Request):
 
 
 def _can_edit(request: Request) -> bool:
-    """Edit on the Requests page's module (the MD only views it), and not limited to one branch (company-wide rule)."""
+    """Edit on the Requests page's Notify tab (the MD only views it), and not limited to one branch (company-wide rule)."""
     from .permission_registry import effective_permissions, resolve_permission
 
     hr = _hr_user(request)
     if hr is None:
         return False
-    if not hr.is_super_admin and resolve_permission(effective_permissions(hr), "requests") != "edit":
+    # requests.notify follows the Requests page until it is set on its own (permission_tree.py)
+    if not hr.is_super_admin and resolve_permission(effective_permissions(hr), "requests.notify") != "edit":
         return False
     return get_branch_scope(request) is None
 

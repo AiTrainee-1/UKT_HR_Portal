@@ -48,7 +48,15 @@ export type PayrollMonthStatus = {
   snapshot: { inPayroll: number; notCleared: number; onHold: number; newJoiners: number; mainNet: number } | null;
   /** Not limited to one unit: only such a login may press Payroll Done / Mark as Paid / Release & pay. */
   wholeCompany: boolean;
-  can: { finalize: boolean; markPaid: boolean; hold: boolean; addToPayroll: boolean; releaseAndPay: boolean };
+  can: {
+    finalize: boolean;
+    markPaid: boolean;
+    hold: boolean;
+    addToPayroll: boolean;
+    releaseAndPay: boolean;
+    /** May this login mark a payroll Cleared (its approval switch)? Missing on an older backend: allowed. */
+    markCleared?: boolean;
+  };
   /** Mark as Paid only: how many employees it paid. */
   employeesPaid?: number;
 };

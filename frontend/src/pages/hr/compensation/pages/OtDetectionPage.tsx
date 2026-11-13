@@ -4,12 +4,14 @@ import { ToFirstSubtab, useSubtab } from "@/components/ui/subtab-nav";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import {
   CompensationPageShell,
+  NothingOpenPage,
   ToDefaultNested,
   useCompensationFeaturesOff,
   useNestedSubtab,
 } from "../CompensationPageShell";
 import OtTab from "../ot/OtTab";
 import { OT_SUBS, pagePath } from "../routes";
+import { openSubs, useCanOpen } from "../visible";
 
 const BASE = pagePath("ot");
 
@@ -34,7 +36,12 @@ function OtDetection({ sub, nested }: { sub: (typeof OT_SUBS)[number]; nested: s
 export default function OtDetectionPage() {
   const sub = useSubtab(BASE, OT_SUBS);
   const nested = useNestedSubtab("ot", sub);
-  if (!sub) return <ToFirstSubtab base={BASE} first={OT_SUBS[0]} />;
+  const canOpen = useCanOpen();
+  if (!sub) {
+    // the first subtab the role may open
+    const first = openSubs(canOpen, "ot", OT_SUBS)[0];
+    return first ? <ToFirstSubtab base={BASE} first={first} /> : <NothingOpenPage />;
+  }
   if (nested === null) return <ToDefaultNested pageKey="ot" sub={sub} />;
   return <OtDetection sub={sub} nested={nested} />;
 }

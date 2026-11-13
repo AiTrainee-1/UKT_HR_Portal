@@ -81,7 +81,13 @@ def access_state(request, spec: ReportSpec) -> str:
         return OK  # the Managing Director may open every other report too, super-admin-only ones included
     if spec.super_admin_only:
         return OK if is_super_admin(request) else HIDDEN
-    if not spec.modules or is_super_admin(request):
+    if is_super_admin(request):
+        return OK
+    # Reports -> <group> (permission_tree.py): a role can hide one group of reports. It follows "reports" until it is set,
+    # and the middleware already needs "reports" for every reports/ call, so nothing changes for a role that never set it.
+    if _hr_user(request) is not None and permission_level(request, f"reports.{spec.category}") not in ("view", "edit"):
+        return HIDDEN
+    if not spec.modules:
         return OK
     if any(permission_level(request, m) in ("view", "edit") for m in spec.modules):
         return OK

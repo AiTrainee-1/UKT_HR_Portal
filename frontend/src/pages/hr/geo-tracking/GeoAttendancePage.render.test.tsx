@@ -451,6 +451,77 @@ describe("the page frame", () => {
   });
 });
 
+describe("a role that may see only some of it (Account Management -> Roles & Permissions)", () => {
+  const role = (permissions: Record<string, string>) => ({
+    role: "hr",
+    employeeId: null,
+    isSuperAdmin: false,
+    permissions,
+  });
+  const asked = (path: string) => world.requests.some((r) => r.split("?")[0].endsWith(path));
+
+  it("offers only the sections it may see, lands on the first of them, and asks only for what they show", async () => {
+    h.user.current = role({
+      geo_attendance: "edit",
+      "geo_attendance.approvals": "hidden",
+      "geo_attendance.verifications": "hidden",
+      "geo_attendance.live_map": "hidden",
+    });
+    await open("?tab=map");
+    await waitFor(() => here() === "/hr/geo-attendance/journeys", "the first section it may see");
+    expect(tabs().map((t) => labelOf(t))).toEqual(["Journey History", "On-Duty Map", "Tracking Settings"]);
+    await settle(20);
+    expect(asked("/api/on-duty-sessions")).toBe(false);
+    expect(asked("/api/on-duty-punch-verifications")).toBe(false);
+    expect(asked("/api/tracking/live")).toBe(false);
+    expect(q("on-duty-now")).toBeNull();
+  });
+
+  it("offers no replay without 'Simulate a journey', and no export without 'Export a journey'", async () => {
+    h.user.current = role({
+      geo_attendance: "edit",
+      "geo_attendance.journeys.simulate": "hidden",
+      "geo_attendance.journeys.export": "hidden",
+    });
+    await openAt("/hr/geo-attendance/journeys");
+    await waitFor(() => all("journey-row").length === 3, "the journeys");
+    expect(q("sim-picker")).toBeNull();
+    expect(q("journey-simulate")).toBeNull();
+    unmount();
+    await openAt("/hr/geo-attendance/journeys/7");
+    await waitFor(() => q("journey-detail") !== null, "the journey");
+    expect(q("journey-simulate")).toBeNull();
+    expect(q("journey-export")).toBeNull();
+    expect(q("journey-export-pdf")).toBeNull();
+    expect(q("journey-refresh")).not.toBeNull();
+  });
+
+  it("keeps the export for a View only 'Export a journey' (a read)", async () => {
+    h.user.current = role({ geo_attendance: "edit", "geo_attendance.journeys.export": "view" });
+    await openAt("/hr/geo-attendance/journeys/7");
+    await waitFor(() => q("journey-detail") !== null, "the journey");
+    await settle(5);
+    expect((q("journey-export") as HTMLButtonElement).disabled).toBe(false);
+    expect((q("journey-export-pdf") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("says so when no section is open to it", async () => {
+    h.user.current = role({
+      geo_attendance: "view",
+      "geo_attendance.approvals": "hidden",
+      "geo_attendance.verifications": "hidden",
+      "geo_attendance.live_map": "hidden",
+      "geo_attendance.journeys": "hidden",
+      "geo_attendance.on_duty_map": "hidden",
+      "geo_attendance.settings": "hidden",
+    });
+    await open();
+    expect(text(q("nothing-open"))).toBe("Nothing on this page is open to your role.");
+    expect(q("geo-tabs")).toBeNull();
+    expect(world.requests).toEqual([]);
+  });
+});
+
 describe("the Live Map opens on Tiruppur, not on India", () => {
   const map = () => css('[data-testid="leaflet-map"]')!;
 

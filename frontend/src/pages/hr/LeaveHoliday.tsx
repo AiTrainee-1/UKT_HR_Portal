@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { CalendarDays, CalendarRange, Clock, Gift, Scale, Sunrise } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import {
   getListLeaveRequestsQueryKey,
@@ -11,6 +13,8 @@ import {
   useListLeaveRequests,
   useUpdateLeaveStatus,
 } from "@/lib/api-client";
+import { moduleForPath } from "@/lib/permission-modules";
+import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { ConfirmDialog } from "./leave/ConfirmDialog";
 import BalancesTab from "./leave/BalancesTab";
 import CalendarTab from "./leave/CalendarTab";
@@ -22,6 +26,16 @@ import { longDate, type LeaveRow } from "./leave/logic";
 
 const TABS = ["leaves", "halfDay", "permissions", "calendar", "holidays", "balances"] as const;
 type Tab = (typeof TABS)[number];
+
+// Each tab's own permission key (Account Management -> Roles & Permissions); a key with no setting follows "leave".
+const TAB_KEY: Record<Tab, string> = {
+  leaves: "leave.requests",
+  halfDay: "leave.half_day",
+  permissions: "leave.permissions",
+  calendar: "leave.calendar",
+  holidays: "leave.holidays",
+  balances: "leave.balances",
+};
 
 /** The `?tab=` the page was opened on (the dashboard and the MD portal link to a tab), else the leave requests. */
 const tabFromUrl = (): Tab => {
@@ -37,14 +51,30 @@ const localToday = () => {
 export default function LeaveHoliday() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<Tab>(tabFromUrl);
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted), also when ?tab= asks for it.
+  const visibleTabs = visibleItems(TABS, (t) => TAB_KEY[t], level);
+  const [askedTab, setTab] = useState<Tab>(tabFromUrl);
+  const tab = pickVisible(askedTab, visibleTabs);
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const tabViewOnly =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(TAB_KEY[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
+  // The leave list feeds the Leave Requests, Half-Day and Calendar tabs only: not loaded when all three are hidden.
+  const needsLeaves = visibleTabs.some((t) => t === "leaves" || t === "halfDay" || t === "calendar");
   const [selected, setSelected] = useState<LeaveRow | null>(null);
   const [toDelete, setToDelete] = useState<LeaveRow | null>(null);
   const today = useMemo(localToday, []);
 
   // Polled: this page has no other live-update mechanism, and a mobile HOD approval writes straight to the DB with no
   // signal back to whatever HR is looking at (ApprovedRequests.tsx polls the same query keys for the same reason).
-  const leavesQuery = useListLeaveRequests(undefined, { query: { refetchInterval: 60_000 } } as any);
+  const leavesQuery = useListLeaveRequests(undefined, {
+    query: { refetchInterval: 60_000, enabled: needsLeaves },
+  } as any);
   const all = useMemo(() => (leavesQuery.data ?? []) as unknown as LeaveRow[], [leavesQuery.data]);
   // Half-day requests get their own tab, so a half day is never listed twice.
   const fullDay = useMemo(() => all.filter((l) => !l.isHalfDay), [all]);
@@ -105,25 +135,46 @@ export default function LeaveHoliday() {
         </div>
 
         <div>
-          <div className="max-w-full overflow-x-auto pb-1">
+          {visibleTabs.length === 0 && (
+            <p
+              className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+              data-testid="leave-nothing-open"
+            >
+              Nothing on this page is open to your role.
+            </p>
+          )}
+          <div className="max-w-full overflow-x-auto pb-1" hidden={visibleTabs.length === 0}>
             <PillTabs
-              items={[
-                { value: "leaves", label: "Leave Requests", icon: <CalendarDays size={14} /> },
-                { value: "halfDay", label: "Half-Day Leave", icon: <Sunrise size={14} /> },
-                { value: "permissions", label: "Permissions", icon: <Clock size={14} /> },
-                { value: "calendar", label: "Calendar", icon: <CalendarRange size={14} /> },
-                { value: "holidays", label: "Holidays", icon: <Gift size={14} /> },
-                { value: "balances", label: "Balances", icon: <Scale size={14} /> },
-              ]}
+              items={visibleItems(
+                [
+                  { value: "leaves", label: "Leave Requests", icon: <CalendarDays size={14} /> },
+                  { value: "halfDay", label: "Half-Day Leave", icon: <Sunrise size={14} /> },
+                  { value: "permissions", label: "Permissions", icon: <Clock size={14} /> },
+                  { value: "calendar", label: "Calendar", icon: <CalendarRange size={14} /> },
+                  { value: "holidays", label: "Holidays", icon: <Gift size={14} /> },
+                  { value: "balances", label: "Balances", icon: <Scale size={14} /> },
+                ],
+                (t) => TAB_KEY[t.value as Tab],
+                level,
+              )}
               value={tab}
               onChange={(v) => setTab(v as Tab)}
             />
           </div>
+          {tabViewOnly && (
+            <div className="mb-3 mt-2">
+              <ViewOnlyTabNote show />
+            </div>
+          )}
 
-          {tab === "leaves" && <LeaveRequestsTab mode="leave" rows={fullDay} {...shared} />}
-          {tab === "halfDay" && <LeaveRequestsTab mode="half" rows={halfDay} {...shared} />}
-          {tab === "permissions" && <PermissionsTab />}
-          {tab === "calendar" && (
+          {visibleTabs.includes("leaves") && tab === "leaves" && (
+            <LeaveRequestsTab mode="leave" rows={fullDay} {...shared} />
+          )}
+          {visibleTabs.includes("halfDay") && tab === "halfDay" && (
+            <LeaveRequestsTab mode="half" rows={halfDay} {...shared} />
+          )}
+          {visibleTabs.includes("permissions") && tab === "permissions" && <PermissionsTab />}
+          {visibleTabs.includes("calendar") && tab === "calendar" && (
             <CalendarTab
               leaves={all}
               loading={shared.loading}
@@ -132,8 +183,8 @@ export default function LeaveHoliday() {
               today={today}
             />
           )}
-          {tab === "holidays" && <HolidaysTab today={today} />}
-          {tab === "balances" && <BalancesTab />}
+          {visibleTabs.includes("holidays") && tab === "holidays" && <HolidaysTab today={today} />}
+          {visibleTabs.includes("balances") && tab === "balances" && <BalancesTab />}
         </div>
 
         <LeaveDetailDialog leave={selected} onClose={() => setSelected(null)} onDecide={decide} busy={busy} />

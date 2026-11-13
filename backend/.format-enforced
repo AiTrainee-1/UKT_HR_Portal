@@ -462,3 +462,6 @@ api/tests_super_admin_sync.py
 api/hr_access.py
 api/hr_activity_views.py
 api/tests_hr_categories.py
+api/permission_tree.py
+api/tests_permission_tree.py
+api/tests_permission_snapshot.py

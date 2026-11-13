@@ -30,7 +30,10 @@ const h = vi.hoisted(() => ({ fetch: vi.fn(), trigger: vi.fn(), toast: vi.fn() }
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
-vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ token: "t", user: null }) }));
+vi.mock("@/contexts/AuthContext", async (original) => ({
+  ...(await original<typeof import("@/contexts/AuthContext")>()),
+  useAuth: () => ({ token: "t", user: null }),
+}));
 vi.mock("@/contexts/PayrollGenerationContext", () => ({
   usePayrollGeneration: () => ({
     isGenerating: false,

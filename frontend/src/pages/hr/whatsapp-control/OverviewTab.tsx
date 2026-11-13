@@ -56,12 +56,17 @@ function CategoryCard({
   category: WhatsAppCategory;
   label: string;
   counts: WhatsAppCounts;
-  onOpen: () => void;
+  /** Opens the Messages tab on this module; left out when Messages is hidden for the role. */
+  onOpen?: () => void;
 }) {
   const ok = counts.accepted;
   const pct = counts.total ? Math.round((ok / counts.total) * 100) : 0;
   return (
-    <button onClick={onOpen} className="text-left rounded-2xl border bg-white p-4 hover:shadow-md transition-shadow">
+    <button
+      onClick={onOpen}
+      disabled={!onOpen}
+      className="text-left rounded-2xl border bg-white p-4 hover:shadow-md transition-shadow disabled:cursor-default disabled:hover:shadow-none"
+    >
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-sm font-bold text-gray-800">{label}</p>
         <p className="text-2xl font-black tabular-nums">{counts.total}</p>
@@ -84,9 +89,10 @@ export default function OverviewTab({
   onOpenFailures,
   onOpenConfig,
 }: {
-  onOpenCategory: (category: WhatsAppCategory) => void;
-  onOpenFailures: () => void;
-  onOpenConfig: () => void;
+  /** The shortcuts into another tab; the page leaves one out when that tab is hidden for the role. */
+  onOpenCategory?: (category: WhatsAppCategory) => void;
+  onOpenFailures?: () => void;
+  onOpenConfig?: () => void;
 }) {
   const [days, setDays] = useState(30);
   const { data, isLoading } = useWhatsAppOverview(days);
@@ -122,9 +128,11 @@ export default function OverviewTab({
           <AlertTriangle size={14} className="mt-0.5 shrink-0" />
           <span>
             WhatsApp isn't configured on this server, so nothing can be sent.{" "}
-            <button className="underline font-semibold" onClick={onOpenConfig}>
-              See what's missing
-            </button>
+            {onOpenConfig && (
+              <button className="underline font-semibold" onClick={onOpenConfig}>
+                See what's missing
+              </button>
+            )}
           </span>
         </div>
       )}
@@ -187,7 +195,7 @@ export default function OverviewTab({
               category={c.key}
               label={c.label}
               counts={data.byCategory[c.key]}
-              onOpen={() => onOpenCategory(c.key)}
+              onOpen={onOpenCategory ? () => onOpenCategory(c.key) : undefined}
             />
           ))}
         </div>
@@ -274,7 +282,7 @@ export default function OverviewTab({
       <Card className="border-0 shadow-sm">
         <CardHeader className="pb-2 flex-row items-center justify-between space-y-0">
           <CardTitle className="text-sm font-bold">Recent failures</CardTitle>
-          {data.recentFailures.length > 0 && (
+          {data.recentFailures.length > 0 && onOpenFailures && (
             <Button variant="ghost" size="sm" className="text-xs h-7" onClick={onOpenFailures}>
               View all failures
             </Button>

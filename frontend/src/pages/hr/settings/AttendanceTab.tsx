@@ -29,6 +29,8 @@ import { TabContents } from "./attendance/TabContents";
 import { useDraft } from "./attendance/useDraft";
 import { ATTENDANCE_VIEW_OF } from "./AttendanceTab.meta";
 import { CLASS_VIEWS, ClassPills, UnsavedChip, useAddressView } from "./kit/view";
+import { NothingOpen, SubtabViewOnlyNote, useSubtabAccess } from "./kit/subtabs";
+import { SETTINGS_SUBTAB_MODULE } from "./constants";
 
 const STAFF_CONTENTS = [
   { id: "attendance-how-it-works", label: "How it works" },
@@ -57,7 +59,10 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
   const { toast } = useToast();
   const { data } = usePayrollSettings();
   const update = useUpdatePayrollSettings();
-  const [view, chooseView] = useAddressView(CLASS_VIEWS, "staff", ATTENDANCE_VIEW_OF);
+  const [askedView, chooseView] = useAddressView(CLASS_VIEWS, "staff", ATTENDANCE_VIEW_OF);
+  // Staff and Production each have their own permission key: only the visible ones are offered, a View-only one is read-only
+  const page = useSubtabAccess(CLASS_VIEWS, SETTINGS_SUBTAB_MODULE.attendance, askedView, readOnly);
+  const view = page.shown;
 
   const saved = useMemo(() => (data ? staffDraftFrom(data) : null), [data]);
   const carried = useMemo(() => (data ? carriedKeysFrom(data) : null), [data]);
@@ -99,7 +104,7 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
     }
   };
 
-  const hint = readOnly
+  const hint = page.readOnly
     ? "View only: you can try values to see the examples, but they cannot be saved."
     : !loaded
       ? "Loading the saved settings…"
@@ -107,12 +112,21 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
         ? `Fix this first: ${problem}`
         : undefined;
 
+  if (page.none) {
+    return (
+      <div className="space-y-4" data-testid="attendance-tab">
+        <NothingOpen />
+      </div>
+    );
+  }
+
   if (view === "production") {
     return (
       <div className="space-y-4" data-testid="attendance-tab">
-        <ClassPills value={view} onChange={chooseView}>
+        <ClassPills value={view} onChange={chooseView} values={page.visible}>
           {dirty && <UnsavedChip>Not saved yet: Staff</UnsavedChip>}
         </ClassPills>
+        <SubtabViewOnlyNote show={page.viewOnly} />
         <div className="space-y-4" data-testid="attendance-page-production">
           <TabContents items={PRODUCTION_CONTENTS} />
           <ProductionSection />
@@ -123,7 +137,8 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
 
   return (
     <div className="space-y-4" data-testid="attendance-tab">
-      <ClassPills value={view} onChange={chooseView} />
+      <ClassPills value={view} onChange={chooseView} values={page.visible} />
+      <SubtabViewOnlyNote show={page.viewOnly} />
       <TabContents items={STAFF_CONTENTS} />
 
       {data && !access.companyWideEditable && (
@@ -189,7 +204,7 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
           onSave={() => setConfirming(true)}
           onDiscard={discard}
           saveLabel="Save Attendance Settings"
-          disabled={readOnly || !loaded || !dirty || !!problem}
+          disabled={page.readOnly || !loaded || !dirty || !!problem}
           hint={hint}
         />
       </div>

@@ -9,7 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import {
-  useGetEmployee, useListSalaryRecords, useListLeaveRequests, getGetEmployeeQueryKey,
+  useGetEmployee, useListSalaryRecords, useListLeaveRequests, getGetEmployeeQueryKey, getListSalaryRecordsQueryKey,
 } from "@/lib/api-client";
 import {
   useIdCards, useAttendanceEmployeeHistory, previewDocumentPdf, downloadDocumentPdf,
@@ -30,18 +30,28 @@ import {
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
 import { FIRST_PORTION, SECOND_PORTION } from "@/lib/salary-split";
+import { Gate, useLevel } from "@/lib/tab-access";
 
 export default function EmployeeDetail() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const empId = Number(id);
+  // Each section of the profile has a key of its own (Roles & Permissions -> Employees -> Employee profile); a hidden
+  // section is not drawn, and its own data is not fetched.
+  const level = useLevel();
+  const showSalary = level("employees.profile.salary") !== "hidden";
+  const showIdCard = level("employees.profile.id_card") !== "hidden";
+  const showDocuments = level("employees.profile.documents") !== "hidden";
 
   const { data: employee, isLoading } = useGetEmployee(empId, {
     query: { enabled: !!empId, queryKey: getGetEmployeeQueryKey(empId) }
   });
-  const { data: salaryRecords } = useListSalaryRecords({ employeeId: empId });
-  const { data: idCards } = useIdCards(empId ? [empId] : []);
+  const salaryParams = { employeeId: empId };
+  const { data: salaryRecords } = useListSalaryRecords(salaryParams, {
+    query: { enabled: showSalary, queryKey: getListSalaryRecordsQueryKey(salaryParams) },
+  });
+  const { data: idCards } = useIdCards(empId ? [empId] : [], showIdCard);
   const idCard = idCards?.[0];
   const qrs = useQrCodes(idCard ? [idCard] : []);
 
@@ -50,7 +60,7 @@ export default function EmployeeDetail() {
     empId || null, now.getMonth() + 1, now.getFullYear(),
   );
   const { data: leaveRequests } = useListLeaveRequests({ employeeId: empId } as never);
-  const { data: uploadedDocuments } = useEmployeeDocuments(empId || null);
+  const { data: uploadedDocuments } = useEmployeeDocuments(empId || null, showDocuments);
 
   const { token } = useAuth();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -147,7 +157,9 @@ export default function EmployeeDetail() {
 
   return (
     <HrLayout>
-      <div className="space-y-5">
+      {/* A column with a gap (not space-y): a section a role may only view is wrapped in a display:contents Gate, which
+          space-y's margins would skip. */}
+      <div className="flex flex-col gap-5">
         {/* Header */}
         <div className="flex items-start gap-3">
           <Button variant="ghost" size="icon" onClick={() => navigate("/hr/employees")} data-testid="button-back">
@@ -177,10 +189,12 @@ export default function EmployeeDetail() {
               {employee.joinDate ? new Date(employee.joinDate).toLocaleDateString("en-IN") : "N/A"}
             </p>
           </div>
+          <Gate k="employees.profile.id_card">
           <Button className="gap-2" onClick={handleDownloadIdCard} disabled={downloading || !idCard}>
             <Download size={15} />
             {downloading ? "Preparing…" : "Download ID Card"}
           </Button>
+          </Gate>
         </div>
 
         {/* This-month attendance snapshot */}
@@ -233,6 +247,7 @@ export default function EmployeeDetail() {
           </Card>
 
           {/* Salary */}
+          <Gate k="employees.profile.salary">
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Salary</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
@@ -259,8 +274,10 @@ export default function EmployeeDetail() {
               )}
             </CardContent>
           </Card>
+          </Gate>
 
           {/* Bank */}
+          <Gate k="employees.profile.bank">
           {(employee.bankName || employee.bankAccount) && (
             <Card>
               <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Banking</CardTitle></CardHeader>
@@ -283,9 +300,11 @@ export default function EmployeeDetail() {
               </CardContent>
             </Card>
           )}
+          </Gate>
         </div>
 
         {/* Documents -Offer Letter / Experience Letter generation */}
+        <Gate k="employees.letters">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -322,8 +341,10 @@ export default function EmployeeDetail() {
             </div>
           </CardContent>
         </Card>
+        </Gate>
 
         {/* Uploaded Documents -read-only here; upload/delete happens on the dedicated Documents page */}
+        <Gate k="employees.profile.documents">
         <Card>
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -374,8 +395,10 @@ export default function EmployeeDetail() {
             )}
           </CardContent>
         </Card>
+        </Gate>
 
         {/* Employee ID Card -view only, download is the only action */}
+        <Gate k="employees.profile.id_card">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
@@ -402,8 +425,10 @@ export default function EmployeeDetail() {
             )}
           </CardContent>
         </Card>
+        </Gate>
 
         {/* Salary History */}
+        <Gate k="employees.profile.salary">
         <Card>
           <CardHeader className="pb-3"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2"><Calendar size={15} />Salary History</CardTitle></CardHeader>
           <CardContent className="p-0">
@@ -440,6 +465,7 @@ export default function EmployeeDetail() {
             )}
           </CardContent>
         </Card>
+        </Gate>
       </div>
     </HrLayout>
   );

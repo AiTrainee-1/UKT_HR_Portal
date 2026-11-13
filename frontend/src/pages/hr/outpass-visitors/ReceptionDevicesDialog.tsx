@@ -16,6 +16,7 @@ import {
   useDeleteReceptionDevice,
   type ReceptionDevice,
 } from "@/lib/api-client/custom-hooks";
+import { useLevel } from "@/lib/tab-access";
 import { Copy, KeyRound, Plus, ShieldCheck, Trash2 } from "lucide-react";
 
 // ── Reception device management ─────────────────────────────────────────
@@ -108,6 +109,8 @@ export function ReceptionDevicesDialog({
   const [formError, setFormError] = useState<string | null>(null);
   const [resetTarget, setResetTarget] = useState<ReceptionDevice | null>(null);
   const [resetPassword, setResetPassword] = useState("");
+  // View only on "Reception desk devices" (outpass_visitors.visitors.reception_devices): the list opens, nothing in it can be changed
+  const viewOnly = useLevel()("outpass_visitors.visitors.reception_devices") === "view";
 
   const { data: devices, isLoading } = useListReceptionDevices();
   const createMutation = useCreateReceptionDevice();
@@ -186,7 +189,7 @@ export function ReceptionDevicesDialog({
                     onToggleActive={toggleActive}
                     onResetPassword={(device) => setResetTarget(device)}
                     onDelete={handleDelete}
-                    isMutating={updateMutation.isPending || deleteMutation.isPending}
+                    isMutating={updateMutation.isPending || deleteMutation.isPending || viewOnly}
                   />
                 ))
               )}
@@ -240,7 +243,7 @@ export function ReceptionDevicesDialog({
                 </div>
               </div>
               {formError && <p className="text-sm text-destructive">{formError}</p>}
-              <Button type="submit" className="gap-1.5" disabled={createMutation.isPending}>
+              <Button type="submit" className="gap-1.5" disabled={createMutation.isPending || viewOnly}>
                 <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create Desk"}
               </Button>
             </form>

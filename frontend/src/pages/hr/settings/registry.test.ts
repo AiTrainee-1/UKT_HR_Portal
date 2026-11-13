@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allModuleKeys } from "@/lib/permission-modules";
+import { INHERITS, allModuleKeys } from "@/lib/permission-modules";
 import { SETTINGS_TAB_MODULE, SUPER_ADMIN_ONLY_TABS } from "./constants";
 import { SETTINGS_GROUPS, searchSettings } from "./kit/catalog";
 import { ALL_SETTINGS } from "./metas";
@@ -75,8 +75,9 @@ describe("the Settings tab registry", () => {
     expect(tab).toBeDefined();
     expect(tab?.label).toBe("Production Shifts");
     expect(tab?.group).toBe("time");
-    // it is edited with the permission its API checks (settings.attendance): no new permission key
-    expect(SETTINGS_TAB_MODULE.production_shifts).toBe("settings.attendance");
+    // its own permission key, which follows settings.attendance (the permission it had before) while it is unset
+    expect(SETTINGS_TAB_MODULE.production_shifts).toBe("settings.production_shifts");
+    expect(INHERITS["settings.production_shifts"]).toBe("settings.attendance");
     expect(tab?.purpose).toContain("Production only");
     expect(tab?.usedBy.map((u) => u.to).filter(Boolean)).toEqual([
       "/hr/attendance/production",
@@ -120,6 +121,9 @@ describe("the Settings tab registry", () => {
     expect(tab?.group).toBe("system");
     expect(SUPER_ADMIN_ONLY_TABS.has("endpoint_sharing")).toBe(true);
     expect(SETTINGS_TAB_MODULE.endpoint_sharing).toBeUndefined();
+    // (ID Card's own key follows the ID Cards page while it is unset)
+    expect(SETTINGS_TAB_MODULE.idcard).toBe("settings.idcard");
+    expect(INHERITS["settings.idcard"]).toBe("id_cards");
     expect([...allModuleKeys()].some((key) => key.includes("endpoint"))).toBe(false);
     // it sits with the other integrations, between WhatsApp and Backup
     const order = SETTINGS_TABS.filter((t) => t.group === "system").map((t) => t.id);
@@ -142,8 +146,10 @@ describe("the Settings tab registry", () => {
     const tab = SETTINGS_TABS.find((t) => t.id === "pf_esi");
     expect(tab?.label).toBe("PF & ESI");
     expect(tab?.group).toBe("pay");
-    // read by every login that may see Payroll settings; changing the rules is the super admin's alone, which the API decides
-    expect(SETTINGS_TAB_MODULE.pf_esi).toBe("settings.payroll");
+    // its own permission key, which follows settings.payroll (the permission it had before) while it is unset; changing the
+    // rules is the super admin's alone, which the API decides
+    expect(SETTINGS_TAB_MODULE.pf_esi).toBe("settings.pf_esi");
+    expect(INHERITS["settings.pf_esi"]).toBe("settings.payroll");
     expect(SUPER_ADMIN_ONLY_TABS.has("pf_esi")).toBe(false);
     expect(tab?.purpose).toContain("Co Emp");
     expect(tab?.usedBy.map((u) => u.to).filter(Boolean)).toEqual([

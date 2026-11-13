@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { Gate, useLevel } from "@/lib/tab-access";
 import DayStatusDialog from "./punch-view/DayStatusDialog";
 import { StatusChip } from "./punch-view/parts";
 import {
@@ -100,6 +101,11 @@ export default function PunchView() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
+  const level = useLevel();
+  // "Set a day's status" (attendance.punch_view.day_status): the pencil on each day goes with the button; View only opens
+  // the dialog with its Save locked (DayStatusDialog).
+  const dayStatusShown = level("attendance.punch_view.day_status") !== "hidden";
+  const historyShown = level("attendance.punch_view.history") !== "hidden";
 
   // Defaults to Today -the overwhelmingly common case is "did this morning's
   // punches come through", not a historical range.
@@ -252,13 +258,15 @@ export default function PunchView() {
               Every punch already recorded — filter, export to Excel, edit, and upload it back.
             </p>
           </div>
-          <Button
-            variant="outline" className="ml-auto gap-1.5 h-9 text-xs"
-            onClick={() => navigate("/hr/attendance/punch-view/history")}
-            data-testid="punch-history-link"
-          >
-            <History size={14} /> History
-          </Button>
+          <Gate k="attendance.punch_view.history">
+            <Button
+              variant="outline" className="ml-auto gap-1.5 h-9 text-xs"
+              onClick={() => navigate("/hr/attendance/punch-view/history")}
+              data-testid="punch-history-link"
+            >
+              <History size={14} /> History
+            </Button>
+          </Gate>
         </div>
 
         <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3 flex items-start gap-2.5">
@@ -370,35 +378,41 @@ export default function PunchView() {
                 />
               </form>
 
-              <Button
-                variant="outline" className="gap-1.5 h-9 text-xs"
-                onClick={handleExport}
-                disabled={exporting || isLoading || total === 0}
-              >
-                <Download size={14} />
-                {exporting ? "Exporting…" : `Export ${total > 0 ? `(${total})` : ""}`}
-              </Button>
+              <Gate k="attendance.punch_view.export">
+                <Button
+                  variant="outline" className="gap-1.5 h-9 text-xs"
+                  onClick={handleExport}
+                  disabled={exporting || isLoading || total === 0}
+                >
+                  <Download size={14} />
+                  {exporting ? "Exporting…" : `Export ${total > 0 ? `(${total})` : ""}`}
+                </Button>
+              </Gate>
 
-              <Button
-                variant="outline" className="gap-1.5 h-9 text-xs"
-                onClick={() => setDayDialog({ code: groups.length === 1 ? groups[0].employeeCode : "", date: "" })}
-                data-testid="day-status-open"
-              >
-                <CalendarCheck size={14} /> Set day status
-              </Button>
+              {dayStatusShown && (
+                <Button
+                  variant="outline" className="gap-1.5 h-9 text-xs"
+                  onClick={() => setDayDialog({ code: groups.length === 1 ? groups[0].employeeCode : "", date: "" })}
+                  data-testid="day-status-open"
+                >
+                  <CalendarCheck size={14} /> Set day status
+                </Button>
+              )}
 
-              <input
-                ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
-                onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
-              />
-              <Button
-                variant="outline" className="gap-1.5 h-9 text-xs"
-                onClick={() => fileRef.current?.click()}
-                disabled={importer.isPending}
-              >
-                <UploadCloud size={14} />
-                {importer.isPending ? "Checking…" : "Upload edited file"}
-              </Button>
+              <Gate k="attendance.punch_view.upload">
+                <input
+                  ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
+                  onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+                />
+                <Button
+                  variant="outline" className="gap-1.5 h-9 text-xs"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={importer.isPending}
+                >
+                  <UploadCloud size={14} />
+                  {importer.isPending ? "Checking…" : "Upload edited file"}
+                </Button>
+              </Gate>
             </div>
           </CardContent>
         </Card>
@@ -430,9 +444,11 @@ export default function PunchView() {
               {(importResult.historyRows ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground" data-testid="punch-history-rows">
                   {importResult.historyRows} change{importResult.historyRows === 1 ? "" : "s"} written to the{" "}
-                  <button type="button" className="font-semibold text-indigo-700 hover:underline" onClick={() => navigate("/hr/attendance/punch-view/history")}>
-                    History
-                  </button>
+                  {historyShown ? (
+                    <button type="button" className="font-semibold text-indigo-700 hover:underline" onClick={() => navigate("/hr/attendance/punch-view/history")}>
+                      History
+                    </button>
+                  ) : "History"}
                   .
                 </p>
               )}
@@ -593,16 +609,18 @@ export default function PunchView() {
                                   {r.dayStatus
                                     ? <StatusChip status={r.dayStatus.status} source={r.dayStatus.source} />
                                     : <span className="text-[10px] text-gray-300">not worked out</span>}
-                                  <button
-                                    type="button"
-                                    className="rounded p-1 text-gray-400 hover:bg-slate-100 hover:text-indigo-700"
-                                    aria-label={`Set the status of ${g.employeeName} on ${r.date}`}
-                                    title="Set this day as Present, Half Day or Absent"
-                                    onClick={() => setDayDialog({ code: g.employeeCode, date: r.date })}
-                                    data-testid={`day-status-edit-${g.employeeCode}-${r.date}`}
-                                  >
-                                    <Pencil size={12} />
-                                  </button>
+                                  {dayStatusShown && (
+                                    <button
+                                      type="button"
+                                      className="rounded p-1 text-gray-400 hover:bg-slate-100 hover:text-indigo-700"
+                                      aria-label={`Set the status of ${g.employeeName} on ${r.date}`}
+                                      title="Set this day as Present, Half Day or Absent"
+                                      onClick={() => setDayDialog({ code: g.employeeCode, date: r.date })}
+                                      data-testid={`day-status-edit-${g.employeeCode}-${r.date}`}
+                                    >
+                                      <Pencil size={12} />
+                                    </button>
+                                  )}
                                 </span>
                               )}
                             </td>

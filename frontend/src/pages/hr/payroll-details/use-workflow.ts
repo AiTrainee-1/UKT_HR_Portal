@@ -22,6 +22,8 @@ export type DetailsWorkflow = {
   /** Payroll Done was pressed for this payroll's month: nothing on it can change. */
   locked: boolean;
   canHold: boolean;
+  /** The month's status says this login may not mark payrolls Cleared (false); undefined = allowed (an older server). */
+  markCleared: boolean | undefined;
   /** Why Hold / Unhold cannot be pressed now ("" = it can). */
   holdBlocked: string;
   busy: boolean;
@@ -84,6 +86,7 @@ export function useDetailsWorkflow(details: PayrollDetails, kind: PayrollKind): 
     paidAt: row?.paymentStatus === "paid" ? (row.paymentPaidAt ?? null) : null,
     locked,
     canHold,
+    markCleared: status.data?.can.markCleared,
     holdBlocked,
     busy: hold.isPending,
     toggleHold,

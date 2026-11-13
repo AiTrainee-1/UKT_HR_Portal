@@ -9,6 +9,7 @@ import {
   type GateRange,
   type VisitorRecordRow,
 } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { Eye, EyeOff, Mail, MessageCircle } from "lucide-react";
 import { GateQrDialog } from "../GateQrDialog";
 import { ReceptionDevicesDialog } from "../ReceptionDevicesDialog";
@@ -58,7 +59,9 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
         <RangeFilter value={range} onChange={changeRange} />
         <div className="flex flex-wrap items-center gap-2">
           {!isBranchScoped && <BranchPicker branches={branches} branchId={branchId} setBranchId={setBranchId} />}
-          <ReceptionDevicesDialog isBranchScoped={isBranchScoped} branches={branches} defaultBranchId={branchId} />
+          <Gate k="outpass_visitors.visitors.reception_devices">
+            <ReceptionDevicesDialog isBranchScoped={isBranchScoped} branches={branches} defaultBranchId={branchId} />
+          </Gate>
           <GateQrDialog kind="visitor" token={qr?.token} branchName={qr?.branchName} />
         </div>
       </div>

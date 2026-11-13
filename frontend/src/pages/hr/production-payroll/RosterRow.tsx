@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { EmployeeRules, PeriodEmployee } from "@/lib/api-client/custom-hooks";
 import type { Tone } from "@/lib/statusTones";
+import { Gate } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
 import { coverageLines } from "./coverage";
@@ -231,34 +232,38 @@ function RosterRowImpl({
         )}
         <div className="flex items-center gap-1.5">
           {state === "ready" && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 gap-1 text-xs"
-              disabled={busy || !ended}
-              onClick={() => onGenerate(e)}
-              data-testid={`pcp-generate-${code}`}
-            >
-              <Play size={11} /> Generate
-            </Button>
+            <Gate k="production_payroll.generate">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 gap-1 text-xs"
+                disabled={busy || !ended}
+                onClick={() => onGenerate(e)}
+                data-testid={`pcp-generate-${code}`}
+              >
+                <Play size={11} /> Generate
+              </Button>
+            </Gate>
           )}
           {(state === "pending" || state === "paid") && (
-            <Button
-              size="icon"
-              variant="ghost"
-              className={cn("h-8 w-8", state === "paid" ? "text-emerald-700" : "text-amber-700")}
-              title={
-                state === "paid"
-                  ? `Generate again for ${e.name}: recompute this payslip (it stays Cleared)`
-                  : `Generate again for ${e.name}: recompute this payslip`
-              }
-              aria-label={`Generate again for ${e.name}`}
-              disabled={busy}
-              onClick={() => onGenerateAgain(e)}
-              data-testid={`pcp-regenerate-${code}`}
-            >
-              <RefreshCcw size={14} />
-            </Button>
+            <Gate k="production_payroll.generate">
+              <Button
+                size="icon"
+                variant="ghost"
+                className={cn("h-8 w-8", state === "paid" ? "text-emerald-700" : "text-amber-700")}
+                title={
+                  state === "paid"
+                    ? `Generate again for ${e.name}: recompute this payslip (it stays Cleared)`
+                    : `Generate again for ${e.name}: recompute this payslip`
+                }
+                aria-label={`Generate again for ${e.name}`}
+                disabled={busy}
+                onClick={() => onGenerateAgain(e)}
+                data-testid={`pcp-regenerate-${code}`}
+              >
+                <RefreshCcw size={14} />
+              </Button>
+            </Gate>
           )}
           {p && (
             // Opening a payroll's details only reads: a View Only role keeps it, whatever the employee is called.

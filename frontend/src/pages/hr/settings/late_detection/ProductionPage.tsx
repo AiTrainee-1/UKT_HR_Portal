@@ -6,6 +6,7 @@ import { useListShifts, type PayCycle, type PayrollSettingsItem } from "@/lib/ap
 import { cn } from "@/lib/utils";
 import { ToggleField } from "../kit/Field";
 import { PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "../kit/SettingBlock";
+import { SubtabViewOnlyNote } from "../kit/subtabs";
 import { CYCLE_LATE_SECTIONS, LATE_SECTIONS, lateText } from "../LateDetectionTab.meta";
 import { numberOr, RANGES } from "../payroll/form";
 import { formatPaise } from "../payroll/preview";
@@ -56,6 +57,9 @@ export function ProductionPage({
   settings,
   cycle,
   onCycle,
+  cycles = CYCLES,
+  cycleReadOnly,
+  cycleViewOnly = false,
   branchLogin,
   readOnly,
   busy,
@@ -68,7 +72,14 @@ export function ProductionPage({
   settings: PayrollSettingsItem;
   cycle: PayCycle;
   onCycle: (cycle: PayCycle) => void;
+  /** The cycle pills the login may see (each has its own permission key); every cycle when left out. */
+  cycles?: readonly PayCycle[];
+  /** The open cycle's own fields cannot be changed (its key is View only); `readOnly` when left out. */
+  cycleReadOnly?: boolean;
+  /** The open cycle is View only on a page the login may edit: its note shows. */
+  cycleViewOnly?: boolean;
   branchLogin: boolean;
+  /** The switch and the mode (shared by every cycle) cannot be changed. */
   readOnly: boolean;
   /** A save is running. */
   busy: boolean;
@@ -234,7 +245,7 @@ export function ProductionPage({
 
       <div className="flex flex-wrap items-center gap-3" data-testid="production-late-cycle-pills">
         <PillTabs
-          items={CYCLES.map((c) => ({ value: c, label: CYCLE_INFO[c].label, icon: <CalendarRange size={13} /> }))}
+          items={cycles.map((c) => ({ value: c, label: CYCLE_INFO[c].label, icon: <CalendarRange size={13} /> }))}
           value={cycle}
           onChange={(v) => onCycle(v as PayCycle)}
           baseColor="#0f172a"
@@ -254,18 +265,26 @@ export function ProductionPage({
         )}
       </div>
 
-      <CycleLateSection
-        key={cycle}
-        cycle={cycle}
-        form={form}
-        saved={saved}
-        update={update}
-        settings={settings}
-        branchLogin={branchLogin}
-        readOnly={readOnly}
-        busy={busy}
-        onUseSharedClick={() => setConfirmingShared(true)}
-      />
+      <SubtabViewOnlyNote show={cycleViewOnly} />
+
+      {cycles.length === 0 ? (
+        <p className="text-sm text-slate-500" data-testid="production-late-no-cycle">
+          No pay cycle's late rules are open to your role.
+        </p>
+      ) : (
+        <CycleLateSection
+          key={cycle}
+          cycle={cycle}
+          form={form}
+          saved={saved}
+          update={update}
+          settings={settings}
+          branchLogin={branchLogin}
+          readOnly={cycleReadOnly ?? readOnly}
+          busy={busy}
+          onUseSharedClick={() => setConfirmingShared(true)}
+        />
+      )}
 
       <ConfirmChanges
         open={confirmingShared}

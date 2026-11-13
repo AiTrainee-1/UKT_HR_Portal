@@ -40,6 +40,7 @@ import {
   useJourneyTrail,
   useRebuildJourney,
 } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import ActivityTimeline from "./ActivityTimeline";
 import DeviceCard from "./DeviceCard";
 import JourneyMap from "./JourneyMap";
@@ -195,30 +196,33 @@ export default function JourneyDetail({
           >
             {query.isFetching ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9 gap-1.5 text-xs"
-            onClick={() => void handleExport("xlsx")}
-            disabled={exporting !== null}
-            data-testid="journey-export"
-            data-view-safe
-          >
-            {exporting === "xlsx" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Export
-            (Excel)
-          </Button>
-          <Button
-            size="sm"
-            className="h-9 gap-1.5 bg-red-600 text-xs text-white hover:bg-red-700"
-            onClick={() => void handleExport("pdf")}
-            disabled={exporting !== null}
-            title="A PDF report of this journey: the route on a map, the route breakdown, every stop with its map, the attendance details and the location history"
-            data-testid="journey-export-pdf"
-            data-view-safe
-          >
-            {exporting === "pdf" ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}{" "}
-            {exporting === "pdf" ? "Preparing the report…" : "Export PDF"}
-          </Button>
+          {/* "Export a journey" (geo_attendance.journeys.export): hidden takes both away; View only keeps them (a read) */}
+          <Gate k="geo_attendance.journeys.export">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 text-xs"
+              onClick={() => void handleExport("xlsx")}
+              disabled={exporting !== null}
+              data-testid="journey-export"
+              data-view-safe
+            >
+              {exporting === "xlsx" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Export
+              (Excel)
+            </Button>
+            <Button
+              size="sm"
+              className="h-9 gap-1.5 bg-red-600 text-xs text-white hover:bg-red-700"
+              onClick={() => void handleExport("pdf")}
+              disabled={exporting !== null}
+              title="A PDF report of this journey: the route on a map, the route breakdown, every stop with its map, the attendance details and the location history"
+              data-testid="journey-export-pdf"
+              data-view-safe
+            >
+              {exporting === "pdf" ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}{" "}
+              {exporting === "pdf" ? "Preparing the report…" : "Export PDF"}
+            </Button>
+          </Gate>
           {mayRebuild && (
             <Button
               variant="outline"

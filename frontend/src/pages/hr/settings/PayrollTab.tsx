@@ -12,6 +12,8 @@ import {
   type PayrollSettingsItem,
 } from "@/lib/api-client/custom-hooks";
 import { PAYROLL_SUB_TAB_OF, type PayrollSubTab } from "./PayrollTab.meta";
+import { SETTINGS_SUBTAB_MODULE } from "./constants";
+import { NothingOpen, SubtabViewOnlyNote, useSubtabAccess } from "./kit/subtabs";
 import { addressSetting, saveErrorText, useDraft, useSubTabFromAddress } from "./payroll/form";
 import { bonusPayload, ratesPayload, savedPayroll } from "./payroll/sections";
 import { RatesPanel } from "./payroll/RatesPanel";
@@ -24,6 +26,7 @@ const SUB_TABS: { value: PayrollSubTab; label: string; icon: ReactNode }[] = [
   { value: "bonus", label: "Bonus", icon: <Gift size={13} /> },
   { value: "otCompensation", label: "OT / Compensation", icon: <Clock size={13} /> },
 ];
+const SUB_TAB_VALUES = SUB_TABS.map((t) => t.value);
 
 type Saving = "rates" | "bonus";
 
@@ -45,8 +48,11 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
   const rates = useDraft(saved.rates);
   const bonus = useDraft(saved.bonus);
 
-  const [subTab, setSubTab] = useState<PayrollSubTab>(() => PAYROLL_SUB_TAB_OF[addressSetting()] ?? "rates");
+  const [askedSubTab, setSubTab] = useState<PayrollSubTab>(() => PAYROLL_SUB_TAB_OF[addressSetting()] ?? "rates");
   useSubTabFromAddress(PAYROLL_SUB_TAB_OF, setSubTab);
+  // each sub-tab has its own permission key: only the visible ones are offered, a View-only one is read-only
+  const sub = useSubtabAccess(SUB_TAB_VALUES, SETTINGS_SUBTAB_MODULE.payroll, askedSubTab, readOnly);
+  const subTab = sub.shown;
 
   const [saving, setSaving] = useState<Saving | null>(null);
   const [featuresPending, setFeaturesPending] = useState<boolean | null>(null);
@@ -110,7 +116,7 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
 
       <div className="flex flex-wrap items-center gap-3">
         <PillTabs
-          items={SUB_TABS}
+          items={SUB_TABS.filter((t) => sub.visible.includes(t.value))}
           value={subTab}
           onChange={(v) => setSubTab(v as PayrollSubTab)}
           baseColor="#0f172a"
@@ -122,8 +128,11 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
           </span>
         )}
       </div>
+      <SubtabViewOnlyNote show={sub.viewOnly} />
 
-      {isLoading ? (
+      {sub.none ? (
+        <NothingOpen />
+      ) : isLoading ? (
         <div className="space-y-3" data-testid="payroll-settings-loading">
           <Skeleton className="h-40 w-full rounded-2xl" />
           <Skeleton className="h-64 w-full rounded-2xl" />
@@ -142,7 +151,7 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
               draft={rates}
               saved={saved.rates}
               settings={settings}
-              readOnly={readOnly}
+              readOnly={sub.readOnly}
               saving={saving === "rates"}
               busy={saving !== null}
               onSave={() =>
@@ -164,7 +173,7 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
               draft={bonus}
               saved={saved.bonus}
               fyStartMonth={settings.bonusFyStartMonth ?? 4}
-              readOnly={readOnly}
+              readOnly={sub.readOnly}
               saving={saving === "bonus"}
               busy={saving !== null}
               onSave={() =>
@@ -186,7 +195,7 @@ export default function PayrollTab({ readOnly = false }: { readOnly?: boolean })
               featuresOn={featuresOn}
               onFeatures={(enabled) => void applyFeatures(enabled)}
               branchLogin={branchLogin}
-              readOnly={readOnly || featuresPending !== null}
+              readOnly={sub.readOnly || featuresPending !== null}
             />
           )}
         </>

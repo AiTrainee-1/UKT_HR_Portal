@@ -30,7 +30,7 @@ import {
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
   toast: vi.fn(),
-  user: { current: null as { branchId?: number | null } | null },
+  user: { current: null as Record<string, unknown> | null },
 }));
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
@@ -114,6 +114,67 @@ describe("the three first-level addresses", () => {
     mountPage("/hr/outpass-visitors");
     await waitFor(() => ready("outpass-passes"), "the passes");
     expect(pathname()).toBe(`${OUTPASS}/overview/passes`);
+  });
+});
+
+describe("a role that may see only some of it (Account Management -> Roles & Permissions)", () => {
+  const role = (permissions: Record<string, string>) => ({
+    role: "hr",
+    employeeId: null,
+    isSuperAdmin: false,
+    permissions,
+  });
+  const button = (name: string) =>
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((b) => text(b).includes(name)) ?? null;
+
+  it("offers only the tabs and sections it may see, and lands on the first of them", async () => {
+    h.user.current = role({
+      outpass_visitors: "edit",
+      "outpass_visitors.outpass.overview.passes": "hidden",
+      "outpass_visitors.outpass.in_out": "hidden",
+    });
+    mountPage(OUTPASS);
+    await waitFor(() => pathname() === `${OUTPASS}/overview/qr-submissions`, "the first section it may see");
+    await waitFor(() => ready("outpass-qr-submissions"), "the QR submissions");
+    expect(pillLabels("outpass-subtabs").map((l) => l.replace(/\s*\(\d+\)$/, ""))).toEqual(["Overview", "Requests"]);
+    expect(nestedLabels("outpass-overview-nested").map((l) => l.replace(/\s*\(?\d+\)?$/, ""))).toEqual([
+      "Gate QR submissions",
+    ]);
+  });
+
+  it("the bare address lands on the first page it may see", async () => {
+    h.user.current = role({ outpass_visitors: "edit", "outpass_visitors.outpass": "hidden" });
+    mountPage("/hr/outpass-visitors");
+    await waitFor(() => pathname() === VISITORS, "Visitors");
+    expect(headings()).toEqual(["Visitors"]);
+  });
+
+  it("says so when every tab of a page is hidden, and asks for none of them", async () => {
+    h.user.current = role({
+      outpass_visitors: "edit",
+      "outpass_visitors.tea_break.records": "hidden",
+      "outpass_visitors.tea_break.rule": "hidden",
+    });
+    mountPage(TEA);
+    await waitFor(() => q("nothing-open") !== null, "the note");
+    expect(pathname()).toBe(TEA);
+    expect(text(q("nothing-open"))).toBe("Nothing on this page is open to your role.");
+    expect(world.gets.some((u) => u.startsWith("/api/tea-break"))).toBe(false);
+  });
+
+  it("has no Manage Gates without 'Gate scanner devices', and a list that cannot be changed with View only", async () => {
+    h.user.current = role({ outpass_visitors: "edit", "outpass_visitors.outpass.gate_devices": "hidden" });
+    mountPage(OUTPASS);
+    await waitFor(() => ready("outpass-passes"), "the passes");
+    expect(button("Manage Gates")).toBeNull();
+    expect(world.gets.some((u) => u.startsWith("/api/gate-devices"))).toBe(false);
+    unmountPage();
+    h.user.current = role({ outpass_visitors: "edit", "outpass_visitors.outpass.gate_devices": "view" });
+    mountPage(OUTPASS);
+    await waitFor(() => ready("outpass-passes"), "the passes");
+    click(button("Manage Gates"));
+    await waitFor(() => button("Create Gate") !== null, "the dialog");
+    expect(button("Create Gate")!.disabled).toBe(true);
   });
 });
 

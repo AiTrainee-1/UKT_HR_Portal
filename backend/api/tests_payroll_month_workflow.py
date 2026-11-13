@@ -446,6 +446,7 @@ class LockTests(WorkflowBase):
                 "hold": False,
                 "addToPayroll": False,
                 "releaseAndPay": True,
+                "markCleared": False,  # added 2026-11-11 (a finalized month refuses Mark as Cleared: 409)
             },
         )
         self.assertEqual(s["counts"]["onHold"], 1)

@@ -6,10 +6,12 @@ import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
-import { useAuth } from "@/contexts/AuthContext";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { getListEmployeesQueryKey, useListEmployeesLite } from "@/lib/api-client";
 import { todayStamp } from "@/lib/exportUtils";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import CategorySwitch from "./bulk-upload/CategorySwitch";
 import { CATEGORIES, STATUS_LABEL } from "./bulk-upload/config";
@@ -21,6 +23,14 @@ import type { Category, ListStatus } from "./bulk-upload/types";
 import UploadFlow from "./bulk-upload/UploadFlow";
 
 type Tab = "add" | ListStatus;
+
+const TABS: readonly Tab[] = ["add", "active", "inactive"];
+// Each tab's own key (Account Management -> Roles & Permissions -> Employees -> Bulk upload).
+const TAB_KEY: Record<Tab, string> = {
+  add: "employees.bulk_upload.add",
+  active: "employees.bulk_upload.active",
+  inactive: "employees.bulk_upload.inactive",
+};
 
 function Step({ n, title, children, accent }: { n: number; title: string; children: ReactNode; accent: string }) {
   return (
@@ -67,7 +77,7 @@ const GUIDE: Record<Tab, string[]> = {
 };
 
 export default function BulkUploadEmployees() {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -75,7 +85,17 @@ export default function BulkUploadEmployees() {
   const { data: employees, isLoading } = useListEmployeesLite();
 
   const [category, setCategory] = useState<Category>("staff");
-  const [tab, setTab] = useState<Tab>("add");
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted).
+  const visibleTabs = visibleItems(TABS, (t) => TAB_KEY[t], level);
+  const [askedTab, setTab] = useState<Tab>("add");
+  const tab = pickVisible(askedTab, visibleTabs);
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const tabViewOnly =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(TAB_KEY[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab, category);
   const cfg = CATEGORIES[category];
   const counts = useMemo(() => tally(employees), [employees]);
   const baseColor = category === "staff" ? "#059669" : "#d97706";
@@ -114,52 +134,65 @@ export default function BulkUploadEmployees() {
 
         <Card className="border-0 shadow-sm">
           <CardContent className="space-y-5 p-4 sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            {visibleTabs.length === 0 && (
+              <p className="py-4 text-center text-sm text-muted-foreground" data-testid="bulk-upload-nothing-open">
+                Nothing on this page is open to your role.
+              </p>
+            )}
+            <div
+              className={cn("flex flex-wrap items-center justify-between gap-3", visibleTabs.length === 0 && "hidden")}
+            >
               <PillTabs
                 value={tab}
                 onChange={(v) => setTab(v as Tab)}
                 baseColor={baseColor}
-                items={[
-                  {
-                    value: "add",
-                    label: (
-                      <>
-                        <span className="hidden sm:inline">Add new employees</span>
-                        <span className="sm:hidden">Add new</span>
-                      </>
-                    ),
-                    icon: <UserPlus size={13} />,
-                  },
-                  {
-                    value: "active",
-                    label: (
-                      <>
-                        <span className="hidden sm:inline">Active employees</span>
-                        <span className="sm:hidden">Active</span>
-                      </>
-                    ),
-                    count: counts[category].active,
-                    icon: <UserCheck size={13} />,
-                  },
-                  {
-                    value: "inactive",
-                    label: (
-                      <>
-                        <span className="hidden sm:inline">Inactive employees</span>
-                        <span className="sm:hidden">Inactive</span>
-                      </>
-                    ),
-                    count: counts[category].inactive,
-                    icon: <UserMinus size={13} />,
-                  },
-                ]}
+                items={visibleItems(
+                  [
+                    {
+                      value: "add",
+                      label: (
+                        <>
+                          <span className="hidden sm:inline">Add new employees</span>
+                          <span className="sm:hidden">Add new</span>
+                        </>
+                      ),
+                      icon: <UserPlus size={13} />,
+                    },
+                    {
+                      value: "active",
+                      label: (
+                        <>
+                          <span className="hidden sm:inline">Active employees</span>
+                          <span className="sm:hidden">Active</span>
+                        </>
+                      ),
+                      count: counts[category].active,
+                      icon: <UserCheck size={13} />,
+                    },
+                    {
+                      value: "inactive",
+                      label: (
+                        <>
+                          <span className="hidden sm:inline">Inactive employees</span>
+                          <span className="sm:hidden">Inactive</span>
+                        </>
+                      ),
+                      count: counts[category].inactive,
+                      icon: <UserMinus size={13} />,
+                    },
+                  ],
+                  (t) => TAB_KEY[t.value as Tab],
+                  level,
+                )}
               />
               <p className={cn("text-xs font-semibold", cfg.accent.text)}>
                 {cfg.label}: {cfg.tagline.toLowerCase()}
               </p>
             </div>
 
-            {tab === "add" ? (
+            <ViewOnlyTabNote show={tabViewOnly} />
+
+            {visibleTabs.length === 0 ? null : tab === "add" ? (
               <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-5">
                 <div className="min-w-0 lg:col-span-2">
                   <Step n={1} title={`Download the ${cfg.label} template`} accent={cfg.accent.solid.split(" ")[0]}>

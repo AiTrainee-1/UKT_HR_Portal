@@ -56,6 +56,9 @@ type Props = {
   documentsLoading: boolean;
   docTab: "letters" | "extra";
   onDocTab: (tab: "letters" | "extra") => void;
+  /** The sub-tabs this role may see (Roles & Permissions -> Recruitment -> Documents -> One employee's documents); the
+   *  page already moved `docTab` onto one of them. Default: both. */
+  visibleDocTabs?: readonly ("letters" | "extra")[];
   onBack: () => void;
   onOpenCategory: (category: EmployeeDocumentCategory) => void;
   token: string | null;
@@ -68,6 +71,7 @@ export default function EmployeeView({
   documentsLoading,
   docTab,
   onDocTab,
+  visibleDocTabs = ["letters", "extra"],
   onBack,
   onOpenCategory,
   token,
@@ -136,22 +140,31 @@ export default function EmployeeView({
               </div>
             </div>
           </div>
-          <PillTabs
-            items={[
-              { value: "letters", label: "Letters" },
-              {
-                value: "extra",
-                label: "Extra Documents",
-                count: documentsLoading ? undefined : done.missing.length || undefined,
-              },
-            ]}
-            value={docTab}
-            onChange={(v) => onDocTab(v as "letters" | "extra")}
-          />
+          {visibleDocTabs.length > 0 && (
+            <PillTabs
+              items={[
+                { value: "letters", label: "Letters" },
+                {
+                  value: "extra",
+                  label: "Extra Documents",
+                  count: documentsLoading ? undefined : done.missing.length || undefined,
+                },
+              ].filter((t) => visibleDocTabs.includes(t.value as "letters" | "extra"))}
+              value={docTab}
+              onChange={(v) => onDocTab(v as "letters" | "extra")}
+            />
+          )}
         </CardContent>
       </Card>
 
-      {docTab === "letters" ? (
+      {visibleDocTabs.length === 0 ? (
+        <p
+          className="rounded-2xl border bg-white p-6 text-center text-sm text-muted-foreground"
+          data-testid="employee-docs-nothing-open"
+        >
+          Nothing on this page is open to your role.
+        </p>
+      ) : docTab === "letters" ? (
         <LettersTab
           employeeId={employee.id}
           joinDate={employee.joinDate}

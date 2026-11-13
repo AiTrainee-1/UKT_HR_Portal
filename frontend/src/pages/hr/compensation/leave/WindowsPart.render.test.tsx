@@ -34,7 +34,10 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
-vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ token: "t", user: h.user.current }) }));
+vi.mock("@/contexts/AuthContext", async (original) => ({
+  ...(await original<typeof import("@/contexts/AuthContext")>()),
+  useAuth: () => ({ token: "t", user: h.user.current }),
+}));
 vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-fetch")>()),
   customFetch: h.fetch,
@@ -200,11 +203,12 @@ describe("the list of announcements", () => {
 });
 
 describe("announcing", () => {
-  it("starts today, as a late-in, with the date limited to today and 180 days ahead", async () => {
+  it("starts today, as a late-in, with the date limited to the current month, past days included", async () => {
     await openForm();
     expect(input("window-date").value).toBe("2026-10-14");
-    expect(input("window-date").min).toBe("2026-10-14");
-    expect(input("window-date").max).toBe("2027-04-12");
+    expect(input("window-date").min).toBe("2026-10-01");
+    expect(input("window-date").max).toBe("2026-10-31");
+    expect(text(q("windows-form"))).toContain("Any day of October 2026 (1 to 31 October), past or upcoming.");
     expect(must("window-kind-late_in").getAttribute("aria-checked")).toBe("true");
     expect(must("window-kind-early_out").getAttribute("aria-checked")).toBe("false");
     expect(button("window-submit").disabled).toBe(false);

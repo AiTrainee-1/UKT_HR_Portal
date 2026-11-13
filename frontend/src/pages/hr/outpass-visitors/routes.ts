@@ -44,6 +44,17 @@ export const GATE_NESTED: Record<GatePageKey, Readonly<Record<string, readonly G
 export const subsOf = (page: GatePageKey): readonly GateTab[] => GATE_SUBS[page];
 export const nestedOf = (page: GatePageKey, sub: string): readonly GateTab[] => GATE_NESTED[page][sub] ?? [];
 
+/**
+ * The permission key of a page, a subtab or a nested subtab (Account Management -> Roles & Permissions), each of which is also
+ * the key of its address: `outpass_visitors.tea_break`, `outpass_visitors.outpass.overview.qr_submissions`.
+ */
+export function gateKey(page: GatePageKey, sub?: string | null, nested?: string | null): string {
+  return ["outpass_visitors", page, sub, sub ? nested : null]
+    .filter((part): part is string => !!part)
+    .map((part) => part.replace(/-/g, "_"))
+    .join(".");
+}
+
 /** `/hr/outpass-visitors/outpass/overview/passes`: the page, the subtab and the nested subtab it names (each optional). */
 export function gateTabPath(page: GatePageKey, sub?: string, nested?: string): string {
   return [gatePagePath(page), sub, sub ? nested : undefined].filter(Boolean).join("/");
@@ -80,15 +91,22 @@ export function readGatePath(pathname: string): { page: GatePageKey; sub: string
  * The address an address really is: a path that stops early gets the first subtab (and the first nested subtab), an unknown
  * subtab or nested subtab is replaced by the first one, anything after the last level is dropped, and the bare
  * `/hr/outpass-visitors` is Outpass. The page itself decides to redirect when this is not the address it was opened at.
+ * `canSee(key)` (the signed-in role may see that page / subtab, see `gateKey`): "the first one" is then the first it may see,
+ * the bare address (or one that names no page) lands on the first page it may see, and a level it may see nothing of stops
+ * the address there (the page says so). Left out: everything may be seen.
  */
-export function resolveGatePath(pathname: string): string {
-  const { page, sub, nested } = readGatePath(pathname);
-  const subs = subsOf(page);
+export function resolveGatePath(pathname: string, canSee: (key: string) => boolean = () => true): string {
+  const named = readGatePath(pathname);
+  const namesPage = (GATE_PAGES as readonly string[]).includes(segmentsOf(pathname)[0] ?? "");
+  const page = namesPage ? named.page : (GATE_PAGES.find((p) => canSee(gateKey(p))) ?? named.page);
+  const sub = namesPage ? named.sub : null;
+  const nested = namesPage ? named.nested : null;
+  const subs = subsOf(page).filter((s) => canSee(gateKey(page, s.value)));
   if (subs.length === 0) return gatePagePath(page);
-  const chosen = sub ?? subs[0].value;
-  const levels = nestedOf(page, chosen);
+  const chosen = sub && subs.some((s) => s.value === sub) ? sub : subs[0].value;
+  const levels = nestedOf(page, chosen).filter((n) => canSee(gateKey(page, chosen, n.value)));
   if (levels.length === 0) return gateTabPath(page, chosen);
-  return gateTabPath(page, chosen, nested ?? levels[0].value);
+  return gateTabPath(page, chosen, nested && levels.some((n) => n.value === nested) ? nested : levels[0].value);
 }
 
 /** The address with the trailing slash dropped, so `/hr/outpass-visitors/visitors/` is the page itself. */

@@ -17,6 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useListShiftAssignments, type ShiftAssignment } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import EmployeeShiftStatsDialog from "./EmployeeShiftStatsDialog";
 import { EditScheduleDialog, RemoveFromShiftDialog } from "./ManageAssignmentDialogs";
@@ -180,15 +181,17 @@ function GroupCard({
             <ChevronDown size={16} className={cn("text-gray-400 transition-transform", !open && "-rotate-90")} />
           </span>
         </button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="hidden h-8 shrink-0 gap-1.5 text-xs sm:inline-flex"
-          onClick={onAssign}
-          data-testid={`group-assign-${group.shiftId}`}
-        >
-          <UserPlus size={13} /> Assign people
-        </Button>
+        <Gate k="shifts.assign">
+          <Button
+            variant="outline"
+            size="sm"
+            className="hidden h-8 shrink-0 gap-1.5 text-xs sm:inline-flex"
+            onClick={onAssign}
+            data-testid={`group-assign-${group.shiftId}`}
+          >
+            <UserPlus size={13} /> Assign people
+          </Button>
+        </Gate>
       </div>
 
       {open && (
@@ -205,16 +208,18 @@ function GroupCard({
             </label>
             {chosen.length > 0 ? (
               <div className="ml-auto flex items-center gap-1.5">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 gap-1.5 text-xs"
-                  onClick={() => onMove(chosen)}
-                  aria-label="Assign the selected employees to another shift"
-                  data-testid={`group-move-${group.shiftId}`}
-                >
-                  <ArrowRightLeft size={12} /> Move selected
-                </Button>
+                <Gate k="shifts.assign">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 text-xs"
+                    onClick={() => onMove(chosen)}
+                    aria-label="Assign the selected employees to another shift"
+                    data-testid={`group-move-${group.shiftId}`}
+                  >
+                    <ArrowRightLeft size={12} /> Move selected
+                  </Button>
+                </Gate>
                 <Button
                   size="sm"
                   variant="destructive"
@@ -280,22 +285,32 @@ function GroupCard({
                         ["Edit schedule", Pencil, () => onEdit(m), "edit"],
                         ["Remove from shift", UserMinus, () => onRemove([m]), "remove"],
                       ] as const
-                    ).map(([label, Icon, run, key]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={run}
-                        aria-label={`${label}: ${m.employeeName}`}
-                        title={label}
-                        data-testid={`member-${key}-${m.employeeCode}`}
-                        className={cn(
-                          "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700",
-                          key === "remove" && "hover:bg-red-50 hover:text-red-600",
-                        )}
-                      >
-                        <Icon size={14} />
-                      </button>
-                    ))}
+                    ).map(([label, Icon, run, key]) => {
+                      const button = (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={run}
+                          aria-label={`${label}: ${m.employeeName}`}
+                          title={label}
+                          data-testid={`member-${key}-${m.employeeCode}`}
+                          className={cn(
+                            "flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700",
+                            key === "remove" && "hover:bg-red-50 hover:text-red-600",
+                          )}
+                        >
+                          <Icon size={14} />
+                        </button>
+                      );
+                      // Moving someone opens the Assign dialog: its own switch.
+                      return key === "move" ? (
+                        <Gate key={key} k="shifts.assign">
+                          {button}
+                        </Gate>
+                      ) : (
+                        button
+                      );
+                    })}
                   </div>
                 </li>
               ))}

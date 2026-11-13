@@ -10,6 +10,7 @@ import { useMarkPaid, useRefreshPayroll } from "@/components/payroll/kit/use-pay
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { SalaryStatementPanel } from "@/components/payroll/statement";
 import { Button } from "@/components/ui/button";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { useListProductionPayroll, type CyclePeriod, type PayCycle } from "@/lib/api-client/custom-hooks";
 import { formatPeriod, productionScope, type UrlSetter } from "./logic";
 
@@ -30,6 +31,9 @@ export function SalaryTab({
   setUrl: UrlSetter;
 }) {
   const [, navigate] = useLocation();
+  const { user } = useAuth();
+  // Mark as Cleared is an approval of its own (payroll_mark_cleared)
+  const mayMarkCleared = canApprove(user, "payroll_mark_cleared");
   const [adjust, setAdjust] = useState<AdjustTarget | null>(null);
   const { markPaid, markingId } = useMarkPaid();
   const refresh = useRefreshPayroll();
@@ -102,7 +106,7 @@ export function SalaryTab({
               >
                 <Pencil size={13} />
               </Button>
-              {run.status === "pending" && (
+              {run.status === "pending" && mayMarkCleared && (
                 <Button
                   type="button"
                   variant="ghost"

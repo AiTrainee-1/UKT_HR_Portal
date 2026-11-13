@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useLocation } from "wouter";
 import { AlarmClock, CalendarDays, CalendarX2, ClipboardList } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { AttendanceSheetContent } from "./AttendanceSheet";
 import { ALL } from "./leave/logic";
@@ -32,11 +36,18 @@ const writeTab = (tab: TabKey) => {
   }
 };
 
-const TAB_ITEMS = [
+const TAB_ITEMS: { value: TabKey; label: string; icon: ReactNode }[] = [
   { value: "monthly", label: TAB_LABELS.monthly, icon: <CalendarDays size={14} /> },
   { value: "leave", label: TAB_LABELS.leave, icon: <CalendarX2 size={14} /> },
   { value: "late", label: TAB_LABELS.late, icon: <AlarmClock size={14} /> },
 ];
+
+/** Each sub-tab's own permission key (Account Management -> Roles & Permissions); one without a setting follows the page. */
+const TAB_KEY: Record<TabKey, string> = {
+  monthly: "attendance.report_log.monthly",
+  leave: "attendance.report_log.leave",
+  late: "attendance.report_log.late",
+};
 
 /**
  * Report Log: three sub-tabs.
@@ -48,12 +59,28 @@ const TAB_ITEMS = [
  * The tab is in the address (`?tab=`), so a refresh or a shared link opens the same one.
  */
 export default function AttendanceReportLog() {
-  const [tab, setTab] = useState<TabKey>(readTab);
+  const [asked, setTab] = useState<TabKey>(readTab);
   // the two daily lists share their date, department and search: switching between them keeps what was picked
   const [daily, setDaily] = useState<DailyFilters>(() => ({ date: localToday(), department: ALL, search: "" }));
 
   const { data: settings } = usePayrollSettings();
   const simpleMode = settings?.attendanceMode === "simple";
+
+  // Only the sub-tabs this role may see are offered; a hidden one asked for (by the address too) opens the first it may see.
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  const items = visibleItems(TAB_ITEMS, (t) => TAB_KEY[t.value], level);
+  const tab = pickVisible(
+    asked,
+    items.map((t) => t.value),
+  );
+  const tabViewOnly =
+    items.length > 0 && !isRouteViewOnly(user, location, moduleForPath(location)) && level(TAB_KEY[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
+  useEffect(() => {
+    if (tab !== asked) writeTab(tab);
+  }, [tab, asked]);
 
   const selectTab = (next: string) => {
     const key = parseTab(next);
@@ -87,18 +114,31 @@ export default function AttendanceReportLog() {
           </span>
         </div>
 
-        <div className="max-w-full overflow-x-auto pb-1" data-testid="report-log-tabs">
-          <PillTabs items={TAB_ITEMS} value={tab} onChange={selectTab} baseColor="#4f46e5" size="sm" />
-        </div>
+        {items.length === 0 ? (
+          <p
+            className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
+            data-testid="nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        ) : (
+          <>
+            <div className="max-w-full overflow-x-auto pb-1" data-testid="report-log-tabs">
+              <PillTabs items={items} value={tab} onChange={selectTab} baseColor="#4f46e5" size="sm" />
+            </div>
 
-        {tab === "monthly" && (
-          <div className="space-y-5" data-testid="monthly-tab">
-            <AttendanceSheetContent />
-            <LatePenaltyCard />
-          </div>
+            <ViewOnlyTabNote show={tabViewOnly} />
+
+            {tab === "monthly" && (
+              <div className="space-y-5" data-testid="monthly-tab">
+                <AttendanceSheetContent />
+                <LatePenaltyCard />
+              </div>
+            )}
+            {tab === "leave" && <LeaveTab filters={daily} onFilters={setDaily} />}
+            {tab === "late" && <LateTab filters={daily} onFilters={setDaily} />}
+          </>
         )}
-        {tab === "leave" && <LeaveTab filters={daily} onFilters={setDaily} />}
-        {tab === "late" && <LateTab filters={daily} onFilters={setDaily} />}
       </div>
     </HrLayout>
   );

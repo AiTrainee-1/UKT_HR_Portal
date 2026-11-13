@@ -1,6 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { useLocation } from "wouter";
 import { Search, Building2, BriefcaseBusiness, UserRound, X, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
+import { moduleForPath } from "@/lib/permission-modules";
+import { Gate, ViewOnlyTabNote, pickVisible, useLevel, visibleItems } from "@/lib/tab-access";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -41,11 +45,15 @@ interface Option {
   label: string;
 }
 
+type LookupTab = "search" | "unassigned";
+const LOOKUP_TABS: readonly LookupTab[] = ["search", "unassigned"];
+
 export function EmployeeAssignmentLookup({
   kind,
   options,
   listSearch,
   onListSearchChange,
+  subTabKeys,
 }: {
   /** Which assignment this instance manages. */
   kind: "department" | "designation";
@@ -56,12 +64,32 @@ export function EmployeeAssignmentLookup({
    *  out when the page has a filter bar of its own. */
   listSearch?: string;
   onListSearchChange?: (v: string) => void;
+  /** Each sub-tab's own permission key (Account Management -> Roles &
+   *  Permissions), e.g. "employees.departments.find.search": a hidden one is
+   *  not offered (its list is never fetched), a View-only one locks its own
+   *  controls. Each key's dotted parent is the tab this lookup sits in. Leave
+   *  out and both sub-tabs are always shown. */
+  subTabKeys?: Record<LookupTab, string>;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const assignMutation = useAssignEmployee();
+  const { user } = useAuth();
+  const [location] = useLocation();
 
-  const [tab, setTab] = useState<"search" | "unassigned">("search");
+  const level = useLevel();
+  const visibleTabs = visibleItems(LOOKUP_TABS, (t) => subTabKeys?.[t], level);
+  const [askedTab, setTab] = useState<LookupTab>("search");
+  const tab = pickVisible(askedTab, visibleTabs);
+  const tabKey = subTabKeys?.[tab];
+  const parentKey = tabKey ? tabKey.slice(0, tabKey.lastIndexOf(".")) : "";
+  // The note only when the tab this lookup sits in is editable on an editable page (otherwise a note above already
+  // says so); the Gate below locks the sub-tab's own controls either way.
+  const subTabViewOnly =
+    !!tabKey &&
+    level(tabKey) === "view" &&
+    level(parentKey) === "edit" &&
+    !isRouteViewOnly(user, location, moduleForPath(location));
   const [query, setQuery] = useState("");
   /** Filters the unassigned list client-side -it is already fully loaded,
    *  so there is nothing to gain from a round trip per keystroke. */
@@ -131,24 +159,32 @@ export function EmployeeAssignmentLookup({
 
   return (
     <Card className="border-0 shadow-sm">
-      <CardContent className="space-y-3 p-4">
+      {/* A column with a gap (not space-y): a View-only sub-tab sits in a
+          display:contents Gate, which space-y's margins would skip. */}
+      <CardContent className="flex flex-col gap-3 p-4">
         {/* Tabs left, the page's own list filter right -it used to be a
             full-width input above this card, which wasted the whole right
             half of the row. */}
         <div className="flex flex-wrap items-center justify-between gap-3">
+          {visibleTabs.length > 0 && (
           <PillTabs
-            items={[
-              { value: "search", label: "Find employee", color: "#374151" },
-              {
-                value: "unassigned",
-                label: "Unassigned",
-                count: tab === "unassigned" ? unassigned.length : undefined,
-                color: "#dc2626",
-              },
-            ]}
+            items={visibleItems(
+              [
+                { value: "search", label: "Find employee", color: "#374151" },
+                {
+                  value: "unassigned",
+                  label: "Unassigned",
+                  count: tab === "unassigned" ? unassigned.length : undefined,
+                  color: "#dc2626",
+                },
+              ],
+              (t) => subTabKeys?.[t.value as LookupTab],
+              level,
+            )}
             value={tab}
-            onChange={(v) => setTab(v as "search" | "unassigned")}
+            onChange={(v) => setTab(v as LookupTab)}
           />
+          )}
 
           {onListSearchChange && (
             <div className="relative w-full sm:w-64">
@@ -174,6 +210,14 @@ export function EmployeeAssignmentLookup({
           )}
         </div>
 
+        <ViewOnlyTabNote show={subTabViewOnly} testId="assignment-lookup-view-only" />
+
+        {visibleTabs.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground" data-testid="assignment-lookup-nothing-open">
+            Nothing on this page is open to your role.
+          </p>
+        ) : (
+        <MaybeGate key={tab} k={tabKey}>
         {tab === "search" ? (
           <>
             <p className="text-xs text-muted-foreground">
@@ -325,9 +369,16 @@ export function EmployeeAssignmentLookup({
             )}
           </>
         )}
+        </MaybeGate>
+        )}
       </CardContent>
     </Card>
   );
+}
+
+/** A sub-tab's content under its own key (Gate), or as it is when the host page gave no keys. */
+function MaybeGate({ k, children }: { k?: string; children: ReactNode }) {
+  return k ? <Gate k={k}>{children}</Gate> : <>{children}</>;
 }
 
 /** One search result: who they are, and both current assignments. */

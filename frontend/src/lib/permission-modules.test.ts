@@ -60,7 +60,8 @@ describe("Approval Workflow Control permission", () => {
 
   it("is a child of User Management, like the backend tree", () => {
     const parent = MODULE_TREE.find((n) => n.key === "user_management");
-    expect(parent?.children?.map((c) => c.key)).toEqual([KEY]);
+    // since 2026-11-11 the HOD Assignment tab has a key of its own too
+    expect(parent?.children?.map((c) => c.key)).toEqual(["user_management.hod", KEY]);
   });
 
   it("inherits User Management's level until a role overrides it", () => {
@@ -76,7 +77,7 @@ describe("Approval Workflow Control permission", () => {
   });
 
   it("makes the page-wide View-only lock depend on both tabs", () => {
-    expect(ROUTE_OR_MODULES["/hr/user-management"]).toEqual(["user_management", KEY]);
+    expect(ROUTE_OR_MODULES["/hr/user-management"]).toEqual(["user_management", "user_management.hod", KEY]);
   });
 });
 
@@ -86,16 +87,30 @@ describe("module tree", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("lists every parent and child in allModuleKeys and MODULE_LABELS", () => {
-    const expected = MODULE_TREE.flatMap((n) => [n.key, ...(n.children ?? []).map((c) => c.key)]);
+  it("lists every key, parents before their parts, in allModuleKeys and MODULE_LABELS", () => {
+    const expected: string[] = [];
+    const walk = (nodes: typeof MODULE_TREE) => {
+      for (const n of nodes) {
+        expected.push(n.key);
+        walk(n.children ?? []);
+      }
+    };
+    walk(MODULE_TREE);
     expect(allModuleKeys()).toEqual(expected);
-    expect(MODULE_LABELS.map((m) => m.key)).toEqual(expected);
+    // the labels cover every key, and the locked rows (Account Management ...) too
+    const labelled = new Set(MODULE_LABELS.map((m) => m.key));
+    for (const k of expected) expect(labelled.has(k), k).toBe(true);
+    expect(labelled.has("account_management")).toBe(true);
   });
 
   it("namespaces every child under its parent", () => {
-    for (const node of MODULE_TREE) {
-      for (const child of node.children ?? []) expect(child.key.startsWith(`${node.key}.`)).toBe(true);
-    }
+    const walk = (nodes: typeof MODULE_TREE) => {
+      for (const node of nodes) {
+        for (const child of node.children ?? []) expect(child.key.startsWith(`${node.key}.`)).toBe(true);
+        walk(node.children ?? []);
+      }
+    };
+    walk(MODULE_TREE);
   });
 
   it("maps every route to a real module (activity_logs is admin-only and absent from the tree)", () => {
@@ -124,13 +139,17 @@ describe("moduleForPath", () => {
     expect(moduleForPath("/hr/salary-slip")).toBe("salary_slip");
   });
 
-  it("gates the Biometric Connectors pages like Attendance, whatever the case of the address", () => {
-    // Biometric Device Status and Device Control moved there from Attendance: same module, same permission
-    expect(moduleForPath("/hr/Biometric-Connectors")).toBe("attendance");
-    expect(moduleForPath("/hr/Biometric-Connectors/device-status")).toBe("attendance");
-    expect(moduleForPath("/hr/Biometric-Connectors/DeviceControl/fetch")).toBe("attendance");
+  it("gates the Biometric Connectors pages like Attendance until a role sets them, whatever the case of the address", () => {
+    // Biometric Device Status and Device Control moved there from Attendance: since 2026-11-11 they have keys of their
+    // own, which follow Attendance until a role sets them
+    expect(moduleForPath("/hr/Biometric-Connectors")).toBe("biometric_connectors");
+    expect(moduleForPath("/hr/Biometric-Connectors/device-status")).toBe("biometric_connectors.device_status");
+    expect(moduleForPath("/hr/Biometric-Connectors/DeviceControl/fetch")).toBe(
+      "biometric_connectors.device_control.fetch",
+    );
+    expect(resolvePermission({ attendance: "view" }, "biometric_connectors.device_control.fetch")).toBe("view");
     // the router matches routes without regard to case, so the permission lookup must too
-    expect(moduleForPath("/hr/biometric-connectors/devicecontrol")).toBe("attendance");
+    expect(moduleForPath("/hr/biometric-connectors/devicecontrol")).toBe("biometric_connectors.device_control");
     expect(moduleForPath("/hr/Payroll")).toBe("payroll");
     expect(moduleForPath("/hr/Biometric-Connectorsx")).toBeNull();
   });

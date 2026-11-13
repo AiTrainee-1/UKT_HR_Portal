@@ -16,6 +16,8 @@ import {
   dateShort,
   isIsoDate,
   isShiftsValue,
+  MONTH_NAMES,
+  parseIso,
   shiftsText,
   sumShifts,
   fmtShifts,
@@ -26,9 +28,25 @@ import {
 
 // ── A. Announced late-in / early-out ──────────────────────────────────────────
 
-/** HR can announce a window at most this many days ahead (the server refuses more). */
-export const WINDOW_MAX_DAYS_AHEAD = 180;
 export const WINDOW_REASON_MAX = 300;
+
+/**
+ * The dates a window can be announced for (owner 2026-11-13): every day of the current month, past or upcoming, the 1st to
+ * the last. Once the next month begins the previous one is closed; a later month opens on its own 1st. The server enforces
+ * the same rule.
+ */
+export function windowDateRange(today: string): { min: string; max: string; label: string } {
+  const d = parseIso(today);
+  if (!d) return { min: today, max: today, label: "" };
+  const lastDay = new Date(Date.UTC(d.year, d.month, 0)).getUTCDate();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const month = MONTH_NAMES[d.month - 1];
+  return {
+    min: `${d.year}-${pad(d.month)}-01`,
+    max: `${d.year}-${pad(d.month)}-${pad(lastDay)}`,
+    label: `${month} ${d.year} (1 to ${lastDay} ${month})`,
+  };
+}
 
 export type WindowForm = {
   date: string;
@@ -56,9 +74,13 @@ export function checkWindow(form: WindowForm, today: string): WindowCheck {
   const problems: WindowCheck["problems"] = {};
   if (!form.date) problems.date = "Choose the date.";
   else if (!isIsoDate(form.date)) problems.date = "Enter a valid date.";
-  else if (form.date < today) problems.date = "A window can only be announced for today or a later date.";
-  else if (form.date > addDays(today, WINDOW_MAX_DAYS_AHEAD)) {
-    problems.date = `A window can only be announced up to ${WINDOW_MAX_DAYS_AHEAD} days ahead.`;
+  else {
+    const range = windowDateRange(today);
+    if (form.date < range.min || form.date > range.max) {
+      problems.date =
+        `A window can only be announced for a date in the current month, ${range.label}: ` +
+        "an earlier month is closed, and a later month opens on its 1st.";
+    }
   }
   if (!/^\d{2}:\d{2}$/.test(form.time)) {
     problems.time = form.kind === "late_in" ? "Enter the latest arrival time." : "Enter the earliest leaving time.";

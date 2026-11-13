@@ -661,10 +661,17 @@ def _access_by_kind(request: Request) -> tuple[dict[str, str], dict[str, bool]]:
     may: dict[str, bool] = {}
     for kind in KINDS:
         level = "edit" if hr.is_super_admin else resolve_permission(permissions, kind.module)
+        # Requests -> Requests -> <kind> (permission_tree.py): a role can hide one kind of this list on its own. It follows
+        # the Requests page until it is set, so nothing changes for a role that never set it.
+        if not hr.is_super_admin and resolve_permission(permissions, f"requests.list.{kind.key}") == "hidden":
+            level = "hidden"
         if level in ("view", "edit"):
             # the Managing Director only looks at requests; the decision endpoints refuse the MD anyway
             out[kind.key] = "view" if hr.is_md else level
-            may[kind.key] = (not hr.is_md) and approvals.get(kind.key, False)
+            # an employee request / an advance: the account may approve at least one of its types (each row's own
+            # `approval` block says which: hr_access.kind_for)
+            kinds = hr_access.ALIASES.get(kind.key, (kind.key,))
+            may[kind.key] = (not hr.is_md) and any(approvals.get(k, False) for k in kinds)
     return out, may
 
 

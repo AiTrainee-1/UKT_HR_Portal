@@ -16,7 +16,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import compensation_rules as rules
+from . import compensation_rules as rules, hr_access
 from .auth import require_hr, get_hr_display_name
 from .audit_utils import log_action
 from .branch_scope import get_branch_scope, scope_to_branch
@@ -470,6 +470,10 @@ def overtime_assign(request: Request) -> Response:
     are. If nothing could be assigned the answer is a 400 carrying the first reason. Relaxation is applied to the claim
     date straight away (see compensation_apply.py); pay is picked up by the month's payroll. One assignment per record.
     At most MAX_ASSIGN_RECORDS records per request (each relaxation re-computes the day it is granted on)."""
+    # deciding detected overtime is a right of its own: Account Management -> Approvals -> "OT shift
+    # compensation" (on top of Compensation Edit; an account that never set it keeps "edit = may")
+    if refused := hr_access.approval_refusal(request, "compensation_ot"):
+        return refused
     data = request.data if isinstance(request.data, dict) else {}
     items = data.get("records") or []
     if not isinstance(items, list) or not items:
@@ -532,6 +536,11 @@ def overtime_announce(request: Request) -> Response:
     overhaul keeps its old meaning and needs none of them). Each record is decided under a row lock and re-checked as still
     "detected" after it, so a double submit or two HR users can never credit it twice or overwrite an assignment."""
     from django.utils import timezone
+
+    # deciding detected overtime is a right of its own: Account Management -> Approvals -> "OT shift
+    # compensation" (on top of Compensation Edit; an account that never set it keeps "edit = may")
+    if refused := hr_access.approval_refusal(request, "compensation_ot"):
+        return refused
 
     data = request.data if isinstance(request.data, dict) else {}
     items = data.get("records") or []
@@ -609,6 +618,10 @@ def overtime_reject(request: Request) -> Response:
     (e.g. an HR-authorized late stay that isn't real OT) -no further action. Only the caller's own branch and only staff;
     only a record that is still "detected" (the update names that status, so a record somebody assigned a moment ago is
     never turned into a rejection). One audit entry per record."""
+    # deciding detected overtime is a right of its own: Account Management -> Approvals -> "OT shift
+    # compensation" (on top of Compensation Edit; an account that never set it keeps "edit = may")
+    if refused := hr_access.approval_refusal(request, "compensation_ot"):
+        return refused
     data = request.data if isinstance(request.data, dict) else {}
     items = data.get("records") or []
     if not isinstance(items, list):

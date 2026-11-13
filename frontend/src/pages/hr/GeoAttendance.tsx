@@ -15,10 +15,12 @@ import { RefreshButton } from "@/components/PageRefreshBar";
 import { PillTabs, type PillTabItem } from "@/components/ui/pill-tabs";
 import { useLiveTracks, useOnDutyPunchVerificationsHR, useOnDutySessionsHR } from "@/lib/api-client/custom-hooks";
 import { useMdEmbedded } from "@/lib/md/embed";
+import { useLevel } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { SectionSkeleton } from "./geo-tracking/kit";
 import {
   GEO_SECTIONS,
+  GEO_SECTION_KEY,
   GEO_SECTION_LABEL,
   geoPath,
   journeyPath,
@@ -67,14 +69,18 @@ function TabLabel({ text, count }: { text: string; count?: number }) {
 export default function GeoAttendance() {
   const [location, navigate] = useLocation();
   const search = useSearch();
-  const parsed = readGeoRoute(location, search);
+  // Each section is an address of its own (the route guard blocks a hidden one, HrLayout locks a View-only one): the strip
+  // offers the ones this role may see, a landing goes to the first of them, and the header asks only for what they show.
+  const level = useLevel();
+  const visible = GEO_SECTIONS.filter((s) => level(GEO_SECTION_KEY[s]) !== "hidden");
+  const parsed = readGeoRoute(location, search, visible);
   const section = parsed.route?.section ?? "approvals";
 
-  const { data: pendingSessions } = useOnDutySessionsHR("pending");
-  const { data: pendingPunches } = useOnDutyPunchVerificationsHR("pending");
+  const { data: pendingSessions } = useOnDutySessionsHR("pending", visible.includes("approvals"));
+  const { data: pendingPunches } = useOnDutyPunchVerificationsHR("pending", visible.includes("verifications"));
   // the Managing Director's copy has a Live chip and an "On duty now" figure of its own right beside the title
   const embedded = useMdEmbedded();
-  const live = useLiveTracks(!embedded, HEADER_POLL_MS);
+  const live = useLiveTracks(!embedded && visible.includes("live-map"), HEADER_POLL_MS);
   const onDuty = embedded || live.isError ? undefined : live.data?.length;
 
   const sessions = pendingSessions?.length ?? 0;
@@ -83,6 +89,8 @@ export default function GeoAttendance() {
   const go = useCallback((to: string) => navigate(to), [navigate]);
   const openJourney = useCallback((id: number | null) => go(id === null ? geoPath("journeys") : journeyPath(id)), [go]);
   const simulate = useCallback((id: number) => go(simulatePath(id)), [go]);
+  // "Simulate a journey" hidden: no replay is offered anywhere (the picker, a row's button, a journey's button)
+  const maySimulate = level("geo_attendance.journeys.simulate") !== "hidden";
 
   // on a phone the strip scrolls: the open tab is brought into view (a link to a section opens it out of sight otherwise)
   const strip = useRef<HTMLDivElement>(null);
@@ -92,10 +100,22 @@ export default function GeoAttendance() {
       ?.scrollIntoView?.({ inline: "center", block: "nearest" });
   }, [section, sessions, punches]);
 
+  if (visible.length === 0) {
+    return (
+      <HrLayout>
+        <p
+          className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
+          data-testid="nothing-open"
+        >
+          Nothing on this page is open to your role.
+        </p>
+      </HrLayout>
+    );
+  }
   if (parsed.redirect) return <Redirect to={parsed.redirect} replace />;
   const route = parsed.route;
 
-  const tabs: (PillTabItem & { value: GeoSection })[] = GEO_SECTIONS.map((value) => ({
+  const tabs: (PillTabItem & { value: GeoSection })[] = visible.map((value) => ({
     value,
     label: (
       <TabLabel
@@ -183,7 +203,7 @@ export default function GeoAttendance() {
                 journeyId={route.journey}
                 view={route.view}
                 onJourneyChange={openJourney}
-                onSimulate={simulate}
+                onSimulate={maySimulate ? simulate : undefined}
               />
             )}
             {section === "on-duty-map" && <OnDutyMapTab />}

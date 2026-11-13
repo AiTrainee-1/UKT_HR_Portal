@@ -933,6 +933,13 @@ def bonus_detail(request: Request, pk: int) -> Response:
         return Response({"error": "Bonus record not found"}, status=404)
     data = request.data
     if "status" in data and data["status"] in dict(Bonus.STATUS_CHOICES):
+        if data["status"] != b.status:
+            # approving / paying a bonus is a right of its own: Account Management -> Approvals -> "Bonus approval and
+            # payment" (on top of Bonus Edit; an account that never set it keeps "edit = may")
+            from . import hr_access
+
+            if refused := hr_access.approval_refusal(request, "bonus_status"):
+                return refused
         b.status = data["status"]
     if "notes" in data:
         b.notes = data["notes"]

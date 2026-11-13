@@ -5,7 +5,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import type { HrUserItem, Role } from "@/lib/api-client/custom-hooks";
-import { APPROVAL_KINDS, approvalCount } from "@/lib/hr-access";
+import { APPROVAL_KINDS } from "@/lib/hr-access";
+import { roleApprovalCount } from "./ApprovalsEditor";
 import { levelCounts, roleUsage, type LevelCounts } from "./logic";
 import { CategoryChip, Chip } from "./parts";
 
@@ -14,7 +15,7 @@ function ApprovalsLine({ role }: { role: Role }) {
   return (
     <p className="text-[11px] text-gray-500" data-testid={`role-approvals-${role.id}`}>
       {role.approvals
-        ? `Approves ${approvalCount(role.approvals)} of ${APPROVAL_KINDS.length} request types`
+        ? `Approves ${roleApprovalCount(role.approvals, role.permissions, role.category ?? "")} of ${APPROVAL_KINDS.length} kinds of decision`
         : "Approvals follow Edit"}
     </p>
   );

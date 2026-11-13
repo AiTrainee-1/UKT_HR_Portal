@@ -142,16 +142,82 @@ class AnnounceTests(LeaveBase):
         self.assertIn("late-in window for 2026-10-15 at 10:30", log.record_description)
         self.assertIn("3 staff", log.record_description)
 
-    def test_today_is_allowed_yesterday_and_a_far_future_date_are_not(self):
-        self.assertEqual(
-            self.post({"date": "2026-10-14", "kind": "late_in", "time": "10:00", "reason": "x"}).status_code, 201
-        )
+    def test_any_day_of_the_current_month_past_or_upcoming_is_allowed(self):
+        # owner 2026-11-13: the 1st to the last day of the current month, past days included (today is 14 Oct 2026)
+        for day in ("2026-10-01", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-31"):
+            r = self.post({"date": day, "kind": "late_in", "time": "10:00", "reason": "x"})
+            self.assertEqual(r.status_code, 201, (day, r.content))
+
+    def test_a_date_outside_the_current_month_is_refused(self):
+        for day in ("2026-09-30", "2026-09-01", "2026-11-01", "2027-04-12"):
+            r = self.post({"date": day, "kind": "late_in", "time": "10:00", "reason": "x"})
+            self.assertEqual(r.status_code, 400, day)
+            self.assertIn("current month, October 2026 (1 to 31 October)", r.json()["error"], day)
+        self.assertFalse(CompensationDayAnnouncement.objects.exists())
+
+    def test_the_month_closes_when_the_next_one_begins(self):
+        with mock.patch("api.compensation_windows_views.ist_today", return_value=date(2026, 11, 1)):
+            r = self.post({"date": "2026-10-31", "kind": "late_in", "time": "10:00", "reason": "x"})
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("current month, November 2026 (1 to 30 November)", r.json()["error"])
+            self.assertEqual(
+                self.post({"date": "2026-11-30", "kind": "late_in", "time": "10:00", "reason": "x"}).status_code, 201
+            )
+
+    def test_a_month_whose_payroll_is_finalized_is_closed(self):
+        from django.utils import timezone
+
+        from .models import PayrollMonthClose
+
+        PayrollMonthClose.objects.create(month=10, year=2026, finalized_at=timezone.now(), finalized_by="Admin")
         r = self.post({"date": "2026-10-13", "kind": "late_in", "time": "10:00", "reason": "x"})
-        self.assertEqual((r.status_code, "today or a later date" in r.json()["error"]), (400, True))
-        far = self.post({"date": "2027-06-01", "kind": "late_in", "time": "10:00", "reason": "x"})
-        self.assertEqual((far.status_code, "180 days" in far.json()["error"]), (400, True))
-        edge = self.post({"date": "2027-04-12", "kind": "early_out", "time": "10:00", "reason": "x"})  # today + 180
-        self.assertEqual(edge.status_code, 201, edge.content)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Payroll Done", r.json()["error"])
+
+    def test_a_window_for_a_past_day_judges_that_days_stored_attendance_again(self):
+        from .attendance_final import compute_day_record
+        from .models import EmployeeShiftAssignment, ShiftTemplate
+
+        settings = PayrollSettings.get()
+        settings.attendance_mode = "simple"
+        settings.morning_late_in_enabled = True
+        settings.save()
+        shift = ShiftTemplate.objects.create(
+            name="WB Past",
+            shift_type="staff",
+            start_time=time(8, 30),
+            end_time=time(17, 30),
+            grace_period_minutes=10,
+            first_half_end=time(13, 0),
+            lunch_duration_minutes=60,
+            lunch_grace_minutes=10,
+        )
+        yesterday = date(2026, 10, 13)
+        for emp in (self.asha, self.ravi, self.mani):
+            EmployeeShiftAssignment.objects.create(employee=emp, shift=shift, effective_from=date(2026, 1, 1))
+            for t in (time(9, 30), time(13, 0), time(14, 0), time(17, 40)):
+                AttendanceLog.objects.create(employee=emp, date=yesterday, punch_time=t, punch_type="IN", source="test")
+            compute_day_record(emp, yesterday, settings=settings)
+        self.assertTrue(AttendanceDayRecord.objects.get(employee=self.asha, date=yesterday).is_late)
+        # Ravi's day was set by hand: it stays exactly as HR left it
+        AttendanceDayRecord.objects.filter(employee=self.ravi, date=yesterday).update(source="manual", is_late=True)
+        # Mani's day has never been stored: it is worked out (window and all) the first time somebody looks at it
+        AttendanceDayRecord.objects.filter(employee=self.mani, date=yesterday).delete()
+
+        body = self.announce("late_in", day=yesterday, at="10:00", reason="Heavy rain")
+
+        self.assertEqual(body["attendanceUpdated"], 1)
+        asha = AttendanceDayRecord.objects.get(employee=self.asha, date=yesterday)
+        self.assertEqual((asha.is_late, asha.compensation_kind), (False, "window_late_in"))
+        ravi = AttendanceDayRecord.objects.get(employee=self.ravi, date=yesterday)
+        self.assertEqual((ravi.source, ravi.is_late), ("manual", True))
+        self.assertFalse(AttendanceDayRecord.objects.filter(employee=self.mani, date=yesterday).exists())
+        mani = compute_day_record(self.mani, yesterday, settings=settings)
+        self.assertEqual((mani.is_late, mani.compensation_kind), (False, "window_late_in"))
+
+    def test_a_window_for_a_later_day_recomputes_nothing(self):
+        body = self.announce("late_in", day=TOMORROW)
+        self.assertEqual(body["attendanceUpdated"], 0)
 
     def test_validation(self):
         base = {"date": "2026-10-15", "kind": "late_in", "time": "10:30", "reason": "Rain"}

@@ -22,6 +22,7 @@ import {
   type ShiftItem,
   type ShiftType,
 } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { useQueryClient } from "@tanstack/react-query";
 import { TypeChips } from "./AssignmentsTab";
 import ProductionRulesSummary from "./ProductionRulesSummary";
@@ -139,16 +140,18 @@ export default function ShiftsTab({
             <b>Production shift: the same for every production employee.</b> They share one shift, whatever their
             gender, and the shifts they earn each day come from the production shift rules in Settings. New production
             employees are assigned automatically when they are added.{" "}
-            <button
-              type="button"
-              onClick={() => void syncProduction()}
-              disabled={sync.isPending || counts.production === 0}
-              className="ml-1 inline-flex items-center gap-1 font-semibold underline underline-offset-2 disabled:opacity-50"
-              data-testid="sync-production"
-            >
-              <RefreshCw size={11} className={sync.isPending ? "animate-spin" : ""} />
-              {sync.isPending ? "Syncing…" : "Assign any without a shift"}
-            </button>
+            <Gate k="shifts.sync_production">
+              <button
+                type="button"
+                onClick={() => void syncProduction()}
+                disabled={sync.isPending || counts.production === 0}
+                className="ml-1 inline-flex items-center gap-1 font-semibold underline underline-offset-2 disabled:opacity-50"
+                data-testid="sync-production"
+              >
+                <RefreshCw size={11} className={sync.isPending ? "animate-spin" : ""} />
+                {sync.isPending ? "Syncing…" : "Assign any without a shift"}
+              </button>
+            </Gate>
           </Note>
           <Note tone="amber">
             Production employees are paid <b>bi-weekly</b>: pay = total shifts earned × salary per shift. Sunday is a

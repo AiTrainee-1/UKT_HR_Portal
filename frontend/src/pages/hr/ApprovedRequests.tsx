@@ -8,9 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
-import { useAuth } from "@/contexts/AuthContext";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { downloadBlob, downloadWorkbook, fileSafe, newWorkbook, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
+import { moduleForPath } from "@/lib/permission-modules";
+import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { DetailDialog, DecisionDialog, HandleDialog } from "./requests/dialogs";
 import { useDecide, useHandleRequest, useHubRequests } from "./requests/api";
 import { useHrReminders, withReminders } from "./requests/reminders";
@@ -65,6 +67,13 @@ const SECTION_ICONS: Record<PageSection, ReactNode> = {
   notify: <BellRing size={13} aria-hidden />,
 };
 
+// Each section's own permission key (Account Management -> Roles & Permissions); a key with no setting follows "requests".
+const SECTION_KEY: Record<PageSection, string> = {
+  requests: "requests.list",
+  hods: "requests.hods",
+  notify: "requests.notify",
+};
+
 const SECTION_NOTES: Record<PageSection, string> = {
   requests: "Every request employees and HR raise, and who it is waiting for - auto-refreshes every minute",
   hods: "What is waiting for each Department Head's approval, kind by kind - refreshes every minute",
@@ -103,7 +112,18 @@ export default function ApprovedRequests() {
   const { user } = useAuth();
   const [location, navigate] = useLocation();
   const search = useSearch();
-  const section = sectionFromSearch(search);
+  const level = useLevel();
+  // Only the sections this role may see; one that is hidden is never shown (or loaded), also when ?tab= asks for it.
+  const sections = visibleItems(PAGE_SECTIONS, (s) => SECTION_KEY[s.value], level);
+  const sectionValues = sections.map((s) => s.value);
+  const section = pickVisible(sectionFromSearch(search), sectionValues);
+  const canSee = (s: PageSection) => sectionValues.includes(s);
+  // A section this role may only VIEW on a page it may edit: lock its change buttons (HrLayout locks a View-only page).
+  const sectionViewOnly =
+    sections.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(SECTION_KEY[section]) === "view";
+  useViewOnlyLock(sectionViewOnly, section);
 
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [rawTab, setRawTab] = useState<string | null>(readTab);
@@ -118,9 +138,9 @@ export default function ApprovedRequests() {
   const today = dayStamp(new Date());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const params = useMemo(() => serverParams(filters, new Date()), [filters, today]);
-  const query = useHubRequests(params);
+  const query = useHubRequests(params, canSee("requests"));
   // the reminders employees sent HR from the app show on their rows ("Employee reminded HR on ...")
-  const reminders = useHrReminders();
+  const reminders = useHrReminders(canSee("requests"));
   const hub = useMemo(() => withReminders(normalizeHub(query.data), reminders.data), [query.data, reminders.data]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const now = useMemo(() => new Date(), [query.dataUpdatedAt]);
@@ -307,7 +327,7 @@ export default function ApprovedRequests() {
               className="-mt-2.5 text-sm text-muted-foreground sm:col-start-1 sm:row-start-2"
               data-testid="requests-section-note"
             >
-              {SECTION_NOTES[section]}
+              {sections.length > 0 ? SECTION_NOTES[section] : ""}
             </p>
             <nav
               aria-label="Sections of the Requests page"
@@ -317,7 +337,7 @@ export default function ApprovedRequests() {
               <PillTabs
                 size="sm"
                 baseColor="#4f46e5"
-                items={PAGE_SECTIONS.map((s) => ({ ...s, icon: SECTION_ICONS[s.value] }))}
+                items={sections.map((s) => ({ ...s, icon: SECTION_ICONS[s.value] }))}
                 value={section}
                 onChange={(v) => selectSection(v as PageSection)}
               />
@@ -326,18 +346,29 @@ export default function ApprovedRequests() {
           <RefreshButton />
         </div>
 
-        {section === "hods" && (
+        {/* Notify shows its own View-only note (and keeps its form read-only) */}
+        <ViewOnlyTabNote show={sectionViewOnly && section !== "notify"} />
+        {sections.length === 0 && (
+          <p
+            className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+            data-testid="requests-nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        )}
+
+        {canSee("hods") && section === "hods" && (
           <div role="tabpanel" aria-label="HoD's" data-testid="requests-section-hods">
             <HodsTab onOpenRequest={openFromHods} />
           </div>
         )}
-        {section === "notify" && (
+        {canSee("notify") && section === "notify" && (
           <div role="tabpanel" aria-label="Notify" data-testid="requests-section-notify">
             <NotifyTab />
           </div>
         )}
 
-        {section === "requests" && (
+        {canSee("requests") && section === "requests" && (
           <div role="tabpanel" aria-label="Requests" className="space-y-5" data-testid="requests-section-requests">
             {/* Figures */}
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="requests-figures">

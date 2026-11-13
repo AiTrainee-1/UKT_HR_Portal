@@ -4,7 +4,8 @@ import { PauseCircle } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { ToFirstSubtab, useSubtab } from "@/components/ui/subtab-nav";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
-import { defaultNested, nestedOf, pagePath, type CompensationPageKey } from "./routes";
+import { nestedOf, pagePath, type CompensationPageKey } from "./routes";
+import { openDefaultNested, useCanOpen } from "./visible";
 
 // What the five Compensation pages share: the heading with its one-line description, the "features are switched off"
 // notice, and the subtab row (a path, not a query key, so each subtab has an address of its own).
@@ -87,8 +88,26 @@ export function useNestedSubtab(key: CompensationPageKey, sub: string | null): s
   return named;
 }
 
-/** Sends a subtab with a missing or unknown nested subtab to its default one (the first), keeping the query string. */
+/** Sends a subtab with a missing or unknown nested subtab to its default one (the first the role may open), keeping the
+ *  query string. */
 export function ToDefaultNested({ pageKey, sub }: { pageKey: CompensationPageKey; sub: string }) {
   const search = useSearch();
-  return <ToFirstSubtab base={`${pagePath(pageKey)}/${sub}`} first={defaultNested(pageKey, sub, search) ?? ""} />;
+  const canOpen = useCanOpen();
+  const first = openDefaultNested(canOpen, pageKey, sub, search);
+  if (first === undefined) return <NothingOpenPage />;
+  return <ToFirstSubtab base={`${pagePath(pageKey)}/${sub}`} first={first} />;
+}
+
+/** A page (or subtab) whose every part is hidden from the role (Account Management -> Roles & Permissions). */
+export function NothingOpenPage() {
+  return (
+    <HrLayout>
+      <p
+        className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+        data-testid="compensation-nothing-open"
+      >
+        Nothing on this page is open to your role.
+      </p>
+    </HrLayout>
+  );
 }

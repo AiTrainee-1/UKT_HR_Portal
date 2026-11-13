@@ -811,7 +811,9 @@ class PermissionTests(SettingsBase):
         self.assertIn({"key": "settings.compensation", "label": "Compensation"}, settings_node["children"])
         self.assertEqual(resolve_module("compensation/settings"), "settings.compensation")
         self.assertEqual(resolve_module("compensation/config"), "compensation")
-        self.assertEqual(resolve_module("compensation/ot/assign"), "compensation")
+        # OT Detection -> Type 2 has a key of its own since 2026-11-11; it follows "compensation" until a role sets it
+        self.assertEqual(resolve_module("compensation/ot/assign"), "compensation.ot.type2")
+        self.assertEqual(resolve_permission({"compensation": "edit"}, "compensation.ot.type2"), "edit")
         self.assertEqual(resolve_permission({"settings": "view"}, "settings.compensation"), "view")
         self.assertEqual(
             resolve_permission({"settings": "view", "settings.compensation": "edit"}, "settings.compensation"), "edit"

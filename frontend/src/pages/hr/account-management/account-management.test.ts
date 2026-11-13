@@ -1,30 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { MODULE_TREE, allModuleKeys } from "@/lib/permission-modules";
+import { PERMISSION_GROUPS, allModuleKeys, displayNodes, resolvePermission } from "@/lib/permission-modules";
 import type { HrUserItem, Role } from "@/lib/api-client/custom-hooks";
 import {
   NONE,
   NO_FILTERS,
   accountsOf,
+  applyLevel,
+  clearOverride,
+  commonLevel,
+  countsText,
   defaultRoleFor,
   displayCategoryOf,
-  rolesFor,
-  clearOverride,
   emptyPermissions,
   filterAccounts,
-  filterModules,
+  filterTree,
   filtersActive,
+  foldableKeys,
+  followText,
+  groupCounts,
   initials,
   levelCounts,
+  matchedCount,
   overrideCount,
+  partsOf,
   permissionsEqual,
   relativeTime,
   roleUsage,
+  rolesFor,
   sectionCounts,
   setAll,
+  setGroup,
   setLevel,
   setSection,
   sortAccounts,
   summarizeAccounts,
+  typeWord,
   visibleModuleCount,
 } from "./logic";
 
@@ -204,49 +214,76 @@ describe("avatars and times", () => {
 
 describe("what a role can do", () => {
   const total = allModuleKeys().length;
+  const node = (key: string) => displayNodes().find((d) => d.node.key === key)!.node;
 
-  it("starts with nothing granted", () => {
+  it("starts with nothing granted, with as few settings as possible", () => {
     const empty = emptyPermissions();
-    expect(Object.keys(empty).sort()).toEqual(MODULE_TREE.map((n) => n.key).sort()); // sections only, submodules inherit
+    // the pages at the top of each heading, plus the parts that follow another key (Salary, ID Card settings ...)
+    expect(Object.keys(empty)).toContain("dashboard");
+    expect(Object.keys(empty)).not.toContain("payroll.issues"); // it follows Staff Payroll
+    expect(resolvePermission(empty, "settings.idcard")).toBe("hidden"); // it follows the ID Cards page, also Hidden
     expect(levelCounts(empty)).toEqual({ edit: 0, view: 0, hidden: total, total });
   });
 
-  it("counts a submodule with no setting of its own as its parent's level", () => {
-    const settings = MODULE_TREE.find((n) => n.key === "settings")!;
-    const p = setLevel(emptyPermissions(), "settings", "view");
-    expect(sectionCounts(p, settings)).toEqual({
-      edit: 0,
-      view: 1 + settings.children!.length,
-      hidden: 0,
-      total: 1 + settings.children!.length,
-    });
+  it("counts a part with no setting of its own as the level it follows", () => {
+    const settings = node("settings");
+    const parts = partsOf(settings).length;
+    const p = setSection(emptyPermissions(), settings, "view");
+    expect(sectionCounts(p, settings)).toEqual({ edit: 0, view: 1 + parts, hidden: 0, total: 1 + parts });
     expect(overrideCount(p, settings)).toBe(0);
-    const q = setLevel(p, "settings.payroll", "edit");
+    const q = setLevel(p, "settings.smtp", "edit");
     expect(sectionCounts(q, settings).edit).toBe(1);
-    expect(sectionCounts(q, settings).view).toBe(settings.children!.length);
+    expect(sectionCounts(q, settings).view).toBe(parts);
     expect(overrideCount(q, settings)).toBe(1);
   });
 
-  it("sets a whole section at once and drops the submodule settings", () => {
-    const settings = MODULE_TREE.find((n) => n.key === "settings")!;
+  it("a page's control takes its tabs and its own-setting tabs with it, but keeps a tab set on its own", () => {
+    const payroll = node("payroll");
+    const p = setLevel(emptyPermissions(), "payroll.issues", "view");
+    const done = applyLevel(p, payroll, "edit");
+    expect(resolvePermission(done, "payroll.records")).toBe("edit"); // follows
+    expect(done["salary"]).toBe("edit"); // its own setting, shown under Staff Payroll: given the level too
+    expect(done["payroll.issues"]).toBe("view"); // custom: kept
+    expect(p["payroll"]).toBe("hidden"); // the input is never changed
+  });
+
+  it("sets a whole branch at once and drops the parts' own settings", () => {
+    const settings = node("settings");
     const messy = setLevel(setLevel(emptyPermissions(), "settings", "hidden"), "settings.smtp", "edit");
     const done = setSection(messy, settings, "view");
     expect(done["settings"]).toBe("view");
     expect(done["settings.smtp"]).toBeUndefined();
-    expect(messy["settings.smtp"]).toBe("edit"); // the input is never changed
+    expect(done["settings.idcard"]).toBe("view"); // follows the ID Cards page unless set: set to match
+    expect(messy["settings.smtp"]).toBe("edit");
   });
 
-  it("clears one submodule setting so it follows its parent again", () => {
+  it("sets everything under one sidebar heading", () => {
+    const payroll = PERMISSION_GROUPS.find((g) => g.id === "payroll")!;
+    const p = setGroup(emptyPermissions(), payroll, "view");
+    const c = groupCounts(p, payroll);
+    expect(c.view).toBe(c.total);
+    expect(commonLevel(c)).toBe("view");
+    expect(resolvePermission(p, "dashboard")).toBe("hidden");
+  });
+
+  it("clears one part's setting so it follows again", () => {
     const p = setLevel(setLevel(emptyPermissions(), "settings", "view"), "settings.smtp", "edit");
     expect(clearOverride(p, "settings.smtp")["settings.smtp"]).toBeUndefined();
     expect(clearOverride(p, "settings.smtp")["settings"]).toBe("view");
   });
 
-  it("sets every module at once but leaves keys it does not know about", () => {
+  it("sets everything at once but leaves keys it does not know about", () => {
     const p = setAll({ legacy_module: "edit", "settings.smtp": "edit" }, "view");
     expect(levelCounts(p)).toEqual({ edit: 0, view: total, hidden: 0, total });
     expect(p["legacy_module"]).toBe("edit");
     expect(p["settings.smtp"]).toBeUndefined();
+  });
+
+  it("says where an unset key takes its level from", () => {
+    const p = { attendance: "edit" } as const;
+    expect(followText({ ...p }, node("biometric_connectors"))).toBe("follows Attendance");
+    expect(followText({ ...p }, node("payroll.issues"))).toBe("nothing set");
+    expect(followText({ payroll: "view" }, node("payroll.issues"))).toBe("follows Staff Payroll");
   });
 
   it("compares two sets of permissions, whatever the order of the keys", () => {
@@ -257,30 +294,47 @@ describe("what a role can do", () => {
   });
 });
 
-describe("searching the modules", () => {
+describe("searching the tree", () => {
   it("shows everything for a blank search", () => {
-    const all = filterModules("  ");
-    expect(all).toHaveLength(MODULE_TREE.length);
-    expect(visibleModuleCount(all)).toBe(allModuleKeys().length);
+    const all = filterTree("  ");
+    expect(all.map((g) => g.group.id)).toEqual(PERMISSION_GROUPS.map((g) => g.id));
+    expect(visibleModuleCount(all)).toBe(displayNodes().length);
   });
 
-  it("keeps all submodules when the section itself matches", () => {
-    const hit = filterModules("settings");
-    const settings = hit.find((s) => s.node.key === "settings")!;
-    expect(settings.matched).toBe(true);
-    expect(settings.children).toHaveLength(MODULE_TREE.find((n) => n.key === "settings")!.children!.length);
+  it("keeps all the parts when a page itself matches", () => {
+    const hit = filterTree("staff payroll");
+    const payroll = hit.flatMap((g) => g.items).find((i) => i.node.key === "payroll")!;
+    expect(payroll.matched).toBe(true);
+    expect(payroll.children.map((c) => c.node.key)).toContain("payroll.issues");
   });
 
-  it("keeps just the matching submodules, under their section, when only they match", () => {
-    const hit = filterModules("smtp");
-    expect(hit.map((s) => s.node.key)).toEqual(["settings"]);
-    expect(hit[0].matched).toBe(false);
-    expect(hit[0].children.map((c) => c.key)).toEqual(["settings.smtp"]);
+  it("finds a tab deep down and keeps the path to it", () => {
+    const hit = filterTree("smtp");
+    expect(hit.map((g) => g.group.id)).toEqual(["administration"]);
+    const settings = hit[0].items.find((i) => i.node.key === "settings")!;
+    expect(settings.matched).toBe(false);
+    expect(settings.children.map((c) => c.node.key)).toEqual(["settings.smtp"]);
+    expect(matchedCount(hit, "smtp")).toBe(1);
+    // a sub-tab three levels down
+    const deep = filterTree("waiting for hr");
+    expect(visibleModuleCount(deep)).toBe(4); // Compensation > OT Detection > Type 2 > Waiting for HR
   });
 
   it("finds nothing for nonsense", () => {
-    expect(filterModules("zzzzzz")).toEqual([]);
-    expect(visibleModuleCount(filterModules("zzzzzz"))).toBe(0);
+    expect(filterTree("zzzzzz")).toEqual([]);
+    expect(visibleModuleCount(filterTree("zzzzzz"))).toBe(0);
+  });
+
+  it("lists the nodes Expand all opens", () => {
+    expect(foldableKeys()).toContain("payroll");
+    expect(foldableKeys()).toContain("compensation.ot.type2");
+    expect(foldableKeys()).not.toContain("payroll.issues");
+  });
+
+  it("describes a mixed set in words", () => {
+    expect(countsText({ edit: 3, view: 2, hidden: 1, total: 6 })).toBe("3 of 6 edit · 2 view");
+    expect(countsText({ edit: 6, view: 0, hidden: 0, total: 6 })).toBe("all 6 edit");
+    expect(typeWord("subtab")).toBe("Sub-tab");
   });
 });
 

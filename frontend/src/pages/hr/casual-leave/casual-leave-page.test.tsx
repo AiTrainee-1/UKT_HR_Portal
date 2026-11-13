@@ -10,6 +10,11 @@ import type { BoardRow, ClBoard, ClRequest } from "./logic";
 // this month, who is eligible, who is not and why) and the request list HR decides.
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
+// the page reads the signed-in role (lib/tab-access.tsx): no user = every tab and part open, as before
+vi.mock("@/contexts/AuthContext", async (original) => ({
+  ...(await original<typeof import("@/contexts/AuthContext")>()),
+  useAuth: () => ({ user: null }),
+}));
 vi.mock("@/components/ApprovalTrail", async (original) => ({
   ...(await original<typeof import("@/components/ApprovalTrail")>()),
   PipelineNote: () => null,

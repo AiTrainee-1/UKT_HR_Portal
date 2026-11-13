@@ -46,19 +46,22 @@ import {
 import { RulesPanel } from "@/components/payroll/panels/rules";
 import { type SkippedItem } from "@/components/payroll/panels/skipped";
 import { MONTH_NAMES } from "@/components/payroll/BreakdownDrawer";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useListDepartments, useListPayrollRuns } from "@/lib/api-client";
 import {
+  getPayrollMonthSkippedQueryKey,
   getPayrollSkipCheckQueryKey,
   usePayrollIssues,
-  usePayrollMonthSkipped,
   usePayrollMonthStatus,
   usePayrollRules,
   usePayrollSkipCheck,
+  type PayrollMonthSkipped,
   type PayrollSkipCheckResult,
 } from "@/lib/api-client/custom-hooks";
 import { customFetch } from "@/lib/api-client/custom-fetch";
-import { useQueryClient } from "@tanstack/react-query";
+import { Gate, pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import { downloadReportFile } from "@/lib/report-download";
 import { GenerateDialog } from "./GenerateDialog";
@@ -67,6 +70,7 @@ import { MonthTimeline } from "./month-workflow/MonthTimeline";
 import { StaffSkippedView } from "./month-workflow/StaffSkippedView";
 import {
   STATEMENT_REPORT_ID,
+  STAFF_VIEWS,
   isStaffView,
   issueFiltersFromUrl,
   issueFiltersToUrl,
@@ -78,6 +82,14 @@ import {
 } from "./logic";
 
 type UrlSetter = (patch: Record<string, string>) => void;
+
+// Each view's own permission key (Account Management -> Roles & Permissions); a key with no setting follows "payroll".
+const VIEW_KEY: Record<StaffView, string> = {
+  records: "payroll.records",
+  issues: "payroll.issues",
+  skipped: "payroll.skipped",
+  rules: "payroll.rules",
+};
 
 /**
  * Payroll tab of the Staff Payroll page: the actions (Generate, Skipped, Export) and its four views - Records, Issues,
@@ -98,17 +110,33 @@ export function PayrollTab({
   onPeriodChange: (month: number, year: number) => void;
 }) {
   const [, navigate] = useLocation();
+  const { user } = useAuth();
+  const level = useLevel();
   const [showGenerate, setShowGenerate] = useState(false);
   const { markPaid, markingId } = useMarkPaid();
+  // Only the views this role may see (Records / Issues / Skipped / Rules); a hidden one is never shown nor loaded.
+  const canSee = (v: StaffView) => level(VIEW_KEY[v]) !== "hidden";
   // The month's workflow (owner 2026-11-10): Payroll Done -> Payment Pending -> Paid, and the held / new-joiner lists of
   // Skipped Employees. Once the month is finalized nothing in it can be generated, cleared or adjusted.
   const monthStatus = usePayrollMonthStatus(month, year);
-  const monthSkipped = usePayrollMonthSkipped(month, year);
+  // (usePayrollMonthSkipped's own query, not loaded while the Skipped view is hidden from the role)
+  const monthSkipped = useQuery<PayrollMonthSkipped>({
+    queryKey: getPayrollMonthSkippedQueryKey(month, year),
+    queryFn: () => customFetch<PayrollMonthSkipped>(`/api/payroll/month-skipped?month=${month}&year=${year}`),
+    enabled: canSee("skipped"),
+  });
   const locked = !!monthStatus.data?.locked;
+  // Mark as Cleared is an approval of its own (payroll_mark_cleared): an account with the switch off does not get the
+  // button; a View-only role still sees it disabled, and a finalized month hides it (locked), as before.
+  const mayMarkCleared = canApprove(user, "payroll_mark_cleared");
 
   const scope = useMemo(() => staffScope({ month, year }), [month, year]);
   const periodLabel = staffPeriodLabel({ month, year });
-  const view: StaffView = isStaffView(url.view) ? url.view : "records";
+  const visibleViews = visibleItems(STAFF_VIEWS, (v) => VIEW_KEY[v], level);
+  const view: StaffView = pickVisible(isStaffView(url.view) ? url.view : "records", visibleViews);
+  // A view this role may only VIEW while the Payroll tab itself is editable (StaffPayroll locks a View-only tab).
+  const viewLocked = visibleViews.length > 0 && level("payroll") !== "view" && level(VIEW_KEY[view]) === "view";
+  useViewOnlyLock(viewLocked, view);
   // The department is picked with the tabs above the records, never by the filter: an old address naming one is ignored.
   const filters = useMemo(() => ({ ...filtersFromUrl(url), dept: ALL }), [url]);
   const issueFilters = useMemo(() => issueFiltersFromUrl(url), [url]);
@@ -118,11 +146,15 @@ export function PayrollTab({
   const runsQuery = useListPayrollRuns({ month, year });
   // Staff payroll only: Production payroll has its own pages.
   const runs = useMemo(() => onlyStaff(runsQuery.data), [runsQuery.data]);
-  const issuesQuery = usePayrollIssues(scope);
-  const rulesQuery = usePayrollRules(scope);
+  const issuesQuery = usePayrollIssues(canSee("issues") ? scope : null);
+  const rulesQuery = usePayrollRules(canSee("rules") ? scope : null);
   // Runs on arrival (not behind a button) so the Skipped tile and the view's count are always live; the Generate dialog
   // and the Skipped view read the same cached answer.
-  const skipQuery = usePayrollSkipCheck({ month, year, runType: "monthly" });
+  const skipQuery = usePayrollSkipCheck(
+    canSee("issues") || canSee("skipped") || level("payroll.generate") !== "hidden"
+      ? { month, year, runType: "monthly" }
+      : null,
+  );
   // The server keeps its last answer while no salary, name, joining date, branch or holiday changed; Re-check asks it
   // to run the whole check again (fresh=1) and puts the answer where the tile and the view read it.
   const queryClient = useQueryClient();
@@ -177,7 +209,9 @@ export function PayrollTab({
   const skippedTotal = (skipQuery.data?.skippedCount ?? 0) + setAside;
   const lockedTitle = `${periodLabel} is finalized (Payroll Done): its payroll is locked for good`;
 
-  const setView = (next: StaffView) => setUrl({ view: next });
+  const setView = (next: StaffView) => {
+    if (canSee(next)) setUrl({ view: next });
+  };
   const resetFilters = () => setUrl(filtersToUrl(DEFAULT_FILTERS) as Record<string, string>);
 
   // Both files are the Report Center's Salary Statement (Reports > HR Reports), so the two can never differ. They are split
@@ -199,24 +233,28 @@ export function PayrollTab({
   });
   const exportItems: ExportItem[] = [statementItem("xlsx"), statementItem("pdf")];
 
-  const options: ViewOption<StaffView>[] = [
-    { value: "records", label: "Records", icon: ListChecks, count: runsQuery.isLoading ? null : runs.length },
-    {
-      value: "issues",
-      label: "Issues",
-      icon: AlertTriangle,
-      count: issuesQuery.isLoading || skipQuery.isLoading ? null : (dashIssues?.total ?? 0),
-      tone: (dashIssues?.bySeverity.critical ?? 0) > 0 ? "danger" : "warning",
-    },
-    {
-      value: "skipped",
-      label: "Skipped",
-      icon: CircleSlash,
-      count: skipQuery.isLoading || monthSkipped.isLoading ? null : skippedTotal,
-      tone: "warning",
-    },
-    { value: "rules", label: "Rules", icon: BookOpenCheck },
-  ];
+  const options: ViewOption<StaffView>[] = visibleItems<ViewOption<StaffView>>(
+    [
+      { value: "records", label: "Records", icon: ListChecks, count: runsQuery.isLoading ? null : runs.length },
+      {
+        value: "issues",
+        label: "Issues",
+        icon: AlertTriangle,
+        count: issuesQuery.isLoading || skipQuery.isLoading ? null : (dashIssues?.total ?? 0),
+        tone: (dashIssues?.bySeverity.critical ?? 0) > 0 ? "danger" : "warning",
+      },
+      {
+        value: "skipped",
+        label: "Skipped",
+        icon: CircleSlash,
+        count: skipQuery.isLoading || monthSkipped.isLoading ? null : skippedTotal,
+        tone: "warning",
+      },
+      { value: "rules", label: "Rules", icon: BookOpenCheck },
+    ],
+    (o) => VIEW_KEY[o.value],
+    level,
+  );
 
   const empty =
     runs.length === 0 ? (
@@ -226,14 +264,16 @@ export function PayrollTab({
         hint='Click "Generate Payroll" to compute payroll from attendance data.'
         testId="staff-empty-period"
         action={
-          <Button
-            className="mt-2 gap-2 bg-indigo-600 hover:bg-indigo-700"
-            disabled={locked}
-            title={locked ? lockedTitle : undefined}
-            onClick={() => setShowGenerate(true)}
-          >
-            <Play size={14} /> Generate Payroll
-          </Button>
+          <Gate k="payroll.generate">
+            <Button
+              className="mt-2 gap-2 bg-indigo-600 hover:bg-indigo-700"
+              disabled={locked}
+              title={locked ? lockedTitle : undefined}
+              onClick={() => setShowGenerate(true)}
+            >
+              <Play size={14} /> Generate Payroll
+            </Button>
+          </Gate>
         }
       />
     ) : (
@@ -272,40 +312,46 @@ export function PayrollTab({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            className="h-9 gap-2 border-amber-200 text-amber-700 hover:bg-amber-50"
-            onClick={() => setView("skipped")}
-            data-testid="staff-skipped-open"
-          >
-            <AlertTriangle size={14} /> Skipped Employees
-          </Button>
-          <MonthStatusButton status={monthStatus.data} loading={monthStatus.isLoading} />
-          <ExportMenu
-            items={exportItems}
-            label="Export"
-            heading={`Export ${periodLabel} payroll`}
-            testId="staff-export"
-          />
-          <Button
-            variant="outline"
-            className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-            disabled={shown.length === 0}
-            onClick={() => void exportPayrollToExcel(shown, "Staff", `${MONTH_NAMES[month - 1]}_${year}`)}
-            data-testid="staff-export-bank"
-          >
-            <Download size={14} /> Export bank file
-          </Button>
-          <span title={locked ? lockedTitle : undefined}>
+          <Gate k="payroll.skipped">
             <Button
-              className="h-9 gap-2 bg-indigo-600 hover:bg-indigo-700"
-              disabled={locked}
-              onClick={() => setShowGenerate(true)}
-              data-testid="staff-generate-open"
+              variant="outline"
+              className="h-9 gap-2 border-amber-200 text-amber-700 hover:bg-amber-50"
+              onClick={() => setView("skipped")}
+              data-testid="staff-skipped-open"
             >
-              <Play size={14} /> Generate Payroll
+              <AlertTriangle size={14} /> Skipped Employees
             </Button>
-          </span>
+          </Gate>
+          <MonthStatusButton status={monthStatus.data} loading={monthStatus.isLoading} />
+          <Gate k="payroll.exports">
+            <ExportMenu
+              items={exportItems}
+              label="Export"
+              heading={`Export ${periodLabel} payroll`}
+              testId="staff-export"
+            />
+            <Button
+              variant="outline"
+              className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+              disabled={shown.length === 0}
+              onClick={() => void exportPayrollToExcel(shown, "Staff", `${MONTH_NAMES[month - 1]}_${year}`)}
+              data-testid="staff-export-bank"
+            >
+              <Download size={14} /> Export bank file
+            </Button>
+          </Gate>
+          <Gate k="payroll.generate">
+            <span title={locked ? lockedTitle : undefined}>
+              <Button
+                className="h-9 gap-2 bg-indigo-600 hover:bg-indigo-700"
+                disabled={locked}
+                onClick={() => setShowGenerate(true)}
+                data-testid="staff-generate-open"
+              >
+                <Play size={14} /> Generate Payroll
+              </Button>
+            </span>
+          </Gate>
         </div>
       </div>
 
@@ -315,7 +361,7 @@ export function PayrollTab({
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <ViewSwitch options={options} value={view} onChange={setView} accent="indigo" />
+        {options.length > 0 && <ViewSwitch options={options} value={view} onChange={setView} accent="indigo" />}
         {view === "records" && hasChanges(filters) && (
           <button
             type="button"
@@ -327,7 +373,16 @@ export function PayrollTab({
         )}
       </div>
 
-      {runsQuery.isError && view === "records" ? (
+      <ViewOnlyTabNote show={viewLocked} />
+
+      {visibleViews.length === 0 ? (
+        <p
+          className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+          data-testid="staff-nothing-open"
+        >
+          Nothing on this page is open to your role.
+        </p>
+      ) : runsQuery.isError && view === "records" ? (
         <EmptyNote
           icon={RefreshCw}
           title="The payroll records could not be loaded"
@@ -370,7 +425,7 @@ export function PayrollTab({
             rulesLoading={rulesQuery.isLoading}
             onOpenDetails={(run) => openPayrollDetails(navigate, "staff", run.id)}
             onOpenIssues={(run) => openPayrollDetails(navigate, "staff", run.id, "issues")}
-            onMarkPaid={locked ? undefined : (run) => void markPaid(run)}
+            onMarkPaid={locked || !mayMarkCleared ? undefined : (run) => void markPaid(run)}
             markingId={markingId}
             layout={url.layout === "cards" ? "cards" : "table"}
             onLayoutChange={(layout: RecordLayout) => setUrl({ layout })}
@@ -408,7 +463,7 @@ export function PayrollTab({
         <RulesPanel scope={scope} accent="indigo" />
       )}
 
-      {showGenerate && (
+      {showGenerate && level("payroll.generate") !== "hidden" && (
         <GenerateDialog
           initialMonth={month}
           initialYear={year}

@@ -347,6 +347,10 @@ export type CompensationWindow = {
   canDelete: boolean;
 };
 
+/** POST /api/compensation/windows answers the new announcement plus how many staff had that day's attendance judged again
+ * (a window for today or a past day; 0 for a later day). */
+export type CreatedCompensationWindow = CompensationWindow & { attendanceUpdated?: number };
+
 export type CompensationWindowsResponse = {
   results: CompensationWindow[];
   count: number;
@@ -392,7 +396,10 @@ export const useCreateCompensationWindow = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: CreateWindowBody) =>
-      customFetch<CompensationWindow>("/api/compensation/windows", { method: "POST", body: JSON.stringify(body) }),
+      customFetch<CreatedCompensationWindow>("/api/compensation/windows", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
     onSuccess: () => invalidateCompensation(queryClient),
   });
 };

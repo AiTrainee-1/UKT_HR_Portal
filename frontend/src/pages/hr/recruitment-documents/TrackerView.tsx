@@ -46,7 +46,8 @@ type Props = {
   onFilters: (next: TrackerFilters) => void;
   /** Every employee, to find people the tracker does not list (inactive ones). */
   everyone: Employee[];
-  onOpen: (employeeId: number, docTab?: "letters" | "extra") => void;
+  /** Opens one employee's documents; left out when this role may not (no Open button, rows are not clickable). */
+  onOpen?: (employeeId: number, docTab?: "letters" | "extra") => void;
 };
 
 const PHONE_SORTS: { value: string; label: string; key: SortKey; dir: SortDir }[] = [
@@ -415,9 +416,11 @@ export default function TrackerView({
                         sort={sort}
                         onSort={(k) => setSort(nextSort(sort, k))}
                       />
-                      <TableHead className="text-right text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
-                        Action
-                      </TableHead>
+                      {onOpen && (
+                        <TableHead className="text-right text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
+                          Action
+                        </TableHead>
+                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -426,8 +429,9 @@ export default function TrackerView({
                         <TableCell className="max-w-[16rem]">
                           <button
                             type="button"
-                            className="flex min-w-0 items-center gap-3 text-left"
-                            onClick={() => onOpen(r.id, r.status === "pending" ? "extra" : "letters")}
+                            className="flex min-w-0 items-center gap-3 text-left disabled:cursor-default"
+                            onClick={() => onOpen?.(r.id, r.status === "pending" ? "extra" : "letters")}
+                            disabled={!onOpen}
                             aria-label={`Open the documents of ${r.name}`}
                           >
                             <Initial
@@ -450,17 +454,19 @@ export default function TrackerView({
                         <TableCell>
                           <Progress row={r} />
                         </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="gap-1"
-                            onClick={() => onOpen(r.id, r.status === "pending" ? "extra" : "letters")}
-                            data-testid={`open-${r.employeeCode}`}
-                          >
-                            Open <ChevronRight size={14} />
-                          </Button>
-                        </TableCell>
+                        {onOpen && (
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1"
+                              onClick={() => onOpen(r.id, r.status === "pending" ? "extra" : "letters")}
+                              data-testid={`open-${r.employeeCode}`}
+                            >
+                              Open <ChevronRight size={14} />
+                            </Button>
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -472,8 +478,9 @@ export default function TrackerView({
                   <button
                     key={r.id}
                     type="button"
-                    onClick={() => onOpen(r.id, r.status === "pending" ? "extra" : "letters")}
-                    className="block w-full space-y-2.5 p-4 text-left"
+                    onClick={() => onOpen?.(r.id, r.status === "pending" ? "extra" : "letters")}
+                    disabled={!onOpen}
+                    className="block w-full space-y-2.5 p-4 text-left disabled:cursor-default"
                     data-testid={`tracker-card-${r.employeeCode}`}
                   >
                     <span className="flex items-center gap-3">
@@ -488,7 +495,7 @@ export default function TrackerView({
                           {r.departmentName ? ` · ${r.departmentName}` : ""}
                         </span>
                       </span>
-                      <ChevronRight size={16} className="shrink-0 text-gray-300" />
+                      {onOpen && <ChevronRight size={16} className="shrink-0 text-gray-300" />}
                     </span>
                     <Progress row={r} />
                   </button>
@@ -522,8 +529,9 @@ export default function TrackerView({
               <button
                 key={e.id}
                 type="button"
-                onClick={() => onOpen(e.id)}
-                className="flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left hover:bg-gray-50"
+                onClick={() => onOpen?.(e.id)}
+                disabled={!onOpen}
+                className="flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent"
                 data-testid={`other-${e.employeeCode}`}
               >
                 <Initial name={e.firstName} tone="from-indigo-500 to-blue-600" />

@@ -46,6 +46,7 @@ import {
 } from "@/components/payroll/panels/records";
 import { RulesPanel } from "@/components/payroll/panels/rules";
 import { SkippedPanel } from "@/components/payroll/panels/skipped";
+import { canApprove, isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useListDepartments } from "@/lib/api-client";
 import {
@@ -57,11 +58,14 @@ import {
   type CyclePeriod,
   type PayCycle,
 } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
 import { exportPayrollToExcel } from "@/lib/payrollExcelExport";
 import { downloadReportFile } from "@/lib/report-download";
+import { Gate, pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { NotEndedNote, PeriodError } from "./CycleNotices";
 import { GenerateDialog } from "./GenerateDialog";
 import {
+  PRODUCTION_VIEWS,
   formatPeriod,
   isProductionView,
   issueFiltersFromUrl,
@@ -72,6 +76,14 @@ import {
   type UrlSetter,
 } from "./logic";
 import { PRODUCTION_STATEMENT_REPORT_ID, productionStatementQuery } from "./payroll-tab-logic";
+
+// Each view's own permission key (Account Management -> Roles & Permissions); a key with no setting follows the Payroll tab.
+const VIEW_KEY: Record<ProductionView, string> = {
+  records: "production_payroll.payroll.records",
+  issues: "production_payroll.payroll.issues",
+  skipped: "production_payroll.payroll.skipped",
+  rules: "production_payroll.payroll.rules",
+};
 
 /**
  * Payroll tab of a cycle page: the actions (Generate, Skipped Employees, Export), the dashboard of the period and its four
@@ -93,14 +105,29 @@ export function PayrollTab({
   /** Called as a run starts, so the page keeps showing this period while it is generated. */
   onPeriodChange: (period: CyclePeriod) => void;
 }) {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
+  const { user } = useAuth();
+  const level = useLevel();
   const [showGenerate, setShowGenerate] = useState(false);
   const { markPaid, markingId } = useMarkPaid();
   const info = PAY_CYCLE_INFO[cycle];
+  // Only the views this role may see (Records / Issues / Skipped / Rules); a hidden one is never shown nor loaded.
+  const canSee = (v: ProductionView) => level(VIEW_KEY[v]) !== "hidden";
+  const visibleViews = visibleItems(PRODUCTION_VIEWS, (v) => VIEW_KEY[v], level);
+  const mayGenerate = level("production_payroll.generate") !== "hidden";
+  // Mark as Cleared is an approval of its own (payroll_mark_cleared)
+  const mayMarkCleared = canApprove(user, "payroll_mark_cleared");
 
   const scope = useMemo(() => productionScope(cycle, period), [cycle, period]);
   const periodLabel = formatPeriod(period);
-  const view: ProductionView = isProductionView(url.view) ? url.view : "records";
+  const view: ProductionView = pickVisible(isProductionView(url.view) ? url.view : "records", visibleViews);
+  // A view this role may only VIEW while the page and the Payroll tab are editable (those have their own locks).
+  const viewLocked =
+    visibleViews.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level("production_payroll.payroll") !== "view" &&
+    level(VIEW_KEY[view]) === "view";
+  useViewOnlyLock(viewLocked, view);
   // The department is picked with the tabs above the records, never by the filter: an old address naming one is ignored.
   const filters = useMemo(() => ({ ...filtersFromUrl(url), dept: ALL }), [url]);
   const issueFilters = useMemo(() => issueFiltersFromUrl(url), [url]);
@@ -117,8 +144,8 @@ export function PayrollTab({
   });
   // A production row already is a payroll row (`ProductionPayrollItem` extends `PayrollRunItem`): the panels take it as it is.
   const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
-  const issuesQuery = usePayrollIssues(scope);
-  const rulesQuery = usePayrollRules(scope);
+  const issuesQuery = usePayrollIssues(canSee("issues") ? scope : null);
+  const rulesQuery = usePayrollRules(canSee("rules") ? scope : null);
 
   const issues = issuesQuery.data;
   const issueIndex = useMemo(() => buildIssueIndex(issues?.issues ?? []), [issues]);
@@ -141,7 +168,9 @@ export function PayrollTab({
   // what the dashboard tile and the view's count say: the issues plus the employees who cannot be paid, as the view lists them
   const dashIssues = useMemo(() => addSkipped(issues?.summary, skippedCount), [issues, skippedCount]);
 
-  const setView = (next: ProductionView) => setUrl({ view: next });
+  const setView = (next: ProductionView) => {
+    if (canSee(next)) setUrl({ view: next });
+  };
   const resetFilters = () => setUrl(filtersToUrl(DEFAULT_FILTERS) as Record<string, string>);
 
   // Both files are the Report Center's Production Salary Statement (Reports > HR Reports), so the two can never differ: the
@@ -163,24 +192,28 @@ export function PayrollTab({
   });
   const exportItems: ExportItem[] = [statementItem("xlsx"), statementItem("pdf")];
 
-  const options: ViewOption<ProductionView>[] = [
-    { value: "records", label: "Records", icon: ListChecks, count: runsQuery.isLoading ? null : runs.length },
-    {
-      value: "issues",
-      label: "Issues",
-      icon: AlertTriangle,
-      count: issuesQuery.isLoading || status.isLoading ? null : (dashIssues?.total ?? 0),
-      tone: (dashIssues?.bySeverity.critical ?? 0) > 0 ? "danger" : "warning",
-    },
-    {
-      value: "skipped",
-      label: "Skipped",
-      icon: CircleSlash,
-      count: status.isLoading ? null : skippedCount,
-      tone: "warning",
-    },
-    { value: "rules", label: "Rules", icon: BookOpenCheck },
-  ];
+  const options: ViewOption<ProductionView>[] = visibleItems<ViewOption<ProductionView>>(
+    [
+      { value: "records", label: "Records", icon: ListChecks, count: runsQuery.isLoading ? null : runs.length },
+      {
+        value: "issues",
+        label: "Issues",
+        icon: AlertTriangle,
+        count: issuesQuery.isLoading || status.isLoading ? null : (dashIssues?.total ?? 0),
+        tone: (dashIssues?.bySeverity.critical ?? 0) > 0 ? "danger" : "warning",
+      },
+      {
+        value: "skipped",
+        label: "Skipped",
+        icon: CircleSlash,
+        count: status.isLoading ? null : skippedCount,
+        tone: "warning",
+      },
+      { value: "rules", label: "Rules", icon: BookOpenCheck },
+    ],
+    (o) => VIEW_KEY[o.value],
+    level,
+  );
 
   // Why the list is empty, and what to do about it: the filters, nobody on the cycle, or nothing generated yet.
   const empty =
@@ -217,13 +250,15 @@ export function PayrollTab({
         hint={`${periodLabel}: click "Generate Payroll" to compute it from attendance.`}
         testId="pcp-empty-period"
         action={
-          <Button
-            className="mt-2 gap-2 bg-amber-600 hover:bg-amber-700"
-            onClick={() => setShowGenerate(true)}
-            disabled={!status.data}
-          >
-            <Play size={14} /> Generate Payroll
-          </Button>
+          <Gate k="production_payroll.generate">
+            <Button
+              className="mt-2 gap-2 bg-amber-600 hover:bg-amber-700"
+              onClick={() => setShowGenerate(true)}
+              disabled={!status.data}
+            >
+              <Play size={14} /> Generate Payroll
+            </Button>
+          </Gate>
         }
       />
     );
@@ -250,14 +285,16 @@ export function PayrollTab({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            className="h-9 gap-2 border-amber-200 text-amber-700 hover:bg-amber-50"
-            onClick={() => setView("skipped")}
-            data-testid="pcp-skipped-open"
-          >
-            <AlertTriangle size={14} /> Skipped Employees
-          </Button>
+          <Gate k="production_payroll.payroll.skipped">
+            <Button
+              variant="outline"
+              className="h-9 gap-2 border-amber-200 text-amber-700 hover:bg-amber-50"
+              onClick={() => setView("skipped")}
+              data-testid="pcp-skipped-open"
+            >
+              <AlertTriangle size={14} /> Skipped Employees
+            </Button>
+          </Gate>
           <ExportMenu
             items={exportItems}
             label="Export"
@@ -275,14 +312,16 @@ export function PayrollTab({
           >
             <Download size={14} /> Export bank file
           </Button>
-          <Button
-            className="h-9 gap-2 bg-amber-600 hover:bg-amber-700"
-            onClick={() => setShowGenerate(true)}
-            disabled={!status.data}
-            data-testid="pcp-generate-open"
-          >
-            <Play size={14} /> Generate Payroll
-          </Button>
+          <Gate k="production_payroll.generate">
+            <Button
+              className="h-9 gap-2 bg-amber-600 hover:bg-amber-700"
+              onClick={() => setShowGenerate(true)}
+              disabled={!status.data}
+              data-testid="pcp-generate-open"
+            >
+              <Play size={14} /> Generate Payroll
+            </Button>
+          </Gate>
         </div>
       </div>
 
@@ -298,18 +337,24 @@ export function PayrollTab({
         expected={
           status.data ? { count: status.data.employees.length, label: `on the ${info.label} cycle` } : undefined
         }
-        issues={dashIssues}
+        issues={canSee("issues") ? dashIssues : undefined}
         issuesLoading={issuesQuery.isLoading}
-        skipped={status.data ? { count: skippedCount, total: status.data.employees.length } : undefined}
+        skipped={
+          status.data && canSee("skipped") ? { count: skippedCount, total: status.data.employees.length } : undefined
+        }
         skippedLoading={status.isLoading}
-        onOpenIssues={(code) => setUrl({ view: "issues", ...(code ? { icode: code } : {}) })}
-        onOpenSkipped={() => setView("skipped")}
-        onFilterStatus={(statusFilter) => setUrl({ view: "records", status: statusFilter })}
+        onOpenIssues={
+          canSee("issues") ? (code) => setUrl({ view: "issues", ...(code ? { icode: code } : {}) }) : undefined
+        }
+        onOpenSkipped={canSee("skipped") ? () => setView("skipped") : undefined}
+        onFilterStatus={
+          canSee("records") ? (statusFilter) => setUrl({ view: "records", status: statusFilter }) : undefined
+        }
         testIdPrefix="pcp-dash"
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <ViewSwitch options={options} value={view} onChange={setView} accent="amber" />
+        {options.length > 0 && <ViewSwitch options={options} value={view} onChange={setView} accent="amber" />}
         {view === "records" && hasChanges(filters) && (
           <button type="button" className="text-xs font-semibold text-amber-700 hover:underline" onClick={resetFilters}>
             Clear filters
@@ -317,7 +362,16 @@ export function PayrollTab({
         )}
       </div>
 
-      {runsQuery.isError && view === "records" ? (
+      <ViewOnlyTabNote show={viewLocked} />
+
+      {visibleViews.length === 0 ? (
+        <p
+          className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+          data-testid="pcp-views-nothing-open"
+        >
+          Nothing on this page is open to your role.
+        </p>
+      ) : runsQuery.isError && view === "records" ? (
         <EmptyNote
           icon={RefreshCw}
           title="The payroll records could not be loaded"
@@ -361,7 +415,7 @@ export function PayrollTab({
             rulesLoading={rulesQuery.isLoading}
             onOpenDetails={(run) => openPayrollDetails(navigate, "production", run.id)}
             onOpenIssues={(run) => openPayrollDetails(navigate, "production", run.id, "issues")}
-            onMarkPaid={(run) => void markPaid(run)}
+            onMarkPaid={mayMarkCleared ? (run) => void markPaid(run) : undefined}
             markingId={markingId}
             layout={url.layout === "cards" ? "cards" : "table"}
             onLayoutChange={(layout: RecordLayout) => setUrl({ layout })}
@@ -432,7 +486,7 @@ export function PayrollTab({
         </p>
       </SectionCard>
 
-      {showGenerate && status.data && (
+      {showGenerate && mayGenerate && status.data && (
         <GenerateDialog
           cycle={cycle}
           period={period}

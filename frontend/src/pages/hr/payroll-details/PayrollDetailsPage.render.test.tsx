@@ -46,7 +46,10 @@ vi.mock("@/components/HrLayout", async () => {
   };
 });
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
-vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ token: "tok", user: null }) }));
+vi.mock("@/contexts/AuthContext", async (original) => ({
+  ...(await original<typeof import("@/contexts/AuthContext")>()),
+  useAuth: () => ({ token: "tok", user: null }),
+}));
 vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-fetch")>()),
   customFetch: h.fetch,

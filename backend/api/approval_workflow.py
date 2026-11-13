@@ -658,9 +658,9 @@ def decide(
     if role == HR:
         # The HR account deciding must hold the approval right for this kind (hr_access.py: role, per-account changes, and
         # the HR Assistant locks). Editing a module never implies it. None when no HR account is behind the call.
-        from .hr_access import actor_refusal
+        from .hr_access import actor_refusal, kind_for
 
-        refused = actor_refusal(key)
+        refused = actor_refusal(kind_for(key, obj))
         if refused:
             raise ApprovalError(refused, status=403, code="approval_not_permitted")
     defn = definition(key)
@@ -717,7 +717,7 @@ def can_act(
     "edit = approve" rule and for callers with no HR account; `for_actor=False` asks about the role alone."""
     if not is_pending(key, obj):
         return False
-    if role == HR and for_actor and not _hr_actor_may(key):
+    if role == HR and for_actor and not _hr_actor_may(key, obj):
         return False
     cfg = cfg or get_config(key)
     approved = approved_roles(trail_of(key, obj))
@@ -725,10 +725,12 @@ def can_act(
     return ok
 
 
-def _hr_actor_may(key: str) -> bool:
-    from .hr_access import actor_may_approve
+def _hr_actor_may(key: str, obj=None) -> bool:
+    """May the HR account behind this request approve this request? An employee request is judged by its type and an
+    advance by general / term (hr_access.kind_for); with no request at hand, "any of them"."""
+    from .hr_access import actor_may_approve, kind_for
 
-    return actor_may_approve(key)
+    return actor_may_approve(kind_for(key, obj))
 
 
 def filter_actionable(key: str, objs, role: str, cfg: Config | None = None) -> list:
@@ -798,7 +800,7 @@ def progress(key: str, obj, cfg: Config | None = None) -> dict:
     hr_reject_turn = bool(pending) and (
         can_act(key, obj, HR, cfg, "rejected", for_actor=False) if a else HR in cfg.steps[0].roles
     )
-    hr_permitted = _hr_actor_may(key)
+    hr_permitted = _hr_actor_may(key, obj)
     return {
         "workflow": key,
         "label": defn.label,

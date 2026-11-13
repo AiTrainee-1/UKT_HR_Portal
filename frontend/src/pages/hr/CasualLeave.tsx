@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { CalendarCheck, CalendarHeart, Hourglass, ListChecks, Repeat2, UserCheck, UserX } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { PipelineNote } from "@/components/ApprovalTrail";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { waitingText } from "@/lib/approval-workflow";
 import {
@@ -12,6 +14,8 @@ import {
   useDeleteCasualLeave,
   useListCasualLeaves,
 } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
+import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { ConfirmDialog } from "./leave/ConfirmDialog";
 import { exportSheet } from "./leave/export";
 import { ALL, branchOptions, departmentOptions, longDate, type PersonFilters } from "./leave/logic";
@@ -50,6 +54,15 @@ type Tab = "taken" | "eligible" | "not-eligible" | "requests" | "carry-forward";
 
 const TABS: Tab[] = ["taken", "eligible", "not-eligible", "requests", "carry-forward"];
 
+// Each tab's own permission key (Account Management -> Roles & Permissions); a key with no setting follows "casual_leave".
+const TAB_KEY: Record<Tab, string> = {
+  taken: "casual_leave.taken",
+  eligible: "casual_leave.eligible",
+  "not-eligible": "casual_leave.not_eligible",
+  requests: "casual_leave.requests",
+  "carry-forward": "casual_leave.carry_forward",
+};
+
 /** `?tab=carry-forward` opens that tab (a link, a refresh); any other value the first one. */
 function tabFromUrl(): Tab {
   const raw = new URLSearchParams(window.location.search).get("tab");
@@ -68,9 +81,23 @@ export default function CasualLeave() {
     year: Number(today.slice(0, 4)),
     month: Number(today.slice(5, 7)),
   }));
-  const [tab, setTabState] = useState<Tab>(tabFromUrl);
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted), also when ?tab= or a stat card asks for it.
+  const visibleTabs = visibleItems(TABS, (t) => TAB_KEY[t], level);
+  const [askedTab, setTabState] = useState<Tab>(tabFromUrl);
+  const tab = pickVisible(askedTab, visibleTabs);
+  const canOpen = (t: Tab) => visibleTabs.includes(t);
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const tabViewOnly =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(TAB_KEY[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
   // the tab stays in the address, so a refresh or a shared link comes back to it
   const setTab = (next: Tab) => {
+    if (!canOpen(next)) return;
     setTabState(next);
     const params = new URLSearchParams(window.location.search);
     if (next === "taken") params.delete("tab");
@@ -232,7 +259,7 @@ export default function CasualLeave() {
             icon={CalendarCheck}
             tone="bg-emerald-50 text-emerald-800"
             testId="cl-stat-taken"
-            onClick={() => setTab("taken")}
+            onClick={canOpen("taken") ? () => setTab("taken") : undefined}
             active={tab === "taken"}
           />
           <StatCard
@@ -242,7 +269,7 @@ export default function CasualLeave() {
             icon={UserCheck}
             tone="bg-blue-50 text-blue-800"
             testId="cl-stat-eligible"
-            onClick={() => setTab("eligible")}
+            onClick={canOpen("eligible") ? () => setTab("eligible") : undefined}
             active={tab === "eligible"}
           />
           <StatCard
@@ -254,7 +281,7 @@ export default function CasualLeave() {
             icon={UserX}
             tone="bg-slate-100 text-slate-700"
             testId="cl-stat-not-eligible"
-            onClick={() => setTab("not-eligible")}
+            onClick={canOpen("not-eligible") ? () => setTab("not-eligible") : undefined}
             active={tab === "not-eligible"}
           />
           <StatCard
@@ -264,30 +291,51 @@ export default function CasualLeave() {
             icon={Hourglass}
             tone="bg-amber-50 text-amber-800"
             testId="cl-stat-pending"
-            onClick={() => {
-              setReqStatus("pending");
-              setTab("requests");
-            }}
+            onClick={
+              canOpen("requests")
+                ? () => {
+                    setReqStatus("pending");
+                    setTab("requests");
+                  }
+                : undefined
+            }
             active={tab === "requests" && reqStatus === "pending"}
           />
         </div>
 
         <div>
-          <div className="max-w-full overflow-x-auto pb-1">
+          {visibleTabs.length === 0 && (
+            <p
+              className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+              data-testid="cl-nothing-open"
+            >
+              Nothing on this page is open to your role.
+            </p>
+          )}
+          <div className="max-w-full overflow-x-auto pb-1" hidden={visibleTabs.length === 0}>
             <PillTabs
-              items={[
-                { value: "taken", label: "Taken this month", icon: <CalendarHeart size={14} /> },
-                { value: "eligible", label: "Eligible", icon: <UserCheck size={14} /> },
-                { value: "not-eligible", label: "Not eligible", icon: <UserX size={14} /> },
-                { value: "requests", label: "Requests", icon: <ListChecks size={14} /> },
-                { value: "carry-forward", label: "Carry Forward", icon: <Repeat2 size={14} /> },
-              ]}
+              items={visibleItems(
+                [
+                  { value: "taken", label: "Taken this month", icon: <CalendarHeart size={14} /> },
+                  { value: "eligible", label: "Eligible", icon: <UserCheck size={14} /> },
+                  { value: "not-eligible", label: "Not eligible", icon: <UserX size={14} /> },
+                  { value: "requests", label: "Requests", icon: <ListChecks size={14} /> },
+                  { value: "carry-forward", label: "Carry Forward", icon: <Repeat2 size={14} /> },
+                ],
+                (t) => TAB_KEY[t.value as Tab],
+                level,
+              )}
               value={tab}
               onChange={(v) => setTab(v as Tab)}
             />
           </div>
+          {tabViewOnly && (
+            <div className="mt-2">
+              <ViewOnlyTabNote show />
+            </div>
+          )}
 
-          {tab === "taken" && (
+          {canOpen("taken") && tab === "taken" && (
             <ClTab
               id="taken"
               filters={takenF}
@@ -334,7 +382,7 @@ export default function CasualLeave() {
             </ClTab>
           )}
 
-          {tab === "eligible" && (
+          {canOpen("eligible") && tab === "eligible" && (
             <ClTab
               id="eligible"
               filters={eligibleF}
@@ -371,7 +419,7 @@ export default function CasualLeave() {
             </ClTab>
           )}
 
-          {tab === "not-eligible" && (
+          {canOpen("not-eligible") && tab === "not-eligible" && (
             <ClTab
               id="not-eligible"
               filters={notF}
@@ -424,7 +472,7 @@ export default function CasualLeave() {
             </ClTab>
           )}
 
-          {tab === "requests" && (
+          {canOpen("requests") && tab === "requests" && (
             <ClTab
               id="requests"
               filters={reqF}
@@ -479,7 +527,7 @@ export default function CasualLeave() {
             </ClTab>
           )}
 
-          {tab === "carry-forward" && (
+          {canOpen("carry-forward") && tab === "carry-forward" && (
             <CarryForwardTab
               board={board}
               {...boardState}

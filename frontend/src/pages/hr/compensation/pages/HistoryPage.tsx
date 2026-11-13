@@ -4,6 +4,7 @@ import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   CompensationPageShell,
+  NothingOpenPage,
   ToDefaultNested,
   useCompensationFeaturesOff,
   useNestedSubtab,
@@ -11,6 +12,7 @@ import {
 import HistoryTab from "../history/HistoryTab";
 import { COMPENSATION_URL_DEFAULTS } from "../logic";
 import { HISTORY_SUB_VALUES, pagePath } from "../routes";
+import { openSubs, useCanOpen } from "../visible";
 
 const BASE = pagePath("history");
 
@@ -43,7 +45,12 @@ function CompensationHistory({ sub, nested }: { sub: string; nested: string | un
 export default function HistoryPage() {
   const sub = useSubtab(BASE, HISTORY_SUB_VALUES);
   const nested = useNestedSubtab("history", sub);
-  if (!sub) return <ToFirstSubtab base={BASE} first={HISTORY_SUB_VALUES[0]} />;
+  const canOpen = useCanOpen();
+  if (!sub) {
+    // the first subtab the role may open
+    const first = openSubs(canOpen, "history", HISTORY_SUB_VALUES)[0];
+    return first ? <ToFirstSubtab base={BASE} first={first} /> : <NothingOpenPage />;
+  }
   if (nested === null) return <ToDefaultNested pageKey="history" sub={sub} />;
   return <CompensationHistory sub={sub} nested={nested} />;
 }

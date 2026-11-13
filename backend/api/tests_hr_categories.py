@@ -37,6 +37,20 @@ from .models import (
 from .permission_registry import effective_permissions
 
 ALL_KINDS = list(hr_access.APPROVAL_KEYS)
+# the kinds of 2026-11-10, as the starter roles were seeded with them (migration 0146)
+STORED_KINDS = (
+    "leave",
+    "permission",
+    "casual_leave",
+    "missing_punch",
+    "attendance_correction",
+    "on_duty",
+    "on_duty_punch",
+    "outpass",
+    "request",
+    "resignation",
+    "advance",
+)
 
 
 def bearer(user: HRUser, **extra) -> dict:
@@ -170,7 +184,7 @@ class LegacyAccountsUnchanged(Matrix):
         me = self.call(self.admin, "get", "/api/auth/me").json()
         self.assertEqual((me["category"], me["approvalMode"], me["displayCategory"]), ("admin", "legacy", "admin"))
         self.assertTrue(me["approvals"]["missing_punch"])
-        self.assertFalse(me["approvals"]["advance"])  # settlement hidden
+        self.assertFalse(me["approvals"]["advance_general"] or me["approvals"]["advance_term"])  # settlement hidden
         self.assertEqual(me["lockedApprovals"], [])
 
     def test_md_unchanged(self):
@@ -576,7 +590,7 @@ class AccountManagement(Matrix):
         manager = Role.objects.get(name="HR Manager - default")
         assistant = Role.objects.get(name="HR Assistant - default")
         self.assertEqual((manager.category, assistant.category), ("hr_manager", "hr_assistant"))
-        self.assertTrue(all(manager.approvals[k] for k in ALL_KINDS))
+        self.assertTrue(all(manager.approvals[k] for k in STORED_KINDS))
         self.assertEqual({k for k, v in assistant.approvals.items() if v}, {"leave", "permission"})
         self.assertFalse(assistant.approvals["missing_punch"] or assistant.approvals["attendance_correction"])
         for key in ("payroll", "attendance", "leave", "requests", "compensation"):
@@ -652,16 +666,24 @@ class AssistantActivity(Matrix):
 
 class HelperRules(TestCase):
     def test_catalogue(self):
+        # 2026-11-11: "request" became one kind per request type and "advance" general / term; the payroll month,
+        # OT, bonus, interview and screening decisions got switches of their own (permission-inventory.md)
         self.assertEqual(
             hr_access.APPROVAL_KEYS,
             ("leave", "permission", "casual_leave", "missing_punch", "attendance_correction", "on_duty", "on_duty_punch",
-             "outpass", "request", "resignation", "advance"),
+             "outpass", "request_leave", "request_salary_enquiry", "request_shift_correction", "request_advance",
+             "request_permission", "request_general", "resignation", "interview_result", "resume_decision",
+             "advance_general", "advance_term", "payroll_hold", "payroll_add", "payroll_finalize", "payroll_mark_paid",
+             "payroll_release", "payroll_mark_cleared", "compensation_ot", "bonus_status"),
         )  # fmt: skip
         self.assertEqual(set(hr_access.ASSISTANT_LOCKED), {"missing_punch", "attendance_correction"})
         for kind in hr_access.APPROVAL_KINDS:
-            approval.definition(kind.key)  # every kind is a real workflow
+            if kind.replaces:
+                approval.definition(kind.replaces)  # a request type / an advance type: its workflow is the old kind's
+            elif not kind.needs_edit:
+                approval.definition(kind.key)  # every request kind is a real workflow
         for pattern, _method, kind in hr_access.DECISION_ROUTES:
-            self.assertIn(kind, hr_access.KIND_BY_KEY, pattern)
+            self.assertTrue(kind in hr_access.KIND_BY_KEY or kind in hr_access.ALIASES, pattern)
 
     def test_decision_routes(self):
         self.assertEqual(hr_access.decision_kind("missing-punch-requests/4/status", "PATCH"), "missing_punch")

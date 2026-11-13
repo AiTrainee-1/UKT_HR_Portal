@@ -1,11 +1,15 @@
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { BarChart3, CalendarClock, History, IndianRupee, Percent, TrendingUp, Users } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useListEmployeesLite } from "@/lib/api-client";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import { formatMoney } from "./career/common";
 import { monthsLabel, todayYmd } from "./career/dates";
 import { PersonCell, StatCard } from "./career/parts";
@@ -30,9 +34,20 @@ import SalaryTimeline from "./increment/SalaryTimeline";
 
 type TabKey = "apply" | "history" | "due" | "insights";
 
+const TABS: readonly TabKey[] = ["apply", "history", "due", "insights"];
+// Each tab's own key (Account Management -> Roles & Permissions -> Increment).
+const TAB_PERMISSION: Record<TabKey, string> = {
+  apply: "increment.apply",
+  history: "increment.history",
+  due: "increment.due",
+  insights: "increment.insights",
+};
+
 /** Salary Increment: apply a percentage increment with the new salary previewed to the paisa, read every increment, see who may be due, and the company-wide picture. */
 export default function Increment() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const [location] = useLocation();
   const today = todayYmd();
 
   const employeesQuery = useListEmployeesLite({ status: "active" });
@@ -42,7 +57,19 @@ export default function Increment() {
   const records = useMemo<IncrementRecord[]>(() => historyQuery.data?.results ?? [], [historyQuery.data]);
   const total = historyQuery.data?.total ?? 0;
 
-  const [tab, setTab] = useState<TabKey>("apply");
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted).
+  const visibleTabs = visibleItems(TABS, (t) => TAB_PERMISSION[t], level);
+  const [askedTab, setTab] = useState<TabKey>("apply");
+  const tab = pickVisible(askedTab, visibleTabs);
+  // The History / Due / timeline "give an increment" jumps only when this role may see the Apply tab.
+  const canOpenApply = visibleTabs.includes("apply");
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const tabViewOnly =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(TAB_PERMISSION[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [historyFilters, setHistoryFilters] = useState<HistoryFilters>(NO_FILTERS);
   const [dueFilters, setDueFilters] = useState<DueFilters>(NO_DUE_FILTERS);
@@ -138,18 +165,42 @@ export default function Increment() {
         </div>
 
         <div>
-          <PillTabs
-            items={[
-              { value: "apply", label: "Apply increment", icon: <TrendingUp size={14} /> },
-              { value: "history", label: "History", icon: <History size={14} />, count: total || records.length },
-              { value: "due", label: "Due for increment", icon: <CalendarClock size={14} />, count: due.rows.length },
-              { value: "insights", label: "Insights", icon: <BarChart3 size={14} /> },
-            ]}
-            value={tab}
-            onChange={(v) => setTab(v as TabKey)}
-          />
+          {visibleTabs.length === 0 && (
+            <p
+              className="rounded-2xl border bg-white p-6 text-center text-sm text-muted-foreground"
+              data-testid="increment-nothing-open"
+            >
+              Nothing on this page is open to your role.
+            </p>
+          )}
+          {visibleTabs.length > 0 && (
+            <PillTabs
+              items={visibleItems(
+                [
+                  { value: "apply", label: "Apply increment", icon: <TrendingUp size={14} /> },
+                  { value: "history", label: "History", icon: <History size={14} />, count: total || records.length },
+                  {
+                    value: "due",
+                    label: "Due for increment",
+                    icon: <CalendarClock size={14} />,
+                    count: due.rows.length,
+                  },
+                  { value: "insights", label: "Insights", icon: <BarChart3 size={14} /> },
+                ],
+                (t) => TAB_PERMISSION[t.value as TabKey],
+                level,
+              )}
+              value={tab}
+              onChange={(v) => setTab(v as TabKey)}
+            />
+          )}
+          {tabViewOnly && (
+            <div className="mt-3">
+              <ViewOnlyTabNote show />
+            </div>
+          )}
 
-          {tab === "apply" && (
+          {visibleTabs.length > 0 && tab === "apply" && (
             <ApplyTab
               employees={employees}
               loading={employeesQuery.isLoading}
@@ -159,7 +210,7 @@ export default function Increment() {
               today={today}
             />
           )}
-          {tab === "history" && (
+          {visibleTabs.length > 0 && tab === "history" && (
             <HistoryTab
               records={records}
               total={total}
@@ -169,11 +220,11 @@ export default function Increment() {
               filters={historyFilters}
               onFilters={setHistoryFilters}
               onTimeline={setTimelineFor}
-              onApply={openApply}
+              onApply={canOpenApply ? openApply : undefined}
               today={today}
             />
           )}
-          {tab === "due" && (
+          {visibleTabs.length > 0 && tab === "due" && (
             <DueTab
               employees={employees}
               increments={records}
@@ -185,10 +236,10 @@ export default function Increment() {
               threshold={threshold}
               onThreshold={setThreshold}
               today={today}
-              onApply={openApply}
+              onApply={canOpenApply ? openApply : undefined}
             />
           )}
-          {tab === "insights" && (
+          {visibleTabs.length > 0 && tab === "insights" && (
             <InsightsTab
               records={records}
               loading={historyQuery.isLoading}
@@ -219,7 +270,7 @@ export default function Increment() {
                 <SalaryTimeline steps={timelineSteps} startSalary={startSalary} />
               </div>
             )}
-            {timelineEmployee && (
+            {timelineEmployee && canOpenApply && (
               <Button
                 className="gap-1.5 bg-green-600 hover:bg-green-700"
                 onClick={() => openApply(timelineEmployee.id)}

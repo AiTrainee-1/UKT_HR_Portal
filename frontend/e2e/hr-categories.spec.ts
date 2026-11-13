@@ -252,7 +252,8 @@ test("HR Manager and HR Assistant: created by the Super Admin, the assistant edi
     await page.goto("/hr/assistant-activity");
     await expect(page.getByTestId("activity-title")).toHaveText("HR Assistant activity");
     const table = page.getByTestId("activity-table");
-    await expect(table).toContainText("Changed in Payroll", { timeout: 30_000 });
+    // (the module's name in the tree is "Staff Payroll" since 2026-11-11)
+    await expect(table).toContainText("Changed in Staff Payroll", { timeout: 30_000 });
     await expect(table).toContainText("Proposed Absent");
     await expect(table).toContainText("Asha Assistant");
     expect((await api(page, "GET", "/api/hr-users")).status).toBe(403);

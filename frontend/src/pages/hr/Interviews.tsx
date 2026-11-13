@@ -44,6 +44,7 @@ import {
 import type { Applicant } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -76,6 +77,10 @@ export default function Interviews() {
   const [viewApplicant, setViewApplicant] = useState<Applicant | null>(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  // Marking an applicant Selected / Rejected is a decision (Account Management -> Approvals -> "interview_result");
+  // "Attended" stays open to everyone who may edit this page. Unchanged for an account on the old rule.
+  const canDecide = canApprove(user, "interview_result");
 
   const { data: jobs, isLoading: jobsLoading } = useListJobs({});
   const { data: departments } = useListDepartments();
@@ -381,6 +386,8 @@ export default function Interviews() {
                                 <Select
                                   value={app.status ?? "applied"}
                                   onValueChange={(v) => updateApplicant(app.id, v)}
+                                  // A decided applicant can only be moved again by an account that may decide.
+                                  disabled={!canDecide && (app.status === "selected" || app.status === "rejected")}
                                 >
                                   <SelectTrigger
                                     className="w-28 h-8 text-xs"
@@ -391,8 +398,8 @@ export default function Interviews() {
                                   <SelectContent>
                                     <SelectItem value="applied">Applied</SelectItem>
                                     <SelectItem value="attended">Attended</SelectItem>
-                                    <SelectItem value="selected">Selected</SelectItem>
-                                    <SelectItem value="rejected">Rejected</SelectItem>
+                                    <SelectItem value="selected" disabled={!canDecide}>Selected</SelectItem>
+                                    <SelectItem value="rejected" disabled={!canDecide}>Rejected</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>

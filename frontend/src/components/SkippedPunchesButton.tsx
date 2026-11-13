@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SkippedPunchesDialog } from "@/components/SkippedPunchesDialog";
 import { useSkippedPunches } from "@/lib/api-client/custom-hooks";
+import { useLevel } from "@/lib/tab-access";
+import { watchMutatingControls } from "@/lib/view-only-lock";
 import { UserX } from "lucide-react";
 
 /**
@@ -16,6 +18,26 @@ export function SkippedPunchesButton() {
   const [open, setOpen] = useState(false);
   const { data } = useSkippedPunches(false);
   const count = data?.unresolvedCount ?? 0;
+  // "Skipped punches" View only (attendance.skipped_punches): the list opens, its Save (mark handled) is locked. The
+  // dialog renders outside the page, so the lock follows it there.
+  const viewOnly = useLevel()("attendance.skipped_punches") === "view";
+  useEffect(() => {
+    if (!open || !viewOnly || typeof MutationObserver === "undefined") return;
+    let stop: (() => void) | null = null;
+    const finder = new MutationObserver(() => attach());
+    const attach = () => {
+      const dialog = stop ? null : document.querySelector<HTMLElement>('[role="dialog"]');
+      if (!dialog) return;
+      stop = watchMutatingControls(dialog);
+      finder.disconnect();
+    };
+    finder.observe(document.body, { childList: true, subtree: true });
+    attach();
+    return () => {
+      finder.disconnect();
+      stop?.();
+    };
+  }, [open, viewOnly]);
 
   return (
     <>

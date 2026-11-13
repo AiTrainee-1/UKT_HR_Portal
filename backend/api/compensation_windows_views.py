@@ -17,7 +17,12 @@ Rules, every refusal a plain sentence:
 
   * changes need the master switch (Settings -> Payroll -> OT / Compensation) and the Windows switch (Settings ->
     Compensation); reading never needs them;
-  * `date` is today or a later date, at most MAX_DAYS_AHEAD days ahead (today is allowed: HR often announces in the morning);
+  * `date` is any day of the CURRENT month, past or upcoming, the 1st to the last (owner 2026-11-13: "announce leave for
+    any past or upcoming date within the current month, but not for dates belonging to previous months"). Once the next
+    month begins the previous one is closed; a later month opens on its own 1st. A month whose payroll is finalized
+    (Payroll Done) is closed too;
+  * a window for today or a past day re-derives the stored attendance of the staff it covers for that day straight away,
+    so their Late / Early-out marks follow it (a day HR set by hand is never recomputed, as everywhere else);
   * `time` is required; `reason` is required (what happened: rain, a transport strike ...);
   * ONE window of a kind can apply to a person on a date: an announcement that would cover anybody an earlier one of the
     same kind and date already covers is refused (so the engine never has to choose between two times);
@@ -33,7 +38,8 @@ Both routes read and write the same table, so rows made here also appear in the 
 
 from __future__ import annotations
 
-from datetime import timedelta
+import logging
+from datetime import date, timedelta
 
 from django.db import transaction
 from django.db.models import Count, Q
@@ -47,7 +53,17 @@ from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import ist_today
 from .compensation_shared import date_text, parse_date, parse_int, parse_time, switches
 from .compensation_views import require_compensation_features_for_changes
-from .models import Branch, CompensationConfig, CompensationDayAnnouncement, Department, Employee
+from .models import (
+    AttendanceDayRecord,
+    Branch,
+    CompensationConfig,
+    CompensationDayAnnouncement,
+    Department,
+    Employee,
+    PayrollSettings,
+)
+
+logger = logging.getLogger(__name__)
 
 KIND_LABEL = {
     CompensationDayAnnouncement.KIND_LATE_IN: "Late-in",
@@ -55,7 +71,41 @@ KIND_LABEL = {
     CompensationDayAnnouncement.KIND_DAY: "Day exemption",
 }
 WINDOW_KINDS = (CompensationDayAnnouncement.KIND_LATE_IN, CompensationDayAnnouncement.KIND_EARLY_OUT)
-MAX_DAYS_AHEAD = 180
+
+
+def announce_month(today: date) -> tuple[date, date]:
+    """The first and last day a window can be announced for: the current month, past days included."""
+    first = today.replace(day=1)
+    last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    return first, last
+
+
+def refresh_attendance(day: date, staff_ids) -> int:
+    """Re-derive the stored attendance of these staff for `day` (a window announced for today or a past day changes how
+    that day is judged). Only days already stored are touched: a day nobody has looked at yet is worked out, window and
+    all, the first time it is. A day HR set by hand (source manual) is never recomputed. One person's failure is logged
+    and never undoes the announcement. Returns how many staff were re-derived."""
+    from .attendance_final import compensation_prefetch_for_range, compute_range_records
+
+    ids = list(
+        AttendanceDayRecord.objects.filter(date=day, employee_id__in=list(staff_ids))
+        .exclude(source="manual")
+        .values_list("employee_id", flat=True)
+    )
+    if not ids:
+        return 0
+    settings = PayrollSettings.get()
+    prefetch = compensation_prefetch_for_range(settings, day, day)
+    done = 0
+    for emp in Employee.objects.filter(pk__in=ids).order_by("pk"):
+        try:
+            compute_range_records(emp, day, day, settings, comp_prefetch=prefetch)
+            done += 1
+        except Exception:
+            logger.exception("Re-deriving the attendance of employee %s on %s after a window failed", emp.pk, day)
+    return done
+
+
 MAX_REASON_LENGTH = 300
 MAX_WINDOW_EMPLOYEES = 500
 LIST_DEFAULT_LIMIT = 200
@@ -269,10 +319,18 @@ def _announce(request: Request) -> Response:
     day = parse_date(data.get("date"))
     if day is None:
         return _bad("date must be a date (YYYY-MM-DD).")
-    if day < today:
-        return _bad("A window can only be announced for today or a later date.")
-    if day > today + timedelta(days=MAX_DAYS_AHEAD):
-        return _bad(f"A window can only be announced up to {MAX_DAYS_AHEAD} days ahead.")
+    first, last = announce_month(today)
+    if not first <= day <= last:
+        return _bad(
+            f"A window can only be announced for a date in the current month, {today.strftime('%B %Y')} "
+            f"(1 to {last.day} {today.strftime('%B')}): an earlier month is closed, and a later month opens on its 1st."
+        )
+    from . import payroll_month_workflow as month_workflow
+
+    if month_workflow.is_locked(day.month, day.year):
+        return _bad(
+            f"{today.strftime('%B %Y')} payroll is finalized (Payroll Done), so no window can be announced for it."
+        )
     kind = data.get("kind")
     if kind not in WINDOW_KINDS:
         return _bad(
@@ -325,6 +383,8 @@ def _announce(request: Request) -> Response:
         )
         if scope["employee_ids"]:
             ann.employees.set(scope["employee_ids"])
+    # today or a past day: the covered staff's stored day is judged again at once, so Attendance and History show it
+    refreshed = refresh_attendance(day, covered) if day <= today else 0
     log_action(
         request,
         "create",
@@ -338,7 +398,9 @@ def _announce(request: Request) -> Response:
         .prefetch_related("employees")
         .get(pk=ann.pk)
     )
-    return Response(window_json(ann, _coverage_table(request), today, get_branch_scope(request)), status=201)
+    body = window_json(ann, _coverage_table(request), today, get_branch_scope(request))
+    body["attendanceUpdated"] = refreshed
+    return Response(body, status=201)
 
 
 @api_view(["GET", "POST"])

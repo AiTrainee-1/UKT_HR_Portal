@@ -755,6 +755,58 @@ Never shareable: password hashes, tokens, OTPs, device secrets and API keys; Aad
 - **The `approval` block** gains `hrTurn` (HR's turn under the pipeline, whoever is looking) and `hrPermitted` (the account looking may approve this kind); `canAct.hr` / `canReject.hr` need both. For accounts on the old rule `hrPermitted` is always true, so their screens are unchanged. The "waiting for HR" list (`attendance/override-requests?waiting=hr`) and the dashboard's `pendingLeaves` / On-Duty counts follow it; **GET /api/hr-requests** kinds carry `canApprove`.
 - **GET /api/hr-activity?category=hr_assistant|hr_manager&accountId=&module=&action=&dateFrom=&dateTo=&search=&page=&pageSize=** — `@require_hr`, then the Super Admin or an HR Manager only (403 otherwise; `category=hr_manager` is the Super Admin's only). The Activity Logs rows of the HR Assistants (by `audit_logs.hr_user_id`), newest first: `{category, total, page, pageSize, results: [{id, at, accountId, username, fullName, action, module, moduleLabel, recordId, description, oldValues, newValues, ipAddress}], summary: {today, last7Days, approvals}, accounts: [{id, username, fullName, roleName, branchName, isActive, lastLogin}], modules: [{key, label}], canSeeManagers}`. A manager limited to one branch sees that branch's assistants only, and only rows of modules the manager can open (plus sign-ins and `general`). Besides what the views log themselves, every successful POST / PUT / PATCH / DELETE by an HR Manager or HR Assistant that its view did not log gets one row (`module` = its sidebar module, description like "Changed in Payroll (PATCH /api/payroll/12)", `new_values: {request: <the JSON sent, without passwords, tokens, codes, bank / account details, photos and files>}`). Admin accounts, the Super Admin and the MD are not logged this way.
 
+## The full permission tree and every approval kind (permission_tree.py; 2026-11-11, no migration)
+
+Every page, tab, sub-tab and feature of the HR portal has its own permission key (325 keys, up from 55; the full list with
+the address, the API paths and how each is enforced is **`permission-inventory.md`**, generated from the tree). Nothing
+changed in the stored data: `Role.permissions` / `HRUser.permission_overrides.modules` stay `{key: "hidden"|"view"|"edit"}`,
+and a key with no entry follows its dotted parent (`payroll.issues` follows `payroll`) or, for the four keys that were part of
+another module before (`biometric_connectors` -> `attendance`, `settings.idcard` -> `id_cards`, `settings.pf_esi` ->
+`settings.payroll`, `settings.production_shifts` -> `settings.attendance`), that module (`INHERITS`). Proven unchanged for
+every role shape and the real roles: `tests_permission_tree.py` (API paths, approvals), `permission-tree.test.ts` (portal
+addresses).
+
+- **Which key guards a call**: `permission_registry.resolve_module(path)`: an `URL_PATTERNS` full match first (paths with an
+  id in the middle: `employees/<id>/offer-letter|experience-letter...` -> `employees.letters`, `employees/<id>/status` ->
+  `employees.status`, `payroll/<id>/details` -> `payroll.details`, `payroll/production/<id>/details`,
+  `on-duty-sessions/<id>/punches` -> `geo_attendance.verifications`, `tracking/journeys/<id>/export`,
+  `salary-slips/<id>/email|whatsapp` -> `salary_slip.send`, `attendance/device-control/employees/<id>/photo|links`,
+  `mobile-app-logins/<id>/reset-password`, `recruitment/employee-documents/<id>[/upload]`, `gmail-control/templates/<type>`,
+  `live-location/team/<id>/route` -> `geo_attendance`), else the longest `URL_MODULE_MAP` prefix (the tree's own prefixes
+  merged in: e.g. `payroll/issues` -> `payroll.issues`, `attendance/report-log/sheet` ->
+  `attendance.report_log.monthly`, `hr/hod-reminders/send` -> `requests.notify.send`, `idcard-settings` -> `settings.idcard`,
+  `attendance/biometric-status` -> `biometric_connectors.device_status`, `attendance/device-control/fetch` ->
+  `biometric_connectors.device_control.fetch` ...). View = GET (and `READ_ONLY_POST_PATHS`), Edit = every write, as before.
+- **Checked inside the view** (`VIEW_CHECKED_KEYS`): **GET /api/hr-requests** (and the HoD board) leaves out a kind whose
+  `requests.list.<kind>` is hidden (it follows `requests` until set); **reports** (`reporting/access.py`): a report of a
+  category whose `reports.<category>` is hidden is answered as not found and the catalog drops the group (`reports.admin`,
+  `reports.md` stay Super Admin / MD only); **PUT /api/payroll-settings**: `FIELD_GROUPS` now names the Settings SUB-TAB
+  of each field (`settings.payroll.rates|bonus|ot_compensation`, `settings.attendance.staff`,
+  `settings.late_detection.staff|production`, `settings.production_payroll.<cycle>|pay_bonus`); each follows its tab until
+  set, so a role can be given one sub-tab of a tab; **hr/hod-reminders/settings** saves need `requests.notify` edit;
+  **employees/production/assign** needs `employees.production_employees` edit.
+- **Approval kinds** (`hr_access.APPROVAL_KINDS`, 27; `/auth/me` `approvals` and `Role.approvals` use these keys):
+  `leave`, `permission`, `casual_leave`, `missing_punch`, `attendance_correction`, `on_duty`, `on_duty_punch`, `outpass`,
+  one per employee-request type `request_leave | request_salary_enquiry | request_shift_correction | request_advance |
+  request_permission | request_general` (they replace `request`), `resignation`, `interview_result`, `resume_decision`,
+  `advance_general | advance_term` (they replace `advance`), `payroll_hold`, `payroll_add`, `payroll_finalize`,
+  `payroll_mark_paid`, `payroll_release`, `payroll_mark_cleared`, `compensation_ot`, `bonus_status`. Holiday / Sunday work
+  claims stay HOD-only (`INFO_KINDS`, no switch).
+  - **Older keys**: `request` and `advance` are still accepted in `Role.approvals` / `permissionOverrides.approvals`
+    (older clients); a new kind with no switch of its own follows the old one (`replaces`). Asking about `request` /
+    `advance` (the middleware's `DECISION_ROUTES`, hr-requests `canApprove`) means "any of its types"; the views check the
+    exact type: `hr_access.kind_for("request", obj)` by `request_type`, `kind_for("advance", obj)` by `advance_type`.
+  - **Needs Edit** (`needs_edit`: interview / screening results, the payroll month decisions, Mark as Cleared, OT, bonus):
+    an extra right on top of Edit on the module, never instead of it. Unset on a role with switches = Edit decides, so
+    nothing changed for existing roles. Payroll Done / Mark as Paid / Release & pay keep the whole-company rule.
+  - **New 403 `approval_not_permitted`** (the same shape as the other decisions): `POST payroll/<id>/hold`,
+    `/add-to-payroll`, `/release-and-pay`, `POST payroll/month-finalize`, `/month-paid`, `PATCH payroll/<id>` changing
+    `status` (Mark as Cleared), `POST compensation/ot/assign|reject|announce`, `PATCH bonus/<id>` changing `status`,
+    `PATCH applicants/<id>/status` to selected / rejected, `PATCH recruitment/resume-screening/candidates/<id>` to selected
+    / rejected; `PUT employee-requests/<id>/action` and `PUT advances/<id>` now by type.
+  - **GET /api/payroll/month-status** `can` adds `markCleared` (edit, month open, `payroll_mark_cleared`); `finalize`,
+    `markPaid`, `hold`, `addToPayroll`, `releaseAndPay` also need their switch.
+
 ## Audit Logs (hr_user_views.py)
 
 - **GET /api/audit-logs** — `@require_super_admin`. Paginated, filterable (module/action/userName/date range) audit trail; branch-scoped for rows that carry a branch (older rows without one stay admin-only-visible).

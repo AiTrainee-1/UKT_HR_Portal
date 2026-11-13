@@ -42,7 +42,8 @@ type Props = {
   threshold: number;
   onThreshold: (months: number) => void;
   today: string;
-  onPromote: (employeeId: number) => void;
+  /** Opens the Promote tab on that employee; left out when this role may not see the Promote tab (no Review button). */
+  onPromote?: (employeeId: number) => void;
 };
 
 export default function DueTab({
@@ -253,7 +254,7 @@ export default function DueTab({
                           <Since row={r} />
                         </TableCell>
                         <TableCell className="text-right">
-                          <PromoteButton row={r} onPromote={onPromote} />
+                          {onPromote && <PromoteButton row={r} onPromote={onPromote} />}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -274,7 +275,7 @@ export default function DueTab({
                       sub={[r.employee.designationTitle, r.employee.departmentName].filter(Boolean).join(" · ")}
                     />
                     <Since row={r} />
-                    <PromoteButton row={r} onPromote={onPromote} full />
+                    {onPromote && <PromoteButton row={r} onPromote={onPromote} full />}
                   </div>
                 ))}
               </div>

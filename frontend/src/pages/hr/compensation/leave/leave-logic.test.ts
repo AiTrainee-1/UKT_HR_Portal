@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { CLAIMS, TODAY, WINDOWS, windowOf } from "../fixtures";
 import {
   CLAIM_REASON_MAX,
-  WINDOW_MAX_DAYS_AHEAD,
   WINDOW_REASON_MAX,
   checkClaim,
   checkRedeem,
@@ -18,6 +17,7 @@ import {
   redeemSummary,
   scopeText,
   splitWindows,
+  windowDateRange,
   windowKindText,
   windowPayload,
   windowScopeText,
@@ -49,16 +49,31 @@ describe("announcing a late-in / early-out", () => {
     });
   });
 
-  it("accepts a complete form, for today or a day up to 180 days ahead", () => {
+  it("accepts a complete form for any day of the current month, past or upcoming (owner 2026-11-13)", () => {
     expect(checkWindow(good, TODAY)).toEqual({ ok: true, problems: {} });
-    expect(checkWindow({ ...good, date: TODAY }, TODAY).ok).toBe(true);
-    expect(checkWindow({ ...good, date: "2027-04-12" }, TODAY).ok).toBe(true); // exactly 180 days
-    expect(WINDOW_MAX_DAYS_AHEAD).toBe(180);
+    for (const date of ["2026-10-01", "2026-10-13", TODAY, "2026-10-31"]) {
+      expect(checkWindow({ ...good, date }, TODAY).ok).toBe(true);
+    }
   });
 
-  it("refuses a past date and a date more than 180 days ahead", () => {
-    expect(checkWindow({ ...good, date: "2026-10-13" }, TODAY).problems.date).toMatch(/today or a later date/);
-    expect(checkWindow({ ...good, date: "2027-04-13" }, TODAY).problems.date).toMatch(/180 days ahead/);
+  it("knows each month's own last day", () => {
+    expect(windowDateRange("2026-11-13")).toEqual({
+      min: "2026-11-01",
+      max: "2026-11-30",
+      label: "November 2026 (1 to 30 November)",
+    });
+    expect(windowDateRange("2028-02-01").max).toBe("2028-02-29"); // a leap year
+    expect(windowDateRange("2027-02-28").max).toBe("2027-02-28");
+    expect(windowDateRange("2026-12-31")).toMatchObject({ min: "2026-12-01", max: "2026-12-31" });
+  });
+
+  it("refuses a date in an earlier or a later month", () => {
+    for (const date of ["2026-09-30", "2026-11-01", "2027-04-12"]) {
+      expect(checkWindow({ ...good, date }, TODAY).problems.date).toBe(
+        "A window can only be announced for a date in the current month, October 2026 (1 to 31 October): an earlier " +
+          "month is closed, and a later month opens on its 1st.",
+      );
+    }
     expect(checkWindow({ ...good, date: "" }, TODAY).problems.date).toBe("Choose the date.");
     expect(checkWindow({ ...good, date: "2026-02-30" }, TODAY).problems.date).toBe("Enter a valid date.");
   });

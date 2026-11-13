@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { ArrowRight, CalendarCheck2, History, ScrollText, Search, Wallet, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -6,8 +7,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { moduleForPath } from "@/lib/permission-modules";
 import { TONE } from "@/lib/statusTones";
+import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { exportSheet } from "../leave/export";
 import { ALL, type Option, type PersonFilters } from "../leave/logic";
@@ -343,6 +347,13 @@ function LogList({ items }: { items: ClAdjustment[] }) {
 
 type View = "balances" | "log";
 
+// Each part's own permission key; a key with no setting follows the Carry Forward tab.
+const VIEW_KEY: Record<View, string> = {
+  balances: "casual_leave.carry_forward.balances",
+  log: "casual_leave.carry_forward.log",
+};
+const VIEWS = Object.keys(VIEW_KEY) as View[];
+
 /**
  * Carry Forward (owner 2026-11-04): each staff member's Casual Leave balance for the year (a fixed 12), the place to turn
  * their absent or on-leave days into Casual Leave (one employee, or several ticked at once), and the log of every round
@@ -373,7 +384,20 @@ export default function CarryForwardTab({
   onHistory: (r: BoardRow) => void;
 }) {
   const { toast } = useToast();
-  const [view, setView] = useState<View>("balances");
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  // Only the parts this role may see; a hidden one is never shown (its list is never loaded).
+  const views = visibleItems(VIEWS, (v) => VIEW_KEY[v], level);
+  const [askedView, setView] = useState<View>("balances");
+  const view = pickVisible(askedView, views);
+  // A part this role may only VIEW, when neither the page nor the Carry Forward tab is View-only already (those lock it).
+  const viewOnly =
+    views.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level("casual_leave.carry_forward") !== "view" &&
+    level(VIEW_KEY[view]) === "view";
+  useViewOnlyLock(viewOnly, view);
   const [filters, setFilters] = useState<PersonFilters>(NO_CL_FILTERS);
   const [pill, setPill] = useState<string>(ALL);
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
@@ -386,7 +410,7 @@ export default function CarryForwardTab({
 
   const canEdit = year === today.year;
   const assign = useAssignCl();
-  const log = useClAdjustments(year, view === "log");
+  const log = useClAdjustments(year, view === "log" && views.includes("log"));
 
   const all = useMemo(() => carryRows(board), [board]);
   const counts = useMemo(() => carryCounts(all), [all]);
@@ -454,18 +478,32 @@ export default function CarryForwardTab({
             ? "Unused days lapse on 31 December."
             : `This is ${year}: only this year's (${today.year}) Casual Leave can be given.`}
         </p>
-        <PillTabs
-          size="sm"
-          items={[
-            { value: "balances", label: "Balances", icon: <Wallet size={13} />, count: counts.all },
-            { value: "log", label: "Change log", icon: <ScrollText size={13} />, count: summary?.changes },
-          ]}
-          value={view}
-          onChange={(v) => setView(v as View)}
-        />
+        {views.length > 0 && (
+          <PillTabs
+            size="sm"
+            items={visibleItems(
+              [
+                { value: "balances", label: "Balances", icon: <Wallet size={13} />, count: counts.all },
+                { value: "log", label: "Change log", icon: <ScrollText size={13} />, count: summary?.changes },
+              ],
+              (v) => VIEW_KEY[v.value as View],
+              level,
+            )}
+            value={view}
+            onChange={(v) => setView(v as View)}
+          />
+        )}
       </div>
+      <ViewOnlyTabNote show={viewOnly} testId="cf-view-only" />
 
-      {view === "balances" ? (
+      {views.length === 0 ? (
+        <p
+          className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+          data-testid="cf-nothing-open"
+        >
+          Nothing on this page is open to your role.
+        </p>
+      ) : view === "balances" ? (
         <ClTab
           id="cf-balances"
           filters={filters}

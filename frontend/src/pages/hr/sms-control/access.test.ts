@@ -3,7 +3,16 @@ import { canEdit, canView, canViewRoute, isRouteViewOnly, permissionLevel } from
 import { navGroups, navItemActive } from "@/components/ui/dashboard-sidebar";
 import { MODULE_LABELS, MODULE_TREE, ROUTE_MODULE_MAP, allModuleKeys, moduleForPath } from "@/lib/permission-modules";
 import { pageHasRefresh } from "@/lib/page-refresh";
-import { SETTINGS_SECTIONS, SMS_BASE, SMS_CONTROL_MODULE, SMS_TABS, smsPath, smsTabPath } from "./routes";
+import {
+  SETTINGS_SECTIONS,
+  SMS_BASE,
+  SMS_CONTROL_MODULE,
+  SMS_TABS,
+  smsPath,
+  smsSectionModule,
+  smsTabModule,
+  smsTabPath,
+} from "./routes";
 
 // Who may open SMS Control: App.tsx gates the whole /hr/sms-control prefix by the module its path belongs to
 // (moduleForPath), so every address of every tab has to stay in the one `sms_control` module, and no other.
@@ -31,17 +40,31 @@ describe("the module", () => {
     expect(MODULE_TREE.map((n) => n.key)).toContain("sms_control");
     expect(MODULE_LABELS).toContainEqual({ key: "sms_control", label: "SMS Control" });
     expect(allModuleKeys()).toContain("sms_control");
-    expect(MODULE_TREE.find((n) => n.key === "sms_control")?.children).toBeUndefined();
+    // each tab, and each Settings section, can be given a level of its own (each follows the one above it while unset)
+    const node = MODULE_TREE.find((n) => n.key === "sms_control");
+    expect(node?.children?.map((c) => c.key)).toEqual(SMS_TABS.map((t) => smsTabModule(t.value)));
+    expect(node?.children?.find((c) => c.key === "sms_control.settings")?.children?.map((c) => c.key)).toEqual(
+      SETTINGS_SECTIONS.map((s) => smsSectionModule(s.value)),
+    );
     // it sits beside the other two message-control modules
     const keys = MODULE_TREE.map((n) => n.key);
-    expect(keys.indexOf("sms_control")).toBe(keys.indexOf("gmail_control") + 1);
+    // (the permission tree of 2026-11-11 lists them in the sidebar's order: WhatsApp, SMS, Gmail)
+    expect(keys.indexOf("sms_control")).toBe(keys.indexOf("whatsapp_control") + 1);
+    expect(keys.indexOf("gmail_control")).toBe(keys.indexOf("sms_control") + 1);
     expect(ROUTE_MODULE_MAP["/hr/sms-control"]).toBe("sms_control");
   });
 });
 
 describe("who may open SMS Control", () => {
-  it("keeps every address of every tab in the sms_control module, and no other", () => {
-    for (const path of everyPath) expect(moduleForPath(path.split("?")[0]), path).toBe("sms_control");
+  it("keeps every address of every tab in the sms_control module (each tab and section its own part of it), and no other", () => {
+    for (const path of everyPath) expect(moduleForPath(path.split("?")[0]), path).toMatch(/^sms_control(\.|$)/);
+    // the bare page and an unknown tab are the page itself; a tab or section is its own key
+    expect(moduleForPath(SMS_BASE)).toBe("sms_control");
+    expect(moduleForPath(`${SMS_BASE}/nope`)).toBe("sms_control");
+    for (const t of SMS_TABS) expect(moduleForPath(smsTabPath(t.value)), t.value).toBe(smsTabModule(t.value));
+    for (const s of SETTINGS_SECTIONS) {
+      expect(moduleForPath(smsTabPath("settings", s.value)), s.value).toBe(smsSectionModule(s.value));
+    }
     // a look-alike is not SMS Control, and the other control pages keep their own modules
     expect(moduleForPath("/hr/sms-control-archive")).toBeNull();
     expect(moduleForPath("/hr/whatsapp-control")).toBe("whatsapp_control");

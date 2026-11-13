@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +14,9 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useResumeScreening } from "@/contexts/ResumeScreeningContext";
+import { canApprove, isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import ResumeScreeningPipeline from "@/components/ResumeScreeningPipeline";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import {
@@ -1118,11 +1122,38 @@ function CandidateCard({ candidate, actions }: { candidate: ScreeningCandidateIt
   );
 }
 
-function CandidatePipelinePanel() {
+// The pipeline's status sub-tabs and each one's own key (Roles & Permissions -> Recruitment -> Resume screening ->
+// Candidate pipeline).
+const PIPELINE_TABS: readonly ScreeningCandidateStatus[] = ["shortlisted", "selected", "rejected", "not_shortlisted"];
+const PIPELINE_TAB_KEY: Partial<Record<ScreeningCandidateStatus, string>> = {
+  shortlisted: "recruitment.resume_screening.pipeline.shortlisted",
+  selected: "recruitment.resume_screening.pipeline.selected",
+  rejected: "recruitment.resume_screening.pipeline.rejected",
+  not_shortlisted: "recruitment.resume_screening.pipeline.not_shortlisted",
+};
+
+/** pageOrTabViewOnly: the page or the Candidate Pipeline tab is View only for this role (its notes are drawn above). */
+function CandidatePipelinePanel({ pageOrTabViewOnly }: { pageOrTabViewOnly: boolean }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<ScreeningCandidateStatus>("shortlisted");
-  const { data: candidates, isLoading } = useListScreeningCandidates({ status: tab });
+  const { user } = useAuth();
+  const level = useLevel();
+  // Only the status tabs this role may see: a hidden one is never shown (or fetched).
+  const visibleTabs = visibleItems(PIPELINE_TABS, (t) => PIPELINE_TAB_KEY[t], level);
+  const [askedTab, setTab] = useState<ScreeningCandidateStatus>("shortlisted");
+  const tab = pickVisible(askedTab, visibleTabs);
+  const subTabKey = PIPELINE_TAB_KEY[tab];
+  const subTabViewOnly = !pageOrTabViewOnly && !!subTabKey && level(subTabKey) === "view";
+  // Most of these buttons ("Mark Selected", "Move to Shortlist", "Schedule interviews") are not words the view-only lock
+  // knows, so they are disabled here while anything above this list is View only.
+  const readOnly = pageOrTabViewOnly || subTabViewOnly;
+  // Mark Selected / Mark Rejected / Reject are a decision (Account Management -> Approvals -> "resume_decision"): not
+  // offered without it; an account on that rule may decide on a View-only screen, like any other approval.
+  const canDecide = canApprove(user, "resume_decision");
+  const decisionLocked = readOnly && user?.approvalMode !== "explicit";
+  const { data: candidates, isLoading } = useListScreeningCandidates({ status: tab }, {
+    enabled: visibleTabs.length > 0,
+  } as never);
   const updateStatus = useUpdateCandidateStatus();
   const shortlistMutation = useShortlistCandidate();
   const rejectAllMutation = useSendRejectionEmailsAll();
@@ -1162,32 +1193,48 @@ function CandidatePipelinePanel() {
         <CardTitle className="text-base flex items-center gap-2">
           <ClipboardList size={16} /> Review candidates by status
         </CardTitle>
-        <PillTabs
-          size="sm"
-          value={tab}
-          onChange={(v) => setTab(v as ScreeningCandidateStatus)}
-          items={[
-            { value: "shortlisted", label: "Shortlisted" },
-            { value: "selected", label: "Selected" },
-            { value: "rejected", label: "Rejected" },
-            { value: "not_shortlisted", label: "Not Shortlisted" },
-          ]}
-        />
+        {visibleTabs.length > 0 && (
+          <PillTabs
+            size="sm"
+            value={tab}
+            onChange={(v) => setTab(v as ScreeningCandidateStatus)}
+            items={visibleItems(
+              [
+                { value: "shortlisted", label: "Shortlisted" },
+                { value: "selected", label: "Selected" },
+                { value: "rejected", label: "Rejected" },
+                { value: "not_shortlisted", label: "Not Shortlisted" },
+              ],
+              (t) => PIPELINE_TAB_KEY[t.value as ScreeningCandidateStatus],
+              level,
+            )}
+          />
+        )}
       </CardHeader>
       <CardContent className="space-y-3">
-        {tab === "selected" && (
+        <ViewOnlyTabNote show={subTabViewOnly} testId="pipeline-view-only" />
+        {visibleTabs.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-6">Nothing on this page is open to your role.</p>
+        )}
+        {visibleTabs.length > 0 && tab === "selected" && (
           <div className="flex justify-end">
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setInviteFor({ type: "bulk" })}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => setInviteFor({ type: "bulk" })}
+              disabled={readOnly}
+            >
               <CalendarClock size={13} /> Schedule interviews for all selected
             </Button>
           </div>
         )}
-        {tab === "rejected" && (
+        {visibleTabs.length > 0 && tab === "rejected" && (
           <div className="flex justify-end">
             <Button
               size="sm"
               className="gap-1.5 bg-rose-600 hover:bg-rose-700"
-              disabled={pendingRejectionCount === 0 || rejectAllMutation.isPending}
+              disabled={pendingRejectionCount === 0 || rejectAllMutation.isPending || readOnly}
               onClick={handleRejectAll}
             >
               <Mail size={13} />{" "}
@@ -1196,35 +1243,39 @@ function CandidatePipelinePanel() {
           </div>
         )}
 
-        {isLoading && <CircleLoader texts={["UK Textiles", "Resume Screening", "Loading"]} />}
-        {!isLoading && (candidates ?? []).length === 0 && (
+        {visibleTabs.length > 0 && isLoading && <CircleLoader texts={["UK Textiles", "Resume Screening", "Loading"]} />}
+        {visibleTabs.length > 0 && !isLoading && (candidates ?? []).length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-6">No candidates here yet.</p>
         )}
 
         <div className="grid gap-3 sm:grid-cols-2">
-          {(candidates ?? []).map((c) => (
+          {(visibleTabs.length > 0 ? (candidates ?? []) : []).map((c) => (
             <CandidateCard
               key={c.id}
               candidate={c}
               actions={
                 tab === "shortlisted" ? (
-                  <>
-                    <Button
-                      size="sm"
-                      className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700"
-                      onClick={() => setStatus(c.id, "selected", `${c.candidateName ?? "Candidate"} marked Selected`)}
-                    >
-                      <CheckCircle2 size={12} /> Mark Selected
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs gap-1 text-rose-600 border-rose-200"
-                      onClick={() => setStatus(c.id, "rejected", `${c.candidateName ?? "Candidate"} marked Rejected`)}
-                    >
-                      <XCircle size={12} /> Mark Rejected
-                    </Button>
-                  </>
+                  canDecide ? (
+                    <>
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700"
+                        onClick={() => setStatus(c.id, "selected", `${c.candidateName ?? "Candidate"} marked Selected`)}
+                        disabled={decisionLocked}
+                      >
+                        <CheckCircle2 size={12} /> Mark Selected
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1 text-rose-600 border-rose-200"
+                        onClick={() => setStatus(c.id, "rejected", `${c.candidateName ?? "Candidate"} marked Rejected`)}
+                        disabled={decisionLocked}
+                      >
+                        <XCircle size={12} /> Mark Rejected
+                      </Button>
+                    </>
+                  ) : null
                 ) : tab === "selected" ? (
                   <>
                     <Button
@@ -1232,6 +1283,7 @@ function CandidatePipelinePanel() {
                       variant="outline"
                       className="h-7 text-xs gap-1"
                       onClick={() => setInviteFor({ type: "single", candidate: c })}
+                      disabled={readOnly}
                     >
                       <CalendarClock size={12} /> {c.interviewInvitedAt ? "Re-send Invite" : "Send Interview Invite"}
                     </Button>
@@ -1240,14 +1292,17 @@ function CandidatePipelinePanel() {
                         Invited for {c.interviewDatetime ? new Date(c.interviewDatetime).toLocaleString() : "—"}
                       </Badge>
                     )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs gap-1 text-rose-600 border-rose-200 ml-auto"
-                      onClick={() => setStatus(c.id, "rejected", `${c.candidateName ?? "Candidate"} marked Rejected`)}
-                    >
-                      <XCircle size={12} /> Reject
-                    </Button>
+                    {canDecide && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1 text-rose-600 border-rose-200 ml-auto"
+                        onClick={() => setStatus(c.id, "rejected", `${c.candidateName ?? "Candidate"} marked Rejected`)}
+                        disabled={decisionLocked}
+                      >
+                        <XCircle size={12} /> Reject
+                      </Button>
+                    )}
                   </>
                 ) : tab === "rejected" ? (
                   c.rejectionEmailedAt ? (
@@ -1262,6 +1317,7 @@ function CandidatePipelinePanel() {
                     size="sm"
                     variant="outline"
                     className="h-7 text-xs gap-1"
+                    disabled={readOnly}
                     onClick={async () => {
                       await shortlistMutation.mutateAsync(c.id);
                       toast({ title: `${c.candidateName ?? "Candidate"} moved to Shortlisted` });
@@ -1288,8 +1344,28 @@ function CandidatePipelinePanel() {
 //  Main page
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ScreeningTab = "upload" | "bulk" | "rules" | "pipeline";
+const SCREENING_TABS: readonly ScreeningTab[] = ["upload", "bulk", "rules", "pipeline"];
+// Each tab's own key (Account Management -> Roles & Permissions -> Recruitment -> Resume screening).
+const SCREENING_TAB_KEY: Record<ScreeningTab, string> = {
+  upload: "recruitment.resume_screening.upload",
+  bulk: "recruitment.resume_screening.bulk",
+  rules: "recruitment.resume_screening.rules",
+  pipeline: "recruitment.resume_screening.pipeline",
+};
+
 export default function ResumeScreening() {
-  const [tab, setTab] = useState<"upload" | "bulk" | "rules" | "pipeline">("upload");
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted).
+  const visibleTabs = visibleItems(SCREENING_TABS, (t) => SCREENING_TAB_KEY[t], level);
+  const [askedTab, setTab] = useState<ScreeningTab>("upload");
+  const tab = pickVisible(askedTab, visibleTabs);
+  const pageViewOnly = isRouteViewOnly(user, location, moduleForPath(location));
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const tabViewOnly = visibleTabs.length > 0 && !pageViewOnly && level(SCREENING_TAB_KEY[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
 
   return (
     <HrLayout>
@@ -1303,21 +1379,38 @@ export default function ResumeScreening() {
           </p>
         </div>
 
-        <PillTabs
-          value={tab}
-          onChange={(v) => setTab(v as typeof tab)}
-          items={[
-            { value: "upload", label: "Upload Resume", icon: <FileText size={14} /> },
-            { value: "bulk", label: "Bulk Resume Upload", icon: <Files size={14} /> },
-            { value: "rules", label: "Company Rules & Expectations", icon: <ClipboardList size={14} /> },
-            { value: "pipeline", label: "Candidate Pipeline", icon: <UserSearch size={14} /> },
-          ]}
-        />
+        {visibleTabs.length === 0 ? (
+          <p
+            className="rounded-2xl border bg-white p-6 text-center text-sm text-muted-foreground"
+            data-testid="resume-screening-nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        ) : (
+          <PillTabs
+            value={tab}
+            onChange={(v) => setTab(v as ScreeningTab)}
+            items={visibleItems(
+              [
+                { value: "upload", label: "Upload Resume", icon: <FileText size={14} /> },
+                { value: "bulk", label: "Bulk Resume Upload", icon: <Files size={14} /> },
+                { value: "rules", label: "Company Rules & Expectations", icon: <ClipboardList size={14} /> },
+                { value: "pipeline", label: "Candidate Pipeline", icon: <UserSearch size={14} /> },
+              ],
+              (t) => SCREENING_TAB_KEY[t.value as ScreeningTab],
+              level,
+            )}
+          />
+        )}
 
-        {tab === "upload" && <UploadResumeTab />}
-        {tab === "bulk" && <BulkUploadTab />}
-        {tab === "rules" && <RulesTab />}
-        {tab === "pipeline" && <CandidatePipelinePanel />}
+        <ViewOnlyTabNote show={tabViewOnly} />
+
+        {visibleTabs.length > 0 && tab === "upload" && <UploadResumeTab />}
+        {visibleTabs.length > 0 && tab === "bulk" && <BulkUploadTab />}
+        {visibleTabs.length > 0 && tab === "rules" && <RulesTab />}
+        {visibleTabs.length > 0 && tab === "pipeline" && (
+          <CandidatePipelinePanel pageOrTabViewOnly={pageViewOnly || tabViewOnly} />
+        )}
       </div>
     </HrLayout>
   );

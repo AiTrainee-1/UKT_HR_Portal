@@ -16,6 +16,7 @@ import {
   useDeleteGateDevice,
   type GateDevice,
 } from "@/lib/api-client/custom-hooks";
+import { useLevel } from "@/lib/tab-access";
 import { Copy, KeyRound, Plus, ShieldCheck, Trash2 } from "lucide-react";
 
 // ── Gate Scanner device management ─────────────────────────────────────────
@@ -108,6 +109,8 @@ export function GateDevicesDialog({
   const [formError, setFormError] = useState<string | null>(null);
   const [resetTarget, setResetTarget] = useState<GateDevice | null>(null);
   const [resetPassword, setResetPassword] = useState("");
+  // View only on "Gate scanner devices" (outpass_visitors.outpass.gate_devices): the list opens, nothing in it can be changed
+  const viewOnly = useLevel()("outpass_visitors.outpass.gate_devices") === "view";
 
   const { data: gates, isLoading } = useListGateDevices();
   const createMutation = useCreateGateDevice();
@@ -186,7 +189,7 @@ export function GateDevicesDialog({
                     onToggleActive={toggleActive}
                     onResetPassword={(gate) => setResetTarget(gate)}
                     onDelete={handleDelete}
-                    isMutating={updateMutation.isPending || deleteMutation.isPending}
+                    isMutating={updateMutation.isPending || deleteMutation.isPending || viewOnly}
                   />
                 ))
               )}
@@ -240,7 +243,7 @@ export function GateDevicesDialog({
                 </div>
               </div>
               {formError && <p className="text-sm text-destructive">{formError}</p>}
-              <Button type="submit" className="gap-1.5" disabled={createMutation.isPending}>
+              <Button type="submit" className="gap-1.5" disabled={createMutation.isPending || viewOnly}>
                 <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create Gate"}
               </Button>
             </form>

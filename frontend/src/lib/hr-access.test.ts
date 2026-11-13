@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  APPROVAL_ALIASES,
+  APPROVAL_GROUPS,
   APPROVAL_KINDS,
   ASSISTANT_LOCKED,
   applyModuleOverrides,
@@ -9,13 +11,17 @@ import {
   clearOverride,
   effectiveApprovals,
   isLocked,
+  kindFor,
   legacyApprovals,
+  normalizeApprovals,
+  normalizeOverrideApprovals,
   overrideCount,
+  roleSwitch,
   setAllApprovals,
 } from "./hr-access";
 
 describe("the catalogue", () => {
-  it("lists the eleven kinds HR decides, the same as backend hr_access.APPROVAL_KEYS", () => {
+  it("lists every kind HR decides, each on its own, the same as backend hr_access.APPROVAL_KEYS", () => {
     expect(APPROVAL_KINDS.map((k) => k.key)).toEqual([
       "leave",
       "permission",
@@ -25,10 +31,42 @@ describe("the catalogue", () => {
       "on_duty",
       "on_duty_punch",
       "outpass",
-      "request",
+      "request_leave",
+      "request_salary_enquiry",
+      "request_shift_correction",
+      "request_advance",
+      "request_permission",
+      "request_general",
       "resignation",
-      "advance",
+      "interview_result",
+      "resume_decision",
+      "advance_general",
+      "advance_term",
+      "payroll_hold",
+      "payroll_add",
+      "payroll_finalize",
+      "payroll_mark_paid",
+      "payroll_release",
+      "payroll_mark_cleared",
+      "compensation_ot",
+      "bonus_status",
     ]);
+    // nothing hides behind a generic label: every kind has a heading of its own page
+    for (const k of APPROVAL_KINDS)
+      expect(
+        APPROVAL_GROUPS.some((g) => g.id === k.group),
+        k.key,
+      ).toBe(true);
+    expect(APPROVAL_ALIASES.request).toHaveLength(6);
+    expect(APPROVAL_ALIASES.advance).toEqual(["advance_general", "advance_term"]);
+  });
+
+  it("names the kind of one request: by its type, an advance by general / term", () => {
+    expect(kindFor("request", { requestType: "salary_enquiry" })).toBe("request_salary_enquiry");
+    expect(kindFor("request", { requestType: "unknown" })).toBe("request_general");
+    expect(kindFor("advance", { advanceType: "term" })).toBe("advance_term");
+    expect(kindFor("advance", {})).toBe("advance_general");
+    expect(kindFor("leave")).toBe("leave");
   });
 
   it("locks missing punches and attendance edits for HR Assistants only", () => {
@@ -65,7 +103,20 @@ describe("effective approvals", () => {
     expect(a.leave).toBe(true);
     expect(a.missing_punch).toBe(true);
     expect(a.permission).toBe(false); // view only
-    expect(a.advance).toBe(false);
+    expect(a.advance_general || a.advance_term).toBe(false);
+    expect(a.payroll_finalize).toBe(false); // payroll hidden
+  });
+
+  it("lets a kind split out of an older one follow the old switch until it has its own", () => {
+    const a = effectiveApprovals({
+      rolePermissions: { requests: "view", settlement: "edit", payroll: "edit" },
+      roleApprovals: { request: true, request_general: false, advance: false },
+      category: "hr_manager",
+    });
+    expect(a.request_salary_enquiry).toBe(true);
+    expect(a.request_general).toBe(false);
+    expect(a.advance_term).toBe(false);
+    expect(a.payroll_finalize).toBe(true); // a "needs Edit" kind never set: edit = may, as before
   });
 
   it("follows the role's switches, then the account's own changes", () => {
@@ -87,7 +138,7 @@ describe("effective approvals", () => {
       overrides: { approvals: { missing_punch: true } },
       category: "hr_assistant",
     });
-    expect(a.advance).toBe(false); // settlement hidden
+    expect(a.advance_general).toBe(false); // settlement hidden
     expect(a.missing_punch).toBe(false);
     expect(a.attendance_correction).toBe(false);
   });
@@ -144,5 +195,55 @@ describe("canApprove", () => {
     expect(canApprove(user, "leave")).toBe(true);
     expect(canApprove(user, "missing_punch")).toBe(false);
     expect(canApprove(user, "advance")).toBe(false);
+  });
+
+  it("reads an old kind as any of the kinds that replaced it, and an older backend's own old key", () => {
+    const user = {
+      role: "hr",
+      approvalMode: "explicit" as const,
+      approvals: { advance_general: false, advance_term: true, request_general: false },
+    };
+    expect(canApprove(user, "advance")).toBe(true);
+    expect(canApprove(user, "request")).toBe(false);
+    expect(canApprove({ ...user, approvals: { request: true } }, "request")).toBe(true);
+  });
+});
+
+describe("the editors' view of a role's switches", () => {
+  const perms = { requests: "view", payroll: "edit", bonus: "view" } as const;
+
+  it("spreads an old switch over the kinds that replaced it and keeps needs-Edit kinds following Edit", () => {
+    const n = normalizeApprovals({ request: true, advance: false, leave: true }, { ...perms });
+    expect(APPROVAL_ALIASES.request.every((k) => n[k])).toBe(true);
+    expect(n.advance_general || n.advance_term).toBe(false);
+    expect(n.payroll_finalize).toBe(true); // payroll edit, never set
+    expect(n.bonus_status).toBe(false); // bonus only view
+    expect("request" in n || "advance" in n).toBe(false);
+  });
+
+  it("reads a role switch: own, then the old one, then Edit for a needs-Edit kind", () => {
+    const kind = (key: string) => APPROVAL_KINDS.find((k) => k.key === key)!;
+    expect(roleSwitch({ request: true }, kind("request_general"), "view")).toBe(true);
+    expect(roleSwitch({ request: true, request_general: false }, kind("request_general"), "view")).toBe(false);
+    expect(roleSwitch({}, kind("payroll_hold"), "edit")).toBe(true);
+    expect(roleSwitch({}, kind("leave"), "edit")).toBe(false);
+  });
+
+  it("spreads an account's old switch, without overriding the new ones it set", () => {
+    expect(normalizeOverrideApprovals({ advance: true, advance_term: false })).toEqual({
+      advance_general: true,
+      advance_term: false,
+    });
+    expect(normalizeOverrideApprovals(undefined)).toEqual({});
+  });
+
+  it("starts explicit approvals without the needs-Edit kinds, so they keep following Edit", () => {
+    const a = legacyApprovals({ ...perms });
+    expect("payroll_finalize" in a).toBe(false);
+    expect(a.permission).toBe(false);
+  });
+
+  it("counts an old switch for every kind it covers", () => {
+    expect(approvalCount({ request: true })).toBe(APPROVAL_ALIASES.request.length);
   });
 });

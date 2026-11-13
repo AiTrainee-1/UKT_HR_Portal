@@ -10,6 +10,7 @@ import { dateShort, rangeLabel, shiftsText, todayIst, type CompensationUrl } fro
 import { NestedTabs } from "@/components/ui/nested-tabs";
 import { PeriodBar, isPeriod } from "../period";
 import { LEAVE_NESTED, subPath } from "../routes";
+import { keepOpenNested, useCanOpen } from "../visible";
 import { CELL, PersonCell, Pager, StatusChip, SwitchOffNotice, TABLE_HEAD, Notice, usePaged } from "../ui";
 
 type SetUrl = (patch: Partial<CompensationUrl>) => void;
@@ -33,6 +34,7 @@ const punchesText = (row: Pick<BirthdayRow, "firstPunch" | "lastPunch">): string
  * The year of birth is never shown. Two nested subtabs: the list (Today / Week / Month, the figures and the table) and How it works.
  */
 export function BirthdaysPart({ url, setUrl, nested }: { url: CompensationUrl; setUrl: SetUrl; nested: string }) {
+  const canOpen = useCanOpen();
   const today = useMemo(() => todayIst(), []);
   const period = isPeriod(url.bperiod) ? url.bperiod : "today";
   const date = url.bdate || today;
@@ -56,10 +58,10 @@ export function BirthdaysPart({ url, setUrl, nested }: { url: CompensationUrl; s
         value={nested}
         testId="birthday-nested"
         label="Sections of Birthdays"
-        items={[
+        items={keepOpenNested(canOpen, "leave", "birthdays", [
           { value: "list", label: LEAVE_NESTED.birthdays[0].label, count: data ? rows.length : undefined },
           { value: "how", label: LEAVE_NESTED.birthdays[1].label },
-        ]}
+        ])}
       >
         {nested === "list" && (
           <>

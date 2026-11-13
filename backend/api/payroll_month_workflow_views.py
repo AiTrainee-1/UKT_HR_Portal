@@ -20,6 +20,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import hr_access
 from . import payroll_month_workflow as wf
 from .audit_utils import log_action
 from .auth import require_hr
@@ -127,6 +128,8 @@ def payroll_month_skipped(request: Request) -> Response:
 @api_view(["POST"])
 @require_hr
 def payroll_hold(request: Request, pk: int) -> Response:
+    if refused := hr_access.approval_refusal(request, "payroll_hold"):
+        return refused
     payroll = _staff_payroll(request, pk)
     if payroll is None:
         return _error("Not found", 404)
@@ -157,6 +160,8 @@ def payroll_hold(request: Request, pk: int) -> Response:
 @api_view(["POST"])
 @require_hr
 def payroll_add_to_payroll(request: Request, pk: int) -> Response:
+    if refused := hr_access.approval_refusal(request, "payroll_add"):
+        return refused
     payroll = _staff_payroll(request, pk)
     if payroll is None:
         return _error("Not found", 404)
@@ -183,6 +188,8 @@ def payroll_add_to_payroll(request: Request, pk: int) -> Response:
 def payroll_release_and_pay(request: Request, pk: int) -> Response:
     if not (wf.can_edit_payroll(request) and wf.is_whole_company(request)):
         return _error(WHOLE_COMPANY_ONLY, 403)
+    if refused := hr_access.approval_refusal(request, "payroll_release"):
+        return refused
     payroll = _staff_payroll(request, pk)
     if payroll is None:
         return _error("Not found", 404)
@@ -216,6 +223,8 @@ def payroll_release_and_pay(request: Request, pk: int) -> Response:
 def payroll_month_finalize(request: Request) -> Response:
     if not (wf.can_edit_payroll(request) and wf.is_whole_company(request)):
         return _error(WHOLE_COMPANY_ONLY, 403)
+    if refused := hr_access.approval_refusal(request, "payroll_finalize"):
+        return refused
     period = _period(request.data)
     if period is None:
         return _error("month (1-12) and year are required")
@@ -258,6 +267,8 @@ def payroll_month_finalize(request: Request) -> Response:
 def payroll_month_paid(request: Request) -> Response:
     if not (wf.can_edit_payroll(request) and wf.is_whole_company(request)):
         return _error(WHOLE_COMPANY_ONLY, 403)
+    if refused := hr_access.approval_refusal(request, "payroll_mark_paid"):
+        return refused
     period = _period(request.data)
     if period is None:
         return _error("month (1-12) and year are required")

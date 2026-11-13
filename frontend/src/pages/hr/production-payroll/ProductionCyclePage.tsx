@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, Factory, Loader2, RefreshCw, Settings as SettingsIcon, Users } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { EmptyNote, PayrollLoader } from "@/components/payroll/kit/parts";
 import { useIsRefreshingPayroll, useRefreshPayroll } from "@/components/payroll/kit/use-payroll-actions";
@@ -8,6 +8,7 @@ import { periodParam, useUrlParams } from "@/components/payroll/kit/url-state";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Separator } from "@/components/ui/separator";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import {
   PAY_CYCLE_INFO,
   useProductionCycles,
@@ -15,6 +16,8 @@ import {
   type CyclePeriod,
   type PayCycle,
 } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
+import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { SetupNeeded, UnassignedNotice, cycleSettingsHref, errorText } from "./CycleNotices";
 import { EmployeesTab } from "./EmployeesTab";
 import {
@@ -33,6 +36,14 @@ import { PayslipTab } from "./PayslipTab";
 import { PeriodPicker } from "./PeriodPicker";
 import { SalaryTab } from "./SalaryTab";
 
+// Each tab's own permission key (the same on every cycle page); a key with no setting follows "production_payroll".
+const TAB_KEY: Record<ProductionTab, string> = {
+  payroll: "production_payroll.payroll",
+  employees: "production_payroll.employees",
+  salary: "production_payroll.salary",
+  payslip: "production_payroll.payslip",
+};
+
 const TAB_LABEL: Record<ProductionTab, string> = {
   payroll: "Payroll",
   employees: "Employees",
@@ -49,7 +60,18 @@ const TAB_LABEL: Record<ProductionTab, string> = {
 export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
   const info = PAY_CYCLE_INFO[cycle];
   const [url, setUrl] = useUrlParams(PRODUCTION_PAGE_URL_DEFAULTS);
-  const tab: ProductionTab = isProductionTab(url.tab) ? url.tab : "payroll";
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted), also when the address asks for it.
+  const visibleTabs = visibleItems(PRODUCTION_TABS, (t) => TAB_KEY[t], level);
+  const tab: ProductionTab = pickVisible(isProductionTab(url.tab) ? url.tab : "payroll", visibleTabs);
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const tabViewOnly =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(TAB_KEY[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
   const slipMonth = useMemo(() => resolveSlipMonth({ month: url.month, year: url.year }), [url.month, url.year]);
   const refresh = useRefreshPayroll();
   const refreshing = useIsRefreshingPayroll();
@@ -88,12 +110,23 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
   const changeSlipMonth = (month: number, year: number) => setUrl({ month: String(month), year: String(year) });
   // Every tab keeps its own filters under its own keys, so switching tabs never mixes them (and the filters of a tab
   // that was left are still there when it is opened again).
-  const changeTab = (next: string) => setUrl({ tab: next });
+  const changeTab = (next: string) => {
+    if (visibleTabs.includes(next as ProductionTab)) setUrl({ tab: next });
+  };
 
-  const showPeriodBar = tab !== "payslip" && !cycles.isLoading && !needsSetup;
+  const showPeriodBar = visibleTabs.length > 0 && tab !== "payslip" && !cycles.isLoading && !needsSetup;
 
   let body: ReactNode;
-  if (tab === "payslip") {
+  if (visibleTabs.length === 0) {
+    body = (
+      <p
+        className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+        data-testid="pcp-nothing-open"
+      >
+        Nothing on this page is open to your role.
+      </p>
+    );
+  } else if (tab === "payslip") {
     body = <PayslipTab cycle={cycle} month={slipMonth.month} year={slipMonth.year} onPeriodChange={changeSlipMonth} />;
   } else if (cycles.isLoading) {
     body = <PayrollLoader label="Loading the pay cycle" />;
@@ -177,7 +210,7 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
         <UnassignedNotice unassigned={cycles.data?.unassigned ?? 0} />
 
         <PillTabs
-          items={PRODUCTION_TABS.map((t) => ({
+          items={visibleTabs.map((t) => ({
             value: t,
             label: TAB_LABEL[t],
             ...(t === "employees" && summary ? { count: summary.assigned } : {}),
@@ -188,6 +221,8 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
         />
 
         <Separator />
+
+        <ViewOnlyTabNote show={tabViewOnly} />
 
         {showPeriodBar && (
           <PeriodPicker

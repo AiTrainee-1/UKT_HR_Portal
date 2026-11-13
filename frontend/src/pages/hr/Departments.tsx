@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { Briefcase, Building2, CircleOff, Download, Factory, Plus, Search, Users, X } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { EmployeeAssignmentLookup } from "@/components/EmployeeAssignmentLookup";
@@ -18,9 +19,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useAuth } from "@/contexts/AuthContext";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useAssignEmployee, useDeleteDepartment } from "@/lib/api-client";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import AssignDialog from "./org-structure/AssignDialog";
 import DepartmentDialog from "./org-structure/DepartmentDialog";
 import DepartmentList from "./org-structure/DepartmentList";
@@ -50,8 +53,22 @@ import {
 } from "./org-structure/logic";
 import { BranchChip, EmptyState, LoadError, StatCard } from "./org-structure/parts";
 
+type View = "list" | "find";
+const VIEWS: readonly View[] = ["list", "find"];
+// Each tab's own key (Account Management -> Roles & Permissions -> Employees -> Departments); the Find tab's two sub-tabs
+// are keyed inside EmployeeAssignmentLookup.
+const VIEW_KEY: Record<View, string> = {
+  list: "employees.departments.list",
+  find: "employees.departments.find",
+};
+const FIND_SUB_TAB_KEYS = {
+  search: "employees.departments.find.search",
+  unassigned: "employees.departments.find.unassigned",
+};
+
 export default function Departments() {
   const { user } = useAuth();
+  const [location] = useLocation();
   const { toast } = useToast();
   const refresh = useRefreshOrg();
   const overview = useDepartmentsOverview();
@@ -59,7 +76,17 @@ export default function Departments() {
   const branches = useMemo(() => overview.data?.branches ?? [], [overview.data]);
   const summary = useMemo(() => summarizeDepartments(rows, overview.data?.unassigned), [rows, overview.data]);
 
-  const [view, setView] = useState<"list" | "find">("list");
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted).
+  const visibleViews = visibleItems(VIEWS, (v) => VIEW_KEY[v], level);
+  const [askedView, setView] = useState<View>("list");
+  const view = pickVisible(askedView, visibleViews);
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const viewOnlyTab =
+    visibleViews.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(VIEW_KEY[view]) === "view";
+  useViewOnlyLock(viewOnlyTab, view);
   const [filters, setFilters] = useState<DeptFilters>(NO_DEPT_FILTERS);
   const [sort, setSort] = useState<DeptSort>("name-asc");
   const [page, setPage] = useState(1);
@@ -207,22 +234,38 @@ export default function Departments() {
           />
         </div>
 
-        <PillTabs
-          items={[
-            { value: "list", label: "Departments", icon: <Building2 size={14} />, count: rows.length },
-            { value: "find", label: "Find & assign employees", icon: <Users size={14} /> },
-          ]}
-          value={view}
-          onChange={(v) => setView(v as "list" | "find")}
-        />
+        {visibleViews.length > 0 && (
+          <PillTabs
+            items={visibleItems(
+              [
+                { value: "list", label: "Departments", icon: <Building2 size={14} />, count: rows.length },
+                { value: "find", label: "Find & assign employees", icon: <Users size={14} /> },
+              ],
+              (t) => VIEW_KEY[t.value as View],
+              level,
+            )}
+            value={view}
+            onChange={(v) => setView(v as View)}
+          />
+        )}
 
-        {view === "find" ? (
+        <ViewOnlyTabNote show={viewOnlyTab} />
+
+        {visibleViews.length === 0 ? (
+          <p
+            className="rounded-2xl border bg-white p-6 text-center text-sm text-muted-foreground"
+            data-testid="departments-nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        ) : view === "find" ? (
           <EmployeeAssignmentLookup
             kind="department"
             options={rows.map((d) => ({
               id: d.id,
               label: d.branchName && branches.length > 1 ? `${d.name} (${d.branchName})` : d.name,
             }))}
+            subTabKeys={FIND_SUB_TAB_KEYS}
           />
         ) : (
           <div className="space-y-3">

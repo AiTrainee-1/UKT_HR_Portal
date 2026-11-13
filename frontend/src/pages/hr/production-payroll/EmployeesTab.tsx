@@ -29,6 +29,7 @@ import {
   type PayCycle,
   type PeriodEmployee,
 } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { NotEndedNote, PeriodError } from "./CycleNotices";
 import { coverageText } from "./coverage";
@@ -214,15 +215,17 @@ export function EmployeesTab({
             data-testid="pcp-roster-bulk"
           >
             <span className="text-xs font-semibold text-gray-700">{chosen.length} selected</span>
-            <Button
-              size="sm"
-              className="h-8 gap-1.5 bg-amber-600 hover:bg-amber-700"
-              disabled={isGenerating || !ended}
-              onClick={() => run(chosen)}
-              data-testid="pcp-generate-selected"
-            >
-              <Play size={12} /> Generate selected ({chosen.length})
-            </Button>
+            <Gate k="production_payroll.generate">
+              <Button
+                size="sm"
+                className="h-8 gap-1.5 bg-amber-600 hover:bg-amber-700"
+                disabled={isGenerating || !ended}
+                onClick={() => run(chosen)}
+                data-testid="pcp-generate-selected"
+              >
+                <Play size={12} /> Generate selected ({chosen.length})
+              </Button>
+            </Gate>
             <Button size="sm" variant="ghost" className="h-8" onClick={() => setSelected(new Set())}>
               Clear selection
             </Button>

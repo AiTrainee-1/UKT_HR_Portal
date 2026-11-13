@@ -1,50 +1,41 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { PillTabs } from "@/components/ui/pill-tabs";
-import { Eye, GitBranch, Users } from "lucide-react";
-import { useAuth, permissionLevel, isRouteViewOnly } from "@/contexts/AuthContext";
-import { lockMutatingControls } from "@/lib/view-only-lock";
+import { GitBranch, Users } from "lucide-react";
+import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
+import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import HodAssignmentTab from "./user-management/HodAssignmentTab";
 import ApprovalWorkflowControl from "./user-management/ApprovalWorkflowControl";
 import { USER_MANAGEMENT_TAB_MODULE } from "./user-management/constants";
+
+const TABS = [
+  { value: "hod", label: "HOD Assignment", icon: <Users size={13} /> },
+  { value: "approvals", label: "Approval Workflow Control", icon: <GitBranch size={13} /> },
+];
 
 // User Management: HOD Assignment (who the Department Heads are and what each may decide) and Approval Workflow Control
 // (how every kind of request is approved: who is responsible for each step, in what order, on or off).
 export default function UserManagement() {
   const { user } = useAuth();
-  const tabLevel = (t: string) => permissionLevel(user, USER_MANAGEMENT_TAB_MODULE[t] ?? "user_management");
-  const firstVisibleTab = () => Object.keys(USER_MANAGEMENT_TAB_MODULE).find((t) => tabLevel(t) !== "hidden");
-  // Start on a tab this role can see, so a role without HOD Assignment never mounts it (and never calls its API).
+  const level = useLevel();
+  const tabLevel = (t: string) => level(USER_MANAGEMENT_TAB_MODULE[t] ?? "user_management");
+  const visibleTabs = visibleItems(TABS, (t) => USER_MANAGEMENT_TAB_MODULE[t.value], level);
   // '?tab=approvals' (the "Change" link beside each screen's approval pipeline) opens Approval Workflow Control.
-  const [tab, setTab] = useState(() => {
-    const asked = new URLSearchParams(window.location.search).get("tab") ?? "";
-    return asked in USER_MANAGEMENT_TAB_MODULE && tabLevel(asked) !== "hidden" ? asked : (firstVisibleTab() ?? "hod");
-  });
+  const [asked, setTab] = useState(() => new URLSearchParams(window.location.search).get("tab") ?? "hod");
+  // The tab shown is always one this role can see (also when it came from the URL, or a permission changed under an
+  // open page), so a role without HOD Assignment never mounts it (and never calls its API).
+  const tab = pickVisible(
+    asked,
+    visibleTabs.map((t) => t.value),
+  );
 
   // HrLayout already shows the banner and locks the page when NEITHER tab is editable (ROUTE_OR_MODULES); the per-tab
   // banner and lock below are for a role that can edit one tab but only view the other.
   const pageViewOnly = isRouteViewOnly(user, "/hr/user-management", "user_management");
-  const isTabViewOnly = !pageViewOnly && tabLevel(tab) === "view";
-
-  // A role's permissions can change under an open page: move off a tab that has just become hidden.
-  useEffect(() => {
-    if (tabLevel(tab) === "hidden") {
-      const firstVisible = firstVisibleTab();
-      if (firstVisible) setTab(firstVisible);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, tab]);
-
+  const isTabViewOnly = visibleTabs.length > 0 && !pageViewOnly && tabLevel(tab) === "view";
   // Only the active tab is mounted, so locking the body while it is view-only touches just that tab's controls.
-  useEffect(() => {
-    if (!isTabViewOnly) return;
-    const relock = () => lockMutatingControls(document.body);
-    relock();
-    const observer = new MutationObserver(relock);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [isTabViewOnly, tab]);
+  useViewOnlyLock(isTabViewOnly, tab);
 
   return (
     <HrLayout>
@@ -56,38 +47,32 @@ export default function UserManagement() {
           </p>
         </div>
 
-        <Tabs value={tab} onValueChange={setTab}>
-          <PillTabs
-            items={[
-              { value: "hod", label: "HOD Assignment", icon: <Users size={13} /> },
-              { value: "approvals", label: "Approval Workflow Control", icon: <GitBranch size={13} /> },
-            ].filter((t) => tabLevel(t.value) !== "hidden")}
-            value={tab}
-            onChange={setTab}
-            size="sm"
-          />
+        {visibleTabs.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="user-management-nothing-open">
+            Nothing on this page is open to your role.
+          </p>
+        ) : (
+          <Tabs value={tab} onValueChange={setTab}>
+            <PillTabs items={visibleTabs} value={tab} onChange={setTab} size="sm" />
 
-          {isTabViewOnly && (
-            <div
-              className="flex items-center gap-2 mt-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold"
-              style={{
-                background: "rgba(245,158,11,0.08)",
-                color: "#b45309",
-                boxShadow: "inset 3px 3px 8px rgba(245,158,11,0.06), inset -3px -3px 8px rgba(255,255,255,0.9)",
-              }}
-            >
-              <Eye size={15} strokeWidth={2} />
-              View only -browse and inspect freely, changes can't be saved.
-            </div>
-          )}
+            {isTabViewOnly && (
+              <div className="mt-3">
+                <ViewOnlyTabNote show />
+              </div>
+            )}
 
-          <TabsContent value="hod" className="mt-4 focus-visible:outline-none">
-            <HodAssignmentTab />
-          </TabsContent>
-          <TabsContent value="approvals" className="mt-4 focus-visible:outline-none">
-            <ApprovalWorkflowControl />
-          </TabsContent>
-        </Tabs>
+            {tab === "hod" && (
+              <TabsContent value="hod" className="mt-4 focus-visible:outline-none">
+                <HodAssignmentTab />
+              </TabsContent>
+            )}
+            {tab === "approvals" && (
+              <TabsContent value="approvals" className="mt-4 focus-visible:outline-none">
+                <ApprovalWorkflowControl />
+              </TabsContent>
+            )}
+          </Tabs>
+        )}
       </div>
     </HrLayout>
   );

@@ -1,9 +1,11 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { useLocation } from "wouter";
 import { CalendarClock, Layers, Plus, UserMinus, Users } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useListEmployeesLite } from "@/lib/api-client";
 import {
   useListShiftAssignments,
@@ -12,6 +14,8 @@ import {
   type ShiftItem,
   type ShiftType,
 } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
+import { Gate, pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import AssignDialog, { type AssignDialogStart } from "./shifts/AssignDialog";
 import AssignmentsTab from "./shifts/AssignmentsTab";
@@ -21,6 +25,14 @@ import UnassignedTab from "./shifts/UnassignedTab";
 import { unassignedOf, type Person } from "./shifts/shift-logic";
 
 type Tab = "shifts" | "assignments" | "unassigned";
+
+// Each tab's own permission key (Account Management -> Roles & Permissions); a key with no setting follows "shifts".
+const TAB_KEY: Record<Tab, string> = {
+  shifts: "shifts.shifts",
+  assignments: "shifts.assignments",
+  unassigned: "shifts.unassigned",
+};
+const TABS = Object.keys(TAB_KEY) as Tab[];
 
 function StatTile({
   icon,
@@ -72,7 +84,22 @@ function StatTile({
  * or exclude employees, departments and designations, and read the preview before anything is saved.
  */
 export default function ManageShift() {
-  const [tab, setTab] = useState<Tab>("shifts");
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  // Only the tabs this role may see; a hidden tab is never shown (or mounted), even when something asks for it.
+  const visibleTabs = visibleItems(TABS, (t) => TAB_KEY[t], level);
+  const [askedTab, setAskedTab] = useState<Tab>("shifts");
+  const tab = pickVisible(askedTab, visibleTabs);
+  const setTab = (t: Tab) => {
+    if (visibleTabs.includes(t)) setAskedTab(t);
+  };
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const tabViewOnly =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(TAB_KEY[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
   const [form, setForm] = useState<{ editing: ShiftItem | null; type: ShiftType } | null>(null);
   const [assign, setAssign] = useState<AssignDialogStart | null>(null);
   const [focusShiftId, setFocusShiftId] = useState<number | null>(null);
@@ -118,9 +145,15 @@ export default function ManageShift() {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <RefreshButton />
-            <Button className="gap-2" onClick={() => setForm({ editing: null, type: "staff" })} data-testid="new-shift">
-              <Plus size={16} /> New Shift
-            </Button>
+            <Gate k="shifts.shifts">
+              <Button
+                className="gap-2"
+                onClick={() => setForm({ editing: null, type: "staff" })}
+                data-testid="new-shift"
+              >
+                <Plus size={16} /> New Shift
+              </Button>
+            </Gate>
           </div>
         </div>
 
@@ -139,7 +172,7 @@ export default function ManageShift() {
             tint="bg-emerald-50 text-emerald-600"
             value={assignments.length}
             label="Employees on a shift"
-            onClick={() => setTab("assignments")}
+            onClick={visibleTabs.includes("assignments") ? () => setTab("assignments") : undefined}
           />
           <StatTile
             testId="stat-unassigned"
@@ -147,8 +180,14 @@ export default function ManageShift() {
             tint={without > 0 ? "bg-red-50 text-red-600" : "bg-gray-50 text-gray-400"}
             value={without}
             label="Without a shift"
-            sub={without > 0 ? "Open the list to assign them" : "Everyone is covered"}
-            onClick={() => setTab("unassigned")}
+            sub={
+              without === 0
+                ? "Everyone is covered"
+                : visibleTabs.includes("unassigned")
+                  ? "Open the list to assign them"
+                  : undefined
+            }
+            onClick={visibleTabs.includes("unassigned") ? () => setTab("unassigned") : undefined}
           />
           <StatTile
             testId="stat-unused"
@@ -159,33 +198,48 @@ export default function ManageShift() {
           />
         </div>
 
-        <PillTabs
-          items={[
-            { value: "shifts", label: "Shifts", count: shifts.length, icon: <Layers size={13} /> },
-            {
-              value: "assignments",
-              label: (
-                <>
-                  <span className="hidden sm:inline">Assignments</span>
-                  <span className="sm:hidden">Assigned</span>
-                </>
-              ),
-              count: assignments.length,
-              icon: <Users size={13} />,
-            },
-            {
-              value: "unassigned",
-              label: "Unassigned",
-              count: without,
-              icon: <UserMinus size={13} />,
-              color: "#dc2626",
-            },
-          ]}
-          value={tab}
-          onChange={(v) => setTab(v as Tab)}
-        />
+        {visibleTabs.length === 0 && (
+          <p
+            className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+            data-testid="shifts-nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        )}
+        {visibleTabs.length > 0 && (
+          <PillTabs
+            items={visibleItems(
+              [
+                { value: "shifts", label: "Shifts", count: shifts.length, icon: <Layers size={13} /> },
+                {
+                  value: "assignments",
+                  label: (
+                    <>
+                      <span className="hidden sm:inline">Assignments</span>
+                      <span className="sm:hidden">Assigned</span>
+                    </>
+                  ),
+                  count: assignments.length,
+                  icon: <Users size={13} />,
+                },
+                {
+                  value: "unassigned",
+                  label: "Unassigned",
+                  count: without,
+                  icon: <UserMinus size={13} />,
+                  color: "#dc2626",
+                },
+              ],
+              (t) => TAB_KEY[t.value as Tab],
+              level,
+            )}
+            value={tab}
+            onChange={(v) => setTab(v as Tab)}
+          />
+        )}
+        <ViewOnlyTabNote show={tabViewOnly} />
 
-        {tab === "shifts" && (
+        {visibleTabs.includes("shifts") && tab === "shifts" && (
           <ShiftsTab
             shifts={shifts}
             loading={isLoading}
@@ -195,7 +249,7 @@ export default function ManageShift() {
             onViewPeople={viewPeople}
           />
         )}
-        {tab === "assignments" && (
+        {visibleTabs.includes("assignments") && tab === "assignments" && (
           <AssignmentsTab
             focusShiftId={focusShiftId}
             onAssignToShift={(id) => {
@@ -205,7 +259,7 @@ export default function ManageShift() {
             onMove={moveAway}
           />
         )}
-        {tab === "unassigned" && <UnassignedTab onAssign={assignPeople} />}
+        {visibleTabs.includes("unassigned") && tab === "unassigned" && <UnassignedTab onAssign={assignPeople} />}
 
         {form && (
           <ShiftFormDialog

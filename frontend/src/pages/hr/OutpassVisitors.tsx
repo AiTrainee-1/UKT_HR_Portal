@@ -3,8 +3,9 @@ import { Coffee, DoorOpen, UserRound } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLevel } from "@/lib/tab-access";
 import { OutpassTab } from "./outpass-visitors/outpass/OutpassTab";
-import { cleanGatePath, readGatePath, resolveGatePath, type GatePageKey } from "./outpass-visitors/routes";
+import { cleanGatePath, readGatePath, resolveGatePath, subsOf, type GatePageKey } from "./outpass-visitors/routes";
 import { TeaBreakTab } from "./outpass-visitors/tea-break/TeaBreakTab";
 import { VisitorsTab } from "./outpass-visitors/visitors/VisitorsTab";
 
@@ -32,15 +33,18 @@ const HEADING: Record<GatePageKey, { icon: typeof DoorOpen; title: string; descr
  * deliberately no in-page switcher, so none of the three shows any trace of the others). The page is the first path segment
  * and its tabs are the ones after it (/outpass/overview/passes, /tea-break/rule): a path that stops early, or names an
  * unknown tab, is replaced by the first one (routes.ts). Visitors is one list, so it has no tabs.
+ * Each page and tab is an address with its own permission key (the route guard blocks a hidden one, HrLayout locks a View-only
+ * one): "the first one" is the first this role may see, and a page whose tabs are all hidden for it says so.
  */
 export default function OutpassVisitors() {
   const { user } = useAuth();
   const isBranchScoped = !!user?.branchId;
   const [location] = useLocation();
   const search = useSearch();
+  const level = useLevel();
 
   const here = cleanGatePath(location);
-  const target = resolveGatePath(here);
+  const target = resolveGatePath(here, (key) => level(key) !== "hidden");
   if (target !== here) return <Redirect to={`${target}${search ? `?${search}` : ""}`} replace />;
 
   const { page, sub, nested } = readGatePath(here);
@@ -59,7 +63,14 @@ export default function OutpassVisitors() {
           <RefreshButton />
         </div>
 
-        {page === "outpass" ? (
+        {subsOf(page).length > 0 && sub === null ? (
+          <p
+            className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
+            data-testid="nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        ) : page === "outpass" ? (
           <OutpassTab isBranchScoped={isBranchScoped} sub={sub!} nested={nested} />
         ) : page === "visitors" ? (
           <VisitorsTab isBranchScoped={isBranchScoped} />

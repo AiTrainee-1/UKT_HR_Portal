@@ -34,7 +34,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass
 
-from .permission_registry import MODULE_TREE, effective_permissions, resolve_permission
+from .permission_registry import all_module_keys, effective_permissions, resolve_permission
 
 ADMIN = "admin"
 HR_MANAGER = "hr_manager"
@@ -55,37 +55,275 @@ LEVELS = ("hidden", "view", "edit")
 
 @dataclass(frozen=True)
 class ApprovalKind:
-    key: str  # the approval workflow key (approval_workflow.DEFINITIONS)
+    key: str  # the approval kind (the approval workflow key where it has one: approval_workflow.DEFINITIONS)
     label: str
     module: str  # the permission module that owns the requests (the old rule: edit on it = may approve them)
     description: str
+    group: str = ""  # the heading it is listed under in Account Management (APPROVAL_GROUPS)
+    # An older, wider kind this one was split out of (2026-11-11: "request" -> one kind per request type, "advance" -> general
+    # / term). A role or account that set the old switch and not this one keeps what the old switch said.
+    replaces: str | None = None
+    # A decision that always needed Edit on its module (Payroll Done, Bonus approval ...): the switch is an extra right on
+    # top of Edit, never instead of it, and a role with approvals of its own that never set it keeps "edit = approve".
+    needs_edit: bool = False
+    note: str = ""  # an extra condition, in plain words (a login for the whole company ...)
+
+    def to_json(self) -> dict:
+        out = {
+            "key": self.key,
+            "label": self.label,
+            "module": self.module,
+            "description": self.description,
+            "group": self.group,
+        }
+        if self.replaces:
+            out["replaces"] = self.replaces
+        if self.needs_edit:
+            out["needsEdit"] = True
+        if self.note:
+            out["note"] = self.note
+        return out
 
 
-# Every kind of request HR decides. Holiday / Sunday work is not here: only a Department Head decides it.
+# The headings of the Approvals list: the page each kind of decision is made on.
+APPROVAL_GROUPS: tuple[dict, ...] = (
+    {"id": "leave", "label": "Leave & Holiday"},
+    {"id": "casual_leave", "label": "Casual Leave"},
+    {"id": "attendance", "label": "Attendance"},
+    {"id": "geo", "label": "Geo Attendance"},
+    {"id": "outpass", "label": "Outpass"},
+    {"id": "other_requests", "label": "Requests page - Other requests (the employee request form)"},
+    {"id": "recruitment", "label": "Recruitment"},
+    {"id": "settlement", "label": "Settlement"},
+    {"id": "payroll", "label": "Staff Payroll"},
+    {"id": "compensation", "label": "Compensation"},
+    {"id": "bonus", "label": "Bonus"},
+)
+
+_WHOLE_COMPANY = "Only for a login that covers every branch, as before."
+
+# Every kind of decision HR makes, each with its own switch. Holiday / Sunday work is in INFO_KINDS: only a Department Head
+# decides it.
 APPROVAL_KINDS: tuple[ApprovalKind, ...] = (
-    ApprovalKind("leave", "Leave", "leave", "Approve or reject employees' leave requests."),
+    ApprovalKind("leave", "Leave requests", "leave", "Approve or reject leave and half-day leave requests.", "leave"),
     ApprovalKind(
-        "permission", "Permission", "requests", "Approve or reject Late-In / Early-Out / One-Hour permissions."
+        "permission",
+        "Permission requests",
+        "requests",
+        "Approve or reject Late-In / Early-Out / One-Hour permissions.",
+        "leave",
     ),
-    ApprovalKind("casual_leave", "Casual Leave", "casual_leave", "Approve or reject Casual Leave requests."),
-    ApprovalKind("missing_punch", "Missing Punch", "missing_punch", "Approve or reject missed-punch requests."),
+    ApprovalKind(
+        "casual_leave", "Casual Leave requests", "casual_leave", "Approve or reject CL requests.", "casual_leave"
+    ),
+    ApprovalKind(
+        "missing_punch",
+        "Missing punch requests",
+        "missing_punch",
+        "Approve or reject missed-punch requests.",
+        "attendance",
+    ),
     ApprovalKind(
         "attendance_correction",
-        "Attendance edits",
+        "Attendance edit requests",
         "attendance",
-        "Give HR's approval to an attendance change (after the Department Head's).",
+        "Give HR's approval to a change of a day's attendance (after the Department Head's).",
+        "attendance",
+    ),
+    ApprovalKind("on_duty", "On-Duty requests", "geo_attendance", "Approve or reject On-Duty requests.", "geo"),
+    ApprovalKind(
+        "on_duty_punch",
+        "On-Duty punch verifications",
+        "geo_attendance",
+        "Accept or reject the punches made On-Duty.",
+        "geo",
+    ),
+    ApprovalKind("outpass", "Outpass requests", "requests", "Approve or reject gate outpass requests.", "outpass"),
+    ApprovalKind(
+        "request_leave",
+        "Leave Request",
+        "requests",
+        "A leave asked for with the request form (not the Leave & Holiday leave requests).",
+        "other_requests",
+        replaces="request",
     ),
     ApprovalKind(
-        "on_duty", "On-Duty requests", "geo_attendance", "Approve or reject On-Duty (Geo Attendance) requests."
+        "request_salary_enquiry",
+        "Salary Enquiry",
+        "requests",
+        "A question about salary sent with the request form.",
+        "other_requests",
+        replaces="request",
     ),
-    ApprovalKind("on_duty_punch", "On-Duty punches", "geo_attendance", "Accept or reject the punches made On-Duty."),
-    ApprovalKind("outpass", "Gate Outpass", "requests", "Approve or reject outpass requests."),
-    ApprovalKind("request", "Other requests", "requests", "Approve or reject employees' general requests."),
-    ApprovalKind("resignation", "Resignation", "recruitment.resignations", "Approve or reject resignations."),
-    ApprovalKind("advance", "Advance", "settlement", "Approve or reject salary advances."),
+    ApprovalKind(
+        "request_shift_correction",
+        "Shift Correction",
+        "requests",
+        "A request to correct a shift, sent with the request form.",
+        "other_requests",
+        replaces="request",
+    ),
+    ApprovalKind(
+        "request_advance",
+        "Advance Request",
+        "requests",
+        "An advance asked for with the request form (the advance itself is decided under Settlement).",
+        "other_requests",
+        replaces="request",
+    ),
+    ApprovalKind(
+        "request_permission",
+        "Permission Request",
+        "requests",
+        "A permission asked for with the request form (not the Late-In / Early-Out permissions).",
+        "other_requests",
+        replaces="request",
+    ),
+    ApprovalKind(
+        "request_general",
+        "General Query",
+        "requests",
+        "Any other question or request sent with the request form.",
+        "other_requests",
+        replaces="request",
+    ),
+    ApprovalKind(
+        "resignation", "Resignations", "recruitment.resignations", "Approve or reject resignations.", "recruitment"
+    ),
+    ApprovalKind(
+        "interview_result",
+        "Interview results",
+        "recruitment",
+        "Mark an applicant selected or rejected on the Interviews page.",
+        "recruitment",
+        needs_edit=True,
+    ),
+    ApprovalKind(
+        "resume_decision",
+        "Resume screening decisions",
+        "recruitment.resume_screening",
+        "Mark a screened candidate selected or rejected.",
+        "recruitment",
+        needs_edit=True,
+    ),
+    ApprovalKind(
+        "advance_general",
+        "General advances",
+        "settlement",
+        "Approve or reject a one-time salary advance.",
+        "settlement",
+        replaces="advance",
+    ),
+    ApprovalKind(
+        "advance_term",
+        "Term advances (loans)",
+        "settlement",
+        "Approve or reject a loan repaid in monthly instalments.",
+        "settlement",
+        replaces="advance",
+    ),
+    ApprovalKind(
+        "payroll_hold",
+        "Hold / unhold a salary",
+        "payroll",
+        "Hold an employee's salary for the month, or release the hold, before Payroll Done.",
+        "payroll",
+        needs_edit=True,
+    ),
+    ApprovalKind(
+        "payroll_add",
+        "Add a new joiner to the payroll",
+        "payroll",
+        "Put a new joiner into this month's payroll.",
+        "payroll",
+        needs_edit=True,
+    ),
+    ApprovalKind(
+        "payroll_finalize",
+        "Payroll Done (lock the month)",
+        "payroll",
+        "Finalize and lock the month's staff payroll.",
+        "payroll",
+        needs_edit=True,
+        note=_WHOLE_COMPANY,
+    ),
+    ApprovalKind(
+        "payroll_mark_paid",
+        "Mark the month as Paid",
+        "payroll",
+        "Record that the finalized month has been paid and tell the employees.",
+        "payroll",
+        needs_edit=True,
+        note=_WHOLE_COMPANY,
+    ),
+    ApprovalKind(
+        "payroll_release",
+        "Release & pay",
+        "payroll",
+        "Pay a held salary or a new joiner after Payroll Done.",
+        "payroll",
+        needs_edit=True,
+        note=_WHOLE_COMPANY,
+    ),
+    ApprovalKind(
+        "payroll_mark_cleared",
+        "Mark a salary as cleared",
+        "payroll",
+        "Mark one employee's payroll as paid (Mark as Cleared, staff and production).",
+        "payroll",
+        needs_edit=True,
+    ),
+    ApprovalKind(
+        "compensation_ot",
+        "OT shift compensation",
+        "compensation.ot",
+        "Assign or reject compensation for extra shifts worked, and announce earlier records.",
+        "compensation",
+        needs_edit=True,
+    ),
+    ApprovalKind(
+        "bonus_status",
+        "Bonus approval and payment",
+        "bonus",
+        "Set a bonus row to Approved or Paid.",
+        "bonus",
+        needs_edit=True,
+    ),
 )
 KIND_BY_KEY = {k.key: k for k in APPROVAL_KINDS}
 APPROVAL_KEYS = tuple(k.key for k in APPROVAL_KINDS)
+
+# Decisions HR does not make, listed so the owner sees them too (no switch).
+INFO_KINDS: tuple[dict, ...] = (
+    {
+        "key": "holiday_work",
+        "label": "Holiday / Sunday work claims",
+        "group": "compensation",
+        "text": "Decided by the Department Head only: HR has no approval step for them.",
+    },
+)
+
+# The older kinds that were split (2026-11-11) and the kinds that took their place. They are still accepted from an older
+# client and still read from a role or an account that set them (a new kind follows its old switch until it has its own);
+# asking "may this account approve <old kind>" means "any of them" (the screens and the middleware ask it before they know
+# which type a request is; the view then checks the exact kind: kind_for).
+ALIASES: dict[str, tuple[str, ...]] = {
+    old: tuple(k.key for k in APPROVAL_KINDS if k.replaces == old) for old in ("request", "advance")
+}
+ALIAS_LABEL = {"request": "Other requests", "advance": "Advance"}
+ALIAS_MODULE = {"request": "requests", "advance": "settlement"}
+REQUEST_TYPE_KINDS = {k.key[len("request_") :]: k.key for k in APPROVAL_KINDS if k.replaces == "request"}
+
+
+def kind_for(workflow_key: str, obj=None) -> str:
+    """The approval kind of one request: an employee request by its type, an advance by general / term, else the
+    workflow key itself."""
+    if workflow_key == "request" and obj is not None:
+        return REQUEST_TYPE_KINDS.get(getattr(obj, "request_type", None) or "", "request_general")
+    if workflow_key == "advance" and obj is not None:
+        return "advance_term" if getattr(obj, "advance_type", None) == "term" else "advance_general"
+    return workflow_key
+
 
 # What an HR Assistant may never approve (the owner, 2026-11-10), and the reason the screens show.
 ASSISTANT_LOCKED: dict[str, str] = {
@@ -95,8 +333,9 @@ ASSISTANT_LOCKED: dict[str, str] = {
     ),
 }
 
-_CHILDREN = {node["key"]: [c["key"] for c in node.get("children", [])] for node in MODULE_TREE}
-_ALL_MODULE_KEYS = frozenset([node["key"] for node in MODULE_TREE] + [c for kids in _CHILDREN.values() for c in kids])
+_ALL_MODULE_KEYS = frozenset(all_module_keys())
+# what an older client may still send / a role may still hold: the kinds that were split
+_KNOWN_APPROVAL_KEYS = frozenset(KIND_BY_KEY) | frozenset(ALIASES)
 
 
 # ───────────────────────────── categories ─────────────────────────────
@@ -135,7 +374,7 @@ def overrides_of(hr_user) -> dict:
     approvals = raw.get("approvals") if isinstance(raw, dict) else None
     return {
         "modules": {k: v for k, v in (modules or {}).items() if k in _ALL_MODULE_KEYS and v in LEVELS},
-        "approvals": {k: bool(v) for k, v in (approvals or {}).items() if k in KIND_BY_KEY},
+        "approvals": {k: bool(v) for k, v in (approvals or {}).items() if k in _KNOWN_APPROVAL_KEYS},
     }
 
 
@@ -147,7 +386,7 @@ def validate_approvals(raw, *, category: str = "", field: str = "approvals") -> 
         return None, f"{field} must be an object of request type -> true/false."
     out: dict[str, bool] = {}
     for key, value in raw.items():
-        if key not in KIND_BY_KEY:
+        if key not in _KNOWN_APPROVAL_KEYS:
             return None, f"Unknown request type in {field}: {key}"
         if not isinstance(value, bool):
             return None, f"{field}.{key} must be true or false."
@@ -220,11 +459,14 @@ def effective_approvals(hr_user, permissions: dict | None = None) -> dict[str, b
     out: dict[str, bool] = {}
     for kind in APPROVAL_KINDS:
         level = resolve_permission(perms, kind.module)
-        allowed = (level == "edit") if role_map is None else bool(role_map.get(kind.key, False))
-        if kind.key in changes:
-            allowed = changes[kind.key]
+        allowed = (level == "edit") if role_map is None else _switch(role_map, kind, level)
+        own = _own_switch(changes, kind)
+        if own is not None:
+            allowed = own
         if level not in ("view", "edit"):
             allowed = False  # nobody decides requests they cannot even open
+        if kind.needs_edit and level != "edit":
+            allowed = False  # an extra right on top of Edit, never instead of it
         if category == HR_ASSISTANT and kind.key in ASSISTANT_LOCKED:
             allowed = False
         out[kind.key] = allowed
@@ -236,18 +478,66 @@ def effective_approvals(hr_user, permissions: dict | None = None) -> dict[str, b
     return out
 
 
+def _own_switch(switches: dict, kind: ApprovalKind) -> bool | None:
+    """A switch set for this kind, or for the older kind it was split out of; None when neither is set."""
+    if kind.key in switches:
+        return bool(switches[kind.key])
+    if kind.replaces and kind.replaces in switches:
+        return bool(switches[kind.replaces])
+    return None
+
+
+def _switch(role_map: dict, kind: ApprovalKind, level: str) -> bool:
+    """What a role with approvals of its own says about `kind`. Unset: off, as it always was, except for a decision that
+    only ever needed Edit (needs_edit): that one keeps "edit = approve" until the role sets it."""
+    own = _own_switch(role_map, kind)
+    if own is not None:
+        return own
+    return level == "edit" if kind.needs_edit else False
+
+
 def may_approve(hr_user, kind: str) -> bool:
+    if kind in ALIASES:  # "any request type" / "any advance": the view checks the exact one (kind_for)
+        approvals = effective_approvals(hr_user)
+        return any(approvals.get(k, False) for k in ALIASES[kind])
     if kind not in KIND_BY_KEY:
         return bool(hr_user is not None and getattr(hr_user, "is_super_admin", False))
     return effective_approvals(hr_user).get(kind, False)
 
 
+# How the Activity Logs rows have always named a decision ("Approved Leave request of ..."); kinds added later use their
+# label.
+_LOG_NOUN = {
+    "leave": "Leave",
+    "permission": "Permission",
+    "casual_leave": "Casual Leave",
+    "missing_punch": "Missing Punch",
+    "attendance_correction": "Attendance edits",
+    "on_duty": "On-Duty requests",
+    "on_duty_punch": "On-Duty punches",
+    "outpass": "Gate Outpass",
+    "resignation": "Resignation",
+    **{k: "Other requests" for k in ALIASES["request"]},
+    **{k: "Advance" for k in ALIASES["advance"]},
+    "request": "Other requests",
+    "advance": "Advance",
+}
+
+
+def kind_label(kind: str) -> str:
+    if kind in KIND_BY_KEY:
+        return KIND_BY_KEY[kind].label
+    return ALIAS_LABEL.get(kind, kind)
+
+
 def refusal_text(hr_user, kind: str) -> str:
     if category_of(hr_user) == HR_ASSISTANT and kind in ASSISTANT_LOCKED:
         return ASSISTANT_LOCKED[kind]
-    label = KIND_BY_KEY[kind].label if kind in KIND_BY_KEY else kind
+    spec = KIND_BY_KEY.get(kind)
+    if spec is not None and spec.needs_edit:
+        return f"Your account can't do this: {spec.label}. Ask the Super Admin to allow it in Account Management."
     return (
-        f"Your account can't approve or reject {label} requests. An HR Manager or the Super Admin has to decide them."
+        f"Your account can't approve or reject {kind_label(kind)}. An HR Manager or the Super Admin has to decide them."
     )
 
 
@@ -384,14 +674,16 @@ def out_of_branch(request, branch_id) -> bool:
 
 def audit_module(kind: str) -> str:
     """The Activity Logs module a decision of this kind is filed under (the top of its permission module)."""
-    return KIND_BY_KEY[kind].module.split(".")[0] if kind in KIND_BY_KEY else kind
+    if kind in KIND_BY_KEY:
+        return KIND_BY_KEY[kind].module.split(".")[0]
+    return ALIAS_MODULE.get(kind, kind)
 
 
 def log_decision(request, kind: str, obj, decision: str, what: str = "") -> None:
     """One Activity Logs row for an HR approval / rejection (never raises)."""
     from .audit_utils import log_action
 
-    label = KIND_BY_KEY[kind].label if kind in KIND_BY_KEY else kind
+    label = _LOG_NOUN.get(kind) or kind_label(kind)
     word = "Approved" if decision == "approved" else "Rejected" if decision == "rejected" else f"Set to {decision}:"
     emp = getattr(obj, "employee", None)
     who = f"{emp.first_name} {emp.last_name}".strip() if emp is not None else ""

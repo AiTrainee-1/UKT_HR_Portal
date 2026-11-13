@@ -5,14 +5,17 @@ import HistoryPage from "./compensation/pages/HistoryPage";
 import OtDetectionPage from "./compensation/pages/OtDetectionPage";
 import ReportsPage from "./compensation/pages/ReportsPage";
 import { COMPENSATION_BASE, legacyCompensationTarget, pagePath } from "./compensation/routes";
+import { openTarget, useCanOpen } from "./compensation/visible";
 
 /**
  * The old `/hr/compensation?tab=ot&sub=...` address (and the bare `/hr/compensation`, and any path under it that is not a
  * page): sent to its new path with every other query parameter carried over. Replaces the entry, so Back does not bounce.
+ * A part the role may not open lands on the nearest part it may (the first open page when none).
  */
 function LegacyAddress() {
   const search = useSearch();
-  return <Redirect to={legacyCompensationTarget(search)} replace />;
+  const canOpen = useCanOpen();
+  return <Redirect to={openTarget(canOpen, legacyCompensationTarget(search))} replace />;
 }
 
 /**

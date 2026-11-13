@@ -127,8 +127,11 @@ class AccessTests(ControlBase):
         self.assertIn("sms_control", permission_registry.all_module_keys())
         labels = {node["key"]: node["label"] for node in permission_registry.MODULE_TREE}
         self.assertEqual(labels["sms_control"], "SMS Control")
+        # its tabs have keys of their own since 2026-11-11, each following "sms_control" until a role sets it
         for path in ("sms-control/overview", "sms-control/settings", "sms-control/messages", "sms-control/test"):
-            self.assertEqual(permission_registry.resolve_module(path), "sms_control", path)
+            key = permission_registry.resolve_module(path)
+            self.assertTrue(key == "sms_control" or key.startswith("sms_control."), path)
+            self.assertEqual(permission_registry.resolve_permission({"sms_control": "view"}, key), "view", path)
         self.assertEqual(permission_registry.resolve_module("whatsapp-control/overview"), "whatsapp_control")
 
     def test_a_branch_login_can_read_but_not_change_company_settings_or_send_a_test(self):

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import {
   useRejectOvertime,
@@ -75,6 +76,9 @@ export function Type2Section({
   onHistoryStatus: (value: string) => void;
 }) {
   const { toast } = useToast();
+  const { user } = useAuth();
+  // assigning / rejecting Type 2 is an approval of its own (compensation_ot)
+  const mayDecide = canApprove(user, "compensation_ot");
   const reject = useRejectOvertime();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assigning, setAssigning] = useState(false);
@@ -143,28 +147,32 @@ export function Type2Section({
                 <span className="text-xs text-muted-foreground" data-testid="ot2-selected">
                   {chosen.length} selected
                 </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={disabled}
-                  title={pause?.reason ?? "Assign the selected records as Relaxation or Payment"}
-                  onClick={() => setAssigning(true)}
-                  data-testid="ot2-assign"
-                >
-                  Assign{chosen.length > 0 ? ` (${chosen.length})` : ""}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="text-rose-600"
-                  disabled={disabled}
-                  title={pause?.reason ?? "Reject the selected records: no compensation for them"}
-                  onClick={() => setRejecting(true)}
-                  data-testid="ot2-reject"
-                >
-                  Reject
-                </Button>
+                {mayDecide && (
+                  <>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={disabled}
+                      title={pause?.reason ?? "Assign the selected records as Relaxation or Payment"}
+                      onClick={() => setAssigning(true)}
+                      data-testid="ot2-assign"
+                    >
+                      Assign{chosen.length > 0 ? ` (${chosen.length})` : ""}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="text-rose-600"
+                      disabled={disabled}
+                      title={pause?.reason ?? "Reject the selected records: no compensation for them"}
+                      onClick={() => setRejecting(true)}
+                      data-testid="ot2-reject"
+                    >
+                      Reject
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
 

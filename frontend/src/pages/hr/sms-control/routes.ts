@@ -67,16 +67,29 @@ export function readSmsPath(pathname: string): { tab: SmsTabKey | null; nested: 
   return { tab, nested };
 }
 
+/** The permission key of a tab (`sms_control.test`) or of a Settings section (`sms_control.settings.limits`). Each follows
+ *  the one above it while it has no setting of its own, so a role that never set one keeps what it had. */
+export const smsTabModule = (tab: SmsTabKey): string => `${SMS_CONTROL_MODULE}.${tab}`;
+export const smsSectionModule = (section: SettingsSectionKey): string => `${SMS_CONTROL_MODULE}.settings.${section}`;
+
+/** The tabs and Settings sections the signed-in role may open (every one of them when left out). */
+export type SmsVisible = { tabs: readonly SmsTabKey[]; sections: readonly SettingsSectionKey[] };
+
 /**
- * The address an address really is: the bare page (or an unknown tab) is Overview, Settings without a (known) section is its
- * first one, and anything after the last level is dropped. The page redirects when this is not the address it was opened at.
+ * The address an address really is: the bare page (or an unknown tab) is the first tab, Settings without a (known) section is
+ * its first section, and anything after the last level is dropped. With `visible`, "first" is the first one the role may
+ * open, and a tab or section it may not open counts as unknown (the route guard already turns such an address away). The page
+ * redirects when this is not the address it was opened at.
  */
-export function resolveSmsPath(pathname: string): string {
+export function resolveSmsPath(pathname: string, visible?: SmsVisible): string {
   const { tab, nested } = readSmsPath(pathname);
-  const chosen = tab ?? SMS_TABS[0].value;
-  const levels = nestedOf(chosen);
-  if (levels.length === 0) return smsTabPath(chosen);
-  return smsTabPath(chosen, nested ?? levels[0].value);
+  const tabs = visible?.tabs ?? SMS_TABS.map((t) => t.value);
+  const chosen = (tab && tabs.includes(tab) ? tab : tabs[0]) ?? SMS_TABS[0].value;
+  const levels = nestedOf(chosen)
+    .map((n) => n.value)
+    .filter((n) => !visible || visible.sections.includes(n));
+  if (nestedOf(chosen).length === 0) return smsTabPath(chosen);
+  return smsTabPath(chosen, (nested && levels.includes(nested) ? nested : levels[0]) ?? undefined);
 }
 
 /** The address with the trailing slash dropped, so `/hr/sms-control/messages/` is the page itself. */

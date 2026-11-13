@@ -42,7 +42,8 @@ type Props = {
   threshold: number;
   onThreshold: (months: number) => void;
   today: string;
-  onApply: (employeeId: number) => void;
+  /** Opens the Apply tab on that employee; left out when this role may not see the Apply tab (no button). */
+  onApply?: (employeeId: number) => void;
 };
 
 export default function DueTab({
@@ -260,7 +261,7 @@ export default function DueTab({
                           <Since row={r} />
                         </TableCell>
                         <TableCell className="text-right">
-                          <ApplyButton row={r} onApply={onApply} />
+                          {onApply && <ApplyButton row={r} onApply={onApply} />}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -291,7 +292,7 @@ export default function DueTab({
                       </span>
                     </div>
                     <Since row={r} />
-                    <ApplyButton row={r} onApply={onApply} full />
+                    {onApply && <ApplyButton row={r} onApply={onApply} full />}
                   </div>
                 ))}
               </div>

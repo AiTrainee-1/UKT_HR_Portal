@@ -28,9 +28,10 @@ import {
   type CompensationWindow,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
-import { addDays, dateLong, errorMessage, todayIst } from "../logic";
+import { dateLong, errorMessage, todayIst } from "../logic";
 import { NestedTabs } from "@/components/ui/nested-tabs";
 import { LEAVE_NESTED, subPath } from "../routes";
+import { keepOpenNested, useCanOpen } from "../visible";
 import {
   CELL,
   ErrorNotice,
@@ -43,11 +44,11 @@ import {
   useSingleFlight,
 } from "../ui";
 import {
-  WINDOW_MAX_DAYS_AHEAD,
   WINDOW_REASON_MAX,
   checkWindow,
   emptyWindowForm,
   splitWindows,
+  windowDateRange,
   windowKindText,
   windowPayload,
   windowScopeText,
@@ -90,6 +91,7 @@ export function WindowsPart({
   nested: string;
 }) {
   const { toast } = useToast();
+  const canOpen = useCanOpen();
   const today = useMemo(() => todayIst(), []);
   const query = useCompensationWindows({ kind: "all" });
   const create = useCreateCompensationWindow();
@@ -111,6 +113,7 @@ export function WindowsPart({
       ? "Paused: the OT / Compensation features are switched off in Settings → Payroll"
       : "Paused: company-announced late-in / early-out is switched off in Settings → Compensation";
 
+  const dateRange = useMemo(() => windowDateRange(serverToday), [serverToday]);
   const check = checkWindow(form, serverToday);
   const branchName = branches?.find((b) => String(b.id) === form.branchId)?.name ?? null;
   const departmentName = departments?.find((d) => String(d.id) === form.departmentId)?.name ?? null;
@@ -132,9 +135,14 @@ export function WindowsPart({
       if (!check.ok || !canAnnounce || create.isPending) return;
       try {
         const made = await create.mutateAsync(windowPayload(form));
+        const updated = made.attendanceUpdated ?? 0;
         toast({
           title: "Announcement added",
-          description: `${windowKindText(made)} for ${dateLong(made.date)} covers ${made.covers} ${made.covers === 1 ? "staff member" : "staff"}.`,
+          description:
+            `${windowKindText(made)} for ${dateLong(made.date)} covers ${made.covers} ${made.covers === 1 ? "staff member" : "staff"}.` +
+            (updated > 0
+              ? ` That day's attendance was updated for ${updated} ${updated === 1 ? "person" : "people"}.`
+              : ""),
         });
         setForm((f) => ({ ...emptyWindowForm(today), date: f.date, kind: f.kind }));
         setTouched(false);
@@ -181,10 +189,10 @@ export function WindowsPart({
         value={nested}
         testId="windows-nested"
         label="Sections of Announce late-in / early-out"
-        items={[
+        items={keepOpenNested(canOpen, "leave", "announcements", [
           { value: "announce", label: LEAVE_NESTED.announcements[0].label },
           { value: "list", label: LEAVE_NESTED.announcements[1].label, count: query.data?.results.length },
-        ]}
+        ])}
       >
         {nested === "announce" && (
           <div className="grid gap-4 lg:grid-cols-5">
@@ -241,14 +249,14 @@ export function WindowsPart({
                     label="Date"
                     htmlFor="window-date"
                     problem={problems.date}
-                    hint={`Today or later, up to ${WINDOW_MAX_DAYS_AHEAD} days ahead.`}
+                    hint={`Any day of ${dateRange.label}, past or upcoming.`}
                   >
                     <Input
                       id="window-date"
                       type="date"
                       value={form.date}
-                      min={serverToday}
-                      max={addDays(serverToday, WINDOW_MAX_DAYS_AHEAD)}
+                      min={dateRange.min}
+                      max={dateRange.max}
                       onChange={(e) => patch({ date: e.target.value })}
                       aria-invalid={problems.date ? true : undefined}
                       data-testid="window-date"
@@ -371,6 +379,11 @@ export function WindowsPart({
                 </li>
                 <li>
                   Attendance marks the days of the staff who used it as Compensation, and History lists who used it.
+                </li>
+                <li>
+                  Any day of the current month can be announced, past days included: a past day&apos;s attendance is
+                  judged again straight away (a day HR edited by hand stays as it is). Once the next month begins, the
+                  previous month is closed.
                 </li>
                 <li>
                   One late-in and one early-out per person per date. A future date can be deleted; today&apos;s has

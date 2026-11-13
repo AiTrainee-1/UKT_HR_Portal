@@ -17,6 +17,8 @@ import {
   type PayrollSettingsItem,
 } from "@/lib/api-client/custom-hooks";
 import { PRODUCTION_SUB_TAB_OF, type ProductionPayrollSubTab } from "./ProductionPayrollTab.meta";
+import { SETTINGS_SUBTAB_MODULE } from "./constants";
+import { NothingOpen, SubtabViewOnlyNote, useSubtabAccess } from "./kit/subtabs";
 import { addressSetting, saveErrorText, useDraft, useSubTabFromAddress, type Draft } from "./payroll/form";
 import { dayOf } from "./payroll/preview";
 import { BranchNotice } from "./payroll/ui";
@@ -40,6 +42,18 @@ const SUB_TABS: { value: ProductionPayrollSubTab; label: string; icon: ReactNode
   { value: "monthly", label: "Monthly", icon: <Factory size={13} /> },
   { value: "payBonus", label: "Pay & Bonus", icon: <IndianRupee size={13} /> },
 ];
+const SUB_TAB_VALUES = SUB_TABS.map((t) => t.value);
+
+/** The Overview sub-tab with its shift list: the list is asked for only while the Overview is open. */
+function OverviewPanel({ settings }: { settings: PayrollSettingsItem }) {
+  const shifts = useListShifts();
+  return (
+    <>
+      <ProductionOverview settings={settings} />
+      <ShiftPanel shifts={shifts.data} shiftsLoading={shifts.isLoading} shiftsError={shifts.isError} />
+    </>
+  );
+}
 
 type Saving = PayCycle | "payBonus";
 
@@ -63,15 +77,17 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
   const drafts: Record<PayCycle, Draft<CycleForm>> = { weekly, biweekly, monthly };
   const payBonus = useDraft(saved.payBonus);
 
-  const [subTab, setSubTab] = useState<ProductionPayrollSubTab>(
+  const [askedSubTab, setSubTab] = useState<ProductionPayrollSubTab>(
     () => PRODUCTION_SUB_TAB_OF[addressSetting()] ?? "overview",
   );
   useSubTabFromAddress(PRODUCTION_SUB_TAB_OF, setSubTab);
+  // each sub-tab has its own permission key: only the visible ones are offered, a View-only one is read-only
+  const sub = useSubtabAccess(SUB_TAB_VALUES, SETTINGS_SUBTAB_MODULE.production_payroll, askedSubTab, readOnly);
+  const subTab = sub.shown;
 
   const [saving, setSaving] = useState<Saving | null>(null);
   const branchLogin = settings?.companyWideRulesEditable === false;
   const today = useMemo(() => dayOf(new Date()), []);
-  const shifts = useListShifts();
 
   const keepSaved = (fresh: PayrollSettingsItem) => queryClient.setQueryData(getPayrollSettingsQueryKey(), fresh);
 
@@ -149,7 +165,7 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
 
       <div className="flex flex-wrap items-center gap-3">
         <PillTabs
-          items={SUB_TABS}
+          items={SUB_TABS.filter((t) => sub.visible.includes(t.value))}
           value={subTab}
           onChange={(v) => setSubTab(v as ProductionPayrollSubTab)}
           baseColor="#0f172a"
@@ -161,8 +177,11 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
           </span>
         )}
       </div>
+      <SubtabViewOnlyNote show={sub.viewOnly} />
 
-      {isLoading ? (
+      {sub.none ? (
+        <NothingOpen />
+      ) : isLoading ? (
         <div className="space-y-3" data-testid="production-payroll-settings-loading">
           <Skeleton className="h-40 w-full rounded-2xl" />
           <Skeleton className="h-64 w-full rounded-2xl" />
@@ -176,12 +195,7 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
         </div>
       ) : (
         <>
-          {subTab === "overview" && (
-            <>
-              <ProductionOverview settings={settings} />
-              <ShiftPanel shifts={shifts.data} shiftsLoading={shifts.isLoading} shiftsError={shifts.isError} />
-            </>
-          )}
+          {subTab === "overview" && <OverviewPanel settings={settings} />}
 
           {CYCLES.map(
             (cycle) =>
@@ -193,7 +207,7 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
                   saved={saved.cycles[cycle]}
                   branchLogin={branchLogin}
                   today={today}
-                  readOnly={readOnly}
+                  readOnly={sub.readOnly}
                   saving={saving === cycle}
                   busy={saving !== null}
                   onSave={() => saveCycle(cycle)}
@@ -206,7 +220,7 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
               draft={payBonus}
               saved={saved.payBonus}
               settings={settings}
-              readOnly={readOnly}
+              readOnly={sub.readOnly}
               saving={saving === "payBonus"}
               busy={saving !== null}
               onSave={savePayBonus}

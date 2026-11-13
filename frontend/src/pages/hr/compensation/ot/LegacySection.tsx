@@ -3,6 +3,7 @@ import { Archive } from "lucide-react";
 import { SectionCard } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import {
   useAnnounceOvertime,
@@ -30,6 +31,9 @@ export function LegacySection({
   pauseReason: string;
 }) {
   const { toast } = useToast();
+  const { user } = useAuth();
+  // announcing / rejecting an earlier record is the OT approval (compensation_ot)
+  const mayDecide = canApprove(user, "compensation_ot");
   const announce = useAnnounceOvertime();
   const reject = useRejectOvertime();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -82,7 +86,7 @@ export function LegacySection({
       description="These keep their old meaning: Pay is one day's pay, Relaxation is one Alternative-Day credit. New overtime is Type 1 or Type 2 above."
       bodyClassName="space-y-3 px-0 pb-0"
       actions={
-        rows.some((r) => r.status === "detected") ? (
+        mayDecide && rows.some((r) => r.status === "detected") ? (
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-muted-foreground">{chosen.length} selected</span>
             <Button

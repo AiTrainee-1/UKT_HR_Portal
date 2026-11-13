@@ -22,17 +22,30 @@ import {
   useListEmployeesPaginated, useEmployeeCount,
 } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Landmark, Plus, Search, UserCheck, UserX, Trash2, Eye, Pencil, UploadCloud } from "lucide-react";
 import { DataPagination } from "@/components/ui/DataPagination";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
+import { moduleForPath } from "@/lib/permission-modules";
+import { Gate, ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import { CoEmpTab } from "./co-emp/CoEmpTab";
 import { TdsPanel } from "./co-emp/TdsPanel";
-import { EMPLOYEES_URL_DEFAULTS, parseClass, parseEmployeesTab, type EmployeesTab } from "./co-emp/logic";
+import {
+  EMPLOYEES_TABS, EMPLOYEES_URL_DEFAULTS, parseClass, parseEmployeesTab, type EmployeesTab,
+} from "./co-emp/logic";
+
+// Each tab's own key (Account Management -> Roles & Permissions -> Employees); the TDS panel inside Co Emp is
+// "employees.co_emp.tds".
+const TAB_KEY: Record<EmployeesTab, string> = {
+  staff: "employees.staff",
+  production: "employees.production",
+  coemp: "employees.co_emp",
+};
+const TDS_KEY = "employees.co_emp.tds";
 
 export default function Employees() {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("all");
   const [branchFilter, setBranchFilter] = useState("all");
@@ -44,17 +57,31 @@ export default function Employees() {
   // The tab, and inside Co Emp the class pill and the TDS panel, live in the address
   // (/hr/employees?tab=coemp&type=production&view=tds): a reload or a pasted link lands on the same screen.
   const [urlState, setUrlState] = useUrlParams(EMPLOYEES_URL_DEFAULTS);
-  const typeFilter: EmployeesTab = parseEmployeesTab(urlState.tab);
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or fetched), also when ?tab= asks for it.
+  const visibleTabs = visibleItems(EMPLOYEES_TABS, (t) => TAB_KEY[t], level);
+  const noTabOpen = visibleTabs.length === 0;
+  const typeFilter: EmployeesTab = pickVisible(parseEmployeesTab(urlState.tab), visibleTabs);
   const coEmpClass = parseClass(urlState.type);
   // "Co Emp" is not an employmentType: it is its own view (see co-emp/CoEmpTab.tsx) which lists ONE class at a time and
   // asks the server for that class itself, so the roster below is not fetched at all while it is showing.
   const viewingCoEmp = typeFilter === "coemp";
-  const viewingTds = viewingCoEmp && urlState.view === "tds";
+  const tdsLevel = level(TDS_KEY);
+  const viewingTds = viewingCoEmp && urlState.view === "tds" && tdsLevel !== "hidden";
   const selectTab = (tab: EmployeesTab) => setUrlState({ tab, type: "", view: "" });
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
   const isBranchScoped = !!user?.branchId;
+  // A tab (or the TDS panel) this role may only VIEW on a page it may edit: lock its change buttons (HrLayout locks a
+  // View-only page). Activate / Deactivate, Bulk Upload, Add Employee, Edit and View have keys of their own (below).
+  const tabViewOnly =
+    !noTabOpen &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    (viewingTds ? tdsLevel : level(TAB_KEY[typeFilter])) === "view";
+  useViewOnlyLock(tabViewOnly, typeFilter, viewingTds);
+  const statusLevel = level("employees.status");
+  const rosterOpen = !noTabOpen && !viewingCoEmp;
 
   const [page, setPage] = useState(1);
   // State, not a constant -the pagination bar lets the user change it.
@@ -82,7 +109,7 @@ export default function Employees() {
   // The roster (Staff / Production tabs) is only fetched while one of them is showing; Co Emp asks for its own list.
   const { data: pageData, isLoading, isPlaceholderData } = useListEmployeesPaginated({
     ...filterParams, page, pageSize,
-  }, { enabled: !viewingCoEmp });
+  }, { enabled: rosterOpen });
   const paginatedEmployees = pageData?.results ?? [];
   const totalEmployees = pageData?.count ?? 0;
   const staffCount = pageData?.staffCount ?? 0;
@@ -94,7 +121,7 @@ export default function Employees() {
     departmentId: filterParams.departmentId,
     branchId: filterParams.branchId,
     status: "inactive",
-  }, { enabled: !viewingCoEmp });
+  }, { enabled: rosterOpen });
 
   const { data: departments } = useListDepartments();
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
@@ -147,27 +174,36 @@ export default function Employees() {
           <div>
             <h2 className="text-2xl font-black">Employees</h2>
             <p className="text-muted-foreground text-sm mt-0.5">
-              {viewingCoEmp
+              {noTabOpen
+                ? ""
+                : viewingCoEmp
                 ? "Co Emp decides who PF/ESI applies to"
                 : `${totalEmployees} records`}
             </p>
             {/* Staff / Production / Co Emp toggle. The counts come from the roster list, which Co Emp does not fetch,
                 so they are left off there rather than shown stale. */}
+            {!noTabOpen && (
             <div className="mt-2" data-testid="employees-tabs">
               <PillTabs
-                items={[
-                  { value: "staff", label: "Staff", count: viewingCoEmp ? undefined : staffCount },
-                  { value: "production", label: "Production", count: viewingCoEmp ? undefined : productionCount },
-                  { value: "coemp", label: "Co Emp" },
-                ]}
+                items={visibleItems(
+                  [
+                    { value: "staff", label: "Staff", count: viewingCoEmp ? undefined : staffCount },
+                    { value: "production", label: "Production", count: viewingCoEmp ? undefined : productionCount },
+                    { value: "coemp", label: "Co Emp" },
+                  ],
+                  (t) => TAB_KEY[t.value as EmployeesTab],
+                  level,
+                )}
                 value={typeFilter}
                 onChange={(v) => selectTab(parseEmployeesTab(v))}
               />
             </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            {viewingCoEmp ? (
+            {noTabOpen ? null : viewingCoEmp ? (
               // Co Emp has no Inactive / Bulk Upload / Add Employee here: one button opens the TDS panel (and closes it again).
+              tdsLevel !== "hidden" && (
               <Button
                 variant={viewingTds ? "default" : "outline"}
                 onClick={() => setUrlState({ view: viewingTds ? "" : "tds" })}
@@ -177,6 +213,7 @@ export default function Employees() {
                 <Landmark size={16} className="mr-2" />
                 TDS – Tax Deducted at Source
               </Button>
+              )
             ) : (
               <>
                 {/* Drives the same `statusFilter` the Select below does, rather
@@ -196,18 +233,32 @@ export default function Employees() {
                     </span>
                   )}
                 </Button>
+                {/* Only opens the Bulk Upload page, which locks itself when this role may only view it. */}
+                {level("employees.bulk_upload") !== "hidden" && (
                 <Button variant="outline" onClick={() => navigate("/hr/employees/bulk-upload")} data-testid="button-bulk-upload">
                   <UploadCloud size={16} className="mr-2" /> Bulk Upload
                 </Button>
+                )}
+                <Gate k="employees.add">
                 <Button onClick={() => navigate("/hr/employees/new")} data-testid="button-add-employee">
                   <Plus size={16} className="mr-2" /> Add Employee
                 </Button>
+                </Gate>
               </>
             )}
           </div>
         </div>
 
-        {viewingTds ? (
+        <ViewOnlyTabNote show={tabViewOnly} />
+
+        {noTabOpen ? (
+          <p
+            className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+            data-testid="employees-nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        ) : viewingTds ? (
           <TdsPanel
             cls={coEmpClass}
             onClassChange={(type) => setUrlState({ type })}
@@ -367,6 +418,7 @@ export default function Employees() {
                       </TableCell>
                       <TableCell className="pr-4 text-right">
                         <div className="flex items-center gap-1 justify-end">
+                          <Gate k="employees.profile">
                           <ActionTooltip label="View profile" color="blue">
                             <Button
                               size="icon" variant="ghost"
@@ -377,7 +429,11 @@ export default function Employees() {
                               <Eye size={14} />
                             </Button>
                           </ActionTooltip>
+                          </Gate>
 
+                          {/* employees.status: View shows the button locked ("Activate" / "Deactivate" are not words the
+                              view-only lock knows, so it is disabled here, also on a View-only tab). */}
+                          {statusLevel !== "hidden" && (
                           <ActionTooltip
                             label={emp.status === "active" ? "Deactivate employee" : "Activate employee"}
                             color={emp.status === "active" ? "amber" : "emerald"}
@@ -386,12 +442,15 @@ export default function Employees() {
                               size="icon" variant="ghost"
                               aria-label={emp.status === "active" ? "Deactivate employee" : "Activate employee"}
                               onClick={() => handleToggleStatus(emp.id, emp.status ?? "active")}
+                              disabled={statusLevel !== "edit" || tabViewOnly}
                               data-testid={`button-toggle-${emp.id}`}
                             >
                               {emp.status === "active" ? <UserX size={14} /> : <UserCheck size={14} />}
                             </Button>
                           </ActionTooltip>
+                          )}
 
+                          <Gate k="employees.edit">
                           <ActionTooltip label="Edit details" color="blue">
                             <Button
                               size="icon" variant="ghost"
@@ -402,6 +461,7 @@ export default function Employees() {
                               <Pencil size={14} />
                             </Button>
                           </ActionTooltip>
+                          </Gate>
 
                           <AlertDialog>
                             <ActionTooltip label="Delete employee" color="red">
@@ -445,7 +505,7 @@ export default function Employees() {
         </>)}
       </div>
 
-      {!viewingCoEmp && (
+      {rosterOpen && (
         <DataPagination
           page={page}
           totalPages={totalPages}

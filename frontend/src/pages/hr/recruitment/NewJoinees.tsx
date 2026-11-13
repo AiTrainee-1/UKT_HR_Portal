@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { Gate, useLevel } from "@/lib/tab-access";
 import {
   useListNewJoinees,
   useSendOfferLetterEmail,
@@ -22,6 +23,11 @@ import { CircleLoader } from "@/components/ui/CircleLoader";
 export default function NewJoinees() {
   const { toast } = useToast();
   const { token } = useAuth();
+  // The offer letter (view, download, email, WhatsApp) is "employees.letters" (Roles & Permissions -> Employees, shared
+  // with the profile and Documents): hidden = no actions; View = view and download only (Email / WhatsApp are not words
+  // the view-only lock knows, so they are disabled here).
+  const lettersLevel = useLevel()("employees.letters");
+  const canSendLetters = lettersLevel === "edit";
   const { data: joinees, isLoading } = useListNewJoinees(30);
   const sendEmail = useSendOfferLetterEmail();
   const sendWhatsApp = useWhatsAppOfferLetter();
@@ -123,7 +129,7 @@ export default function NewJoinees() {
                     <TableHead>Designation</TableHead>
                     <TableHead>Branch</TableHead>
                     <TableHead>Join Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    {lettersLevel !== "hidden" && <TableHead className="text-right">Actions</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -152,7 +158,9 @@ export default function NewJoinees() {
                       <TableCell className="text-sm">
                         {j.joinDate ? new Date(j.joinDate).toLocaleDateString("en-IN") : "—"}
                       </TableCell>
+                      {lettersLevel !== "hidden" && (
                       <TableCell>
+                        <Gate k="employees.letters">
                         <div className="flex items-center justify-end gap-1.5">
                           <RowActionBtn
                             icon={
@@ -190,7 +198,7 @@ export default function NewJoinees() {
                             }
                             label="Email"
                             onClick={() => handleEmail(j)}
-                            disabled={busy !== null}
+                            disabled={busy !== null || !canSendLetters}
                             color="purple"
                           />
                           <RowActionBtn
@@ -203,11 +211,13 @@ export default function NewJoinees() {
                             }
                             label="WhatsApp"
                             onClick={() => handleWhatsApp(j)}
-                            disabled={busy !== null}
+                            disabled={busy !== null || !canSendLetters}
                             color="emerald"
                           />
                         </div>
+                        </Gate>
                       </TableCell>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>

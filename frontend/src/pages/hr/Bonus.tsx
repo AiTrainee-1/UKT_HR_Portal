@@ -11,7 +11,8 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/contexts/AuthContext";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
+import { Gate } from "@/lib/tab-access";
 import {
   useBonusCalculate, useBonusList, useGenerateBonus, useUpdateBonus,
   downloadAuthedFile, type BonusItem,
@@ -45,7 +46,10 @@ const STATUS_LABEL: Record<BonusItem["status"], string> = {
 
 export default function Bonus() {
   const { toast } = useToast();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  // Setting a row's status (Calculated / Approved / Paid) is an approval right of its own (Account Management ->
+  // Approvals -> "bonus_status"); unchanged for an account on the old rule.
+  const canSetStatus = canApprove(user, "bonus_status");
   const [fy, setFy] = useState(defaultFinancialYear());
   const [showInfo, setShowInfo] = useState(false);
   const fyOptions = useMemo(financialYearOptions, []);
@@ -121,10 +125,13 @@ export default function Bonus() {
               </SelectContent>
             </Select>
             {hasPersisted && (
-              <Button variant="outline" onClick={handleExport}>
-                <Download size={15} className="mr-2" /> Export
-              </Button>
+              <Gate k="bonus.export">
+                <Button variant="outline" onClick={handleExport}>
+                  <Download size={15} className="mr-2" /> Export
+                </Button>
+              </Gate>
             )}
+            <Gate k="bonus.generate">
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button disabled={generateMutation.isPending}>
@@ -147,6 +154,7 @@ export default function Bonus() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+            </Gate>
           </div>
         </div>
 
@@ -214,8 +222,15 @@ export default function Bonus() {
                         <TableCell className="text-right text-sm">{b.bonusPercentApplied}%</TableCell>
                         <TableCell className="text-right text-sm font-bold text-green-700">{fmt(b.bonusAmount)}</TableCell>
                         <TableCell className="pr-4">
-                          <Select value={b.status} onValueChange={(v) => handleStatusChange(b.id, v as BonusItem["status"])}>
-                            <SelectTrigger className="h-8 w-32 text-xs">
+                          <Select
+                            value={b.status}
+                            onValueChange={(v) => handleStatusChange(b.id, v as BonusItem["status"])}
+                            disabled={!canSetStatus}
+                          >
+                            <SelectTrigger
+                              className="h-8 w-32 text-xs"
+                              title={canSetStatus ? undefined : "Your account may not change a bonus status"}
+                            >
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>

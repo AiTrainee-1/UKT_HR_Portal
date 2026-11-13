@@ -3,7 +3,14 @@ import { useGetMe, getGetMeQueryKey } from "@/lib/api-client";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PermissionLevel } from "@/lib/api-client/custom-hooks";
-import { resolvePermission, resolvePermissionOrChildren, ROUTE_OR_MODULES } from "@/lib/permission-modules";
+import {
+  hasOwnSetting,
+  legacyCanView,
+  legacyRouteKey,
+  resolvePermission,
+  resolvePermissionOrChildren,
+  ROUTE_OR_MODULES,
+} from "@/lib/permission-modules";
 import { canApprove as canApproveKind, type Category, type DisplayCategory } from "@/lib/hr-access";
 
 type Role = "hr" | "employee";
@@ -80,8 +87,16 @@ export function canViewPage(user: UserInfo | null, moduleKey: string): boolean {
 // canViewPage but for siblings instead of MODULE_TREE parent+children.
 export function canViewRoute(user: UserInfo | null, path: string, moduleKey: string | null): boolean {
   const orKeys = ROUTE_OR_MODULES[path];
-  if (orKeys) return orKeys.some((k) => canView(user, k));
-  return moduleKey ? canViewPage(user, moduleKey) : true;
+  if (orKeys) return orKeys.some((k) => canViewPage(user, k));
+  if (!moduleKey) return true;
+  if (canViewPage(user, moduleKey)) return true;
+  // An address that had its section's key before 2026-11-11 (/hr/employees/new was "employees"): while the role sets
+  // nothing on the new key's own chain, the old rule still decides, so no existing role loses or gains a page.
+  const legacy = legacyRouteKey(path, moduleKey);
+  if (legacy && user && user.role === "hr" && !hasOwnSetting(user.permissions, moduleKey, legacy)) {
+    return legacyCanView(user.permissions, legacy);
+  }
+  return false;
 }
 
 // Like permissionLevel(...) === "view", but for a ROUTE_OR_MODULES page: the
@@ -95,7 +110,17 @@ export function isRouteViewOnly(user: UserInfo | null, path: string, moduleKey: 
     const levels = orKeys.map((k) => permissionLevel(user, k));
     return !levels.includes("edit") && levels.includes("view");
   }
-  return moduleKey ? permissionLevel(user, moduleKey) === "view" : false;
+  if (!moduleKey || permissionLevel(user, moduleKey) !== "view") return false;
+  // A part of this page set to Edit on its own (a tab, a sub-tab): the page-wide lock would lock it too, so the page
+  // locks its View-only parts itself instead (lib/tab-access.tsx; Settings: settingsTabLevel).
+  return !hasEditablePart(user, moduleKey);
+}
+
+/** Is a part of `moduleKey` (a key under it) set to Edit on its own for this login? */
+export function hasEditablePart(user: UserInfo | null, moduleKey: string): boolean {
+  if (!user || user.role !== "hr" || user.isSuperAdmin || !user.permissions) return false;
+  const prefix = `${moduleKey}.`;
+  return Object.entries(user.permissions).some(([k, v]) => k.startsWith(prefix) && v === "edit");
 }
 
 interface AuthContextType {

@@ -8,6 +8,8 @@ import {
   useGetHrDashboardSummary,
   useGetSalaryTrends,
   useListDepartments,
+  getGetSalaryTrendsQueryKey,
+  getListDepartmentsQueryKey,
 } from "@/lib/api-client";
 import {
   useAttendanceSummary,
@@ -23,6 +25,7 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import { hrCanAct } from "@/lib/approval-workflow";
+import { Gate, useLevel } from "@/lib/tab-access";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, PieChart, Pie, Cell, Legend,
@@ -213,23 +216,45 @@ export default function HrDashboard() {
   const canSeeResumeScreening = canView(user, "recruitment.resume_screening");
   const canSeeDocuments = canView(user, "recruitment.documents");
 
+  // Each section of the Dashboard is a key of its own (Account Management -> Roles & Permissions -> Dashboard); a
+  // hidden section is not drawn and, where its data is its own, not fetched either.
+  const level = useLevel();
+  const shows = (key: string) => level(key) !== "hidden";
+  const showKeyFigures = shows("dashboard.key_figures");
+  const showAttendance = shows("dashboard.attendance");
+  const showSalaryCost = shows("dashboard.salary_cost");
+  const showHeadcount = shows("dashboard.headcount");
+  const showPendingActions = shows("dashboard.pending_actions");
+  const showHolidays = shows("dashboard.holidays");
+  const showRecruitment = shows("dashboard.recruitment");
+
   const { data: summary, isLoading: sumLoading } = useGetHrDashboardSummary();
-  const { data: trends  } = useGetSalaryTrends();
-  const { data: depts   } = useListDepartments();
+  const { data: trends  } = useGetSalaryTrends({
+    query: { enabled: showSalaryCost, queryKey: getGetSalaryTrendsQueryKey() },
+  });
+  const { data: depts   } = useListDepartments({
+    query: { enabled: showHeadcount, queryKey: getListDepartmentsQueryKey() },
+  });
   const { data: attn    } = useAttendanceSummary();
   const { data: attnTrend } = useAttendanceMonthlyTrend(year, month);
-  const { data: advances  } = useListAdvances({ status: "approved" }, { enabled: canSeeSettlement } as any);
-  const { data: holidays  } = useListHolidays({ year });
+  const { data: advances  } = useListAdvances(
+    { status: "approved" },
+    { enabled: canSeeSettlement && (showKeyFigures || showPendingActions) } as any
+  );
+  const { data: holidays  } = useListHolidays({ year }, { enabled: showHolidays } as any);
   const { data: auditStats } = useAuditLogStats();
-  const { data: pendingPerms } = useListPermissions({ status: "pending", month, year }, { enabled: canSeeRequests } as any);
-  const { data: missingPunches } = useMissingPunchRequestsHR("pending", canSeeMissingPunch);
-  const { data: casualLeaves } = useListCasualLeaves({ status: "pending" }, canSeeCasualLeave);
+  const { data: pendingPerms } = useListPermissions(
+    { status: "pending", month, year },
+    { enabled: canSeeRequests && (showKeyFigures || showPendingActions) } as any
+  );
+  const { data: missingPunches } = useMissingPunchRequestsHR("pending", canSeeMissingPunch && showPendingActions);
+  const { data: casualLeaves } = useListCasualLeaves({ status: "pending" }, canSeeCasualLeave && showPendingActions);
   const { data: screeningCandidates } = useListScreeningCandidates(
     { status: "screened" },
-    { enabled: canSeeResumeScreening } as any
+    { enabled: canSeeResumeScreening && showRecruitment } as any
   );
-  const { data: staffDocStats } = useDocumentCompletionStats("staff", canSeeDocuments);
-  const { data: productionDocStats } = useDocumentCompletionStats("production", canSeeDocuments);
+  const { data: staffDocStats } = useDocumentCompletionStats("staff", canSeeDocuments && showRecruitment);
+  const { data: productionDocStats } = useDocumentCompletionStats("production", canSeeDocuments && showRecruitment);
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
@@ -308,8 +333,10 @@ export default function HrDashboard() {
 
   return (
     <HrLayout>
+      {/* A column with a gap (not space-y): a section a role may only view is wrapped in a display:contents Gate, which
+          space-y's margins would skip. */}
       <div
-        className="space-y-5"
+        className="flex flex-col gap-5"
         style={{ fontFamily: "'Hanken Grotesk', 'Inter', sans-serif" }}
       >
 
@@ -335,22 +362,24 @@ export default function HrDashboard() {
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               Live
             </span>
-            <button
-              onClick={handleSync}
-              disabled={isSyncing}
-              className="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1 rounded-full transition-all disabled:opacity-60"
-              style={{
-                color: "#006496",
-                background: "rgba(0,100,150,0.07)",
-                boxShadow: "3px 3px 8px rgba(0,100,150,0.1), -2px -2px 6px rgba(255,255,255,0.8)",
-              }}
-            >
-              <RefreshCw size={11} className={isSyncing ? "animate-spin" : ""} />
-              {isSyncing ? "Syncing…" : "Auto Sync"}
-              {lastSyncedAt && !isSyncing && (
-                <span style={{ color: "rgba(0,100,150,0.45)", fontWeight: 400 }}>· {lastSyncedAt}</span>
-              )}
-            </button>
+            <Gate k="dashboard.auto_sync">
+              <button
+                onClick={handleSync}
+                disabled={isSyncing}
+                className="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1 rounded-full transition-all disabled:opacity-60"
+                style={{
+                  color: "#006496",
+                  background: "rgba(0,100,150,0.07)",
+                  boxShadow: "3px 3px 8px rgba(0,100,150,0.1), -2px -2px 6px rgba(255,255,255,0.8)",
+                }}
+              >
+                <RefreshCw size={11} className={isSyncing ? "animate-spin" : ""} />
+                {isSyncing ? "Syncing…" : "Auto Sync"}
+                {lastSyncedAt && !isSyncing && (
+                  <span style={{ color: "rgba(0,100,150,0.45)", fontWeight: 400 }}>· {lastSyncedAt}</span>
+                )}
+              </button>
+            </Gate>
             <button
               onClick={() => navigate("/hr/payroll")}
               className="text-[11px] font-semibold px-3 py-1 rounded-full transition-all"
@@ -362,6 +391,7 @@ export default function HrDashboard() {
             >
               Run Payroll
             </button>
+            <Gate k="employees.add">
             <button
               onClick={() => navigate("/hr/employees/new")}
               className="text-[11px] font-semibold px-3 py-1 rounded-full text-white transition-all clay-btn"
@@ -369,10 +399,12 @@ export default function HrDashboard() {
             >
               + Add Employee
             </button>
+            </Gate>
           </div>
         </div>
 
         {/* ── KPI Row ─────────────────────────────────────────────────────── */}
+        <Gate k="dashboard.key_figures">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <KpiCard
               label="Total Employees" loading={!summary} value={summary?.totalEmployees ?? 0}
@@ -413,8 +445,10 @@ export default function HrDashboard() {
               onClick={() => navigate("/hr/settlement")}
             />
         </div>
+        </Gate>
 
         {/* ── Attendance Hero ──────────────────────────────────────────────── */}
+        <Gate k="dashboard.attendance">
         <div
           className="relative rounded-2xl overflow-hidden cursor-pointer group clay-card"
           onClick={() => navigate("/hr/attendance")}
@@ -507,11 +541,14 @@ export default function HrDashboard() {
             </div>
           )}
         </div>
+        </Gate>
 
         {/* ── Charts Row ──────────────────────────────────────────────────── */}
+        {(showSalaryCost || showAttendance) && (
         <div className="grid lg:grid-cols-3 gap-4">
 
           {/* Salary Cost Trend */}
+          <Gate k="dashboard.salary_cost">
           <div
             className="relative lg:col-span-2 rounded-2xl p-5 cursor-pointer clay-card"
             onClick={() => navigate("/hr/payroll")}
@@ -553,8 +590,10 @@ export default function HrDashboard() {
               </div>
             )}
           </div>
+          </Gate>
 
           {/* Attendance Trend This Month */}
+          <Gate k="dashboard.attendance">
           <div
             className="relative rounded-2xl p-5 cursor-pointer clay-card"
             onClick={() => navigate("/hr/attendance")}
@@ -583,12 +622,16 @@ export default function HrDashboard() {
               </div>
             )}
           </div>
+          </Gate>
         </div>
+        )}
 
         {/* ── Insights Row ─────────────────────────────────────────────────── */}
+        {(showHeadcount || showPendingActions || showHolidays) && (
         <div className="grid lg:grid-cols-3 gap-4">
 
           {/* Department Headcount */}
+          <Gate k="dashboard.headcount">
           <div className="relative rounded-2xl p-5 clay-card">
           {!depts && <KpiRunningBorder accent="#006496" radius={16} />}
             <SectionTitle action="Manage Departments" onAction={() => navigate("/hr/departments")}>
@@ -653,11 +696,14 @@ export default function HrDashboard() {
               ))}
             </div>
           </div>
+          </Gate>
 
           {/* Action Items + Holidays */}
-          <div className="space-y-4">
+          {(showPendingActions || showHolidays) && (
+          <div className="flex flex-col gap-4">
 
             {/* Pending Actions */}
+            <Gate k="dashboard.pending_actions">
             <div className="relative rounded-2xl p-5 clay-card">
             {!summary && <KpiRunningBorder accent="#ef4444" radius={16} />}
               <SectionTitle>
@@ -709,8 +755,10 @@ export default function HrDashboard() {
                 ))}
               </div>
             </div>
+            </Gate>
 
             {/* Upcoming Holidays */}
+            <Gate k="dashboard.holidays">
             <div className="relative rounded-2xl p-5 clay-card">
             {!holidays && <KpiRunningBorder accent="#f59e0b" radius={16} />}
               <SectionTitle action="Manage" onAction={() => navigate("/hr/leave")}>
@@ -745,10 +793,14 @@ export default function HrDashboard() {
                 <p className="text-xs text-center py-3" style={{ color: "rgba(0,60,100,0.55)" }}>No upcoming holidays</p>
               )}
             </div>
+            </Gate>
           </div>
+          )}
         </div>
+        )}
 
         {/* ── Geo Attendance Snapshot ─────────────────────────────────────── */}
+        <Gate k="dashboard.geo">
         <div className="relative rounded-2xl p-5 clay-card">
         {!attn && <KpiRunningBorder accent="#0d9488" radius={16} />}
           <SectionTitle action="Open Geo Attendance" onAction={() => navigate("/hr/geo-attendance")}>
@@ -785,8 +837,10 @@ export default function HrDashboard() {
             ))}
           </div>
         </div>
+        </Gate>
 
         {/* ── Recruitment & Documents Snapshot ─────────────────────────────── */}
+        <Gate k="dashboard.recruitment">
         <div className="relative rounded-2xl p-5 clay-card">
         {!auditStats && <KpiRunningBorder accent="#0891b2" radius={16} />}
           <SectionTitle action="View Recruitment" onAction={() => navigate("/hr/recruitment")}>
@@ -821,8 +875,10 @@ export default function HrDashboard() {
             ))}
           </div>
         </div>
+        </Gate>
 
         {/* ── Bottom Row: Activity Summary ─────────────────────────────────── */}
+        <Gate k="dashboard.activity">
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {[
             { label: "Events Today",     value: auditStats?.today    ?? 0, icon: Activity,     color: "#006496", path: "/hr/activity-logs", sub: "in audit log" },
@@ -853,6 +909,7 @@ export default function HrDashboard() {
             </button>
           ))}
         </div>
+        </Gate>
 
       </div>
     </HrLayout>

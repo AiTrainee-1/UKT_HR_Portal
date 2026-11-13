@@ -51,7 +51,7 @@ from .models import (
     ProductionShiftRule,
     Role,
 )
-from .permission_registry import READ_ONLY_POST_PATHS, resolve_module
+from .permission_registry import READ_ONLY_POST_PATHS, resolve_module, resolve_permission
 from .reporting.definitions.employees_admin_audit import AUDIT_MODULES
 
 URL = "/api/production-shift-rules"
@@ -1160,9 +1160,13 @@ class FuzzTests(Base):
 
 class PermissionTests(Base):
     def test_the_url_is_mapped_to_the_attendance_settings(self):
-        self.assertEqual(resolve_module("production-shift-rules"), "settings.attendance")
-        self.assertEqual(resolve_module("production-shift-rules/preview"), "settings.attendance")
-        self.assertEqual(resolve_module("production-shift-config"), "settings.attendance")
+        # Settings -> Production Shifts has a key of its own since 2026-11-11: it follows Settings -> Attendance until a
+        # role sets it, so a role keeps exactly the access it had
+        self.assertEqual(resolve_module("production-shift-rules"), "settings.production_shifts")
+        self.assertEqual(resolve_permission({"settings.attendance": "view"}, "settings.production_shifts"), "view")
+        self.assertEqual(resolve_module("production-shift-rules/preview"), "settings.production_shifts")
+        # the Production view of Settings -> Attendance (a sub-tab key that follows the tab)
+        self.assertEqual(resolve_module("production-shift-config"), "settings.attendance.production")
         # (the HR Requests page's Notify preview is the other POST that only reads)
         self.assertEqual(
             READ_ONLY_POST_PATHS, frozenset({"production-shift-rules/preview", "hr/hod-reminders/preview"})

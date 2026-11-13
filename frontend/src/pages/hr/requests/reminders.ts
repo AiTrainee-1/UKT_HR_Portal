@@ -28,9 +28,10 @@ export function normalizeReminders(raw: unknown): HrReminder[] {
 }
 
 /** Refreshes every minute. A user who may not read it (or an older backend) simply gets no reminders. */
-export function useHrReminders() {
+export function useHrReminders(enabled = true) {
   return useQuery<HrReminder[]>({
     queryKey: [REMINDERS_KEY],
+    enabled,
     queryFn: async () => normalizeReminders(await customFetch<unknown>(REMINDERS_KEY)),
     refetchInterval: 60_000,
     retry: false,

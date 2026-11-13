@@ -319,8 +319,8 @@ def employee_request_action(request: Request, pk: int) -> Response:
     data = request.data
     prev_status = er.status
     if data.get("status") in ("approved", "rejected") and data.get("status") != prev_status:
-        # approving / rejecting a general request is the approval right, not the edit right (hr_access.py)
-        if refused := hr_access.approval_refusal(request, "request"):
+        # approving / rejecting an employee request is the approval right of its type, not the edit right (hr_access.py)
+        if refused := hr_access.approval_refusal(request, hr_access.kind_for("request", er)):
             return refused
         if hr_access.out_of_branch(request, er.employee.branch_id if er.employee_id else None):
             return Response({"error": "Request not found"}, status=404)
@@ -343,7 +343,7 @@ def employee_request_action(request: Request, pk: int) -> Response:
                 message=f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
             )
         if er.status in ("approved", "rejected"):
-            hr_access.log_decision(request, "request", er, er.status, f"request '{er.subject}'")
+            hr_access.log_decision(request, hr_access.kind_for("request", er), er, er.status, f"request '{er.subject}'")
             whatsapp_approvals.notify_decision(
                 "request", er, er.status, approver=er.handled_by or request.jwt_user.get("name", ""), role="hr",
                 comment=er.hr_notes,

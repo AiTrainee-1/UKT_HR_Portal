@@ -1,6 +1,7 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderMdPage, type RenderedPage } from "@/pages/md/testing/renderMdPage";
+import { useAuth } from "@/contexts/AuthContext";
 import MobileMessagesTab from "./MobileMessagesTab";
 
 // Mobile App Login -> Mobile Messages: the overview, the switches over what is pushed to phones, the message log, the phones
@@ -63,6 +64,22 @@ const row = (id: number, over: Record<string, unknown> = {}) => ({
 });
 const paged = (items: unknown[]) => ({ items, total: items.length, page: 1, pageSize: 20 });
 
+// The sections follow the role's Mobile App Login keys (an HR login with none set sees none of them), so the page is opened
+// by an HR login that may edit Mobile App Login unless a test says otherwise.
+const signedIn = (permissions: Record<string, string>) => ({
+  role: "hr",
+  employeeId: null,
+  name: "Test HR",
+  isSuperAdmin: false,
+  permissions,
+});
+
+/** Like the app's ProtectedRoute: the page is drawn once the login is known. */
+function SignedIn({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  return user ? <>{children}</> : null;
+}
+
 let page: RenderedPage | undefined;
 afterEach(() => {
   page?.unmount();
@@ -71,8 +88,13 @@ afterEach(() => {
 
 const open = async (fixtures: Record<string, unknown> = {}) => {
   page = await renderMdPage(
-    () => <MobileMessagesTab />,
+    () => (
+      <SignedIn>
+        <MobileMessagesTab />
+      </SignedIn>
+    ),
     {
+      "/api/auth/me": signedIn({ mobile_app_login: "edit" }),
       "/api/mobile-app/messages/overview": overview(),
       "/api/mobile-app/messages/controls": controls(),
       "/api/mobile-app/messages/log": paged([
@@ -142,6 +164,48 @@ describe("Mobile Messages", () => {
       expect(text, needle).toContain(needle);
     }
     expect(text).not.toContain("switched OFF");
+  });
+
+  it("offers only the sections the role may see, opens the first of them and asks nothing for a hidden one", async () => {
+    await open({
+      "/api/auth/me": signedIn({
+        mobile_app_login: "edit",
+        "mobile_app_login.messages.overview": "hidden",
+        "mobile_app_login.messages.send": "hidden",
+      }),
+    });
+    expect(page!.container.querySelector('[data-testid="mm-controls"]')).not.toBeNull();
+    expect(page!.container.querySelector('[data-testid="mm-overview"]')).toBeNull();
+    const labels = [...page!.container.querySelectorAll("button")].map((b) => b.textContent ?? "");
+    expect(labels.some((l) => l.includes("Send a message"))).toBe(false);
+    expect(labels.some((l) => l.includes("Overview"))).toBe(false);
+    expect(page!.requests().some((r) => r.startsWith("/api/mobile-app/messages/overview"))).toBe(false);
+  });
+
+  it("says so when no section is open to the role", async () => {
+    await open({
+      "/api/auth/me": signedIn({ mobile_app_login: "edit", "mobile_app_login.messages": "hidden" }),
+    });
+    expect(page!.container.querySelector('[data-testid="mobile-messages-nothing-open"]')).not.toBeNull();
+    expect(page!.requests().some((r) => r.startsWith("/api/mobile-app/messages"))).toBe(false);
+  });
+
+  it("marks a View-only section of an editable page, and only that one", async () => {
+    await open({
+      "/api/auth/me": signedIn({ mobile_app_login: "edit", "mobile_app_login.messages.send": "view" }),
+    });
+    expect(page!.container.querySelector('[data-testid="tab-view-only"]')).toBeNull();
+    await go("Send a message");
+    expect(page!.container.querySelector('[data-testid="tab-view-only"]')).not.toBeNull();
+  });
+
+  it("does not offer the overview's shortcut to Controls when Controls is hidden", async () => {
+    await open({
+      "/api/auth/me": signedIn({ mobile_app_login: "edit", "mobile_app_login.messages.controls": "hidden" }),
+      "/api/mobile-app/messages/overview": overview({ pushEnabled: false }),
+    });
+    expect(page!.text()).toContain("Phone notifications are switched OFF");
+    expect(page!.text()).not.toContain("Switch them on");
   });
 
   it("explains on the overview when no phone has registered at all", async () => {

@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { AlertTriangle, CheckCircle2, Info, Send } from "lucide-react";
 import { useGmailControlSettings, useGmailTestEmail, type GmailTestResult } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { Row, StatusPill } from "./shared";
 
 // Opens Settings on the SMTP / Email tab itself (the bare /hr/settings that the server's settingsPath gives opens Company).
@@ -156,7 +157,10 @@ export default function ConfigTab() {
         </CardContent>
       </Card>
 
-      <TestEmail disabledReason={c.sendingBlockedReason} />
+      {/* its own permission key: hidden = not shown, View only = shown with the Send button locked */}
+      <Gate k="gmail_control.config.test_email">
+        <TestEmail disabledReason={c.sendingBlockedReason} />
+      </Gate>
 
       <Card className="border-0 shadow-sm">
         <CardHeader className="pb-1">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { Cable, CloudDownload, Cpu, Link2, Loader2, RefreshCw, UsersRound } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
@@ -6,8 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Switch } from "@/components/ui/switch";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDeviceControlOverview, useRecheckDevices, useRefreshDeviceUsers } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import { relativeTime } from "./device-status/logic";
 import ConnectorsTab from "./device-control/ConnectorsTab";
 import FetchTab from "./device-control/FetchTab";
@@ -15,6 +18,23 @@ import LinkTab from "./device-control/LinkTab";
 import OverviewTab from "./device-control/OverviewTab";
 import PushTab from "./device-control/PushTab";
 import { pathForTab, tabFromPath, type DeviceControlTab } from "./device-control/logic";
+
+const TABS: { value: DeviceControlTab; label: string; icon: ReactNode }[] = [
+  { value: "overview", label: "Overview", icon: <Cpu size={14} /> },
+  { value: "fetch", label: "Data Fetch", icon: <CloudDownload size={14} /> },
+  { value: "push", label: "Data Push", icon: <UsersRound size={14} /> },
+  { value: "link-unlink", label: "Link / Unlink", icon: <Link2 size={14} /> },
+  { value: "connectors", label: "Site connectors", icon: <Cable size={14} /> },
+];
+
+/** Each tab's own permission key (Account Management -> Roles & Permissions); one without a setting follows the page. */
+const TAB_KEY: Record<DeviceControlTab, string> = {
+  overview: "biometric_connectors.device_control.overview",
+  fetch: "biometric_connectors.device_control.fetch",
+  push: "biometric_connectors.device_control.push",
+  "link-unlink": "biometric_connectors.device_control.link_unlink",
+  connectors: "biometric_connectors.device_control.connectors",
+};
 
 /**
  * Device Control (Attendance → Device Control): everything about the biometric machines in one place.
@@ -31,7 +51,22 @@ import { pathForTab, tabFromPath, type DeviceControlTab } from "./device-control
 export default function DeviceControl() {
   const [location, navigate] = useLocation();
   const { toast } = useToast();
-  const tab = tabFromPath(location);
+  const { user } = useAuth();
+  const level = useLevel();
+  // Every tab but Overview has an address of its own (the route guard blocks a hidden one, HrLayout locks a View-only one).
+  // Overview is the page's own address: when it is hidden the page opens on the first tab this role may see.
+  const tabs = visibleItems(TABS, (t) => TAB_KEY[t.value], level);
+  const asked = tabFromPath(location);
+  const tab = pickVisible(
+    asked,
+    tabs.map((t) => t.value),
+  );
+  useEffect(() => {
+    if (tabs.length > 0 && tab !== asked) navigate(pathForTab(tab), { replace: true });
+  }, [tab, asked, tabs.length, navigate]);
+  const tabViewOnly =
+    tabs.length > 0 && !isRouteViewOnly(user, location, moduleForPath(location)) && level(TAB_KEY[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const overview = useDeviceControlOverview(autoRefresh);
   const recheck = useRecheckDevices();
@@ -116,21 +151,22 @@ export default function DeviceControl() {
           </div>
         </div>
 
-        <div className="max-w-full overflow-x-auto">
-          <PillTabs
-            items={[
-              { value: "overview", label: "Overview", icon: <Cpu size={14} /> },
-              { value: "fetch", label: "Data Fetch", icon: <CloudDownload size={14} /> },
-              { value: "push", label: "Data Push", icon: <UsersRound size={14} /> },
-              { value: "link-unlink", label: "Link / Unlink", icon: <Link2 size={14} /> },
-              { value: "connectors", label: "Site connectors", icon: <Cable size={14} /> },
-            ]}
-            value={tab}
-            onChange={(v) => navigate(pathForTab(v as DeviceControlTab))}
-          />
-        </div>
+        {tabs.length === 0 ? (
+          <p
+            className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
+            data-testid="nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        ) : (
+          <div className="max-w-full overflow-x-auto">
+            <PillTabs items={tabs} value={tab} onChange={(v) => navigate(pathForTab(v as DeviceControlTab))} />
+          </div>
+        )}
 
-        {tab === "overview" && (
+        <ViewOnlyTabNote show={tabViewOnly} />
+
+        {tabs.length > 0 && tab === "overview" && (
           <OverviewTab
             overview={data}
             loading={overview.isLoading}
@@ -139,7 +175,7 @@ export default function DeviceControl() {
             onRead={readOne}
           />
         )}
-        {tab === "connectors" ? (
+        {tabs.length === 0 ? null : tab === "connectors" ? (
           <ConnectorsTab />
         ) : tab !== "overview" && overview.isError && !data ? (
           <Card className="rounded-2xl ring-1 ring-red-200">

@@ -1174,6 +1174,58 @@ describe("a View Only role", () => {
   });
 });
 
+describe("the role's own keys for each tab and Settings section", () => {
+  const as = (permissions: Record<string, string>) => {
+    h.user.current = { role: "hr", employeeId: null, permissions: { sms_control: "edit", ...permissions } };
+  };
+
+  it("offers only the tabs the role may open, and the bare page lands on the first of them", async () => {
+    as({ "sms_control.overview": "hidden", "sms_control.messages": "hidden" });
+    mountPage(BASE);
+    await waitFor(() => pathname() === `${BASE}/settings/channel`, "the redirect to the first visible tab");
+    expect(pillLabels()).toEqual(["Settings", "Test", "Setup"]);
+    expect(q("sms-overview")).toBeNull();
+    expect(asked()).not.toContain("/api/sms-control/messages");
+  });
+
+  it("opens Settings on the first section the role may open, and offers only those", async () => {
+    as({ "sms_control.settings.channel": "hidden" });
+    mountPage(`${BASE}/settings`);
+    await waitFor(() => pathname() === `${BASE}/settings/limits`, "the redirect to the first visible section");
+    await waitFor(() => !!q("sms-section-limits"), "limits");
+    expect(nestedLabels()).toEqual(["Limits", "Switches"]);
+  });
+
+  it("a section the role may only view is read-only, the others stay editable", async () => {
+    as({ "sms_control.settings.limits": "view" });
+    await open(`${BASE}/settings/limits`, "sms-section-limits");
+    expect(input("sms-input-dailyCap").disabled).toBe(true);
+    expect(text(must("sms-limits-save-row"))).toContain("View only");
+    click(nestedTab("switches"));
+    await waitFor(() => !!q("sms-section-switches"), "switches");
+    for (const sw of document.body.querySelectorAll<HTMLButtonElement>('[role="switch"]'))
+      expect(sw.disabled).toBe(false);
+  });
+
+  it("a tab the role may only view is read-only", async () => {
+    as({ "sms_control.test": "view" });
+    await open(`${BASE}/test`, "sms-test");
+    expect((must("sms-test-send") as HTMLButtonElement).disabled).toBe(true);
+    expect(world.calls).toHaveLength(0);
+  });
+
+  it("says so when no tab is open to the role", async () => {
+    as(
+      Object.fromEntries(
+        ["overview", "settings", "messages", "test", "setup"].map((t) => [`sms_control.${t}`, "hidden"]),
+      ),
+    );
+    mountPage(BASE);
+    await waitFor(() => !!q("sms-nothing-open"), "the note");
+    expect(pathname()).toBe(BASE);
+  });
+});
+
 describe("the keyboard", () => {
   const focusTab = (name: string) => {
     const t = tab(name);

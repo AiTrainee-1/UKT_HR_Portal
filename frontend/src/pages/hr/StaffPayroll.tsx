@@ -107,11 +107,21 @@ export default function StaffPayroll() {
 
         <Separator />
 
-        {tab === "payroll" && (
+        {visibleTabs.length === 0 && (
+          <p
+            className="rounded-2xl bg-white p-6 text-center text-sm text-muted-foreground shadow-sm"
+            data-testid="staff-payroll-nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        )}
+        {visibleTabs.includes("payroll") && tab === "payroll" && (
           <PayrollTab month={month} year={year} url={url} setUrl={setUrl} onPeriodChange={changePeriod} />
         )}
-        {tab === "salary" && <SalaryTab month={month} year={year} url={url} setUrl={setUrl} />}
-        {tab === "payslip" && (
+        {visibleTabs.includes("salary") && tab === "salary" && (
+          <SalaryTab month={month} year={year} url={url} setUrl={setUrl} />
+        )}
+        {visibleTabs.includes("payslip") && tab === "payslip" && (
           <PayslipsPanel kind="staff" accent="indigo" month={month} year={year} onPeriodChange={changePeriod} />
         )}
       </div>

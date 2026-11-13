@@ -43,7 +43,8 @@ type Props = {
   filters: HistoryFilters;
   onFilters: (next: HistoryFilters) => void;
   onTimeline: (record: IncrementRecord) => void;
-  onApply: (employeeId: number) => void;
+  /** Opens the Apply tab on that employee; left out when this role may not see the Apply tab (no "again" button). */
+  onApply?: (employeeId: number) => void;
   today: string;
 };
 
@@ -444,7 +445,7 @@ function RowActions({
 }: {
   r: IncrementRecord;
   onTimeline: (r: IncrementRecord) => void;
-  onApply: (employeeId: number) => void;
+  onApply?: (employeeId: number) => void;
 }) {
   return (
     <div className="flex items-center justify-end gap-0.5">
@@ -458,16 +459,18 @@ function RowActions({
       >
         <Route size={15} />
       </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => onApply(r.employeeId)}
-        title="Give another increment"
-        aria-label={`Give ${r.employeeName} another increment`}
-        data-testid={`increment-again-${r.id}`}
-      >
-        <TrendingUp size={15} className="text-green-600" />
-      </Button>
+      {onApply && (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => onApply(r.employeeId)}
+          title="Give another increment"
+          aria-label={`Give ${r.employeeName} another increment`}
+          data-testid={`increment-again-${r.id}`}
+        >
+          <TrendingUp size={15} className="text-green-600" />
+        </Button>
+      )}
     </div>
   );
 }

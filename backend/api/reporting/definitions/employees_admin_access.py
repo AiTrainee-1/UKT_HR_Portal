@@ -223,18 +223,19 @@ def _run_role_matrix(ctx):
         *(ColumnSpec(f"role_{r.id}", r.name, BADGE, 1.0) for r in roles),
     ]
     rows = []
-    for node in MODULE_TREE:
-        for item, parent in [(node, None), *((c, node) for c in node.get("children", []))]:
-            levels = {f"role_{r.id}": _level(r.permissions, item["key"]) for r in roles}
-            if hide_none and all(v == "hidden" for v in levels.values()):
-                continue
-            row = {
-                "module": item["label"] if parent is None else f"{parent['label']} > {item['label']}",
-                "moduleKey": item["key"],
-                "group": (parent or node)["label"],
-            }
+
+    def walk(item: dict, path: list[str], group: str) -> None:
+        # every key of the tree: a section, its pages, their tabs and sub-tabs ("Payroll > Payroll - Issues")
+        levels = {f"role_{r.id}": _level(r.permissions, item["key"]) for r in roles}
+        if not (hide_none and all(v == "hidden" for v in levels.values())):
+            row = {"module": " > ".join([*path, item["label"]]), "moduleKey": item["key"], "group": group}
             row.update({k: _LEVEL_LABEL.get(v, "Hidden") for k, v in levels.items()})
             rows.append(row)
+        for child in item.get("children", []):
+            walk(child, [*path, item["label"]], group)
+
+    for node in MODULE_TREE:
+        walk(node, [], node["label"])
 
     known = set(all_module_keys())
     unknown: list[str] = []

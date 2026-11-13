@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useSearch } from "wouter";
 import { CalendarCheck, ClipboardCheck, Loader2, SearchX, Sun, UserCheck } from "lucide-react";
 import { ApprovalTrail } from "@/components/ApprovalTrail";
@@ -21,18 +22,20 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { customFetch } from "@/lib/api-client/custom-fetch";
 import {
-  useCompensationCredits,
   useHolidayWorkClaims,
   useHolidayWorkEligible,
   useRaiseHolidayWork,
   useWithdrawHolidayWork,
+  type CompensationCreditRow,
   type HolidayWorkClaim,
   type ShiftsValue,
 } from "@/lib/api-client/custom-hooks";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
 import { NestedTabs } from "@/components/ui/nested-tabs";
 import { LEAVE_NESTED, subPath } from "../routes";
+import { keepOpenNested, useCanOpen } from "../visible";
 import { BalancePart, LegacyCredits } from "./BalancePart";
 import {
   MONTH_NAMES,
@@ -119,7 +122,13 @@ export function HolidayWorkPart({
     status: url.hstatus === "all" ? undefined : url.hstatus,
     ...(wholeYear ? { anyMonth: true } : { month, year }),
   });
-  const credits = useCompensationCredits();
+  const canOpen = useCanOpen();
+  // useCompensationCredits' own query (the same cache entry), not loaded while the credits are hidden from the role
+  const credits = useQuery<{ results: CompensationCreditRow[]; count: number }>({
+    queryKey: ["/api/compensation/credits", {}],
+    queryFn: () => customFetch("/api/compensation/credits"),
+    enabled: canOpen(subPath("leave", "holiday-work", "", "credits")),
+  });
   const draft = useRaiseDraft();
   const enabled = claims.data?.enabled;
   const master = enabled?.master ?? !featuresOff;
@@ -160,12 +169,12 @@ export function HolidayWorkPart({
         value={nested}
         testId="holiday-nested"
         label="Sections of Sunday and holiday work"
-        items={[
+        items={keepOpenNested(canOpen, "leave", "holiday-work", [
           { value: "raise", label: LEAVE_NESTED["holiday-work"][0].label },
           { value: "claims", label: LEAVE_NESTED["holiday-work"][1].label, count: claims.data?.results.length },
           { value: "balance", label: LEAVE_NESTED["holiday-work"][2].label },
           { value: "credits", label: LEAVE_NESTED["holiday-work"][3].label, count: credits.data?.results.length },
-        ]}
+        ])}
       >
         {nested === "raise" && (
           <>

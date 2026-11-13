@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Download, HandCoins, Hourglass, Plus, Search, UserMinus, Wallet } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { canApprove, useAuth } from "@/contexts/AuthContext";
+import { kindFor } from "@/lib/hr-access";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -50,8 +51,10 @@ const FIRST_DIRECTION: Record<SortKey, Sort["dir"]> = {
 export default function Settlement() {
   const { toast } = useToast();
   // approving an advance is a right of its own (HR Manager / HR Assistant categories); unchanged for everyone else
+  // General advances and term loans are separate switches: each row's Approve / Reject asks about its own type.
   const { user } = useAuth();
-  const canDecide = canApprove(user, "advance");
+  const canDecide = (row: Pick<SettlementRow, "advanceType">) =>
+    canApprove(user, kindFor("advance", { advanceType: row.advanceType }));
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);

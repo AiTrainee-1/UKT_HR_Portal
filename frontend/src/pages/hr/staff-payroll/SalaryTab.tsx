@@ -10,8 +10,10 @@ import { useMarkPaid, useRefreshPayroll } from "@/components/payroll/kit/use-pay
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { SalaryStatementPanel } from "@/components/payroll/statement";
 import { Button } from "@/components/ui/button";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { useListPayrollRuns } from "@/lib/api-client";
 import { usePayrollMonthStatus } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { onlyStaff, staffPeriodLabel, staffScope } from "./logic";
 
 /**
@@ -31,6 +33,7 @@ export function SalaryTab({
   setUrl: (patch: Record<string, string>) => void;
 }) {
   const [, navigate] = useLocation();
+  const { user } = useAuth();
   const [adjust, setAdjust] = useState<AdjustTarget | null>(null);
   const { markPaid, markingId } = useMarkPaid();
   const refresh = useRefreshPayroll();
@@ -41,7 +44,10 @@ export function SalaryTab({
   const runs = useMemo(() => onlyStaff(runsQuery.data), [runsQuery.data]);
   const runById = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs]);
   // a month finalized with Payroll Done (2026-11-10) is locked: no bonus / deduction change, no Mark as Cleared
-  const locked = !!usePayrollMonthStatus(month, year).data?.locked;
+  const monthStatus = usePayrollMonthStatus(month, year).data;
+  const locked = !!monthStatus?.locked;
+  // Mark as Cleared is an approval of its own (a View-only role still sees it disabled, a finalized month hides it)
+  const mayMarkCleared = canApprove(user, "payroll_mark_cleared");
   const uiState = useMemo(() => statementUiFromUrl(url), [url]);
   const branchId = branchIdOf(url.sbranch);
   const filters = useMemo(() => (branchId ? { branchId } : undefined), [branchId]);
@@ -87,19 +93,21 @@ export function SalaryTab({
           const name = run.employeeName ?? run.employeeCode ?? "employee";
           return (
             <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-indigo-600 hover:text-indigo-800"
-                aria-label={`Edit the bonus and deductions of ${name}`}
-                title="Edit bonus and deductions"
-                onClick={() => setAdjust(adjustTargetFromRun(run, periodLabel))}
-                data-testid={`staff-salary-adjust-${run.id}`}
-              >
-                <Pencil size={13} />
-              </Button>
-              {run.status === "pending" && (
+              <Gate k="payroll.adjust">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-indigo-600 hover:text-indigo-800"
+                  aria-label={`Edit the bonus and deductions of ${name}`}
+                  title="Edit bonus and deductions"
+                  onClick={() => setAdjust(adjustTargetFromRun(run, periodLabel))}
+                  data-testid={`staff-salary-adjust-${run.id}`}
+                >
+                  <Pencil size={13} />
+                </Button>
+              </Gate>
+              {run.status === "pending" && mayMarkCleared && (
                 <Button
                   type="button"
                   variant="ghost"

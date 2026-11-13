@@ -1,8 +1,12 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
+import { moduleForPath } from "@/lib/permission-modules";
+import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import {
   BarChart3,
   FileText,
@@ -30,8 +34,25 @@ const TABS = [
   { value: "config", label: "Configuration", icon: <Settings2 size={13} /> },
 ];
 
+// Each tab has its own permission key (Account Management); with no setting of its own it follows the page.
+const tabModule = (tab: string) => `whatsapp_control.${tab}`;
+
 export default function WhatsAppControl() {
-  const [tab, setTab] = useState("overview");
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  const [askedTab, setTab] = useState("overview");
+  // Only the tabs this role may see are offered, and the one shown is always one of them (only it is mounted, so a
+  // hidden tab asks the server for nothing). A tab the role may only VIEW on a page it may edit gets the note and lock.
+  const visibleTabs = visibleItems(TABS, (t) => tabModule(t.value), level);
+  const visibleValues = visibleTabs.map((t) => t.value);
+  const tab = pickVisible(askedTab, visibleValues);
+  const canOpen = (t: string) => visibleValues.includes(t);
+  const tabViewOnly =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(tabModule(tab)) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
   const [preset, setPreset] = useState<MessageFilterPreset>({});
   const queryClient = useQueryClient();
   const fetching = useIsFetching({ predicate: (q) => String(q.queryKey[0]).startsWith("/api/whatsapp") }) > 0;
@@ -68,20 +89,29 @@ export default function WhatsAppControl() {
           </Button>
         </div>
 
-        <PillTabs className="flex-wrap h-auto" size="sm" items={TABS} value={tab} onChange={setTab} />
+        {visibleTabs.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="whatsapp-control-nothing-open">
+            Nothing on this page is open to your role.
+          </p>
+        ) : (
+          <PillTabs className="flex-wrap h-auto" size="sm" items={visibleTabs} value={tab} onChange={setTab} />
+        )}
 
-        {tab === "overview" && (
+        <ViewOnlyTabNote show={tabViewOnly} />
+
+        {/* the Overview's shortcuts into another tab are only offered when that tab is open to the role */}
+        {tab === "overview" && canOpen("overview") && (
           <OverviewTab
-            onOpenCategory={showCategory}
-            onOpenFailures={() => openMessages({ status: "failed" })}
-            onOpenConfig={() => setTab("config")}
+            onOpenCategory={canOpen("messages") ? showCategory : undefined}
+            onOpenFailures={canOpen("messages") ? () => openMessages({ status: "failed" }) : undefined}
+            onOpenConfig={canOpen("config") ? () => setTab("config") : undefined}
           />
         )}
-        {tab === "messages" && <MessagesTab preset={preset} />}
-        {tab === "employees" && <EmployeesTab />}
-        {tab === "controls" && <ControlsTab />}
-        {tab === "templates" && <TemplatesTab />}
-        {tab === "config" && <ConfigTab />}
+        {tab === "messages" && canOpen("messages") && <MessagesTab preset={preset} />}
+        {tab === "employees" && canOpen("employees") && <EmployeesTab />}
+        {tab === "controls" && canOpen("controls") && <ControlsTab />}
+        {tab === "templates" && canOpen("templates") && <TemplatesTab />}
+        {tab === "config" && canOpen("config") && <ConfigTab />}
       </div>
     </HrLayout>
   );

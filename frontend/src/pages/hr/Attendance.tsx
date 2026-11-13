@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useMemo, memo } from "react";
-import { useLocation } from "wouter";
+import { useState, useRef, useEffect, useMemo, memo, type ReactNode } from "react";
+import { Redirect, useLocation } from "wouter";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { TONE } from "@/lib/statusTones";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { customFetch } from "@/lib/api-client/custom-fetch";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
+import { moduleForPath } from "@/lib/permission-modules";
+import { Gate, ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import {
   useAttendanceDaily,
   useAttendanceEmployeeHistory, useCreateManualAttendance, useListEmployeesLite,
@@ -21,7 +25,7 @@ import {
 import {
   useAttendanceSummaryTyped, useAttendanceTrendTyped,
   useListBiometricDevices, type SyncBiometricMode, type SyncDeviceId,
-  useListAutoSyncRules, useCreateAutoSyncRule, useUpdateAutoSyncRule, useDeleteAutoSyncRule,
+  getAutoSyncRulesQueryKey, useCreateAutoSyncRule, useUpdateAutoSyncRule, useDeleteAutoSyncRule,
   type AutoSyncRuleItem, type AutoSyncRuleInput,
   type BiometricDeviceItem,
   usePayrollSettings, useListHolidays,
@@ -86,9 +90,53 @@ const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct"
 // and the employee search. Everything on it reads the same endpoints as before plus the additive daily keys (punches,
 // leaveState ...); nothing here computes or changes an attendance verdict.
 
+type AttendanceView = "staff" | "production";
+
+/** The Staff / Production switch and the permission key of each (Account Management -> Roles & Permissions). */
+const ATTENDANCE_VIEWS: { value: AttendanceView; label: string; icon: ReactNode }[] = [
+  { value: "staff", label: "Staff", icon: <Briefcase size={12} /> },
+  { value: "production", label: "Production", icon: <Factory size={12} /> },
+];
+const ATTENDANCE_VIEW_KEY: Record<AttendanceView, string> = {
+  staff: "attendance.staff",
+  production: "attendance.production",
+};
+
+/** Staff / Production are addresses of their own (the route guard blocks a hidden one); the bare /hr/attendance shows Staff,
+ *  or Production when Staff is hidden for this role, or a short note when neither is open to it. */
 export default function AttendancePage() {
+  const [location] = useLocation();
+  const level = useLevel();
+  const views = visibleItems(ATTENDANCE_VIEWS, (v) => ATTENDANCE_VIEW_KEY[v.value], level);
+  const asked: AttendanceView = location.includes("/attendance/production") ? "production" : "staff";
+  const view = pickVisible(asked, views.map((v) => v.value));
+
+  if (views.length === 0) {
+    return (
+      <HrLayout>
+        <p
+          className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
+          data-testid="nothing-open"
+        >
+          Nothing on this page is open to your role.
+        </p>
+      </HrLayout>
+    );
+  }
+  if (view !== asked) return <Redirect to={`/hr/attendance/${view}`} replace />;
+  return <AttendanceDay view={view} views={views} />;
+}
+
+function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof ATTENDANCE_VIEWS }) {
   const queryClient = useQueryClient();
   const [location, navigate] = useLocation();
+  const { user } = useAuth();
+  const level = useLevel();
+  // Staff / Production on the bare /hr/attendance (no address of its own there): HrLayout locks a View-only address, this
+  // locks the view when only it is View-only
+  const viewOnlyHere =
+    !isRouteViewOnly(user, location, moduleForPath(location)) && level(ATTENDANCE_VIEW_KEY[view]) === "view";
+  useViewOnlyLock(viewOnlyHere, view);
 
   const [urlState, setUrlState] = useUrlParams<Record<keyof typeof ATTENDANCE_URL_DEFAULTS, string>>(
     ATTENDANCE_URL_DEFAULTS,
@@ -100,9 +148,7 @@ export default function AttendancePage() {
   const setSelectedMonth = (v: number) => setUrlState({ month: String(v) });
   const setSelectedYear = (v: number) => setUrlState({ year: String(v) });
   // Staff / Production sub-section -derived from the route so the sidebar
-  // stays in sync (/hr/attendance/staff | /hr/attendance/production)
-  const view: "staff" | "production" =
-    location.includes("/attendance/production") ? "production" : "staff";
+  // stays in sync (/hr/attendance/staff | /hr/attendance/production); `view` is the one AttendancePage chose
   const setView = (v: "staff" | "production") => navigate(`/hr/attendance/${v}`);
 
   const [showManualDialog, setShowManualDialog] = useState(false);
@@ -158,7 +204,13 @@ export default function AttendancePage() {
   const [editingRule, setEditingRule] = useState<AutoSyncRuleItem | null>(null);
   const [ruleDialogSeq, setRuleDialogSeq] = useState(0);
 
-  const { data: autoSyncRules } = useListAutoSyncRules();
+  // The rules belong to "Sync from devices and Auto Sync rules" (attendance.sync): a role without it never asks for them.
+  const { data: autoSyncRules } = useQuery<AutoSyncRuleItem[]>({
+    queryKey: getAutoSyncRulesQueryKey(),
+    queryFn: () => customFetch<AutoSyncRuleItem[]>("/api/auto-sync-rules"),
+    refetchInterval: 60_000,
+    enabled: level("attendance.sync") !== "hidden",
+  });
   const createAutoSyncRule = useCreateAutoSyncRule();
   const updateAutoSyncRule = useUpdateAutoSyncRule();
   const deleteAutoSyncRule = useDeleteAutoSyncRule();
@@ -252,10 +304,7 @@ export default function AttendancePage() {
             {/* Staff / Production sub-section toggle */}
             <div className="mt-2">
               <PillTabs
-                items={[
-                  { value: "staff", label: "Staff", icon: <Briefcase size={12} /> },
-                  { value: "production", label: "Production", icon: <Factory size={12} /> },
-                ]}
+                items={views}
                 value={view}
                 onChange={(v) => setView(v as "staff" | "production")}
               />
@@ -271,25 +320,34 @@ export default function AttendancePage() {
                 buttons below replace them with equivalents that read the
                 database instead, so they work regardless of where the backend
                 runs. */}
-            <SkippedPunchesButton />
-            <Button
-              variant="outline"
-              onClick={() => navigate("/hr/attendance/punch-view")}
-              className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
-            >
-              <Fingerprint size={14} />
-              <span className="text-[13px] font-semibold">Punch View</span>
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => navigate("/hr/Biometric-Connectors/device-status")}
-              className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
-              data-testid="open-device-status"
-            >
-              <Radar size={14} />
-              <span className="text-[13px] font-semibold">Device Status</span>
-            </Button>
-            <SyncStatusIndicator />
+            <Gate k="attendance.skipped_punches">
+              <SkippedPunchesButton />
+            </Gate>
+            <Gate k="attendance.punch_view">
+              <Button
+                variant="outline"
+                onClick={() => navigate("/hr/attendance/punch-view")}
+                className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
+              >
+                <Fingerprint size={14} />
+                <span className="text-[13px] font-semibold">Punch View</span>
+              </Button>
+            </Gate>
+            <Gate k="biometric_connectors.device_status">
+              <Button
+                variant="outline"
+                onClick={() => navigate("/hr/Biometric-Connectors/device-status")}
+                className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
+                data-testid="open-device-status"
+              >
+                <Radar size={14} />
+                <span className="text-[13px] font-semibold">Device Status</span>
+              </Button>
+            </Gate>
+            {/* the "Sync Live / Offline" pill stands where the Sync / Auto Sync buttons were */}
+            <Gate k="attendance.sync">
+              <SyncStatusIndicator />
+            </Gate>
             <div className="flex items-center gap-1 shrink-0" role="group" aria-label="Day">
               <button
                 type="button"
@@ -329,15 +387,19 @@ export default function AttendancePage() {
                 </button>
               )}
             </div>
-            <Button
-              onClick={() => setShowManualDialog(true)}
-              className="clay-btn gap-1.5 h-9 px-3.5 rounded-xl border-0 bg-gradient-to-br from-[#006496] to-[#0080bf] text-white hover:brightness-105 shrink-0"
-            >
-              <Plus size={14} />
-              <span className="text-[13px] font-semibold">Add Attendance</span>
-            </Button>
+            <Gate k="attendance.add_manual">
+              <Button
+                onClick={() => setShowManualDialog(true)}
+                className="clay-btn gap-1.5 h-9 px-3.5 rounded-xl border-0 bg-gradient-to-br from-[#006496] to-[#0080bf] text-white hover:brightness-105 shrink-0"
+              >
+                <Plus size={14} />
+                <span className="text-[13px] font-semibold">Add Attendance</span>
+              </Button>
+            </Gate>
           </div>
         </div>
+
+        <ViewOnlyTabNote show={viewOnlyHere} />
 
         {/* ── Biometric Sync Pipeline (visible only while/just after syncing) ── */}
         <BiometricSyncPipeline active={showPipeline} data={progress} onDismiss={dismiss} />
@@ -397,7 +459,9 @@ export default function AttendancePage() {
         />
 
         {/* ── Employee Search + Manual Overrides ── */}
-        <AttendanceSearchPanel employmentType={view} />
+        <Gate k="attendance.employee_search">
+          <AttendanceSearchPanel employmentType={view} />
+        </Gate>
 
       </div>
 

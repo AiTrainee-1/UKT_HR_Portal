@@ -221,14 +221,17 @@ def assign_production_pay_cycle(request: Request) -> Response:
 
 
 def _can_assign(request: Request) -> bool:
-    """The assign endpoint's own permission: Employees at edit level (a Super Admin always)."""
+    """The assign endpoint's own permission: Employees -> Production Employees at edit level (it follows Employees until a
+    role sets it on its own; a Super Admin always)."""
     from .permission_registry import effective_permissions, resolve_permission
 
     user_id = (getattr(request, "jwt_user", None) or {}).get("hrUserId")
     hr = HRUser.objects.select_related("role").filter(pk=user_id, is_active=True).first() if user_id else None
     if hr is None:
         return False
-    return hr.is_super_admin or resolve_permission(effective_permissions(hr), "employees") == "edit"
+    return (
+        hr.is_super_admin or resolve_permission(effective_permissions(hr), "employees.production_employees") == "edit"
+    )
 
 
 def _previous_label(emp: Employee, last: PayrollRef) -> str:

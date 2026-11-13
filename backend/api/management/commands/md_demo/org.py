@@ -33,7 +33,7 @@ from api.models import (
     ShiftTemplate,
     TeaBreakRule,
 )
-from api.permission_registry import MODULE_TREE
+from api.permission_registry import INHERITS, MODULE_TREE
 from api.pf_esi import BASIS_FIRST_PORTION, BASIS_TOTAL, CLASS_PRODUCTION, CLASS_STAFF, KIND_ESI, KIND_PF, RULE_FIELDS
 
 from .common import DEMO_TAG, MD_USERNAME, QR_TOKEN_PREFIX, World, at
@@ -338,7 +338,8 @@ def holiday_dates(first: date, last: date) -> dict[date, tuple[str, str]]:
 
 # ─── permissions of the HR roles ──────────────────────────────────────────────────────────────────────────────
 
-_TOP_LEVEL_KEYS = tuple(node["key"] for node in MODULE_TREE)
+# (a key that follows another one while unset -Biometric Connectors follows Attendance- is left unset, as it always was)
+_TOP_LEVEL_KEYS = tuple(node["key"] for node in MODULE_TREE if node["key"] not in INHERITS)
 
 
 def role_permissions(edit: Iterable[str] = (), view: Iterable[str] = ()) -> dict[str, str]:

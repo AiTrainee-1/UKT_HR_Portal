@@ -8,6 +8,7 @@ import { SubtabBar } from "@/components/ui/subtab-nav";
 import { rangeLabel, type CompensationUrl } from "../logic";
 import { PeriodBar } from "../period";
 import { HISTORY_SUBS, nestedOf, pagePath, subPath } from "../routes";
+import { keepOpenNested, useCanOpen } from "../visible";
 import { RedemptionsCard, ReportSectionCard } from "./ReportSectionCard";
 import { useReportFilters } from "./useReportFilters";
 
@@ -46,6 +47,7 @@ export default function HistoryTab({
   url: CompensationUrl;
   setUrl: SetUrl;
 }) {
+  const canOpen = useCanOpen();
   const f = useReportFilters(url, isBranchScoped);
   // every kind in one request (the pills count them all), so a subtab switch is instant and shares Reports' answer
   const query = useCompensationReport({
@@ -58,7 +60,7 @@ export default function HistoryTab({
 
   const info = HISTORY_SUBS.find((s) => s.value === sub) ?? HISTORY_SUBS[0];
   const sections = (types: readonly string[]) => (report?.sections ?? []).filter((s) => types.includes(s.type));
-  const items = HISTORY_SUBS.map((s) => ({
+  const items = HISTORY_SUBS.filter((s) => s.value === info.value || canOpen(subPath("history", s.value))).map((s) => ({
     value: s.value,
     label: s.label,
     count: report ? sections(s.types).reduce((n, section) => n + section.rows.length, 0) : undefined,
@@ -67,7 +69,7 @@ export default function HistoryTab({
   const rowsOf = (types: readonly string[]) => sections(types).reduce((n, section) => n + section.rows.length, 0);
   const redeemedCount = sections(["holiday_work"]).reduce((n, section) => n + (section.redemptions?.length ?? 0), 0);
   // Balance redeemed is listed only when there is some (as before); it stays while it is the one open
-  const nestedItems = nestedInfo
+  const nestedItems = keepOpenNested(canOpen, "history", info.value, nestedInfo)
     .filter((n) => n.value !== "redeemed" || redeemedCount > 0 || nested === "redeemed")
     .map((n) => ({
       value: n.value,

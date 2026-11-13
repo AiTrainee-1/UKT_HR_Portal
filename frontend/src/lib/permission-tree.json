@@ -1,0 +1,2931 @@
+{
+  "groups": [
+    {
+      "id": "main",
+      "label": "Main",
+      "children": [
+        {
+          "key": "dashboard",
+          "label": "Dashboard",
+          "type": "page",
+          "help": "The HR home page.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "dashboard.key_figures",
+              "label": "Key figures",
+              "type": "feature",
+              "help": "The cards at the top: employees, present today, pending leave and permissions, monthly payroll, open advances.",
+              "enforce": "screen"
+            },
+            {
+              "key": "dashboard.attendance",
+              "label": "Today's attendance and daily trend",
+              "type": "feature",
+              "help": "Present / absent rings and this month's daily chart (also needs Attendance).",
+              "enforce": "screen"
+            },
+            {
+              "key": "dashboard.salary_cost",
+              "label": "Salary cost, last 12 months",
+              "type": "feature",
+              "help": "The monthly salary cost chart.",
+              "enforce": "server"
+            },
+            {
+              "key": "dashboard.headcount",
+              "label": "Headcount and workforce",
+              "type": "feature",
+              "help": "Employees per department and the workforce mix.",
+              "enforce": "screen"
+            },
+            {
+              "key": "dashboard.pending_actions",
+              "label": "Pending actions",
+              "type": "feature",
+              "help": "What is waiting for HR: leave, permissions, missing punches, CL, advances, On-Duty.",
+              "enforce": "screen"
+            },
+            {
+              "key": "dashboard.holidays",
+              "label": "Upcoming holidays",
+              "type": "feature",
+              "help": "The next company holidays.",
+              "enforce": "screen"
+            },
+            {
+              "key": "dashboard.geo",
+              "label": "Geo Attendance today",
+              "type": "feature",
+              "help": "Today's On-Duty and live-tracking figures.",
+              "enforce": "screen"
+            },
+            {
+              "key": "dashboard.recruitment",
+              "label": "Recruitment and documents",
+              "type": "feature",
+              "help": "Open positions, applicants, resumes and document completion.",
+              "enforce": "screen"
+            },
+            {
+              "key": "dashboard.activity",
+              "label": "Activity summary",
+              "type": "feature",
+              "help": "Sign-ins and changes made in the portal today.",
+              "enforce": "screen"
+            },
+            {
+              "key": "dashboard.auto_sync",
+              "label": "Auto Sync button",
+              "type": "feature",
+              "help": "Pulls today's punches from the biometric devices (also needs Attendance -> Sync).",
+              "enforce": "screen"
+            }
+          ]
+        },
+        {
+          "key": "employees",
+          "label": "Employees",
+          "type": "section",
+          "help": "The employee list and everything about employees.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "employees.staff",
+              "label": "All Employees - Staff",
+              "type": "tab",
+              "help": "The staff list.",
+              "enforce": "screen"
+            },
+            {
+              "key": "employees.production",
+              "label": "All Employees - Production",
+              "type": "tab",
+              "help": "The production list.",
+              "enforce": "screen"
+            },
+            {
+              "key": "employees.co_emp",
+              "label": "All Employees - Co Emp",
+              "type": "tab",
+              "help": "Who is a Co Emp (PF / ESI) and the coverage counts.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "employees.co_emp.tds",
+                  "label": "TDS",
+                  "type": "subtab",
+                  "help": "Employees whose salary has tax deducted at source.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "employees.status",
+              "label": "Activate / deactivate an employee",
+              "type": "feature",
+              "help": "The Active / Inactive switch on a row.",
+              "enforce": "server"
+            },
+            {
+              "key": "employees.profile",
+              "label": "Employee profile",
+              "type": "page",
+              "help": "One employee's full details page.",
+              "routePatterns": ["/hr/employees/\\d+"],
+              "enforce": "screen",
+              "children": [
+                {
+                  "key": "employees.profile.salary",
+                  "label": "Salary and salary history",
+                  "type": "feature",
+                  "help": "Salary, its split and past salaries.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "employees.profile.bank",
+                  "label": "Bank and statutory details",
+                  "type": "feature",
+                  "help": "Bank account, PF, ESI, PAN and Aadhaar.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "employees.profile.documents",
+                  "label": "Uploaded documents",
+                  "type": "feature",
+                  "help": "The documents uploaded for the employee.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "employees.profile.id_card",
+                  "label": "ID card",
+                  "type": "feature",
+                  "help": "The employee's ID card and its download.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "employees.letters",
+              "label": "Offer and experience letters",
+              "type": "feature",
+              "help": "View, download, email and WhatsApp offer / experience letters (profile, New Joinees, Documents).",
+              "enforce": "server"
+            },
+            {
+              "key": "employees.add",
+              "label": "Add employee",
+              "type": "page",
+              "help": "The new-employee form.",
+              "routes": ["/hr/employees/new"],
+              "enforce": "screen"
+            },
+            {
+              "key": "employees.edit",
+              "label": "Edit employee",
+              "type": "page",
+              "help": "The edit form of an employee.",
+              "routePatterns": ["/hr/employees/\\d+/edit"],
+              "enforce": "screen"
+            },
+            {
+              "key": "employees.bulk_upload",
+              "label": "Bulk upload",
+              "type": "page",
+              "help": "Add or update many employees from an Excel file.",
+              "routes": ["/hr/employees/bulk-upload"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "employees.bulk_upload.add",
+                  "label": "Add new employees",
+                  "type": "tab",
+                  "help": "Upload new employees.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "employees.bulk_upload.active",
+                  "label": "Active employees",
+                  "type": "tab",
+                  "help": "Download and re-upload the active employees.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "employees.bulk_upload.inactive",
+                  "label": "Inactive employees",
+                  "type": "tab",
+                  "help": "Download and re-upload the inactive employees.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "employees.production_employees",
+              "label": "Production Employees",
+              "type": "page",
+              "help": "Which production employees are paid Weekly, BiWeekly or Monthly.",
+              "routes": ["/hr/employees/productionEmployee"],
+              "enforce": "server"
+            },
+            {
+              "key": "employees.departments",
+              "label": "Departments",
+              "type": "page",
+              "help": "Departments and who is in each.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "employees.departments.list",
+                  "label": "Departments",
+                  "type": "tab",
+                  "help": "The department list.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "employees.departments.find",
+                  "label": "Find & assign employees",
+                  "type": "tab",
+                  "help": "Find an employee or the unassigned ones and set their department.",
+                  "enforce": "screen",
+                  "children": [
+                    {
+                      "key": "employees.departments.find.search",
+                      "label": "Find employee",
+                      "type": "subtab",
+                      "help": "Search an employee.",
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "employees.departments.find.unassigned",
+                      "label": "Unassigned",
+                      "type": "subtab",
+                      "help": "Employees with no department.",
+                      "enforce": "screen"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "employees.designations",
+              "label": "Designations",
+              "type": "page",
+              "help": "Designations and who holds each.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "employees.designations.structure",
+                  "label": "Structure",
+                  "type": "tab",
+                  "help": "The designation tree and list.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "employees.designations.find",
+                  "label": "Find & assign employees",
+                  "type": "tab",
+                  "help": "Find an employee or the unassigned ones and set their designation.",
+                  "enforce": "screen",
+                  "children": [
+                    {
+                      "key": "employees.designations.find.search",
+                      "label": "Find employee",
+                      "type": "subtab",
+                      "help": "Search an employee.",
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "employees.designations.find.unassigned",
+                      "label": "Unassigned",
+                      "type": "subtab",
+                      "help": "Employees with no designation.",
+                      "enforce": "screen"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "employees.branches",
+              "label": "Manage Branch",
+              "type": "page",
+              "help": "The company's branches / units.",
+              "enforce": "server"
+            }
+          ]
+        },
+        {
+          "key": "attendance",
+          "label": "Attendance",
+          "type": "section",
+          "help": "Daily attendance, punches and attendance reports.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "attendance.staff",
+              "label": "Staff Attendance",
+              "type": "page",
+              "help": "Today's staff attendance and the month panel.",
+              "routes": ["/hr/attendance/staff"],
+              "enforce": "screen"
+            },
+            {
+              "key": "attendance.production",
+              "label": "Production Attendance",
+              "type": "page",
+              "help": "Today's production attendance and the month panel.",
+              "routes": ["/hr/attendance/production"],
+              "enforce": "screen"
+            },
+            {
+              "key": "attendance.employee_search",
+              "label": "Employee attendance search",
+              "type": "feature",
+              "help": "One employee's month with every punch, on the attendance pages.",
+              "enforce": "server"
+            },
+            {
+              "key": "attendance.add_manual",
+              "label": "Add attendance by hand",
+              "type": "feature",
+              "help": "The Add Attendance form.",
+              "enforce": "server"
+            },
+            {
+              "key": "attendance.skipped_punches",
+              "label": "Skipped punches",
+              "type": "feature",
+              "help": "Punches the system could not use, and resolving them.",
+              "enforce": "server"
+            },
+            {
+              "key": "attendance.sync",
+              "label": "Sync from devices and Auto Sync rules",
+              "type": "feature",
+              "help": "Pull punches from the biometric devices now, and the automatic sync rules.",
+              "enforce": "server"
+            },
+            {
+              "key": "attendance.search",
+              "label": "Attendance Search",
+              "type": "page",
+              "help": "Search punches by employee and period.",
+              "routes": ["/hr/attendance/search"],
+              "enforce": "server"
+            },
+            {
+              "key": "attendance.report_log",
+              "label": "Report Log",
+              "type": "page",
+              "help": "Monthly attendance sheet and the daily leave / late reports.",
+              "routes": ["/hr/attendance/report-log"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "attendance.report_log.monthly",
+                  "label": "Monthly Report",
+                  "type": "tab",
+                  "help": "The month's attendance sheet and the late-penalty card.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "attendance.report_log.leave",
+                  "label": "Daily Leave Report",
+                  "type": "tab",
+                  "help": "Who was absent or on leave on a day, and whether they informed.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "attendance.report_log.late",
+                  "label": "Daily Late Report",
+                  "type": "tab",
+                  "help": "Who came late on a day.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "attendance.punch_view",
+              "label": "Punch View",
+              "type": "page",
+              "help": "Every punch, with filters.",
+              "routes": ["/hr/attendance/punch-view"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "attendance.punch_view.history",
+                  "label": "Punch View history",
+                  "type": "page",
+                  "help": "Who changed which punch and when.",
+                  "routes": ["/hr/attendance/punch-view/history"],
+                  "enforce": "server"
+                },
+                {
+                  "key": "attendance.punch_view.export",
+                  "label": "Export to Excel",
+                  "type": "feature",
+                  "help": "Download the punches as an Excel file.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "attendance.punch_view.upload",
+                  "label": "Upload an edited file",
+                  "type": "feature",
+                  "help": "Add, change or delete punches from an Excel file.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "attendance.punch_view.day_status",
+                  "label": "Set a day's status",
+                  "type": "feature",
+                  "help": "Mark a day Present / Absent / Leave by hand, or back to automatic.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "attendance.manual_import",
+              "label": "Manual punch import",
+              "type": "page",
+              "help": "Download / upload punching data (kept for sites without device access; no menu entry).",
+              "routes": ["/hr/attendance/manual-import"],
+              "enforce": "server"
+            },
+            {
+              "key": "attendance.edit",
+              "label": "Edit a day's attendance",
+              "type": "page",
+              "help": "Propose a change to one day's attendance (the Department Head and HR then approve it).",
+              "routes": ["/hr/attendance/edit"],
+              "enforce": "server"
+            },
+            {
+              "key": "missing_punch",
+              "label": "Missing Punch",
+              "type": "page",
+              "help": "Employees' missed-punch requests.",
+              "own": true,
+              "enforce": "server"
+            }
+          ]
+        },
+        {
+          "key": "geo_attendance",
+          "label": "Geo Attendance",
+          "type": "section",
+          "help": "Work away from the premises: On-Duty, live tracking and journeys.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "geo_attendance.approvals",
+              "label": "On-Duty Approvals",
+              "type": "tab",
+              "help": "On-Duty requests.",
+              "routes": ["/hr/geo-attendance/approvals"],
+              "enforce": "server"
+            },
+            {
+              "key": "geo_attendance.verifications",
+              "label": "Punch Verifications",
+              "type": "tab",
+              "help": "Punches made On-Duty, with photos and place.",
+              "routes": ["/hr/geo-attendance/verifications"],
+              "enforce": "server"
+            },
+            {
+              "key": "geo_attendance.live_map",
+              "label": "Live Map",
+              "type": "tab",
+              "help": "Where tracked employees are now.",
+              "routes": ["/hr/geo-attendance/live-map"],
+              "enforce": "server"
+            },
+            {
+              "key": "geo_attendance.journeys",
+              "label": "Journey History",
+              "type": "tab",
+              "help": "Past journeys and their maps.",
+              "routes": ["/hr/geo-attendance/journeys"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "geo_attendance.journeys.simulate",
+                  "label": "Simulate a journey",
+                  "type": "subtab",
+                  "help": "Replay a journey on the map.",
+                  "routePatterns": ["/hr/geo-attendance/journeys/\\d+/simulate"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "geo_attendance.journeys.export",
+                  "label": "Export a journey",
+                  "type": "feature",
+                  "help": "Download a journey as Excel or PDF.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "geo_attendance.on_duty_map",
+              "label": "On-Duty Map",
+              "type": "tab",
+              "help": "A day's On-Duty places on one map.",
+              "routes": ["/hr/geo-attendance/on-duty-map"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "geo_attendance.on_duty_map.all",
+                  "label": "All On-Duty",
+                  "type": "subtab",
+                  "help": "Everyone On-Duty that day.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "geo_attendance.on_duty_map.single",
+                  "label": "Single employee",
+                  "type": "subtab",
+                  "help": "One employee's day.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "geo_attendance.settings",
+              "label": "Tracking Settings",
+              "type": "tab",
+              "help": "Who is tracked, and the tracking rules (the rules also need Settings -> Attendance).",
+              "routes": ["/hr/geo-attendance/settings"],
+              "enforce": "screen"
+            }
+          ]
+        },
+        {
+          "key": "outpass_visitors",
+          "label": "Outpass / Visitors",
+          "type": "section",
+          "help": "Gate passes, visitors and tea breaks.",
+          "enforce": "parts",
+          "children": [
+            {
+              "key": "outpass_visitors.outpass",
+              "label": "Outpass",
+              "type": "page",
+              "help": "Employees going out during work hours.",
+              "routes": ["/hr/outpass-visitors/outpass"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "outpass_visitors.outpass.overview",
+                  "label": "Overview",
+                  "type": "tab",
+                  "help": "Today's passes, the gate QR and its submissions.",
+                  "routes": ["/hr/outpass-visitors/outpass/overview"],
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "outpass_visitors.outpass.overview.passes",
+                      "label": "Passes",
+                      "type": "subtab",
+                      "help": "The passes list.",
+                      "routes": ["/hr/outpass-visitors/outpass/overview/passes"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "outpass_visitors.outpass.overview.qr_submissions",
+                      "label": "Gate QR submissions",
+                      "type": "subtab",
+                      "help": "What was submitted at the gate QR.",
+                      "routes": ["/hr/outpass-visitors/outpass/overview/qr-submissions"],
+                      "enforce": "screen"
+                    }
+                  ]
+                },
+                {
+                  "key": "outpass_visitors.outpass.requests",
+                  "label": "Requests",
+                  "type": "tab",
+                  "help": "Outpass requests waiting for HR.",
+                  "routes": ["/hr/outpass-visitors/outpass/requests"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "outpass_visitors.outpass.in_out",
+                  "label": "In/Out",
+                  "type": "tab",
+                  "help": "Who went out and came back.",
+                  "routes": ["/hr/outpass-visitors/outpass/in-out"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "outpass_visitors.outpass.gate_devices",
+                  "label": "Gate scanner devices",
+                  "type": "feature",
+                  "help": "The gate scanner logins.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "outpass_visitors.visitors",
+              "label": "Visitors",
+              "type": "page",
+              "help": "Visitors at reception.",
+              "routes": ["/hr/outpass-visitors/visitors"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "outpass_visitors.visitors.reception_devices",
+                  "label": "Reception desk devices",
+                  "type": "feature",
+                  "help": "The reception desk logins.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "outpass_visitors.tea_break",
+              "label": "Tea Break",
+              "type": "page",
+              "help": "Tea break records and the tea break rule.",
+              "routes": ["/hr/outpass-visitors/tea-break"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "outpass_visitors.tea_break.records",
+                  "label": "Records",
+                  "type": "tab",
+                  "help": "Who took a tea break and for how long.",
+                  "routes": ["/hr/outpass-visitors/tea-break/records"],
+                  "enforce": "server"
+                },
+                {
+                  "key": "outpass_visitors.tea_break.rule",
+                  "label": "Rule",
+                  "type": "tab",
+                  "help": "How long a tea break may be.",
+                  "routes": ["/hr/outpass-visitors/tea-break/rule"],
+                  "enforce": "server"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hr_operations",
+      "label": "HR Operations",
+      "children": [
+        {
+          "key": "shifts",
+          "label": "Manage Shift",
+          "type": "page",
+          "help": "Shifts and who works which shift.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "shifts.shifts",
+              "label": "Shifts",
+              "type": "tab",
+              "help": "Create, change and switch off shifts.",
+              "enforce": "screen"
+            },
+            {
+              "key": "shifts.assignments",
+              "label": "Assigned",
+              "type": "tab",
+              "help": "Who is on which shift; change or end it.",
+              "enforce": "server"
+            },
+            {
+              "key": "shifts.unassigned",
+              "label": "Unassigned",
+              "type": "tab",
+              "help": "Active employees with no shift.",
+              "enforce": "screen"
+            },
+            {
+              "key": "shifts.assign",
+              "label": "Assign employees to a shift",
+              "type": "feature",
+              "help": "The Assign / Move dialog.",
+              "enforce": "server"
+            },
+            {
+              "key": "shifts.sync_production",
+              "label": "Assign production staff with no shift",
+              "type": "feature",
+              "help": "Puts every production employee without a shift on the default one.",
+              "enforce": "server"
+            }
+          ]
+        },
+        {
+          "key": "leave",
+          "label": "Leave & Holiday",
+          "type": "page",
+          "help": "Leave, half days, permissions, holidays and leave balances.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "leave.requests",
+              "label": "Leave Requests",
+              "type": "tab",
+              "help": "Employees' leave requests.",
+              "enforce": "screen"
+            },
+            {
+              "key": "leave.half_day",
+              "label": "Half-Day Leave",
+              "type": "tab",
+              "help": "Half-day leave requests.",
+              "enforce": "screen"
+            },
+            {
+              "key": "leave.permissions",
+              "label": "Permissions",
+              "type": "tab",
+              "help": "Late-In / Early-Out / One-Hour permissions (their data is the Requests page's).",
+              "enforce": "screen"
+            },
+            {
+              "key": "leave.calendar",
+              "label": "Calendar",
+              "type": "tab",
+              "help": "Leave, CL and holidays on a calendar.",
+              "enforce": "screen"
+            },
+            {
+              "key": "leave.holidays",
+              "label": "Holidays",
+              "type": "tab",
+              "help": "The company holiday list (everyone can still read it).",
+              "enforce": "server"
+            },
+            {
+              "key": "leave.balances",
+              "label": "Balances",
+              "type": "tab",
+              "help": "Leave balances, allocations and leave types.",
+              "enforce": "server"
+            }
+          ]
+        },
+        {
+          "key": "casual_leave",
+          "label": "Casual Leave",
+          "type": "page",
+          "help": "Casual Leave (CL): who took it, who may, requests and carry forward.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "casual_leave.taken",
+              "label": "Taken this month",
+              "type": "tab",
+              "help": "CL taken this month.",
+              "enforce": "screen"
+            },
+            {
+              "key": "casual_leave.eligible",
+              "label": "Eligible",
+              "type": "tab",
+              "help": "Who may take CL, and applying CL for them.",
+              "enforce": "screen"
+            },
+            {
+              "key": "casual_leave.not_eligible",
+              "label": "Not eligible",
+              "type": "tab",
+              "help": "Who may not take CL, and why.",
+              "enforce": "screen"
+            },
+            {
+              "key": "casual_leave.requests",
+              "label": "Requests",
+              "type": "tab",
+              "help": "CL requests waiting for a decision.",
+              "enforce": "screen"
+            },
+            {
+              "key": "casual_leave.carry_forward",
+              "label": "Carry Forward",
+              "type": "tab",
+              "help": "The yearly CL balances and changes to them.",
+              "enforce": "parts",
+              "children": [
+                {
+                  "key": "casual_leave.carry_forward.balances",
+                  "label": "Balances",
+                  "type": "subtab",
+                  "help": "Balances left, and assigning CL against absent days.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "casual_leave.carry_forward.log",
+                  "label": "Change log",
+                  "type": "subtab",
+                  "help": "Every change to a CL balance.",
+                  "enforce": "server"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "requests",
+          "label": "Requests",
+          "type": "page",
+          "help": "Every request waiting for HR in one place; also permissions, outpasses and employee requests.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "requests.list",
+              "label": "Requests",
+              "type": "tab",
+              "help": "The list of every kind of request. Each kind also needs its own page (Leave, Casual Leave ...).",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "requests.list.leave",
+                  "label": "Leave",
+                  "type": "subtab",
+                  "help": "Leave requests in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.permission",
+                  "label": "Permission",
+                  "type": "subtab",
+                  "help": "Permission requests in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.casual_leave",
+                  "label": "Casual Leave",
+                  "type": "subtab",
+                  "help": "Casual Leave requests in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.missing_punch",
+                  "label": "Missing Punch",
+                  "type": "subtab",
+                  "help": "Missed-punch requests in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.on_duty",
+                  "label": "On-Duty",
+                  "type": "subtab",
+                  "help": "On-Duty requests in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.on_duty_punch",
+                  "label": "On-Duty punches",
+                  "type": "subtab",
+                  "help": "On-Duty punches in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.outpass",
+                  "label": "Outpass",
+                  "type": "subtab",
+                  "help": "Outpass requests in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.request",
+                  "label": "Other requests",
+                  "type": "subtab",
+                  "help": "Requests sent with the employee request form (salary enquiry, shift correction ...).",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.attendance_correction",
+                  "label": "Attendance correction",
+                  "type": "subtab",
+                  "help": "Attendance edit requests in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.holiday_work",
+                  "label": "Holiday / Sunday work",
+                  "type": "subtab",
+                  "help": "Holiday / Sunday work claims in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.resignation",
+                  "label": "Resignation",
+                  "type": "subtab",
+                  "help": "Resignations in the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.list.advance",
+                  "label": "Advance",
+                  "type": "subtab",
+                  "help": "Advance requests in the list.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "requests.hods",
+              "label": "HoD's",
+              "type": "tab",
+              "help": "What is waiting with each Department Head.",
+              "enforce": "server"
+            },
+            {
+              "key": "requests.notify",
+              "label": "Notify",
+              "type": "tab",
+              "help": "Reminders sent to Department Heads, and their schedule.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "requests.notify.send",
+                  "label": "Send reminders now",
+                  "type": "feature",
+                  "help": "Send the reminders at once.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "requests.notify.history",
+                  "label": "Run history",
+                  "type": "feature",
+                  "help": "The reminders sent before.",
+                  "enforce": "server"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "promotion",
+          "label": "Promotion",
+          "type": "page",
+          "help": "Promotions.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "promotion.promote",
+              "label": "Promote",
+              "type": "tab",
+              "help": "Promote an employee.",
+              "enforce": "screen"
+            },
+            {
+              "key": "promotion.history",
+              "label": "History",
+              "type": "tab",
+              "help": "Past promotions.",
+              "enforce": "screen"
+            },
+            {
+              "key": "promotion.due",
+              "label": "Due for review",
+              "type": "tab",
+              "help": "Who is due a promotion review.",
+              "enforce": "screen"
+            }
+          ]
+        },
+        {
+          "key": "increment",
+          "label": "Increment",
+          "type": "page",
+          "help": "Salary increments.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "increment.apply",
+              "label": "Apply increment",
+              "type": "tab",
+              "help": "Give an employee an increment.",
+              "enforce": "server"
+            },
+            {
+              "key": "increment.history",
+              "label": "History",
+              "type": "tab",
+              "help": "Past increments.",
+              "enforce": "screen"
+            },
+            {
+              "key": "increment.due",
+              "label": "Due for increment",
+              "type": "tab",
+              "help": "Who is due an increment.",
+              "enforce": "screen"
+            },
+            {
+              "key": "increment.insights",
+              "label": "Insights",
+              "type": "tab",
+              "help": "Increment charts.",
+              "enforce": "screen"
+            }
+          ]
+        },
+        {
+          "key": "bonus",
+          "label": "Bonus",
+          "type": "page",
+          "help": "The yearly bonus register.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "bonus.generate",
+              "label": "Generate the register",
+              "type": "feature",
+              "help": "Work out and save a year's bonus.",
+              "enforce": "server"
+            },
+            {
+              "key": "bonus.export",
+              "label": "Export",
+              "type": "feature",
+              "help": "Download the register as Excel.",
+              "enforce": "server"
+            }
+          ]
+        },
+        {
+          "key": "id_cards",
+          "label": "ID Cards",
+          "type": "page",
+          "help": "Employee ID cards.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "id_cards.send",
+              "label": "Email / WhatsApp ID cards",
+              "type": "feature",
+              "help": "Send an ID card to the employee.",
+              "enforce": "server"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "payroll",
+      "label": "Payroll",
+      "children": [
+        {
+          "key": "payroll",
+          "label": "Staff Payroll",
+          "type": "page",
+          "help": "The staff payroll (this is also its Payroll tab).",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "payroll.records",
+              "label": "Payroll - Records",
+              "type": "view",
+              "help": "The month's payroll rows.",
+              "enforce": "screen"
+            },
+            {
+              "key": "payroll.issues",
+              "label": "Payroll - Issues",
+              "type": "view",
+              "help": "Problems found in the month's attendance and pay.",
+              "enforce": "server"
+            },
+            {
+              "key": "payroll.skipped",
+              "label": "Payroll - Skipped",
+              "type": "view",
+              "help": "Employees not in the payroll: not generated, on hold, new joiners.",
+              "enforce": "server"
+            },
+            {
+              "key": "payroll.rules",
+              "label": "Payroll - Rules",
+              "type": "view",
+              "help": "The rules the month was worked out with.",
+              "enforce": "server"
+            },
+            {
+              "key": "payroll.generate",
+              "label": "Generate payroll",
+              "type": "feature",
+              "help": "Work out the month's payroll.",
+              "enforce": "server"
+            },
+            {
+              "key": "payroll.exports",
+              "label": "Salary statement and bank file",
+              "type": "feature",
+              "help": "The Excel / PDF salary statement and the bank file (the statement also needs Reports).",
+              "enforce": "screen"
+            },
+            {
+              "key": "payroll.adjust",
+              "label": "Adjust bonus / deductions",
+              "type": "feature",
+              "help": "Change one employee's bonus, deductions or notes.",
+              "enforce": "screen"
+            },
+            {
+              "key": "payroll.details",
+              "label": "Payroll details",
+              "type": "page",
+              "help": "One employee's payroll page: days, issues, pay and deductions.",
+              "routes": ["/hr/payroll/details"],
+              "enforce": "server"
+            },
+            {
+              "key": "salary",
+              "label": "Salary",
+              "type": "tab",
+              "help": "The Salary tab: the month's salary statement.",
+              "own": true,
+              "enforce": "server"
+            },
+            {
+              "key": "salary_slip",
+              "label": "Payslip",
+              "type": "tab",
+              "help": "The Payslip tab: view, download and send payslips (production payslips too).",
+              "own": true,
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "salary_slip.send",
+                  "label": "Email / WhatsApp payslips",
+                  "type": "feature",
+                  "help": "Send payslips one by one or all at once.",
+                  "enforce": "server"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "production_payroll",
+          "label": "Production Payroll",
+          "type": "section",
+          "help": "The production payroll, one page per pay cycle.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "production_payroll.weekly",
+              "label": "Weekly",
+              "type": "page",
+              "help": "The weekly cycle.",
+              "routes": ["/hr/production-payroll/weekly"],
+              "enforce": "screen"
+            },
+            {
+              "key": "production_payroll.biweekly",
+              "label": "BiWeekly",
+              "type": "page",
+              "help": "The fortnightly cycle.",
+              "routes": ["/hr/production-payroll/biweekly"],
+              "enforce": "screen"
+            },
+            {
+              "key": "production_payroll.monthly",
+              "label": "Monthly",
+              "type": "page",
+              "help": "The monthly cycle.",
+              "routes": ["/hr/production-payroll/monthly"],
+              "enforce": "screen"
+            },
+            {
+              "key": "production_payroll.payroll",
+              "label": "Payroll tab (every cycle)",
+              "type": "tab",
+              "help": "The period's payroll.",
+              "enforce": "screen",
+              "children": [
+                {
+                  "key": "production_payroll.payroll.records",
+                  "label": "Records",
+                  "type": "view",
+                  "help": "The period's payroll rows.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "production_payroll.payroll.issues",
+                  "label": "Issues",
+                  "type": "view",
+                  "help": "Problems found in the period.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "production_payroll.payroll.skipped",
+                  "label": "Skipped",
+                  "type": "view",
+                  "help": "Who is not in the period's payroll.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "production_payroll.payroll.rules",
+                  "label": "Rules",
+                  "type": "view",
+                  "help": "The rules the period was worked out with.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "production_payroll.employees",
+              "label": "Employees tab (every cycle)",
+              "type": "tab",
+              "help": "Each employee's state in the period, and generating one by one.",
+              "enforce": "screen"
+            },
+            {
+              "key": "production_payroll.salary",
+              "label": "Salary tab (every cycle)",
+              "type": "tab",
+              "help": "The period's salary statement.",
+              "enforce": "server"
+            },
+            {
+              "key": "production_payroll.payslip",
+              "label": "Payslip tab (every cycle)",
+              "type": "tab",
+              "help": "The period's payslips (their data also needs Staff Payroll -> Payslip).",
+              "enforce": "screen"
+            },
+            {
+              "key": "production_payroll.generate",
+              "label": "Generate payroll",
+              "type": "feature",
+              "help": "Work out the period's payroll.",
+              "enforce": "server"
+            },
+            {
+              "key": "production_payroll.details",
+              "label": "Payroll details",
+              "type": "page",
+              "help": "One employee's production payroll page.",
+              "routes": ["/hr/production-payroll/details"],
+              "enforce": "server"
+            }
+          ]
+        },
+        {
+          "key": "compensation",
+          "label": "Compensation",
+          "type": "section",
+          "help": "Overtime, compensation leave and their history.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "compensation.ctc",
+              "label": "CTC Breakdown",
+              "type": "page",
+              "help": "Each employee's cost to company.",
+              "routes": ["/hr/compensation/ctc-breakdown"],
+              "enforce": "screen"
+            },
+            {
+              "key": "compensation.ot",
+              "label": "OT Detection",
+              "type": "page",
+              "help": "Overtime found in the punches.",
+              "routes": ["/hr/compensation/ot-detection"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "compensation.ot.type1",
+                  "label": "Type 1 - Late-in allowance",
+                  "type": "subtab",
+                  "help": "Next-day late-in allowance earned by staying late.",
+                  "routes": ["/hr/compensation/ot-detection/type-1"],
+                  "enforce": "screen",
+                  "children": [
+                    {
+                      "key": "compensation.ot.type1.allowance",
+                      "label": "Late-in allowance",
+                      "type": "subtab",
+                      "help": "Who earned it.",
+                      "routes": ["/hr/compensation/ot-detection/type-1/allowance"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.ot.type1.how",
+                      "label": "How it is worked out",
+                      "type": "subtab",
+                      "help": "The rule, explained.",
+                      "routes": ["/hr/compensation/ot-detection/type-1/how"],
+                      "enforce": "screen"
+                    }
+                  ]
+                },
+                {
+                  "key": "compensation.ot.type2",
+                  "label": "Type 2 - Shift compensation",
+                  "type": "subtab",
+                  "help": "Extra shifts worked, for HR to compensate.",
+                  "routes": ["/hr/compensation/ot-detection/type-2"],
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "compensation.ot.type2.waiting",
+                      "label": "Waiting for HR",
+                      "type": "subtab",
+                      "help": "Not decided yet.",
+                      "routes": ["/hr/compensation/ot-detection/type-2/waiting"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.ot.type2.assigned",
+                      "label": "Assigned and rejected",
+                      "type": "subtab",
+                      "help": "Already decided.",
+                      "routes": ["/hr/compensation/ot-detection/type-2/assigned"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.ot.type2.how",
+                      "label": "How the suggested shifts are worked out",
+                      "type": "subtab",
+                      "help": "The rule, explained.",
+                      "routes": ["/hr/compensation/ot-detection/type-2/how"],
+                      "enforce": "screen"
+                    }
+                  ]
+                },
+                {
+                  "key": "compensation.ot.earlier",
+                  "label": "Earlier records",
+                  "type": "subtab",
+                  "help": "Overtime records from before the two types.",
+                  "routes": ["/hr/compensation/ot-detection/earlier"],
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "compensation.leave",
+              "label": "Compensation Leave",
+              "type": "page",
+              "help": "Announced windows, Sunday / holiday work and birthdays.",
+              "routes": ["/hr/compensation/compensation-leave"],
+              "enforce": "parts",
+              "children": [
+                {
+                  "key": "compensation.leave.announcements",
+                  "label": "A. Announce late-in / early-out",
+                  "type": "subtab",
+                  "help": "Company-wide late-in / early-out windows.",
+                  "routes": ["/hr/compensation/compensation-leave/announcements"],
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "compensation.leave.announcements.announce",
+                      "label": "Announce",
+                      "type": "subtab",
+                      "help": "Announce a window.",
+                      "routes": ["/hr/compensation/compensation-leave/announcements/announce"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.leave.announcements.list",
+                      "label": "Announcements",
+                      "type": "subtab",
+                      "help": "Windows announced.",
+                      "routes": ["/hr/compensation/compensation-leave/announcements/list"],
+                      "enforce": "screen"
+                    }
+                  ]
+                },
+                {
+                  "key": "compensation.leave.holiday_work",
+                  "label": "B. Sunday & holiday work",
+                  "type": "subtab",
+                  "help": "Work on Sundays and holidays, and the leave it earns.",
+                  "routes": ["/hr/compensation/compensation-leave/holiday-work"],
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "compensation.leave.holiday_work.raise",
+                      "label": "Raise a claim",
+                      "type": "subtab",
+                      "help": "Claim a day worked.",
+                      "routes": ["/hr/compensation/compensation-leave/holiday-work/raise"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.leave.holiday_work.claims",
+                      "label": "Claims",
+                      "type": "subtab",
+                      "help": "Claims raised.",
+                      "routes": ["/hr/compensation/compensation-leave/holiday-work/claims"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.leave.holiday_work.balance",
+                      "label": "Compensation balance",
+                      "type": "subtab",
+                      "help": "Leave earned and redeeming it.",
+                      "routes": ["/hr/compensation/compensation-leave/holiday-work/balance"],
+                      "enforce": "server"
+                    },
+                    {
+                      "key": "compensation.leave.holiday_work.credits",
+                      "label": "Earlier Alternative-Day credits",
+                      "type": "subtab",
+                      "help": "Credits from the old system.",
+                      "routes": ["/hr/compensation/compensation-leave/holiday-work/credits"],
+                      "enforce": "server"
+                    }
+                  ]
+                },
+                {
+                  "key": "compensation.leave.birthdays",
+                  "label": "C. Birthdays",
+                  "type": "subtab",
+                  "help": "Birthday leave.",
+                  "routes": ["/hr/compensation/compensation-leave/birthdays"],
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "compensation.leave.birthdays.list",
+                      "label": "Who has a birthday",
+                      "type": "subtab",
+                      "help": "Birthdays in a period.",
+                      "routes": ["/hr/compensation/compensation-leave/birthdays/list"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.leave.birthdays.how",
+                      "label": "How it works",
+                      "type": "subtab",
+                      "help": "The rule, explained.",
+                      "routes": ["/hr/compensation/compensation-leave/birthdays/how"],
+                      "enforce": "screen"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "compensation.history",
+              "label": "History",
+              "type": "page",
+              "help": "Every compensation record by kind.",
+              "routes": ["/hr/compensation/history"],
+              "enforce": "screen",
+              "children": [
+                {
+                  "key": "compensation.history.ot_allowance",
+                  "label": "OT allowance",
+                  "type": "subtab",
+                  "help": "Late-in allowances given.",
+                  "routes": ["/hr/compensation/history/ot-allowance"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "compensation.history.ot_relaxation",
+                  "label": "OT relaxation",
+                  "type": "subtab",
+                  "help": "Shift relaxations given.",
+                  "routes": ["/hr/compensation/history/ot-relaxation"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "compensation.history.ot_pay",
+                  "label": "OT pay",
+                  "type": "subtab",
+                  "help": "Overtime paid.",
+                  "routes": ["/hr/compensation/history/ot-pay"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "compensation.history.company_windows",
+                  "label": "Company windows",
+                  "type": "subtab",
+                  "help": "Announced windows used.",
+                  "routes": ["/hr/compensation/history/company-windows"],
+                  "enforce": "screen",
+                  "children": [
+                    {
+                      "key": "compensation.history.company_windows.late_in",
+                      "label": "Late-in window",
+                      "type": "subtab",
+                      "help": "Late-in windows used.",
+                      "routes": ["/hr/compensation/history/company-windows/late-in"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.history.company_windows.early_out",
+                      "label": "Early-out window",
+                      "type": "subtab",
+                      "help": "Early-out windows used.",
+                      "routes": ["/hr/compensation/history/company-windows/early-out"],
+                      "enforce": "screen"
+                    }
+                  ]
+                },
+                {
+                  "key": "compensation.history.holiday_work",
+                  "label": "Holiday / Sunday work",
+                  "type": "subtab",
+                  "help": "Days worked and balance redeemed.",
+                  "routes": ["/hr/compensation/history/holiday-work"],
+                  "enforce": "screen",
+                  "children": [
+                    {
+                      "key": "compensation.history.holiday_work.work",
+                      "label": "Sunday / holiday work",
+                      "type": "subtab",
+                      "help": "Days worked.",
+                      "routes": ["/hr/compensation/history/holiday-work/work"],
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "compensation.history.holiday_work.redeemed",
+                      "label": "Balance redeemed",
+                      "type": "subtab",
+                      "help": "Leave taken from the balance.",
+                      "routes": ["/hr/compensation/history/holiday-work/redeemed"],
+                      "enforce": "screen"
+                    }
+                  ]
+                },
+                {
+                  "key": "compensation.history.birthday_leave",
+                  "label": "Birthday leave",
+                  "type": "subtab",
+                  "help": "Birthday leave given.",
+                  "routes": ["/hr/compensation/history/birthday-leave"],
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "compensation.reports",
+              "label": "Reports",
+              "type": "page",
+              "help": "Compensation summaries and their export.",
+              "routes": ["/hr/compensation/reports"],
+              "enforce": "screen"
+            }
+          ]
+        },
+        {
+          "key": "settlement",
+          "label": "Settlement",
+          "type": "page",
+          "help": "Salary advances and term loans, and their repayment.",
+          "enforce": "server"
+        },
+        {
+          "key": "reports",
+          "label": "Reports",
+          "type": "page",
+          "help": "The Report Center. Each report also needs view on the pages its data comes from.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "reports.payroll",
+              "label": "Payroll & Salary",
+              "type": "tab",
+              "help": "Slips, registers, wages, statutory statements and deductions.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.attendance",
+              "label": "Attendance",
+              "type": "tab",
+              "help": "Time cards, daily and monthly attendance, late, overtime and shifts.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.leave",
+              "label": "Leave & Requests",
+              "type": "tab",
+              "help": "Leave, permission, on-duty, missing punch and other requests.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.gate",
+              "label": "Gate & Visitors",
+              "type": "tab",
+              "help": "Outpass, visitor and tea-break registers.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.employees",
+              "label": "Employees",
+              "type": "tab",
+              "help": "Master data, headcount, joiners, exits and compliance.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.hr",
+              "label": "HR Reports",
+              "type": "tab",
+              "help": "Ready-made HR registers (time card, punching, strength, salary statement ...).",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.finance",
+              "label": "Loans & Bonus",
+              "type": "tab",
+              "help": "Advances, loans, bonus, increments and promotions.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.admin",
+              "label": "Administration",
+              "type": "tab",
+              "help": "Audit trail and user access reports.",
+              "locked": "Super Admin only"
+            },
+            {
+              "key": "reports.md",
+              "label": "Executive (MD)",
+              "type": "tab",
+              "help": "The Managing Director's one-page summaries.",
+              "locked": "Managing Director only"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "recruitment",
+      "label": "Recruitment",
+      "children": [
+        {
+          "key": "recruitment",
+          "label": "Recruitment",
+          "type": "section",
+          "help": "Hiring, joiners, exits and employee documents.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "recruitment.dashboard",
+              "label": "Recruitment Dashboard",
+              "type": "page",
+              "help": "Hiring figures at a glance.",
+              "routes": ["/hr/recruitment/dashboard"],
+              "enforce": "server"
+            },
+            {
+              "key": "recruitment.new_joinees",
+              "label": "New Joinees",
+              "type": "page",
+              "help": "Who joined in the last 30 days, and their offer letters.",
+              "enforce": "server"
+            },
+            {
+              "key": "recruitment.resignations",
+              "label": "Resignations",
+              "type": "page",
+              "help": "Resignations and their letters.",
+              "enforce": "server"
+            },
+            {
+              "key": "recruitment.required_roles",
+              "label": "Required Roles",
+              "type": "page",
+              "help": "How many people each department needs.",
+              "enforce": "server"
+            },
+            {
+              "key": "recruitment.interviews",
+              "label": "Interviews",
+              "type": "page",
+              "help": "Job postings and applicants (their data is the Recruitment section's).",
+              "enforce": "server"
+            },
+            {
+              "key": "recruitment.resume_screening",
+              "label": "Resume Screening",
+              "type": "page",
+              "help": "Screen resumes against the company's rules.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "recruitment.resume_screening.upload",
+                  "label": "Upload resume",
+                  "type": "tab",
+                  "help": "Screen one resume.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "recruitment.resume_screening.bulk",
+                  "label": "Bulk resume upload",
+                  "type": "tab",
+                  "help": "Screen many resumes at once.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "recruitment.resume_screening.rules",
+                  "label": "Company rules & expectations",
+                  "type": "tab",
+                  "help": "The rules resumes are screened against.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "recruitment.resume_screening.pipeline",
+                  "label": "Candidate pipeline",
+                  "type": "tab",
+                  "help": "Candidates by stage.",
+                  "enforce": "screen",
+                  "children": [
+                    {
+                      "key": "recruitment.resume_screening.pipeline.shortlisted",
+                      "label": "Shortlisted",
+                      "type": "subtab",
+                      "help": "Shortlisted candidates.",
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "recruitment.resume_screening.pipeline.selected",
+                      "label": "Selected",
+                      "type": "subtab",
+                      "help": "Selected candidates and interview invites.",
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "recruitment.resume_screening.pipeline.rejected",
+                      "label": "Rejected",
+                      "type": "subtab",
+                      "help": "Rejected candidates.",
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "recruitment.resume_screening.pipeline.not_shortlisted",
+                      "label": "Not shortlisted",
+                      "type": "subtab",
+                      "help": "Candidates the screening left out.",
+                      "enforce": "screen"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "recruitment.documents",
+              "label": "Documents",
+              "type": "page",
+              "help": "Every employee's documents (in the sidebar under HR Operations).",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "recruitment.documents.staff",
+                  "label": "Staff",
+                  "type": "tab",
+                  "help": "Document completion of the staff.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "recruitment.documents.production",
+                  "label": "Production",
+                  "type": "tab",
+                  "help": "Document completion of the production employees.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "recruitment.documents.employee",
+                  "label": "One employee's documents",
+                  "type": "view",
+                  "help": "Opened from a row of the list.",
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "recruitment.documents.employee.letters",
+                      "label": "Letters",
+                      "type": "subtab",
+                      "help": "Offer, experience and resignation letters (also needs Employees -> Offer and experience letters).",
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "recruitment.documents.employee.extra",
+                      "label": "Extra documents",
+                      "type": "subtab",
+                      "help": "Upload, view, send and delete other documents.",
+                      "enforce": "server"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "administration",
+      "label": "Administration",
+      "children": [
+        {
+          "key": "account_management",
+          "label": "Account Management",
+          "type": "page",
+          "help": "HR logins, roles and what they may do.",
+          "locked": "Super Admin only",
+          "children": [
+            {
+              "key": "account_management.accounts",
+              "label": "Accounts",
+              "type": "tab",
+              "help": "Every HR login.",
+              "locked": "Super Admin only"
+            },
+            {
+              "key": "account_management.roles",
+              "label": "Roles & Permissions",
+              "type": "tab",
+              "help": "Roles and this tree.",
+              "locked": "Super Admin only"
+            },
+            {
+              "key": "account_management.md_profile",
+              "label": "MD Profile",
+              "type": "tab",
+              "help": "The Managing Director's account and AI assistant.",
+              "locked": "Super Admin only"
+            },
+            {
+              "key": "account_management.hr_manager",
+              "label": "HR Manager",
+              "type": "tab",
+              "help": "HR Manager logins.",
+              "locked": "Super Admin only"
+            },
+            {
+              "key": "account_management.hr_assistant",
+              "label": "HR Assistant",
+              "type": "tab",
+              "help": "HR Assistant logins.",
+              "locked": "Super Admin only"
+            },
+            {
+              "key": "account_management.master",
+              "label": "Master",
+              "type": "page",
+              "help": "Hide accounts and switch features per account.",
+              "locked": "The master administrator only"
+            }
+          ]
+        },
+        {
+          "key": "user_management",
+          "label": "User Management",
+          "type": "page",
+          "help": "Department Heads and how requests are approved.",
+          "enforce": "parts",
+          "children": [
+            {
+              "key": "user_management.hod",
+              "label": "HOD Assignment",
+              "type": "tab",
+              "help": "Who the Department Heads are and what each may approve.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "user_management.hod.find_user",
+                  "label": "Find user",
+                  "type": "subtab",
+                  "help": "Find an employee to make a Department Head.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "user_management.hod.unassigned",
+                  "label": "Unassigned staff",
+                  "type": "subtab",
+                  "help": "Staff with no Department Head.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "user_management.hod.detail",
+                  "label": "Department Head details",
+                  "type": "page",
+                  "help": "One Department Head's departments, people and approval rights.",
+                  "routePatterns": ["/hr/user-management/\\d+"],
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "user_management.approval_workflow",
+              "label": "Approval Workflow Control",
+              "type": "tab",
+              "help": "Who approves each kind of request, in what order, on or off.",
+              "enforce": "server"
+            }
+          ]
+        },
+        {
+          "key": "activity_logs",
+          "label": "Activity Logs",
+          "type": "page",
+          "help": "The company-wide audit trail.",
+          "locked": "Super Admin only"
+        },
+        {
+          "key": "assistant_activity",
+          "label": "Assistant Activity",
+          "type": "page",
+          "help": "What HR Assistants (and, for the Super Admin, HR Managers) did.",
+          "locked": "Super Admin and HR Managers (by account type, not by role)",
+          "children": [
+            {
+              "key": "assistant_activity.hr_assistants",
+              "label": "HR Assistants",
+              "type": "tab",
+              "help": "HR Assistants' changes.",
+              "locked": "Super Admin and HR Managers"
+            },
+            {
+              "key": "assistant_activity.hr_managers",
+              "label": "HR Managers",
+              "type": "tab",
+              "help": "HR Managers' changes.",
+              "locked": "Super Admin only"
+            }
+          ]
+        },
+        {
+          "key": "chat",
+          "label": "Chat",
+          "type": "page",
+          "help": "The company chat channel.",
+          "enforce": "server"
+        },
+        {
+          "key": "notifications",
+          "label": "Notifications",
+          "type": "page",
+          "help": "Messages from employees.",
+          "enforce": "server"
+        },
+        {
+          "key": "login_devices",
+          "label": "Login Devices",
+          "type": "page",
+          "help": "Where HR and employees are signed in.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "login_devices.revoke",
+              "label": "Sign a device out",
+              "type": "feature",
+              "help": "End a sign-in remotely.",
+              "locked": "Super Admin only"
+            }
+          ]
+        },
+        {
+          "key": "mobile_app_login",
+          "label": "Mobile App Login",
+          "type": "page",
+          "help": "The employee mobile app: logins, messages and versions.",
+          "enforce": "parts",
+          "children": [
+            {
+              "key": "mobile_app_login.logins",
+              "label": "Login Status",
+              "type": "tab",
+              "help": "Who can sign in to the app.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "mobile_app_login.logins.export",
+                  "label": "Export to Excel",
+                  "type": "feature",
+                  "help": "Download the list.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "mobile_app_login.logins.password",
+                  "label": "Set / reset a password",
+                  "type": "feature",
+                  "help": "Set, reset or clear an employee's app password.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "mobile_app_login.messages",
+              "label": "Mobile Messages",
+              "type": "tab",
+              "help": "Messages pushed to employees' phones.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "mobile_app_login.messages.overview",
+                  "label": "Overview",
+                  "type": "subtab",
+                  "help": "Messages sent and read.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "mobile_app_login.messages.controls",
+                  "label": "Controls",
+                  "type": "subtab",
+                  "help": "Which messages are pushed.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "mobile_app_login.messages.log",
+                  "label": "Messages",
+                  "type": "subtab",
+                  "help": "Every message sent.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "mobile_app_login.messages.devices",
+                  "label": "Phones",
+                  "type": "subtab",
+                  "help": "Phones that receive messages.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "mobile_app_login.messages.send",
+                  "label": "Send a message",
+                  "type": "subtab",
+                  "help": "Send a message to employees' phones.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "mobile_app_login.version",
+              "label": "New Version",
+              "type": "tab",
+              "help": "Offer a new app version.",
+              "enforce": "server"
+            }
+          ]
+        },
+        {
+          "key": "whatsapp_control",
+          "label": "WhatsApp Control",
+          "type": "page",
+          "help": "Every WhatsApp message the HRMS sends.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "whatsapp_control.overview",
+              "label": "Overview",
+              "type": "tab",
+              "help": "Messages sent, failed and waiting; the send queue.",
+              "enforce": "server"
+            },
+            {
+              "key": "whatsapp_control.messages",
+              "label": "Messages",
+              "type": "tab",
+              "help": "Every message.",
+              "enforce": "server"
+            },
+            {
+              "key": "whatsapp_control.employees",
+              "label": "Employees",
+              "type": "tab",
+              "help": "Per employee, and opting out.",
+              "enforce": "server"
+            },
+            {
+              "key": "whatsapp_control.controls",
+              "label": "Feature Controls",
+              "type": "tab",
+              "help": "Which messages are sent, limits and timing.",
+              "enforce": "screen"
+            },
+            {
+              "key": "whatsapp_control.templates",
+              "label": "Message Text",
+              "type": "tab",
+              "help": "The text of each message.",
+              "enforce": "server"
+            },
+            {
+              "key": "whatsapp_control.config",
+              "label": "Configuration",
+              "type": "tab",
+              "help": "The WhatsApp account set-up.",
+              "enforce": "screen"
+            }
+          ]
+        },
+        {
+          "key": "sms_control",
+          "label": "SMS Control",
+          "type": "page",
+          "help": "One-time sign-in codes by SMS.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "sms_control.overview",
+              "label": "Overview",
+              "type": "tab",
+              "help": "Codes sent and the account balance.",
+              "routes": ["/hr/sms-control/overview"],
+              "enforce": "screen"
+            },
+            {
+              "key": "sms_control.settings",
+              "label": "Settings",
+              "type": "tab",
+              "help": "How codes are sent.",
+              "routes": ["/hr/sms-control/settings"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "sms_control.settings.channel",
+                  "label": "Channel",
+                  "type": "subtab",
+                  "help": "SMS provider and sender.",
+                  "routes": ["/hr/sms-control/settings/channel"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "sms_control.settings.limits",
+                  "label": "Limits",
+                  "type": "subtab",
+                  "help": "How many codes may be sent.",
+                  "routes": ["/hr/sms-control/settings/limits"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "sms_control.settings.switches",
+                  "label": "Switches",
+                  "type": "subtab",
+                  "help": "Which sign-ins use SMS.",
+                  "routes": ["/hr/sms-control/settings/switches"],
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "sms_control.messages",
+              "label": "Messages",
+              "type": "tab",
+              "help": "Every SMS sent.",
+              "routes": ["/hr/sms-control/messages"],
+              "enforce": "server"
+            },
+            {
+              "key": "sms_control.test",
+              "label": "Test",
+              "type": "tab",
+              "help": "Send a test SMS.",
+              "routes": ["/hr/sms-control/test"],
+              "enforce": "server"
+            },
+            {
+              "key": "sms_control.setup",
+              "label": "Setup",
+              "type": "tab",
+              "help": "How to set the account up.",
+              "routes": ["/hr/sms-control/setup"],
+              "enforce": "screen"
+            }
+          ]
+        },
+        {
+          "key": "gmail_control",
+          "label": "Gmail Control",
+          "type": "page",
+          "help": "Every email the HRMS sends.",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "gmail_control.overview",
+              "label": "Overview",
+              "type": "tab",
+              "help": "Emails sent and failed.",
+              "enforce": "screen"
+            },
+            {
+              "key": "gmail_control.messages",
+              "label": "Messages",
+              "type": "tab",
+              "help": "Every email.",
+              "enforce": "server"
+            },
+            {
+              "key": "gmail_control.employees",
+              "label": "Employees",
+              "type": "tab",
+              "help": "Per employee.",
+              "enforce": "server"
+            },
+            {
+              "key": "gmail_control.controls",
+              "label": "Feature Controls",
+              "type": "tab",
+              "help": "Which emails are sent.",
+              "enforce": "screen"
+            },
+            {
+              "key": "gmail_control.templates",
+              "label": "Message Text",
+              "type": "tab",
+              "help": "The text of each email.",
+              "enforce": "server"
+            },
+            {
+              "key": "gmail_control.config",
+              "label": "Configuration",
+              "type": "tab",
+              "help": "The mail account set-up.",
+              "enforce": "parts",
+              "children": [
+                {
+                  "key": "gmail_control.config.test_email",
+                  "label": "Send a test email",
+                  "type": "feature",
+                  "help": "Check the mail account works.",
+                  "enforce": "server"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "biometric_connectors",
+          "label": "Biometric Connectors",
+          "type": "section",
+          "help": "The biometric devices: their status and direct control (followed Attendance before it had its own setting).",
+          "routes": ["/hr/Biometric-Connectors"],
+          "inherits": "attendance",
+          "enforce": "parts",
+          "children": [
+            {
+              "key": "biometric_connectors.device_status",
+              "label": "Biometric Device Status",
+              "type": "page",
+              "help": "Is each device reachable and sending punches.",
+              "routes": ["/hr/Biometric-Connectors/device-status"],
+              "enforce": "server"
+            },
+            {
+              "key": "biometric_connectors.device_control",
+              "label": "Device Control",
+              "type": "page",
+              "help": "Read and change the devices directly.",
+              "routes": ["/hr/Biometric-Connectors/DeviceControl"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "biometric_connectors.device_control.overview",
+                  "label": "Overview",
+                  "type": "tab",
+                  "help": "Each device at a glance.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "biometric_connectors.device_control.fetch",
+                  "label": "Data Fetch",
+                  "type": "tab",
+                  "help": "Pull punches from a device.",
+                  "routes": ["/hr/Biometric-Connectors/DeviceControl/fetch"],
+                  "enforce": "server"
+                },
+                {
+                  "key": "biometric_connectors.device_control.push",
+                  "label": "Data Push",
+                  "type": "tab",
+                  "help": "Add, change and delete people on the devices.",
+                  "routes": ["/hr/Biometric-Connectors/DeviceControl/push"],
+                  "enforce": "server"
+                },
+                {
+                  "key": "biometric_connectors.device_control.link_unlink",
+                  "label": "Link / Unlink",
+                  "type": "tab",
+                  "help": "Which devices an employee may punch on.",
+                  "routes": ["/hr/Biometric-Connectors/DeviceControl/link-unlink"],
+                  "enforce": "server"
+                },
+                {
+                  "key": "biometric_connectors.device_control.connectors",
+                  "label": "Site connectors",
+                  "type": "tab",
+                  "help": "The connector programs at the factories.",
+                  "routes": ["/hr/Biometric-Connectors/DeviceControl/connectors"],
+                  "enforce": "server"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "settings",
+          "label": "Settings",
+          "type": "section",
+          "help": "Company-wide settings, one tab each.",
+          "enforce": "parts",
+          "children": [
+            {
+              "key": "settings.company",
+              "label": "Company",
+              "type": "tab",
+              "help": "Company name, logo, address.",
+              "enforce": "server"
+            },
+            {
+              "key": "settings.hr_contact",
+              "label": "HR Contact",
+              "type": "tab",
+              "help": "Who employees call for help.",
+              "enforce": "server"
+            },
+            {
+              "key": "settings.themes",
+              "label": "Themes",
+              "type": "tab",
+              "help": "The portal's colours.",
+              "enforce": "screen"
+            },
+            {
+              "key": "settings.attendance",
+              "label": "Attendance",
+              "type": "tab",
+              "help": "How attendance is worked out.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "settings.attendance.staff",
+                  "label": "Staff",
+                  "type": "subtab",
+                  "help": "The staff rules.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.attendance.production",
+                  "label": "Production",
+                  "type": "subtab",
+                  "help": "The production shift table (read-only here).",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "settings.production_shifts",
+              "label": "Production Shifts",
+              "type": "tab",
+              "help": "The production shift ladder (followed Settings -> Attendance before it had its own setting).",
+              "inherits": "settings.attendance",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "settings.production_shifts.staff",
+                  "label": "Staff",
+                  "type": "subtab",
+                  "help": "What it means for staff.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "settings.production_shifts.production",
+                  "label": "Production",
+                  "type": "subtab",
+                  "help": "Shift groups, breaks and the Try-a-day calculator.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "settings.late_detection",
+              "label": "Late Detection",
+              "type": "tab",
+              "help": "What being late or taking permission costs.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "settings.late_detection.staff",
+                  "label": "Staff",
+                  "type": "subtab",
+                  "help": "Staff late slabs and permission rules.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.late_detection.production",
+                  "label": "Production",
+                  "type": "subtab",
+                  "help": "Production late rules per cycle.",
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "settings.late_detection.production.weekly",
+                      "label": "Weekly",
+                      "type": "subtab",
+                      "help": "Weekly cycle.",
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "settings.late_detection.production.biweekly",
+                      "label": "BiWeekly",
+                      "type": "subtab",
+                      "help": "BiWeekly cycle.",
+                      "enforce": "screen"
+                    },
+                    {
+                      "key": "settings.late_detection.production.monthly",
+                      "label": "Monthly",
+                      "type": "subtab",
+                      "help": "Monthly cycle.",
+                      "enforce": "screen"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "key": "settings.compensation",
+              "label": "Compensation",
+              "type": "tab",
+              "help": "OT and compensation rules.",
+              "enforce": "server"
+            },
+            {
+              "key": "settings.devices",
+              "label": "Devices",
+              "type": "tab",
+              "help": "The biometric devices and how they connect.",
+              "enforce": "server"
+            },
+            {
+              "key": "settings.payroll",
+              "label": "Staff Payroll",
+              "type": "tab",
+              "help": "Staff payroll rules.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "settings.payroll.rates",
+                  "label": "Payroll Rules",
+                  "type": "subtab",
+                  "help": "Basic / HRA split, pay day.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.payroll.bonus",
+                  "label": "Bonus",
+                  "type": "subtab",
+                  "help": "Bonus percentage and ceilings.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.payroll.ot_compensation",
+                  "label": "OT / Compensation",
+                  "type": "subtab",
+                  "help": "The OT / Compensation master switch.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "settings.production_payroll",
+              "label": "Production Payroll",
+              "type": "tab",
+              "help": "Production payroll rules.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "settings.production_payroll.overview",
+                  "label": "Overview",
+                  "type": "subtab",
+                  "help": "The cycles at a glance.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "settings.production_payroll.weekly",
+                  "label": "Weekly",
+                  "type": "subtab",
+                  "help": "When weekly periods start.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.production_payroll.biweekly",
+                  "label": "BiWeekly",
+                  "type": "subtab",
+                  "help": "When fortnightly periods start.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.production_payroll.monthly",
+                  "label": "Monthly",
+                  "type": "subtab",
+                  "help": "When monthly periods start.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.production_payroll.pay_bonus",
+                  "label": "Pay & Bonus",
+                  "type": "subtab",
+                  "help": "Salary per shift and the production bonus.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "settings.pf_esi",
+              "label": "PF & ESI",
+              "type": "tab",
+              "help": "PF / ESI rates (only the Super Admin changes them; followed Settings -> Staff Payroll before).",
+              "inherits": "settings.payroll",
+              "enforce": "screen",
+              "children": [
+                {
+                  "key": "settings.pf_esi.staff",
+                  "label": "Staff",
+                  "type": "subtab",
+                  "help": "Staff PF / ESI.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "settings.pf_esi.production",
+                  "label": "Production",
+                  "type": "subtab",
+                  "help": "Production PF / ESI.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
+              "key": "settings.salary_slip",
+              "label": "Salary Slip",
+              "type": "tab",
+              "help": "What the payslip shows.",
+              "enforce": "server"
+            },
+            {
+              "key": "settings.documents",
+              "label": "Company Documents",
+              "type": "tab",
+              "help": "The letters the HRMS prints.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "settings.documents.offer_letter",
+                  "label": "Offer Letter",
+                  "type": "subtab",
+                  "help": "The offer letter.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.documents.experience_letter",
+                  "label": "Experience Letter",
+                  "type": "subtab",
+                  "help": "The experience letter.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.documents.salary_slip",
+                  "label": "Salary Slip",
+                  "type": "subtab",
+                  "help": "The payslip layout.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.documents.resignation_letter",
+                  "label": "Resignation Letter",
+                  "type": "subtab",
+                  "help": "The resignation letter.",
+                  "enforce": "server"
+                }
+              ]
+            },
+            {
+              "key": "settings.idcard",
+              "label": "ID Card",
+              "type": "tab",
+              "help": "The ID card layout (followed the ID Cards page before it had its own setting).",
+              "inherits": "id_cards",
+              "enforce": "server"
+            },
+            {
+              "key": "settings.smtp",
+              "label": "SMTP / Email",
+              "type": "tab",
+              "help": "The mail server.",
+              "enforce": "server"
+            },
+            {
+              "key": "settings.whatsapp",
+              "label": "WhatsApp",
+              "type": "tab",
+              "help": "Points to WhatsApp Control.",
+              "enforce": "server"
+            },
+            {
+              "key": "settings.endpoint_sharing",
+              "label": "Endpoint Sharing",
+              "type": "tab",
+              "help": "Data shared with other systems by API key.",
+              "locked": "Super Admin only"
+            },
+            {
+              "key": "settings.backup",
+              "label": "Backup",
+              "type": "tab",
+              "help": "Database backups.",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "settings.backup.schedule",
+                  "label": "Schedule",
+                  "type": "feature",
+                  "help": "When backups run.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.backup.drive",
+                  "label": "Google Drive copy",
+                  "type": "feature",
+                  "help": "Copy backups to Google Drive.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "settings.backup.restore",
+                  "label": "Restore",
+                  "type": "feature",
+                  "help": "Check a backup file (only the Super Admin can restore one).",
+                  "enforce": "server"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "approvals": [
+    {
+      "key": "leave",
+      "label": "Leave requests",
+      "module": "leave",
+      "description": "Approve or reject leave and half-day leave requests.",
+      "group": "leave"
+    },
+    {
+      "key": "permission",
+      "label": "Permission requests",
+      "module": "requests",
+      "description": "Approve or reject Late-In / Early-Out / One-Hour permissions.",
+      "group": "leave"
+    },
+    {
+      "key": "casual_leave",
+      "label": "Casual Leave requests",
+      "module": "casual_leave",
+      "description": "Approve or reject CL requests.",
+      "group": "casual_leave"
+    },
+    {
+      "key": "missing_punch",
+      "label": "Missing punch requests",
+      "module": "missing_punch",
+      "description": "Approve or reject missed-punch requests.",
+      "group": "attendance"
+    },
+    {
+      "key": "attendance_correction",
+      "label": "Attendance edit requests",
+      "module": "attendance",
+      "description": "Give HR's approval to a change of a day's attendance (after the Department Head's).",
+      "group": "attendance"
+    },
+    {
+      "key": "on_duty",
+      "label": "On-Duty requests",
+      "module": "geo_attendance",
+      "description": "Approve or reject On-Duty requests.",
+      "group": "geo"
+    },
+    {
+      "key": "on_duty_punch",
+      "label": "On-Duty punch verifications",
+      "module": "geo_attendance",
+      "description": "Accept or reject the punches made On-Duty.",
+      "group": "geo"
+    },
+    {
+      "key": "outpass",
+      "label": "Outpass requests",
+      "module": "requests",
+      "description": "Approve or reject gate outpass requests.",
+      "group": "outpass"
+    },
+    {
+      "key": "request_leave",
+      "label": "Leave Request",
+      "module": "requests",
+      "description": "A leave asked for with the request form (not the Leave & Holiday leave requests).",
+      "group": "other_requests",
+      "replaces": "request"
+    },
+    {
+      "key": "request_salary_enquiry",
+      "label": "Salary Enquiry",
+      "module": "requests",
+      "description": "A question about salary sent with the request form.",
+      "group": "other_requests",
+      "replaces": "request"
+    },
+    {
+      "key": "request_shift_correction",
+      "label": "Shift Correction",
+      "module": "requests",
+      "description": "A request to correct a shift, sent with the request form.",
+      "group": "other_requests",
+      "replaces": "request"
+    },
+    {
+      "key": "request_advance",
+      "label": "Advance Request",
+      "module": "requests",
+      "description": "An advance asked for with the request form (the advance itself is decided under Settlement).",
+      "group": "other_requests",
+      "replaces": "request"
+    },
+    {
+      "key": "request_permission",
+      "label": "Permission Request",
+      "module": "requests",
+      "description": "A permission asked for with the request form (not the Late-In / Early-Out permissions).",
+      "group": "other_requests",
+      "replaces": "request"
+    },
+    {
+      "key": "request_general",
+      "label": "General Query",
+      "module": "requests",
+      "description": "Any other question or request sent with the request form.",
+      "group": "other_requests",
+      "replaces": "request"
+    },
+    {
+      "key": "resignation",
+      "label": "Resignations",
+      "module": "recruitment.resignations",
+      "description": "Approve or reject resignations.",
+      "group": "recruitment"
+    },
+    {
+      "key": "interview_result",
+      "label": "Interview results",
+      "module": "recruitment",
+      "description": "Mark an applicant selected or rejected on the Interviews page.",
+      "group": "recruitment",
+      "needsEdit": true
+    },
+    {
+      "key": "resume_decision",
+      "label": "Resume screening decisions",
+      "module": "recruitment.resume_screening",
+      "description": "Mark a screened candidate selected or rejected.",
+      "group": "recruitment",
+      "needsEdit": true
+    },
+    {
+      "key": "advance_general",
+      "label": "General advances",
+      "module": "settlement",
+      "description": "Approve or reject a one-time salary advance.",
+      "group": "settlement",
+      "replaces": "advance"
+    },
+    {
+      "key": "advance_term",
+      "label": "Term advances (loans)",
+      "module": "settlement",
+      "description": "Approve or reject a loan repaid in monthly instalments.",
+      "group": "settlement",
+      "replaces": "advance"
+    },
+    {
+      "key": "payroll_hold",
+      "label": "Hold / unhold a salary",
+      "module": "payroll",
+      "description": "Hold an employee's salary for the month, or release the hold, before Payroll Done.",
+      "group": "payroll",
+      "needsEdit": true
+    },
+    {
+      "key": "payroll_add",
+      "label": "Add a new joiner to the payroll",
+      "module": "payroll",
+      "description": "Put a new joiner into this month's payroll.",
+      "group": "payroll",
+      "needsEdit": true
+    },
+    {
+      "key": "payroll_finalize",
+      "label": "Payroll Done (lock the month)",
+      "module": "payroll",
+      "description": "Finalize and lock the month's staff payroll.",
+      "group": "payroll",
+      "needsEdit": true,
+      "note": "Only for a login that covers every branch, as before."
+    },
+    {
+      "key": "payroll_mark_paid",
+      "label": "Mark the month as Paid",
+      "module": "payroll",
+      "description": "Record that the finalized month has been paid and tell the employees.",
+      "group": "payroll",
+      "needsEdit": true,
+      "note": "Only for a login that covers every branch, as before."
+    },
+    {
+      "key": "payroll_release",
+      "label": "Release & pay",
+      "module": "payroll",
+      "description": "Pay a held salary or a new joiner after Payroll Done.",
+      "group": "payroll",
+      "needsEdit": true,
+      "note": "Only for a login that covers every branch, as before."
+    },
+    {
+      "key": "payroll_mark_cleared",
+      "label": "Mark a salary as cleared",
+      "module": "payroll",
+      "description": "Mark one employee's payroll as paid (Mark as Cleared, staff and production).",
+      "group": "payroll",
+      "needsEdit": true
+    },
+    {
+      "key": "compensation_ot",
+      "label": "OT shift compensation",
+      "module": "compensation.ot",
+      "description": "Assign or reject compensation for extra shifts worked, and announce earlier records.",
+      "group": "compensation",
+      "needsEdit": true
+    },
+    {
+      "key": "bonus_status",
+      "label": "Bonus approval and payment",
+      "module": "bonus",
+      "description": "Set a bonus row to Approved or Paid.",
+      "group": "bonus",
+      "needsEdit": true
+    }
+  ],
+  "approvalGroups": [
+    {
+      "id": "leave",
+      "label": "Leave & Holiday"
+    },
+    {
+      "id": "casual_leave",
+      "label": "Casual Leave"
+    },
+    {
+      "id": "attendance",
+      "label": "Attendance"
+    },
+    {
+      "id": "geo",
+      "label": "Geo Attendance"
+    },
+    {
+      "id": "outpass",
+      "label": "Outpass"
+    },
+    {
+      "id": "other_requests",
+      "label": "Requests page - Other requests (the employee request form)"
+    },
+    {
+      "id": "recruitment",
+      "label": "Recruitment"
+    },
+    {
+      "id": "settlement",
+      "label": "Settlement"
+    },
+    {
+      "id": "payroll",
+      "label": "Staff Payroll"
+    },
+    {
+      "id": "compensation",
+      "label": "Compensation"
+    },
+    {
+      "id": "bonus",
+      "label": "Bonus"
+    }
+  ],
+  "approvalInfo": [
+    {
+      "key": "holiday_work",
+      "label": "Holiday / Sunday work claims",
+      "group": "compensation",
+      "text": "Decided by the Department Head only: HR has no approval step for them."
+    }
+  ],
+  "assistantLocked": {
+    "missing_punch": "HR Assistants can't approve missing-punch requests. An HR Manager or the Super Admin decides them.",
+    "attendance_correction": "HR Assistants can't approve attendance edits. An HR Manager or the Super Admin gives HR's approval."
+  }
+}

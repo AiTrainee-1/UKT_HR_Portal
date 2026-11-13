@@ -26,8 +26,8 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { getListRolesQueryKey, useCreateRole, useUpdateRole, type Role } from "@/lib/api-client/custom-hooks";
-import { approvalCount, isLocked, legacyApprovals, type Approvals, type RoleCategory } from "@/lib/hr-access";
-import { RoleApprovalsEditor } from "./ApprovalsEditor";
+import { isLocked, legacyApprovals, type Approvals, type RoleCategory } from "@/lib/hr-access";
+import { RoleApprovalsEditor, roleApprovalCount } from "./ApprovalsEditor";
 import PermissionEditor from "./PermissionEditor";
 import { emptyPermissions, permissionsEqual, type Permissions } from "./logic";
 
@@ -219,7 +219,10 @@ export default function RoleDialog({ role, roles, usedBy, open, onClose }: Props
                   { value: "pages", label: "Pages & actions" },
                   {
                     value: "approvals",
-                    label: approvals === null ? "Approvals · follow Edit" : `Approvals · ${approvalCount(approvals)}`,
+                    label:
+                      approvals === null
+                        ? "Approvals · follow Edit"
+                        : `Approvals · ${roleApprovalCount(approvals, permissions, category)}`,
                   },
                 ]}
                 value={section}

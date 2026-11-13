@@ -25,6 +25,8 @@ import { useDraft } from "./attendance/useDraft";
 import { SaveBar } from "./kit/SaveBar";
 import { SaveDock } from "./kit/SaveDock";
 import { CLASS_VIEWS, ClassPills, UnsavedChip, useAddressView } from "./kit/view";
+import { NothingOpen, SubtabViewOnlyNote, useSubtabAccess } from "./kit/subtabs";
+import { SETTINGS_SUBTAB_MODULE } from "./constants";
 import { PRODUCTION_SHIFT_VIEW_OF } from "./ProductionShiftsTab.meta";
 import { isIsoDate, prettyDate, todayIst } from "./compensation/form";
 import { saveErrorText } from "./payroll/form";
@@ -109,7 +111,10 @@ function stamp(iso: string): string {
  */
 export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
-  const [view, chooseView] = useAddressView(CLASS_VIEWS, "production", PRODUCTION_SHIFT_VIEW_OF);
+  const [askedView, chooseView] = useAddressView(CLASS_VIEWS, "production", PRODUCTION_SHIFT_VIEW_OF);
+  // Staff and Production each have their own permission key: only the visible ones are offered, a View-only one is read-only
+  const page = useSubtabAccess(CLASS_VIEWS, SETTINGS_SUBTAB_MODULE.production_shifts, askedView, readOnly);
+  const view = page.shown;
   const query = useProductionShiftRules();
   const update = useUpdateProductionShiftRules();
   const payroll = usePayrollSettings();
@@ -140,13 +145,24 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
   // a save the server refused as a branch login's: the tab is read-only from then on, whatever it first thought
   const [refusedAsBranch, setRefusedAsBranch] = useState(false);
   const branchLogin = payroll.data?.companyWideRulesEditable === false || refusedAsBranch;
-  const locked = readOnly || branchLogin;
+  const locked = page.readOnly || branchLogin;
 
   const pills = (
-    <ClassPills value={view} onChange={chooseView}>
-      {view === "staff" && dirty && <UnsavedChip>Not saved yet: Production</UnsavedChip>}
-    </ClassPills>
+    <>
+      <ClassPills value={view} onChange={chooseView} values={page.visible}>
+        {view === "staff" && dirty && <UnsavedChip>Not saved yet: Production</UnsavedChip>}
+      </ClassPills>
+      <SubtabViewOnlyNote show={page.viewOnly} />
+    </>
   );
+
+  if (page.none) {
+    return (
+      <div className="space-y-4" data-testid="production-shifts-tab">
+        <NothingOpen />
+      </div>
+    );
+  }
 
   if (view === "staff") {
     return (
@@ -236,7 +252,7 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
     setStale(false);
   };
 
-  const hint = readOnly
+  const hint = page.readOnly
     ? "View only: you can try a day, but the rules cannot be changed."
     : branchLogin
       ? "Signed in for a branch: only an administrator can save these company-wide rules."

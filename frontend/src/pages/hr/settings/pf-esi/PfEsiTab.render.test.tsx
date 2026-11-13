@@ -186,7 +186,8 @@ async function open(
         employeeId: null,
         name: "Test HR",
         isSuperAdmin: options.canEdit !== false,
-        permissions: {},
+        // a login that is not the Super Admin but may open the tab (its Staff / Production pills follow the role's keys)
+        permissions: options.canEdit !== false ? {} : { settings: "edit" },
       },
       "/api/pf-esi-settings": made.handler,
     },

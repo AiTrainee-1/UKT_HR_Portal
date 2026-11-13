@@ -5,6 +5,7 @@ import {
   GATE_PAGES,
   GATE_SUBS,
   cleanGatePath,
+  gateKey,
   gateLanding,
   gatePageOf,
   gatePagePath,
@@ -136,5 +137,54 @@ describe("the redirect table (resolveGatePath)", () => {
   it("drops a trailing slash before looking, so the page itself is not a redirect", () => {
     expect(cleanGatePath("/hr/outpass-visitors/visitors/")).toBe("/hr/outpass-visitors/visitors");
     expect(resolveGatePath(cleanGatePath("/hr/outpass-visitors/visitors/"))).toBe("/hr/outpass-visitors/visitors");
+  });
+});
+
+describe("the pages and tabs a role may see (Account Management -> Roles & Permissions)", () => {
+  const hiding =
+    (...hidden: string[]) =>
+    (key: string) =>
+      !hidden.some((h) => key === h || key.startsWith(`${h}.`));
+
+  it("names each page and tab by its permission key", () => {
+    expect(gateKey("outpass")).toBe("outpass_visitors.outpass");
+    expect(gateKey("tea-break", "rule")).toBe("outpass_visitors.tea_break.rule");
+    expect(gateKey("outpass", "in-out")).toBe("outpass_visitors.outpass.in_out");
+    expect(gateKey("outpass", "overview", "qr-submissions")).toBe("outpass_visitors.outpass.overview.qr_submissions");
+  });
+
+  it("lands on the first page, tab and section the role may see", () => {
+    const noOutpass = hiding("outpass_visitors.outpass");
+    expect(resolveGatePath("/hr/outpass-visitors", noOutpass)).toBe("/hr/outpass-visitors/visitors");
+    expect(resolveGatePath("/hr/outpass-visitors/nope", noOutpass)).toBe("/hr/outpass-visitors/visitors");
+    const noOverview = hiding("outpass_visitors.outpass.overview");
+    expect(resolveGatePath("/hr/outpass-visitors/outpass", noOverview)).toBe("/hr/outpass-visitors/outpass/requests");
+    const noPasses = hiding("outpass_visitors.outpass.overview.passes");
+    expect(resolveGatePath("/hr/outpass-visitors/outpass", noPasses)).toBe(
+      "/hr/outpass-visitors/outpass/overview/qr-submissions",
+    );
+    expect(resolveGatePath("/hr/outpass-visitors/tea-break", hiding("outpass_visitors.tea_break.records"))).toBe(
+      "/hr/outpass-visitors/tea-break/rule",
+    );
+  });
+
+  it("stops at a level the role may see nothing of (the page says so), and stays there", () => {
+    const noTabs = hiding("outpass_visitors.tea_break.records", "outpass_visitors.tea_break.rule");
+    expect(resolveGatePath("/hr/outpass-visitors/tea-break/records", noTabs)).toBe("/hr/outpass-visitors/tea-break");
+    expect(resolveGatePath("/hr/outpass-visitors/tea-break", noTabs)).toBe("/hr/outpass-visitors/tea-break");
+    const noSections = hiding(
+      "outpass_visitors.outpass.overview.passes",
+      "outpass_visitors.outpass.overview.qr_submissions",
+    );
+    expect(resolveGatePath("/hr/outpass-visitors/outpass", noSections)).toBe("/hr/outpass-visitors/outpass/overview");
+    expect(resolveGatePath("/hr/outpass-visitors/outpass/overview", noSections)).toBe(
+      "/hr/outpass-visitors/outpass/overview",
+    );
+  });
+
+  it("keeps a page named in the address (the route guard decides about it), and changes nothing when all may be seen", () => {
+    const noOutpass = hiding("outpass_visitors.outpass");
+    expect(resolveGatePath("/hr/outpass-visitors/visitors", noOutpass)).toBe("/hr/outpass-visitors/visitors");
+    expect(resolveGatePath("/hr/outpass-visitors", () => true)).toBe("/hr/outpass-visitors/outpass/overview/passes");
   });
 });

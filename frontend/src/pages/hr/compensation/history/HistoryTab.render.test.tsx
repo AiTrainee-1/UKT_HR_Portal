@@ -34,7 +34,10 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
-vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ token: "t", user: h.user.current }) }));
+vi.mock("@/contexts/AuthContext", async (original) => ({
+  ...(await original<typeof import("@/contexts/AuthContext")>()),
+  useAuth: () => ({ token: "t", user: h.user.current }),
+}));
 vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-fetch")>()),
   customFetch: h.fetch,

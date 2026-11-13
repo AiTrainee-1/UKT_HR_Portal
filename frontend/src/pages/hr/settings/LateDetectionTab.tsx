@@ -14,6 +14,8 @@ import { SaveFooter } from "./attendance/SaveFooter";
 import { TabContents } from "./attendance/TabContents";
 import { useDraft } from "./attendance/useDraft";
 import { CLASS_VIEWS, ClassPills, UnsavedChip, useAddressView } from "./kit/view";
+import { NothingOpen, SubtabViewOnlyNote, useSubtabAccess } from "./kit/subtabs";
+import { LATE_CYCLE_MODULE, SETTINGS_SUBTAB_MODULE } from "./constants";
 import { LATE_CYCLE_OF, LATE_VIEW_OF } from "./LateDetectionTab.meta";
 import {
   capChanges,
@@ -50,7 +52,7 @@ import {
   type ProductionLatePayload,
 } from "./late_detection/production";
 import { addressSetting, saveErrorText, useSubTabFromAddress } from "./payroll/form";
-import { CYCLE_INFO } from "./production-payroll/cycles";
+import { CYCLE_INFO, CYCLES } from "./production-payroll/cycles";
 
 const STAFF_CONTENTS = [
   { id: "late-pool-intro", label: "How the pool works" },
@@ -88,10 +90,30 @@ export default function LateDetectionTab({ readOnly = false }: { readOnly?: bool
   const { data } = usePayrollSettings();
   const update = useUpdatePayrollSettings();
 
-  const [view, chooseView] = useAddressView(CLASS_VIEWS, "staff", LATE_VIEW_OF);
-  const [cycle, setCycle] = useState<PayCycle>(() => LATE_CYCLE_OF[addressSetting()] ?? "weekly");
+  const [askedView, chooseView] = useAddressView(CLASS_VIEWS, "staff", LATE_VIEW_OF);
+  const [askedCycle, setCycle] = useState<PayCycle>(() => LATE_CYCLE_OF[addressSetting()] ?? "weekly");
   const openCycle = useCallback((next: PayCycle) => setCycle(next), []);
   useSubTabFromAddress(LATE_CYCLE_OF, openCycle, { focus: false });
+
+  // Staff and Production each have their own permission key, and so does each cycle pill of Production (they follow
+  // Production while unset): only the visible ones are offered, a View-only one is read-only. A View-only Production with
+  // an editable cycle keeps its own switches read-only and leaves that cycle editable (the Save then sends what changed).
+  const page = useSubtabAccess(CLASS_VIEWS, SETTINGS_SUBTAB_MODULE.late_detection, askedView, readOnly, {
+    below: { production: Object.values(LATE_CYCLE_MODULE) },
+  });
+  const view = page.shown;
+  const onProduction = view === "production" && !page.none;
+  const cycles = useSubtabAccess(
+    CYCLES,
+    LATE_CYCLE_MODULE,
+    askedCycle,
+    // the cycles answer for themselves only on the Production page, and only when it is not read-only as a whole; they
+    // share the page's Save, so a View-only cycle disables its own fields instead of locking the page
+    !onProduction || readOnly || page.viewOnly,
+    { lock: false },
+  );
+  const cycle = cycles.shown;
+  const productionReadOnly = page.readOnly && cycles.readOnly;
 
   const savedLate = useMemo(() => (data ? lateDraftFrom(data) : null), [data]);
   const savedCap = useMemo(() => (data ? capDraftFrom(data) : null), [data]);
@@ -244,8 +266,8 @@ export default function LateDetectionTab({ readOnly = false }: { readOnly?: bool
     }
   };
 
-  const hint = (problem: string | null) =>
-    readOnly
+  const hint = (problem: string | null, ro = page.readOnly) =>
+    ro
       ? "View only: you can try values to see the examples, but they cannot be saved."
       : !loaded
         ? "Loading the saved settings…"
@@ -262,12 +284,21 @@ export default function LateDetectionTab({ readOnly = false }: { readOnly?: bool
           .map((c) => CYCLE_INFO[c].label)
       : [];
 
+  if (page.none) {
+    return (
+      <div className="space-y-4" data-testid="late-detection-tab">
+        <NothingOpen />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4" data-testid="late-detection-tab">
-      <ClassPills value={view} onChange={chooseView}>
+      <ClassPills value={view} onChange={chooseView} values={page.visible}>
         {view === "staff" && production.dirty && <UnsavedChip>Not saved yet: Production</UnsavedChip>}
         {view === "production" && staffDirty && <UnsavedChip>Not saved yet: Staff</UnsavedChip>}
       </ClassPills>
+      <SubtabViewOnlyNote show={page.viewOnly} />
 
       {view === "staff" ? (
         <div className="space-y-4" data-testid="late-page-staff">
@@ -291,7 +322,7 @@ export default function LateDetectionTab({ readOnly = false }: { readOnly?: bool
               onSave={() => setConfirming("late")}
               onDiscard={late.discard}
               saveLabel="Save Late Detection Policy"
-              disabled={readOnly || !loaded || !late.dirty || !!lateError}
+              disabled={page.readOnly || !loaded || !late.dirty || !!lateError}
               hint={hint(lateError)}
             />
           </div>
@@ -314,9 +345,11 @@ export default function LateDetectionTab({ readOnly = false }: { readOnly?: bool
               onSave={() => setConfirming("cap")}
               onDiscard={capForm.discard}
               saveLabel="Save Permission Policy"
-              disabled={readOnly || !loaded || !capForm.dirty || !!capError || !companyWideEditable || !capReported}
+              disabled={
+                page.readOnly || !loaded || !capForm.dirty || !!capError || !companyWideEditable || !capReported
+              }
               hint={
-                !readOnly && loaded && !companyWideEditable
+                !page.readOnly && loaded && !companyWideEditable
                   ? "The monthly cap is a company-wide rule: only an administrator can change it."
                   : hint(capError)
               }
@@ -343,10 +376,15 @@ export default function LateDetectionTab({ readOnly = false }: { readOnly?: bool
               onDiscard={pricingForm.discard}
               saveLabel="Save Permission Pricing"
               disabled={
-                readOnly || !loaded || !pricingForm.dirty || !!pricingError || !companyWideEditable || !pricingReported
+                page.readOnly ||
+                !loaded ||
+                !pricingForm.dirty ||
+                !!pricingError ||
+                !companyWideEditable ||
+                !pricingReported
               }
               hint={
-                !readOnly && loaded && !companyWideEditable
+                !page.readOnly && loaded && !companyWideEditable
                   ? "Permission pricing is a company-wide rule: only an administrator can change it."
                   : hint(pricingError)
               }
@@ -364,8 +402,11 @@ export default function LateDetectionTab({ readOnly = false }: { readOnly?: bool
               settings={data}
               cycle={cycle}
               onCycle={setCycle}
+              cycles={cycles.visible}
+              cycleReadOnly={cycles.readOnly}
+              cycleViewOnly={cycles.viewOnly}
               branchLogin={!companyWideEditable}
-              readOnly={readOnly}
+              readOnly={page.readOnly}
               busy={saving !== null}
               onUseShared={useSharedRules}
             />
@@ -380,8 +421,8 @@ export default function LateDetectionTab({ readOnly = false }: { readOnly?: bool
             onSave={() => setConfirming("production")}
             onDiscard={production.discard}
             saveLabel="Save Production Late Detection"
-            disabled={readOnly || !loaded || !production.dirty || !!productionError || saving !== null}
-            hint={hint(productionError)}
+            disabled={productionReadOnly || !loaded || !production.dirty || !!productionError || saving !== null}
+            hint={hint(productionError, productionReadOnly)}
           />
         </div>
       )}

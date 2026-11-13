@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { Gate } from "@/lib/tab-access";
 import { usePunchDayStatus, useSetPunchDayStatus, type PunchDayStatusValue } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { StatusChip, todayISO } from "./parts";
@@ -220,10 +221,13 @@ export default function DayStatusDialog({
           <Button type="button" variant="ghost" onClick={onClose} disabled={save.isPending}>
             Cancel
           </Button>
-          <Button type="button" onClick={submit} disabled={!canSave} data-testid="day-status-save">
-            {save.isPending && <Loader2 size={14} className="mr-1.5 animate-spin" />}
-            Save
-          </Button>
+          {/* View only on "Set a day's status": the dialog shows the day, its Save stays locked */}
+          <Gate k="attendance.punch_view.day_status">
+            <Button type="button" onClick={submit} disabled={!canSave} data-testid="day-status-save">
+              {save.isPending && <Loader2 size={14} className="mr-1.5 animate-spin" />}
+              Save
+            </Button>
+          </Gate>
         </DialogFooter>
       </DialogContent>
     </Dialog>

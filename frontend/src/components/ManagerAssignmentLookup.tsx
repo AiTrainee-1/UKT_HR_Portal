@@ -11,6 +11,8 @@ import { useDebounced } from "@/hooks/use-debounced";
 import { useListEmployeesLite, useSearchEmployees } from "@/lib/api-client";
 import { useAssignEmployeeToManager } from "@/lib/api-client/custom-hooks";
 import { DataPagination } from "@/components/ui/DataPagination";
+import { Gate, pickVisible, useLevel, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
+import { HOD_FINDER_PILL_MODULE } from "@/pages/hr/user-management/constants";
 
 /**
  * User lookup + unassigned worklist for User Management.
@@ -89,7 +91,19 @@ export function ManagerAssignmentLookup({
   const { toast } = useToast();
   const assignMutation = useAssignEmployeeToManager();
 
-  const [tab, setTab] = useState<"users" | "unassigned">("users");
+  // Each finder pill has its own permission key (Account Management -> User Management -> HOD Assignment): a hidden pill
+  // is not offered (and its list is never fetched), a View-only one locks its own controls (the HOD picker).
+  const level = useLevel();
+  const visiblePills = visibleItems(
+    ["users", "unassigned"] as const,
+    (p) => HOD_FINDER_PILL_MODULE[p],
+    level,
+  );
+  const [askedTab, setTab] = useState<"users" | "unassigned">("users");
+  const tab = pickVisible(askedTab, visiblePills);
+  const tabKey = HOD_FINDER_PILL_MODULE[tab];
+  // The note only when the HOD Assignment tab itself is editable (otherwise the page/tab note already says so).
+  const pillViewOnly = level(tabKey) === "view" && level("user_management.hod") === "edit";
   const [empQuery, setEmpQuery] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -203,6 +217,9 @@ export function ManagerAssignmentLookup({
     }
   };
 
+  // Neither finder pill is open to this role: the whole finder stays out (the HOD cards below are unaffected).
+  if (visiblePills.length === 0) return null;
+
   return (
     <Card className="border-0 shadow-sm">
       <CardContent className="space-y-3 p-4">
@@ -217,7 +234,7 @@ export function ManagerAssignmentLookup({
                 count: tab === "unassigned" ? staffWithoutHod.length : undefined,
                 color: "#dc2626",
               },
-            ]}
+            ].filter((p) => (visiblePills as readonly string[]).includes(p.value))}
             value={tab}
             onChange={(v) => changeTab(v as "users" | "unassigned")}
           />
@@ -238,6 +255,9 @@ export function ManagerAssignmentLookup({
           )}
         </div>
 
+        <ViewOnlyTabNote show={pillViewOnly} testId="hod-finder-view-only" />
+
+        <Gate key={tab} k={tabKey}>
         {tab === "users" ? (
           <>
             <p className="text-xs text-muted-foreground">
@@ -441,6 +461,7 @@ export function ManagerAssignmentLookup({
             )}
           </>
         )}
+        </Gate>
       </CardContent>
     </Card>
   );

@@ -194,9 +194,11 @@ test("the roles list shows who uses each role and how much it opens up", async (
   await openRoles(page);
   await expect(roleRow(page, "AM Auditor")).toContainText("1 account");
   await expect(roleRow(page, "AM Auditor")).toContainText("Reads payroll and reports");
-  // dashboard, payroll, reports and the whole of Settings (13 sub-modules + 1) are view; SMTP is hidden on its own
-  await expect(roleRow(page, "AM Auditor")).toContainText("0 edit");
-  await expect(roleRow(page, "AM Clerk")).toContainText("2 edit");
+  // dashboard, payroll, reports and the whole of Settings are view (with every tab under them); SMTP is hidden on its own
+  await expect(roleRow(page, "AM Auditor")).toContainText(/\b0 edit/);
+  // Attendance and Leave & Holiday with every page, tab and feature under them (2026-11-11: each one counts)
+  await expect(roleRow(page, "AM Clerk")).toContainText(/\b[1-9]\d* edit/);
+  await expect(roleRow(page, "AM Clerk")).not.toContainText(/\b0 edit/);
 
   // "1 account" jumps to those accounts
   await roleRow(page, "AM Clerk")
@@ -243,7 +245,9 @@ test("a role is built with search, set-every-module, copy-from and sub-module ex
   await expect(dialog.getByTestId("section-payroll")).toBeVisible();
   await expect(dialog.getByTestId("section-dashboard")).toHaveCount(0);
   await dialog.getByTestId("perm-payroll-edit").click();
-  await expect(page.getByTestId("count-edit")).toHaveText("1");
+  // the page and every tab under it (2026-11-11: pages, tabs and features each count)
+  await expect(dialog.getByTestId("perm-payroll.issues-edit")).toHaveAttribute("data-active", "true");
+  expect(Number(await page.getByTestId("count-edit").innerText())).toBeGreaterThan(1);
   await page.getByTestId("module-search").fill("zzzz");
   await expect(page.getByTestId("no-modules")).toBeVisible();
   await page.getByRole("button", { name: "Clear module search" }).click();
@@ -257,7 +261,8 @@ test("a role is built with search, set-every-module, copy-from and sub-module ex
   await page.getByTestId("copy-from").click();
   await page.getByRole("option", { name: "AM Clerk" }).click();
   await expect(page.getByTestId("copied-note")).toContainText("copied from AM Clerk");
-  await expect(page.getByTestId("count-edit")).toHaveText("2");
+  // Attendance and Leave & Holiday with every part of them
+  expect(Number(await page.getByTestId("count-edit").innerText())).toBeGreaterThan(2);
 
   // a sub-module can differ from its section; "reset" makes it follow the section again
   await page.getByTestId("module-search").fill("smtp");
@@ -302,7 +307,7 @@ test("closing a role with unsaved changes asks before throwing them away", async
   await expect(page.getByTestId("discard-confirm")).toBeVisible();
   await page.getByTestId("discard-keep").click();
   await expect(dialog).toBeVisible();
-  await expect(page.getByTestId("count-edit")).toHaveText("1");
+  expect(Number(await page.getByTestId("count-edit").innerText())).toBeGreaterThan(1);
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await page.getByTestId("discard-confirm").click();
   await expect(dialog).toHaveCount(0);

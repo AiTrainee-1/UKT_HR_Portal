@@ -203,6 +203,16 @@ def can_edit_payroll(request) -> bool:
     return resolve_permission(effective_permissions(hr_user), "payroll") == "edit"
 
 
+def may_decide(request, kind: str) -> bool:
+    """The account's own switch for one of the month's decisions (Account Management -> Approvals: Payroll Done, Mark as
+    Paid, Release & pay, Hold, Add to payroll; hr_access.APPROVAL_KINDS). An extra right on top of payroll Edit: an
+    account with no switches, or that never set this one, keeps "edit = may" as before; the Super Admin always may."""
+    from . import hr_access
+
+    hr_user = _hr_user(request)
+    return hr_user is not None and hr_access.may_approve(hr_user, kind)
+
+
 def is_whole_company(request) -> bool:
     """Not limited to one unit / branch (a super administrator, or a role with no branch)."""
     return get_branch_scope(request) is None
@@ -271,11 +281,17 @@ def month_status(request, month: int, year: int) -> dict:
         "snapshot": (close.snapshot or None) if close else None,
         "wholeCompany": whole,
         "can": {
-            "finalize": edit and whole and not locked and counts["inPayroll"] + counts["onHold"] > 0,
-            "markPaid": edit and whole and locked and not paid,
-            "hold": edit and not locked,
-            "addToPayroll": edit and not locked,
-            "releaseAndPay": edit and whole and locked,
+            "finalize": edit
+            and whole
+            and not locked
+            and counts["inPayroll"] + counts["onHold"] > 0
+            and may_decide(request, "payroll_finalize"),
+            "markPaid": edit and whole and locked and not paid and may_decide(request, "payroll_mark_paid"),
+            "hold": edit and not locked and may_decide(request, "payroll_hold"),
+            "addToPayroll": edit and not locked and may_decide(request, "payroll_add"),
+            "releaseAndPay": edit and whole and locked and may_decide(request, "payroll_release"),
+            # added 2026-11-11: Mark as Cleared (one row's payroll as paid; staff and production)
+            "markCleared": edit and not locked and may_decide(request, "payroll_mark_cleared"),
         },
     }
 

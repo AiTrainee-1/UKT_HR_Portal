@@ -18,6 +18,11 @@ import type { BoardRow, ClBoard } from "./logic";
 const h = vi.hoisted(() => ({ fetch: vi.fn(), post: vi.fn(), toast: vi.fn() }));
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
+// the page reads the signed-in role (lib/tab-access.tsx): no user = every tab and part open, as before
+vi.mock("@/contexts/AuthContext", async (original) => ({
+  ...(await original<typeof import("@/contexts/AuthContext")>()),
+  useAuth: () => ({ user: null }),
+}));
 vi.mock("@/components/ApprovalTrail", async (original) => ({
   ...(await original<typeof import("@/components/ApprovalTrail")>()),
   PipelineNote: () => null,

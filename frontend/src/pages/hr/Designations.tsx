@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import {
   Briefcase,
   ChevronsDownUp,
@@ -31,10 +32,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useAuth } from "@/contexts/AuthContext";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useAssignEmployee } from "@/lib/api-client";
 import { useDeleteDesignation } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import AssignDialog from "./org-structure/AssignDialog";
 import DesignationDialog from "./org-structure/DesignationDialog";
 import DesignationList from "./org-structure/DesignationList";
@@ -68,8 +71,22 @@ import {
 } from "./org-structure/logic";
 import { BranchChip, EmptyState, LevelChip, LoadError, StatCard } from "./org-structure/parts";
 
+type Tab = "structure" | "find";
+const TABS: readonly Tab[] = ["structure", "find"];
+// Each tab's own key (Account Management -> Roles & Permissions -> Employees -> Designations); the Find tab's two
+// sub-tabs are keyed inside EmployeeAssignmentLookup.
+const TAB_KEY: Record<Tab, string> = {
+  structure: "employees.designations.structure",
+  find: "employees.designations.find",
+};
+const FIND_SUB_TAB_KEYS = {
+  search: "employees.designations.find.search",
+  unassigned: "employees.designations.find.unassigned",
+};
+
 export default function Designations() {
   const { user } = useAuth();
+  const [location] = useLocation();
   const { toast } = useToast();
   const refresh = useRefreshOrg();
   const treeQuery = useDesignationsTree();
@@ -79,7 +96,17 @@ export default function Designations() {
   const branches = useMemo(() => tree?.branches ?? [], [tree]);
   const summary = useMemo(() => (tree ? summarizeDesignations(tree) : null), [tree]);
 
-  const [tab, setTab] = useState<"structure" | "find">("structure");
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted).
+  const visibleTabs = visibleItems(TABS, (t) => TAB_KEY[t], level);
+  const [askedTab, setTab] = useState<Tab>("structure");
+  const tab = pickVisible(askedTab, visibleTabs);
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const viewOnlyTab =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(TAB_KEY[tab]) === "view";
+  useViewOnlyLock(viewOnlyTab, tab);
   const [view, setView] = useState<"tree" | "list">("tree");
   const [filters, setFilters] = useState<DesigFilters>(NO_DESIG_FILTERS);
   const [sort, setSort] = useState<DesigSort>("title-asc");
@@ -251,22 +278,38 @@ export default function Designations() {
           />
         </div>
 
-        <PillTabs
-          items={[
-            { value: "structure", label: "Structure", icon: <FolderTree size={14} />, count: designations.length },
-            { value: "find", label: "Find & assign employees", icon: <Users size={14} /> },
-          ]}
-          value={tab}
-          onChange={(v) => setTab(v as "structure" | "find")}
-        />
+        {visibleTabs.length > 0 && (
+          <PillTabs
+            items={visibleItems(
+              [
+                { value: "structure", label: "Structure", icon: <FolderTree size={14} />, count: designations.length },
+                { value: "find", label: "Find & assign employees", icon: <Users size={14} /> },
+              ],
+              (t) => TAB_KEY[t.value as Tab],
+              level,
+            )}
+            value={tab}
+            onChange={(v) => setTab(v as Tab)}
+          />
+        )}
 
-        {tab === "find" ? (
+        <ViewOnlyTabNote show={viewOnlyTab} />
+
+        {visibleTabs.length === 0 ? (
+          <p
+            className="rounded-2xl border bg-white p-6 text-center text-sm text-muted-foreground"
+            data-testid="designations-nothing-open"
+          >
+            Nothing on this page is open to your role.
+          </p>
+        ) : tab === "find" ? (
           <EmployeeAssignmentLookup
             kind="designation"
             options={designations.map((d) => ({
               id: d.id,
               label: d.departmentName ? `${d.title} (${d.departmentName})` : d.title,
             }))}
+            subTabKeys={FIND_SUB_TAB_KEYS}
           />
         ) : (
           <div className="space-y-3">

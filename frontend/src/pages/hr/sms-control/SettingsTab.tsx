@@ -38,7 +38,16 @@ const SECTIONS: readonly SettingsSectionKey[] = SETTINGS_SECTIONS.map((s) => s.v
  * which sends the saved values with that section's fields changed, and the `version` the form was started from: a copy that
  * somebody else has outdated is refused (and the form is kept until HR chooses to reload). Switching the channel asks first.
  */
-export default function SettingsTab({ section, readOnly }: { section: SettingsSectionKey; readOnly: boolean }) {
+export default function SettingsTab({
+  section,
+  readOnly,
+  sections = SECTIONS,
+}: {
+  section: SettingsSectionKey;
+  readOnly: boolean;
+  /** The sections the role may open (each has its own permission key); the others are not offered. */
+  sections?: readonly SettingsSectionKey[];
+}) {
   const { toast } = useToast();
   const query = useSmsSettings();
   const update = useUpdateSmsSettings();
@@ -182,7 +191,7 @@ export default function SettingsTab({ section, readOnly }: { section: SettingsSe
 
       <NestedTabs
         base={`${SMS_BASE}/settings`}
-        items={SETTINGS_SECTIONS.map((s) => ({ ...s }))}
+        items={SETTINGS_SECTIONS.filter((s) => sections.includes(s.value)).map((s) => ({ ...s }))}
         value={section}
         testId="sms-settings-nested"
         label="Sections of Settings"

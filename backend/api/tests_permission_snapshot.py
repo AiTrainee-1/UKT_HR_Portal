@@ -1,0 +1,487 @@
+"""
+The permission rules exactly as they were on 2026-11-10, before the full page / tab / sub-tab tree (2026-11-11), frozen
+for tests_permission_tree.py: it resolves every API path and every portal address for a role under these old rules and
+under the new ones, and fails on any difference. Not a test module itself (no test cases); nothing outside the tests uses
+it. Never edit the frozen source below: it IS the old behaviour.
+"""
+
+from __future__ import annotations
+
+_OLD_REGISTRY_SOURCE = r'''
+"""
+Canonical module/submodule tree for HR-portal permissions, and the
+URL-prefix -> module_key mapping used by permission_middleware.py.
+
+module_key values here are the single source of truth mirrored on the
+frontend (frontend/src/lib/permission-modules.ts) and Account Management —
+keep the two in sync when adding a new sidebar section.
+
+Keys are dot-separated for submodules that have their own distinct API
+endpoints (e.g. "employees.departments"). Role.permissions stays a flat
+{key: "hidden"|"view"|"edit"} dict -resolve_permission() below is what gives
+it hierarchy: setting "employees"="edit" cascades to every "employees.*"
+child unless that child has its own explicit entry overriding it. This keeps
+the stored JSON simple while still supporting per-submodule overrides.
+
+Not every sidebar group has been split into submodules -only Employees,
+Recruitment, and Settings currently have children with genuinely separate
+REST endpoints or (for Settings' Company/Attendance/Payroll/Salary Slip/SMTP
+tabs) a view-level field-group check (see payroll_views.py::FIELD_GROUPS —
+those five tabs share one PayrollSettings record/endpoint, so URL-level
+gating alone can't split them; the view itself checks which settings.* group
+each submitted field belongs to). Others (e.g. Attendance's Staff/Production/
+Report Log pages) share the same underlying endpoints distinguished by query
+params rather than URL path, so the API can't enforce a per-tab split without
+similar view-level work; they stay single-level for now.
+"""
+
+MODULE_TREE: list[dict] = [
+    {"key": "dashboard", "label": "Dashboard"},
+    {"key": "employees", "label": "Employees", "children": [
+        {"key": "employees.departments", "label": "Departments"},
+        {"key": "employees.designations", "label": "Designations"},
+        {"key": "employees.branches", "label": "Manage Branch"},
+    ]},
+    {"key": "attendance", "label": "Attendance"},
+    {"key": "shifts", "label": "Manage Shift"},
+    {"key": "leave", "label": "Leave & Holiday"},
+    {"key": "casual_leave", "label": "Casual Leave"},
+    {"key": "missing_punch", "label": "Missing Punch"},
+    {"key": "requests", "label": "Requests"},
+    {"key": "promotion", "label": "Promotion"},
+    {"key": "increment", "label": "Increment"},
+    {"key": "bonus", "label": "Bonus"},
+    {"key": "id_cards", "label": "ID Cards"},
+    {"key": "recruitment", "label": "Recruitment", "children": [
+        {"key": "recruitment.new_joinees", "label": "New Joinees"},
+        {"key": "recruitment.resignations", "label": "Resignations"},
+        {"key": "recruitment.required_roles", "label": "Required Roles"},
+        {"key": "recruitment.interviews", "label": "Interviews"},
+        {"key": "recruitment.resume_screening", "label": "Resume Screening"},
+        {"key": "recruitment.documents", "label": "Documents"},
+    ]},
+    {"key": "payroll", "label": "Payroll"},
+    {"key": "production_payroll", "label": "Production Payroll"},
+    {"key": "compensation", "label": "Compensation"},
+    {"key": "salary", "label": "Salary"},
+    {"key": "salary_slip", "label": "Salary Slip"},
+    {"key": "settlement", "label": "Settlement"},
+    {"key": "reports", "label": "Reports"},
+    {"key": "user_management", "label": "User Management", "children": [
+        {"key": "user_management.approval_workflow", "label": "Approval Workflow Control"},
+    ]},
+    # Activity Logs is intentionally NOT here: it is admin-only and
+    # enforced by @require_super_admin on the view, not by a per-role
+    # grant. Listing it would show a checkbox that cannot grant access.
+    # The URL_MODULE_MAP entry below stays as a second gate.
+    {"key": "login_devices", "label": "Login Devices"},
+    {"key": "mobile_app_login", "label": "Mobile App Login"},
+    {"key": "whatsapp_control", "label": "WhatsApp Control"},
+    {"key": "sms_control", "label": "SMS Control"},
+    {"key": "gmail_control", "label": "Gmail Control"},
+    {"key": "chat", "label": "Chat"},
+    {"key": "notifications", "label": "Notifications"},
+    {"key": "geo_attendance", "label": "Geo Attendance"},
+    {"key": "outpass_visitors", "label": "Outpass / Visitors"},
+    {"key": "settings", "label": "Settings", "children": [
+        {"key": "settings.company", "label": "Company"},
+        {"key": "settings.hr_contact", "label": "HR Contact"},
+        {"key": "settings.attendance", "label": "Attendance"},
+        {"key": "settings.late_detection", "label": "Late Detection"},
+        {"key": "settings.devices", "label": "Devices"},
+        {"key": "settings.documents", "label": "Company Documents"},
+        {"key": "settings.payroll", "label": "Payroll"},
+        {"key": "settings.production_payroll", "label": "Production Payroll"},
+        {"key": "settings.salary_slip", "label": "Salary Slip"},
+        {"key": "settings.smtp", "label": "SMTP / Email"},
+        {"key": "settings.whatsapp", "label": "WhatsApp"},
+        {"key": "settings.backup", "label": "Backup"},
+        {"key": "settings.themes", "label": "Themes"},
+        {"key": "settings.compensation", "label": "Compensation"},
+    ]},
+]
+
+
+def all_module_keys() -> list[str]:
+    keys = []
+    for node in MODULE_TREE:
+        keys.append(node["key"])
+        for child in node.get("children", []):
+            keys.append(child["key"])
+    return keys
+
+
+# ── the Managing Director's working access ──────────────────────────────────────────────────────────────────────────────
+#
+# The MD portal (/md/*) reproduces these HR pages in full (Dashboard, Employees, Branches, Staff/Production Attendance,
+# Geo Attendance, Attendance Search, Report Log, Outpass / Visitors / Tea Break, Manage Shift, Leave & Holiday, Requests)
+# with the AI and visual extras on top, and the MD works in them like a super administrator does (except for the requests
+# the MD only views: MD_VIEW_ONLY). That needs the same API access, so the MD account is given this access on exactly these
+# modules, whatever its role says (a role can add more; it can never take these away). It is not a super administrator:
+# every module not listed keeps following the role.
+#
+# One place to change it: set a level to "view" to make the MD's copy of a module read-only, or remove a key to take the
+# module away. See md-portal.md section 10.
+MD_HR_GRANTS: dict[str, str] = {
+    # the fourteen pages
+    "dashboard": "edit",
+    "employees": "edit",
+    "employees.departments": "edit",
+    "employees.designations": "edit",
+    "employees.branches": "edit",
+    "attendance": "edit",
+    "geo_attendance": "edit",
+    "outpass_visitors": "edit",
+    "shifts": "edit",
+    # The MD only LOOKS at leave, permission and outpass requests, holidays and leave types: see MD_VIEW_ONLY below.
+    "leave": "view",
+    "requests": "view",
+    # what the pages above read or approve through other modules (the Requests page decides leave, permission, casual-leave,
+    # missing-punch, outpass and advance requests; the Dashboard counts them). See md-portal.md section 10 for the audit.
+    "casual_leave": "edit",
+    "missing_punch": "edit",
+    "settlement": "edit",
+    "notifications": "view",
+    "recruitment": "view",
+}
+
+# Modules the Managing Director may only VIEW (2026-10-10, the product owner: "the MD only needs to view those requests"):
+# the Leave & Holiday and Requests pages show leave, permission and outpass requests but the MD does not approve, reject,
+# edit or delete them; HR and the department heads decide. Unlike a grant this is a CAP: a role on the MD account that says
+# "edit" is lowered to "view" for these modules, so nothing but this list decides it. To give the decisions back, remove a
+# key here and set it to "edit" in MD_HR_GRANTS.
+MD_VIEW_ONLY: frozenset[str] = frozenset({"leave", "requests"})
+
+_LEVEL_RANK = {"hidden": 0, "view": 1, "edit": 2}
+
+
+def apply_module_overrides(permissions: dict, overrides: dict) -> dict:
+    """The role's {module: level} with an account's own changes on top. A change on a section is a change of the whole
+    section: its sub-modules follow it, unless the account has a change of its own for that sub-module too."""
+    out = dict(permissions)
+    children = {node["key"]: [c["key"] for c in node.get("children", [])] for node in MODULE_TREE}
+    for key in sorted(overrides, key=lambda k: k.count(".")):  # sections before their sub-modules
+        out[key] = overrides[key]
+        for child in children.get(key, ()):
+            if child not in overrides:
+                out.pop(child, None)
+    return out
+
+
+def effective_permissions(hr_user) -> dict:
+    """What an HR account may do in each module: its role's permissions, the account's own changes (HR Manager / HR
+    Assistant accounts, hr_access.py) and, for the Managing Director, MD_HR_GRANTS.
+
+    A grant only ever raises a level, except that MD_VIEW_ONLY modules are held at "view". The result is a flat
+    {module key: level} dict like Role.permissions, so every consumer (the permission middleware, /auth/me, the per-view
+    checks) reads it the same way."""
+    permissions = dict((hr_user.role.permissions if hr_user is not None and hr_user.role else {}) or {})
+    if hr_user is not None and getattr(hr_user, "permission_overrides", None):
+        from .hr_access import overrides_of  # (imports this module)
+
+        changes = overrides_of(hr_user)["modules"]
+        if changes:
+            permissions = apply_module_overrides(permissions, changes)
+    if hr_user is None or not getattr(hr_user, "is_md", False) or not getattr(hr_user, "is_active", True):
+        return permissions
+    for key, level in MD_HR_GRANTS.items():
+        if _LEVEL_RANK[level] > _LEVEL_RANK.get(resolve_permission(permissions, key), 0):
+            permissions[key] = level
+    for key in MD_VIEW_ONLY:
+        if _LEVEL_RANK.get(resolve_permission(permissions, key), 0) > _LEVEL_RANK["view"]:
+            permissions[key] = "view"
+    return permissions
+
+
+def resolve_permission(permissions: dict, key: str) -> str:
+    """
+    Walks a dotted key ("employees.departments") from most specific to least
+    specific, returning the first explicit entry found -so a child with no
+    override inherits its parent's level. Defaults to "hidden" if nothing in
+    the chain is set (fail closed).
+    """
+    parts = key.split(".")
+    for i in range(len(parts), 0, -1):
+        candidate = ".".join(parts[:i])
+        if candidate in permissions:
+            return permissions[candidate]
+    return "hidden"
+
+
+# Longest-prefix match against the request path with the "/api/" prefix
+# stripped (e.g. "employees/12/status" for GET /api/employees/12/status).
+# Paths not covered here (auth, dashboard summaries, manager/mobile endpoints,
+# roles/hr-users which are super-admin-only regardless of this table) are left
+# ungated -only the modules above are subject to hidden/view/edit.
+URL_MODULE_MAP: dict[str, str] = {
+    "dashboard/": "dashboard",
+
+    "employees": "employees",
+    # TDS membership (Employees -> Co Emp -> TDS) and the PF / ESI coverage counts shown beside it: the same permission as the
+    # Co Emp toggle itself. (/pf-esi-settings is deliberately NOT mapped: any HR login may read the rules, and the view lets
+    # only the Super Admin change them.)
+    "tds": "employees",
+    "pf-esi/coverage": "employees",
+
+    "departments": "employees.departments",
+    "designations": "employees.designations",
+    "branches": "employees.branches",
+
+    "shifts": "shifts",
+    "shift-assignments": "shifts",
+
+    "leave-types": "leave",
+    "leave-balances": "leave",
+    "holidays": "leave",
+    "leave-requests": "leave",
+
+    "casual-leaves": "casual_leave",
+
+    "missing-punch-requests": "missing_punch",
+
+    "employee-requests": "requests",
+    "permissions": "requests",
+    "outpass-requests": "requests",
+    # the Requests page's unified list: its own module gates the endpoint, and the view then drops every kind whose own
+    # module (leave, casual_leave, geo_attendance, settlement ...) the caller cannot open
+    "hr-requests": "requests",
+    # Its HoD's and Notify tabs: what is pending with each Department Head, and the reminders sent to them. Viewing needs
+    # the page; changing the (company-wide) schedule and sending need edit (the preview only reads: READ_ONLY_POST_PATHS).
+    "hr/hod-pending": "requests",
+    "hr/hod-reminders": "requests",
+
+    "promotions": "promotion",
+
+    "increments": "increment",
+
+    "idcard": "id_cards",
+    "idcard-settings": "id_cards",
+    "verify-employee": "id_cards",
+
+    "recruitment/new-joinees": "recruitment.new_joinees",
+    "recruitment/resignations": "recruitment.resignations",
+    "recruitment/department-headcount": "recruitment.required_roles",
+    "recruitment/resume-screening": "recruitment.resume_screening",
+    "recruitment/employee-documents": "recruitment.documents",
+    "employee-documents": "recruitment.documents",
+    "interviews": "recruitment.interviews",
+    "recruitment": "recruitment",
+    "jobs": "recruitment",
+    "applicants": "recruitment",
+
+    "salary-records": "salary",
+
+    "advances": "settlement",
+
+    "salary-slips": "salary_slip",
+
+    "reports/": "reports",
+
+    "attendance": "attendance",
+    "biometric/punch": "attendance",
+    "attendance-logs": "attendance",
+    "work-sessions": "attendance",
+    "session-configs": "attendance",
+    "auto-sync-rules": "attendance",
+
+    # Employee-facing geo-punch/live-location routes (attendance/geo-punch*,
+    # live-location/ping) are called with employee tokens, not HR ones, so
+    # HrPermissionMiddleware never gates them regardless of this table (it
+    # only checks role=="hr"). Only the HR-dashboard-facing routes need an
+    # entry here.
+    "on-duty-sessions": "geo_attendance",
+    "on-duty-punch-verifications": "geo_attendance",
+    "on-duty-map": "geo_attendance",
+    "live-location/team": "geo_attendance",
+
+    # Geo-Tracking (api/geo_tracking/). The journey history and the live feed belong to the Geo Attendance page; the
+    # geo-tracking RULES (thresholds, retention, day-end time, photos per punch, the notice) are Settings -> Attendance:
+    # longest prefix wins, so "tracking/settings" resolves to settings.attendance and not to the module below.
+    # tracking/state, /consent, /batch and /my-journeys are called with EMPLOYEE tokens, which this middleware never gates
+    # (and the views answer an HR token 403); tracking/journeys/<id> is shared: the view itself scopes an employee to their
+    # own tracks.
+    "tracking/journeys": "geo_attendance",
+    "tracking/live": "geo_attendance",
+    "tracking/settings": "settings.attendance",
+
+    # Only the HR-portal endpoints -"outpass/gate/..."/"visitor/gate/..." are
+    # deliberately left out of this table so they stay reachable with no
+    # bearer token at all (see outpass_visitor_views.py's module docstring).
+    "outpass/qr": "outpass_visitors",
+    "outpass/summary": "outpass_visitors",
+    "outpass/records": "outpass_visitors",
+    "visitor/qr": "outpass_visitors",
+    "visitor/summary": "outpass_visitors",
+    "visitor/records": "outpass_visitors",
+
+    # Gate Scanner device management (create/list/update/delete a gate login
+    # profile) -same page, same permission as the rest of Outpass/Visitors.
+    # gate-devices/login-info, /login and /scan are deliberately absent: they
+    # are never called with an HR token (public, or gate_device-role), so
+    # HrPermissionMiddleware (role=="hr" only) never applies to them anyway.
+    "gate-devices": "outpass_visitors",
+
+    # Reception device management (create/list/update/delete a Reception
+    # login profile) -same page, same permission as the rest of
+    # Outpass/Visitors. login-info/login/summary/visits are deliberately
+    # absent for the same reason as gate-devices' equivalents above.
+    "reception-devices": "outpass_visitors",
+
+    # Tea Break -a third page under the same Outpass/Visitors sidebar group
+    # (/hr/outpass-visitors/tea-break), same permission. qr-token/my-status
+    # are never called with an HR token (employee-token-authenticated), so
+    # HrPermissionMiddleware never applies to them regardless of this table.
+    "tea-break": "outpass_visitors",
+
+    "payroll/production": "production_payroll",
+    "payroll": "payroll",
+    "compensation": "compensation",
+    # Settings -> Compensation tab: the rules and switches of the OT / Compensation features. Longest prefix wins, so this
+    # beats "compensation" above; "compensation/config" (the read-only copy for the page) stays under "compensation".
+    "compensation/settings": "settings.compensation",
+    "bonus": "bonus",
+
+    "department-managers": "user_management",
+    # Approval Workflow Control (a User Management sub-tab): changes who approves every kind of request, so it has its own
+    # permission. "approval-summary" (the pipelines, read-only, for the apps) is deliberately left ungated.
+    "approval-workflows": "user_management.approval_workflow",
+
+    "audit-logs": "activity_logs",
+
+    "login-sessions": "login_devices",
+
+    "mobile-app-logins": "mobile_app_login",
+    # New Version tab of the same page. "mobile-app/latest-version" is deliberately
+    # absent: the employee app reads it with no login at all.
+    "mobile-app/versions": "mobile_app_login",
+    # Mobile Messages tab of the same page: what is pushed to employees' phones.
+    "mobile-app/messages": "mobile_app_login",
+
+    "whatsapp-control": "whatsapp_control",
+
+    # SMS Control (one-time codes by SMS through 2Factor): view for the GETs, edit for the PUT and the test POST.
+    "sms-control": "sms_control",
+
+    "gmail-control": "gmail_control",
+
+    "chat": "chat",
+
+    "notifications": "notifications",
+
+    # "payroll-settings" (Settings → Company/Attendance/Payroll/Salary Slip/
+    # SMTP tabs) is deliberately absent here -those five tabs write to one
+    # shared PayrollSettings record via one endpoint, so a single URL-level
+    # module_key can't separate them. payroll_settings_view() does its own
+    # per-field settings.* permission check instead (see FIELD_GROUPS in
+    # payroll_views.py). GET stays in ALWAYS_READABLE_GET_PREFIXES below,
+    # same as before.
+    "biometric-devices": "settings.devices",
+    "production-shift-config": "settings.attendance",
+    # Settings -> Production shifts (the shift table that judges production days from its effective date on). Its
+    # "preview" is a POST that only reads: see READ_ONLY_POST_PATHS below.
+    "production-shift-rules": "settings.attendance",
+    "production-shift-segments": "settings.attendance",
+    "document-settings": "settings.documents",
+    "backup": "settings.backup",
+    "whatsapp": "settings.whatsapp",
+    # idcard-settings (Settings → ID Card tab) intentionally maps to "id_cards"
+    # above, not a settings.* key -it's the same permission that already
+    # governs the ID Cards feature page, not a separate Settings concern.
+}
+
+
+# POST endpoints that only READ (their input is too structured for a query string) and write nothing: a role that may
+# only VIEW the module can call them, like a GET. Paths relative to /api/, exact. Everything else a POST does is a change.
+READ_ONLY_POST_PATHS: frozenset[str] = frozenset({"production-shift-rules/preview", "hr/hod-reminders/preview"})
+
+
+def resolve_module(path: str) -> str | None:
+    """
+    path is the request path relative to /api/, e.g. 'employees/12/status'.
+    Matches on path-segment boundaries (never a bare substring), and prefers
+    the longest/most-specific match so e.g. "recruitment/resignations"
+    resolves to the submodule rather than the parent "recruitment".
+    """
+    best_match = None
+    best_len = -1
+    for raw_prefix, module_key in URL_MODULE_MAP.items():
+        prefix = raw_prefix.rstrip("/")
+        if (path == prefix or path.startswith(prefix + "/")) and len(prefix) > best_len:
+            best_match = module_key
+            best_len = len(prefix)
+    return best_match
+'''
+
+_ns: dict = {}
+exec(compile(_OLD_REGISTRY_SOURCE, "permission_registry@2026-11-10", "exec"), _ns)  # noqa: S102 (frozen copy, see above)
+
+OLD_MODULE_TREE: list[dict] = _ns["MODULE_TREE"]
+OLD_URL_MODULE_MAP: dict[str, str] = _ns["URL_MODULE_MAP"]
+OLD_MD_HR_GRANTS: dict[str, str] = _ns["MD_HR_GRANTS"]
+OLD_MD_VIEW_ONLY: frozenset[str] = _ns["MD_VIEW_ONLY"]
+OLD_READ_ONLY_POST_PATHS: frozenset[str] = _ns["READ_ONLY_POST_PATHS"]
+old_resolve_permission = _ns["resolve_permission"]
+old_resolve_module = _ns["resolve_module"]
+old_apply_module_overrides = _ns["apply_module_overrides"]
+old_all_module_keys = _ns["all_module_keys"]
+_RANK = {"hidden": 0, "view": 1, "edit": 2}
+
+
+def old_effective_permissions(role_permissions: dict | None, module_overrides: dict | None = None, is_md: bool = False):
+    """permission_registry.effective_permissions of 2026-11-10 for a role, an account's module changes and the MD flag."""
+    permissions = dict(role_permissions or {})
+    if module_overrides:
+        known = set(old_all_module_keys())
+        changes = {k: v for k, v in module_overrides.items() if k in known and v in _RANK}
+        if changes:
+            permissions = old_apply_module_overrides(permissions, changes)
+    if not is_md:
+        return permissions
+    for key, level in OLD_MD_HR_GRANTS.items():
+        if _RANK[level] > _RANK.get(old_resolve_permission(permissions, key), 0):
+            permissions[key] = level
+    for key in OLD_MD_VIEW_ONLY:
+        if _RANK.get(old_resolve_permission(permissions, key), 0) > _RANK["view"]:
+            permissions[key] = "view"
+    return permissions
+
+
+# hr_access.APPROVAL_KINDS of 2026-11-10: (kind, module)
+OLD_APPROVAL_KINDS: tuple[tuple[str, str], ...] = (
+    ("leave", "leave"),
+    ("permission", "requests"),
+    ("casual_leave", "casual_leave"),
+    ("missing_punch", "missing_punch"),
+    ("attendance_correction", "attendance"),
+    ("on_duty", "geo_attendance"),
+    ("on_duty_punch", "geo_attendance"),
+    ("outpass", "requests"),
+    ("request", "requests"),
+    ("resignation", "recruitment.resignations"),
+    ("advance", "settlement"),
+)
+OLD_ASSISTANT_LOCKED = ("missing_punch", "attendance_correction")
+
+
+def old_effective_approvals(
+    permissions: dict,
+    role_approvals: dict | None,
+    approval_overrides: dict | None = None,
+    category: str = "admin",
+    is_md: bool = False,
+) -> dict[str, bool]:
+    """hr_access.effective_approvals of 2026-11-10 for an active account that is not the Super Admin."""
+    role_map = None if is_md else role_approvals
+    changes = {k: bool(v) for k, v in (approval_overrides or {}).items()}
+    out = {}
+    for key, module in OLD_APPROVAL_KINDS:
+        level = old_resolve_permission(permissions, module)
+        allowed = (level == "edit") if role_map is None else bool(role_map.get(key, False))
+        if key in changes:
+            allowed = changes[key]
+        if level not in ("view", "edit"):
+            allowed = False
+        if category == "hr_assistant" and key in OLD_ASSISTANT_LOCKED:
+            allowed = False
+        out[key] = allowed
+    return out

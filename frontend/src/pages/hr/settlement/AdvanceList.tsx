@@ -26,8 +26,9 @@ type Props = {
   onDelete: (row: SettlementRow) => void;
   /** The advance whose decision is being saved: its buttons are disabled meanwhile. */
   busyId?: number | null;
-  /** false: this account may not approve advances (an HR Manager / HR Assistant without it), so no Approve / Reject. */
-  canDecide?: boolean;
+  /** false for a row: this account may not approve that type of advance (an HR Manager / HR Assistant without it, General
+   *  and Term are separate switches), so that row has no Approve / Reject. */
+  canDecide?: (row: SettlementRow) => boolean;
 };
 
 const startOf = (a: SettlementRow) =>
@@ -180,7 +181,7 @@ export default function AdvanceList({
   onReject,
   onDelete,
   busyId,
-  canDecide = true,
+  canDecide = () => true,
 }: Props) {
   return (
     <>
@@ -231,7 +232,7 @@ export default function AdvanceList({
                 <TableCell className="whitespace-nowrap text-xs text-gray-500">{formatDate(a.createdAt)}</TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center justify-end gap-1">
-                    {canDecide && (
+                    {canDecide(a) && (
                       <Decide
                         a={a}
                         busy={busyId === a.id}
@@ -290,7 +291,7 @@ export default function AdvanceList({
                 </Button>
               </span>
             </div>
-            {a.status === "pending" && canDecide && (
+            {a.status === "pending" && canDecide(a) && (
               <div onClick={(e) => e.stopPropagation()}>
                 <Decide
                   prefix="advance-card"

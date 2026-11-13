@@ -1,103 +1,45 @@
 """
-Canonical module/submodule tree for HR-portal permissions, and the
-URL-prefix -> module_key mapping used by permission_middleware.py.
+The HR portal's permission rules: the tree of keys (from permission_tree.py), how a key's level is worked out, and which
+API paths each key guards (URL_MODULE_MAP + URL_PATTERNS, enforced by permission_middleware.py).
 
-module_key values here are the single source of truth mirrored on the
-frontend (frontend/src/lib/permission-modules.ts) and Account Management —
-keep the two in sync when adding a new sidebar section.
+Role.permissions stays a flat {key: "hidden" | "view" | "edit"} dict. resolve_permission() gives it its hierarchy: a key
+with no entry follows its dotted parent ("payroll.issues" follows "payroll"), or the key named in its `inherits` (Settings
+-> ID Card follows the ID Cards page, as it always did), and a chain with no entry at all is "hidden" (fail closed). Only
+keys that need a different level are stored, so a role made before a part got its own key keeps exactly the access it had.
 
-Keys are dot-separated for submodules that have their own distinct API
-endpoints (e.g. "employees.departments"). Role.permissions stays a flat
-{key: "hidden"|"view"|"edit"} dict -resolve_permission() below is what gives
-it hierarchy: setting "employees"="edit" cascades to every "employees.*"
-child unless that child has its own explicit entry overriding it. This keeps
-the stored JSON simple while still supporting per-submodule overrides.
-
-Not every sidebar group has been split into submodules -only Employees,
-Recruitment, and Settings currently have children with genuinely separate
-REST endpoints or (for Settings' Company/Attendance/Payroll/Salary Slip/SMTP
-tabs) a view-level field-group check (see payroll_views.py::FIELD_GROUPS —
-those five tabs share one PayrollSettings record/endpoint, so URL-level
-gating alone can't split them; the view itself checks which settings.* group
-each submitted field belongs to). Others (e.g. Attendance's Staff/Production/
-Report Log pages) share the same underlying endpoints distinguished by query
-params rather than URL path, so the API can't enforce a per-tab split without
-similar view-level work; they stay single-level for now.
+The tree, the API prefixes of each key and the portal addresses are written once, in permission_tree.py; the portal reads
+the same tree from frontend/src/lib/permission-tree.json. tests_permission_tree.py proves (1) every API path an HR login
+can call maps to a key or is on its commented allowlist, (2) every /hr address maps to a key or is allowlisted, and
+(3) every role keeps exactly the level it had on every API path and every address (tests_permission_snapshot.py is the
+frozen copy of the rules before the full tree).
 """
 
-MODULE_TREE: list[dict] = [
-    {"key": "dashboard", "label": "Dashboard"},
-    {"key": "employees", "label": "Employees", "children": [
-        {"key": "employees.departments", "label": "Departments"},
-        {"key": "employees.designations", "label": "Designations"},
-        {"key": "employees.branches", "label": "Manage Branch"},
-    ]},
-    {"key": "attendance", "label": "Attendance"},
-    {"key": "shifts", "label": "Manage Shift"},
-    {"key": "leave", "label": "Leave & Holiday"},
-    {"key": "casual_leave", "label": "Casual Leave"},
-    {"key": "missing_punch", "label": "Missing Punch"},
-    {"key": "requests", "label": "Requests"},
-    {"key": "promotion", "label": "Promotion"},
-    {"key": "increment", "label": "Increment"},
-    {"key": "bonus", "label": "Bonus"},
-    {"key": "id_cards", "label": "ID Cards"},
-    {"key": "recruitment", "label": "Recruitment", "children": [
-        {"key": "recruitment.new_joinees", "label": "New Joinees"},
-        {"key": "recruitment.resignations", "label": "Resignations"},
-        {"key": "recruitment.required_roles", "label": "Required Roles"},
-        {"key": "recruitment.interviews", "label": "Interviews"},
-        {"key": "recruitment.resume_screening", "label": "Resume Screening"},
-        {"key": "recruitment.documents", "label": "Documents"},
-    ]},
-    {"key": "payroll", "label": "Payroll"},
-    {"key": "production_payroll", "label": "Production Payroll"},
-    {"key": "compensation", "label": "Compensation"},
-    {"key": "salary", "label": "Salary"},
-    {"key": "salary_slip", "label": "Salary Slip"},
-    {"key": "settlement", "label": "Settlement"},
-    {"key": "reports", "label": "Reports"},
-    {"key": "user_management", "label": "User Management", "children": [
-        {"key": "user_management.approval_workflow", "label": "Approval Workflow Control"},
-    ]},
-    # Activity Logs is intentionally NOT here: it is admin-only and
-    # enforced by @require_super_admin on the view, not by a per-role
-    # grant. Listing it would show a checkbox that cannot grant access.
-    # The URL_MODULE_MAP entry below stays as a second gate.
-    {"key": "login_devices", "label": "Login Devices"},
-    {"key": "mobile_app_login", "label": "Mobile App Login"},
-    {"key": "whatsapp_control", "label": "WhatsApp Control"},
-    {"key": "sms_control", "label": "SMS Control"},
-    {"key": "gmail_control", "label": "Gmail Control"},
-    {"key": "chat", "label": "Chat"},
-    {"key": "notifications", "label": "Notifications"},
-    {"key": "geo_attendance", "label": "Geo Attendance"},
-    {"key": "outpass_visitors", "label": "Outpass / Visitors"},
-    {"key": "settings", "label": "Settings", "children": [
-        {"key": "settings.company", "label": "Company"},
-        {"key": "settings.hr_contact", "label": "HR Contact"},
-        {"key": "settings.attendance", "label": "Attendance"},
-        {"key": "settings.late_detection", "label": "Late Detection"},
-        {"key": "settings.devices", "label": "Devices"},
-        {"key": "settings.documents", "label": "Company Documents"},
-        {"key": "settings.payroll", "label": "Payroll"},
-        {"key": "settings.production_payroll", "label": "Production Payroll"},
-        {"key": "settings.salary_slip", "label": "Salary Slip"},
-        {"key": "settings.smtp", "label": "SMTP / Email"},
-        {"key": "settings.whatsapp", "label": "WhatsApp"},
-        {"key": "settings.backup", "label": "Backup"},
-        {"key": "settings.themes", "label": "Themes"},
-        {"key": "settings.compensation", "label": "Compensation"},
-    ]},
-]
+from __future__ import annotations
+
+import re
+
+from .permission_tree import build_key_tree, inherits_map, url_entries, url_patterns, view_checked_keys
+
+# [{"key", "label", "children": [...]}]: every key a role can be given, by key (a dotted key under its dotted parent).
+MODULE_TREE: list[dict] = build_key_tree()
+
+# key -> the key it follows when unset (instead of its dotted parent): permission_tree.py `inherits`.
+INHERITS: dict[str, str] = inherits_map()
+
+# Keys the API view checks itself (a settings field group, a Requests kind, a report group): permission_tree.py `viewCheck`.
+VIEW_CHECKED_KEYS: frozenset[str] = view_checked_keys()
 
 
 def all_module_keys() -> list[str]:
-    keys = []
-    for node in MODULE_TREE:
-        keys.append(node["key"])
-        for child in node.get("children", []):
-            keys.append(child["key"])
+    """Every key in the tree, parents before children."""
+    keys: list[str] = []
+
+    def walk(nodes):
+        for node in nodes:
+            keys.append(node["key"])
+            walk(node.get("children", []))
+
+    walk(MODULE_TREE)
     return keys
 
 
@@ -138,23 +80,26 @@ MD_HR_GRANTS: dict[str, str] = {
 # Modules the Managing Director may only VIEW (2026-10-10, the product owner: "the MD only needs to view those requests"):
 # the Leave & Holiday and Requests pages show leave, permission and outpass requests but the MD does not approve, reject,
 # edit or delete them; HR and the department heads decide. Unlike a grant this is a CAP: a role on the MD account that says
-# "edit" is lowered to "view" for these modules, so nothing but this list decides it. To give the decisions back, remove a
-# key here and set it to "edit" in MD_HR_GRANTS.
+# "edit" is lowered to "view" for these modules AND every part of them (a tab set to "edit" on its own is capped too), so
+# nothing but this list decides it. To give the decisions back, remove a key here and set it to "edit" in MD_HR_GRANTS.
 MD_VIEW_ONLY: frozenset[str] = frozenset({"leave", "requests"})
 
 _LEVEL_RANK = {"hidden": 0, "view": 1, "edit": 2}
 
 
+def _is_part_of(key: str, parent: str) -> bool:
+    return key.startswith(parent + ".")
+
+
 def apply_module_overrides(permissions: dict, overrides: dict) -> dict:
     """The role's {module: level} with an account's own changes on top. A change on a section is a change of the whole
-    section: its sub-modules follow it, unless the account has a change of its own for that sub-module too."""
+    section: every part of it (its dotted keys) follows it, unless the account has a change of its own for that part
+    too. (The Account Management screen also writes the parts that follow another key: Settings -> ID Card ...)"""
     out = dict(permissions)
-    children = {node["key"]: [c["key"] for c in node.get("children", [])] for node in MODULE_TREE}
-    for key in sorted(overrides, key=lambda k: k.count(".")):  # sections before their sub-modules
+    for key in sorted(overrides, key=lambda k: k.count(".")):  # sections before their parts
         out[key] = overrides[key]
-        for child in children.get(key, ()):
-            if child not in overrides:
-                out.pop(child, None)
+        for part in [k for k in out if _is_part_of(k, key) and k not in overrides]:
+            out.pop(part, None)
     return out
 
 
@@ -180,38 +125,50 @@ def effective_permissions(hr_user) -> dict:
     for key in MD_VIEW_ONLY:
         if _LEVEL_RANK.get(resolve_permission(permissions, key), 0) > _LEVEL_RANK["view"]:
             permissions[key] = "view"
+        for part in [k for k in permissions if _is_part_of(k, key)]:
+            if _LEVEL_RANK.get(permissions[part], 0) > _LEVEL_RANK["view"]:
+                permissions[part] = "view"
     return permissions
 
 
 def resolve_permission(permissions: dict, key: str) -> str:
     """
-    Walks a dotted key ("employees.departments") from most specific to least
-    specific, returning the first explicit entry found -so a child with no
-    override inherits its parent's level. Defaults to "hidden" if nothing in
-    the chain is set (fail closed).
+    The level of `key`: its own entry, else the entry of the key it follows -its `inherits` key when it has one
+    (permission_tree.py), else its dotted parent ("employees.departments" -> "employees")- and so on up. "hidden" when
+    nothing on the way is set (fail closed).
     """
-    parts = key.split(".")
-    for i in range(len(parts), 0, -1):
-        candidate = ".".join(parts[:i])
-        if candidate in permissions:
-            return permissions[candidate]
+    seen: set[str] = set()
+    current = key
+    while current and current not in seen:
+        seen.add(current)
+        if current in permissions:
+            return permissions[current]
+        current = INHERITS.get(current) or current.rpartition(".")[0]
     return "hidden"
+
+
+def legacy_module(key: str) -> str:
+    """The key that governed `key`'s part of the portal before it had a setting of its own (it follows that key while
+    unset): Biometric Connectors -> attendance, Settings -> ID Card -> id_cards. Activity Logs files changes under it."""
+    current = key
+    while current:
+        if current in INHERITS:
+            return legacy_module(INHERITS[current])
+        current = current.rpartition(".")[0]
+    return key
 
 
 # Longest-prefix match against the request path with the "/api/" prefix
 # stripped (e.g. "employees/12/status" for GET /api/employees/12/status).
-# Paths not covered here (auth, dashboard summaries, manager/mobile endpoints,
-# roles/hr-users which are super-admin-only regardless of this table) are left
-# ungated -only the modules above are subject to hidden/view/edit.
-URL_MODULE_MAP: dict[str, str] = {
+# Paths not covered here (auth, manager/mobile endpoints, roles/hr-users which
+# are super-admin-only regardless of this table ...) are left ungated: the
+# allowlist in tests_permission_tree.py names every one and why. The prefixes
+# of the parts that have keys of their own (tabs, sub-tabs, features) are
+# written beside their node in permission_tree.py and merged in below.
+_BASE_URL_MODULE_MAP: dict[str, str] = {
     "dashboard/": "dashboard",
 
     "employees": "employees",
-    # TDS membership (Employees -> Co Emp -> TDS) and the PF / ESI coverage counts shown beside it: the same permission as the
-    # Co Emp toggle itself. (/pf-esi-settings is deliberately NOT mapped: any HR login may read the rules, and the view lets
-    # only the Super Admin change them.)
-    "tds": "employees",
-    "pf-esi/coverage": "employees",
 
     "departments": "employees.departments",
     "designations": "employees.designations",
@@ -220,9 +177,6 @@ URL_MODULE_MAP: dict[str, str] = {
     "shifts": "shifts",
     "shift-assignments": "shifts",
 
-    "leave-types": "leave",
-    "leave-balances": "leave",
-    "holidays": "leave",
     "leave-requests": "leave",
 
     "casual-leaves": "casual_leave",
@@ -232,20 +186,15 @@ URL_MODULE_MAP: dict[str, str] = {
     "employee-requests": "requests",
     "permissions": "requests",
     "outpass-requests": "requests",
-    # the Requests page's unified list: its own module gates the endpoint, and the view then drops every kind whose own
-    # module (leave, casual_leave, geo_attendance, settlement ...) the caller cannot open
-    "hr-requests": "requests",
-    # Its HoD's and Notify tabs: what is pending with each Department Head, and the reminders sent to them. Viewing needs
-    # the page; changing the (company-wide) schedule and sending need edit (the preview only reads: READ_ONLY_POST_PATHS).
-    "hr/hod-pending": "requests",
-    "hr/hod-reminders": "requests",
+    # The Requests page's unified list, its HoD's and its Notify tabs are requests.list / .hods / .notify
+    # (permission_tree.py). Viewing needs the page; changing the (company-wide) schedule and sending need edit (the
+    # preview only reads: READ_ONLY_POST_PATHS).
 
     "promotions": "promotion",
 
     "increments": "increment",
 
     "idcard": "id_cards",
-    "idcard-settings": "id_cards",
     "verify-employee": "id_cards",
 
     "recruitment/new-joinees": "recruitment.new_joinees",
@@ -253,9 +202,10 @@ URL_MODULE_MAP: dict[str, str] = {
     "recruitment/department-headcount": "recruitment.required_roles",
     "recruitment/resume-screening": "recruitment.resume_screening",
     "recruitment/employee-documents": "recruitment.documents",
-    "employee-documents": "recruitment.documents",
     "interviews": "recruitment.interviews",
     "recruitment": "recruitment",
+    # The Interviews page's job postings and applicants: the Recruitment section's (a role could always be given the
+    # Interviews page apart from them, so they cannot move under it without changing what such a role may call).
     "jobs": "recruitment",
     "applicants": "recruitment",
 
@@ -272,56 +222,27 @@ URL_MODULE_MAP: dict[str, str] = {
     "attendance-logs": "attendance",
     "work-sessions": "attendance",
     "session-configs": "attendance",
-    "auto-sync-rules": "attendance",
 
     # Employee-facing geo-punch/live-location routes (attendance/geo-punch*,
     # live-location/ping) are called with employee tokens, not HR ones, so
     # HrPermissionMiddleware never gates them regardless of this table (it
-    # only checks role=="hr"). Only the HR-dashboard-facing routes need an
-    # entry here.
-    "on-duty-sessions": "geo_attendance",
-    "on-duty-punch-verifications": "geo_attendance",
-    "on-duty-map": "geo_attendance",
-    "live-location/team": "geo_attendance",
+    # only checks role=="hr"). The HR-dashboard-facing routes are the Geo
+    # Attendance tabs' (permission_tree.py).
 
-    # Geo-Tracking (api/geo_tracking/). The journey history and the live feed belong to the Geo Attendance page; the
-    # geo-tracking RULES (thresholds, retention, day-end time, photos per punch, the notice) are Settings -> Attendance:
-    # longest prefix wins, so "tracking/settings" resolves to settings.attendance and not to the module below.
+    # Geo-Tracking (api/geo_tracking/): the journey history and the live feed are Geo Attendance tabs (permission_tree.py);
+    # the geo-tracking RULES (thresholds, retention, day-end time, photos per punch, the notice) are Settings -> Attendance:
+    # longest prefix wins, so "tracking/settings" resolves to settings.attendance.
     # tracking/state, /consent, /batch and /my-journeys are called with EMPLOYEE tokens, which this middleware never gates
     # (and the views answer an HR token 403); tracking/journeys/<id> is shared: the view itself scopes an employee to their
     # own tracks.
-    "tracking/journeys": "geo_attendance",
-    "tracking/live": "geo_attendance",
     "tracking/settings": "settings.attendance",
 
-    # Only the HR-portal endpoints -"outpass/gate/..."/"visitor/gate/..." are
-    # deliberately left out of this table so they stay reachable with no
-    # bearer token at all (see outpass_visitor_views.py's module docstring).
-    "outpass/qr": "outpass_visitors",
-    "outpass/summary": "outpass_visitors",
-    "outpass/records": "outpass_visitors",
-    "visitor/qr": "outpass_visitors",
-    "visitor/summary": "outpass_visitors",
-    "visitor/records": "outpass_visitors",
-
-    # Gate Scanner device management (create/list/update/delete a gate login
-    # profile) -same page, same permission as the rest of Outpass/Visitors.
-    # gate-devices/login-info, /login and /scan are deliberately absent: they
-    # are never called with an HR token (public, or gate_device-role), so
-    # HrPermissionMiddleware (role=="hr" only) never applies to them anyway.
-    "gate-devices": "outpass_visitors",
-
-    # Reception device management (create/list/update/delete a Reception
-    # login profile) -same page, same permission as the rest of
-    # Outpass/Visitors. login-info/login/summary/visits are deliberately
-    # absent for the same reason as gate-devices' equivalents above.
-    "reception-devices": "outpass_visitors",
-
-    # Tea Break -a third page under the same Outpass/Visitors sidebar group
-    # (/hr/outpass-visitors/tea-break), same permission. qr-token/my-status
-    # are never called with an HR token (employee-token-authenticated), so
-    # HrPermissionMiddleware never applies to them regardless of this table.
-    "tea-break": "outpass_visitors",
+    # Outpass / Visitors / Tea Break: the pages and tabs are in permission_tree.py. "outpass/gate/..." / "visitor/gate/..."
+    # are deliberately absent so they stay reachable with no bearer token at all (see outpass_visitor_views.py's module
+    # docstring); gate-devices/login-info, /login, /scan and reception-devices/login-info, /login, /summary, /visits are
+    # never called with an HR token (public, or a device's own login), so the middleware never applies to them anyway.
+    # Tea Break: qr-token/my-status are employee-token calls; the rest is the Tea Break page.
+    "tea-break": "outpass_visitors.tea_break",
 
     "payroll/production": "production_payroll",
     "payroll": "payroll",
@@ -331,7 +252,7 @@ URL_MODULE_MAP: dict[str, str] = {
     "compensation/settings": "settings.compensation",
     "bonus": "bonus",
 
-    "department-managers": "user_management",
+    # User Management -> HOD Assignment is user_management.hod (permission_tree.py).
     # Approval Workflow Control (a User Management sub-tab): changes who approves every kind of request, so it has its own
     # permission. "approval-summary" (the pipelines, read-only, for the apps) is deliberately left ungated.
     "approval-workflows": "user_management.approval_workflow",
@@ -340,12 +261,8 @@ URL_MODULE_MAP: dict[str, str] = {
 
     "login-sessions": "login_devices",
 
-    "mobile-app-logins": "mobile_app_login",
-    # New Version tab of the same page. "mobile-app/latest-version" is deliberately
-    # absent: the employee app reads it with no login at all.
-    "mobile-app/versions": "mobile_app_login",
-    # Mobile Messages tab of the same page: what is pushed to employees' phones.
-    "mobile-app/messages": "mobile_app_login",
+    # Mobile App Login: its tabs are in permission_tree.py. "mobile-app/latest-version" is deliberately absent: the
+    # employee app reads it with no login at all.
 
     "whatsapp-control": "whatsapp_control",
 
@@ -359,25 +276,31 @@ URL_MODULE_MAP: dict[str, str] = {
     "notifications": "notifications",
 
     # "payroll-settings" (Settings → Company/Attendance/Payroll/Salary Slip/
-    # SMTP tabs) is deliberately absent here -those five tabs write to one
+    # SMTP tabs) is deliberately absent here -those tabs write to one
     # shared PayrollSettings record via one endpoint, so a single URL-level
     # module_key can't separate them. payroll_settings_view() does its own
     # per-field settings.* permission check instead (see FIELD_GROUPS in
     # payroll_views.py). GET stays in ALWAYS_READABLE_GET_PREFIXES below,
     # same as before.
     "biometric-devices": "settings.devices",
-    "production-shift-config": "settings.attendance",
-    # Settings -> Production shifts (the shift table that judges production days from its effective date on). Its
-    # "preview" is a POST that only reads: see READ_ONLY_POST_PATHS below.
-    "production-shift-rules": "settings.attendance",
-    "production-shift-segments": "settings.attendance",
     "document-settings": "settings.documents",
     "backup": "settings.backup",
     "whatsapp": "settings.whatsapp",
-    # idcard-settings (Settings → ID Card tab) intentionally maps to "id_cards"
-    # above, not a settings.* key -it's the same permission that already
-    # governs the ID Cards feature page, not a separate Settings concern.
 }
+
+
+def _merged_url_map() -> dict[str, str]:
+    tree = url_entries()
+    clash = {p: (_BASE_URL_MODULE_MAP[p], k) for p, k in tree.items() if p in _BASE_URL_MODULE_MAP}
+    if clash:
+        raise ValueError(f"API prefixes mapped twice (permission_tree.py and URL_MODULE_MAP): {clash}")
+    return {**_BASE_URL_MODULE_MAP, **tree}
+
+
+URL_MODULE_MAP: dict[str, str] = _merged_url_map()
+
+# API paths with an id in the middle (employees/12/offer-letter/pdf): a full match wins over every prefix above.
+URL_PATTERNS: list[tuple[re.Pattern, str]] = url_patterns()
 
 
 # POST endpoints that only READ (their input is too structured for a query string) and write nothing: a role that may
@@ -388,10 +311,14 @@ READ_ONLY_POST_PATHS: frozenset[str] = frozenset({"production-shift-rules/previe
 def resolve_module(path: str) -> str | None:
     """
     path is the request path relative to /api/, e.g. 'employees/12/status'.
-    Matches on path-segment boundaries (never a bare substring), and prefers
-    the longest/most-specific match so e.g. "recruitment/resignations"
-    resolves to the submodule rather than the parent "recruitment".
+    A URL_PATTERNS full match wins; otherwise the longest URL_MODULE_MAP prefix, matched on path-segment boundaries
+    (never a bare substring), so e.g. "recruitment/resignations" resolves to the submodule rather than the parent
+    "recruitment".
     """
+    clean = path.rstrip("/")
+    for pattern, module_key in URL_PATTERNS:
+        if pattern.fullmatch(clean):
+            return module_key
     best_match = None
     best_len = -1
     for raw_prefix, module_key in URL_MODULE_MAP.items():

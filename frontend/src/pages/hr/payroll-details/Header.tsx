@@ -28,7 +28,7 @@ import {
 import { Avatar, BusyIcon, Chip, PayStatusChip } from "@/components/payroll/kit/parts";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
 import { ago, dateShort, dateTime } from "@/components/payroll/kit/format";
-import { useAuth } from "@/contexts/AuthContext";
+import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import {
   downloadDocumentPdf,
@@ -36,6 +36,7 @@ import {
   type PayrollDetails,
   type PayrollKind,
 } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { coverageLines } from "../production-payroll/coverage";
 import type { Accent } from "./accent";
@@ -84,8 +85,11 @@ export function DetailsHeader({
   workflow?: DetailsWorkflow;
 }) {
   const { employee, period, neighbours } = details;
+  const { user } = useAuth();
   const pending = details.status === "pending";
   const wf = workflow?.applies ? workflow : null;
+  // Mark as Cleared is an approval of its own (a View-only role still sees it disabled, a finalized month as before)
+  const mayMarkCleared = canApprove(user, "payroll_mark_cleared");
   const locked = !!wf?.locked;
   const computed = details.generatedAt;
   const regenerated = !!details.firstGeneratedAt && details.firstGeneratedAt !== details.generatedAt;
@@ -118,7 +122,7 @@ export function DetailsHeader({
         <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-2" data-testid="pd-top-right">
           <div className="flex flex-wrap items-center gap-2 print:hidden" data-testid="pd-actions">
             {employee.phone && <PhoneButton phone={employee.phone} name={employee.name} />}
-            {pending && (
+            {pending && mayMarkCleared && (
               <span title={locked ? "This month is finalized (Payroll Done): nothing on it can change" : undefined}>
                 <Button
                   size="sm"
@@ -158,7 +162,9 @@ export function DetailsHeader({
                 </Button>
               </span>
             )}
-            <PayslipMenu details={details} disabled={switching} />
+            <Gate k="salary_slip">
+              <PayslipMenu details={details} disabled={switching} />
+            </Gate>
             <ExportMenu items={exportItems} disabled={switching} />
             <Button asChild variant="outline" size="sm" className="h-9 gap-2">
               <Link href={settingsPathFor(kind)} data-testid="pd-settings-link">

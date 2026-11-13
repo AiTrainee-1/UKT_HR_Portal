@@ -7,10 +7,12 @@ import { normalizeHub, type HubItem, type HubResponse, type KindKey } from "./lo
 export const HUB_KEY = "/api/hr-requests";
 
 /** The list the page shows: every kind in one response. Refreshes by itself every 60 seconds. */
-export function useHubRequests(params: Record<string, string>) {
+/** `enabled`: false while the Requests list is hidden from the role (its section is not shown, nothing is fetched). */
+export function useHubRequests(params: Record<string, string>, enabled = true) {
   const qs = new URLSearchParams(params).toString();
   return useQuery<HubResponse>({
     queryKey: [HUB_KEY, params],
+    enabled,
     queryFn: async () => normalizeHub(await customFetch<Partial<HubResponse>>(`/api/hr-requests?${qs}`)),
     refetchInterval: 60_000,
     // while a filter change loads, the list stays on screen instead of flashing the loader

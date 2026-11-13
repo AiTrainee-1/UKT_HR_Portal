@@ -19,7 +19,8 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { Filter, Save } from "lucide-react";
 import { SubtabBar } from "@/components/ui/subtab-nav";
-import { gatePagePath, subsOf } from "../routes";
+import { useLevel, visibleItems } from "@/lib/tab-access";
+import { gateKey, gatePagePath, subsOf } from "../routes";
 import { KpiRow, RANGE_LABEL, RangeFilter, RecordsPagination, fmtDateTime } from "../shared";
 
 // ── Tea Break tab ─────────────────────────────────────────────────────────
@@ -219,6 +220,9 @@ export function TeaBreakTab({ sub }: { sub: string }) {
   const [page, setPage] = useState(1);
 
   const { data: summary, isLoading: summaryLoading } = useTeaBreakSummary();
+  // only the subtabs this role may see are offered; the page lands on the first of them (routes.ts)
+  const level = useLevel();
+  const subs = visibleItems(subsOf("tea-break"), (s) => gateKey("tea-break", s.value), level);
 
   const changeRange = (v: GateRange) => {
     setRange(v);
@@ -233,12 +237,7 @@ export function TeaBreakTab({ sub }: { sub: string }) {
     <div className="space-y-4" data-testid="tea-break-tab">
       <KpiRow summary={summary} isLoading={summaryLoading} />
 
-      <SubtabBar
-        base={gatePagePath("tea-break")}
-        value={sub}
-        testId="tea-break-subtabs"
-        items={[...subsOf("tea-break")]}
-      />
+      <SubtabBar base={gatePagePath("tea-break")} value={sub} testId="tea-break-subtabs" items={[...subs]} />
 
       {sub === "rule" ? (
         <TeaBreakRuleCard />

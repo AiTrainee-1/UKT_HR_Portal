@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { Award, Building2, CalendarClock, History, TrendingUp, Users } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import {
@@ -14,9 +15,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PillTabs } from "@/components/ui/pill-tabs";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useListDepartments, useListEmployeesLite } from "@/lib/api-client";
 import { useDeletePromotion, useListDesignations } from "@/lib/api-client/custom-hooks";
+import { moduleForPath } from "@/lib/permission-modules";
+import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import { formatDate, monthsLabel, todayYmd } from "./career/dates";
 import { PersonCell, StatCard } from "./career/parts";
 import { PROMOTION_LIMIT, usePromotionHistory } from "./promotion/api";
@@ -39,9 +43,19 @@ import Timeline from "./promotion/Timeline";
 
 type TabKey = "promote" | "history" | "due";
 
+const TABS: readonly TabKey[] = ["promote", "history", "due"];
+// Each tab's own key (Account Management -> Roles & Permissions -> Promotion).
+const TAB_PERMISSION: Record<TabKey, string> = {
+  promote: "promotion.promote",
+  history: "promotion.history",
+  due: "promotion.due",
+};
+
 /** Promotion: promote an employee (designation / department) with a before / after, read the whole history, and see who may be due for review. */
 export default function Promotion() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const [location] = useLocation();
   const today = todayYmd();
 
   const employeesQuery = useListEmployeesLite({ status: "active" });
@@ -53,7 +67,19 @@ export default function Promotion() {
   const employees = useMemo<PromoEmployee[]>(() => employeesQuery.data ?? [], [employeesQuery.data]);
   const history = useMemo<PromotionRecord[]>(() => historyQuery.data ?? [], [historyQuery.data]);
 
-  const [tab, setTab] = useState<TabKey>("promote");
+  const level = useLevel();
+  // Only the tabs this role may see: a hidden tab is never shown (or mounted).
+  const visibleTabs = visibleItems(TABS, (t) => TAB_PERMISSION[t], level);
+  const [askedTab, setTab] = useState<TabKey>("promote");
+  const tab = pickVisible(askedTab, visibleTabs);
+  // The Due tab's and the timeline's "Promote" jump only when this role may see the Promote tab.
+  const canOpenPromote = visibleTabs.includes("promote");
+  // A tab this role may only VIEW on a page it may edit: lock that tab's change buttons (HrLayout locks a View-only page).
+  const tabViewOnly =
+    visibleTabs.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(TAB_PERMISSION[tab]) === "view";
+  useViewOnlyLock(tabViewOnly, tab);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [historyFilters, setHistoryFilters] = useState<HistoryFilters>(NO_FILTERS);
   const [dueFilters, setDueFilters] = useState<DueFilters>(NO_DUE_FILTERS);
@@ -147,17 +173,36 @@ export default function Promotion() {
         </div>
 
         <div>
-          <PillTabs
-            items={[
-              { value: "promote", label: "Promote", icon: <TrendingUp size={14} /> },
-              { value: "history", label: "History", icon: <History size={14} />, count: history.length },
-              { value: "due", label: "Due for review", icon: <CalendarClock size={14} />, count: due.rows.length },
-            ]}
-            value={tab}
-            onChange={(v) => setTab(v as TabKey)}
-          />
+          {visibleTabs.length === 0 && (
+            <p
+              className="rounded-2xl border bg-white p-6 text-center text-sm text-muted-foreground"
+              data-testid="promotion-nothing-open"
+            >
+              Nothing on this page is open to your role.
+            </p>
+          )}
+          {visibleTabs.length > 0 && (
+            <PillTabs
+              items={visibleItems(
+                [
+                  { value: "promote", label: "Promote", icon: <TrendingUp size={14} /> },
+                  { value: "history", label: "History", icon: <History size={14} />, count: history.length },
+                  { value: "due", label: "Due for review", icon: <CalendarClock size={14} />, count: due.rows.length },
+                ],
+                (t) => TAB_PERMISSION[t.value as TabKey],
+                level,
+              )}
+              value={tab}
+              onChange={(v) => setTab(v as TabKey)}
+            />
+          )}
+          {tabViewOnly && (
+            <div className="mt-3">
+              <ViewOnlyTabNote show />
+            </div>
+          )}
 
-          {tab === "promote" && (
+          {visibleTabs.length > 0 && tab === "promote" && (
             <PromoteTab
               employees={employees}
               loading={employeesQuery.isLoading}
@@ -170,7 +215,7 @@ export default function Promotion() {
               today={today}
             />
           )}
-          {tab === "history" && (
+          {visibleTabs.length > 0 && tab === "history" && (
             <HistoryTab
               records={history}
               loading={historyQuery.isLoading}
@@ -184,7 +229,7 @@ export default function Promotion() {
               truncated={history.length >= PROMOTION_LIMIT}
             />
           )}
-          {tab === "due" && (
+          {visibleTabs.length > 0 && tab === "due" && (
             <DueTab
               employees={employees}
               promotions={history}
@@ -196,7 +241,7 @@ export default function Promotion() {
               threshold={threshold}
               onThreshold={setThreshold}
               today={today}
-              onPromote={openPromote}
+              onPromote={canOpenPromote ? openPromote : undefined}
             />
           )}
         </div>
@@ -234,7 +279,7 @@ export default function Promotion() {
                 />
               </div>
             )}
-            {timelineEmployee && (
+            {timelineEmployee && canOpenPromote && (
               <Button
                 className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
                 onClick={() => openPromote(timelineEmployee.id)}

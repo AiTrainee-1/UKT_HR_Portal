@@ -1,6 +1,14 @@
 // Account Management: the rules behind the page, kept apart from the screens so they can be tested on their own.
 
-import { MODULE_TREE, allModuleKeys, resolvePermission, type ModuleNode } from "@/lib/permission-modules";
+import {
+  MODULE_LABELS,
+  PERMISSION_GROUPS,
+  allModuleKeys,
+  resolvePermission,
+  resolveSource,
+  type DisplayGroup,
+  type DisplayNode,
+} from "@/lib/permission-modules";
 import type { HrUserItem, PermissionLevel, Role } from "@/lib/api-client/custom-hooks";
 import { CATEGORY_LABEL, type Category, type DisplayCategory } from "@/lib/hr-access";
 
@@ -203,52 +211,140 @@ export function roleUsage(users: HrUserItem[]): Record<number, number> {
 }
 
 // ─── Roles: counting and editing permissions ────────────────────────────────────
+//
+// The tree the owner sees (lib/permission-modules.ts PERMISSION_GROUPS): sidebar headings -> sections / pages -> tabs ->
+// sub-tabs and features. A part with no setting of its own follows the node above it (its dotted parent, or the key it
+// `inherits`); a few nodes are shown under a page but have a setting of their own (`own`: Staff Payroll -> Salary).
 
 export type LevelCounts = { edit: number; view: number; hidden: number; total: number };
 
 function countKeys(permissions: Permissions | undefined, keys: string[]): LevelCounts {
   const counts: LevelCounts = { edit: 0, view: 0, hidden: 0, total: keys.length };
-  for (const key of keys) counts[resolvePermission(permissions, key)] += 1;
+  for (const key of keys) {
+    const level = resolvePermission(permissions, key);
+    if (level in counts) counts[level] += 1;
+    else counts.hidden += 1; // a stored value that is not a level (a hand-edited row) grants nothing
+  }
   return counts;
 }
 
-const keysOf = (node: ModuleNode) => [node.key, ...(node.children ?? []).map((c) => c.key)];
+/** The parts shown under a node that a role can be given a level on (locked ones left out), in order. */
+export function partsOf(node: DisplayNode): DisplayNode[] {
+  const out: DisplayNode[] = [];
+  const walk = (nodes: DisplayNode[]) => {
+    for (const n of nodes) {
+      if (n.locked) continue;
+      out.push(n);
+      walk(n.children ?? []);
+    }
+  };
+  walk(node.children ?? []);
+  return out;
+}
 
-/** What a role can actually do across every module and submodule (a submodule with no setting of its own counts as its parent's level). */
+const groupNodes = (group: DisplayGroup): DisplayNode[] =>
+  group.children.filter((n) => !n.locked).flatMap((n) => [n, ...partsOf(n)]);
+
+/** What a role can actually do across every key (a part with no setting of its own counts as the level it follows). */
 export const levelCounts = (permissions: Permissions | undefined): LevelCounts =>
   countKeys(permissions, allModuleKeys());
 
-export const sectionCounts = (permissions: Permissions | undefined, node: ModuleNode): LevelCounts =>
-  countKeys(permissions, keysOf(node));
+/** A node and every part under it. */
+export const sectionCounts = (permissions: Permissions | undefined, node: DisplayNode): LevelCounts =>
+  countKeys(permissions, node.locked ? [] : [node.key, ...partsOf(node).map((n) => n.key)]);
 
-/** Submodules with a setting of their own (as opposed to inheriting their parent's). */
-export const overrideCount = (permissions: Permissions | undefined, node: ModuleNode): number =>
-  (node.children ?? []).filter((c) => permissions != null && c.key in permissions).length;
+/** Every key under a sidebar heading. */
+export const groupCounts = (permissions: Permissions | undefined, group: DisplayGroup): LevelCounts =>
+  countKeys(
+    permissions,
+    groupNodes(group).map((n) => n.key),
+  );
+
+/** "12 of 14 edit", or the mix when it is not one level. */
+export function countsText(c: LevelCounts): string {
+  if (c.total === 0) return "";
+  if (c.edit === c.total) return `all ${c.total} edit`;
+  if (c.view === c.total) return `all ${c.total} view`;
+  if (c.hidden === c.total) return `all ${c.total} hidden`;
+  return `${c.edit} of ${c.total} edit · ${c.view} view`;
+}
+
+/** The one level every key of a set has, or null when they differ. */
+export const commonLevel = (c: LevelCounts): PermissionLevel | null =>
+  c.total === 0
+    ? null
+    : c.edit === c.total
+      ? "edit"
+      : c.view === c.total
+        ? "view"
+        : c.hidden === c.total
+          ? "hidden"
+          : null;
+
+/** Parts under a node that have a setting of their own. A part whose key never followed the page (an `own` part, or one
+ *  that follows another key) needs a setting to match it, so it counts only when its level differs from the page's. */
+export function overrideCount(permissions: Permissions | undefined, node: DisplayNode): number {
+  if (!permissions) return 0;
+  let n = 0;
+  const walk = (nodes: DisplayNode[], parent: DisplayNode) => {
+    for (const c of nodes) {
+      if (c.locked) continue;
+      if (c.key in permissions) {
+        const differs = resolvePermission(permissions, c.key) !== resolvePermission(permissions, parent.key);
+        if (!(c.own || c.inherits) || differs) n += 1;
+      }
+      walk(c.children ?? [], c);
+    }
+  };
+  walk(node.children ?? [], node);
+  return n;
+}
 
 export function setLevel(permissions: Permissions, key: string, level: PermissionLevel): Permissions {
   return { ...permissions, [key]: level };
 }
 
-/** A submodule goes back to following its parent. */
+/** A part goes back to following the node above it. */
 export function clearOverride(permissions: Permissions, key: string): Permissions {
   const next = { ...permissions };
   delete next[key];
   return next;
 }
 
-/** The module and every submodule of it get this level; the submodules stop having a setting of their own. */
-export function setSection(permissions: Permissions, node: ModuleNode, level: PermissionLevel): Permissions {
-  const next = { ...permissions, [node.key]: level };
-  for (const child of node.children ?? []) delete next[child.key];
+/**
+ * The Hidden / View / Edit control of one node: the node gets this level, and so does every part under it that follows
+ * it. A part with a setting of its own keeps it (that is what "custom" means); a part that follows another key (an `own`
+ * part, or one that `inherits`) is given the level too, so "Staff Payroll: Hidden" also hides its Salary and Payslip tabs.
+ */
+export function applyLevel(permissions: Permissions, node: DisplayNode, level: PermissionLevel): Permissions {
+  const next: Permissions = { ...permissions, [node.key]: level };
+  const before = permissions;
+  for (const part of partsOf(node)) {
+    if (part.key in before) continue; // custom: keeps its own setting
+    if (resolvePermission(next, part.key) !== level) next[part.key] = level;
+  }
   return next;
 }
 
-/** Every module at one level. Keys the page does not know about are left alone. */
+/** The node and EVERY part under it at one level, with as few settings as possible (the "custom · reset" chip). */
+export function setSection(permissions: Permissions, node: DisplayNode, level: PermissionLevel): Permissions {
+  const next: Permissions = { ...permissions, [node.key]: level };
+  const parts = partsOf(node);
+  for (const part of parts) delete next[part.key];
+  for (const part of parts) if (resolvePermission(next, part.key) !== level) next[part.key] = level;
+  return next;
+}
+
+/** Every key under one sidebar heading at one level. */
+export function setGroup(permissions: Permissions, group: DisplayGroup, level: PermissionLevel): Permissions {
+  return group.children.filter((n) => !n.locked).reduce((p, node) => setSection(p, node, level), permissions);
+}
+
+/** Every key at one level. Keys the page does not know about are left alone. */
 export function setAll(permissions: Permissions, level: PermissionLevel): Permissions {
   const known = new Set(allModuleKeys());
-  const next: Permissions = Object.fromEntries(Object.entries(permissions).filter(([k]) => !known.has(k)));
-  for (const node of MODULE_TREE) next[node.key] = level;
-  return next;
+  const kept: Permissions = Object.fromEntries(Object.entries(permissions).filter(([k]) => !known.has(k)));
+  return PERMISSION_GROUPS.reduce((p, group) => setGroup(p, group, level), kept);
 }
 
 /** A new role starts with nothing granted. */
@@ -262,21 +358,75 @@ export function permissionsEqual(a: Permissions | undefined, b: Permissions | un
   return true;
 }
 
-export type VisibleSection = { node: ModuleNode; children: ModuleNode[]; matched: boolean };
+const LABEL_OF = new Map(MODULE_LABELS.map((m) => [m.key, m.label]));
 
-/** The modules left after a search. A section whose own name matches keeps all its submodules; otherwise only the matching ones. */
-export function filterModules(query: string): VisibleSection[] {
-  const q = query.trim().toLowerCase();
-  const hit = (n: ModuleNode) => n.label.toLowerCase().includes(q) || n.key.toLowerCase().includes(q);
-  return MODULE_TREE.flatMap((node): VisibleSection[] => {
-    const children = node.children ?? [];
-    if (!q) return [{ node, children, matched: true }];
-    if (hit(node)) return [{ node, children, matched: true }];
-    const some = children.filter(hit);
-    return some.length ? [{ node, children: some, matched: false }] : [];
-  });
+/** Where an unset node takes its level from, in words: "follows Staff Payroll", or "nothing set" (= Hidden). */
+export function followText(permissions: Permissions | undefined, node: DisplayNode): string {
+  const source = resolveSource(permissions, node.key);
+  if (!source) return "nothing set";
+  return `follows ${LABEL_OF.get(source) ?? source}`;
 }
 
-/** How many modules (sections and submodules) a search leaves. */
-export const visibleModuleCount = (sections: VisibleSection[]): number =>
-  sections.reduce((n, s) => n + 1 + s.children.length, 0);
+// ─── searching the tree ─────────────────────────────────────────────────────────
+
+export type TreeItem = { node: DisplayNode; children: TreeItem[]; matched: boolean };
+export type TreeGroup = { group: DisplayGroup; items: TreeItem[] };
+
+const TYPE_WORD: Record<string, string> = {
+  section: "Section",
+  page: "Page",
+  tab: "Tab",
+  subtab: "Sub-tab",
+  view: "View",
+  feature: "Feature",
+};
+export const typeWord = (type: string): string => TYPE_WORD[type] ?? type;
+
+/**
+ * The tree left after a search (blank = everything). A node stays when it matches (its name or its key) or when
+ * one of its parts does; a node that matches keeps all its parts, so a page's tabs show under it.
+ */
+export function filterTree(query: string): TreeGroup[] {
+  const q = query.trim().toLowerCase();
+  const hit = (n: DisplayNode) => !q || n.label.toLowerCase().includes(q) || n.key.toLowerCase().includes(q);
+  const all = (n: DisplayNode): TreeItem => ({ node: n, matched: true, children: (n.children ?? []).map(all) });
+  const prune = (nodes: DisplayNode[]): TreeItem[] =>
+    nodes.flatMap((n): TreeItem[] => {
+      if (hit(n)) return [all(n)];
+      const children = prune(n.children ?? []);
+      return children.length ? [{ node: n, matched: false, children }] : [];
+    });
+  return PERMISSION_GROUPS.map((group) => ({ group, items: prune(group.children) })).filter((g) => g.items.length);
+}
+
+/** How many nodes a search shows. */
+export function visibleModuleCount(groups: TreeGroup[]): number {
+  const count = (items: TreeItem[]): number => items.reduce((n, i) => n + 1 + count(i.children), 0);
+  return groups.reduce((n, g) => n + count(g.items), 0);
+}
+
+/** How many nodes the search itself matched (not counting the parts shown with them or the path to them). */
+export function matchedCount(groups: TreeGroup[], query: string): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  const count = (items: TreeItem[]): number =>
+    items.reduce((n, i) => {
+      const self = i.node.label.toLowerCase().includes(q) || i.node.key.toLowerCase().includes(q);
+      return n + (self ? 1 : 0) + count(i.children);
+    }, 0);
+  return groups.reduce((n, g) => n + count(g.items), 0);
+}
+
+/** Every node that has parts (the ones "Expand all" opens). */
+export const foldableKeys = (): string[] =>
+  PERMISSION_GROUPS.flatMap((g) => {
+    const out: string[] = [];
+    const walk = (nodes: DisplayNode[]) => {
+      for (const n of nodes) {
+        if ((n.children ?? []).length) out.push(n.key);
+        walk(n.children ?? []);
+      }
+    };
+    walk(g.children);
+    return out;
+  });

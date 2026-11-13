@@ -29,7 +29,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
-vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ token: "tok-123", user: null }) }));
+vi.mock("@/contexts/AuthContext", async (original) => ({
+  ...(await original<typeof import("@/contexts/AuthContext")>()),
+  useAuth: () => ({ token: "tok-123", user: null }),
+}));
 vi.mock("@/contexts/SalarySlipBulkContext", () => ({ useSalarySlipBulk: () => h.bulk() }));
 vi.mock("@/contexts/WhatsAppBulkContext", () => ({ useWhatsAppBulk: () => h.whatsappBulk() }));
 vi.mock("@/lib/api-client/custom-hooks", async (original) => ({

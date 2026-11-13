@@ -2,13 +2,13 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { Link, useLocation, useRoute, useSearch } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAuth } from "@/contexts/AuthContext";
+import { permissionLevel, useAuth } from "@/contexts/AuthContext";
 import { lockMutatingControls } from "@/lib/view-only-lock";
 import "./settings/settings-skin.css";
 import { settingsTabLevel } from "./settings/access";
-import { UNLISTED_TABS } from "./settings/constants";
+import { subtabKeysOf, UNLISTED_TABS } from "./settings/constants";
 import { SETTINGS_TABS, SETTINGS_TAB_COMPONENTS } from "./settings/tabs";
-import { ALL_SETTINGS } from "./settings/metas";
+import { ALL_SETTINGS, settingPartKeys } from "./settings/metas";
 import { SettingsNav } from "./settings/kit/SettingsNav";
 import { SettingsSearch } from "./settings/kit/SettingsSearch";
 import { ViewOnlyNotice } from "./settings/kit/SettingBlock";
@@ -29,6 +29,12 @@ export default function Settings() {
   const visibleTabs = useMemo(() => SETTINGS_TABS.filter((t) => tabLevel(t.id) !== "hidden"), [tabLevel]);
   // What the menu and the search offer: the tabs this login may open, minus the ones that open only from their address.
   const listedTabs = useMemo(() => visibleTabs.filter((t) => !UNLISTED_TABS.has(t.id)), [visibleTabs]);
+  // ... and, in the search, only the settings whose sub-tab (and cycle pill, Backup part) is not hidden for the login, so a
+  // search result never opens a hidden sub-tab (the tabs fall back to a visible one for a #setting link of a hidden one).
+  const searchable = useMemo(
+    () => ALL_SETTINGS.filter((m) => settingPartKeys(m).every((k) => permissionLevel(user, k) !== "hidden")),
+    [user],
+  );
 
   // The tab (and the setting) come from the address, so a link such as /hr/settings?tab=attendance#late-window works.
   // /hr/settings/<tab> is the same address as /hr/settings?tab=<tab> (the path wins when both are given).
@@ -81,7 +87,9 @@ export default function Settings() {
   const tab = SETTINGS_TABS.find((t) => t.id === shownId) ?? SETTINGS_TABS[0];
   const Panel = SETTINGS_TAB_COMPONENTS[tab.id];
   const level = tabLevel(tab.id);
-  const isTabViewOnly = level === "view";
+  // A View-only tab is locked as a whole, unless one of its sub-tabs is editable (its own key set to Edit): then each sub-tab
+  // decides for itself (settings/kit/subtabs.tsx), and the others, which follow the tab, are View only one by one.
+  const isTabViewOnly = level === "view" && !subtabKeysOf(tab.id).some((k) => permissionLevel(user, k) === "edit");
 
   // The plain, flat look is for this page only (settings/settings-skin.css): the page root carries `.settings-skin`, and
   // <html> carries `.settings-skin-on` while the page is open so the dialogs and menus it opens (they render in a portal)
@@ -120,7 +128,7 @@ export default function Settings() {
               it.
             </p>
           </div>
-          <SettingsSearch metas={ALL_SETTINGS} tabs={listedTabs} onPick={pick} />
+          <SettingsSearch metas={searchable} tabs={listedTabs} onPick={pick} />
         </div>
 
         <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">

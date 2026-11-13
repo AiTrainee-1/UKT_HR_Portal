@@ -17,6 +17,7 @@ import {
   useUpdateHodReminderSettings,
 } from "@/lib/api-client/custom-hooks";
 import { ApiError } from "@/lib/api-client/custom-fetch";
+import { Gate, useLevel } from "@/lib/tab-access";
 import { ErrorState } from "../RequestList";
 import {
   CHANNEL_LABEL,
@@ -72,7 +73,9 @@ export default function NotifyTab() {
     setForm((current) => (sameForm(current, previous) ? saved : current));
   }, [saved]);
 
-  const viewOnlyRole = isRouteViewOnly(user, "/hr/requests", "requests");
+  const level = useLevel();
+  // View only: the page, or this section on its own (requests.notify, Account Management -> Roles & Permissions)
+  const viewOnlyRole = isRouteViewOnly(user, "/hr/requests", "requests") || level("requests.notify") === "view";
   const readOnly = !settings || !settings.canEdit || viewOnlyRole || refusal !== null;
   const readOnlyText = viewOnlyRole
     ? "View only: your role can look at the reminder settings and the run history, but not change them or send reminders."
@@ -100,7 +103,7 @@ export default function NotifyTab() {
   const preview = useHodReminderPreview(readOnly ? null : previewOf, { enabled: !!settings });
 
   // who a Send now reaches: the same board as HoD's (read once the dialog may open)
-  const hods = useHodPending({}, { enabled: !!settings && !readOnly });
+  const hods = useHodPending({}, { enabled: !!settings && !readOnly && level("requests.notify.send") !== "hidden" });
   const plan = useMemo(
     () => sendPlan(hods.data?.hods ?? [], form.channels, settings?.channelStatus),
     [hods.data, form.channels, settings?.channelStatus],
@@ -252,47 +255,51 @@ export default function NotifyTab() {
         onDiscard={() => setForm(saved)}
       />
 
-      <SectionCard
-        icon={Send}
-        title="Send now"
-        description="Reminds every HoD with something pending right away, on the channels switched on above. You see who gets what before anything goes."
-        testId="notify-send"
-        actions={
-          <Button
-            onClick={() => setConfirming(true)}
-            disabled={readOnly || send.isPending || live !== null}
-            className="gap-1.5"
-            data-testid="notify-send-now"
-          >
-            {live ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-            {live ? "Sending…" : "Send now"}
-          </Button>
-        }
-      >
-        {live ? (
-          <div
-            className="flex flex-wrap items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-900"
-            role="status"
-            data-testid="notify-live-run"
-          >
-            <Chip tone={RUN_STATUS.running.tone}>{RUN_STATUS.running.label}</Chip>
-            {live.hods} HoD{live.hods === 1 ? "" : "s"} ·{" "}
-            {(["whatsapp", "email", "push"] as const)
-              .map((c) => `${CHANNEL_LABEL[c]}: ${countText(live.counts[c])}`)
-              .join(" · ")}
-          </div>
-        ) : (
-          <p className="text-xs text-gray-500">
-            {hods.data
-              ? `${plan.length} HoD${plan.length === 1 ? "" : "s"} would be reminded now.`
-              : readOnly
-                ? "Sending is not open to your login."
-                : "Counting who would be reminded…"}
-          </p>
-        )}
-      </SectionCard>
+      <Gate k="requests.notify.send">
+        <SectionCard
+          icon={Send}
+          title="Send now"
+          description="Reminds every HoD with something pending right away, on the channels switched on above. You see who gets what before anything goes."
+          testId="notify-send"
+          actions={
+            <Button
+              onClick={() => setConfirming(true)}
+              disabled={readOnly || send.isPending || live !== null}
+              className="gap-1.5"
+              data-testid="notify-send-now"
+            >
+              {live ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+              {live ? "Sending…" : "Send now"}
+            </Button>
+          }
+        >
+          {live ? (
+            <div
+              className="flex flex-wrap items-center gap-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-900"
+              role="status"
+              data-testid="notify-live-run"
+            >
+              <Chip tone={RUN_STATUS.running.tone}>{RUN_STATUS.running.label}</Chip>
+              {live.hods} HoD{live.hods === 1 ? "" : "s"} ·{" "}
+              {(["whatsapp", "email", "push"] as const)
+                .map((c) => `${CHANNEL_LABEL[c]}: ${countText(live.counts[c])}`)
+                .join(" · ")}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">
+              {hods.data
+                ? `${plan.length} HoD${plan.length === 1 ? "" : "s"} would be reminded now.`
+                : readOnly
+                  ? "Sending is not open to your login."
+                  : "Counting who would be reminded…"}
+            </p>
+          )}
+        </SectionCard>
+      </Gate>
 
-      <RunHistory />
+      <Gate k="requests.notify.history">
+        <RunHistory />
+      </Gate>
 
       <SendNowDialog
         open={confirming}

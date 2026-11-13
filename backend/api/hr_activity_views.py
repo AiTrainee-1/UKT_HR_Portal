@@ -31,6 +31,7 @@ from .permission_registry import (
     MODULE_TREE,
     READ_ONLY_POST_PATHS,
     effective_permissions,
+    legacy_module,
     resolve_module,
     resolve_permission,
 )
@@ -126,7 +127,9 @@ def record_write(request, response, captured) -> None:
 
         actor, path, method = captured["actor"], captured["path"], captured["method"]
         module_key = resolve_module(path)
-        module = module_key.split(".")[0] if module_key else "general"
+        # filed under the module that governed the path before its part had a key of its own (Biometric Connectors are
+        # still "attendance" changes), so the Activity Logs module filter keeps working
+        module = legacy_module(module_key).split(".")[0] if module_key else "general"
         label = _LABELS.get(module_key or "", None) or _LABELS.get(module, module)
         number = re.search(r"(?:^|/)(\d+)(?:/|$)", path)
         if method == "DELETE":
@@ -163,10 +166,17 @@ def _visible_modules(viewer) -> set[str] | None:
     perms = effective_permissions(viewer)
     out = set(ALWAYS_VISIBLE)
     for node in MODULE_TREE:
-        keys = [node["key"]] + [c["key"] for c in node.get("children", [])]
-        if any(resolve_permission(perms, k) in ("view", "edit") for k in keys):
-            out.add(node["key"])
+        if any(resolve_permission(perms, k) in ("view", "edit") for k in _keys_under(node)):
+            out.add(legacy_module(node["key"]).split(".")[0])
     out.update(name for name, owner in AUDIT_MODULE_SCOPE.items() if owner in out)
+    return out
+
+
+def _keys_under(node: dict) -> list[str]:
+    """A module's key and every key of its parts (tabs, sub-tabs ...)."""
+    out = [node["key"]]
+    for child in node.get("children", []):
+        out.extend(_keys_under(child))
     return out
 
 

@@ -1915,12 +1915,10 @@ class AccessReportTests(_Base):
         self.assertEqual(len(body["rows"]), len(all_module_keys()))
         self.assertEqual(by_key(body, "employees.departments", "moduleKey")["module"], "Employees > Departments")
         self.assertEqual(by_key(body, "employees.departments", "moduleKey")["group"], "Employees")
-        self.assertEqual(
-            [r["moduleKey"] for r in body["rows"]][:3], ["dashboard", "employees", "employees.departments"]
-        )
-        self.assertEqual(
-            cards(body)["Modules"], len(MODULE_TREE) + sum(len(n.get("children", [])) for n in MODULE_TREE)
-        )
+        # every key of the tree, parents before their parts (2026-11-11: pages, tabs, sub-tabs and features too)
+        self.assertEqual([r["moduleKey"] for r in body["rows"]], all_module_keys())
+        self.assertEqual(MODULE_TREE[0]["key"], "dashboard")
+        self.assertEqual(cards(body)["Modules"], len(all_module_keys()))
 
     def test_role_matrix_notes_filters_and_counts(self):
         body = self.run_report("role-access-matrix")
@@ -1939,7 +1937,8 @@ class AccessReportTests(_Base):
         self.assertEqual(self.run_report("role-access-matrix", role="Legacy", hideNoAccess="true")["rows"], [])
         trimmed = self.run_report("role-access-matrix", role="Payroll", hideNoAccess="true")
         keys = {r["moduleKey"] for r in trimmed["rows"]}
-        self.assertEqual(keys, {"employees.departments", "payroll", "salary_slip"})
+        granted = ("employees.departments", "payroll", "salary_slip")  # and every part of them (they follow)
+        self.assertEqual(keys, {k for k in all_module_keys() if any(k == g or k.startswith(g + ".") for g in granted)})
         self.assertNotIn("dashboard", keys)
 
     def test_role_matrix_with_many_roles_still_exports(self):

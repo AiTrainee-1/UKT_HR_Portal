@@ -2,6 +2,9 @@ import { useCallback, useState } from "react";
 import { Files } from "lucide-react";
 import { usePayrollSettings, type DocumentType } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
+import { useLevel } from "@/lib/tab-access";
+import { SETTINGS_SUBTAB_MODULE } from "./constants";
+import { NothingOpen, SubtabViewOnlyNote, useSubtabAccess } from "./kit/subtabs";
 import { ManagedElsewhere, SettingsSection } from "./kit/SettingBlock";
 import { isHexColour } from "./identity/colours";
 import { DOCS } from "./documents/docs";
@@ -9,9 +12,18 @@ import { DEFAULT_LOOK, DocumentCard } from "./documents/DocumentCard";
 
 type CardStatus = { dirty: boolean; primary: string };
 
+const DOC_TYPES = DOCS.map((d) => d.type);
+const docModule = (type: DocumentType) => SETTINGS_SUBTAB_MODULE.documents[type];
+
 export default function DocumentsTab({ readOnly = false }: { readOnly?: boolean }) {
   const { data: settings } = usePayrollSettings();
-  const [selected, setSelected] = useState<DocumentType>("offer_letter");
+  const [askedDoc, setSelected] = useState<DocumentType>("offer_letter");
+  // Each document has its own permission key: only the visible ones are offered (and drawn), and a View-only one's card is
+  // read-only. Every visible card stays mounted (hidden when not picked), so each locks itself rather than the page.
+  const level = useLevel();
+  const pick = useSubtabAccess(DOC_TYPES, SETTINGS_SUBTAB_MODULE.documents, askedDoc, readOnly, { lock: false });
+  const selected = pick.shown;
+  const visibleDocs = DOCS.filter((d) => pick.visible.includes(d.type));
   const [status, setStatus] = useState<Partial<Record<DocumentType, CardStatus>>>({});
 
   const onDirtyChange = useCallback((type: DocumentType, dirty: boolean, primary: string) => {
@@ -19,6 +31,14 @@ export default function DocumentsTab({ readOnly = false }: { readOnly?: boolean 
       s[type]?.dirty === dirty && s[type]?.primary === primary ? s : { ...s, [type]: { dirty, primary } },
     );
   }, []);
+
+  if (pick.none) {
+    return (
+      <div className="space-y-4">
+        <NothingOpen />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -38,7 +58,7 @@ export default function DocumentsTab({ readOnly = false }: { readOnly?: boolean 
           className="grid grid-cols-2 gap-2 lg:grid-cols-4"
           data-testid="document-picker"
         >
-          {DOCS.map((d) => {
+          {visibleDocs.map((d) => {
             const on = d.type === selected;
             const s = status[d.type];
             const colour = s && isHexColour(s.primary) ? s.primary : DEFAULT_LOOK.primaryColor;
@@ -91,12 +111,14 @@ export default function DocumentsTab({ readOnly = false }: { readOnly?: boolean 
         </div>
       </SettingsSection>
 
-      {DOCS.map((d) => (
+      <SubtabViewOnlyNote show={pick.viewOnly} />
+
+      {visibleDocs.map((d) => (
         <DocumentCard
           key={d.type}
           doc={d}
           active={d.type === selected}
-          readOnly={readOnly}
+          readOnly={readOnly || level(docModule(d.type)) !== "edit"}
           settings={settings}
           onDirtyChange={onDirtyChange}
         />

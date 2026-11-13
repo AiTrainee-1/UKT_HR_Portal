@@ -123,3 +123,15 @@ export const BACKUP_SETTINGS: SettingMeta[] = [
     keywords: [...BACKUP, "restore", "automatic", "super admin", "rollback"],
   },
 ];
+
+/** The part of the tab with a permission key of its own (Schedule, Google Drive, Restore) each setting sits in, so the
+ *  page's search does not offer a setting of a part that is hidden for the login (the Manual Backup part has none). */
+export type BackupFeature = "schedule" | "drive" | "restore";
+const FEATURE_OF_SECTION: Record<string, BackupFeature> = {
+  [SCHEDULE]: "schedule",
+  [DRIVE]: "drive",
+  [RESTORE]: "restore",
+};
+export const BACKUP_FEATURE_OF: Record<string, BackupFeature> = Object.fromEntries(
+  BACKUP_SETTINGS.filter((m) => FEATURE_OF_SECTION[m.section]).map((m) => [m.id, FEATURE_OF_SECTION[m.section]]),
+);

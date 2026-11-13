@@ -12,7 +12,8 @@ import { SubtabBar } from "@/components/ui/subtab-nav";
 import { MONTH_NAMES, countOf, fmtShifts, minutesText, monthYearFromUrl, todayIst, yearChoices } from "../logic";
 import type { CompensationUrl } from "../logic";
 import { NestedTabs } from "@/components/ui/nested-tabs";
-import { OT_NESTED, OT_SUBS, OT_SUB_LABEL, nestedOf, pagePath, subPath, type OtSub } from "../routes";
+import { OT_NESTED, OT_SUBS, OT_SUB_LABEL, pagePath, subPath, type OtSub } from "../routes";
+import { keepOpenNested, openDefaultNested, useCanOpen } from "../visible";
 import { SwitchOffNotice } from "../ui";
 import { LegacySection } from "./LegacySection";
 import { Type1How, Type1Section } from "./Type1Section";
@@ -45,6 +46,7 @@ export default function OtTab({
   url: CompensationUrl;
   setUrl: SetUrl;
 }) {
+  const canOpen = useCanOpen();
   const today = useMemo(() => todayIst(), []);
   const { month, year } = monthYearFromUrl(url.month, url.year, today);
   const query = useOvertimeList(month, year);
@@ -78,11 +80,13 @@ export default function OtTab({
         base={OT_BASE}
         value={sub}
         testId="ot-subtabs"
-        items={OT_SUBS.filter((v) => v !== "earlier" || groups.legacy.length > 0 || sub === "earlier").map((v) => ({
-          value: v,
-          label: OT_SUB_LABEL[v],
-        }))}
-        landing={(next) => nestedOf("ot", next)[0]?.value}
+        items={OT_SUBS.filter((v) => v !== "earlier" || groups.legacy.length > 0 || sub === "earlier")
+          .filter((v) => v === sub || canOpen(subPath("ot", v)))
+          .map((v) => ({
+            value: v,
+            label: OT_SUB_LABEL[v],
+          }))}
+        landing={(next) => openDefaultNested(canOpen, "ot", next)}
       />
 
       {/* controls */}
@@ -211,14 +215,14 @@ export default function OtTab({
                 value={nested ?? "allowance"}
                 testId="ot-type1-nested"
                 label="Sections of Type 1"
-                items={[
+                items={keepOpenNested(canOpen, "ot", "type-1", [
                   {
                     value: "allowance",
                     label: OT_NESTED["type-1"][0].label,
                     count: loading ? undefined : groups.allowance.length,
                   },
                   { value: "how", label: OT_NESTED["type-1"][1].label },
-                ]}
+                ])}
               >
                 {nested === "how" ? (
                   <Type1How />
@@ -258,7 +262,7 @@ export default function OtTab({
                 value={nested ?? "waiting"}
                 testId="ot-type2-nested"
                 label="Sections of Type 2"
-                items={[
+                items={keepOpenNested(canOpen, "ot", "type-2", [
                   {
                     value: "waiting",
                     label: OT_NESTED["type-2"][0].label,
@@ -270,7 +274,7 @@ export default function OtTab({
                     count: loading ? undefined : groups.history.length,
                   },
                   { value: "how", label: OT_NESTED["type-2"][2].label },
-                ]}
+                ])}
               >
                 <Type2Section
                   view={(nested ?? "waiting") as Type2View}

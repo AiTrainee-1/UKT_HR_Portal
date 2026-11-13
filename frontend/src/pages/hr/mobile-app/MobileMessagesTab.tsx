@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import {
   AlertTriangle,
   BellRing,
@@ -35,8 +36,22 @@ import {
   type PushStatus,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
+import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
+import { moduleForPath } from "@/lib/permission-modules";
+import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 
 type Section = "overview" | "controls" | "log" | "devices" | "send";
+
+// Each section has its own permission key (Account Management -> Mobile App Login -> Mobile Messages); with no setting of
+// its own it follows the Mobile Messages tab.
+const MESSAGES_MODULE = "mobile_app_login.messages";
+const SECTION_MODULE: Record<Section, string> = {
+  overview: "mobile_app_login.messages.overview",
+  controls: "mobile_app_login.messages.controls",
+  log: "mobile_app_login.messages.log",
+  devices: "mobile_app_login.messages.devices",
+  send: "mobile_app_login.messages.send",
+};
 
 const STATUS_STYLE: Record<PushStatus | "", { label: string; cls: string }> = {
   sent: { label: "Sent (waiting for confirmation)", cls: "border-blue-200 bg-blue-50 text-blue-700" },
@@ -77,7 +92,7 @@ function CountsLine({ label, c }: { label: string; c: PushCounts }) {
   );
 }
 
-function Overview({ onGo }: { onGo: (s: Section) => void }) {
+function Overview({ onGo, canGo }: { onGo: (s: Section) => void; canGo: (s: Section) => boolean }) {
   const { data, isLoading, isError, refetch } = useMobileMessagesOverview();
   if (isLoading) return <Skeleton className="h-80 rounded-2xl" />;
   if (isError || !data)
@@ -100,9 +115,11 @@ function Overview({ onGo }: { onGo: (s: Section) => void }) {
           <span>
             Phone notifications are switched <b>OFF</b>: nothing is pushed to phones (the Notifications page of the apps
             still records everything).{" "}
-            <button type="button" className="font-semibold underline" onClick={() => onGo("controls")}>
-              Switch them on
-            </button>
+            {canGo("controls") && (
+              <button type="button" className="font-semibold underline" onClick={() => onGo("controls")}>
+                Switch them on
+              </button>
+            )}
           </span>
         </div>
       )}
@@ -713,23 +730,45 @@ function SendMessage() {
 }
 
 /** Mobile App Login -> Mobile Messages: the control panel for what is pushed to employees' phones. */
+const SECTIONS: { value: Section; label: string; icon: React.ReactNode }[] = [
+  { value: "overview", label: "Overview", icon: <BellRing size={12} /> },
+  { value: "controls", label: "Controls", icon: <CheckCircle2 size={12} /> },
+  { value: "log", label: "Messages", icon: <MailCheck size={12} /> },
+  { value: "devices", label: "Phones", icon: <SmartphoneNfc size={12} /> },
+  { value: "send", label: "Send a message", icon: <Send size={12} /> },
+];
+
 export default function MobileMessagesTab() {
-  const [section, setSection] = useState<Section>("overview");
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const level = useLevel();
+  const [asked, setSection] = useState<Section>("overview");
+  // Only the sections this role may see are offered, and only the one shown is mounted (a hidden one asks for nothing).
+  const visible = visibleItems(SECTIONS, (s) => SECTION_MODULE[s.value], level);
+  const visibleValues = visible.map((s) => s.value);
+  const section = pickVisible(asked, visibleValues);
+  // A View-only section of a Mobile Messages tab the role may edit: the note and the lock (the page or the tab being View
+  // only already has its own).
+  const sectionViewOnly =
+    visible.length > 0 &&
+    !isRouteViewOnly(user, location, moduleForPath(location)) &&
+    level(MESSAGES_MODULE) === "edit" &&
+    level(SECTION_MODULE[section]) === "view";
+  useViewOnlyLock(sectionViewOnly, section);
+
+  if (visible.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground" data-testid="mobile-messages-nothing-open">
+        Nothing on this page is open to your role.
+      </p>
+    );
+  }
+
   return (
     <div className="space-y-4" data-testid="mobile-messages">
-      <PillTabs
-        items={[
-          { value: "overview", label: "Overview", icon: <BellRing size={12} /> },
-          { value: "controls", label: "Controls", icon: <CheckCircle2 size={12} /> },
-          { value: "log", label: "Messages", icon: <MailCheck size={12} /> },
-          { value: "devices", label: "Phones", icon: <SmartphoneNfc size={12} /> },
-          { value: "send", label: "Send a message", icon: <Send size={12} /> },
-        ]}
-        value={section}
-        onChange={(v) => setSection(v as Section)}
-        size="sm"
-      />
-      {section === "overview" && <Overview onGo={setSection} />}
+      <PillTabs items={visible} value={section} onChange={(v) => setSection(v as Section)} size="sm" />
+      <ViewOnlyTabNote show={sectionViewOnly} />
+      {section === "overview" && <Overview onGo={setSection} canGo={(s) => visibleValues.includes(s)} />}
       {section === "controls" && <Controls />}
       {section === "log" && <MessageLog />}
       {section === "devices" && <Devices />}

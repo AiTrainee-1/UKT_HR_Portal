@@ -10,9 +10,10 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { hrCanAct } from "@/lib/approval-workflow";
 import { inGateRange } from "@/lib/gate-range";
+import { Gate, useLevel, visibleItems } from "@/lib/tab-access";
 import { GateDevicesDialog } from "../GateDevicesDialog";
 import { GateQrDialog } from "../GateQrDialog";
-import { gatePagePath, gateTabPath, nestedOf, subsOf } from "../routes";
+import { gateKey, gatePagePath, gateTabPath, nestedOf, subsOf, type GateTab } from "../routes";
 import { BranchPicker, KpiRow, PAGE_SIZE, RangeFilter, useSelectedBranch } from "../shared";
 import { InOutSection } from "./InOutSection";
 import { ApprovedPassesSection } from "./PassesSection";
@@ -31,6 +32,7 @@ type Branches = ReturnType<typeof useSelectedBranch>;
  */
 function Overview({
   nested,
+  sections,
   isBranchScoped,
   branch,
   range,
@@ -40,6 +42,8 @@ function Overview({
   passesCount,
 }: {
   nested: string;
+  /** The nested subtabs this role may see (each has its own key and address). */
+  sections: readonly GateTab[];
   isBranchScoped: boolean;
   branch: Branches;
   range: GateRange;
@@ -62,27 +66,38 @@ function Overview({
         <RangeFilter value={range} onChange={onRange} />
         <div className="flex flex-wrap items-center gap-2">
           {!isBranchScoped && <BranchPicker branches={branches} branchId={branchId} setBranchId={setBranchId} />}
-          <GateDevicesDialog isBranchScoped={isBranchScoped} branches={branches} defaultBranchId={branchId} />
+          <Gate k="outpass_visitors.outpass.gate_devices">
+            <GateDevicesDialog isBranchScoped={isBranchScoped} branches={branches} defaultBranchId={branchId} />
+          </Gate>
           <GateQrDialog kind="outpass" token={qr?.token} branchName={qr?.branchName} />
         </div>
       </div>
 
-      <NestedTabs
-        base={OVERVIEW_BASE}
-        value={nested}
-        testId="outpass-overview-nested"
-        label="Sections of the Outpass overview"
-        items={nestedOf("outpass", "overview").map((n) => ({
-          ...n,
-          count: n.value === "passes" ? passesCount : records?.total,
-        }))}
-      >
-        {nested === "passes" ? (
-          <ApprovedPassesSection key={range} range={range} />
-        ) : (
-          <QrSubmissionsSection range={range} records={records} isLoading={recordsLoading} setPage={setPage} />
-        )}
-      </NestedTabs>
+      {sections.length === 0 ? (
+        <p
+          className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
+          data-testid="nothing-open"
+        >
+          Neither section of the overview is open to your role.
+        </p>
+      ) : (
+        <NestedTabs
+          base={OVERVIEW_BASE}
+          value={nested}
+          testId="outpass-overview-nested"
+          label="Sections of the Outpass overview"
+          items={sections.map((n) => ({
+            ...n,
+            count: n.value === "passes" ? passesCount : records?.total,
+          }))}
+        >
+          {nested === "passes" ? (
+            <ApprovedPassesSection key={range} range={range} />
+          ) : (
+            <QrSubmissionsSection range={range} records={records} isLoading={recordsLoading} setPage={setPage} />
+          )}
+        </NestedTabs>
+      )}
     </div>
   );
 }
@@ -105,6 +120,12 @@ export function OutpassTab({
   const [range, setRange] = useState<GateRange>("today");
   const [page, setPage] = useState(1);
   const branch = useSelectedBranch(isBranchScoped);
+  // only the subtabs (and Overview sections) this role may see are offered; the page lands on the first of them (routes.ts)
+  const level = useLevel();
+  const subs = visibleItems(subsOf("outpass"), (s) => gateKey("outpass", s.value), level);
+  const sectionsOf = (next: string) =>
+    visibleItems(nestedOf("outpass", next), (n) => gateKey("outpass", next, n.value), level);
+  const sections = sectionsOf("overview");
   const changeRange = (next: GateRange) => {
     setRange(next);
     setPage(1);
@@ -125,8 +146,8 @@ export function OutpassTab({
         base={OUTPASS_BASE}
         value={sub}
         testId="outpass-subtabs"
-        items={subsOf("outpass").map((s) => ({ ...s, count: counts[s.value] }))}
-        landing={(next) => nestedOf("outpass", next)[0]?.value}
+        items={subs.map((s) => ({ ...s, count: counts[s.value] }))}
+        landing={(next) => sectionsOf(next)[0]?.value}
       />
 
       {sub === "requests" ? (
@@ -135,7 +156,8 @@ export function OutpassTab({
         <InOutSection />
       ) : (
         <Overview
-          nested={nested ?? nestedOf("outpass", "overview")[0].value}
+          nested={nested ?? sections[0]?.value ?? ""}
+          sections={sections}
           isBranchScoped={isBranchScoped}
           branch={branch}
           range={range}

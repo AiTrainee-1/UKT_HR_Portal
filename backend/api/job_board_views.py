@@ -130,7 +130,15 @@ def update_applicant_status(request: Request, pk: int) -> Response:
     applicant = Applicant.objects.filter(pk=pk).first()
     if not applicant:
         return _error("Not found", 404)
-    applicant.status = request.data.get("status", applicant.status)
+    new_status = request.data.get("status", applicant.status)
+    if new_status in ("selected", "rejected") and new_status != applicant.status:
+        # an interview result is a right of its own: Account Management -> Approvals -> "Interview results" (on top of
+        # Recruitment Edit; an account that never set it keeps "edit = may")
+        from . import hr_access
+
+        if refused := hr_access.approval_refusal(request, "interview_result"):
+            return refused
+    applicant.status = new_status
     if "interviewDate" in request.data:
         applicant.interview_date = request.data["interviewDate"]
     if "notes" in request.data:

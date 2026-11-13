@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useListEmployeesLite } from "@/lib/api-client";
 import { useListShiftAssignments } from "@/lib/api-client/custom-hooks";
+import { Gate } from "@/lib/tab-access";
 import { SearchBox, TypeChips } from "./AssignmentsTab";
 import { filterPeople, pluralize, unassignedOf, type Person, type TypeFilter } from "./shift-logic";
 
@@ -82,14 +83,16 @@ export default function UnassignedTab({ onAssign }: { onAssign: (people: Person[
                 : `${pluralize(list.length, "employee")} without a shift`}
             </label>
             {chosen.length > 0 && (
-              <Button
-                size="sm"
-                className="ml-auto h-8 gap-1.5 text-xs"
-                onClick={() => onAssign(chosen)}
-                data-testid="unassigned-assign-selected"
-              >
-                <UserPlus size={13} /> Assign selected
-              </Button>
+              <Gate k="shifts.assign">
+                <Button
+                  size="sm"
+                  className="ml-auto h-8 gap-1.5 text-xs"
+                  onClick={() => onAssign(chosen)}
+                  data-testid="unassigned-assign-selected"
+                >
+                  <UserPlus size={13} /> Assign selected
+                </Button>
+              </Gate>
             )}
           </div>
           <ul className="divide-y">
@@ -120,15 +123,17 @@ export default function UnassignedTab({ onAssign }: { onAssign: (people: Person[
                 >
                   {e.employmentType ?? "staff"}
                 </StatusBadge>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 shrink-0 gap-1.5 text-xs"
-                  onClick={() => onAssign([e])}
-                  data-testid={`unassigned-assign-${e.employeeCode}`}
-                >
-                  <UserPlus size={12} /> Assign shift
-                </Button>
+                <Gate k="shifts.assign">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 shrink-0 gap-1.5 text-xs"
+                    onClick={() => onAssign([e])}
+                    data-testid={`unassigned-assign-${e.employeeCode}`}
+                  >
+                    <UserPlus size={12} /> Assign shift
+                  </Button>
+                </Gate>
               </li>
             ))}
           </ul>

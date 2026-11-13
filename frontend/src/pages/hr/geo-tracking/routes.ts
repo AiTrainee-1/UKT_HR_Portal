@@ -38,6 +38,16 @@ export const GEO_SECTION_LABEL: Record<GeoSection, string> = {
   settings: "Tracking Settings",
 };
 
+/** Each section's own permission key (Account Management -> Roles & Permissions; each is also its address's key). */
+export const GEO_SECTION_KEY: Record<GeoSection, string> = {
+  approvals: "geo_attendance.approvals",
+  verifications: "geo_attendance.verifications",
+  "live-map": "geo_attendance.live_map",
+  journeys: "geo_attendance.journeys",
+  "on-duty-map": "geo_attendance.on_duty_map",
+  settings: "geo_attendance.settings",
+};
+
 /** The tab names of the old single page. */
 const OLD_TABS: Record<string, GeoSection> = {
   approvals: "approvals",
@@ -86,21 +96,26 @@ function otherParams(search: string): string {
 /**
  * What an address under /hr/geo-attendance shows, or where it must be sent instead (`redirect`, always a full address under
  * GEO_BASE with the other query parameters kept). The router matches without regard to case, so this does too.
+ * `visible`: the sections the signed-in role may see (in order). A landing (the bare address, an old `?tab=`, an old section
+ * name, an unknown section) never goes to a section outside it: the first one it holds instead. Left out: every section.
  */
 export function readGeoRoute(
   pathname: string,
   search = "",
+  visible?: readonly GeoSection[],
 ): { route: GeoRoute; redirect: null } | { route: null; redirect: string } {
   const clean = pathname.replace(/\/+$/, "");
   const lower = clean.toLowerCase();
   const base = GEO_BASE.toLowerCase();
   const rest = lower === base ? "" : lower.startsWith(`${base}/`) ? clean.slice(GEO_BASE.length + 1) : null;
   const keep = otherParams(search);
+  const land = (section: GeoSection): GeoSection =>
+    !visible || visible.length === 0 || visible.includes(section) ? section : visible[0];
 
   if (rest === null || rest === "") {
     // the old single page: its tab (and journey) say where to go
     const params = new URLSearchParams(search);
-    const tab = OLD_TABS[(params.get("tab") ?? "").toLowerCase()] ?? DEFAULT_GEO_SECTION;
+    const tab = land(OLD_TABS[(params.get("tab") ?? "").toLowerCase()] ?? DEFAULT_GEO_SECTION);
     const journey = tab === "journeys" ? positiveInt(params.get("journey")) : null;
     return { route: null, redirect: `${geoPath(tab, journey)}${keep}` };
   }
@@ -108,7 +123,7 @@ export function readGeoRoute(
   const parts = rest.split("/");
   const head = parts[0].toLowerCase();
   const section = (GEO_SECTIONS as readonly string[]).includes(head) ? (head as GeoSection) : OLD_TABS[head];
-  if (!section) return { route: null, redirect: `${geoPath(DEFAULT_GEO_SECTION)}${keep}` };
+  if (!section) return { route: null, redirect: `${geoPath(land(DEFAULT_GEO_SECTION))}${keep}` };
 
   if (section === "journeys") {
     if (parts.length === 1) {
@@ -128,7 +143,7 @@ export function readGeoRoute(
 
   if (parts.length > 1 || head !== section) {
     // a section under an old name (/hr/geo-attendance/map) or with a tail it does not have
-    return { route: null, redirect: `${geoPath(section)}${keep}` };
+    return { route: null, redirect: `${geoPath(land(section))}${keep}` };
   }
   return { route: { section, journey: null, view: "list" }, redirect: null };
 }

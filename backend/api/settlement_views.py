@@ -316,8 +316,8 @@ def advance_detail(request: Request, pk: int) -> Response:
             new_status in ("approved", "rejected") or (new_status == "pending" and previous_status != "closed")
         )
         if deciding:
-            # approving / rejecting an advance is the approval right, not the edit right (hr_access.py)
-            if refused := hr_access.approval_refusal(request, "advance"):
+            # approving / rejecting an advance is the approval right of its type (general / term), not the edit right
+            if refused := hr_access.approval_refusal(request, hr_access.kind_for("advance", adv)):
                 return refused
             if hr_access.out_of_branch(request, adv.employee.branch_id):
                 return Response({"error": "Advance not found"}, status=404)
@@ -352,7 +352,9 @@ def advance_detail(request: Request, pk: int) -> Response:
             _auto_create_repayments(adv)
             adv.refresh_from_db()
             if previous_status != "approved":
-                hr_access.log_decision(request, "advance", adv, "approved", f"advance of {inr(adv.amount)}")
+                hr_access.log_decision(
+                    request, hr_access.kind_for("advance", adv), adv, "approved", f"advance of {inr(adv.amount)}"
+                )
                 whatsapp_approvals.notify_decision(
                     "advance", adv, "approved", approver=adv.approved_by or request.jwt_user.get("name", ""),
                     role="hr", comment=_decision_comment(adv),
@@ -361,7 +363,9 @@ def advance_detail(request: Request, pk: int) -> Response:
 
         adv.save()
         if adv.status == "rejected" and previous_status != "rejected":
-            hr_access.log_decision(request, "advance", adv, "rejected", f"advance of {inr(adv.amount)}")
+            hr_access.log_decision(
+                request, hr_access.kind_for("advance", adv), adv, "rejected", f"advance of {inr(adv.amount)}"
+            )
             whatsapp_approvals.notify_decision(
                 "advance", adv, "rejected", approver=adv.approved_by or request.jwt_user.get("name", ""),
                 role="hr", comment=adv.notes,

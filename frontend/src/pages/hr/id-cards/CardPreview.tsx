@@ -1,6 +1,7 @@
 import { Briefcase, CameraOff, Download, Factory, Mail, MessageCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { IdCardData } from "@/lib/api-client/custom-hooks";
+import { useLevel } from "@/lib/tab-access";
 import {
   ProductionCardBack,
   ProductionCardFront,
@@ -41,6 +42,9 @@ export default function CardPreview({
 }: Props) {
   const production = card.employmentType === "production";
   const gaps = cardGaps(card);
+  // Email / WhatsApp to the employee is a key of its own (Roles & Permissions -> ID Cards -> "id_cards.send"): hidden =
+  // no buttons, View = shown but locked ("Email to employee" is not a word the page's view-only lock knows).
+  const send = useLevel()("id_cards.send");
   return (
     <div className="space-y-2" data-testid={`id-card-${card.code}`}>
       <div className="no-print flex flex-wrap items-center gap-2">
@@ -76,26 +80,32 @@ export default function CardPreview({
           >
             <Download size={11} /> Picture
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 gap-1.5 text-xs"
-            onClick={onEmail}
-            disabled={emailBusy || !card.email}
-            title={card.email ? `Email the card to ${card.email}` : "This employee has no email address"}
-          >
-            <Mail size={11} /> Email to employee
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 gap-1.5 border-emerald-200 text-xs text-emerald-700 hover:bg-emerald-50"
-            onClick={onWhatsApp}
-            disabled={whatsappBusy || !card.phone}
-            title={card.phone ? `Send the card on WhatsApp to ${card.phone}` : "This employee has no phone number"}
-          >
-            <MessageCircle size={11} /> Send via WhatsApp
-          </Button>
+          {send !== "hidden" && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 text-xs"
+                onClick={onEmail}
+                disabled={emailBusy || !card.email || send !== "edit"}
+                title={card.email ? `Email the card to ${card.email}` : "This employee has no email address"}
+                data-testid={`id-email-${card.code}`}
+              >
+                <Mail size={11} /> Email to employee
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 border-emerald-200 text-xs text-emerald-700 hover:bg-emerald-50"
+                onClick={onWhatsApp}
+                disabled={whatsappBusy || !card.phone || send !== "edit"}
+                title={card.phone ? `Send the card on WhatsApp to ${card.phone}` : "This employee has no phone number"}
+                data-testid={`id-whatsapp-${card.code}`}
+              >
+                <MessageCircle size={11} /> Send via WhatsApp
+              </Button>
+            </>
+          )}
           <Button
             size="icon"
             variant="ghost"

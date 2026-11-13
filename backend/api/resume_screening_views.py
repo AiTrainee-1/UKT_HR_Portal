@@ -388,6 +388,13 @@ def candidate_detail(request: Request, pk: int) -> Response:
         new_status = data["status"]
         if new_status != c.status and (c.status, new_status) not in _ALLOWED_TRANSITIONS:
             return _error(f"Cannot move a candidate from '{c.status}' to '{new_status}'")
+        if new_status in ("selected", "rejected") and new_status != c.status:
+            # selecting / rejecting a candidate is a right of its own: Account Management -> Approvals -> "Resume
+            # screening decisions" (on top of Resume Screening Edit; an account that never set it keeps "edit = may")
+            from . import hr_access
+
+            if refused := hr_access.approval_refusal(request, "resume_decision"):
+                return refused
         # Once a candidate is rejected, their resume file is removed from
         # storage automatically -only the resume binary goes; every
         # extracted detail (name, phone, email, city, education, skills,

@@ -35,6 +35,8 @@ import { setUnsavedGuard } from "./kit/leaveGuard";
 import { addressSetting, useSubTabFromAddress } from "./payroll/form";
 import { PF_ESI_SUB_TAB_OF, pfEsiText, type PfEsiSubTab } from "./PfEsiTab.meta";
 import { ClassPage } from "./pf-esi/ClassPage";
+import { SETTINGS_SUBTAB_MODULE } from "./constants";
+import { NothingOpen, SubtabViewOnlyNote, useSubtabAccess } from "./kit/subtabs";
 import {
   CLASS_LABEL,
   DEFAULT_MAX_RULES,
@@ -83,8 +85,17 @@ export default function PfEsiTab({ readOnly = false }: { readOnly?: boolean }) {
   const data = query.data;
   const switching = query.isPlaceholderData;
 
-  const [subTab, setSubTab] = useState<PfEsiSubTab>(() => PF_ESI_SUB_TAB_OF[addressSetting()] ?? "staff");
+  const [askedSubTab, setSubTab] = useState<PfEsiSubTab>(() => PF_ESI_SUB_TAB_OF[addressSetting()] ?? "staff");
   useSubTabFromAddress(PF_ESI_SUB_TAB_OF, setSubTab);
+  // Staff and Production each have their own permission key: only the visible ones are offered, and a View-only one's lists
+  // are locked (the one Save of both stays for the other's edits, so the page itself is not locked)
+  const sub = useSubtabAccess(
+    SUB_TABS.map((t) => t.value),
+    SETTINGS_SUBTAB_MODULE.pf_esi,
+    askedSubTab,
+    readOnly,
+    { lock: false },
+  );
 
   // unsaved edits in the open scope: leaving the tab or changing scope asks first
   const dirtyRef = useRef(false);
@@ -110,6 +121,14 @@ export default function PfEsiTab({ readOnly = false }: { readOnly?: boolean }) {
 
   // a reset to global remounts the editor on the branch's new (global) rules
   const [resets, setResets] = useState(0);
+
+  if (sub.none) {
+    return (
+      <div className="space-y-4" data-testid="pf-esi-tab">
+        <NothingOpen />
+      </div>
+    );
+  }
 
   if (query.isLoading || (!data && !query.isError)) {
     return (
@@ -172,7 +191,10 @@ export default function PfEsiTab({ readOnly = false }: { readOnly?: boolean }) {
           key={`${branchId ?? "global"}:${resets}`}
           data={data}
           locked={!canEdit}
-          subTab={subTab}
+          subTab={sub.shown}
+          subTabs={sub.visible}
+          subLocked={sub.readOnly}
+          subViewOnly={sub.viewOnly && canEdit}
           onSubTab={setSubTab}
           onDirty={reportDirty}
           reload={async () => (await query.refetch()).data}
@@ -423,6 +445,9 @@ function PfEsiEditor({
   data,
   locked,
   subTab,
+  subTabs,
+  subLocked,
+  subViewOnly,
   onSubTab,
   onDirty,
   reload: refetchSaved,
@@ -430,6 +455,12 @@ function PfEsiEditor({
   data: PfEsiSettings;
   locked: boolean;
   subTab: PfEsiSubTab;
+  /** The pills the login may see (each has its own permission key). */
+  subTabs: readonly PfEsiSubTab[];
+  /** The open pill's lists cannot be changed (its key is View only). */
+  subLocked: boolean;
+  /** The open pill is View only on a tab the login may edit: its note shows. */
+  subViewOnly: boolean;
   onSubTab: (tab: PfEsiSubTab) => void;
   onDirty: (dirty: boolean) => void;
   reload: () => Promise<PfEsiSettings | undefined>;
@@ -537,7 +568,7 @@ function PfEsiEditor({
     <div className="space-y-4" data-testid="pf-esi-editor" data-scope={scope.branchId ?? "global"}>
       <div className="flex flex-wrap items-center gap-3" data-testid="pf-esi-subtabs">
         <PillTabs
-          items={SUB_TABS}
+          items={SUB_TABS.filter((t) => subTabs.includes(t.value))}
           value={subTab}
           onChange={(v) => onSubTab(v as PfEsiSubTab)}
           baseColor="#0f172a"
@@ -558,6 +589,8 @@ function PfEsiEditor({
         )}
       </div>
 
+      <SubtabViewOnlyNote show={subViewOnly} />
+
       <ClassPage
         key={subTab}
         cls={subTab}
@@ -565,7 +598,7 @@ function PfEsiEditor({
         validation={validation}
         onList={(key, rows) => patchDraft({ [key]: rows })}
         settings={data}
-        locked={locked}
+        locked={locked || subLocked}
       />
 
       {!locked && (

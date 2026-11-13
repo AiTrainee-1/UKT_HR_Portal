@@ -44,6 +44,7 @@ import { dateTime, inr, inr2, monthYear, plural } from "@/components/payroll/kit
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
 import { Avatar, BusyIcon, Chip, EmptyNote, KpiTile, SkeletonRows } from "@/components/payroll/kit/parts";
 import { hasTds, tdsAmount, tdsLabel } from "@/components/payroll/kit/statutory";
+import { Gate } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { pageSlice } from "../records/records-logic";
 import {
@@ -450,32 +451,35 @@ export function PayslipsPanel({ kind, cycle, accent, testIdPrefix, month, year, 
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-9 gap-2 border-purple-200 text-purple-700 hover:bg-purple-50"
-            disabled={bulk.isRunning || everyone === 0}
-            onClick={bulkEmail}
-            title="Send every payslip of this period by email"
-            data-testid={`${p}-bulk-email`}
-          >
-            <BusyIcon busy={bulk.isRunning && bulk.progress?.kind === "email"} icon={Mail} size={14} />
-            Bulk Send ({everyone})
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-            disabled={whatsappBulk.isRunning || everyone === 0}
-            onClick={() => void whatsappBulk.triggerBulkWhatsApp(bulkParams)}
-            title="Send every payslip of this period on WhatsApp"
-            data-testid={`${p}-bulk-whatsapp`}
-          >
-            <BusyIcon busy={whatsappBulk.isRunning} icon={MessageCircle} size={14} />
-            Bulk WhatsApp ({everyone})
-          </Button>
+          {/* sending payslips (email / WhatsApp) is a switch of its own: salary_slip.send */}
+          <Gate k="salary_slip.send">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 gap-2 border-purple-200 text-purple-700 hover:bg-purple-50"
+              disabled={bulk.isRunning || everyone === 0}
+              onClick={bulkEmail}
+              title="Send every payslip of this period by email"
+              data-testid={`${p}-bulk-email`}
+            >
+              <BusyIcon busy={bulk.isRunning && bulk.progress?.kind === "email"} icon={Mail} size={14} />
+              Bulk Send ({everyone})
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+              disabled={whatsappBulk.isRunning || everyone === 0}
+              onClick={() => void whatsappBulk.triggerBulkWhatsApp(bulkParams)}
+              title="Send every payslip of this period on WhatsApp"
+              data-testid={`${p}-bulk-whatsapp`}
+            >
+              <BusyIcon busy={whatsappBulk.isRunning} icon={MessageCircle} size={14} />
+              Bulk WhatsApp ({everyone})
+            </Button>
+          </Gate>
           <Button
             type="button"
             variant="outline"
@@ -629,26 +633,28 @@ export function PayslipsPanel({ kind, cycle, accent, testIdPrefix, month, year, 
                           onClick={() => void doPdf(slip, "download")}
                           className="border-green-200 text-green-700 hover:bg-green-50"
                         />
-                        <SlipAction
-                          testId={`${p}-slip-${slip.id}-email`}
-                          icon={Mail}
-                          busy={emailing === slip.id}
-                          label="Email"
-                          ariaLabel={`Send the payslip of ${slip.employeeName} by email`}
-                          disabled={emailing !== null}
-                          onClick={() => void doEmail(slip)}
-                          className="border-purple-200 text-purple-700 hover:bg-purple-50"
-                        />
-                        <SlipAction
-                          testId={`${p}-slip-${slip.id}-whatsapp`}
-                          icon={MessageCircle}
-                          busy={whatsapping === slip.id}
-                          label="WhatsApp"
-                          ariaLabel={`Send the payslip of ${slip.employeeName} on WhatsApp`}
-                          disabled={whatsapping !== null}
-                          onClick={() => void doWhatsApp(slip)}
-                          className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                        />
+                        <Gate k="salary_slip.send">
+                          <SlipAction
+                            testId={`${p}-slip-${slip.id}-email`}
+                            icon={Mail}
+                            busy={emailing === slip.id}
+                            label="Email"
+                            ariaLabel={`Send the payslip of ${slip.employeeName} by email`}
+                            disabled={emailing !== null}
+                            onClick={() => void doEmail(slip)}
+                            className="border-purple-200 text-purple-700 hover:bg-purple-50"
+                          />
+                          <SlipAction
+                            testId={`${p}-slip-${slip.id}-whatsapp`}
+                            icon={MessageCircle}
+                            busy={whatsapping === slip.id}
+                            label="WhatsApp"
+                            ariaLabel={`Send the payslip of ${slip.employeeName} on WhatsApp`}
+                            disabled={whatsapping !== null}
+                            onClick={() => void doWhatsApp(slip)}
+                            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                          />
+                        </Gate>
                       </div>
                     </div>
                   </div>
