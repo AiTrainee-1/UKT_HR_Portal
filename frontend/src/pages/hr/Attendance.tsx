@@ -14,6 +14,7 @@ import { TONE } from "@/lib/statusTones";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
+import { useMdEmbedded } from "@/lib/md/embed";
 import { moduleForPath } from "@/lib/permission-modules";
 import { Gate, ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import {
@@ -81,6 +82,9 @@ const currentMonth = () => new Date().getMonth() + 1;
 const currentYear = () => new Date().getFullYear();
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/** A toolbar button on a phone: half the row (two a row, gap included), growing to the whole row when it is alone on it. */
+const PHONE_HALF = "max-sm:grow max-sm:basis-[calc(50%-0.25rem)]";
 
 // ── Main Page ──────────────────────────────────────────────────────────────
 //
@@ -150,6 +154,9 @@ function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof AT
   // Staff / Production sub-section -derived from the route so the sidebar
   // stays in sync (/hr/attendance/staff | /hr/attendance/production); `view` is the one AttendancePage chose
   const setView = (v: "staff" | "production") => navigate(`/hr/attendance/${v}`);
+  // the Managing Director's copy has no Staff / Production switch: the MD sidebar lists Staff Attendance and Production
+  // Attendance as pages of their own (owner, 2026-11-14)
+  const embeddedInMd = useMdEmbedded();
 
   const [showManualDialog, setShowManualDialog] = useState(false);
 
@@ -289,7 +296,7 @@ function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof AT
 
   return (
     <HrLayout>
-      <div className="space-y-5">
+      <div className="space-y-4 sm:space-y-5">
 
         {/* ── Header (the MD portal adopts this row: keep a title block + one group of buttons) ── */}
         <div className="flex flex-wrap lg:flex-nowrap items-start justify-between gap-3">
@@ -301,16 +308,21 @@ function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof AT
             <p className="text-sm text-muted-foreground mt-0.5">
               See who is in, check every punch, and export the day or the month.
             </p>
-            {/* Staff / Production sub-section toggle */}
-            <div className="mt-2">
-              <PillTabs
-                items={views}
-                value={view}
-                onChange={(v) => setView(v as "staff" | "production")}
-              />
-            </div>
+            {/* Staff / Production sub-section toggle (not in the MD portal, whose sidebar has a page for each) */}
+            {!embeddedInMd && (
+              <div className="mt-2">
+                <PillTabs
+                  items={views}
+                  value={view}
+                  onChange={(v) => setView(v as "staff" | "production")}
+                />
+              </div>
+            )}
           </div>
-          <div className="flex min-w-0 items-center gap-2 flex-wrap justify-end">
+          {/* Phones: the toolbar starts at the left and fills the width, two equal buttons a row (a lone one takes the row),
+              the day picker and Add Attendance a row each. The wrappers are `display: contents` from `sm` up, so tablets
+              and desktops keep the row of buttons they had. */}
+          <div className="flex w-full min-w-0 items-center gap-2 flex-wrap sm:w-auto sm:justify-end">
             {/* Manual Import, Sync Biometric and Auto Sync are hidden, not
                 deleted: all three worked by having the backend open a direct
                 connection to a device on the factory LAN, which is impossible
@@ -321,13 +333,15 @@ function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof AT
                 database instead, so they work regardless of where the backend
                 runs. */}
             <Gate k="attendance.skipped_punches">
-              <SkippedPunchesButton />
+              <div className={`${PHONE_HALF} flex sm:contents max-sm:[&>button]:w-full max-sm:[&_.rounded-full]:text-[11px]`}>
+                <SkippedPunchesButton />
+              </div>
             </Gate>
             <Gate k="attendance.punch_view">
               <Button
                 variant="outline"
                 onClick={() => navigate("/hr/attendance/punch-view")}
-                className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
+                className={`clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0 ${PHONE_HALF}`}
               >
                 <Fingerprint size={14} />
                 <span className="text-[13px] font-semibold">Punch View</span>
@@ -337,7 +351,7 @@ function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof AT
               <Button
                 variant="outline"
                 onClick={() => navigate("/hr/Biometric-Connectors/device-status")}
-                className="clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0"
+                className={`clay-btn gap-1.5 h-9 px-3 rounded-xl border-0 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-700 shrink-0 ${PHONE_HALF}`}
                 data-testid="open-device-status"
               >
                 <Radar size={14} />
@@ -346,13 +360,15 @@ function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof AT
             </Gate>
             {/* the "Sync Live / Offline" pill stands where the Sync / Auto Sync buttons were */}
             <Gate k="attendance.sync">
-              <SyncStatusIndicator />
+              <div className="flex basis-full sm:contents max-sm:[&>div]:w-full max-sm:[&>div>button]:flex-1 max-sm:[&_.opacity-70]:text-[11px]">
+                <SyncStatusIndicator />
+              </div>
             </Gate>
-            <div className="flex items-center gap-1 shrink-0" role="group" aria-label="Day">
+            <div className="flex items-center gap-1 shrink-0 max-sm:w-full" role="group" aria-label="Day">
               <button
                 type="button"
                 onClick={() => setSelectedDate(shiftDay(selectedDate, -1))}
-                className="inline-flex h-9 w-8 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                className="inline-flex h-9 w-8 max-sm:w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
                 aria-label="Previous day"
                 data-testid="attendance-prev-day"
               >
@@ -363,14 +379,14 @@ function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof AT
                 value={selectedDate}
                 onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
                 aria-label="Attendance date"
-                className="clay-input h-9 text-sm w-36 shrink-0 rounded-xl"
+                className="clay-input h-9 text-sm w-36 shrink-0 rounded-xl max-sm:w-auto max-sm:min-w-0 max-sm:flex-1 max-sm:shrink"
                 data-testid="attendance-date"
               />
               <button
                 type="button"
                 onClick={() => setSelectedDate(shiftDay(selectedDate, 1))}
                 disabled={selectedDate >= today()}
-                className="inline-flex h-9 w-8 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-40 disabled:hover:bg-transparent"
+                className="inline-flex h-9 w-8 max-sm:w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 disabled:opacity-40 disabled:hover:bg-transparent"
                 aria-label="Next day"
                 data-testid="attendance-next-day"
               >
@@ -390,7 +406,7 @@ function AttendanceDay({ view, views }: { view: AttendanceView; views: typeof AT
             <Gate k="attendance.add_manual">
               <Button
                 onClick={() => setShowManualDialog(true)}
-                className="clay-btn gap-1.5 h-9 px-3.5 rounded-xl border-0 bg-gradient-to-br from-[#006496] to-[#0080bf] text-white hover:brightness-105 shrink-0"
+                className="clay-btn gap-1.5 h-9 px-3.5 rounded-xl border-0 bg-gradient-to-br from-[#006496] to-[#0080bf] text-white hover:brightness-105 shrink-0 max-sm:h-11 max-sm:w-full"
               >
                 <Plus size={14} />
                 <span className="text-[13px] font-semibold">Add Attendance</span>
@@ -878,7 +894,7 @@ function EmployeeHistoryDialog({
       open={!!detailEmpId}
       onOpenChange={(open) => { if (!open) { onSelectEmployee(null); setHistorySearch(""); } }}
     >
-      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col max-sm:overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {empDetail ? `${empDetail.employee.name} -Attendance History` : "Attendance History"}
@@ -950,7 +966,7 @@ function EmployeeHistoryDialog({
           // Days on which the employee used a compensation (OT allowance, announced window, birthday, relaxation).
           const compensationCounts = countMarks(empDetail.records);
           return (
-          <div className="flex flex-col gap-4 overflow-hidden">
+          <div className="flex flex-col gap-4 sm:overflow-hidden max-sm:flex-none">
             {/* ── Profile + month summary ── */}
             <div className="flex flex-col gap-3 p-4 bg-gray-50 rounded-xl text-sm">
               <div className="flex items-center gap-3 flex-wrap">
@@ -969,51 +985,51 @@ function EmployeeHistoryDialog({
                   </span>
                 </span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2">
                 <div className="bg-white rounded-lg px-3 py-2 border border-green-100">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Present</p>
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Present</p>
                   <p className="text-lg font-black text-green-700">{empDetail.totalPresent}</p>
                 </div>
                 <div className="bg-white rounded-lg px-3 py-2 border border-amber-100">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Half Shift</p>
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Half Shift</p>
                   <p className="text-lg font-black text-amber-600">{empDetail.summary.halfShift}</p>
                 </div>
                 <div className="bg-white rounded-lg px-3 py-2 border border-amber-100">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Late</p>
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Late</p>
                   <p className="text-lg font-black text-amber-600">{empDetail.summary.late}</p>
                 </div>
                 <div className="bg-white rounded-lg px-3 py-2 border border-orange-100">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Early Out</p>
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Early Out</p>
                   <p className="text-lg font-black text-orange-600">{earlyOutDays}</p>
                 </div>
                 {penaltyDays > 0 && (
                   <div className="bg-white rounded-lg px-3 py-2 border border-red-100" data-testid="history-penalty-early-out">
-                    <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Penalty Early Out</p>
+                    <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Penalty Early Out</p>
                     <p className="text-lg font-black text-red-600">{penaltyDays}</p>
                   </div>
                 )}
                 <div className="bg-white rounded-lg px-3 py-2 border border-red-100">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Absent</p>
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Absent</p>
                   <p className="text-lg font-black text-red-600">{empDetail.totalAbsent}</p>
                 </div>
                 <div className="bg-white rounded-lg px-3 py-2 border border-purple-100">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">On Leave</p>
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">On Leave</p>
                   <p className="text-lg font-black text-purple-600">{empDetail.summary.onLeave}</p>
                 </div>
                 <div className="bg-white rounded-lg px-3 py-2 border border-slate-100">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Holidays</p>
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Holidays</p>
                   <p className="text-lg font-black text-slate-500">{holidays}</p>
                 </div>
                 <div className="bg-white rounded-lg px-3 py-2 border border-gray-100">
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Upcoming</p>
+                  <p className="text-[11px] sm:text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Upcoming</p>
                   <p className="text-lg font-black text-gray-400">{upcoming}</p>
                 </div>
               </div>
-              <CompensationLegend counts={compensationCounts} />
+              <CompensationLegend counts={compensationCounts} className="max-sm:[&_[data-kind]]:h-4 max-sm:[&_[data-kind]]:min-w-[1.3rem] max-sm:[&_[data-kind]]:text-[11px]" />
             </div>
 
             {/* ── Day-by-day breakdown ── */}
-            <div className="overflow-y-auto flex-1">
+            <div className="overflow-y-auto flex-1 max-sm:flex-none">
               {empDetail.records.length === 0 ? (
                 <p className="text-center py-8 text-muted-foreground text-sm">No attendance records found.</p>
               ) : (
@@ -1034,9 +1050,9 @@ function EmployeeHistoryDialog({
                       const isDim = rec.status === "future" || rec.status === "holiday";
                       return (
                       <tr key={rec.date} className={`border-b hover:bg-gray-50 ${isDim ? "opacity-70" : ""}`}>
-                        <td className="py-2.5 px-3">
+                        <td className="py-2.5 px-3 max-sm:whitespace-nowrap">
                           <span className="font-mono text-xs text-gray-700">{rec.date}</span>
-                          <span className="ml-1.5 text-[10px] text-gray-400">{rec.day}</span>
+                          <span className="ml-1.5 text-[11px] sm:text-[10px] text-gray-400">{rec.day}</span>
                         </td>
                         <td className="py-2.5 px-3">
                           <div className="flex items-center gap-1.5 flex-wrap">

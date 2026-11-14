@@ -18,18 +18,18 @@ export default function ExploreSection({ pages }: { pages: MdMe["pages"] | undef
       <GroupHeading id="md-explore-heading" title="Explore">
         Everything behind these numbers, one page each
       </GroupHeading>
-      <div className="grid grid-cols-1 gap-4 @lg:grid-cols-2 @4xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 @lg:gap-4 @4xl:grid-cols-4">
         {tiles.map((tile, i) => {
           const Icon = tile.icon;
           return (
             <div
               key={tile.id}
-              className="md-card md-dashboard-explore flex flex-col justify-between gap-3.5 p-4"
+              className="md-card md-dashboard-explore flex flex-col justify-between gap-3 p-3 @lg:gap-3.5 @lg:p-4"
               data-interactive=""
               data-testid={`md-explore-${tile.id}`}
             >
               <Link href={tile.path} className="group block rounded-xl">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 @lg:gap-3">
                   <span
                     className={cn(
                       "md-dashboard-icon md-dashboard-icon-sm",
@@ -38,13 +38,19 @@ export default function ExploreSection({ pages }: { pages: MdMe["pages"] | undef
                   >
                     <Icon size={15} aria-hidden />
                   </span>
-                  <h4 className="min-w-0 flex-1 truncate text-sm font-extrabold tracking-tight text-md-ink group-hover:text-md-wine">
+                  <h4 className="line-clamp-2 min-w-0 flex-1 text-[13px] font-extrabold leading-tight tracking-tight text-md-ink group-hover:text-md-wine @lg:truncate @lg:text-sm">
                     {tile.title}
                   </h4>
-                  <ArrowUpRight size={15} aria-hidden className="md-dashboard-explore-arrow shrink-0" />
+                  <ArrowUpRight
+                    size={15}
+                    aria-hidden
+                    className="md-dashboard-explore-arrow hidden shrink-0 @lg:block"
+                  />
                 </div>
                 {tile.summary && (
-                  <p className="mt-2.5 line-clamp-3 text-xs leading-relaxed text-md-ink-soft">{tile.summary}</p>
+                  <p className="mt-2 line-clamp-3 text-[11px] leading-snug text-md-ink-soft @lg:mt-2.5 @lg:text-xs @lg:leading-relaxed">
+                    {tile.summary}
+                  </p>
                 )}
               </Link>
               <AskAiButton question={tile.question} label="Ask about this" className="self-start" />

@@ -25,8 +25,10 @@ class MdAssistantSettings(models.Model):
         db_column="fallback_models",
     )
     thinking_level = models.TextField(default="low", db_default="low", db_column="thinking_level")
-    # Replace employee names with tokens before anything is sent to Gemini (and put the names back for the MD).
-    privacy_mode = models.BooleanField(default=True, db_default=True, db_column="privacy_mode")
+    # Replace employee names with tokens before anything is sent to Gemini (and put the names back for the MD). OFF since
+    # 2026-11-13 (owner: the assistant must answer by employee name and code): names, codes and departments are sent;
+    # phone numbers, addresses, bank and government ids never are (privacy.PII_KEYS). Super Admin can switch it back on.
+    privacy_mode = models.BooleanField(default=False, db_default=False, db_column="privacy_mode")
     max_tool_rounds = models.IntegerField(default=5, db_default=5, db_column="max_tool_rounds")
     requests_per_minute = models.IntegerField(default=8, db_default=8, db_column="requests_per_minute")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")

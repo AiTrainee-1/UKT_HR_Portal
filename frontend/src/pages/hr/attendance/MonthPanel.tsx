@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { useCompany } from "../report-log/useCompany";
 import { BOARD_META, shortDate } from "./logic";
 import { prefersReducedMotion } from "./useCountUp";
+import { usePhone } from "./usePhone";
 
 export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MONTH_FULL = [
@@ -102,6 +103,10 @@ export const MonthPanel = memo(function MonthPanel({
     return trend.map((d) => ({ ...d, offDay: offDayLabel(d.date, names) }));
   }, [trend, holidays]);
   const figures = useMemo(() => monthFigures(points), [points]);
+  // phones: 11 px ticks and at most six day labels (every n-th day), so they stay apart on a narrow chart
+  const phone = usePhone();
+  const tick = { fontSize: phone ? 11 : 10 };
+  const dayInterval = phone ? Math.max(0, Math.ceil(points.length / 6) - 1) : "preserveStartEnd";
 
   const monthExport = async (kind: "xlsx" | "pdf") => {
     const summary = await fetchMonthlyAttendanceSummary(year, month, view);
@@ -121,7 +126,7 @@ export const MonthPanel = memo(function MonthPanel({
 
   return (
     <section
-      className="clay-card min-w-0 rounded-2xl border border-slate-100 bg-white p-4 sm:p-5"
+      className="clay-card min-w-0 rounded-2xl border border-slate-100 bg-white p-3.5 sm:p-5"
       aria-labelledby="month-title"
       data-testid="attendance-month"
     >
@@ -142,7 +147,7 @@ export const MonthPanel = memo(function MonthPanel({
             value={month}
             onChange={(e) => onMonth(Number(e.target.value))}
             aria-label="Month"
-            className="h-8 rounded-lg border border-slate-200 bg-white px-1.5 text-xs"
+            className="h-9 rounded-lg border border-slate-200 bg-white px-1.5 text-xs sm:h-8"
           >
             {MONTH_NAMES.map((m, i) => (
               <option key={m} value={i + 1}>
@@ -155,7 +160,7 @@ export const MonthPanel = memo(function MonthPanel({
             value={year}
             onChange={(e) => onYear(Number(e.target.value))}
             aria-label="Year"
-            className="h-8 w-20 text-xs"
+            className="h-9 w-20 text-xs sm:h-8"
             min={2020}
             max={2035}
           />
@@ -188,8 +193,8 @@ export const MonthPanel = memo(function MonthPanel({
           <ChartContainer config={{ present: { color: PRESENT }, absent: { color: NOT_IN } }} className="h-52 w-full">
             <BarChart data={points} margin={{ top: 4, right: 4, left: -20, bottom: 0 }} barCategoryGap="22%">
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="day" tick={{ fontSize: 10 }} interval="preserveStartEnd" minTickGap={10} />
-              <YAxis allowDecimals={false} tick={{ fontSize: 10 }} />
+              <XAxis dataKey="day" tick={tick} interval={dayInterval} minTickGap={10} />
+              <YAxis allowDecimals={false} tick={tick} />
               <Tooltip content={<TrendTooltip />} cursor={{ fillOpacity: 0.06 }} />
               <Bar
                 dataKey="present"

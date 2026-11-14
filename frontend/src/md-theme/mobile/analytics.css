@@ -1,0 +1,84 @@
+/* MD portal on phones: analytics (see mobile-rules in md-portal docs). Every selector is scoped to html[data-md-theme] or is an
+   md-* class, and colours come from the tokens (no hex). */
+
+/* Owner of this file: Payroll Analysis, Reports, Recruitment and Activity Logs. Everything below only applies while the page
+   (<main>, the @container) is narrower than 32rem, the same line as the kit's @lg: classes, so tablets and desktops keep
+   exactly the look they had. */
+
+@container (max-width: 31.99rem) {
+  /* ── Payroll Analysis ─────────────────────────────────────────────────────────────────────────────────────────────── */
+
+  /* the eight headline cards, two across: tighter padding and a smaller icon tile, so a card is about two thirds as tall */
+  html[data-md-theme] [data-testid="md-payroll-kpis"] .md-money-kpi,
+  html[data-md-theme] [data-testid="md-payroll-kpis"] .md-money-hero {
+    gap: 0.55rem;
+    padding: 0.8rem 0.85rem 0.85rem;
+  }
+  html[data-md-theme] [data-testid="md-payroll-kpis"] .md-money-tile-md {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.72rem;
+  }
+
+  /* the status banner under the filters */
+  html[data-md-theme] [data-testid="md-payroll"] .md-money-status {
+    gap: 0.7rem 1rem;
+    padding: 0.85rem 0.9rem 0.85rem 1.2rem;
+  }
+
+  /* small figures inside a card (average / highest / lowest month, take-home, advances, employer cost) */
+  html[data-md-theme] [data-testid="md-payroll"] .md-money-metric {
+    padding: 0.65rem 0.75rem 0.7rem;
+  }
+
+  /* the steps of the cost bridge */
+  html[data-md-theme] [data-testid="md-payroll"] .md-money-step {
+    gap: 0.6rem;
+    padding: 0.65rem 0.75rem;
+  }
+
+  /* the twelve month tiles, three across instead of one sideways row */
+  html[data-md-theme] [data-testid="md-payroll-status-chips"] .md-money-month {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    padding: 0.55rem 0.6rem;
+  }
+
+  /* ── Reports ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+  /* the executive shelf, two across: a card the size of its neighbours in the library */
+  html[data-md-theme] [data-testid="md-executive-shelf"] .md-money-exec {
+    padding: 0.85rem 0.85rem 0.8rem;
+  }
+  html[data-md-theme] [data-testid="md-executive-shelf"] .md-money-exec .md-money-tile-lg {
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: 0.85rem;
+  }
+  html[data-md-theme] [data-testid="md-executive-shelf"] .md-money-cta {
+    padding: 0.4rem 0.7rem;
+  }
+
+  /* the library's cards, two across */
+  html[data-md-theme] [data-testid="md-report-library"] .md-money-card {
+    padding: 0.8rem 0.8rem 0.75rem;
+    border-radius: 1.1rem;
+  }
+  html[data-md-theme] [data-testid="md-report-library"] .md-money-card > .md-money-tile {
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: 0.8rem;
+  }
+
+  /* "Starred" and "Recently opened", two across */
+  html[data-md-theme] [data-testid="md-your-reports"] .md-money-card-row {
+    gap: 0.6rem;
+    padding: 0.6rem 0.7rem;
+  }
+
+  /* an open report: the result table's column names (10px in the Report Center) at the 11px floor */
+  html[data-md-theme] [data-testid="md-report-screen"] table thead th {
+    font-size: 11px;
+  }
+}

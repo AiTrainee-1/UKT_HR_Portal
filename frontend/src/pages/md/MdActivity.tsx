@@ -47,7 +47,7 @@ export default function MdActivity() {
 
   return (
     <MdLayout>
-      <div className="mx-auto max-w-[1500px] space-y-5" data-testid="md-activity-page">
+      <div className="mx-auto max-w-[1500px] space-y-4 @lg:space-y-5" data-testid="md-activity-page">
         <MdPageHeader
           icon={Activity}
           title="Activity Logs"
@@ -68,7 +68,7 @@ export default function MdActivity() {
         <AttentionCard />
         <TrendCard params={params} label={label} />
 
-        <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
+        <div className="grid grid-cols-1 items-start gap-4 @lg:gap-5 @4xl:grid-cols-12">
           <AreasCard params={params} label={label} className="@4xl:col-span-5" />
           <UsersCard params={params} label={label} onSelectUser={pickPerson} className="@4xl:col-span-7" />
         </div>

@@ -97,7 +97,9 @@ export function OutpassRequestsSection() {
                   <p className="text-[11px] text-muted-foreground/70">{fmtDateTime(r.createdAt)}</p>
                   <ApprovalTrailLine approval={r.approval} className="mt-0.5" />
                 </div>
-                {explainsWaiting(r.approval) && <WaitingChip approval={r.approval} className="shrink-0" />}
+                {explainsWaiting(r.approval) && (
+                  <WaitingChip approval={r.approval} className="shrink-0 text-[11px] sm:text-[10px]" />
+                )}
                 <div className="flex shrink-0 items-center gap-1.5">
                   {hrDecides(r) && (
                     <Button

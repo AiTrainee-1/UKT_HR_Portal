@@ -64,7 +64,7 @@ export default function LatePenaltyCard() {
       </button>
 
       {open && (
-        <div className="space-y-3 border-t p-4">
+        <div className="space-y-3 border-t p-3.5 sm:p-4">
           <div className="flex items-center gap-2">
             <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
               <SelectTrigger className="h-9 w-24" aria-label="Month">

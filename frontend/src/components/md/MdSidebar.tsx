@@ -1,6 +1,6 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { Fragment, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { ArrowLeftRight, LogOut, Menu, PanelLeftClose, Sparkles, X } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, LogOut, Menu, PanelLeftClose, Sparkles, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UKTLogo } from "@/components/ui/dashboard-sidebar";
 import { useAuth } from "@/contexts/AuthContext";
@@ -10,6 +10,9 @@ import { hasHrAccess } from "@/lib/md/access";
 import { hrToMd } from "@/lib/md/embed";
 import { MD_PALETTE } from "@/lib/md/theme";
 import { cn } from "@/lib/utils";
+import { useMdHods } from "@/pages/md/approvals/api";
+import { hodLabel, hodPath } from "@/pages/md/approvals/logic";
+import type { Hod } from "@/pages/md/approvals/types";
 import { MD_NAV_GROUPS, type MdNavItem } from "./md-nav";
 
 /** @deprecated The MD portal no longer has a gold: its colours are wine, midnight indigo and sand (md-portal.md section 11).
@@ -53,19 +56,151 @@ function ExpandedItem({ item, current, onClose }: { item: MdNavItem; current: st
   );
 }
 
-function RailItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
-  const active = isActivePath(current, item.path);
-  return (
-    <Tip label={item.title}>
+/** Whether the MD last opened or closed the heads under "HOD Approvals" (null: never chose). Kept in this browser, because
+ *  every page mounts a new sidebar; a blocked storage just means the default below. */
+const HODS_OPEN_KEY = "md-nav-hods-open";
+
+function readHodsOpen(): boolean | null {
+  try {
+    const value = localStorage.getItem(HODS_OPEN_KEY);
+    return value === null ? null : value === "1";
+  } catch {
+    return null;
+  }
+}
+
+function writeHodsOpen(open: boolean) {
+  try {
+    localStorage.setItem(HODS_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // storage blocked: the choice lasts until the next page
+  }
+}
+
+/** "HOD Approvals" in the open sidebar, opening and shutting like the HR portal's groups: the row shows or hides the
+ *  Department Heads of the MD department (a small arrow that turns down when open) and each head opens their own tab
+ *  ("HOD – Suresh Raj" with the count of requests waiting for them, a grey 0 when none). The row carries the total
+ *  waiting. Until the MD chooses, the heads are shown on the HOD Approvals page and hidden elsewhere; the choice is
+ *  remembered. They come from User Management (GET /api/md/approvals/hods): a head added or removed there appears or goes
+ *  by itself. With no head at all, the row simply opens the page (which explains how to add one). */
+function ApprovalsItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
+  const { data } = useMdHods();
+  const hods = data?.hods ?? [];
+  const onPage = isActivePath(current, item.path);
+  const [choice, setChoice] = useState<boolean | null>(readHodsOpen);
+  const open = hods.length > 0 && (choice ?? onPage);
+  const waiting = hods.reduce((sum, h) => sum + h.pending.total, 0);
+  const listId = useId();
+  const label = item.navLabel ?? item.title;
+
+  if (hods.length === 0) {
+    return (
       <Link
         href={item.path}
         onClick={onClose}
-        aria-label={item.title}
+        data-testid={`md-nav-${item.id}`}
+        aria-current={onPage ? "page" : undefined}
+        className="md-shell-nav"
+      >
+        <item.icon className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
+        <span className="truncate">{label}</span>
+      </Link>
+    );
+  }
+
+  const toggle = () => {
+    const next = !open;
+    setChoice(next);
+    writeHodsOpen(next);
+  };
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-current={onPage ? "page" : undefined}
+        title={open ? "Hide the Department Heads" : "Show the Department Heads"}
+        data-testid={`md-nav-${item.id}`}
+        className="md-shell-nav w-full text-left"
+      >
+        <item.icon className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {waiting > 0 && (
+          <span className="md-shell-count" aria-label={`${waiting} waiting`} data-testid="md-nav-approvals-waiting">
+            {waiting > 99 ? "99+" : waiting}
+          </span>
+        )}
+        <ChevronRight
+          className={cn("md-shell-nav-chevron", open && "rotate-90")}
+          strokeWidth={2.5}
+          aria-hidden="true"
+          data-testid="md-nav-approvals-chevron"
+        />
+      </button>
+      <div id={listId} className="md-shell-subnav-wrap" data-open={open} data-testid="md-nav-approvals-group">
+        <div className="min-h-0 overflow-hidden">
+          <HodSubNav hods={hods} current={current} onClose={onClose} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HodSubNav({ hods, current, onClose }: { hods: Hod[]; current: string; onClose: () => void }) {
+  const here = current.toLowerCase().replace(/\/+$/, "");
+  return (
+    <ul className="md-shell-subnav-list" aria-label="Department Heads" data-testid="md-nav-approvals-hods">
+      {hods.map((hod) => {
+        const path = hodPath(hod.id);
+        const active = here === path;
+        const n = hod.pending.total;
+        return (
+          <li key={hod.id}>
+            <Link
+              href={path}
+              onClick={onClose}
+              aria-current={active ? "location" : undefined}
+              data-testid={`md-nav-approvals-hod-${hod.id}`}
+              className="md-shell-subnav"
+              title={`${hodLabel(hod)}: ${n} waiting`}
+            >
+              <span className="md-shell-subnav-dot" aria-hidden="true" />
+              <span className="min-w-0 flex-1 break-words leading-snug">{hodLabel(hod)}</span>
+              <span className={cn("md-shell-count", n === 0 && "md-shell-count-zero")} aria-label={`${n} waiting`}>
+                {n > 99 ? "99+" : n}
+              </span>
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** On the collapsed rail the heads have no room: the HOD Approvals icon carries a dot when something waits for them. */
+function useApprovalsWaiting(): number {
+  const { data } = useMdHods();
+  return (data?.hods ?? []).reduce((sum, h) => sum + h.pending.total, 0);
+}
+
+function RailItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
+  const active = isActivePath(current, item.path);
+  const waiting = useApprovalsWaiting();
+  const dot = item.id === "approvals" && waiting > 0;
+  return (
+    <Tip label={item.title} hint={dot ? `${waiting} waiting` : undefined}>
+      <Link
+        href={item.path}
+        onClick={onClose}
+        aria-label={dot ? `${item.title}, ${waiting} waiting` : item.title}
         aria-current={active ? "page" : undefined}
         data-testid={`md-nav-${item.id}`}
         className="md-shell-nav md-shell-nav-rail"
       >
         <item.icon className="h-[18px] w-[18px]" strokeWidth={1.9} aria-hidden="true" />
+        {dot && <span className="md-shell-rail-dot" aria-hidden="true" />}
       </Link>
     </Tip>
   );
@@ -248,7 +383,13 @@ export default function MdSidebar({
                 collapsed ? (
                   <RailItem key={item.id} item={item} current={location} onClose={onClose} />
                 ) : (
-                  <ExpandedItem key={item.id} item={item} current={location} onClose={onClose} />
+                  <Fragment key={item.id}>
+                    {item.id === "approvals" ? (
+                      <ApprovalsItem item={item} current={location} onClose={onClose} />
+                    ) : (
+                      <ExpandedItem item={item} current={location} onClose={onClose} />
+                    )}
+                  </Fragment>
                 ),
               )}
             </div>

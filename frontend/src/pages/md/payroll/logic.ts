@@ -76,6 +76,8 @@ export function previousMonth(month: string): string {
 export const STATE_STYLE: Record<PayrollState, { label: string; chip: string; dot: string }> = {
   paid: { label: "Paid", chip: "md-chip-success", dot: "bg-md-success-500" },
   part_paid: { label: "Part paid", chip: "md-chip-warning", dot: "bg-md-warning-500" },
+  // Payroll Done: locked, the money not paid yet. Ochre (watch), with the darker dot to tell it from part paid
+  finalized: { label: "Payment pending", chip: "md-chip-warning", dot: "bg-md-warning-700" },
   generated: { label: "Generated", chip: "md-money-pill-info", dot: "bg-md-info-500" },
   in_progress: { label: "In progress", chip: "md-money-pill-quiet", dot: "bg-md-n-400" },
   not_generated: { label: "Not generated", chip: "md-chip-danger", dot: "bg-md-danger-500" },
@@ -91,21 +93,59 @@ export function whenText(iso: string | null | undefined): string {
 
 export type StatusSummary = { headline: string; detail: string; tone: "good" | "warn" | "bad" | "info" };
 
-/** One plain sentence for the status banner: which month this is and what is outstanding about it. */
+/** "1 day" / "5 days". */
+export const daysText = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
+
+/** " 1 salary on hold (₹2,370) is not paid yet." (empty when none). */
+function heldSentence(status: MonthStatus): string {
+  const held = status.onHold ?? 0;
+  if (!held) return "";
+  const what = held === 1 ? "1 salary on hold" : `${held} salaries on hold`;
+  return ` ${what} (${inr(status.onHoldNet ?? 0)}) ${held === 1 ? "is" : "are"} not paid yet.`;
+}
+
+/** One plain sentence for the status banner: which month this is and what is outstanding about it. A staff month says
+ *  where it is in HR's workflow (still open / Payroll Done / Paid on a date); Cleared is a verification, never "paid". */
 export function describeStatus(status: MonthStatus): StatusSummary {
   const unpaid = `${status.unpaidSlips} of ${status.slips} slips are not marked paid (${inr(status.unpaidNet)} net pay)`;
   switch (status.state) {
     case "paid":
-      return status.provisionalSlips > 0
-        ? {
-            headline: "Paid, but some figures are provisional",
-            detail: `${status.provisionalSlips} staff slip(s) were generated before the month ended and understate pay: regenerate payroll.`,
-            tone: "warn",
-          }
-        : { headline: "Paid", detail: `All ${status.slips} slips are marked paid.`, tone: "good" };
+      if (status.provisionalSlips > 0)
+        return {
+          headline: "Paid, but some figures are provisional",
+          detail: `${status.provisionalSlips} staff slip(s) were generated before the month ended and understate pay: regenerate payroll.`,
+          tone: "warn",
+        };
+      if (status.markedPaidAt) {
+        const after = status.daysToPay != null ? `, ${daysText(status.daysToPay)} after Payroll Done` : "";
+        return {
+          headline: "Paid",
+          detail: `HR marked it as paid on ${dayLong(status.markedPaidAt)}${after}.${heldSentence(status)}`,
+          tone: "good",
+        };
+      }
+      return { headline: "Paid", detail: `All ${status.slips} slips are marked paid.`, tone: "good" };
+    case "finalized": {
+      const pending = status.paymentPendingDays ?? 0;
+      return {
+        headline: "Payroll Done · payment pending",
+        detail:
+          `Locked on ${dayLong(status.finalizedAt)}: HR can no longer change it. Payment pending for ${daysText(pending)}` +
+          ` (${inr(status.unpaidNet)} net pay not marked as paid yet).${heldSentence(status)}`,
+        tone: "warn",
+      };
+    }
     case "part_paid":
       return { headline: "Part paid", detail: `${unpaid}.`, tone: "warn" };
     case "generated":
+      if (status.staffState === "generated")
+        return {
+          headline: "Generated, still open",
+          detail:
+            `HR can still change it: Payroll Done has not been pressed. ${status.clearedSlips ?? 0} of ${status.slips}` +
+            ` verified (Cleared); nothing is paid yet (${inr(status.unpaidNet)} net pay).`,
+          tone: "warn",
+        };
       return { headline: "Generated, not marked paid", detail: `${unpaid}.`, tone: "warn" };
     case "in_progress":
       return {
@@ -119,6 +159,71 @@ export function describeStatus(status: MonthStatus): StatusSummary {
     default:
       return { headline: STATE_STYLE[status.state].label, detail: "There is no payroll for this month.", tone: "info" };
   }
+}
+
+export type StatusFact = { id: string; text: string; chip: string; title: string };
+
+/** The small counts under the banner sentence, only those that are not nil: how many salaries HR verified (Cleared),
+ *  how many are on hold, how many new joiners wait to be added, how many were paid separately. Empty on an answer from
+ *  before the staff month workflow. */
+export function statusFacts(status: MonthStatus): StatusFact[] {
+  const out: StatusFact[] = [];
+  const staff = status.staffSlips ?? 0;
+  if (status.clearedSlips != null && status.slips > 0 && staff > 0)
+    out.push({
+      id: "cleared",
+      text: `${status.clearedSlips} of ${status.slips} verified`,
+      chip: "md-money-pill-quiet",
+      title: "Cleared by HR: a check of the salary, not a payment",
+    });
+  if (status.onHold)
+    out.push({
+      id: "hold",
+      text: `${status.onHold} on hold · ${inrCompact(status.onHoldNet ?? 0)}`,
+      chip: "md-money-pill-info",
+      title: "In these figures and on the Salary Statement, but not in the bank file: paid when HR releases them",
+    });
+  if (status.newJoinersWaiting)
+    out.push({
+      id: "joiners",
+      text: `${status.newJoinersWaiting} new ${status.newJoinersWaiting === 1 ? "joiner" : "joiners"} waiting`,
+      chip: "md-money-pill-info",
+      title: "Calculated, but not in the payroll or these figures until HR adds them",
+    });
+  if (status.paidSeparately)
+    out.push({
+      id: "separately",
+      text: `${status.paidSeparately} paid separately`,
+      chip: "md-money-pill-quiet",
+      title: "Released and paid on their own after Payroll Done",
+    });
+  return out;
+}
+
+/** The moments beside the banner: generated, Payroll Done, paid (Mark as Paid; a production-only month: last cleared). */
+export function statusDates(status: MonthStatus): { id: string; label: string; value: string }[] {
+  const out: { id: string; label: string; value: string }[] = [];
+  if (status.generatedAt) out.push({ id: "generated", label: "Generated", value: whenText(status.generatedAt) });
+  if (status.finalizedAt) out.push({ id: "finalized", label: "Payroll Done", value: whenText(status.finalizedAt) });
+  if (status.markedPaidAt) out.push({ id: "paid", label: "Marked paid", value: whenText(status.markedPaidAt) });
+  else if (status.paidAt)
+    out.push({
+      id: "paid",
+      label: status.staffSlips === 0 ? "Last cleared" : "Last marked paid",
+      value: whenText(status.paidAt),
+    });
+  return out;
+}
+
+/** The short lines under a month in the status strip: what is outstanding, in a few words. */
+export function stripLines(m: MonthStatus): { text: string; tone: "warn" | "quiet" }[] {
+  const out: { text: string; tone: "warn" | "quiet" }[] = [];
+  if (m.state === "finalized" && m.paymentPendingDays != null)
+    out.push({ text: `Pending ${daysText(m.paymentPendingDays)}`, tone: "warn" });
+  if (m.unpaidNet > 0 && m.slips > 0) out.push({ text: `${inrCompact(m.unpaidNet)} unpaid`, tone: "warn" });
+  if (m.provisionalSlips > 0) out.push({ text: `${m.provisionalSlips} provisional`, tone: "quiet" });
+  if (m.onHold) out.push({ text: `${m.onHold} on hold`, tone: "quiet" });
+  return out.slice(0, 3);
 }
 
 // ─── month picker ───────────────────────────────────────────────────────────────────────────────────────────
@@ -293,6 +398,17 @@ export type BandKind = "all" | "staff" | "production";
 /** "Under ₹10k" -> "<10k", "₹10k–15k" -> "10k–15k", "Nil or negative" -> "Nil": a label short enough for a column. */
 export function bandTick(label: string): string {
   return label.replace("Under ₹", "<").replace("Nil or negative", "Nil").replace(/₹/g, "");
+}
+
+/** A band's name on two short lines under a narrow column ("10k–15k" as "10–" over "15k", the way a range is written by
+ *  hand; "75k–1 L" keeps both units); a one-word band ("Nil", "<10k") on one line. */
+export function bandTickLines(text: string): string[] {
+  const cut = text.search(/[–-]/);
+  if (cut <= 0) return [text];
+  const low = text.slice(0, cut);
+  const high = text.slice(cut + 1);
+  const sameUnit = low.endsWith("k") && high.endsWith("k");
+  return [`${sameUnit ? low.slice(0, -1) : low}${text[cut]}`, high];
 }
 
 export function bandRows(bands: NetBand[], kind: BandKind): { label: string; tick: string; count: number }[] {

@@ -18,7 +18,7 @@ type Punch = OnDutyMapEmployee["punches"][number];
 function PunchChip({ p }: { p: Punch }) {
   const status = (p.status in PUNCH_STATUS_LABEL ? p.status : "pending") as keyof typeof PUNCH_STATUS_LABEL;
   return (
-    <Chip tone={PUNCH_TONE[status]} className="!px-1.5 !py-0 !text-[10px]">
+    <Chip tone={PUNCH_TONE[status]} className="!px-1.5 !py-0 !text-[11px] sm:!text-[10px]">
       #{p.punchNumber} {p.punchType} {p.punchTime.slice(0, 5)} · {PUNCH_STATUS_LABEL[status]}
     </Chip>
   );

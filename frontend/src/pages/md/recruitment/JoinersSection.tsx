@@ -25,6 +25,7 @@ const JOINER_COLUMNS: Column<JoinerRow>[] = [
               .filter(Boolean)
               .join(" · ")}
           </p>
+          <p className="text-[11px] tabular-nums text-md-ink-soft @lg:hidden">Joined {dayShort(r.joinDate)}</p>
         </div>
       </div>
     ),
@@ -33,6 +34,8 @@ const JOINER_COLUMNS: Column<JoinerRow>[] = [
   {
     key: "joined",
     header: "Joined",
+    // on a phone the date sits under the name, so the three columns fit without scrolling
+    className: "hidden @lg:table-cell",
     cell: (r) => <span className="whitespace-nowrap tabular-nums">{dayShort(r.joinDate)}</span>,
     sortValue: (r) => r.joinDate,
   },
@@ -57,6 +60,9 @@ const EARLY_COLUMNS: Column<EarlyLeaverRow>[] = [
         <div className="min-w-0">
           <p className="font-semibold text-md-ink">{r.employeeName}</p>
           <p className="text-xs text-md-ink-soft">{r.department}</p>
+          <p className="whitespace-nowrap text-[11px] tabular-nums text-md-ink-soft @lg:hidden">
+            {dayShort(r.joinDate)} → {dayShort(r.exitDate)}
+          </p>
         </div>
       </div>
     ),
@@ -79,6 +85,8 @@ const EARLY_COLUMNS: Column<EarlyLeaverRow>[] = [
   {
     key: "dates",
     header: "Joined → left",
+    // on a phone the dates sit under the name
+    className: "hidden @lg:table-cell",
     cell: (r) => (
       <span className="whitespace-nowrap text-xs text-md-ink-soft">
         {dayShort(r.joinDate)} → {dayShort(r.exitDate)}
@@ -123,7 +131,7 @@ export default function JoinersSection({
 
   return (
     <div className="@container" data-testid="md-recruitment-joiners-section">
-      <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
+      <div className="grid grid-cols-1 items-start gap-4 @lg:gap-5 @4xl:grid-cols-12">
         <SectionCard
           className="min-w-0 @4xl:col-span-12"
           testId="md-recruitment-trend"

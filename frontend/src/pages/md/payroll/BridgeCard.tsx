@@ -71,7 +71,7 @@ export default function BridgeCard({
               {headline(bridge)}
             </p>
           </div>
-          <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
+          <div className="grid grid-cols-1 items-start gap-4 @lg:gap-5 @4xl:grid-cols-12">
             <div className="min-w-0 @4xl:col-span-7">
               <WaterfallChart bars={bars} />
               <ul

@@ -630,6 +630,37 @@ def manager_excluded_employees(request: Request, pk: int) -> Response:
 # ─── Mobile App: Manager profile + approval endpoints ─────────────────────────
 
 
+def manager_from_token(request: Request):
+    """(the active DepartmentManager of the employee who is signed in, None) or (None, the refusal to send)."""
+    token_emp_id = get_token_employee_id(request)
+    if not token_emp_id:
+        return None, Response({"error": "Employee authentication required"}, status=403)
+    m = (
+        DepartmentManager.objects.select_related("employee")
+        .prefetch_related("department_assignments", "employee_assignments")
+        .filter(employee_id=token_emp_id, is_active=True)
+        .first()
+    )
+    if m is None:
+        return None, Response({"error": "Not a department manager"}, status=403)
+    return m, None
+
+
+def hod_display_name(m: DepartmentManager) -> str:
+    """The name a Department Head's decision is recorded under."""
+    return f"{m.employee.first_name} {m.employee.last_name}"
+
+
+def hod_emp_filter(m: DepartmentManager) -> Q:
+    """The requests this Department Head decides: of the employees they really oversee (hod_scope.py), never their own
+    (the decision endpoints refuse a head's own request, so it is not listed for them either)."""
+    dept_ids, direct_ids = _get_manager_employee_ids(m)
+    emp_filter = Q(employee_id__in=direct_ids)
+    if dept_ids:
+        emp_filter |= Q(employee__department_id__in=dept_ids)
+    return emp_filter & ~Q(employee_id=m.employee_id)
+
+
 def _hod_pending_counts(m, emp_filter) -> dict[str, int]:
     """How many requests this Department Head can decide RIGHT NOW, per workflow, under the approval pipelines HR has
     configured (approval_workflow.py): a request only counts while it is this role's turn (or every step before it can
@@ -757,33 +788,15 @@ def manager_me(request: Request) -> Response:
     })
 
 
-@api_view(["GET"])
-@require_auth
-def manager_pending_requests(request: Request) -> Response:
-    """All leave + permission requests for employees under this manager."""
+def hod_requests(m: DepartmentManager, status_filter: str = "pending") -> dict:
+    """Every request submitted to this Department Head (leave, permission, resignation, attendance change, casual leave,
+    holiday work, On-Duty, missing punch, outpass). ``status_filter`` "pending" is only what they can decide NOW under
+    the approval pipeline; "approved" / "rejected" / "all" are the history. Also the MD portal's HOD approvals."""
     from .models import LeaveRequest, EmployeePermission
     from .serializers import leave_request_json
     from .leave_views import _permission_json
 
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
-
-    dept_ids, direct_ids = _get_manager_employee_ids(m)
-    emp_filter = Q(employee_id__in=direct_ids)
-    if dept_ids:
-        emp_filter |= Q(employee__department_id__in=dept_ids)
-    # A head never decides their own request (the decision endpoints refuse it), so it is not listed for them either.
-    emp_filter &= ~Q(employee_id=token_emp_id)
-
-    status_filter = request.query_params.get("status", "pending")
+    emp_filter = hod_emp_filter(m)
     cfgs = approval.all_configs()
 
     def mine(key, qs):
@@ -938,7 +951,7 @@ def manager_pending_requests(request: Request) -> Response:
     _cap_cache.prime(perm_rows)  # the monthly-cap positions of every listed permission in one query
 
     counts = _hod_pending_counts(m, emp_filter)
-    return Response({
+    return {
         "leaveRequests": [_leave_with_emp(r) for r in mine("leave", leave_qs)],
         "permissions": [_perm_with_emp(p) for p in perm_rows],
         "resignations": [_resignation_json(r, cfgs["resignation"]) for r in mine("resignation", resign_qs)],
@@ -959,26 +972,24 @@ def manager_pending_requests(request: Request) -> Response:
         ],
         "totalPending": sum(counts.values()),
         "approvalWorkflows": approval.summary(),
-    })
+    }
 
 
-@api_view(["PATCH"])
+@api_view(["GET"])
 @require_auth
-def manager_update_leave_status(request: Request, pk: int) -> Response:
+def manager_pending_requests(request: Request) -> Response:
+    """The Department Head's own list, from their employee login (?status=pending|approved|rejected|all): see
+    hod_requests."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return Response(hod_requests(m, request.query_params.get("status", "pending")))
+
+
+def hod_decide_leave(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """Manager approves/rejects a leave request from their team."""
     from .models import LeaveRequest
     from .serializers import leave_request_json
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
 
     if not m.can_approve_leaves:
         return Response({
@@ -992,7 +1003,7 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
     # A head never decides their own request, even when their own department is
     # one of the ones assigned to them.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     try:
         leave = LeaveRequest.objects.select_related(
@@ -1004,7 +1015,7 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
             return Response({"error": "This leave request is not in your approval scope"}, status=403)
         return Response({"error": "Leave request not found"}, status=404)
 
-    status = request.data.get("status")
+    status = data.get("status")
     if status not in ["approved", "rejected"] and approval.is_pending("leave", leave):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
@@ -1012,7 +1023,7 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
 
     try:
         resolve_leave(
-            leave, approval.HOD, status, f"{m.employee.first_name} {m.employee.last_name}", request.data.get("comment")
+            leave, approval.HOD, status, actor, data.get("comment")
         )
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
@@ -1021,21 +1032,18 @@ def manager_update_leave_status(request: Request, pk: int) -> Response:
 
 @api_view(["PATCH"])
 @require_auth
-def manager_update_permission_status(request: Request, pk: int) -> Response:
+def manager_update_leave_status(request: Request, pk: int) -> Response:
+    """The Department Head's own decision, from their employee login: see hod_decide_leave."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_leave(m, pk, request.data, hod_display_name(m), request)
+
+
+def hod_decide_permission(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """Manager approves/rejects a permission request from their team."""
     from .models import EmployeePermission
     from .leave_views import _permission_json
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
 
     if not m.can_approve_permissions:
         return Response({
@@ -1049,7 +1057,7 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
     # A head never decides their own request, even when their own department is
     # one of the ones assigned to them.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     try:
         perm = EmployeePermission.objects.select_related(
@@ -1060,7 +1068,7 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
             return Response({"error": "This permission request is not in your approval scope"}, status=403)
         return Response({"error": "Permission request not found"}, status=404)
 
-    status = request.data.get("status")
+    status = data.get("status")
     if status not in ["approved", "rejected"] and approval.is_pending("permission", perm):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
@@ -1068,7 +1076,7 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
 
     try:
         resolve_permission(
-            perm, approval.HOD, status, f"{m.employee.first_name} {m.employee.last_name}", request.data.get("comment")
+            perm, approval.HOD, status, actor, data.get("comment")
         )
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
@@ -1077,24 +1085,21 @@ def manager_update_permission_status(request: Request, pk: int) -> Response:
 
 @api_view(["PATCH"])
 @require_auth
-def manager_update_outpass_status(request: Request, pk: int) -> Response:
+def manager_update_permission_status(request: Request, pk: int) -> Response:
+    """The Department Head's own decision, from their employee login: see hod_decide_permission."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_permission(m, pk, request.data, hod_display_name(m), request)
+
+
+def hod_decide_outpass(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """Manager approves/rejects a manually-requested Outpass from their team.
     Reuses the Permissions capability (can_approve_permissions) rather than a
     dedicated flag -this is deliberately "the same approval system" as
     EmployeePermission, per the feature request."""
     from .models import OutpassRequest
     from .outpass_request_views import _outpass_request_json, resolve_outpass_request
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
 
     if not m.can_approve_permissions:
         return Response({
@@ -1108,7 +1113,7 @@ def manager_update_outpass_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
     # A head never decides their own request, even when their own department is
     # one of the ones assigned to them.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     try:
         req = OutpassRequest.objects.select_related(
@@ -1119,13 +1124,13 @@ def manager_update_outpass_status(request: Request, pk: int) -> Response:
             return Response({"error": "This outpass request is not in your approval scope"}, status=403)
         return Response({"error": "Outpass request not found"}, status=404)
 
-    status = request.data.get("status")
+    status = data.get("status")
     if status not in ["approved", "rejected"] and approval.is_pending("outpass", req):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    reviewer_name = actor
     try:
-        resolve_outpass_request(req, status, reviewer_name, "dept_head", request.data.get("comment"))
+        resolve_outpass_request(req, status, reviewer_name, "dept_head", data.get("comment"))
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
     return Response(_outpass_request_json(req))
@@ -1133,24 +1138,21 @@ def manager_update_outpass_status(request: Request, pk: int) -> Response:
 
 @api_view(["PATCH"])
 @require_auth
-def manager_update_attendance_status(request: Request, pk: int) -> Response:
+def manager_update_outpass_status(request: Request, pk: int) -> Response:
+    """The Department Head's own decision, from their employee login: see hod_decide_outpass."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_outpass(m, pk, request.data, hod_display_name(m), request)
+
+
+def hod_decide_attendance(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """
     Department Head approves/rejects an HR-submitted attendance override request.
     Approval writes the requested values onto AttendanceDayRecord (used by payroll).
     Rejection leaves the original attendance data untouched.
     """
     from .growth_views import _override_request_dict
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.select_related("employee").prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
 
     if not m.can_approve_attendance:
         return Response({
@@ -1164,7 +1166,7 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
     # A head never decides their own request, even when their own department is
     # one of the ones assigned to them.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     try:
         req = AttendanceOverrideRequest.objects.select_related(
@@ -1175,14 +1177,14 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
             return Response({"error": "This request is not in your approval scope"}, status=403)
         return Response({"error": "Attendance override request not found"}, status=404)
 
-    status_val = request.data.get("status")
+    status_val = data.get("status")
     if status_val not in ["approved", "rejected"] and approval.is_pending("attendance_correction", req):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    reviewer_name = actor
     try:
         outcome = approval.decide(
-            "attendance_correction", req, approval.HOD, status_val, actor=reviewer_name, comment=request.data.get("comment")
+            "attendance_correction", req, approval.HOD, status_val, actor=reviewer_name, comment=data.get("comment")
         )
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
@@ -1197,7 +1199,7 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
     req.status = outcome.status
     req.reviewed_by = reviewer_name
     req.reviewed_at = timezone.now()
-    if comment := request.data.get("comment"):
+    if comment := data.get("comment"):
         req.review_comment = comment
     req.save()
     approval.stage_notice(
@@ -1217,7 +1219,15 @@ def manager_update_attendance_status(request: Request, pk: int) -> Response:
 
 @api_view(["PATCH"])
 @require_auth
-def manager_update_on_duty_status(request: Request, pk: int) -> Response:
+def manager_update_attendance_status(request: Request, pk: int) -> Response:
+    """The Department Head's own decision, from their employee login: see hod_decide_attendance."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_attendance(m, pk, request.data, hod_display_name(m), request)
+
+
+def hod_decide_on_duty(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """
     Department Head decision on the employee's On-Duty destination request. Under the default pipeline
     (approval_workflow.py) this is stage 1: approval moves the session to pending_hr (HR still has to approve
@@ -1226,17 +1236,6 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
     follow one pipeline.
     """
     from .geo_attendance_views import _on_duty_session_dict, resolve_on_duty_session
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.select_related("employee").prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
 
     if not m.can_approve_on_duty:
         return Response({
@@ -1250,7 +1249,7 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
     # A head never decides their own request, even when their own department is
     # one of the ones assigned to them.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     try:
         session = OnDutySession.objects.select_related(
@@ -1261,13 +1260,13 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
             return Response({"error": "This session is not in your approval scope"}, status=403)
         return Response({"error": "On-Duty session not found"}, status=404)
 
-    status_val = request.data.get("status")
+    status_val = data.get("status")
     if status_val not in ("approved", "rejected") and approval.is_pending("on_duty", session):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    reviewer_name = actor
     try:
-        resolve_on_duty_session(session, approval.HOD, status_val, reviewer_name, request.data.get("comment"))
+        resolve_on_duty_session(session, approval.HOD, status_val, reviewer_name, data.get("comment"))
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
     return Response(_on_duty_session_dict(session))
@@ -1275,7 +1274,15 @@ def manager_update_on_duty_status(request: Request, pk: int) -> Response:
 
 @api_view(["PATCH"])
 @require_auth
-def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
+def manager_update_on_duty_status(request: Request, pk: int) -> Response:
+    """The Department Head's own decision, from their employee login: see hod_decide_on_duty."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_on_duty(m, pk, request.data, hod_display_name(m), request)
+
+
+def hod_decide_missing_punch(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """
     Department Head decision on a Missing Punch request. Under the default pipeline (approval_workflow.py) this is
     stage 1: approval moves the request to pending_hr (HR still has to give the final approval before the punch is
@@ -1284,17 +1291,6 @@ def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
     """
     from .models import MissingPunchRequest
     from .missing_punch_views import _missing_punch_dict, resolve_missing_punch
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.select_related("employee").prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
 
     if not m.can_approve_missing_punch:
         return Response({
@@ -1308,7 +1304,7 @@ def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
     # A head never decides their own request, even when their own department is
     # one of the ones assigned to them.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     try:
         req = MissingPunchRequest.objects.select_related(
@@ -1319,13 +1315,13 @@ def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
             return Response({"error": "This request is not in your approval scope"}, status=403)
         return Response({"error": "Missing Punch request not found"}, status=404)
 
-    status_val = request.data.get("status")
+    status_val = data.get("status")
     if status_val not in ("approved", "rejected") and approval.is_pending("missing_punch", req):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    reviewer_name = actor
     try:
-        resolve_missing_punch(req, approval.HOD, status_val, reviewer_name, request.data.get("comment"))
+        resolve_missing_punch(req, approval.HOD, status_val, reviewer_name, data.get("comment"))
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
     return Response(_missing_punch_dict(req))
@@ -1333,20 +1329,17 @@ def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
 
 @api_view(["PATCH"])
 @require_auth
-def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
+def manager_update_missing_punch_status(request: Request, pk: int) -> Response:
+    """The Department Head's own decision, from their employee login: see hod_decide_missing_punch."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_missing_punch(m, pk, request.data, hod_display_name(m), request)
+
+
+def hod_decide_casual_leave(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """Department Head approves/rejects a Casual Leave request from their team."""
     from .casual_leave_views import _cl_dict, apply_cl_decision
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.select_related("employee").prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
 
     if not m.can_approve_casual_leave:
         return Response({
@@ -1360,7 +1353,7 @@ def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
     # A head never decides their own request, even when their own department is
     # one of the ones assigned to them.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     try:
         cl = CasualLeaveRequest.objects.select_related(
@@ -1371,13 +1364,13 @@ def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
             return Response({"error": "This request is not in your approval scope"}, status=403)
         return Response({"error": "Casual leave request not found"}, status=404)
 
-    status_val = request.data.get("status")
+    status_val = data.get("status")
     if status_val not in ["approved", "rejected"] and approval.is_pending("casual_leave", cl):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    reviewer_name = actor
     try:
-        apply_cl_decision(cl, status_val, reviewer_name, "dept_head", request.data.get("comment"))
+        apply_cl_decision(cl, status_val, reviewer_name, "dept_head", data.get("comment"))
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
     return Response(_cl_dict(cl))
@@ -1385,7 +1378,15 @@ def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
 
 @api_view(["PATCH"])
 @require_auth
-def manager_update_holiday_work_status(request: Request, pk: int) -> Response:
+def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
+    """The Department Head's own decision, from their employee login: see hod_decide_casual_leave."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_casual_leave(m, pk, request.data, hod_display_name(m), request)
+
+
+def hod_decide_holiday_work(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """
     Department Head decision on a Holiday / Sunday work compensation claim that HR raised (approval workflow
     `holiday_work`). Approval adds the claimed shifts to the employee's compensation balance, once; rejection keeps the
@@ -1394,17 +1395,6 @@ def manager_update_holiday_work_status(request: Request, pk: int) -> Response:
     """
     from .holiday_work_views import claims_json, decide_claim
     from .models import HolidayWorkClaim
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return Response({"error": "Employee authentication required"}, status=403)
-
-    try:
-        m = DepartmentManager.objects.select_related("employee").prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return Response({"error": "Not a department manager"}, status=403)
 
     if not m.can_approve_compensation:
         return Response({
@@ -1418,7 +1408,7 @@ def manager_update_holiday_work_status(request: Request, pk: int) -> Response:
         emp_filter |= Q(employee__department_id__in=dept_ids)
     # A head never decides their own request, even when their own department is
     # one of the ones assigned to them.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     claim = HolidayWorkClaim.objects.filter(emp_filter).filter(pk=pk).first()
     if claim is None:
@@ -1426,14 +1416,14 @@ def manager_update_holiday_work_status(request: Request, pk: int) -> Response:
             return Response({"error": "This request is not in your approval scope"}, status=403)
         return Response({"error": "Holiday-work claim not found"}, status=404)
 
-    status_val = request.data.get("status")
+    status_val = data.get("status")
     if status_val not in ["approved", "rejected"] and approval.is_pending("holiday_work", claim):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
-    reviewer_name = f"{m.employee.first_name} {m.employee.last_name}"
+    reviewer_name = actor
     try:
         claim, _outcome = decide_claim(
-            claim.pk, approval.HOD, status_val, actor=reviewer_name, comment=request.data.get("comment")
+            claim.pk, approval.HOD, status_val, actor=reviewer_name, comment=data.get("comment")
         )
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
@@ -1462,3 +1452,13 @@ def manager_update_holiday_work_status(request: Request, pk: int) -> Response:
         },
     )
     return Response(claims_json([claim])[0])
+
+
+@api_view(["PATCH"])
+@require_auth
+def manager_update_holiday_work_status(request: Request, pk: int) -> Response:
+    """The Department Head's own decision, from their employee login: see hod_decide_holiday_work."""
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_holiday_work(m, pk, request.data, hod_display_name(m), request)

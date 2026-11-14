@@ -35,7 +35,9 @@ function Chip({
   );
 }
 
-const GRID = "grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-3";
+// two across on a phone (an odd last card takes the whole row); one, two or three across as the page widens
+const GRID =
+  "grid grid-cols-2 gap-3 @lg:grid-cols-1 @lg:gap-4 @xl:grid-cols-2 @4xl:grid-cols-3 @max-lg:[&>*:last-child:nth-child(odd)]:col-span-2";
 
 /**
  * Every report the MD can open: search across title, description and category, category chips, and the cards grouped by
@@ -171,7 +173,7 @@ export function ReportLibrary({ library }: { library: Library }) {
           </EmptyBlock>
         </div>
       ) : (
-        <div className="space-y-9">
+        <div className="space-y-7 @lg:space-y-9">
           {view.sections.map(({ category, groups }) => {
             const tone = categoryTone(category.id);
             const Icon = iconFor(category.icon);
@@ -181,7 +183,7 @@ export function ReportLibrary({ library }: { library: Library }) {
             const shown = showAll ? groups : groups.slice(0, PREVIEW_PER_CATEGORY);
             return (
               <div key={category.id} data-testid={`md-category-${category.id}`}>
-                <div className="mb-4 flex items-center gap-3">
+                <div className="mb-3 flex items-center gap-3 @lg:mb-4">
                   <span className={cn("md-money-tile md-money-tile-sm", tone.tone)}>
                     <Icon size={16} aria-hidden />
                   </span>

@@ -54,7 +54,7 @@ function GateDeviceRow({
           <p className="font-semibold">{gate.name}</p>
           <Badge
             variant={gate.isActive ? "default" : "secondary"}
-            className={`text-[10px] ${gate.isActive ? "!bg-green-100 !text-green-700" : ""}`}
+            className={`text-[11px] sm:text-[10px] ${gate.isActive ? "!bg-green-100 !text-green-700" : ""}`}
           >
             {gate.isActive ? "Active" : "Deactivated"}
           </Badge>

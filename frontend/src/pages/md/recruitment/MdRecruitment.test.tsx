@@ -252,6 +252,19 @@ describe("the Recruitment page", { timeout: 30_000 }, () => {
     const early = all('[data-testid="md-recruitment-early-table"] tbody tr').map((r) => r.textContent ?? "");
     expect(early[0]).toContain("Jeeva Test");
     expect(early[0]).toContain("about 22 days");
+    // on a phone the date columns fold under the name (the columns are hidden there, the lines shown only there)
+    const phoneLine = (table: string) =>
+      all(`[data-testid="${table}"] tbody tr:first-child td:first-child p`).find((p) =>
+        p.className.includes("@lg:hidden"),
+      )!;
+    expect(phoneLine("md-recruitment-joiners-table").textContent).toMatch(/^Joined /);
+    expect(phoneLine("md-recruitment-early-table").textContent).toContain("→");
+    const hiddenOnPhones = (table: string) =>
+      all(`[data-testid="${table}"] thead th`)
+        .filter((th) => th.className.includes("hidden @lg:table-cell"))
+        .map((th) => th.textContent);
+    expect(hiddenOnPhones("md-recruitment-joiners-table")).toEqual(["Joined"]);
+    expect(hiddenOnPhones("md-recruitment-early-table")).toEqual(["Joined → left"]);
   });
 
   it("explains every card, in the words the assistant quotes", async () => {

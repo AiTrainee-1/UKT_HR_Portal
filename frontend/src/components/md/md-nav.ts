@@ -10,6 +10,7 @@ import {
   BarChart3,
   Building2,
   CalendarDays,
+  ClipboardCheck,
   ClipboardList,
   Clock,
   Coffee,
@@ -52,6 +53,8 @@ export const MD_NAV_GROUPS: MdNavGroup[] = [
     heading: "Workforce",
     items: [
       item("employees", "Employees", Users, "/md/employees"),
+      // the sidebar lists the MD department's Department Heads under this one (MdSidebar, from /api/md/approvals/hods)
+      item("approvals", "HOD Approvals", ClipboardCheck, "/md/approvals"),
       item("branches", "Branches", Building2, "/md/branches"),
     ],
   },
@@ -84,7 +87,7 @@ export const MD_NAV_GROUPS: MdNavGroup[] = [
   {
     heading: "Money & reports",
     items: [
-      item("payroll", "Payroll Analysis", IndianRupee, "/md/payroll", "Payroll"),
+      item("payroll", "Payroll", IndianRupee, "/md/payroll"),
       item("reports", "Reports", BarChart3, "/md/reports"),
     ],
   },

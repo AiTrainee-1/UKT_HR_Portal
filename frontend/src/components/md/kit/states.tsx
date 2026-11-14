@@ -20,7 +20,10 @@ export function EmptyBlock({
   testId?: string;
 }) {
   return (
-    <div className={cn("flex flex-col items-center gap-3.5 px-6 py-10 text-center", className)} data-testid={testId}>
+    <div
+      className={cn("flex flex-col items-center gap-2.5 px-4 py-6 text-center sm:gap-3.5 sm:px-6 sm:py-10", className)}
+      data-testid={testId}
+    >
       <div className="md-shell-empty-tile">
         <Icon size={22} />
       </div>

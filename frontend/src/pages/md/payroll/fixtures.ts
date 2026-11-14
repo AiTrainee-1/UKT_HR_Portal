@@ -101,6 +101,75 @@ const augStatus: MonthStatus = {
   final: true,
 };
 
+// ── the staff month workflow (2026-11-10): the same keys the backend's _month_states sends ──
+
+/** A staff month HR generated but has not finalized: two salaries Cleared (verified), nothing paid. */
+export const openStatus: MonthStatus = {
+  ...sepStatus,
+  state: "generated",
+  stateLabel: "Generated, still open",
+  paidSlips: 0,
+  unpaidSlips: 8,
+  unpaidNet: 108392.69,
+  paidAt: null,
+  staffSlips: 5,
+  productionSlips: 3,
+  staffState: "generated",
+  productionState: "generated",
+  locked: false,
+  finalizedAt: null,
+  markedPaidAt: null,
+  paymentPendingDays: null,
+  daysToPay: null,
+  clearedSlips: 2,
+  onHold: 0,
+  onHoldNet: 0,
+  newJoinersWaiting: 0,
+  newJoinersNet: 0,
+  paidSeparately: 0,
+};
+
+/** Payroll Done on 7 Oct, not marked paid five days later; one salary on hold, one new joiner waiting to be added. */
+export const finalizedStatus: MonthStatus = {
+  ...openStatus,
+  state: "finalized",
+  stateLabel: "Payroll Done, payment pending",
+  staffState: "finalized",
+  locked: true,
+  finalizedAt: "2026-10-07T15:00:00",
+  paymentPendingDays: 5,
+  onHold: 1,
+  onHoldNet: 17865,
+  newJoinersWaiting: 1,
+  newJoinersNet: 15000,
+};
+
+/** Staff scope: Payroll Done on 7 Oct, Mark as Paid on 9 Oct; the held salary was released and paid separately. */
+export const paidStatus: MonthStatus = {
+  ...openStatus,
+  state: "paid",
+  stateLabel: "Paid",
+  slips: 5,
+  headcount: 5,
+  paidSlips: 5,
+  unpaidSlips: 0,
+  unpaidNet: 0,
+  provisionalSlips: 0,
+  final: true,
+  productionPeriods: 0,
+  paidAt: "2026-10-09T11:00:00",
+  staffSlips: 5,
+  productionSlips: 0,
+  staffState: "paid",
+  productionState: null,
+  locked: true,
+  finalizedAt: "2026-10-07T15:00:00",
+  markedPaidAt: "2026-10-09T11:00:00",
+  daysToPay: 2,
+  clearedSlips: 5,
+  paidSeparately: 1,
+};
+
 const quiet = (month: string, label: string, state: MonthStatus["state"]): MonthStatus => ({
   ...sepStatus,
   month,

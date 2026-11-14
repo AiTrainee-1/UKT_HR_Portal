@@ -311,6 +311,8 @@ export function PersonCell({
 /** A small caption above a group of facts: "Destination", "Review". */
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <p className={cn("text-[10px] font-semibold uppercase tracking-wider text-gray-400", className)}>{children}</p>
+    <p className={cn("text-[11px] sm:text-[10px] font-semibold uppercase tracking-wider text-gray-400", className)}>
+      {children}
+    </p>
   );
 }

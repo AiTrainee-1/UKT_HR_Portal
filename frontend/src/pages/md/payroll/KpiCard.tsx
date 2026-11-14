@@ -56,7 +56,8 @@ type Props = {
  * While `loading` the running border replaces the figure, as it does on the other pages.
  *
  * The label sits beside the tile where the cards are wide (the page is at least 64rem across) and under it where they are
- * narrow, so "Employer cost (estimate)" never ends up four lines tall.
+ * narrow, so "Employer cost (estimate)" never ends up four lines tall. On a phone (two small cards across, a smaller tile)
+ * it goes back beside the tile: two short lines there cost less height than a row of its own.
  */
 export default function KpiCard({
   label,
@@ -83,13 +84,13 @@ export default function KpiCard({
       data-testid={testId}
     >
       {loading && <KpiRunningBorder accent={accent} radius={dark ? 28 : 20} />}
-      <div className="grid grid-cols-[1fr_auto] items-start gap-x-2.5 gap-y-2.5 @5xl:grid-cols-[auto_1fr_auto]">
+      <div className="grid grid-cols-[auto_1fr_auto] items-start gap-x-2.5 gap-y-2.5 @lg:grid-cols-[1fr_auto] @5xl:grid-cols-[auto_1fr_auto]">
         <span className={cn("md-money-tile md-money-tile-md", dark && "md-money-tile-sand")}>
           <Icon size={17} aria-hidden />
         </span>
         <p
           className={cn(
-            "order-last col-span-2 text-[12.5px] font-bold leading-snug @5xl:order-none @5xl:col-span-1 @5xl:pt-0.5",
+            "col-span-1 self-center text-[12.5px] font-bold leading-snug @lg:order-last @lg:col-span-2 @lg:self-auto @5xl:order-none @5xl:col-span-1 @5xl:self-auto @5xl:pt-0.5",
             dark ? "text-md-sand/85" : "text-md-ink-soft",
           )}
         >
@@ -107,7 +108,8 @@ export default function KpiCard({
         <p
           className={cn(
             "font-black leading-none tracking-tight tabular-nums",
-            dark ? "text-[32px] text-white" : "text-[28px] text-md-ink",
+            // a phone's two-across cards are half as wide: the figure steps down so "₹45.3 L" stays on one line
+            dark ? "text-[25px] text-white @lg:text-[32px]" : "text-[23px] text-md-ink @lg:text-[28px]",
             loading && "opacity-0",
           )}
           data-testid={testId ? `${testId}-value` : undefined}
@@ -115,7 +117,14 @@ export default function KpiCard({
           {value}
         </p>
         {sub && (
-          <p className={cn("mt-2 text-[12px] leading-snug", dark ? "text-md-sand/80" : "text-md-ink-soft")}>{sub}</p>
+          <p
+            className={cn(
+              "mt-1.5 text-[11.5px] leading-snug @lg:mt-2 @lg:text-[12px]",
+              dark ? "text-md-sand/80" : "text-md-ink-soft",
+            )}
+          >
+            {sub}
+          </p>
         )}
       </div>
       {children}

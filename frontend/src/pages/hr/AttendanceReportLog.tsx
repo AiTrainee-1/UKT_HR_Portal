@@ -42,6 +42,38 @@ const TAB_ITEMS: { value: TabKey; label: string; icon: ReactNode }[] = [
   { value: "late", label: TAB_LABELS.late, icon: <AlarmClock size={14} /> },
 ];
 
+/**
+ * The colored register (AttendanceSheetContent, shared with the Attendance Sheet) on a phone, below `sm` only, so tablets and
+ * desktops are untouched:
+ *  - only the Employee Name column stays put when the register scrolls sideways (#, Emp Code, Name and Department stood
+ *    fixed side by side, 332 px, which left no room for the days on a phone): the others scroll away under it;
+ *  - nothing under 11 px: the column heads (which may wrap to two lines), the weekday under each date, the row number and
+ *    the code, and the compensation symbols of the legend (the ones in the cells stay small: at 11 px they would cover
+ *    the day's letter in a 28 px cell; the legend and the tooltip explain them).
+ * (Class names of AttendanceSheet.tsx are relied on here; better moved into that file one day.)
+ */
+const REGISTER_ON_PHONES = [
+  "max-sm:[&_thead_th:is(:nth-child(1),:nth-child(2),:nth-child(4))]:left-auto!",
+  "max-sm:[&_thead_th:is(:nth-child(1),:nth-child(2),:nth-child(4))]:z-[29]",
+  "max-sm:[&_tfoot_td:is(:nth-child(1),:nth-child(2),:nth-child(4))]:left-auto!",
+  "max-sm:[&_tfoot_td:is(:nth-child(1),:nth-child(2),:nth-child(4))]:z-[29]",
+  "max-sm:[&_tbody_td:is(:nth-child(1),:nth-child(2),:nth-child(4))]:static",
+  "max-sm:[&_tr>:nth-child(3)]:left-0!",
+  "max-sm:[&_th]:text-[11px]",
+  "max-sm:[&_th]:whitespace-normal",
+  "max-sm:[&_th_div]:text-[11px]",
+  "max-sm:[&_tbody_td:is(:nth-child(1),:nth-child(2))]:text-[11px]",
+  "max-sm:[&_[data-testid=compensation-legend]_[data-kind]]:h-4",
+  "max-sm:[&_[data-testid=compensation-legend]_[data-kind]]:min-w-[1.3rem]",
+  "max-sm:[&_[data-testid=compensation-legend]_[data-kind]]:text-[11px]",
+  // and its toolbar: Excel / PDF a row of two equal buttons from the left (and the hint under the legend at the left), not
+  // pushed to the right edge
+  "max-sm:[&_.ml-auto]:ml-0",
+  "max-sm:[&_.ml-auto]:w-full",
+  "max-sm:[&_.ml-auto>button]:h-9",
+  "max-sm:[&_.ml-auto>button]:flex-1",
+].join(" ");
+
 /** Each sub-tab's own permission key (Account Management -> Roles & Permissions); one without a setting follows the page. */
 const TAB_KEY: Record<TabKey, string> = {
   monthly: "attendance.report_log.monthly",
@@ -90,7 +122,7 @@ export default function AttendanceReportLog() {
 
   return (
     <HrLayout>
-      <div className="space-y-5" data-testid="report-log-page">
+      <div className="space-y-4 sm:space-y-5" data-testid="report-log-page">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900">
@@ -104,7 +136,7 @@ export default function AttendanceReportLog() {
           </div>
           <span
             className={cn(
-              "rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide",
+              "rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide sm:text-[10px]",
               simpleMode ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700",
             )}
             title="Attendance calculation mode: change it in Settings → Attendance"
@@ -130,8 +162,10 @@ export default function AttendanceReportLog() {
             <ViewOnlyTabNote show={tabViewOnly} />
 
             {tab === "monthly" && (
-              <div className="space-y-5" data-testid="monthly-tab">
-                <AttendanceSheetContent />
+              <div className="space-y-4 sm:space-y-5" data-testid="monthly-tab">
+                <div className={REGISTER_ON_PHONES} data-testid="monthly-register">
+                  <AttendanceSheetContent />
+                </div>
                 <LatePenaltyCard />
               </div>
             )}

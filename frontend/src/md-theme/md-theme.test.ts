@@ -51,6 +51,17 @@ describe("the MD skin stays inside the MD portal", () => {
     }
   });
 
+  it("the phone files (mobile/*.css) only add md-* classes or scoped rules, and no hex colour", () => {
+    for (const file of fs.readdirSync(path.join(dir, "mobile")).filter((f) => f.endsWith(".css"))) {
+      const css = read(`mobile/${file}`);
+      const stray = rules(css)
+        .flatMap((r) => r.selectors)
+        .filter((s) => !s.startsWith("html[data-md-theme]") && !/^\.md-/.test(s) && !/^(from|to|\d+%)$/.test(s));
+      expect(stray, file).toEqual([]);
+      expect(strip(css).match(/#[0-9a-fA-F]{3,8}\b/g) ?? [], `${file}: hex colours`).toEqual([]);
+    }
+  });
+
   it("tokens.css only declares variables and utilities (no rule that paints anything)", () => {
     const css = strip(read("tokens.css"));
     // :root { --md-...: ...; } and @theme inline { --color-md-...: ...; }: nothing but custom properties

@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { GateRange, OutpassRecordRow, PaginatedRecords } from "@/lib/api-client/custom-hooks";
-import { DateTimeStack, PASS_TD, PASS_TH, RANGE_LABEL, RecordsPagination } from "../shared";
+import { DateTimeStack, PASS_TD, PASS_TH, RANGE_LABEL, RecordsPagination, RowNote } from "../shared";
 
 // The exits logged through the branch's permanent QR form: no approval step, no attendance or payroll impact. The page and the
 // list come from the Overview (it also counts them on its tab), so this only draws them.
@@ -50,13 +50,13 @@ export function QrSubmissionsSection({
               {recordsLoading && !page_ ? (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center py-10 text-muted-foreground">
-                    Loading…
+                    <RowNote>Loading…</RowNote>
                   </TableCell>
                 </TableRow>
               ) : !records.length ? (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center py-10 text-muted-foreground">
-                    No gate QR submissions for {RANGE_LABEL[range].toLowerCase()}.
+                    <RowNote>No gate QR submissions for {RANGE_LABEL[range].toLowerCase()}.</RowNote>
                   </TableCell>
                 </TableRow>
               ) : (

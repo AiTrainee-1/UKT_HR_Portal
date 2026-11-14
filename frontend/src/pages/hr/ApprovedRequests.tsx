@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
 import { Bell, BellRing, CheckCircle2, Hourglass, Inbox, ShieldAlert, UserCheck, Users, XCircle } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { useToast } from "@/hooks/use-toast";
 import { downloadBlob, downloadWorkbook, fileSafe, newWorkbook, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
 import { moduleForPath } from "@/lib/permission-modules";
@@ -50,8 +51,10 @@ import {
   type PageSection,
 } from "./requests/sections";
 
-/** Requests shown before "Show more": a long list is paged on the page, the server has already narrowed it. */
+/** Requests shown before "Show more": a long list is paged on the page, the server has already narrowed it. A phone shows
+ *  them as tall cards, so it pages by 20 (fifty cards are a 10,000 px scroll). */
 const PAGE_SIZE = 50;
+const PHONE_PAGE_SIZE = 20;
 
 const readTab = () => {
   try {
@@ -127,7 +130,11 @@ export default function ApprovedRequests() {
 
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [rawTab, setRawTab] = useState<string | null>(readTab);
-  const [visible, setVisible] = useState(PAGE_SIZE);
+  // how many pages of the list are open; a page is 50 requests, 20 on a phone
+  const phone = useIsMobile();
+  const pageSize = phone ? PHONE_PAGE_SIZE : PAGE_SIZE;
+  const [pages, setPages] = useState(1);
+  const visible = pages * pageSize;
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [deciding, setDeciding] = useState<{ item: HubItem; mode: "approve" | "reject" } | null>(null);
   const [handling, setHandling] = useState<HubItem | null>(null);
@@ -160,7 +167,18 @@ export default function ApprovedRequests() {
   const shown = useMemo(() => sortItems(filterItems(hub.items, filters, tab), filters.sort), [hub.items, filters, tab]);
 
   // a different tab or filter starts at the top again
-  useEffect(() => setVisible(PAGE_SIZE), [filters, tab]);
+  useEffect(() => setPages(1), [filters, tab]);
+
+  // on a phone the sub-tab row scrolls: the open one is brought into view (?kind=advance opens it out of sight otherwise).
+  // Only the row itself scrolls, never the page.
+  const tabStrip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = tabStrip.current;
+    const pill = box?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!box || !pill || box.scrollWidth <= box.clientWidth) return;
+    const at = pill.getBoundingClientRect().left - box.getBoundingClientRect().left;
+    box.scrollLeft += at - (box.clientWidth - pill.offsetWidth) / 2;
+  }, [tab, tabs.length]);
 
   useEffect(() => {
     if (!focus || !query.data || query.isPlaceholderData) return;
@@ -333,6 +351,7 @@ export default function ApprovedRequests() {
               aria-label="Sections of the Requests page"
               className="min-w-0 max-w-full overflow-x-auto sm:col-start-2 sm:row-span-2 sm:row-start-1"
               data-testid="requests-sections"
+              data-tab-row
             >
               <PillTabs
                 size="sm"
@@ -418,12 +437,14 @@ export default function ApprovedRequests() {
                 tone={oldestDays >= 3 ? "bg-rose-50 text-rose-800" : "bg-slate-50 text-slate-700"}
                 onClick={oldest ? () => focusWaiting("waiting") : undefined}
                 testId="figure-oldest"
+                className="col-span-2 sm:col-span-1"
               />
             </div>
 
             {/* Sub-tabs: all, then one per kind with how many are waiting */}
             <div className="space-y-2">
-              <div className="overflow-x-auto pb-1" data-testid="requests-tabs">
+              {/* one row that scrolls sideways on a phone (data-tab-row: the MD skin keeps its pills on one line too) */}
+              <div ref={tabStrip} className="overflow-x-auto pb-1" data-testid="requests-tabs" data-tab-row>
                 <PillTabs size="sm" items={tabs} value={tab} onChange={selectTab} />
               </div>
               {activeKind && (
@@ -495,8 +516,8 @@ export default function ApprovedRequests() {
 
             {shown.length > visible && (
               <div className="flex justify-center">
-                <Button variant="outline" onClick={() => setVisible((v) => v + PAGE_SIZE)} data-testid="requests-more">
-                  Show {Math.min(PAGE_SIZE, shown.length - visible)} more ({shown.length - visible} left)
+                <Button variant="outline" onClick={() => setPages((p) => p + 1)} data-testid="requests-more">
+                  Show {Math.min(pageSize, shown.length - visible)} more ({shown.length - visible} left)
                 </Button>
               </div>
             )}
@@ -511,7 +532,11 @@ export default function ApprovedRequests() {
               </p>
             )}
 
-            <PipelineSummary workflows={hub.kinds.map((k) => k.key)} />
+            {/* on a phone each line keeps its icon beside the text instead of wrapping the text under it */}
+            <PipelineSummary
+              workflows={hub.kinds.map((k) => k.key)}
+              className="max-sm:[&>p]:flex-nowrap max-sm:[&>p]:items-start max-sm:[&>p>svg]:mt-0.5"
+            />
           </div>
         )}
       </div>

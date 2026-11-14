@@ -91,13 +91,16 @@ describe("the colour of a payroll month's state", () => {
     }
   });
 
-  it("keeps sage, ochre and crimson for paid, part paid and not generated", () => {
+  it("keeps sage, ochre and crimson for paid, part paid / payment pending and not generated", () => {
     expect(STATE_STYLE.paid.chip).toBe("md-chip-success");
     expect(STATE_STYLE.part_paid.chip).toBe("md-chip-warning");
+    expect(STATE_STYLE.finalized.chip).toBe("md-chip-warning"); // Payroll Done, money not paid yet: watch
     expect(STATE_STYLE.not_generated.chip).toBe("md-chip-danger");
     // nothing else is allowed to borrow those three meanings
     const meaning = states.filter((s) => /success|warning|danger/.test(STATE_STYLE[s].chip));
-    expect(meaning.sort()).toEqual(["not_generated", "paid", "part_paid"]);
+    expect(meaning.sort()).toEqual(["finalized", "not_generated", "paid", "part_paid"]);
+    // the two ochre states keep apart in the strip, where only the dot shows the colour
+    expect(STATE_STYLE.finalized.dot).not.toBe(STATE_STYLE.part_paid.dot);
   });
 });
 

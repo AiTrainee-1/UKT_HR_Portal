@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useListOutpassRequests, type GateRange, type OutpassRequestItem } from "@/lib/api-client/custom-hooks";
 import { inGateRange } from "@/lib/gate-range";
-import { DateTimeStack, PAGE_SIZE, PASS_TD, PASS_TH, RANGE_LABEL, RecordsPagination } from "../shared";
+import { DateTimeStack, PAGE_SIZE, PASS_TD, PASS_TH, RANGE_LABEL, RecordsPagination, RowNote } from "../shared";
 import { APPROVAL_STATUS_CLS, SCAN_STATUS_BADGE, formatApprover } from "./logic";
 
 // A pass normally expires the same day it was requested, so only the time is shown; the date is
@@ -84,13 +84,15 @@ export function ApprovedPassesSection({ range }: { range: GateRange }) {
               {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
-                    Loading…
+                    <RowNote>Loading…</RowNote>
                   </TableCell>
                 </TableRow>
               ) : !rows.length ? (
                 <TableRow>
                   <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
-                    No outpass requests for {rangeText}.{totalEver > 0 && " Try a wider range."}
+                    <RowNote>
+                      No outpass requests for {rangeText}.{totalEver > 0 && " Try a wider range."}
+                    </RowNote>
                   </TableCell>
                 </TableRow>
               ) : (
@@ -104,7 +106,9 @@ export function ApprovedPassesSection({ range }: { range: GateRange }) {
                         <div className="flex min-w-0 items-center gap-2.5">
                           <Avatar className="size-8 shrink-0">
                             <AvatarImage src={r.employee?.photoUrl ?? undefined} />
-                            <AvatarFallback className="text-[10px]">{r.employee?.name?.[0] ?? "?"}</AvatarFallback>
+                            <AvatarFallback className="text-[11px] sm:text-[10px]">
+                              {r.employee?.name?.[0] ?? "?"}
+                            </AvatarFallback>
                           </Avatar>
                           <div className="min-w-0 leading-tight">
                             <p className="font-medium truncate" title={r.employee?.name}>

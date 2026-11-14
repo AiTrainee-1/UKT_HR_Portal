@@ -5,6 +5,7 @@ import { ChartContainer } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ArrivalSlot } from "./logic";
 import { prefersReducedMotion } from "./useCountUp";
+import { usePhone } from "./usePhone";
 
 // The brand blue and the indigo of the page (both re-coloured by the MD skin, see md-theme/hr-copies-data.css).
 const SLOT_FILL = "#0080bf";
@@ -36,9 +37,12 @@ export const ArrivalsChart = memo(function ArrivalsChart({
   stats: { first: string; median: string; last: string };
   loading: boolean;
 }) {
+  // phones: 11 px ticks (nothing smaller is readable there) and a little more room between the time labels
+  const phone = usePhone();
+  const tick = { fontSize: phone ? 11 : 10 };
   return (
     <section
-      className="clay-card flex min-w-0 flex-col rounded-2xl border border-slate-100 bg-white p-4 sm:p-5"
+      className="clay-card flex min-w-0 flex-col rounded-2xl border border-slate-100 bg-white p-3.5 sm:p-5"
       aria-labelledby="arrivals-title"
       data-testid="attendance-arrivals"
     >
@@ -62,7 +66,7 @@ export const ArrivalsChart = memo(function ArrivalsChart({
           </div>
         ) : (
           <ChartContainer config={{ arrived: { color: SLOT_FILL }, inBy: { color: CURVE } }} className="h-44 w-full">
-            <ComposedChart data={curve} margin={{ top: 6, right: 6, left: -22, bottom: 0 }}>
+            <ComposedChart data={curve} margin={{ top: 6, right: 6, left: phone ? -16 : -22, bottom: 0 }}>
               <defs>
                 <linearGradient id="arrivals-curve" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={CURVE} stopOpacity={0.22} />
@@ -70,8 +74,8 @@ export const ArrivalsChart = memo(function ArrivalsChart({
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="slot" tick={{ fontSize: 10 }} interval="preserveStartEnd" minTickGap={18} />
-              <YAxis allowDecimals={false} tick={{ fontSize: 10 }} width={40} />
+              <XAxis dataKey="slot" tick={tick} interval="preserveStartEnd" minTickGap={phone ? 24 : 18} />
+              <YAxis allowDecimals={false} tick={tick} width={40} />
               <Tooltip content={<ArrivalTooltip />} cursor={{ fillOpacity: 0.06 }} />
               <Area
                 type="monotone"

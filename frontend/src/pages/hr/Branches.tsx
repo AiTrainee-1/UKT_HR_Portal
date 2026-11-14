@@ -185,24 +185,24 @@ export default function Branches() {
 
   return (
     <HrLayout>
-      <div className="space-y-5">
+      <div className="space-y-4 sm:space-y-5">
         {/* Header */}
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
           <div>
             <h2 className="text-2xl font-black text-gray-900">Manage Branch</h2>
             <p className="mt-0.5 text-sm text-muted-foreground">Manage company locations and branch offices</p>
           </div>
-          <div className="flex items-center gap-2 self-start sm:self-auto">
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center sm:self-auto">
             <Button
               variant="outline"
               onClick={handleExport}
               disabled={exporting || shown.length === 0}
-              className="gap-2"
+              className="gap-2 max-sm:h-11"
               data-testid="branches-export"
             >
               <Download size={15} /> {exporting ? "Preparing..." : "Export"}
             </Button>
-            <Button onClick={() => setDialog({ branch: null })} className="gap-2" data-testid="branch-add">
+            <Button onClick={() => setDialog({ branch: null })} className="gap-2 max-sm:h-11" data-testid="branch-add">
               <Plus size={16} /> Add Branch
             </Button>
           </div>
@@ -356,7 +356,7 @@ export default function Branches() {
                 aria-pressed={filters.headOfficeOnly}
                 data-testid="filter-head-office"
                 className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold",
+                  "inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold max-sm:min-h-9",
                   filters.headOfficeOnly
                     ? "border-amber-300 bg-amber-100 text-amber-800"
                     : "border-gray-200 text-gray-600 hover:bg-gray-50",

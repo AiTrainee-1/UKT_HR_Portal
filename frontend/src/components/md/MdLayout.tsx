@@ -154,7 +154,7 @@ export default function MdLayout({ children }: { children: ReactNode }) {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden print:block print:h-auto print:overflow-visible">
-        <header className="md-shell-topbar flex items-center gap-3 px-4 py-2.5 lg:hidden print:hidden">
+        <header className="md-shell-topbar flex items-center gap-3 px-3 py-2.5 sm:px-4 lg:hidden print:hidden">
           <button
             type="button"
             onClick={() => setMobileOpen(true)}
@@ -194,7 +194,7 @@ export default function MdLayout({ children }: { children: ReactNode }) {
         <main
           ref={mainRef}
           className={cn(
-            "@container relative flex-1 overflow-y-auto p-4 transition-[padding] duration-300 ease-out lg:p-6 print:static print:h-auto print:overflow-visible print:p-0",
+            "@container relative flex-1 overflow-y-auto p-3 pb-6 transition-[padding] duration-300 ease-out sm:p-4 lg:p-6 print:static print:h-auto print:overflow-visible print:p-0",
             assistantOpen && "xl:pr-[444px]",
           )}
         >

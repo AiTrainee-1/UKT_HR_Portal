@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { AlertCircle, ArrowUpRight, Check, Compass, Copy, Mic, RotateCcw, Square, Volume2 } from "lucide-react";
+import { AlertCircle, Check, Copy, Mic, RotateCcw, Square, Volume2 } from "lucide-react";
 import { clockText } from "@/lib/md/format";
 import { stripMarkdown } from "@/lib/md/markdown";
 import { describeHeard } from "@/lib/md/voice";
 import type { ChatMessage } from "./api";
-import Explainer, { ConfidenceChip } from "./Explainer";
+import { ConfidenceChip } from "./ConfidenceChip";
 import Markdown from "./Markdown";
 import { MascotFace, type MascotMood } from "./mascot";
-import ProgressList from "./ProgressList";
+import ThinkingLine from "./ThinkingLine";
 
 /** The assistant's face (the radio character, see ./mascot.tsx); its expression follows what the assistant is doing. */
 export function AssistantAvatar({
@@ -38,8 +38,6 @@ export type MessageBubbleProps = {
   speechSupported: boolean;
   onSpeak: (message: ChatMessage) => void;
   onStopSpeaking: () => void;
-  onFollowUp: (text: string) => void;
-  onOpenPage: (path: string) => void;
   onRetry: () => void;
 };
 
@@ -96,8 +94,7 @@ function Actions({
 }
 
 export default function MessageBubble(props: MessageBubbleProps) {
-  const { message, isLast, speakingId, speechSupported, onSpeak, onStopSpeaking, onFollowUp, onOpenPage, onRetry } =
-    props;
+  const { message, isLast, speakingId, speechSupported, onSpeak, onStopSpeaking, onRetry } = props;
   const reduce = useReducedMotion();
   const enter = reduce
     ? {}
@@ -130,11 +127,7 @@ export default function MessageBubble(props: MessageBubbleProps) {
     <motion.div {...enter} className="flex gap-2.5" data-testid="assistant-reply" data-status={message.status}>
       <AssistantAvatar className="mt-0.5" size={32} mood={moodOf(message)} />
       <div className="min-w-0 flex-1 space-y-2.5">
-        {running && (
-          <div className="md-card md-card-strong md-assistant-answer md-assistant-working px-4 py-3.5">
-            <ProgressList lines={payload.progress ?? []} />
-          </div>
-        )}
+        {running && <ThinkingLine lines={payload.progress ?? []} />}
 
         {message.status === "error" && payload.errorKind === "cancelled" && (
           <div className="flex items-center gap-2 px-1 text-[12.5px] text-md-ink-soft" data-testid="assistant-stopped">
@@ -181,47 +174,7 @@ export default function MessageBubble(props: MessageBubbleProps) {
               onSpeak={() => onSpeak(message)}
               onStop={onStopSpeaking}
             />
-            {!!payload.suggestedPages?.length && (
-              <div className="space-y-2" data-testid="assistant-pages">
-                <p className="md-assistant-overline px-0.5">Related pages</p>
-                {payload.suggestedPages.map((page) => (
-                  <button
-                    key={page.id}
-                    type="button"
-                    onClick={() => onOpenPage(page.path)}
-                    className="md-assistant-page group"
-                    data-testid={`assistant-page-${page.id}`}
-                  >
-                    <span className="md-icon-tile md-assistant-tile-sm h-8 w-8 shrink-0">
-                      <Compass size={15} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-bold leading-snug text-md-ink">{page.title}</span>
-                      <span className="block truncate text-[12px] text-md-ink-soft">{page.reason}</span>
-                    </span>
-                    <ArrowUpRight
-                      size={16}
-                      className="shrink-0 text-md-wine-600 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
-                    />
-                  </button>
-                ))}
-              </div>
-            )}
-            <Explainer payload={payload} />
-            {isLast && !!payload.followUps?.length && (
-              <div className="flex flex-wrap gap-2" data-testid="assistant-followups">
-                {payload.followUps.map((text) => (
-                  <button
-                    key={text}
-                    type="button"
-                    onClick={() => onFollowUp(text)}
-                    className="md-chip md-assistant-chipbtn"
-                  >
-                    {text}
-                  </button>
-                ))}
-              </div>
-            )}
+            {/* "How I got this" and the follow-up question chips were removed (owner 2026-11-13): just the answer */}
           </>
         )}
       </div>

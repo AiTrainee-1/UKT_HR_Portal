@@ -55,7 +55,7 @@ export const PunchSources = memo(function PunchSources({
   const max = Math.max(1, ...data.kinds.map((k) => k.punches));
   return (
     <section
-      className="clay-card min-w-0 rounded-2xl border border-slate-100 bg-white p-4 sm:p-5"
+      className="clay-card min-w-0 rounded-2xl border border-slate-100 bg-white p-3.5 sm:p-5"
       aria-labelledby="sources-title"
       data-testid="attendance-sources"
     >

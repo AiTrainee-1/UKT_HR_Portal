@@ -139,6 +139,18 @@ export function heatmapShape(h: Pick<ActivityHeatmap, "rows" | "hours" | "values
   };
 }
 
+type HeatmapGrid = ReturnType<typeof heatmapShape>;
+
+/** The same grid turned on its side, hours down and weekdays across: on a phone seven columns fit where twenty-four
+ *  would scroll sideways. Every cell keeps its value. */
+export function turnHeatmap(grid: HeatmapGrid): HeatmapGrid {
+  return {
+    rows: grid.cols,
+    cols: grid.rows,
+    values: grid.cols.map((_, c) => grid.rows.map((__, r) => grid.values[r]?.[c] ?? null)),
+  };
+}
+
 /** "Fri 4 pm (3 actions)" or null when nothing happened. */
 export function peakText(h: Pick<ActivityHeatmap, "peak">): string | null {
   if (!h.peak) return null;

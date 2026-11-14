@@ -43,7 +43,7 @@ export default function OvertimeCard({
       testId="md-attendance-overtime"
       className={className}
       title="Overtime"
-      subtitle="Staff, on days it was detected, allowed automatically or announced by HR: hours, not rupees (see Payroll Analysis for cost)"
+      subtitle="Staff, on days it was detected, allowed automatically or announced by HR: hours, not rupees (the Payroll page shows the cost)"
       loading={query.isPending}
       provenance={query.data?.provenance}
       actions={<AskAiButton question={ask.overtimeByDepartment(context)} />}

@@ -211,3 +211,25 @@ html[data-md-theme] .clay-tabs-trigger:focus-visible {
   outline: 2px solid var(--md-wine-500);
   outline-offset: -2px;
 }
+
+/* ── phones: the HR page's title row (adopted by components/md/embedded/headerRow.ts) ─────────────────────────────── */
+/* The frame pushes the page's own buttons to the right (an inline margin) and keeps room for the Updated / Refresh stack.
+   On a phone that leaves a ragged right-hand column of single buttons: there, the title block takes the row and the
+   page's buttons start on the left under it and wrap, in the order the page gives them. */
+@media (max-width: 639px) {
+  html[data-md-theme] [data-md-header-row] {
+    padding-right: 0 !important;
+  }
+  html[data-md-theme] [data-md-header-row] > [data-md-titleblock] {
+    width: 100%;
+  }
+  html[data-md-theme] [data-md-header-row] [data-md-actions] {
+    margin-left: 0 !important;
+    justify-content: flex-start !important;
+    flex-wrap: wrap !important;
+    width: 100%;
+  }
+  html[data-md-theme] [data-md-header-row] [data-md-title] {
+    font-size: 1.25rem !important;
+  }
+}

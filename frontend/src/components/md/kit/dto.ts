@@ -5,7 +5,7 @@ import type { MdInsightDto, MdKpiDto } from "@/lib/md/types";
 import { MD_NAV_BY_ID } from "../md-nav";
 import type { Insight } from "./InsightList";
 
-/** An insight DTO as the list shows it: the page id becomes a link ("payroll" -> /md/payroll, "Payroll Analysis"). */
+/** An insight DTO as the list shows it: the page id becomes a link ("payroll" -> /md/payroll, "Payroll"). */
 export function toInsight(dto: MdInsightDto): Insight {
   const page = dto.page ? MD_NAV_BY_ID[dto.page] : undefined;
   return {

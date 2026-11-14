@@ -7,7 +7,7 @@
 //   browser /md/employees/5      <->   the pages see  /hr/employees/5
 //   a page navigates /hr/leave   <->   the browser goes /md/leave
 //
-// A link to an HR page the MD portal does not copy goes to the nearest MD page (Payroll -> Payroll Analysis), so the MD
+// A link to an HR page the MD portal does not copy goes to the nearest MD page (Payroll -> Payroll), so the MD
 // never lands in the HR portal by clicking inside their own. md-portal.md section 10 has the whole design.
 
 import { createContext, useCallback, useContext } from "react";

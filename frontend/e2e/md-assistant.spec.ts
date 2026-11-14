@@ -226,28 +226,40 @@ test.describe("the AI assistant", () => {
     await expect(lastReply(page).locator("strong").first()).toHaveText(/^\d+$/);
     await expect(page.getByTestId("assistant-confidence")).toBeVisible();
 
-    // "how I got this": the steps, the data and the assumptions come from what the server really did
-    await page.getByTestId("assistant-explain-toggle").click();
-    await expect(page.getByTestId("explain-steps")).toContainText("Custom data query");
-    await expect(page.getByTestId("explain-steps")).toContainText("status = active");
-    await page.getByTestId("explain-tab-data").click();
-    await expect(page.getByTestId("explain-data")).toContainText("Employees (custom query)");
-    await page.getByTestId("explain-tab-assume").click();
-    await expect(page.getByTestId("explain-assumptions")).toContainText("names were replaced");
+    // just the answer (owner 2026-11-13): no related pages, no "How I got this", no follow-up chips
+    for (const gone of ["assistant-pages", "assistant-explain-toggle", "assistant-followups"])
+      await expect(page.getByTestId(gone), gone).toHaveCount(0);
 
-    // a navigation suggestion opens the page and the conversation stays
-    await page.getByTestId("assistant-page-employees").click();
-    await expect(page).toHaveURL(/\/md\/employees/);
-    await expect(page.getByTestId("assistant-panel")).toHaveAttribute("data-open", "true");
-    await expect(page.getByTestId("assistant-reply")).toHaveCount(1);
-
-    // and a follow-up question can be asked from its chip
-    await page.getByTestId("assistant-followups").getByRole("button", { name: "And by department?" }).click();
+    // a second question in the same conversation still works
+    await ask(page, "And by department?");
     await expect(page.getByTestId("assistant-reply")).toHaveCount(2);
     await expect(lastReply(page)).toHaveAttribute("data-status", "done", { timeout: 20_000 });
   });
 
-  test("what is sent to Gemini is read-only, structured and carries no names", async ({ page, request }) => {
+  test("by default the assistant works with real names, but never with phone numbers", async ({ page, request }) => {
+    await openAssistant(page);
+    await ask(page, "How is Asha Kumar doing in attendance?");
+    await expect(lastReply(page)).toHaveAttribute("data-status", "done", { timeout: 20_000 });
+    await expect(page.getByTestId("assistant-subtitle")).toContainText("Read-only · uses names");
+    const everything = JSON.stringify(await geminiRequests(request));
+    expect(everything).toContain("Asha");
+    expect(everything).not.toContain("9000000001");
+    expect(everything).not.toContain("@emp-");
+  });
+
+  test("with privacy mode on, what is sent to Gemini is read-only, structured and carries no names", async ({
+    page,
+    request,
+  }) => {
+    await api(request, adminToken, "PUT", "/api/hr-users/md-assistant", { privacyMode: true });
+    try {
+      await runPrivateCheck(page, request);
+    } finally {
+      await api(request, adminToken, "PUT", "/api/hr-users/md-assistant", { privacyMode: false });
+    }
+  });
+
+  async function runPrivateCheck(page: Page, request: APIRequestContext) {
     await openAssistant(page);
     await ask(page, "How is Asha Kumar doing in attendance?");
     await expect(lastReply(page)).toHaveAttribute("data-status", "done", { timeout: 20_000 });
@@ -276,7 +288,7 @@ test.describe("the AI assistant", () => {
       );
     }
     expect(sent[0].body.systemInstruction.parts[0].text).toContain("READ-ONLY");
-  });
+  }
 
   test("it will not change anything: it says so and the data is untouched", async ({ page, request }) => {
     const employees = async () => ((await api(request, adminToken, "GET", "/api/employees")).body as unknown[]).length;
@@ -296,8 +308,6 @@ test.describe("the AI assistant", () => {
     await ask(page, "run an invalid lookup");
     await expect(lastReply(page)).toHaveAttribute("data-status", "done", { timeout: 20_000 });
     await expect(lastReply(page)).toContainText("Unknown dataset");
-    await page.getByTestId("assistant-explain-toggle").click();
-    await expect(page.getByTestId("explain-steps")).toContainText("could not be completed");
   });
 
   test("when Gemini's free daily allowance is used up it says so plainly, with when it resets", async ({

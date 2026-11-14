@@ -14,7 +14,7 @@ function scrollToLibrary() {
 export function ExecutiveShelf({ groups }: { groups: ReportGroup[] }) {
   return (
     <section aria-labelledby="md-executive-heading" data-testid="md-executive-shelf">
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-3 flex items-center gap-3 @lg:mb-4">
         <span className="md-money-tile md-money-tile-solid md-money-t-wine">
           <Landmark size={20} aria-hidden />
         </span>
@@ -27,7 +27,8 @@ export function ExecutiveShelf({ groups }: { groups: ReportGroup[] }) {
       </div>
 
       {groups.length > 0 ? (
-        <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-3">
+        // two across on a phone (an odd last card takes the whole row); one, two or three across as the page widens
+        <div className="grid grid-cols-2 gap-3 @lg:grid-cols-1 @lg:gap-4 @xl:grid-cols-2 @4xl:grid-cols-3 @max-lg:[&>*:last-child:nth-child(odd)]:col-span-2">
           {groups.map((g, i) => (
             <ExecutiveCard key={g.key} group={g} order={i} />
           ))}

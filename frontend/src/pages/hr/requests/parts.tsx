@@ -63,6 +63,7 @@ export function FigureCard({
   onClick,
   active,
   testId,
+  className,
 }: {
   label: string;
   value: number | string;
@@ -72,10 +73,12 @@ export function FigureCard({
   onClick?: () => void;
   active?: boolean;
   testId?: string;
+  /** Placement in the figures grid (an odd last figure spans both phone columns). */
+  className?: string;
 }) {
   const body = (
     <>
-      <div className="mt-0.5 rounded-xl bg-white/60 p-2">
+      <div className="mt-0.5 shrink-0 rounded-xl bg-white/60 p-2">
         <Icon size={16} />
       </div>
       <div className="min-w-0 text-left">
@@ -87,7 +90,13 @@ export function FigureCard({
       </div>
     </>
   );
-  const cls = cn("flex w-full items-start gap-3 rounded-2xl p-4", tone, active && "ring-2 ring-offset-1 ring-current");
+  // phones: 14 px padding and a tighter gap, the old 16 px from sm up
+  const cls = cn(
+    "flex h-full w-full items-start gap-2.5 rounded-2xl p-3.5 sm:gap-3 sm:p-4",
+    tone,
+    active && "ring-2 ring-offset-1 ring-current",
+    className,
+  );
   return onClick ? (
     <button
       type="button"
@@ -144,17 +153,23 @@ export function RequestCell({ item }: { item: HubItem }) {
   );
 }
 
-/** The status chip, who a waiting request is with, and how far it has got. */
-export function StatusCell({ item, now }: { item: HubItem; now: Date }) {
+/** The chips are 11 px on a phone (nothing smaller there), 10 px as before from sm up. */
+const CHIP_TEXT = "text-[11px] sm:text-[10px]";
+
+/** The status chip, who a waiting request is with, and how far it has got. `inline` (the phone card): the chips and the
+ *  lines under them flow on as few lines as fit, instead of one line each. */
+export function StatusCell({ item, now, inline }: { item: HubItem; now: Date; inline?: boolean }) {
   const chip = statusChip(item);
   const days = waitingDays(item, now);
   return (
-    <div className="space-y-1">
+    <div className={inline ? "flex flex-wrap items-center gap-x-2 gap-y-1" : "space-y-1"}>
       <div className="flex flex-wrap items-center gap-1.5">
-        <StatusBadge tone={chip.tone} className="capitalize">
+        <StatusBadge tone={chip.tone} className={cn("capitalize", CHIP_TEXT)}>
           {chip.label}
         </StatusBadge>
-        {item.status === "pending" && explainsWaiting(item.approval) && <WaitingChip approval={item.approval} />}
+        {item.status === "pending" && explainsWaiting(item.approval) && (
+          <WaitingChip approval={item.approval} className={CHIP_TEXT} />
+        )}
       </div>
       <ApprovalTrailLine approval={item.approval} />
       {days >= 3 && <p className="text-[11px] font-semibold text-amber-600">Waiting {days} days</p>}
@@ -184,9 +199,23 @@ export function SubmittedCell({ item }: { item: HubItem }) {
   );
 }
 
-export function DecidedCell({ item }: { item: HubItem }) {
+export function DecidedCell({ item, inline }: { item: HubItem; inline?: boolean }) {
   const d = item.decided;
   if (!d || (!d.by && !d.at)) return <span className="text-xs text-gray-300">-</span>;
+  // the phone card: "Administrator (HR) · 4 Nov · 05:16 pm" on one line that wraps, not two stacked lines
+  if (inline)
+    return (
+      <span className="min-w-0 text-xs text-gray-500" title={dateTimeLong(d.at)}>
+        <span className="font-semibold text-gray-700">{d.by ?? "Not recorded"}</span>
+        {d.role ? <span className="ml-1 font-medium text-gray-400">({roleText(d.role)})</span> : null}
+        {d.at && (
+          <span className="whitespace-nowrap">
+            {" · "}
+            {dateShort(d.at)} · {timeShort(d.at)}
+          </span>
+        )}
+      </span>
+    );
   return (
     <div className="text-xs text-gray-500" title={dateTimeLong(d.at)}>
       <p className="font-semibold text-gray-700">

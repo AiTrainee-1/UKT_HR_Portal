@@ -198,10 +198,12 @@ export default function HolidaysTab({ today }: { today: string }) {
             value={view}
             onChange={setView}
           />
-          <div className="ml-auto flex items-center gap-2">
+          {/* phones: Export and Add Holiday as two equal buttons on their own row */}
+          <div className="grid w-full grid-cols-2 items-center gap-2 sm:ml-auto sm:flex sm:w-auto">
             <ExportButton
               disabled={shown.length === 0}
               testId="hol-export"
+              className="w-full sm:w-auto"
               onClick={() =>
                 exportSheet(
                   `Holidays ${year}`,
@@ -218,7 +220,11 @@ export default function HolidaysTab({ today }: { today: string }) {
                 )
               }
             />
-            <Button onClick={() => setDialog({ holiday: null })} className="h-10 gap-1.5" data-testid="hol-add">
+            <Button
+              onClick={() => setDialog({ holiday: null })}
+              className="h-10 w-full gap-1.5 sm:w-auto"
+              data-testid="hol-add"
+            >
               <Plus size={15} /> Add Holiday
             </Button>
           </div>
@@ -231,7 +237,7 @@ export default function HolidaysTab({ today }: { today: string }) {
             label="Search holidays"
             testId="hol-search"
           />
-          <div className="grid grid-cols-2 gap-2 lg:flex">
+          <div className="grid grid-cols-2 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 lg:flex">
             <FilterSelect
               value={filters.type}
               onChange={(type) => set({ type })}
@@ -328,10 +334,12 @@ export default function HolidaysTab({ today }: { today: string }) {
                       data-testid={`holiday-${h.id}`}
                       className={cn("rounded-2xl border transition-shadow hover:shadow-md", past && "opacity-70")}
                     >
-                      <CardContent className="flex items-start gap-3 p-4">
+                      {/* a grid, so on a phone the description runs under the date box across the whole card instead
+                          of down a narrow column beside it; from sm up it sits under the name as before */}
+                      <CardContent className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 p-3.5 sm:p-4">
                         <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-xl bg-purple-50 text-purple-800">
                           <span className="text-lg font-black leading-none">{d.slice(8, 10)}</span>
-                          <span className="mt-0.5 text-[10px] font-bold uppercase">
+                          <span className="mt-0.5 text-[11px] sm:text-[10px] font-bold uppercase">
                             {WEEKDAYS_SHORT[weekdayIndex(d)]}
                           </span>
                         </div>
@@ -353,7 +361,6 @@ export default function HolidaysTab({ today }: { today: string }) {
                             {longDate(h.date)}
                             {!past && <span className="text-gray-400"> · {relativeDays(daysBetween(today, d))}</span>}
                           </p>
-                          {h.description && <p className="mt-0.5 text-xs text-gray-400">{h.description}</p>}
                         </div>
                         <div className="flex shrink-0 items-center">
                           <Button
@@ -376,6 +383,11 @@ export default function HolidaysTab({ today }: { today: string }) {
                             <Trash2 size={14} />
                           </Button>
                         </div>
+                        {h.description && (
+                          <p className="col-span-3 mt-2 text-xs text-gray-400 sm:col-span-1 sm:col-start-2 sm:mt-0.5">
+                            {h.description}
+                          </p>
+                        )}
                       </CardContent>
                     </Card>
                   );
@@ -427,7 +439,7 @@ function YearView({ year, rows, today }: { year: number; rows: HolidayRow[]; tod
                 {name}{" "}
                 <span className="text-xs font-semibold text-gray-400">{byDay.size ? `(${byDay.size})` : ""}</span>
               </p>
-              <div className="grid grid-cols-7 gap-0.5 text-center text-[10px] font-semibold text-gray-400">
+              <div className="grid grid-cols-7 gap-0.5 text-center text-[11px] sm:text-[10px] font-semibold text-gray-400">
                 {WEEKDAYS_SHORT.map((d) => (
                   <span key={d}>{d.slice(0, 2)}</span>
                 ))}

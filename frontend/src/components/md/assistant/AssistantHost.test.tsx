@@ -147,29 +147,16 @@ describe("AssistantHost: asking", () => {
     expect(reply?.textContent).toContain("91.8%");
     expect(reply?.querySelector("strong")?.textContent).toBe("91.8%"); // markdown rendered, not shown raw
     expect(page.container.querySelector('[data-testid="assistant-confidence"]')?.textContent).toBe("Medium confidence");
-    expect(page.container.querySelector('[data-testid="assistant-page-attendance"]')?.textContent).toContain(
-      "Attendance Analytics",
-    );
-    expect(page.container.querySelector('[data-testid="assistant-followups"]')?.textContent).toContain(
-      "And last month?",
-    );
+    // related-page suggestions were removed (owner 2026-11-13): even an answer that still carries one draws none
+    expect(page.container.querySelector('[data-testid="assistant-pages"]')).toBeNull();
+    expect(page.container.querySelector('[data-testid^="assistant-page-"]')).toBeNull();
+    // nor "How I got this" or the follow-up question chips (owner 2026-11-13): just the answer, Listen, Copy, confidence
+    for (const gone of ["assistant-followups", "assistant-explain-toggle", "explain-steps"]) {
+      expect(page.container.querySelector(`[data-testid="${gone}"]`), gone).toBeNull();
+    }
 
     // the question went out with what the MD is looking at
     expect(page.requests().filter((r) => r === "/api/md/assistant/ask")).toHaveLength(1);
-
-    // "How I got this"
-    await page.click('[data-testid="assistant-explain-toggle"]');
-    expect(page.container.querySelector('[data-testid="explain-steps"]')?.textContent).toContain("Attendance summary");
-    expect(page.container.querySelector('[data-testid="explain-steps"]')?.textContent).toContain("1,200 records");
-    await page.click('[data-testid="explain-tab-data"]');
-    expect(page.container.querySelector('[data-testid="explain-data"]')?.textContent).toContain("present ÷ scheduled");
-    expect(page.container.querySelector('[data-testid="explain-data"]')?.textContent).toContain(
-      "Today is provisional.",
-    );
-    await page.click('[data-testid="explain-tab-assume"]');
-    expect(page.container.querySelector('[data-testid="explain-assumptions"]')?.textContent).toContain(
-      "names were replaced",
-    );
   });
 
   it("sends what is typed with Enter and clears the box", async () => {

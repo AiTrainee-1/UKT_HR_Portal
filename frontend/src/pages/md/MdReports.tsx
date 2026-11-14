@@ -31,7 +31,11 @@ export default function MdReports() {
 
   return (
     <MdLayout>
-      <div className="mx-auto max-w-[1500px] space-y-5" data-testid="md-reports" {...{ [VIEW_SAFE_ATTR]: "" }}>
+      <div
+        className="mx-auto max-w-[1500px] space-y-4 @lg:space-y-5"
+        data-testid="md-reports"
+        {...{ [VIEW_SAFE_ATTR]: "" }}
+      >
         {!catalog.data ? (
           <>
             <ReportsHeader />

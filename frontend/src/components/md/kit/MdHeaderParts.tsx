@@ -26,7 +26,8 @@ export type FrameTab = "operations" | "insights";
 const TAB_ICON = { operations: LayoutGrid, insights: BrainCircuit } as const;
 const TAB_LABEL = { operations: "Operations", insights: "Insights & AI" } as const;
 
-/** The switch between a page itself and its Insights: a frosted track, the chosen side a wine glass pill. */
+/** The switch between a page itself and its Insights: a frosted track, the chosen side a wine glass pill. On a phone it is two
+ *  small round icon buttons at the right of the page's title (the words stay for screen readers; areas/shell.css). */
 export function ModeTabs({
   active,
   onSelect,
@@ -43,7 +44,7 @@ export function ModeTabs({
     <div
       role="tablist"
       aria-label={label}
-      className={cn("md-seg md-shell-seg max-w-full shrink-0", className)}
+      className={cn("md-seg md-shell-seg md-shell-modetabs max-w-full shrink-0", className)}
       data-testid="md-tabs"
     >
       {(["operations", "insights"] as const).map((id) => {
@@ -59,7 +60,8 @@ export function ModeTabs({
             onClick={() => onSelect(id)}
             className="md-seg-item whitespace-nowrap"
           >
-            <Icon size={14} strokeWidth={2.2} aria-hidden="true" /> {TAB_LABEL[id]}
+            <Icon size={14} strokeWidth={2.2} aria-hidden="true" />{" "}
+            <span className="max-sm:sr-only">{TAB_LABEL[id]}</span>
           </button>
         );
       })}
@@ -75,9 +77,16 @@ export function ModeTabs({
 export function UpdatedRefresh({ stamp, className }: { stamp?: ReactNode; className?: string }) {
   const { refresh, busy, lastUpdated } = useRefreshAction();
   return (
-    <div className={cn("flex shrink-0 items-stretch gap-3 print:hidden", className)} data-testid="md-refresh-stack">
-      <span aria-hidden className="w-px self-stretch bg-md-line" />
-      <div className="flex flex-col items-end justify-center gap-0.5 leading-tight">
+    <div
+      className={cn(
+        "flex shrink-0 items-center gap-2 sm:items-stretch sm:gap-3 print:hidden",
+        className,
+        "max-sm:ml-0",
+      )}
+      data-testid="md-refresh-stack"
+    >
+      <span aria-hidden className="hidden w-px self-stretch bg-md-line sm:block" />
+      <div className="flex flex-row items-center gap-2 leading-tight sm:flex-col sm:items-end sm:justify-center sm:gap-0.5">
         {stamp ? (
           <span className="text-[11px] font-medium tabular-nums text-md-ink-soft" data-testid="md-updated">
             {stamp}

@@ -3,11 +3,15 @@ import AskAiButton from "@/components/md/kit/AskAiButton";
 import Heatmap from "@/components/md/kit/Heatmap";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock, ErrorBanner } from "@/components/md/kit/states";
+import { useElementWidth } from "@/components/payroll/statement/use-element-width";
 import { describeMdError, useMdQuery, type MdQueryParams } from "@/lib/api-client/custom-hooks/md";
 import { num } from "@/lib/md/format";
-import { afterHoursText, afterKindText, ask, heatmapShape, peakText, plural, whenText } from "./logic";
+import { afterHoursText, afterKindText, ask, heatmapShape, peakText, plural, turnHeatmap, whenText } from "./logic";
 import { Chip, ListHeading, PersonCell, SeverityChip } from "./parts";
 import type { ActivityAfterHours, ActivityHeatmap } from "./types";
+
+/** Narrower than this (the grid's panel on a phone) twenty-four hour columns would scroll sideways: the grid turns. */
+const TURN_BELOW = 440;
 
 /** When people act: weekday by hour in factory time, and who works outside normal hours. */
 export default function HeatmapCard({ params, label }: { params: MdQueryParams; label: string }) {
@@ -16,6 +20,9 @@ export default function HeatmapCard({ params, label }: { params: MdQueryParams; 
   const h = q.data;
   const a = after.data;
   const peak = h ? peakText(h) : null;
+  // 0 until measured (and in a test DOM): days down, hours across, as on a wide screen
+  const [measure, boxWidth] = useElementWidth<HTMLDivElement>();
+  const turned = boxWidth > 0 && boxWidth < TURN_BELOW;
   return (
     <SectionCard
       title="When people act"
@@ -37,8 +44,17 @@ export default function HeatmapCard({ params, label }: { params: MdQueryParams; 
         </EmptyBlock>
       ) : h ? (
         <div className="space-y-4">
-          <div className="md-panel p-3 sm:p-4">
-            <Heatmap {...heatmapShape(h)} rowHeaderWidth={44} cellHeight={26} testId="md-activity-heatmap-grid" />
+          <div className="md-panel p-3 sm:p-4" ref={measure}>
+            {turned ? (
+              <Heatmap
+                {...turnHeatmap(heatmapShape(h))}
+                rowHeaderWidth={34}
+                cellHeight={20}
+                testId="md-activity-heatmap-grid"
+              />
+            ) : (
+              <Heatmap {...heatmapShape(h)} rowHeaderWidth={44} cellHeight={26} testId="md-activity-heatmap-grid" />
+            )}
           </div>
           <p
             className="md-panel-wine md-people-callout text-xs leading-relaxed text-md-ink"

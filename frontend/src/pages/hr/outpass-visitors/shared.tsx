@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -49,14 +49,19 @@ function StatCard({
   return (
     <Card className="relative border">
       {isLoading && <KpiRunningBorder accent={accent} radius={12} />}
-      <CardContent className="p-5">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
-          <div className={`p-1.5 rounded-lg ${colorCls}`}>
+      {/* phones (three tiles in ~110 px each): 12 px padding, the label may wrap but never runs under the icon */}
+      <CardContent className="p-3 sm:p-5">
+        <div className="mb-2 flex items-start justify-between gap-1.5 sm:mb-3 sm:items-center">
+          <p className="min-w-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 sm:text-xs sm:tracking-wider">
+            {label}
+          </p>
+          <div className={`shrink-0 p-1.5 rounded-lg ${colorCls}`}>
             <Icon size={14} className="text-white" />
           </div>
         </div>
-        <p className="flex h-9 items-center text-3xl font-black text-gray-900 leading-none">{isLoading ? "" : value}</p>
+        <p className="flex h-9 items-center text-2xl font-black text-gray-900 leading-none sm:text-3xl">
+          {isLoading ? "" : value}
+        </p>
       </CardContent>
     </Card>
   );
@@ -64,7 +69,7 @@ function StatCard({
 
 export function KpiRow({ summary, isLoading }: { summary: GateSummary | undefined; isLoading: boolean }) {
   return (
-    <div className="grid grid-cols-3 gap-4">
+    <div className="grid grid-cols-3 gap-2.5 sm:gap-4">
       <StatCard
         icon={Calendar}
         label="Today"
@@ -224,6 +229,13 @@ export function DateTimeStack({ iso }: { iso?: string | null }) {
       </p>
     </div>
   );
+}
+
+// The words of an empty or loading table row. On a phone the table is wider than the screen and scrolls inside its box, so
+// the words keep to the part of the row that is on screen instead of being centred out of sight; on a wide screen the
+// row is narrower than the window and they are centred across it as before.
+export function RowNote({ children }: { children: ReactNode }) {
+  return <p className="sticky left-0 max-w-[calc(100vw-3rem)]">{children}</p>;
 }
 
 // Fixed column widths + one shared horizontal padding: every header sits exactly over its cells.

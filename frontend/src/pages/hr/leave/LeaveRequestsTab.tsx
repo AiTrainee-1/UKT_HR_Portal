@@ -87,7 +87,7 @@ export default function LeaveRequestsTab({
   const half = mode === "half";
   const [filters, setFilters] = useState<LeaveFilters>(NO_LEAVE_FILTERS);
   const set = (patch: Partial<LeaveFilters>) => setFilters((f) => ({ ...f, ...patch }));
-  const visible = useVisibleCount();
+  const visible = useVisibleCount(60, 20);
 
   const summary = useMemo(() => summarizeLeaves(rows, today), [rows, today]);
   const shown = useMemo(() => sortLeaves(filterLeaves(rows, filters)), [rows, filters]);
@@ -158,7 +158,7 @@ export default function LeaveRequestsTab({
             label={`Search ${noun}`}
             testId={`${mode}-search`}
           />
-          <div className="grid grid-cols-2 gap-2 lg:flex">
+          <div className="grid grid-cols-2 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 lg:flex">
             <FilterSelect
               value={filters.branch}
               onChange={(branch) => set({ branch })}
@@ -198,13 +198,21 @@ export default function LeaveRequestsTab({
             )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <DateField label="From" value={filters.from} onChange={(from) => set({ from })} testId={`${mode}-from`} />
-          <DateField label="To" value={filters.to} onChange={(to) => set({ to })} testId={`${mode}-to`} />
-          <div className="ml-auto">
+        {/* phones: From and To side by side, Export across the row under them */}
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
+          <DateField
+            label="From"
+            value={filters.from}
+            onChange={(from) => set({ from })}
+            testId={`${mode}-from`}
+            fill
+          />
+          <DateField label="To" value={filters.to} onChange={(to) => set({ to })} testId={`${mode}-to`} fill />
+          <div className="col-span-2 sm:ml-auto">
             <ExportButton
               disabled={shown.length === 0}
               testId={`${mode}-export`}
+              className="w-full sm:w-auto"
               onClick={() =>
                 exportSheet(half ? "Half-day leave" : "Leave requests", LEAVE_EXPORT_HEADERS, leaveExportRows(shown))
               }
@@ -212,16 +220,19 @@ export default function LeaveRequestsTab({
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <PillTabs
-            size="sm"
-            items={STATUS_PILLS.map((s) => ({
-              value: s,
-              label: s.charAt(0).toUpperCase() + s.slice(1),
-              count: counts[s],
-            }))}
-            value={filters.status}
-            onChange={(status) => set({ status })}
-          />
+          {/* one row of status pills that scrolls sideways on a phone */}
+          <div className="flex min-w-0 max-w-full max-sm:overflow-x-auto" data-tab-row>
+            <PillTabs
+              size="sm"
+              items={STATUS_PILLS.map((s) => ({
+                value: s,
+                label: s.charAt(0).toUpperCase() + s.slice(1),
+                count: counts[s],
+              }))}
+              value={filters.status}
+              onChange={(status) => set({ status })}
+            />
+          </div>
           <ResultLine
             shown={shown.length}
             total={rows.length}
@@ -322,7 +333,7 @@ function LeaveCard({
       )}
       onClick={() => onOpen(leave)}
     >
-      <CardContent className="p-4">
+      <CardContent className="p-3.5 sm:p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1 space-y-1.5">
             <PersonCell id={leave.employeeId} name={leave.employeeName} code={leave.employeeCode} sub={where || null} />
@@ -357,7 +368,8 @@ function LeaveCard({
             <ApprovalTrailLine approval={leave.approval} />
             {by && <p className="text-[11px] text-gray-400">{by}</p>}
           </div>
-          <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          {/* data-row-actions: the MD skin drops this row when the view-only lock has hidden every button in it */}
+          <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()} data-row-actions>
             {pending && hrCanAct(leave.approval, true) && (
               <Button
                 size="sm"

@@ -22,6 +22,7 @@ import {
   RecordsPagination,
   fmtDateTime,
   useSelectedBranch,
+  RowNote,
 } from "../shared";
 
 // ── Visitors tab ──────────────────────────────────────────────────────────
@@ -86,13 +87,13 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
                 {recordsLoading && !page_ ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
-                      Loading…
+                      <RowNote>Loading…</RowNote>
                     </TableCell>
                   </TableRow>
                 ) : !records.length ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
-                      No visitor records for {RANGE_LABEL[range].toLowerCase()}.
+                      <RowNote>No visitor records for {RANGE_LABEL[range].toLowerCase()}.</RowNote>
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -125,7 +126,7 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
                             <div className="flex items-center gap-2">
                               <Avatar className="size-7">
                                 <AvatarImage src={emp.photoUrl ?? undefined} />
-                                <AvatarFallback className="text-[10px]">{emp.name[0]}</AvatarFallback>
+                                <AvatarFallback className="text-[11px] sm:text-[10px]">{emp.name[0]}</AvatarFallback>
                               </Avatar>
                               <div className="min-w-0">
                                 <p className="truncate font-medium">{emp.name}</p>
@@ -141,7 +142,7 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
                           {emp ? (
                             <div className="flex items-center gap-1.5">
                               <span
-                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] sm:text-[10px] font-semibold ${
                                   r.notifiedEmailAt
                                     ? "border-green-200 bg-green-50 text-green-700"
                                     : "border-gray-200 bg-gray-50 text-gray-400"
@@ -151,7 +152,7 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
                                 <Mail size={11} /> {r.notifiedEmailAt ? "Sent" : "—"}
                               </span>
                               <span
-                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] sm:text-[10px] font-semibold ${
                                   r.notifiedWhatsappAt
                                     ? "border-green-200 bg-green-50 text-green-700"
                                     : "border-gray-200 bg-gray-50 text-gray-400"

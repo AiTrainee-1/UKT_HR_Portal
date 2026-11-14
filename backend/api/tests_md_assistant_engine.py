@@ -69,19 +69,9 @@ class TheAnswerFlow(EngineCase):
         self.assertIn("Today is provisional.", p["dataUsed"][0]["caveats"])
         # a caveat lowers confidence from the model's "high" to what the evidence supports
         self.assertEqual(p["confidence"], "medium")
-        # only real pages are suggested, with their path
-        self.assertEqual(
-            p["suggestedPages"],
-            [
-                {
-                    "id": "attendance",
-                    "title": "Staff Attendance",
-                    "path": "/md/attendance/staff",
-                    "reason": "Detailed breakdown",
-                }
-            ],
-        )
-        self.assertEqual(p["followUps"], ["And last month?"])
+        # no related pages any more (owner 2026-11-13), even when the model still sends some
+        self.assertEqual(p["suggestedPages"], [])
+        self.assertEqual(p["followUps"], [])  # no follow-up chips any more (owner 2026-11-13)
         self.assertIn("Staff and production together.", p["assumptions"])
         self.assertEqual(p["reasoning"], ["I looked at attendance."])
         self.assertEqual(p["model"], "gemini-test")
@@ -163,7 +153,9 @@ class TheAnswerFlow(EngineCase):
         self.assertIn("Payroll Analysis", system)
         self.assertIn("Month: Sep 2026", system)
         self.assertIn("Gross: ₹4.2 Cr", system)
-        self.assertIn("attendance: Staff Attendance", system)  # the pages it may suggest
+        # it is told not to suggest pages, and no longer gets a list of pages to suggest
+        self.assertNotIn("PAGES YOU MAY SUGGEST", system)
+        self.assertIn("Do not suggest pages", system)
 
     def test_free_text_instead_of_the_answer_tool_is_accepted_with_low_confidence(self):
         msg, _, _ = self.run_question([text_reply("Attendance was good.")])
@@ -264,6 +256,9 @@ class PrivacyInTheLoop(EngineCase):
         )
 
     def test_names_never_reach_gemini_and_come_back_for_the_md(self):
+        # privacy mode is OFF by default since 2026-11-13; switched on, it still does what it always did
+        self.settings.privacy_mode = True
+        self.settings.save()
         msg, client, _ = self.run_question(
             [
                 call_reply(("attendance_summary", {})),
@@ -492,10 +487,17 @@ class TheAnswerIsCleanedUp(EngineCase):
         )
         self.assertEqual(msg.payload["answerType"], "cannot_answer")
 
-    def test_page_suggestions_are_limited_to_two_distinct_real_pages(self):
-        pages = [{"page": p, "reason": "r"} for p in ("payroll", "payroll", "attendance", "employees")]
-        msg, _, _ = self.run_question([submit_reply(suggested_pages=pages)])
-        self.assertEqual([p["id"] for p in msg.payload["suggestedPages"]], ["payroll", "attendance"])
+    def test_page_suggestions_are_never_returned(self):
+        pages = [{"page": p, "reason": "r"} for p in ("payroll", "attendance")]
+        msg, client, _ = self.run_question([submit_reply(suggested_pages=pages)])
+        self.assertEqual(msg.payload["suggestedPages"], [])
+        submit = next(d for d in client.calls[0]["tools"] if d["name"] == "submit_answer")
+        self.assertNotIn("suggested_pages", submit["parameters"]["properties"])
+
+    def test_privacy_mode_is_off_by_default_and_the_prompt_says_people_come_by_name(self):
+        _, client, _ = self.run_question([submit_reply()])
+        self.assertFalse(self.settings.privacy_mode)
+        self.assertIn("People appear by their real name and employee code", client.calls[0]["system"])
 
     def test_a_clarifying_question_has_low_confidence_and_no_data_claims(self):
         msg, _, _ = self.run_question([submit_reply(answer_type="clarification", answer="Which month do you mean?")])

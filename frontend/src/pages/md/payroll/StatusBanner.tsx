@@ -2,7 +2,7 @@ import { CircleAlert, CircleCheck, Hourglass, Info } from "lucide-react";
 import ProvenanceButton from "@/components/md/kit/ProvenanceButton";
 import type { Provenance } from "@/lib/md/types";
 import { cn } from "@/lib/utils";
-import { STATE_STYLE, describeStatus, whenText, type StatusSummary } from "./logic";
+import { STATE_STYLE, describeStatus, statusDates, statusFacts, type StatusSummary } from "./logic";
 import { OVERLINE, Pill, toneClass, type MoneyTone } from "./parts";
 import type { MonthStatus } from "./types";
 
@@ -15,9 +15,10 @@ const TONE: Record<StatusSummary["tone"], { tone: MoneyTone; icon: typeof Info }
 };
 
 /**
- * Which month the figures describe, and where it stands: paid, part paid, generated, still running, provisional. The
- * system has no "finalised" switch, so this is the nearest honest answer, and it sits right under the filters so a
- * number is never read without it.
+ * Which month the figures describe, and where it stands in HR's month workflow: still open, Payroll Done with the
+ * payment pending for N days, or Paid on a date (production: cleared = paid). Cleared staff salaries are shown as a
+ * "verified" count, never as paid; salaries on hold, new joiners waiting to be added and people paid separately get a
+ * chip each. It sits right under the filters so a number is never read without it.
  */
 export default function StatusBanner({
   status,
@@ -28,9 +29,11 @@ export default function StatusBanner({
 }) {
   if (!status) return null;
   const view = describeStatus(status);
-  const style = STATE_STYLE[status.state];
+  const style = STATE_STYLE[status.state] ?? STATE_STYLE.generated;
   const tone = TONE[view.tone];
   const Icon = tone.icon;
+  const facts = statusFacts(status);
+  const dates = statusDates(status);
   return (
     <div
       className={cn("md-card md-money-status", toneClass(tone.tone))}
@@ -48,21 +51,33 @@ export default function StatusBanner({
         <p className="mt-1 text-[13px] leading-snug text-md-ink-soft" data-testid="md-payroll-status-detail">
           {view.detail}
         </p>
+        {facts.length > 0 && (
+          <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="md-payroll-status-facts">
+            {facts.map((f) => (
+              <li key={f.id}>
+                <span
+                  className={cn("md-chip text-[11.5px] tabular-nums", f.chip)}
+                  title={f.title}
+                  data-testid={`md-payroll-status-fact-${f.id}`}
+                >
+                  {f.text}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      {(status.generatedAt || status.paidAt) && (
-        <dl className="flex gap-5 sm:border-l sm:border-md-line sm:pl-5">
-          {status.generatedAt && (
-            <div>
-              <dt className={OVERLINE}>Generated</dt>
-              <dd className="mt-0.5 text-[13px] font-bold tabular-nums text-md-ink">{whenText(status.generatedAt)}</dd>
+      {dates.length > 0 && (
+        <dl
+          className="grid w-full grid-cols-2 gap-x-5 gap-y-2 @md:flex @md:w-auto @md:flex-wrap @2xl:border-l @2xl:border-md-line @2xl:pl-5"
+          data-testid="md-payroll-status-dates"
+        >
+          {dates.map((d) => (
+            <div key={d.id} className="min-w-0">
+              <dt className={OVERLINE}>{d.label}</dt>
+              <dd className="mt-0.5 text-[13px] font-bold tabular-nums text-md-ink">{d.value}</dd>
             </div>
-          )}
-          {status.paidAt && (
-            <div>
-              <dt className={OVERLINE}>Last marked paid</dt>
-              <dd className="mt-0.5 text-[13px] font-bold tabular-nums text-md-ink">{whenText(status.paidAt)}</dd>
-            </div>
-          )}
+          ))}
         </dl>
       )}
       <ProvenanceButton provenance={provenance} ids={["payroll-status", "provisional"]} />

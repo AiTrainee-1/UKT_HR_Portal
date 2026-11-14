@@ -11,6 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import type { CSSProperties } from "react";
 import { CHART, axisStyle, gridProps, legendStyle, tooltipStyle } from "./chartTheme";
 
 export type TrendSeries = {
@@ -66,7 +67,11 @@ export default function TrendChart({
   const fmtRight = (v: number) => (rightFormat ? rightFormat(v) : fmtY(v));
   const fmtX = (v: string) => (xFormat ? xFormat(v) : v);
   return (
-    <div style={{ height }} data-testid="trend-chart">
+    <div
+      className="md-shell-chart"
+      style={{ "--md-chart-h": `${height}px` } as CSSProperties}
+      data-testid="trend-chart"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: hasRight ? 4 : 8, left: -8, bottom: 0 }}>
           <defs>

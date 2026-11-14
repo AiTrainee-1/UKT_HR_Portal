@@ -159,7 +159,7 @@ export default function LeaveTab({
             ))}
           </SelectContent>
         </Select>
-        <div className="ml-auto flex flex-wrap items-center gap-3">
+        <div className="flex w-full flex-wrap items-center gap-3 sm:ml-auto sm:w-auto">
           <span className="text-xs text-gray-500" data-testid="selected-count">
             <b>{picked.length}</b> selected
           </span>
@@ -208,7 +208,8 @@ export default function LeaveTab({
                   <TableHead className="w-10 pl-4">
                     <SelectAllBox state={selectState(shown, selected)} count={shown.length} onToggle={toggleAll} />
                   </TableHead>
-                  <TableHead>Ticket No</TableHead>
+                  {/* phones: the ticket number goes under the name, so the Informed call stays on the screen */}
+                  <TableHead className="hidden sm:table-cell">Ticket No</TableHead>
                   <TableHead>Employee Name</TableHead>
                   <TableHead className="hidden md:table-cell">Department</TableHead>
                   <TableHead className="hidden lg:table-cell">Designation</TableHead>
@@ -228,11 +229,14 @@ export default function LeaveTab({
                           aria-label={`Select ${row.employeeName}`}
                         />
                       </TableCell>
-                      <TableCell className="whitespace-nowrap font-mono text-xs text-gray-600">
+                      <TableCell className="hidden whitespace-nowrap font-mono text-xs text-gray-600 sm:table-cell">
                         {row.employeeCode}
                       </TableCell>
-                      <TableCell className="whitespace-nowrap text-sm font-semibold text-gray-900">
+                      <TableCell className="text-sm font-semibold text-gray-900 sm:whitespace-nowrap">
                         {row.employeeName}
+                        <span className="block font-mono text-xs font-normal text-gray-600 sm:hidden">
+                          {row.employeeCode}
+                        </span>
                       </TableCell>
                       <TableCell className="hidden whitespace-nowrap text-sm text-gray-600 md:table-cell">
                         {dash(row.department)}
@@ -254,7 +258,7 @@ export default function LeaveTab({
                           disabled={setInformed.isPending}
                         >
                           <SelectTrigger
-                            className={cn("h-8 w-28 text-xs font-semibold sm:w-36", INFORMED_TONE[value])}
+                            className={cn("h-9 w-28 text-xs font-semibold sm:h-8 sm:w-36", INFORMED_TONE[value])}
                             aria-label={`Informed status of ${row.employeeName}`}
                             data-testid={`informed-${row.employeeId}`}
                           >

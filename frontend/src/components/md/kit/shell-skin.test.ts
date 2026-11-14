@@ -33,6 +33,7 @@ const SHELL_FILES = [
     .map((f) => `components/md/kit/${f}`),
   "components/md/embedded/MdEmbeddedFrame.tsx",
   "components/md/embedded/brief.tsx",
+  "components/md/embedded/InsightsReveal.tsx",
 ];
 
 const CLASS = /md-shell-[a-z0-9-]+/g;

@@ -1,5 +1,5 @@
 """The MD portal's pages. One list, used by the sidebar contract (/api/md/me) and by the assistant, which may only
-suggest a page that is in it (so "you can see this on the Payroll Analysis page" always points somewhere real).
+suggest a page that is in it (so "you can see this on the Payroll page" always points somewhere real).
 
 Keep it in step with frontend/src/components/md/md-nav.ts (the frontend mirror: titles, paths and order).
 
@@ -22,6 +22,13 @@ MD_PAGES: list[dict] = [
         "path": "/md/employees",
         "summary": "The employee list and records (add, edit, import) with workforce composition, tenure, movement (joiners and leavers) and attrition.",
         "domain": "employees",
+    },
+    {
+        "id": "approvals",
+        "title": "HOD Approvals",
+        "path": "/md/approvals",
+        "summary": "The requests waiting for the Department Heads who work in the MD department, one tab per Department Head, with their history; the MD can approve or reject at the Department Head's step.",
+        "domain": None,
     },
     {
         "id": "branches",
@@ -107,11 +114,12 @@ MD_PAGES: list[dict] = [
         "summary": "Every request waiting for a decision (leave, permission, outpass, advance, missing punch) with how long they wait and how fast they are decided.",
         "domain": "requests",
     },
+    # Payroll (owner 2026-11-14): employee-focused payroll ANALYTICS, not HR's transaction pages
     {
         "id": "payroll",
-        "title": "Payroll Analysis",
+        "title": "Payroll",
         "path": "/md/payroll",
-        "summary": "Payroll cost and its trend, what changed against last month and why, cost by department and unit, overtime.",
+        "summary": "What the company spends on salaries each month, what is deducted and what employees actually earn: month by month, department by department and employee by employee, with each employee's salary history, attendance deductions and Casual Leave.",
         "domain": "payroll",
     },
     {

@@ -33,7 +33,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { canEdit, useAuth } from "@/contexts/AuthContext";
+import { canEdit, canView, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import {
   isTrackingForbidden,
@@ -105,7 +105,10 @@ export default function TrackingRulesCard() {
   // may read them but not change them
   const branchLogin = user?.role === "hr" && !user.isSuperAdmin && !user.isMd && user.branchId != null;
   const editable = canEdit(user, "settings.attendance") && !branchLogin;
-  const query = useGeoTrackingSettings();
+  // an account that cannot open Settings -> Attendance (the Managing Director's, a role with Geo Attendance alone) is not
+  // sent to the server for rules it would only be refused (a 403 in the console on every visit): the card says so instead
+  const readable = canView(user, "settings.attendance");
+  const query = useGeoTrackingSettings(readable);
   const update = useUpdateGeoTrackingSettings();
   const saved = query.data;
 
@@ -126,6 +129,20 @@ export default function TrackingRulesCard() {
     );
     baseline.current = next;
   }, [saved]);
+
+  // (before the loading state: a query that is never sent stays "pending")
+  if (!readable) {
+    return (
+      <Card className="rounded-2xl" data-testid="rules-no-access">
+        <CardContent className="space-y-2 p-5 text-sm">
+          <h3 className="text-base font-bold text-gray-900">Geo-tracking rules</h3>
+          <p className="text-gray-600">
+            These rules are part of Settings → Attendance, which this account cannot open. HR sets them there.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (query.isPending) {
     return (

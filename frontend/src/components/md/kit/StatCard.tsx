@@ -85,7 +85,7 @@ export default function StatCard({
   return (
     <div
       className={cn(
-        "md-card md-shell-stat relative flex flex-col justify-between gap-3 p-4 @2xl:p-5",
+        "md-card md-shell-stat relative flex h-full flex-col justify-between gap-2.5 p-3 sm:gap-3 sm:p-4 @2xl:p-5",
         t.box,
         clickable && "cursor-pointer",
       )}
@@ -110,14 +110,14 @@ export default function StatCard({
       <div className="min-w-0">
         <p
           className={cn(
-            "text-[1.65rem] font-black leading-none tracking-tight tabular-nums text-md-ink [overflow-wrap:anywhere]",
+            "text-[1.4rem] font-black leading-none tracking-tight tabular-nums text-md-ink [overflow-wrap:anywhere] sm:text-[1.65rem]",
             loading && "opacity-0",
           )}
           data-testid={testId ? `${testId}-value` : undefined}
         >
           {value}
         </p>
-        {sub && <p className="mt-2 text-xs leading-snug text-md-ink-soft">{sub}</p>}
+        {sub && <p className="mt-1.5 text-[11px] leading-snug text-md-ink-soft sm:mt-2 sm:text-xs">{sub}</p>}
       </div>
       {(delta || (spark && spark.length > 1) || children) && (
         <div className="flex flex-wrap items-end justify-between gap-x-2 gap-y-1.5">

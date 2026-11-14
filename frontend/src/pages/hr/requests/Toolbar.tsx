@@ -119,7 +119,8 @@ export default function Toolbar({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:flex lg:flex-wrap">
+      {/* on a phone an odd last filter takes the whole row instead of half of it */}
+      <div className="grid grid-cols-2 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 md:grid-cols-3 lg:flex lg:flex-wrap">
         <Select value={filters.status} onValueChange={(v) => set({ status: v as StatusFilter })}>
           <SelectTrigger className="h-9 lg:w-44" aria-label="Filter by status" data-testid="filter-status">
             <SelectValue />

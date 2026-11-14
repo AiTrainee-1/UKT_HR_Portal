@@ -758,7 +758,7 @@ class Composition(MdApiTestCase):
         self.assertEqual(set(data["sources"]), {s.module for s in D.SOURCES})
         self.assertTrue(all(s["ok"] and "error" not in s for s in data["sources"].values()))
         self.assertEqual(data["notes"], [])
-        self.assertEqual(data["sources"]["payroll"]["title"], "Payroll Analysis")
+        self.assertEqual(data["sources"]["payroll"]["title"], "Payroll")
         self.assertEqual(data["sources"]["tea_break"]["page"], "tea-break")
 
     def test_a_module_that_raises_costs_only_its_own_cards_and_exceptions(self):
@@ -770,9 +770,9 @@ class Composition(MdApiTestCase):
         self.assertEqual(len(data["kpis"]), 8)  # a reserve took the place
         self.assertEqual([i["module"] for i in data["insights"]].count("payroll"), 0)
         self.assertEqual(data["sources"]["payroll"]["ok"], False)
-        self.assertEqual(data["sources"]["payroll"]["error"], "Payroll Analysis could not be loaded just now.")
+        self.assertEqual(data["sources"]["payroll"]["error"], "Payroll could not be loaded just now.")
         self.assertTrue(all(s["ok"] for m, s in data["sources"].items() if m != "payroll"))
-        self.assertEqual(data["notes"], ["Payroll Analysis could not be loaded, so what it adds is missing here."])
+        self.assertEqual(data["notes"], ["Payroll could not be loaded, so what it adds is missing here."])
         self.assertNotIn("hunter2", json.dumps(data))  # the reason stays in the server log ...
         self.assertIn("hunter2", log)  # ... where the people who run the system can read it
         self.assertEqual(data["units"]["total"]["expected"], 1190)  # everything else is intact
@@ -1024,10 +1024,10 @@ class TrendsComposition(MdApiTestCase):
         load, _ = self.stand_ins(payroll=SimpleNamespace(payroll_trend=broken))
         with mock.patch.object(D, "_analytics", side_effect=load), self.assertLogs(D.logger.name, "ERROR"):
             data = D.trends(today=TODAY)
-        self.assertEqual(data["payroll"], {"error": "Payroll Analysis could not be loaded just now."})
+        self.assertEqual(data["payroll"], {"error": "Payroll could not be loaded just now."})
         self.assertEqual(data["attendance"]["average"], {"attendancePct": 91.0})
         self.assertEqual(data["movement"]["totals"], {"joiners": 5})
-        self.assertEqual(data["notes"], ["Payroll Analysis could not be loaded, so what it adds is missing here."])
+        self.assertEqual(data["notes"], ["Payroll could not be loaded, so what it adds is missing here."])
 
     def test_the_scope_reaches_all_three(self):
         load, calls = self.stand_ins()

@@ -27,10 +27,36 @@ the report of the same name to the paisa:
 * a staff slip belongs to its month; a production slip to the month its pay period ENDS in
 * "provisional" = a staff slip computed before its month ended (the days still to come count as absent), until payroll
   is regenerated: ``payroll_statutory_common.provisional_slip_ids`` reproduced in SQL
-* "paid" = the slip's Payroll row carries the status word "paid" (``payroll_core_common.is_paid``)
 
-There is no "finalised" switch in the system: a month is considered closed when it has ended and has slips, and its
-payment state (paid / part paid / generated) comes from the Payroll rows. ``status`` shows that for every month.
+WHICH SLIPS COUNT (the question is "what did the company spend in the month"):
+
+* everyone paid in the month, people who have since left included: August's cost stays August's cost when someone is
+  deactivated in October. HR's Salary Statement and payroll lists show ACTIVE employees only (owner 2026-11-10,
+  ``payroll_insights_views.scope_payrolls``), so a staff month here is higher than the statement by exactly the slips of
+  people deactivated since; with nobody deactivated the two agree to the paisa
+* a new joiner HR has not added to the month's payroll yet (``Payroll.new_joiner_parked``, ``added_to_payroll_at`` not
+  set) is calculated by the engine but is not payroll yet: left out of every figure and counted apart
+  (``newJoinersWaiting``), as on the statement. Once added, or released and paid on their own after the lock, they count
+* a held salary (``Payroll.on_hold``) IS counted: it is on the statement (Remarks HOLD), only not in the bank file
+* production slips have no hold / new-joiner step: every slip counts
+
+The Report Center's slip reports (Department-wise Salary Cost, Payroll Month Comparison, Salary Register) count every
+slip, so they match the figures here except in a month with a new joiner waiting to be added: there they are higher by
+exactly those slips.
+
+WHERE A MONTH STANDS (``status``; owner 2026-11-10 staff month workflow, ``payroll_month_workflow.py``):
+
+* staff  Generated (open: HR can still regenerate and change it) -> Payroll Done (``PayrollMonthClose.finalized_at``:
+         locked for good, payment pending) -> Paid (``PayrollMonthClose.paid_at``, "Mark as Paid"). A staff slip is PAID
+         when its payroll row's ``payment_status`` is paid (Mark as Paid, or released and paid separately later), the
+         rule the employee apps use. "Cleared" (``Payroll.status`` = "paid") only means HR verified the row: it is
+         reported as a count (``clearedSlips``), never as paid.
+* production has no month lock and no payment step: a production slip is paid when its payroll row is Cleared (the
+         status word "paid", ``payroll_month_workflow.employee_sees_paid``), so its months are Paid / Part paid /
+         Generated as before.
+* a month with both is Paid when both are, Payroll Done while the staff payment is pending, Part paid when only some of
+  it is paid and In progress while the month runs. Held salaries and parked new joiners are counted apart (``onHold``,
+  ``newJoinersWaiting``, ``paidSeparately``): Mark as Paid does not pay them.
 """
 
 from __future__ import annotations
@@ -65,7 +91,7 @@ from django.db.models.functions import Cast, Coalesce, ExtractMonth, ExtractYear
 from django.utils import timezone
 
 from ...clock import FACTORY_TZ, ist_today
-from ...models import Advance, AdvanceRepayment, Bonus, Payroll, PayrollSettings, SalarySlip
+from ...models import Advance, AdvanceRepayment, Bonus, Payroll, PayrollMonthClose, PayrollSettings, SalarySlip
 from ...reporting.definitions.finance_common import ist_range_q
 from ...reporting.definitions.payroll_core_common import EMPLOYER_ESI_RATE, EMPLOYER_PF_RATE, LATE_SQL, SLIP_TYPE_SQL
 from ...reporting.formatting import parse_date
@@ -126,12 +152,15 @@ NO_PAYROLL_NOTE = (
 STATE_LABELS = {
     "paid": "Paid",
     "part_paid": "Part paid",
-    "generated": "Generated, not marked paid",
+    "finalized": "Payroll Done, payment pending",
+    "generated": "Generated, not paid",
     "in_progress": "In progress (provisional)",
     "not_generated": "Not generated",
     "not_started": "Not started",
     "no_data": "No payroll",
 }
+# a staff month that is generated but not finalized: HR can still regenerate and change it
+OPEN_LABEL = "Generated, still open"
 
 
 # ─── small numeric helpers ──────────────────────────────────────────────────────────────────────────────────────
@@ -209,8 +238,43 @@ def _pairs_q(pairs: Iterable[Ym]) -> Q:
     return Q(pk__in=[]) if empty else q
 
 
-def _slips(scope: Scope, pairs: Iterable[Ym] | None = None) -> QuerySet:
+def _staff_row_of_slip(rows: QuerySet) -> Exists:
+    """Does the staff slip's own payroll row (same employee and month, no pay period) match ``rows``?"""
+    return Exists(
+        rows.filter(
+            employee_id=OuterRef("employee_id"),
+            year=OuterRef("year"),
+            month=OuterRef("month"),
+            period_start__isnull=True,
+            week_number__isnull=True,
+        )
+    )
+
+
+def _production_row_of_slip(rows: QuerySet) -> Exists:
+    """Does the production slip's own payroll row (same employee and pay period) match ``rows``?"""
+    return Exists(
+        rows.filter(
+            employee_id=OuterRef("employee_id"),
+            period_start=OuterRef("period_start"),
+            period_end=OuterRef("period_end"),
+        )
+    )
+
+
+def _waiting_rows() -> QuerySet:
+    """Staff payroll rows of new joiners HR has not added to the month's payroll yet: calculated, not payroll yet."""
+    return Payroll.objects.filter(new_joiner_parked=True, added_to_payroll_at__isnull=True)
+
+
+def _slips(scope: Scope, pairs: Iterable[Ym] | None = None, *, everyone: bool = False) -> QuerySet:
+    """The slips the figures are made of: the scope's, without the staff slips of new joiners waiting to be added to
+    the payroll (``Payroll.new_joiner_parked``). People who have since left, held salaries and people paid separately
+    all count. ``everyone`` keeps the waiting new joiners too (the advances cross-check compares the slips with
+    recoveries of everyone)."""
     qs = SalarySlip.objects.filter(_slip_scope_q(scope))
+    if not everyone:
+        qs = qs.filter(Q(period_start__isnull=False) | ~_staff_row_of_slip(_waiting_rows()))
     return qs if pairs is None else qs.filter(_pairs_q(pairs))
 
 
@@ -456,22 +520,42 @@ def _context(scope: Scope, month: str | None, today: date | None = None) -> _Ctx
     return _Ctx(scope, today, ym, available, bool(month))
 
 
-def _paid_case() -> Case:
-    """Is this slip's Payroll row marked paid? (Payroll.status is free text: only the word 'paid' counts.) A staff slip
-    pairs with the month's staff row; a production slip with the row of its pay period."""
-    paid = Payroll.objects.annotate(status_norm=Lower(Trim("status"))).filter(status_norm="paid")
-    staff = paid.filter(
-        employee_id=OuterRef("employee_id"),
-        year=OuterRef("year"),
-        month=OuterRef("month"),
-        period_start__isnull=True,
-        week_number__isnull=True,
-    )
-    production = paid.filter(
-        employee_id=OuterRef("employee_id"), period_start=OuterRef("period_start"), period_end=OuterRef("period_end")
-    )
+def _cleared_rows() -> QuerySet:
+    """Payroll rows HR marked Cleared (Payroll.status is free text: only the word 'paid' counts, whatever its case)."""
+    return Payroll.objects.annotate(status_norm=Lower(Trim("status"))).filter(status_norm="paid")
+
+
+def _cleared_case() -> Case:
+    """Did HR clear (verify) this slip's payroll row? A staff slip pairs with the month's staff row; a production slip
+    with the row of its pay period. On a staff slip this is a check, not a payment."""
+    rows = _cleared_rows()
     return Case(
-        When(period_start__isnull=True, then=Exists(staff)), default=Exists(production), output_field=BooleanField()
+        When(period_start__isnull=True, then=_staff_row_of_slip(rows)),
+        default=_production_row_of_slip(rows),
+        output_field=BooleanField(),
+    )
+
+
+def _paid_case() -> Case:
+    """Is this slip PAID, by the rule the employee apps use (payroll_month_workflow.employee_sees_paid)? A staff slip once
+    its payroll row has payment status Paid (Mark as Paid, or released and paid separately after the lock); a production
+    slip once its row is Cleared (production has no payment step of its own)."""
+    return Case(
+        When(
+            period_start__isnull=True,
+            then=_staff_row_of_slip(Payroll.objects.filter(payment_status=Payroll.PAYMENT_PAID)),
+        ),
+        default=_production_row_of_slip(_cleared_rows()),
+        output_field=BooleanField(),
+    )
+
+
+def _held_case() -> Case:
+    """Is this staff slip's salary on hold (on the statement, not in the bank file, not paid with the month)?"""
+    return Case(
+        When(period_start__isnull=True, then=_staff_row_of_slip(Payroll.objects.filter(on_hold=True))),
+        default=Value(False),
+        output_field=BooleanField(),
     )
 
 
@@ -493,11 +577,19 @@ def _last_computed() -> Greatest:
     return Greatest(F("generated_at"), Subquery(touched))
 
 
-def _state_of(slips: int, paid: int, ended: bool, payroll_started: bool) -> str:
-    if slips == 0:
-        if not payroll_started:
-            return "no_data"
-        return "not_generated" if ended else "not_started"
+def _staff_state(slips: int, close: PayrollMonthClose | None, ended: bool) -> str | None:
+    """Where the staff part of a month stands in HR's month workflow (None: no staff slip in the selection)."""
+    if not slips:
+        return None
+    if close is not None:
+        return "paid" if close.paid_at else "finalized"
+    return "generated" if ended else "in_progress"
+
+
+def _production_state(slips: int, paid: int, ended: bool) -> str | None:
+    """Where the production part stands: a production slip is paid once its row is Cleared (no lock, no payment step)."""
+    if not slips:
+        return None
     if paid >= slips:
         return "paid"
     if not ended:
@@ -505,15 +597,42 @@ def _state_of(slips: int, paid: int, ended: bool, payroll_started: bool) -> str:
     return "part_paid" if paid else "generated"
 
 
+def _state_of(staff: str | None, production: str | None, ended: bool, payroll_started: bool) -> str:
+    """The month's one state from its staff and production parts (either may be absent)."""
+    parts = [s for s in (staff, production) if s]
+    if not parts:
+        if not payroll_started:
+            return "no_data"
+        return "not_generated" if ended else "not_started"
+    if len(parts) == 1 or parts[0] == parts[1]:
+        return parts[0]
+    if "finalized" in parts:  # the staff payment is pending, whatever production's own state
+        return "finalized"
+    if not ended:
+        return "in_progress"
+    return "part_paid" if "paid" in parts or "part_paid" in parts else "generated"
+
+
+def _ist_date(value: datetime) -> date:
+    return timezone.localtime(value, FACTORY_TZ).date()
+
+
 def _month_states(scope: Scope, pairs: Sequence[Ym], today: date, available: Sequence[Ym]) -> dict[Ym, dict]:
-    """The payment state of each month: slips, how many are marked paid, how many staff slips are provisional, the net
-    pay still to be marked paid, and when it was generated / paid. Two queries however many months."""
+    """Where each month stands: its state, slips, how many are paid (staff: Mark as Paid / paid separately; production:
+    Cleared), how many staff slips are verified (Cleared), held or provisional, the net pay still to be paid, the new
+    joiners waiting to be added, and when it was generated, finalized (Payroll Done) and paid. Three queries however many
+    months: the slips, the payroll rows and the month closes."""
     first = min(available) if available else None
     rows: dict[Ym, dict] = {}
+    extra: dict[Ym, dict] = {}
+    closes: dict[Ym, PayrollMonthClose] = {}
     if pairs:
+        zero = Value(ZERO, output_field=DEC)
         computed = _last_computed()
         qs = _slips(scope, pairs).annotate(
             is_paid=_paid_case(),
+            is_cleared=_cleared_case(),
+            is_held=_held_case(),
             c_ym=ExtractYear(computed, tzinfo=FACTORY_TZ) * 12 + ExtractMonth(computed, tzinfo=FACTORY_TZ),
             s_ym=F("year") * 12 + F("month"),
         )
@@ -523,54 +642,90 @@ def _month_states(scope: Scope, pairs: Sequence[Ym], today: date, available: Seq
             .annotate(
                 slips=Count("id"),
                 heads=Count("employee_id", distinct=True),
+                staff_slips=Count("id", filter=Q(period_start__isnull=True)),
                 paid=Count("id", filter=Q(is_paid=True)),
+                prod_paid=Count("id", filter=Q(is_paid=True, period_start__isnull=False)),
+                cleared=Count("id", filter=Q(is_cleared=True)),
+                held=Count("id", filter=Q(is_held=True)),
+                held_net=_sum(Case(When(is_held=True, then=F("net_salary")), default=zero, output_field=DEC)),
                 provisional=Count("id", filter=Q(period_start__isnull=True, c_ym__lte=F("s_ym"))),
-                unpaid_net=_sum(
-                    Case(
-                        When(is_paid=False, then=F("net_salary")),
-                        default=Value(ZERO, output_field=DEC),
-                        output_field=DEC,
-                    )
-                ),
+                unpaid_net=_sum(Case(When(is_paid=False, then=F("net_salary")), default=zero, output_field=DEC)),
                 periods=Count("period_end", distinct=True, filter=Q(period_start__isnull=False)),
                 generated=Max("generated_at"),
             )
         )
         rows = {(r["year"], r["month"]): r for r in grouped}
-        paid_at = {
-            (r["year"], r["month"]): r["last"]
+        # the payroll rows: new joiners waiting to be added (their slips are not counted above), people released and
+        # paid separately after the lock, and when production was last cleared (its payment)
+        waiting_q = Q(period_start__isnull=True, new_joiner_parked=True, added_to_payroll_at__isnull=True)
+        extra = {
+            (r["year"], r["month"]): r
             for r in Payroll.objects.annotate(status_norm=Lower(Trim("status")))
-            .filter(_slip_scope_q(scope), _pairs_q(pairs), status_norm="paid")
+            .filter(_slip_scope_q(scope), _pairs_q(pairs))
             .order_by()
             .values("year", "month")
-            .annotate(last=Max("updated_at"))
+            .annotate(
+                waiting=Count("id", filter=waiting_q),
+                waiting_net=_sum(Case(When(waiting_q, then=F("final_salary")), default=zero, output_field=DEC)),
+                separately=Count("id", filter=Q(period_start__isnull=True, released_from__isnull=False)),
+                cleared_at=Max("updated_at", filter=Q(period_start__isnull=False, status_norm="paid")),
+            )
         }
-    else:
-        paid_at = {}
+        # Payroll Done / Mark as Paid are company-wide: one row per staff month, whatever the unit
+        closes = {(c.year, c.month): c for c in PayrollMonthClose.objects.filter(_pairs_q(pairs))}
     out: dict[Ym, dict] = {}
     for ym in pairs:
-        r = rows.get(ym)
-        slips = int(r["slips"]) if r else 0
-        paid = int(r["paid"]) if r else 0
+        r = rows.get(ym) or {}
+        x = extra.get(ym) or {}
+        slips = int(r.get("slips") or 0)
+        staff = int(r.get("staff_slips") or 0)
+        prod_paid = int(r.get("prod_paid") or 0)
+        paid = int(r.get("paid") or 0)
         ended = _end(ym) < today
-        state = _state_of(slips, paid, ended, first is not None and ym >= first)
-        provisional = int(r["provisional"]) if r else 0
+        close = closes.get(ym) if staff else None  # the staff lock says nothing about a production-only selection
+        staff_state = _staff_state(staff, close, ended)
+        prod_state = _production_state(slips - staff, prod_paid, ended)
+        state = _state_of(staff_state, prod_state, ended, first is not None and ym >= first)
+        provisional = int(r.get("provisional") or 0)
+        finalized_at = close.finalized_at if close else None
+        marked_paid_at = close.paid_at if close else None
+        moments = [m for m in (marked_paid_at, x.get("cleared_at") if prod_paid else None) if m]
         out[ym] = {
             "month": _key(ym),
             "label": _label(ym),
             "state": state,
-            "stateLabel": STATE_LABELS[state],
+            "stateLabel": OPEN_LABEL if state == "generated" and staff_state == "generated" else STATE_LABELS[state],
             "monthEnded": ended,
             "slips": slips,
-            "headcount": int(r["heads"]) if r else 0,
+            "headcount": int(r.get("heads") or 0),
             "paidSlips": paid,
             "unpaidSlips": slips - paid,
-            "unpaidNet": money(r["unpaid_net"]) if r else 0.0,
+            "unpaidNet": money(r.get("unpaid_net") or ZERO),
             "provisionalSlips": provisional,
             "final": state == "paid" and provisional == 0 and ended,
-            "productionPeriods": int(r["periods"]) if r else 0,
-            "generatedAt": _wall(r["generated"]) if r else None,
-            "paidAt": _wall(paid_at.get(ym)) if state in ("paid", "part_paid") else None,
+            "productionPeriods": int(r.get("periods") or 0),
+            "generatedAt": _wall(r.get("generated")),
+            "paidAt": _wall(max(moments)) if moments and state in ("paid", "part_paid") else None,
+            # the staff month workflow (2026-11-10) and the verification count
+            "staffSlips": staff,
+            "productionSlips": slips - staff,
+            "staffState": staff_state,
+            "productionState": prod_state,
+            "locked": close is not None,
+            "finalizedAt": _wall(finalized_at),
+            "markedPaidAt": _wall(marked_paid_at),
+            "paymentPendingDays": max(0, (today - _ist_date(finalized_at)).days)
+            if finalized_at and not marked_paid_at
+            else None,
+            "daysToPay": max(0, (_ist_date(marked_paid_at) - _ist_date(finalized_at)).days)
+            if finalized_at and marked_paid_at
+            else None,
+            "clearedSlips": int(r.get("cleared") or 0),
+            "onHold": int(r.get("held") or 0),
+            "onHoldNet": money(r.get("held_net") or ZERO),
+            "newJoinersWaiting": int(x.get("waiting") or 0),
+            "newJoinersNet": money(x.get("waiting_net") or ZERO),
+            "paidSeparately": int(x.get("separately") or 0),
         }
     return out
 
@@ -596,13 +751,19 @@ def _p_source(rows: int | None = None) -> dict:
         ),
         rows=rows,
         filters=[
+            "Everyone paid in the month, people who have since left included",
+            "A new joiner HR has not yet added to the month's payroll is left out (not payroll yet); a salary on "
+            "hold is counted (it is on the Salary Statement, marked HOLD)",
             "Legacy weekly production slips are left out",
             "A staff slip belongs to its month; a production slip to the month its pay period ends in",
-            "People who have since left are included for the months they were paid",
         ],
         caveats=[
             "Department and unit are each person's CURRENT ones: a slip does not record them.",
             "Arrears are not recorded in this system, so they cannot be shown.",
+            "HR's Salary Statement lists active employees only, so for a month in which someone has since left it "
+            "is lower than the figures here by that person's pay.",
+            "The Report Center's Department-wise Salary Cost and Payroll Month Comparison count every slip, so for a "
+            "month with a new joiner not yet added to the payroll they are higher by that person's pay.",
         ],
     )
 
@@ -679,7 +840,9 @@ def _p_people() -> dict:
         dataset="Salary slips",
         definition=(
             "Employees with at least one salary slip in the month, each counted once (a production worker with two "
-            "period slips is one person). A person with a zero-pay slip is still counted: the exceptions list shows them."
+            "period slips is one person): people who have since left and salaries on hold included, new joiners not "
+            "yet added to the payroll left out. A person with a zero-pay slip is still counted: the exceptions list "
+            "shows them."
         ),
     )
 
@@ -744,13 +907,24 @@ def _p_status() -> dict:
         "Payroll status of a month",
         dataset="Salary slips + payroll rows",
         definition=(
-            "There is no 'finalised' switch in the system. A month with slips is Paid when every slip's payroll row is "
-            "marked paid, Part paid when some are, Generated when none are (and the month has ended) and In progress "
-            "while the month is still running. A month with no slips after payroll began is Not generated."
+            "Staff payroll follows HR's month workflow: Generated (still open: HR can regenerate and change it), "
+            "Payroll Done (locked for good, payment pending) and Paid (HR pressed Mark as Paid). Cleared on a staff "
+            "salary only means HR verified it: it is counted as verified, never as paid. Production payroll has no "
+            "lock: a production slip is paid when HR clears it. A month with both is Paid when both are, Payroll Done "
+            "while the staff payment is pending, Part paid when only some of it is paid, and In progress while the "
+            "month is running. A month with no slips after payroll began is Not generated."
         ),
+        formula="payment pending days = today - the day HR pressed Payroll Done (until Mark as Paid)",
         caveats=[
-            "'Paid' is a status HR sets by hand; it does not prove the bank transfer happened.",
-            "Generated and paid times are the slip's first generation and the payroll row's last update.",
+            "'Paid' is recorded by HR; it does not prove the bank transfer happened.",
+            "Salaries on hold are in the totals (they are on the Salary Statement) but are not paid with the month: "
+            "they stay unpaid until HR releases them and pays them separately.",
+            "New joiners who joined in the month are calculated but left out of every figure until HR adds them to "
+            "the payroll; they are counted as waiting.",
+            "Months generated before the workflow began (10 Nov 2026) were never finalized, so they show as Generated "
+            "even when HR cleared every salary.",
+            "The generated time is the slip's first generation; Payroll Done and Paid times are when HR pressed them; "
+            "a production month's paid time is when its last slip was cleared.",
         ],
     )
 
@@ -970,6 +1144,34 @@ def payroll_trend(scope: Scope, month: str | None = None, months: int = 12) -> d
     return _trend(_context(scope, month), _clamp(months, 2, 36))
 
 
+def months_by_type(scope: Scope, months: int = 6, today: date | None = None) -> list[dict]:
+    """The Dashboard's month-wise payroll (owner 2026-11-13): the last ``months`` CALENDAR months ending with the
+    current one (the current month included even while it runs, which the trend above leaves out), oldest first. Each:
+    the company figures (``_figures``: gross = salary earned + overtime, net, people paid ...), the same split into staff
+    and production slips, and the month's payment state (``_month_states``). The same slips, the same sums and the same
+    staff / production rule as every other payroll figure on the MD pages. Three queries."""
+    today = today or _today()
+    pairs = [_shift((today.year, today.month), -n) for n in range(_clamp(months, 1, 24) - 1, -1, -1)]
+    by_type: dict[Ym, dict[str, dict[str, Decimal]]] = defaultdict(dict)
+    for row in _agg_rows(scope, pairs, ("type",)):
+        by_type[(row["year"], row["month"])][row["stype"]] = _raw(row)
+    states = _month_states(scope, pairs, today, _available_months(scope))
+    out = []
+    for ym in pairs:
+        parts = by_type.get(ym, {})
+        total = _sum_raw(parts.values()) if parts else None
+        out.append(
+            {
+                **states[ym],
+                "current": ym == (today.year, today.month),
+                "figures": _figures(total) if total is not None else None,
+                "staff": _figures(parts["staff"]) if "staff" in parts else None,
+                "production": _figures(parts["production"]) if "production" in parts else None,
+            }
+        )
+    return out
+
+
 # ─── bridge: last month's gross pay to this month's, step by step ───────────────────────────────────────────────
 
 BRIDGE_STEPS: tuple[tuple[str, str], ...] = (
@@ -1089,7 +1291,7 @@ def _bridge_amounts(before: dict[int, dict], after: dict[int, dict]) -> tuple[di
 
 
 _BRIDGE_DETAIL = {
-    "joined": "People paid this month who were not paid last month (new joiners, and anyone left off last month's payroll).",
+    "joined": "People paid this month who were not paid last month (new joiners added to the payroll, and anyone left off last month's payroll).",
     "left": "People paid last month who are not on this month's payroll (leavers, and anyone missed this month).",
     "rate": "Change in contract salary (staff) or rate per shift (production) for people paid in both months: increments and promotions.",
     "overtime": "Change in overtime pay for people paid in both months.",
@@ -1860,7 +2062,8 @@ def _advances(ctx: _Ctx) -> dict:
         .filter(Q(year__lt=today.year) | Q(year=today.year, month__lt=today.month))
         .aggregate(amount=Sum("amount"), n=Count("id"), people=Count("advance__employee_id", distinct=True))
     )
-    on_slips = _slips(scope, [ym]).aggregate(total=Sum("advance_deduction"))["total"]
+    # every slip of the month, new joiners not yet added included: the recoveries it is checked against include them
+    on_slips = _slips(scope, [ym], everyone=True).aggregate(total=Sum("advance_deduction"))["total"]
     new_amount, recovered_amount = _dec(new["amount"]), _dec(recovered["amount"])
     gap = _dec(on_slips) - recovered_amount
     notes = []
@@ -2308,7 +2511,8 @@ def _status(ctx: _Ctx, months: int) -> dict:
 
 @cached()
 def payroll_status(scope: Scope, months: int = 12) -> dict:
-    """Which months have payroll, and whether each is paid, part paid, generated, in progress or provisional."""
+    """Which months have payroll, and whether each is open, Payroll Done (payment pending), paid, part paid, in
+    progress or provisional, with the held salaries and new joiners waiting."""
     return _status(_context(scope, None), _clamp(months, 1, 36))
 
 
@@ -2327,9 +2531,50 @@ def _item(id_: str, severity: str, title: str, detail: str, metric: str | None, 
     }
 
 
+def _day_text(wall_iso: str | None) -> str:
+    """'2026-11-10T11:17:00' -> '10 Nov 2026'."""
+    if not wall_iso:
+        return "an unknown day"
+    d = datetime.fromisoformat(wall_iso)
+    return f"{d.day} {d:%b %Y}"
+
+
+def _set_aside_items(st: dict, ym: Ym) -> list[dict]:
+    """Salaries on hold and new joiners waiting to be added in a month that has ended: not an error, but money that is
+    not paid with the month (held) or not in the figures yet (new joiners)."""
+    held, waiting = st["onHold"], st["newJoinersWaiting"]
+    if not (held or waiting):
+        return []
+    label = _label(ym)
+    parts, details = [], []
+    if held:
+        parts.append(f"{_plural(held, 'salary', 'salaries')} on hold")
+        details.append(
+            f"{_inr(st['onHoldNet'])} held: on the Salary Statement and in these figures, but not in the bank file "
+            "and not paid until HR releases them."
+        )
+    if waiting:
+        parts.append(f"{_plural(waiting, 'new joiner')} not yet added to payroll")
+        details.append(
+            f"{_inr(st['newJoinersNet'])} for new joiners: calculated, but left out of the payroll and of every figure "
+            "here until HR adds them."
+        )
+    return [
+        _item(
+            f"set-aside-{_key(ym)}",
+            "info",
+            f"{' and '.join(parts)} in {label}",
+            " ".join(details),
+            _plural(held + waiting, "person", "people"),
+            f"Who is on hold or waiting to be added to the {label} payroll, and for how much?",
+        )
+    ]
+
+
 def _due_status_items(ctx: _Ctx) -> list[dict]:
-    """Salary day has passed and the month is not generated or not marked paid. Looks at the month before this one (the
-    salary that is due now) and at the month being shown, when that is a different one."""
+    """Salary day has passed and the month is not generated, still open, done but not paid (payment pending) or only
+    part paid; plus salaries on hold and new joiners waiting. Looks at the month before this one (the salary that is due
+    now) and at the month being shown, when that is a different one."""
     today = ctx.today
     last_ended = _shift((today.year, today.month), -1)
     wanted = [last_ended] + ([ctx.ym] if ctx.ym and ctx.ym != last_ended and _end(ctx.ym) < today else [])
@@ -2338,12 +2583,20 @@ def _due_status_items(ctx: _Ctx) -> list[dict]:
     out = []
     for ym in wanted:
         st = states[ym]
+        label = _label(ym)
+        out.extend(_set_aside_items(st, ym))
         due = date(*_shift(ym, 1), pay_day)
         late = (today - due).days
         if late <= 0:
             continue
         severity = "critical" if late > PAY_DAY_CRITICAL_DAYS else "warning"
-        label = _label(ym)
+        salary_day = f"Salary day was the {_ordinal(pay_day)}, {_plural(late, 'day')} ago."
+        held = (
+            f" {_plural(st['onHold'], 'salary', 'salaries')} on hold ({_inr(st['onHoldNet'])}) "
+            f"{'is' if st['onHold'] == 1 else 'are'} part of it and will not be paid with the month."
+            if st["onHold"]
+            else ""
+        )
         if st["state"] == "not_generated":
             out.append(
                 _item(
@@ -2355,16 +2608,45 @@ def _due_status_items(ctx: _Ctx) -> list[dict]:
                     f"Payroll for {label} has no salary slips. Which months have payroll and what is pending?",
                 )
             )
+        elif st["state"] == "finalized":
+            pending = st["paymentPendingDays"] or 0
+            out.append(
+                _item(
+                    f"payment-pending-{_key(ym)}",
+                    severity,
+                    f"{label} payroll is done but not paid: payment pending for {_plural(pending, 'day')}",
+                    f"HR pressed Payroll Done on {_day_text(st['finalizedAt'])} and has not marked it as paid yet. "
+                    f"{salary_day} {_inr(st['unpaidNet'])} net pay is waiting to be paid.{held}",
+                    f"{_plural(pending, 'day')} pending",
+                    f"Why is {label} payroll still not paid, and how much is waiting?",
+                )
+            )
+        elif st["state"] in ("generated", "part_paid") and st["staffState"] == "generated":
+            verified = (
+                f" HR has verified (cleared) {st['clearedSlips']} of {st['slips']} salaries."
+                if st["clearedSlips"]
+                else ""
+            )
+            out.append(
+                _item(
+                    f"unpaid-{_key(ym)}",
+                    severity,
+                    f"{label} payroll is not done yet: it is still open and not paid",
+                    f"{salary_day} HR has generated payroll but not pressed Payroll Done, so it can still change, and "
+                    f"{_inr(st['unpaidNet'])} net pay is not paid.{verified}",
+                    _inr_compact(st["unpaidNet"]),
+                    f"Why is {label} payroll still open, and how much is not paid?",
+                )
+            )
         elif st["state"] in ("generated", "part_paid"):
             out.append(
                 _item(
                     f"unpaid-{_key(ym)}",
                     severity,
-                    f"{st['unpaidSlips']} of {st['slips']} slips for {label} are not marked paid",
-                    f"Salary day was the {_ordinal(pay_day)}, {_plural(late, 'day')} ago. {_inr(st['unpaidNet'])} net pay is not "
-                    "yet marked paid.",
+                    f"{st['unpaidSlips']} of {st['slips']} slips for {label} are not paid",
+                    f"{salary_day} {_inr(st['unpaidNet'])} net pay is not paid yet.",
                     _inr_compact(st["unpaidNet"]),
-                    f"Which {label} salary slips are still not marked paid, and for how much?",
+                    f"Which {label} salary slips are still not paid, and for how much?",
                 )
             )
         if st["provisionalSlips"] and st["state"] != "in_progress":
@@ -2528,15 +2810,24 @@ def payroll_attention(scope: Scope, month: str | None = None) -> dict:
 # ─── what the Dashboard and the assistant use ───────────────────────────────────────────────────────────────────
 
 
-def insights(*, today: date | None = None) -> list[dict]:
-    """Company-wide payroll exceptions for the Dashboard: at most 5, most severe first."""
-    ctx = _context(Scope(), None, today)
+def _kind_scope(kind: str | None) -> Scope:
+    """Everyone (None), or only the staff / only the production slips (the Staff and Production Payroll pages)."""
+    if kind not in (None, "staff", "production"):
+        raise MdParamError(f"'{kind}' is not a kind of payroll: use staff or production.")
+    return Scope(employment_type=kind)
+
+
+def insights(*, today: date | None = None, type: str | None = None) -> list[dict]:  # noqa: A002 - the caller's name
+    """Company-wide payroll exceptions for the Dashboard: at most 5, most severe first. ``type`` ("staff" /
+    "production") keeps only that kind's slips, for the strip above the Staff / Production Payroll page."""
+    ctx = _context(_kind_scope(type), None, today)
     return _attention(ctx)[:5]
 
 
-def headline(*, today: date | None = None) -> dict:
-    """What the Dashboard's strip shows for payroll: the latest closed month's cost, cost per head and overtime."""
-    ctx = _context(Scope(), None, today)
+def headline(*, today: date | None = None, type: str | None = None) -> dict:  # noqa: A002 - the caller's name
+    """What the Dashboard's strip shows for payroll: the latest closed month's cost, cost per head and overtime.
+    ``type`` ("staff" / "production") keeps only that kind's slips."""
+    ctx = _context(_kind_scope(type), None, today)
     notes_prov = [_p_gross(), _p_cost_per_head(), _p_overtime(), _p_status()]
     if ctx.ym is None:
         kpis = [
@@ -2663,8 +2954,11 @@ TOOLS = [
         "pay (take-home), total deductions (PF, ESI, TDS, advances, late), TDS deducted, overtime pay and its share, an "
         "estimate of employer cost (gross plus employer PF/ESI), people paid, cost per head and loss-of-pay days, each "
         "compared with the previous month and the same month last year, split staff vs production, with the month's "
-        "payment status (paid / not paid / provisional). All money is in rupees. Use for 'what did payroll cost last "
-        "month', 'how many people were paid', 'cost per head'. The result says which month it describes.",
+        "status (open / Payroll Done with payment pending / paid, salaries on hold, new joiners waiting, provisional). "
+        "Everyone paid in the month, people who have since left included (HR's Salary Statement lists active "
+        "employees only); held salaries counted, new joiners not yet added to the payroll left out. All money is in "
+        "rupees. Use for 'what did payroll cost last month', 'how many people "
+        "were paid', 'cost per head'. The result says which month it describes.",
         _tool_summary,
         page="payroll",
         period=None,
@@ -2713,7 +3007,7 @@ TOOLS = [
         "payroll_components",
         "What gross pay and deductions are made of for one month, with the previous month: basic, HRA, allowances, "
         "incentives, overtime; PF, ESI, TDS, advance recovery, late deductions; employer PF/ESI estimates; statutory "
-        "dues; net pay payable (slips not yet marked paid) and the year's statutory bonus status. Use for 'how much "
+        "dues; net pay still to be paid (slips not paid yet) and the year's statutory bonus status. Use for 'how much "
         "PF/ESI', 'how much TDS was deducted', 'how much was deducted for advances', 'what is bonus accrued'. Only Co "
         "Emp employees have PF and ESI and only employees on the TDS list have TDS; TDS is a separate remittance and "
         "is not part of the statutory dues (PF + ESI + the employer shares).",
@@ -2754,10 +3048,13 @@ TOOLS = [
     ),
     tool(
         "payroll_status",
-        "Which payroll months exist and what state each is in (paid, part paid, generated but not marked paid, in "
-        "progress / provisional, not generated), with slips, people, net pay still unpaid, provisional slips, when it "
-        "was generated and paid, and the salary day. There is no 'finalised' switch: paid means every slip's payroll row "
-        "is marked paid. Use for 'has payroll been done for September', 'is the last month paid', 'which months are pending'.",
+        "Which payroll months exist and what state each is in: generated and still open, finalized (HR pressed "
+        "'Payroll Done': locked, payment pending, with paymentPendingDays), paid (HR pressed 'Mark as Paid', with "
+        "markedPaidAt), part paid, in progress / provisional or not generated; with slips, people, net pay still not "
+        "paid, how many salaries HR verified ('Cleared': clearedSlips, NOT the same as paid), salaries on hold, new "
+        "joiners waiting to be added, people paid separately, when it was generated, and the salary day. Production "
+        "has no Payroll Done: a production slip is paid when it is cleared. Use for 'has payroll been done for "
+        "September', 'is the last month paid', 'how long has payment been pending', 'which months are pending'.",
         _tool_status,
         page="payroll",
         period=None,

@@ -4,6 +4,7 @@ import {
   LATEST,
   bandRows,
   bandTick,
+  bandTickLines,
   bridgeQuestion,
   buildWaterfall,
   deltaView,
@@ -16,13 +17,17 @@ import {
   reconciles,
   signedInr,
   signedInrCompact,
+  statusDates,
+  statusFacts,
   stepIsDrawn,
+  stripLines,
   tdsSub,
   tickMonth,
   trendChartRows,
   waterfallDomain,
   whenText,
 } from "./logic";
+import { finalizedStatus, openStatus, paidStatus } from "./fixtures";
 import { cardNotes, emptyReason } from "./parts";
 import type { BridgeStep, MonthStatus, NetBand, PayrollDepartments, PayrollStatus, TrendRow } from "./types";
 
@@ -140,6 +145,85 @@ describe("the status of a month, in plain words", () => {
     expect(describeStatus(status({ state: "in_progress" })).headline).toBe("Month in progress");
     expect(describeStatus(status({ state: "not_generated", slips: 0 })).tone).toBe("bad");
     expect(describeStatus(status({ state: "no_data", slips: 0 })).tone).toBe("info");
+  });
+
+  it("a staff month HR has not finalized is still open, and Cleared is verified, not paid", () => {
+    expect(describeStatus(openStatus)).toEqual({
+      headline: "Generated, still open",
+      detail:
+        "HR can still change it: Payroll Done has not been pressed. 2 of 8 verified (Cleared); nothing is paid yet (₹1,08,393 net pay).",
+      tone: "warn",
+    });
+  });
+
+  it("Payroll Done says since when the payment is pending, and what is held", () => {
+    expect(describeStatus(finalizedStatus)).toEqual({
+      headline: "Payroll Done · payment pending",
+      detail:
+        "Locked on 07 Oct 2026: HR can no longer change it. Payment pending for 5 days (₹1,08,393 net pay not marked as paid yet). 1 salary on hold (₹17,865) is not paid yet.",
+      tone: "warn",
+    });
+    expect(describeStatus({ ...finalizedStatus, paymentPendingDays: 1, onHold: 0 }).detail).toContain(
+      "pending for 1 day (",
+    );
+  });
+
+  it("paid by Mark as Paid gives the day and how long it took", () => {
+    expect(describeStatus(paidStatus)).toEqual({
+      headline: "Paid",
+      detail: "HR marked it as paid on 09 Oct 2026, 2 days after Payroll Done.",
+      tone: "good",
+    });
+    expect(describeStatus({ ...paidStatus, onHold: 2, onHoldNet: 30000 }).detail).toBe(
+      "HR marked it as paid on 09 Oct 2026, 2 days after Payroll Done. 2 salaries on hold (₹30,000) are not paid yet.",
+    );
+  });
+
+  it("an answer from before the workflow keeps its old wording", () => {
+    expect(describeStatus(status({ state: "generated", paidSlips: 0, unpaidSlips: 8, unpaidNet: 100 })).headline).toBe(
+      "Generated, not marked paid",
+    );
+    expect(statusFacts(status({}))).toEqual([]);
+  });
+
+  it("lists only the counts that are not nil", () => {
+    expect(statusFacts(openStatus).map((f) => f.text)).toEqual(["2 of 8 verified"]);
+    expect(statusFacts(finalizedStatus).map((f) => f.text)).toEqual([
+      "2 of 8 verified",
+      "1 on hold · ₹17,865",
+      "1 new joiner waiting",
+    ]);
+    expect(statusFacts(paidStatus).map((f) => f.id)).toEqual(["cleared", "separately"]);
+    expect(statusFacts({ ...openStatus, newJoinersWaiting: 3 }).find((f) => f.id === "joiners")?.text).toBe(
+      "3 new joiners waiting",
+    );
+    // a production-only month has no staff workflow: no "verified" count
+    expect(statusFacts({ ...openStatus, staffSlips: 0 }).map((f) => f.id)).toEqual([]);
+  });
+
+  it("dates: generated, Payroll Done and Mark as Paid; a production month's last clearing", () => {
+    expect(statusDates(paidStatus).map((d) => [d.label, d.value])).toEqual([
+      ["Generated", "01 Oct 2026, 9:00 am"],
+      ["Payroll Done", "07 Oct 2026, 3:00 pm"],
+      ["Marked paid", "09 Oct 2026, 11:00 am"],
+    ]);
+    expect(statusDates({ ...openStatus, staffSlips: 0, paidAt: "2026-10-08T12:00:00" }).map((d) => d.label)).toEqual([
+      "Generated",
+      "Last cleared",
+    ]);
+  });
+
+  it("the strip says how long a payment has been pending, and keeps to three short lines", () => {
+    expect(stripLines(finalizedStatus).map((l) => l.text)).toEqual([
+      "Pending 5 days",
+      "₹1.1 L unpaid",
+      "1 provisional",
+    ]);
+    expect(stripLines(paidStatus)).toEqual([]);
+    expect(stripLines({ ...openStatus, provisionalSlips: 0, onHold: 2 }).map((l) => l.text)).toEqual([
+      "₹1.1 L unpaid",
+      "2 on hold",
+    ]);
   });
 
   it("formats when it was generated", () => {
@@ -358,6 +442,16 @@ describe("short labels for the histogram columns", () => {
     expect(bandTick("₹75k–1 L")).toBe("75k–1 L");
     expect(bandTick("₹1 L+")).toBe("1 L+");
     expect(bandTick("Nil or negative")).toBe("Nil");
+  });
+});
+
+describe("the histogram's band names on a phone", () => {
+  it("writes a range on two lines the way it is written by hand, and a one-word band on one", () => {
+    expect(bandTickLines("10k–15k")).toEqual(["10–", "15k"]);
+    expect(bandTickLines("75k–1 L")).toEqual(["75k–", "1 L"]);
+    expect(bandTickLines("<10k")).toEqual(["<10k"]);
+    expect(bandTickLines("Nil")).toEqual(["Nil"]);
+    expect(bandTickLines("1 L+")).toEqual(["1 L+"]);
   });
 });
 

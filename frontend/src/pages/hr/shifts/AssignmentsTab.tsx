@@ -158,11 +158,11 @@ function GroupCard({
           <span className="min-w-0 flex-1">
             <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="truncate text-sm font-bold text-gray-900">{group.shiftName}</span>
-              <StatusBadge tone={production ? "warning" : "success"} className="capitalize">
+              <StatusBadge tone={production ? "warning" : "success"} className="text-[11px] capitalize sm:text-[10px]">
                 {group.shiftType}
               </StatusBadge>
               {group.genderRule !== "all" && (
-                <StatusBadge tone="accent" className="capitalize">
+                <StatusBadge tone="accent" className="text-[11px] capitalize sm:text-[10px]">
                   {group.genderRule} only
                 </StatusBadge>
               )}
@@ -270,11 +270,15 @@ function GroupCard({
                   </div>
                   <div className="hidden shrink-0 items-center gap-1.5 md:flex">
                     {(m.customStartTime || m.customEndTime) && (
-                      <StatusBadge tone="info" className="font-semibold">
+                      <StatusBadge tone="info" className="text-[11px] font-semibold sm:text-[10px]">
                         {m.customStartTime ?? m.startTime}–{m.customEndTime ?? m.endTime}
                       </StatusBadge>
                     )}
-                    {m.saturdayOff && <StatusBadge tone="info">Sat off</StatusBadge>}
+                    {m.saturdayOff && (
+                      <StatusBadge tone="info" className="text-[11px] sm:text-[10px]">
+                        Sat off
+                      </StatusBadge>
+                    )}
                     <span className="text-xs text-muted-foreground">since {prettyDate(m.effectiveFrom)}</span>
                   </div>
                   <div className="flex shrink-0 items-center">

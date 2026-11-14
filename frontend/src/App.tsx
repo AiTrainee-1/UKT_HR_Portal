@@ -55,6 +55,7 @@ const MdPayroll = lazy(() => import("@/pages/md/MdPayroll"));
 const MdReports = lazy(() => import("@/pages/md/MdReports"));
 const MdRecruitment = lazy(() => import("@/pages/md/MdRecruitment"));
 const MdActivity = lazy(() => import("@/pages/md/MdActivity"));
+const MdApprovals = lazy(() => import("@/pages/md/MdApprovals"));
 
 // HR pages
 const HrDashboard = lazy(() => import("@/pages/hr/Dashboard"));
@@ -462,10 +463,13 @@ function Router() {
         </Route>
         {/* ── Managing Director portal ─────────────────────────── */}
         <Route path="/md">{() => <Redirect to="/md/dashboard" />}</Route>
+        {/* Payroll: employee-focused payroll analytics (month, department, employee; ?view= and ?employee= in the address) */}
         <Route path="/md/payroll">{() => <ProtectedRoute component={MdPayroll} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/reports">{() => <ProtectedRoute component={MdReports} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/recruitment">{() => <ProtectedRoute component={MdRecruitment} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/activity">{() => <ProtectedRoute component={MdActivity} allowedRoles={["hr"]} />}</Route>
+        {/* HOD Approvals: one page per Department Head of the MD department (/md/approvals/<id>), picked in the sidebar */}
+        <Route path="/md/approvals/*?">{() => <ProtectedRoute component={MdApprovals} allowedRoles={["hr"]} />}</Route>
         {/* The analytics pages that used to be separate now live inside the pages they analyse. */}
         <Route path="/md/visitors">{() => <Redirect to="/md/outpass-visitors/visitors" replace />}</Route>
         <Route path="/md/tea-break">{() => <Redirect to="/md/outpass-visitors/tea-break" replace />}</Route>

@@ -59,6 +59,7 @@ api/md_portal/analytics/attendance.py
 api/md_portal/analytics/dashboard.py
 api/md_portal/analytics/employees.py
 api/md_portal/analytics/payroll.py
+api/md_portal/analytics/payroll_people.py
 api/md_portal/analytics/recruitment.py
 api/md_portal/analytics/tea_break.py
 api/md_portal/analytics/visitors.py
@@ -219,6 +220,7 @@ api/tests_md_employees.py
 api/tests_md_identity.py
 api/tests_md_org.py
 api/tests_md_payroll.py
+api/tests_md_payroll_people.py
 api/tests_md_query_dsl.py
 api/tests_md_recruitment.py
 api/tests_md_reports.py
@@ -469,3 +471,10 @@ api/permission_tree.py
 api/tests_permission_tree.py
 api/tests_permission_snapshot.py
 api/tests_penalty_early_out.py
+api/md_portal/analytics/home.py
+api/tests_md_home.py
+api/tests_md_people.py
+api/md_portal/analytics/people.py
+api/md_portal/hod_approvals.py
+api/md_portal/routes/approvals.py
+api/tests_md_hod_approvals.py

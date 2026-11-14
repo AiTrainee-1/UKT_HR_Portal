@@ -1,0 +1,34 @@
+/* MD portal on phones: hr-requests (see mobile-rules in md-portal docs). Every selector is scoped to html[data-md-theme] or is an
+   md-* class, and colours come from the tokens (no hex).
+
+   The pages of this file are the HR copies Requests, Leave & Holiday, Manage Shifts, Geo Attendance and Outpass / Visitors /
+   Tea Break. Their layout changes for phones live in the page components (responsive Tailwind classes, so the HR portal's
+   phones get them too); this file only holds what the MD skin itself needs on top. */
+
+/* A leave / permission card's button row (data-row-actions) whose every button the MD's view-only lock has hidden (the lock
+   hides a bare bin with an inline display:none): the empty row is dropped, so on a phone, where it sits under the card's
+   text, it no longer leaves a blank band at the bottom of every card. */
+html[data-md-theme] [data-row-actions]:not(:has(> :not([style*="display: none"]))) {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  /* A row of tab pills that does not fit scrolls sideways inside its own box instead of wrapping into a tall block of pills
+     (the skin's general rule wraps every pill row on a phone). The box is the page's own overflow-x-auto wrapper, marked
+     data-tab-row; its pills never shrink. The track's own phone look (and its sideways scroll) is mobile/controls.css. */
+  html[data-md-theme] [data-tab-row] > [data-slot="pill-tabs"] {
+    flex-wrap: nowrap;
+  }
+  html[data-md-theme] [data-tab-row] > [data-slot="pill-tabs"] > [data-slot="pill-tab"] {
+    flex-shrink: 0;
+  }
+  /* room under the row for the open pill's shadow, which the scroll box would otherwise cut off; no scrollbar line */
+  html[data-md-theme] [data-tab-row] {
+    padding-bottom: 12px;
+    margin-bottom: -8px;
+    scrollbar-width: none;
+  }
+  html[data-md-theme] [data-tab-row]::-webkit-scrollbar {
+    display: none;
+  }
+}

@@ -5,6 +5,8 @@ reads the optional ?branch= scope and returns a function of analytics/dashboard.
   GET trends     the three charts (attendance 30 days, payroll 12 months with people paid, joiners against leavers),
                  separate so the page can paint the overview first
   GET briefing   the briefing, the top exceptions and the cards in one answer (what "brief me" needs); ?limit= exceptions
+  GET home       what the page shows under the welcome card (2026-11-13): employees by staff / production and unit,
+                 today's Present / Absent (leave included) / CL with a 14-day trend, and 6 months of payroll by type
 
 The Dashboard has no period of its own: each figure keeps the window its page uses (see the provenance). ``branch``
 narrows the trends and today's count by unit; the cards, exceptions and briefing stay company-wide and the response
@@ -14,6 +16,7 @@ says so in ``notes``.
 from django.urls import path
 
 from ..analytics import dashboard as dashboard_analytics
+from ..analytics import home as home_analytics
 from ..common import MdParamError, md_get, request_params, resolve_scope
 
 
@@ -49,8 +52,14 @@ def briefing(request):
     return dashboard_analytics.briefing(scope=_scope(params), limit=_limit(params))
 
 
+@md_get
+def home(request):
+    return home_analytics.home()
+
+
 urlpatterns = [
     path("overview", overview),
     path("trends", trends),
     path("briefing", briefing),
+    path("home", home),
 ]

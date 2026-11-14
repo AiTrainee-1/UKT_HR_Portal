@@ -29,6 +29,9 @@ DOMAIN_HINTS: dict[str, str] = {
 
 #: always described in full: the cheap, broad ones
 ALWAYS = frozenset({"dashboard", "reports"})
+#: tools always described in full whatever the question is about: a question about one person often names only the
+#: person ("how is Surya M doing?"), so no area words point at them (analytics/people.py)
+ALWAYS_TOOLS = frozenset({"employee_attendance", "employee_leave", "employee_salary", "attendance_people_on_date"})
 MAX_MATCHED_AREAS = 3
 SUMMARY_CHARS = 110
 
@@ -85,6 +88,7 @@ def compact_declaration(spec: ToolSpec) -> dict:
 
 def declarations_for(tools: dict[str, ToolSpec], areas: set[str]) -> list[dict]:
     """Full declarations for the selected areas first, then a compact one for every other tool."""
-    full = [t.declaration() for t in tools.values() if t.page in areas]
-    rest = [compact_declaration(t) for t in tools.values() if t.page not in areas]
+    wanted = [t for t in tools.values() if t.page in areas or t.name in ALWAYS_TOOLS]
+    full = [t.declaration() for t in wanted]
+    rest = [compact_declaration(t) for t in tools.values() if t not in wanted]
     return full + rest

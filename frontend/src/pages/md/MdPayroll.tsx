@@ -1,180 +1,192 @@
-import { useState } from "react";
-import { IndianRupee, Inbox } from "lucide-react";
+import { useEffect, useRef } from "react";
 import MdLayout from "@/components/md/MdLayout";
 import { FilterBar, ScopeBar } from "@/components/md/kit/FilterBar";
 import MdPageHeader from "@/components/md/kit/MdPageHeader";
-import SectionCard from "@/components/md/kit/SectionCard";
-import { EmptyBlock, ErrorBanner, NoteBanner } from "@/components/md/kit/states";
-import { Button } from "@/components/ui/button";
-import { describeMdError, useMdOrg } from "@/lib/api-client/custom-hooks/md";
-import { usePublishAssistantContext } from "@/lib/md/assistant-store";
-import { inrCompact, monthText, num, pct } from "@/lib/md/format";
-import { EVERYONE, describeScope, scopeParams, type ScopeChoice } from "@/lib/md/period";
-import AdvancesCard from "./payroll/AdvancesCard";
-import AttentionCard from "./payroll/AttentionCard";
-import BridgeCard from "./payroll/BridgeCard";
-import ComponentsCard from "./payroll/ComponentsCard";
-import DepartmentsCard from "./payroll/DepartmentsCard";
-import DistributionCard from "./payroll/DistributionCard";
-import ExceptionsCard from "./payroll/ExceptionsCard";
-import KpiStrip from "./payroll/KpiStrip";
-import MonthPicker from "./payroll/MonthPicker";
-import StatusBanner from "./payroll/StatusBanner";
-import StatusStrip from "./payroll/StatusStrip";
-import TrendCard from "./payroll/TrendCard";
-import { EXCEPTION_PAGE, nextLimit, previousMonth } from "./payroll/logic";
-import { emptyReason } from "./payroll/parts";
-import { usePayrollQueries } from "./payroll/queries";
+import { NoteBanner } from "@/components/md/kit/states";
+import { useMdOrg } from "@/lib/api-client/custom-hooks/md";
+import { usePublishAssistantContext, type AssistantPageContext } from "@/lib/md/assistant-store";
+import { inr, inrCompact, num, pct } from "@/lib/md/format";
+import { describeScope } from "@/lib/md/period";
+import DepartmentsView from "./payroll-dashboard/DepartmentsView";
+import EmployeeProfile from "./payroll-dashboard/EmployeeProfile";
+import EmployeesView from "./payroll-dashboard/EmployeesView";
+import {
+  daysText,
+  departmentBars,
+  figuresSummary,
+  kpiChange,
+  scopeOf,
+  typeLabel,
+  withChange,
+  type DashState,
+  type DashView,
+} from "./payroll-dashboard/logic";
+import MonthlyView from "./payroll-dashboard/MonthlyView";
+import { MonthSelect, SearchBox, ViewTabs } from "./payroll-dashboard/parts";
+import {
+  FROM_LIST_STATE,
+  cameFromList,
+  stampOf,
+  useDashState,
+  usePayrollDashboard,
+  type DashQueries,
+} from "./payroll-dashboard/queries";
+
+const VIEW_NAME: Record<DashView, string> = { monthly: "Monthly", departments: "Departments", employees: "Employees" };
+
+/** Where the list was scrolled when an employee was opened: Back returns there. */
+let listScroll = 0;
+const scroller = () => document.querySelector("main");
+
+/** What the MD is looking at, for the assistant: the filters in words and the headline figures of the open view. */
+function assistantContext(state: DashState, q: DashQueries, branchName: string | undefined): AssistantPageContext {
+  const monthly = q.monthly.data;
+  const monthLabel =
+    (state.view === "departments" ? q.departments.data?.label : undefined) ??
+    (state.view === "employees" ? q.people.data?.label : undefined) ??
+    monthly?.label ??
+    null;
+  const person = state.employee && q.person.data?.employee.id === state.employee ? q.person.data : undefined;
+  const filters: AssistantPageContext["filters"] = {
+    View: person ? "One employee's salary history" : VIEW_NAME[state.view],
+    Month: monthLabel ?? (state.month || "Latest month"),
+    Scope: describeScope(scopeOf(state), branchName, state.department || undefined),
+    Search: state.view === "employees" && state.q ? state.q : undefined,
+    Employee: person ? `${person.employee.name} (${person.employee.code})` : undefined,
+  };
+
+  let summary: AssistantPageContext["summary"];
+  if (person) {
+    const t = person.totals;
+    summary = {
+      Employee: `${person.employee.name}, ${person.employee.code}`,
+      Department: [person.employee.department, person.employee.unit].filter(Boolean).join(", ") || null,
+      Type: typeLabel(person.employee.type),
+      "Monthly salary today":
+        person.employee.monthlySalary != null ? inr(person.employee.monthlySalary) : "paid per shift",
+      "Months of history": person.months.length,
+      "Total earned": inrCompact(t.earnedSalary),
+      "Total deductions": inrCompact(t.deductions.total),
+      "Total net paid": inrCompact(t.netPaid),
+      "Attendance deductions": inrCompact(t.attendanceDeduction),
+      "Casual leave": `${daysText(t.clDays)} days, ${inrCompact(t.clAmount)}`,
+    };
+  } else if (state.view === "departments" && q.departments.data) {
+    const d = q.departments.data;
+    const top = departmentBars(d.rows)[0];
+    summary = {
+      Departments: d.rows.length,
+      "Company cost": inrCompact(d.totals.companyCost),
+      "Largest department": top ? `${top.name}: ${inrCompact(top.companyCost)} (${pct(top.sharePct)})` : null,
+      "Average earned per employee": inrCompact(d.totals.averageEarned),
+      Attendance: pct(d.totals.attendancePct),
+    };
+  } else if (state.view === "employees" && q.people.data) {
+    const p = q.people.data;
+    summary = { ...figuresSummary(p.totals), Employees: num(p.total) };
+  } else if (monthly?.current) {
+    summary = {
+      ...figuresSummary(monthly.current),
+      "Payroll status": monthly.current.status.label,
+      "Company cost against the month before": withChange(
+        monthly.current.companyCost,
+        kpiChange(monthly, "companyCost") ?? undefined,
+      ),
+    };
+  }
+  return { page: "payroll", title: "Payroll", filters, summary };
+}
 
 /**
- * Payroll Analysis: what the workforce costs and what changed since last month, and why. Exceptions first (status,
- * cost jump, overtime, outliers), then the trend, the cost bridge, who the money goes to, what it is made of, advances
- * and the rows to check. The figures describe ONE payroll month (the latest closed one unless the MD picks another);
- * the status banner under the filters says where that month stands, so a number is never read without it.
+ * Payroll (/md/payroll): what the company spends on salaries each month, what is deducted and what the employees actually
+ * earn, by month, by department and by employee. Three tabs over one filter bar (month, unit, department, staff /
+ * production; the Employees tab adds a search), and an employee's complete salary history opened inside the page. All of
+ * it lives in the address (?view=&month=&branch=&department=&type=&q=&employee=), so Back and shared links work.
  */
 export default function MdPayroll() {
-  const [month, setMonth] = useState("");
-  const [scope, setScope] = useState<ScopeChoice>(EVERYONE);
-  const [kind, setKind] = useState("");
-  const [limit, setLimit] = useState(EXCEPTION_PAGE);
+  const [state, update] = useDashState();
   const org = useMdOrg();
+  const q = usePayrollDashboard(state);
+  const monthly = q.monthly.data;
 
-  const q = usePayrollQueries({ month, scope: scopeParams(scope) }, { limit, kind });
-  const summary = q.summary.data;
-  const status = q.status.data;
+  // a profile opens at its top; Back to the list returns to where the list was
+  const previousEmployee = useRef(state.employee);
+  useEffect(() => {
+    const was = previousEmployee.current;
+    previousEmployee.current = state.employee;
+    const main = scroller();
+    if (!main || was === state.employee) return;
+    if (state.employee) main.scrollTo({ top: 0 });
+    else if (was) requestAnimationFrame(() => (main.scrollTop = listScroll));
+  }, [state.employee]);
 
-  // a changed filter starts the exceptions list again from its first ten
-  const pickMonth = (next: string) => {
-    setMonth(next);
-    setKind("");
-    setLimit(EXCEPTION_PAGE);
+  const openEmployee = (id: number) => {
+    listScroll = scroller()?.scrollTop ?? 0;
+    update({ employee: id }, { push: true, historyState: FROM_LIST_STATE });
   };
-  const pickScope = (next: ScopeChoice) => {
-    setScope(next);
-    setKind("");
-    setLimit(EXCEPTION_PAGE);
+  const backToList = () => {
+    if (cameFromList()) window.history.back();
+    else update({ employee: null });
   };
+  const openDepartment = (department: string) =>
+    update({ view: "employees", department, q: "", employee: null }, { push: true });
 
-  const label = summary?.monthLabel ?? "the latest closed month";
-  const previousLabel = summary?.month ? monthText(previousMonth(summary.month)) : "last month";
-  const totals = summary?.totals ?? null;
-  const nothingProcessed = !!status && !status.hasData;
-  const monthEmpty = !!summary && !summary.hasData && !nothingProcessed;
-
-  const branchName = org.data?.branches.find((b) => String(b.id) === scope.branch)?.name;
-  usePublishAssistantContext({
-    page: "payroll",
-    title: "Payroll Analysis",
-    filters: {
-      Month: summary?.monthLabel ?? "Latest closed month",
-      "Payroll status": summary?.status?.stateLabel,
-      Scope: describeScope(scope, branchName, scope.department || undefined),
-    },
-    summary: totals
-      ? {
-          "Gross pay": inrCompact(totals.grossPay),
-          "Net pay": inrCompact(totals.netPay),
-          "People paid": num(totals.headcount),
-          "Cost per head": inrCompact(totals.costPerHead),
-          Overtime: `${inrCompact(totals.overtimePay)} (${pct(totals.overtimeSharePct)} of gross pay)`,
-          "Change in gross pay on the previous month": summary?.change?.grossPay
-            ? `${inrCompact(summary.change.grossPay.abs)} (${pct(summary.change.grossPay.pct)})`
-            : null,
-        }
-      : undefined,
-  });
+  const branchName = org.data?.branches.find((b) => String(b.id) === state.branch)?.name;
+  usePublishAssistantContext(assistantContext(state, q, branchName));
 
   return (
     <MdLayout>
-      <div className="mx-auto max-w-[1500px] space-y-5" data-testid="md-payroll">
+      <div
+        className="mx-auto max-w-[1500px] space-y-4 @lg:space-y-5"
+        data-testid="md-payroll"
+        data-view={state.employee ? "employee" : state.view}
+      >
         <MdPageHeader
-          icon={IndianRupee}
-          title="Payroll Analysis"
-          subtitle="What the workforce costs, what changed since last month, and why."
-          updatedAt={summary?.generatedAt}
+          title="Payroll"
+          subtitle="What the company spends on salaries, what is deducted and what employees earn, by month, department and employee."
+          updatedAt={stampOf(q.person.data, q.people.data, q.departments.data, monthly)}
         />
-        <FilterBar>
-          <MonthPicker value={month} onChange={pickMonth} status={status} />
-          <ScopeBar value={scope} onChange={pickScope} org={org.data} />
-        </FilterBar>
+        <ViewTabs value={state.view} onChange={(view) => update({ view, employee: null }, { push: true })} />
 
-        {q.summary.isError && !summary && (
-          <ErrorBanner message={describeMdError(q.summary.error)} onRetry={() => void q.summary.refetch()} />
-        )}
-
-        {nothingProcessed && (
-          <SectionCard title="Payroll" testId="md-payroll-empty">
-            <EmptyBlock icon={Inbox} title="No payroll has been processed yet">
-              There are no salary slips for this selection. The cost, trend and bridge appear here once HR generates a
-              month's payroll.
-            </EmptyBlock>
-          </SectionCard>
-        )}
-
-        {monthEmpty && (
-          <>
-            <StatusBanner status={summary.status} provenance={summary.provenance} />
-            <SectionCard title={`No payroll for ${label}`} testId="md-payroll-month-empty">
-              <EmptyBlock icon={Inbox} title={`Nothing was paid in ${label}`}>
-                {emptyReason(summary.notes, "No salary slips exist for this month in this selection.")}
-              </EmptyBlock>
-              <div className="flex justify-center pb-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="rounded-full"
-                  onClick={() => pickMonth("")}
-                  data-testid="md-payroll-go-latest"
-                >
-                  Show the latest closed month
-                </Button>
-              </div>
-            </SectionCard>
-          </>
-        )}
-
-        {!nothingProcessed && !monthEmpty && (
-          <>
-            <StatusBanner status={summary?.status} provenance={summary?.provenance} />
-            {(summary?.notes ?? [])
-              .filter((n) => !n.includes("staff slip(s)"))
-              .map((n) => (
-                <NoteBanner key={n}>{n}</NoteBanner>
-              ))}
-            <KpiStrip summary={summary} trend={q.trend.data} loading={q.summary.isPending} />
-            <AttentionCard query={q.attention} label={label} />
-            <TrendCard query={q.trend} />
-            <BridgeCard query={q.bridge} label={label} previousLabel={previousLabel} />
-            <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
-              <div className="min-w-0 @4xl:col-span-7">
-                <DepartmentsCard query={q.departments} label={label} />
-              </div>
-              <div className="min-w-0 @4xl:col-span-5">
-                <ComponentsCard query={q.components} label={label} />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
-              <div className="min-w-0 @4xl:col-span-7">
-                <DistributionCard query={q.distribution} label={label} />
-              </div>
-              <div className="min-w-0 @4xl:col-span-5">
-                <AdvancesCard query={q.advances} label={label} />
-              </div>
-            </div>
-            <ExceptionsCard
-              query={q.exceptions}
-              label={label}
-              kind={kind}
-              onKind={(next) => {
-                setKind(next);
-                setLimit(EXCEPTION_PAGE);
-              }}
-              onMore={() => setLimit((n) => nextLimit(n, q.exceptions.data?.matching ?? n))}
+        {!state.employee && (
+          <FilterBar>
+            <MonthSelect
+              value={state.month}
+              onChange={(month) => update({ month })}
+              available={monthly?.available}
+              latest={state.month ? null : monthly?.month}
             />
-          </>
+            <ScopeBar
+              value={scopeOf(state)}
+              onChange={(s) => update({ branch: s.branch, department: s.department, type: s.type })}
+              org={org.data}
+            />
+            {state.view === "employees" && <SearchBox value={state.q} onChange={(text) => update({ q: text })} />}
+          </FilterBar>
         )}
 
-        {!nothingProcessed && <StatusStrip query={q.status} selected={summary?.month} onSelect={pickMonth} />}
+        {q.monthly.isError && !monthly && state.view !== "monthly" && !state.employee && (
+          <NoteBanner>The list of payroll months could not be loaded, so the latest month is shown.</NoteBanner>
+        )}
+
+        {state.employee ? (
+          <EmployeeProfile
+            id={state.employee}
+            query={q.person}
+            month={state.month || monthly?.month || ""}
+            onBack={backToList}
+          />
+        ) : state.view === "departments" ? (
+          <DepartmentsView query={q.departments} chosen={state.department} onOpen={openDepartment} />
+        ) : state.view === "employees" ? (
+          <EmployeesView query={q.people} state={state} update={update} onOpen={openEmployee} />
+        ) : (
+          <MonthlyView
+            query={q.monthly}
+            onSelectMonth={(month) => update({ month })}
+            onLatest={() => update({ month: "" })}
+          />
+        )}
       </div>
     </MdLayout>
   );

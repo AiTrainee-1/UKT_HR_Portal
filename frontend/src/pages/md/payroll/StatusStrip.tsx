@@ -1,15 +1,14 @@
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import SectionCard from "@/components/md/kit/SectionCard";
-import { inrCompact } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
-import { STATE_STYLE, tickMonth } from "./logic";
+import { STATE_STYLE, stripLines, tickMonth } from "./logic";
 import { CardError, failed } from "./parts";
 import type { PayrollQueries } from "./queries";
 
 /**
- * Which months have been generated and paid: twelve chips, newest on the right. A month is "Paid" when every slip's payroll
- * row is marked paid; there is no finalised switch in the system, so this is the nearest honest answer. Click a month to
- * look at it.
+ * Where each of the last twelve months stands, newest on the right: generated (still open), payment pending (HR pressed
+ * Payroll Done, not paid yet), paid (Mark as Paid; production: cleared), part paid, provisional. Click a month to look
+ * at it.
  */
 export default function StatusStrip({
   query,
@@ -38,12 +37,16 @@ export default function StatusStrip({
         <CardError query={query} />
       ) : (
         <>
-          <ol className="-mx-1 flex gap-2.5 overflow-x-auto px-1 pb-3 pt-1" data-testid="md-payroll-status-chips">
+          {/* a phone shows all twelve months at once, three across; wider screens keep the one sideways row */}
+          <ol
+            className="grid grid-cols-3 gap-2 pb-1 pt-1 @lg:-mx-1 @lg:flex @lg:gap-2.5 @lg:overflow-x-auto @lg:px-1 @lg:pb-3"
+            data-testid="md-payroll-status-chips"
+          >
             {(data?.months ?? []).map((m) => {
-              const style = STATE_STYLE[m.state];
+              const style = STATE_STYLE[m.state] ?? STATE_STYLE.generated;
               const clickable = m.slips > 0 || m.state === "not_generated";
               return (
-                <li key={m.month} className="shrink-0">
+                <li key={m.month} className="min-w-0 @lg:shrink-0">
                   <button
                     type="button"
                     disabled={!clickable}
@@ -58,24 +61,27 @@ export default function StatusStrip({
                       <i className={cn("md-money-dot", style.dot)} />
                       {style.label}
                     </span>
-                    {m.unpaidNet > 0 && m.slips > 0 && (
-                      <span className="text-[10.5px] font-semibold text-md-warning-800">
-                        {inrCompact(m.unpaidNet)} unpaid
+                    {stripLines(m).map((line) => (
+                      <span
+                        key={line.text}
+                        className={cn(
+                          "text-[11px] font-semibold",
+                          line.tone === "warn" ? "text-md-warning-800" : "text-md-ink-soft",
+                        )}
+                      >
+                        {line.text}
                       </span>
-                    )}
-                    {m.provisionalSlips > 0 && (
-                      <span className="text-[10.5px] font-semibold text-md-ink-soft">
-                        {m.provisionalSlips} provisional
-                      </span>
-                    )}
+                    ))}
                   </button>
                 </li>
               );
             })}
           </ol>
           <p className="mt-1 text-[11.5px] leading-snug text-md-ink-soft">
-            Paid = every slip is marked paid. Provisional = staff slips generated before the month ended, which
-            understate pay until payroll is regenerated.
+            Staff: Generated = still open, HR can change it; Payment pending = Payroll Done pressed, locked, not paid
+            yet; Paid = HR pressed Mark as Paid. Cleared alone is a check, not a payment. Production is paid once
+            cleared. Provisional = staff slips generated before the month ended, which understate pay until payroll is
+            regenerated.
           </p>
         </>
       )}

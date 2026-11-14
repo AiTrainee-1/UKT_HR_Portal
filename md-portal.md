@@ -413,6 +413,14 @@ buttons, same API as the Super Admin has) with the MD's **Insights & AI** on top
 * The old analytics pages for Attendance, Employees, Outpass & Visitors and Tea Break **merged into** the pages they
   analyse (their content is now each page's Insights). `/md/visitors` and `/md/tea-break` redirect. Payroll, Reports,
   Recruitment and Activity Logs stay analytics pages.
+* **Payroll** (owner, 2026-11-14) is an **employee-focused analytics page**, not a copy of HR's transaction pages (a
+  view-only copy of Staff / Production Payroll was built and then dropped the same day at the owner's request): one page,
+  tabs Monthly | Departments | Employees, filters month / unit / department / employment type, employee search and each
+  employee's complete monthly salary history (actual vs earned salary, attendance deductions, CL days and amount,
+  deductions, adjustments, net paid, company cost). Contract: `frontend/src/pages/md/payroll-dashboard/types.ts`;
+  endpoints `/api/md/payroll/monthly`, `/department-breakdown`, `/people`, `/people/<id>`
+  (`api/md_portal/analytics/payroll_people.py`, read-only like every MD view). The MD has no access to HR's payroll
+  APIs (`MD_HR_GRANTS` has no payroll module); links to HR payroll pages still go to `/md/payroll`.
 
 ### 10.1 The fourteen pages
 

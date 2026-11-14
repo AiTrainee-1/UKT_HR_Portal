@@ -259,6 +259,7 @@ describe("explore", () => {
     const tiles = exploreTiles(ME.pages);
     expect(tiles.map((t) => t.id)).toEqual([
       "employees",
+      "approvals",
       "branches",
       "attendance",
       "attendance-production",
@@ -285,7 +286,7 @@ describe("explore", () => {
 
   it("works before the page list has loaded", () => {
     const tiles = exploreTiles(undefined);
-    expect(tiles).toHaveLength(17);
+    expect(tiles).toHaveLength(18);
     expect(tiles.every((t) => t.summary === "")).toBe(true);
   });
 });

@@ -17,3 +17,9 @@
 @import "./areas/money.css";
 @import "./areas/people.css";
 @import "./areas/analytics.css";
+/* phones (2026-11-14): one file per owner so the pages could be reworked in parallel */
+@import "./mobile/analytics.css";
+@import "./mobile/hr-people.css";
+@import "./mobile/hr-requests.css";
+@import "./mobile/insights.css";
+@import "./mobile/controls.css";

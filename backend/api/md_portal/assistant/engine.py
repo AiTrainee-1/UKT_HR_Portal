@@ -31,7 +31,6 @@ from django.utils import timezone
 from ...clock import FACTORY_TZ, ist_now
 from ...models import MdAssistantSettings, MdAssistantUsage, MdMessage, PayrollSettings
 from ..common import MdParamError, read_only_db
-from ..pages import PAGE_BY_ID
 from . import prompts, query_dsl, registry, routing, xai
 from .gemini import GeminiClient, GeminiError, GeminiReply, function_response_part
 from .privacy import Pseudonymizer
@@ -319,19 +318,8 @@ def outcome_from_submit(args: dict, model: str) -> Outcome:
     if not answer:
         answer = "I could not put an answer together from the data."
         answer_type = "cannot_answer"
-    pages: list[dict] = []
-    for item in args.get("suggested_pages") or []:
-        page_id = item.get("page") if isinstance(item, dict) else item
-        if page_id in PAGE_BY_ID and all(p["id"] != page_id for p in pages):
-            meta = PAGE_BY_ID[page_id]
-            pages.append(
-                {
-                    "id": page_id,
-                    "title": meta["title"],
-                    "path": meta["path"],
-                    "reason": str((item.get("reason") if isinstance(item, dict) else "") or meta["summary"])[:200],
-                }
-            )
+    # Related-page suggestions were removed (owner 2026-11-13: the assistant only answers). The answer keeps an empty
+    # list under suggestedPages for the clients that still read it.
     spoken = str(args.get("spoken_summary") or "").strip() or plain_first_sentences(answer)
     confidence = args.get("confidence") if args.get("confidence") in ("high", "medium", "low") else None
     return Outcome(
@@ -340,8 +328,8 @@ def outcome_from_submit(args: dict, model: str) -> Outcome:
         spoken=spoken,
         explanation=_clean_list(args.get("explanation"), 8, 300),
         assumptions=_clean_list(args.get("assumptions"), 8, 300),
-        pages=pages[:2],
-        follow_ups=_clean_list(args.get("follow_ups"), 3, 140),
+        pages=[],
+        follow_ups=[],  # follow-up question chips were removed (owner 2026-11-13); the payload keeps an empty list
         confidence=confidence,
         model=model,
     )
@@ -359,7 +347,9 @@ def plain_first_sentences(markdown: str, limit: int = 2) -> str:
 def run_loop(job: Job, question: str, page_context: dict | None) -> Outcome:
     company = (PayrollSettings.objects.filter(pk=1).values_list("company_name", flat=True).first()) or "UK Textiles"
     system = (
-        prompts.build_system_prompt(company=company, now=ist_now(), page_context=page_context)
+        prompts.build_system_prompt(
+            company=company, now=ist_now(), page_context=page_context, privacy=job.privacy.enabled
+        )
         + "\nDATASETS for query_data:\n"
         + query_dsl.catalog_text()
         + "\n"

@@ -44,7 +44,7 @@ export default function KpiStrip({
   return (
     <div>
       <div
-        className={`grid grid-cols-1 gap-3 @sm:grid-cols-2 @3xl:grid-cols-4 ${refreshingClass(summary)}`}
+        className={`grid grid-cols-2 gap-3 @3xl:grid-cols-4 [&>*:last-child:nth-child(odd)]:col-span-2 @3xl:[&>*:last-child:nth-child(odd)]:col-span-1 ${refreshingClass(summary)}`}
         data-testid="md-geo-kpis"
       >
         {data

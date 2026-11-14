@@ -27,9 +27,13 @@ export function ExecutiveCard({ group, order = 0 }: { group: ReportGroup; order?
       <span className="md-money-tile md-money-tile-solid md-money-tile-lg">
         <Icon size={22} aria-hidden />
       </span>
-      <span className="mt-4 text-[17px] font-black leading-snug tracking-tight text-md-ink">{report.title}</span>
-      <span className="mt-1.5 line-clamp-3 text-[13px] leading-relaxed text-md-ink-soft">{report.description}</span>
-      <span className="mt-auto flex items-center gap-2 pt-5">
+      <span className="mt-3 text-[14.5px] font-black leading-snug tracking-tight text-md-ink @lg:mt-4 @lg:text-[17px]">
+        {report.title}
+      </span>
+      <span className="mt-1 line-clamp-4 text-[12px] leading-snug text-md-ink-soft @lg:mt-1.5 @lg:line-clamp-3 @lg:text-[13px] @lg:leading-relaxed">
+        {report.description}
+      </span>
+      <span className="mt-auto flex flex-wrap items-center gap-2 pt-3 @lg:flex-nowrap @lg:pt-5">
         {views > 1 && <span className="md-chip md-chip-sand">{views} views</span>}
         <span className="md-money-cta ml-auto">
           Open report <ArrowRight size={14} aria-hidden />
@@ -78,11 +82,13 @@ export function LibraryCard({
         <span className="md-money-tile">
           <Icon size={18} aria-hidden />
         </span>
-        <span className="mt-3.5 text-[14.5px] font-extrabold leading-snug tracking-tight text-md-ink">
+        <span className="mt-2.5 text-[13.5px] font-extrabold leading-snug tracking-tight text-md-ink [overflow-wrap:anywhere] @lg:mt-3.5 @lg:text-[14.5px] @lg:[overflow-wrap:normal]">
           {report.title}
         </span>
-        <span className="mt-1 line-clamp-2 text-[12.5px] leading-relaxed text-md-ink-soft">{report.description}</span>
-        <span className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 pt-3.5 text-[11.5px] font-semibold">
+        <span className="mt-1 line-clamp-3 text-[12px] leading-snug text-md-ink-soft @lg:line-clamp-2 @lg:text-[12.5px] @lg:leading-relaxed">
+          {report.description}
+        </span>
+        <span className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 pt-2.5 text-[11.5px] font-semibold @lg:pt-3.5">
           {category && (
             <span className="inline-flex items-center gap-1.5 text-md-ink-soft">
               <span className={cn("h-1.5 w-1.5 rounded-full", tone.dot)} />
@@ -125,7 +131,9 @@ export function CompactLink({ report, category }: { report: ReportMeta; category
         <Icon size={16} aria-hidden />
       </span>
       <span className="min-w-0">
-        <span className="block truncate text-[13.5px] font-extrabold text-md-ink">{report.title}</span>
+        <span className="block truncate text-[13.5px] font-extrabold text-md-ink @max-lg:line-clamp-2 @max-lg:whitespace-normal @max-lg:leading-snug">
+          {report.title}
+        </span>
         <span className="mt-0.5 flex items-center gap-1.5 truncate text-[11.5px] font-medium text-md-ink-soft">
           <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} />
           <span className="truncate">{category}</span>

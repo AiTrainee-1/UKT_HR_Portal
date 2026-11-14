@@ -29,6 +29,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Iterable
 
 from django.db.models import Count, Min, Q
+from django.utils.text import slugify
 
 from ... import production_shift_rules as psr
 from ...clock import ist_now, ist_today
@@ -683,7 +684,7 @@ def _prov_overtime(rows: int | None, settings: Any) -> dict:
         "yet detected are not counted.",
         "Overtime is never paid by the hour. Only a shift-based day (Type 2) that HR announces as 'Pay' is paid, as "
         "0.25 to 1 shift of one day's pay; the next-day late-in allowance (Type 1) is never paid. The rupee cost is "
-        "on the Payroll Analysis page.",
+        "on the Payroll page.",
     ]
     if not getattr(settings, "compensation_feature_enabled", True):
         caveats.append("The Compensation feature is switched off in Settings, so no overtime is detected or paid.")
@@ -2113,7 +2114,7 @@ def attendance_overtime(scope: Scope, period: Period, limit: int = LIST_LIMIT_DE
     """Overtime hours by department, the people with the most overtime, the trend, the mix of HR decisions (pay,
     relaxation, allowance, detected, rejected) and overtime as a share of scheduled hours. Hours are informational:
     payroll pays only the shift-based days HR announced as 'Pay', 0.25 to 1 shift of one day's pay each (the rupee
-    cost is on the Payroll Analysis page)."""
+    cost is on the Payroll page)."""
     limit = _clamp_limit(limit)
     frame, win = frame_for(scope, period)
     settings = frame.settings
@@ -2789,7 +2790,9 @@ def insights(*, today: date | None = None) -> list[dict]:
         )
         items.append(
             _insight(
-                "attendance.dept-spike",
+                # one item per department (up to two): the id names it, so the two are told apart (the Dashboard drops a
+                # repeated id as a duplicate, and the pages key their lists by it)
+                f"attendance.dept-spike-{slugify(name) or 'department'}",
                 "critical" if rate >= 2 * base and rate >= 8.0 else "warning",
                 f"{name} absenteeism is {rate:g}%, {against}",
                 f"{absent:,} unplanned absence days in the last {SPIKE_RECENT_DAYS} days across {heads:,} employees.",

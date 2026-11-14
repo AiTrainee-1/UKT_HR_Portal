@@ -483,8 +483,9 @@ function AssistantSettingsCard() {
                   Hide employee names from Gemini
                 </Label>
                 <p className="mt-0.5 text-xs text-gray-600">
-                  Names become codes before anything leaves the server, and come back in the answer the MD reads. Phone
-                  numbers, e-mail and bank details are never sent, whatever this says.
+                  Names become codes before anything leaves the server, and come back in the answer the MD reads. Off
+                  since 13 Nov 2026, so the assistant can answer by employee name and code. Phone numbers, e-mail and
+                  bank details are never sent, whatever this says.
                 </p>
               </div>
               <Switch

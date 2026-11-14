@@ -42,6 +42,25 @@ html[data-md-theme] .md-dashboard-card > header p {
   line-height: 1.45;
   color: var(--md-ink-600);
 }
+/* phones: the same card with phone padding (the page's gutter is 12 px there), and the icon tiles of the dashboard's
+   figures a size smaller so two figures fit side by side */
+@media (max-width: 639px) {
+  html[data-md-theme] .md-dashboard-card {
+    padding: 1rem 0.875rem 1.05rem;
+    border-radius: 1.1rem;
+  }
+}
+@container (max-width: 31.99rem) {
+  .md-home-figure .md-dashboard-icon {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.75rem;
+  }
+  .md-home-figure .md-dashboard-icon svg {
+    width: 15px;
+    height: 15px;
+  }
+}
 /* today's briefing: the one warm card (sand glass), with a wine bar down its left edge */
 html[data-md-theme] .md-dashboard-card.md-dashboard-briefing {
   background: linear-gradient(135deg, rgba(245, 235, 208, 0.9) 0%, rgba(255, 255, 255, 0.55) 72%);

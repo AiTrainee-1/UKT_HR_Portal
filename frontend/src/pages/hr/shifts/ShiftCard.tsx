@@ -95,13 +95,21 @@ export default function ShiftCard({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <h4 className="truncate text-sm font-bold text-gray-900">{shift.name}</h4>
-                {shift.isDefault && <StatusBadge tone="info">Default</StatusBadge>}
+                {shift.isDefault && (
+                  <StatusBadge tone="info" className="text-[11px] sm:text-[10px]">
+                    Default
+                  </StatusBadge>
+                )}
                 {shift.genderRule !== "all" && (
-                  <StatusBadge tone="accent" className="capitalize">
+                  <StatusBadge tone="accent" className="text-[11px] capitalize sm:text-[10px]">
                     {shift.genderRule} only
                   </StatusBadge>
                 )}
-                {!shift.isActive && <StatusBadge tone="danger">Inactive</StatusBadge>}
+                {!shift.isActive && (
+                  <StatusBadge tone="danger" className="text-[11px] sm:text-[10px]">
+                    Inactive
+                  </StatusBadge>
+                )}
               </div>
               <p className="mt-0.5 text-xs text-muted-foreground">{t.label} shift</p>
             </div>
@@ -141,7 +149,7 @@ export default function ShiftCard({
                 style={{ marginLeft: `${bar.left}%`, width: `${bar.width}%` }}
               />
             </div>
-            <div className="mt-1 flex justify-between text-[10px] font-medium text-gray-300" aria-hidden>
+            <div className="mt-1 flex justify-between text-[11px] sm:text-[10px] font-medium text-gray-300" aria-hidden>
               <span>00</span>
               <span>06</span>
               <span>12</span>

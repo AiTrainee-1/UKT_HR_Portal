@@ -21,7 +21,9 @@ function Panel({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-xl border border-slate-100 p-4", className)} data-testid={testId}>
+    // min-w-0: a grid cell may be narrower than a wide table inside it (the table scrolls in its own box), or on a phone
+    // the salary split-up widened every card past the screen
+    <div className={cn("min-w-0 rounded-xl border border-slate-100 p-4", className)} data-testid={testId}>
       <h4 className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
         <Icon size={14} /> {title}
       </h4>

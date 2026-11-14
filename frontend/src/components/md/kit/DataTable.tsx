@@ -79,7 +79,7 @@ export default function DataTable<T>({
                 <TableHead
                   key={c.key}
                   className={cn(
-                    "h-10 px-3 text-[11px] font-extrabold uppercase tracking-[0.08em] text-md-ink-soft",
+                    "h-10 px-2 text-[11px] font-extrabold uppercase tracking-[0.06em] text-md-ink-soft sm:px-3 sm:tracking-[0.08em]",
                     alignClass(c.align),
                     c.className,
                   )}
@@ -120,8 +120,8 @@ export default function DataTable<T>({
                 <TableCell
                   key={c.key}
                   className={cn(
-                    dense ? "py-2" : "py-3",
-                    "px-3 text-[13px] text-md-ink",
+                    dense ? "py-2" : "py-2.5 sm:py-3",
+                    "px-2 text-[13px] text-md-ink sm:px-3",
                     alignClass(c.align),
                     c.className,
                   )}

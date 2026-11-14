@@ -1,0 +1,39 @@
+/* MD portal on phones: the "MD insights" strip of the HR copies that have analytics of their own (Geo Attendance, Report
+   Log: pages/md/embedded/shared/InsightStrip.tsx). Every selector is an md-* class, colours come from the tokens. */
+@media (max-width: 639px) {
+  .md-analytics-strip {
+    padding: 0.75rem 0.8rem 0.85rem;
+  }
+  /* the mark and "Ask AI" share the first line; the figures go under them three a row, label over value */
+  .md-analytics-strip-head {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+  .md-analytics-strip-head > .md-analytics-overline {
+    grid-column: span 3;
+    margin-right: 0;
+  }
+  .md-analytics-strip-head > .md-analytics-strip-ask {
+    grid-column: 4 / span 3;
+    grid-row: 1;
+    justify-self: end;
+    margin-left: 0;
+  }
+  .md-analytics-strip-head > .md-analytics-figure {
+    grid-column: span 2;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 0.9rem;
+  }
+  .md-analytics-strip-head > .md-analytics-figure .md-analytics-figure-label {
+    font-size: 0.6875rem;
+    line-height: 1.25;
+  }
+  .md-analytics-strip-item {
+    gap: 0.55rem;
+  }
+}

@@ -103,7 +103,7 @@ export default function TrackingSettingsTab() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <KpiTile
             label="Total Employees"
             value={withEnabled.length}
@@ -127,6 +127,7 @@ export default function TrackingSettingsTab() {
             tone="bg-gray-50 text-gray-600"
             loading={isLoading}
             testId="tracking-disabled"
+            className="col-span-2 sm:col-span-1"
           />
         </div>
 
@@ -144,24 +145,27 @@ export default function TrackingSettingsTab() {
               }}
             />
           </div>
-          <PillTabs
-            size="sm"
-            items={[
-              { value: "all", label: "All", count: withEnabled.length },
-              { value: "enabled", label: "Enabled", count: enabledCount },
-              { value: "disabled", label: "Disabled", count: disabledCount },
-            ]}
-            value={filter}
-            onChange={(v) => {
-              setFilter(v as Filter);
-              setPage(1);
-            }}
-          />
-          <div className="flex items-center gap-2 sm:ml-auto">
+          <div className="flex min-w-0 max-w-full max-sm:overflow-x-auto" data-tab-row>
+            <PillTabs
+              size="sm"
+              items={[
+                { value: "all", label: "All", count: withEnabled.length },
+                { value: "enabled", label: "Enabled", count: enabledCount },
+                { value: "disabled", label: "Disabled", count: disabledCount },
+              ]}
+              value={filter}
+              onChange={(v) => {
+                setFilter(v as Filter);
+                setPage(1);
+              }}
+            />
+          </div>
+          {/* phones: the two bulk switches as two equal buttons across the card */}
+          <div className="grid w-full grid-cols-2 items-center gap-2 sm:ml-auto sm:flex sm:w-auto">
             <Button
               variant="outline"
               size="sm"
-              className="h-9 gap-1.5 text-xs"
+              className="h-9 w-full gap-1.5 text-xs sm:w-auto"
               disabled={bulkMutation.isPending}
               onClick={() => setBulkConfirm(true)}
             >
@@ -171,7 +175,7 @@ export default function TrackingSettingsTab() {
             <Button
               variant="outline"
               size="sm"
-              className="h-9 gap-1.5 text-xs"
+              className="h-9 w-full gap-1.5 text-xs sm:w-auto"
               disabled={bulkMutation.isPending}
               onClick={() => setBulkConfirm(false)}
             >

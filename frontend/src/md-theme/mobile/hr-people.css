@@ -1,0 +1,2 @@
+/* MD portal on phones: hr-people (see mobile-rules in md-portal docs). Every selector is scoped to html[data-md-theme] or is an
+   md-* class, and colours come from the tokens (no hex). */

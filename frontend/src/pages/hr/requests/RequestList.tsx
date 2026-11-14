@@ -124,18 +124,20 @@ export default function RequestList({
           data-testid={`request-${item.kind}-${item.id}`}
           data-status={item.status}
         >
-          <CardContent className="space-y-3 p-4">
+          {/* compact on a phone: 14 px padding, 10 px between the parts, the status chips and their trail on one
+              flowing line and "Decided by" on one line, so a long list is not a wall of tall cards */}
+          <CardContent className="space-y-2.5 p-3.5">
             <div className="flex items-start justify-between gap-2">
               <EmployeeCell item={item} />
               <SubmittedCell item={item} />
             </div>
             <RequestCell item={item} />
-            <StatusCell item={item} now={now} />
+            <StatusCell item={item} now={now} inline />
             {item.decided && (item.decided.by || item.decided.at) && (
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                <span className="font-semibold">Decided by</span>
-                <DecidedCell item={item} />
-              </div>
+              <p className="text-xs text-gray-500">
+                <span className="mr-1.5 font-semibold">Decided by</span>
+                <DecidedCell item={item} inline />
+              </p>
             )}
             <RequestActions item={item} kind={kinds[item.kind]} busy={busyKey === item.key} handlers={handlers} full />
           </CardContent>

@@ -1,4 +1,4 @@
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight, Download, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,7 +47,8 @@ export function StatCard({
       </div>
     </>
   );
-  const cls = cn("flex items-start gap-3 rounded-2xl p-4 shadow-sm ring-1 ring-black/[0.03]", tone);
+  // phones: 14 px padding and a tighter gap (the old 16 px from sm up)
+  const cls = cn("flex items-start gap-2.5 rounded-2xl p-3.5 shadow-sm ring-1 ring-black/[0.03] sm:gap-3 sm:p-4", tone);
   return onClick ? (
     <button
       type="button"
@@ -113,7 +114,7 @@ export function PersonAvatar({
       aria-hidden
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full font-bold",
-        size === "lg" ? "h-11 w-11 text-sm" : size === "sm" ? "h-7 w-7 text-[10px]" : "h-9 w-9 text-xs",
+        size === "lg" ? "h-11 w-11 text-sm" : size === "sm" ? "h-7 w-7 text-[11px] sm:text-[10px]" : "h-9 w-9 text-xs",
         AVATAR_TONES[Math.abs(id) % AVATAR_TONES.length],
       )}
     >
@@ -261,6 +262,7 @@ export function DateField({
   testId,
   min,
   max,
+  fill,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -268,9 +270,11 @@ export function DateField({
   testId?: string;
   min?: string;
   max?: string;
+  /** In a page's phone grid: the input fills its cell below sm (the old 9.5rem from sm up). */
+  fill?: boolean;
 }) {
   return (
-    <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
+    <label className={cn("flex items-center gap-1.5 text-xs font-medium text-gray-500", fill && "min-w-0")}>
       {label}
       <Input
         type="date"
@@ -278,7 +282,7 @@ export function DateField({
         min={min}
         max={max}
         onChange={(e) => onChange(e.target.value)}
-        className="h-10 w-[9.5rem]"
+        className={cn("h-10 w-[9.5rem]", fill && "w-auto min-w-0 flex-1 sm:w-[9.5rem] sm:flex-none")}
         data-testid={testId}
       />
     </label>
@@ -318,10 +322,25 @@ export function ResultLine({
   );
 }
 
-/** Reads a list through its first `step` rows and a button for the next ones, so a long list stays quick. */
-export function useVisibleCount(step = 60) {
-  const [count, setCount] = useState(step);
-  return { count, more: () => setCount((c) => c + step), reset: () => setCount(step) };
+const narrow = () => typeof window !== "undefined" && window.innerWidth < 640;
+
+/** A phone-width window (below Tailwind's sm), followed as the window is resized. */
+function useNarrowScreen() {
+  const [isNarrow, setNarrow] = useState(narrow);
+  useEffect(() => {
+    const onResize = () => setNarrow(narrow());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return isNarrow;
+}
+
+/** Reads a list through its first `step` rows and a button for the next ones, so a long list stays quick. `phoneStep`: a
+ *  smaller page on a phone, where every row is a tall card (left out: the same step everywhere). */
+export function useVisibleCount(step = 60, phoneStep = step) {
+  const size = useNarrowScreen() ? phoneStep : step;
+  const [pages, setPages] = useState(1);
+  return { count: pages * size, more: () => setPages((p) => p + 1), reset: () => setPages(1) };
 }
 
 export function MoreRows({ shown, total, onMore }: { shown: number; total: number; onMore: () => void }) {
@@ -474,15 +493,17 @@ export function ExportButton({
   onClick,
   disabled,
   testId = "export",
+  className,
 }: {
   onClick: () => void;
   disabled?: boolean;
   testId?: string;
+  className?: string;
 }) {
   return (
     <Button
       variant="outline"
-      className="h-10 gap-1.5"
+      className={cn("h-10 gap-1.5", className)}
       onClick={onClick}
       disabled={disabled}
       data-view-safe

@@ -1163,7 +1163,7 @@ class OvertimeTests(World):
     def test_the_explanation_names_what_overtime_is_and_where_the_money_is(self):
         by_id = {p["id"]: p for p in self.overtime()["provenance"]}
         self.assertEqual(set(by_id), {"overtime-hours", "overtime-share", "overtime-decisions"})
-        self.assertIn("Payroll Analysis", " ".join(by_id["overtime-hours"]["caveats"]))
+        self.assertIn("Payroll page", " ".join(by_id["overtime-hours"]["caveats"]))
 
 
 # ─── leave, permissions, approvals waiting ───────────────────────────────────────────────────────────────────────
@@ -1671,7 +1671,7 @@ class InsightTests(InsightsBase):
     def test_a_department_far_above_its_own_normal(self):
         self.spike_world()
         items = self.insights()
-        self.assertEqual([i["id"] for i in items], ["attendance.dept-spike"])
+        self.assertEqual([i["id"] for i in items], ["attendance.dept-spike-sewing"])
         item = items[0]
         # last 7 days: 6 absences in 60 scheduled days = 10 %. The 90 days before: 10 in 770 = 1.3 %, so 7.7 times
         self.assertEqual(item["title"], "Sewing absenteeism is 10%, 7.7× its 90-day average (1.3%)")
@@ -1681,6 +1681,16 @@ class InsightTests(InsightsBase):
         self.assertEqual(
             set(item), {"id", "severity", "title", "detail", "metric", "page", "ask"}
         )  # the Dashboard's shape
+
+    def test_two_departments_spiking_are_two_items_with_their_own_ids(self):
+        # the ids were once the same for both: the pages' lists repeated a React key and the Dashboard dropped the second
+        self.spike_world()
+        cutting = Department.objects.create(name="Cutting Room", branch=self.unit)
+        people = self.staff(dept=cutting, prefix="C")
+        self.records(people, {i: [BASELINE_ABSENCES[i]] + ([d(14 + i)] if i < 6 else []) for i in range(10)})
+        self.punch_in(people, 10)
+        ids = [i["id"] for i in self.insights() if i["id"].startswith("attendance.dept-spike")]
+        self.assertEqual(sorted(ids), ["attendance.dept-spike-cutting-room", "attendance.dept-spike-sewing"])
 
     def test_a_department_that_is_always_like_this_is_not_a_spike(self):
         people = self.staff()

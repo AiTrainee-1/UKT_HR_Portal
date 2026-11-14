@@ -54,7 +54,7 @@ function ReceptionDeviceRow({
           <p className="font-semibold">{device.name}</p>
           <Badge
             variant={device.isActive ? "default" : "secondary"}
-            className={`text-[10px] ${device.isActive ? "!bg-green-100 !text-green-700" : ""}`}
+            className={`text-[11px] sm:text-[10px] ${device.isActive ? "!bg-green-100 !text-green-700" : ""}`}
           >
             {device.isActive ? "Active" : "Deactivated"}
           </Badge>

@@ -74,7 +74,7 @@ function Tile({
           {!enlarged && (
             <span
               aria-hidden
-              className="pointer-events-none absolute right-2 top-2 inline-flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white opacity-90 group-hover:opacity-100"
+              className="pointer-events-none absolute right-2 top-2 inline-flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] sm:text-[10px] font-semibold text-white opacity-90 group-hover:opacity-100"
             >
               <Maximize2 size={10} /> Enlarge
             </span>

@@ -78,7 +78,9 @@ function Leg({
     >
       <Navigation size={11} className="shrink-0" />
       <span className="truncate">Travelled {legText(leg)}</span>
-      {leg.estimated && <span className="rounded bg-white/70 px-1 text-[10px] font-bold text-sky-600">estimated</span>}
+      {leg.estimated && (
+        <span className="rounded bg-white/70 px-1 text-[11px] sm:text-[10px] font-bold text-sky-600">estimated</span>
+      )}
     </button>
   );
 }

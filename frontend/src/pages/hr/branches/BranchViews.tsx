@@ -71,7 +71,7 @@ function Actions({ branch, onEdit, onDelete, busyId }: { branch: Branch } & Omit
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8 text-muted-foreground hover:bg-teal-50 hover:text-teal-700"
+        className="h-8 w-8 text-muted-foreground hover:bg-teal-50 hover:text-teal-700 max-sm:h-9 max-sm:w-9"
         onClick={() => onEdit(branch)}
         title="Edit"
         aria-label={`Edit ${branch.name}`}
@@ -82,7 +82,7 @@ function Actions({ branch, onEdit, onDelete, busyId }: { branch: Branch } & Omit
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+        className="h-8 w-8 text-muted-foreground hover:bg-red-50 hover:text-red-600 max-sm:h-9 max-sm:w-9"
         disabled={busyId === branch.id}
         onClick={() => onDelete(branch)}
         title="Delete"
@@ -112,7 +112,7 @@ export function BranchCard({ branch, row, onOpen, ...actions }: { branch: Branch
       aria-label={`${branch.name}: open details`}
       onClick={() => onOpen(branch)}
       onKeyDown={openOnKey(() => onOpen(branch))}
-      className="group flex cursor-pointer flex-col gap-3 rounded-2xl border bg-white p-4 shadow-sm outline-none transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-teal-500"
+      className="group flex cursor-pointer flex-col gap-3 rounded-2xl border bg-white p-3.5 shadow-sm sm:p-4 outline-none transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-teal-500"
       data-testid={`branch-card-${branch.id}`}
       data-branch-name={branch.name}
     >

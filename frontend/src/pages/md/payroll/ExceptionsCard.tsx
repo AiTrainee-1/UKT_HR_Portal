@@ -78,7 +78,50 @@ export default function ExceptionsCard({
               ]}
             />
           </div>
-          <div className="md-panel overflow-hidden">
+          {/* a phone: one small card per finding (who, what, why, the pay), so nothing hides off the right edge */}
+          <ul className="md-panel divide-y divide-md-line @lg:hidden" data-testid="md-payroll-exceptions-cards">
+            {rows.map((r, i) => {
+              const severity = SEVERITY[r.severity];
+              const SeverityIcon = severity.icon;
+              return (
+                <li
+                  key={`${r.employeeId}-${r.kind}-${i}`}
+                  className="px-3 py-2.5"
+                  data-testid={`md-payroll-exception-card-${r.kind}`}
+                >
+                  <div className="flex items-start justify-between gap-2.5">
+                    <p className="min-w-0 text-[13.5px] leading-snug">
+                      <span className="font-bold text-md-ink [overflow-wrap:anywhere]">{r.name}</span>
+                      <span className="ml-1.5 text-[11.5px] font-medium text-md-ink-soft">{r.code ?? ""}</span>
+                    </p>
+                    <Pill className={cn("shrink-0", severity.chip)}>
+                      <SeverityIcon size={12} aria-hidden />
+                      {r.kindLabel}
+                    </Pill>
+                  </div>
+                  <div className="mt-0.5 flex items-baseline justify-between gap-2.5 text-[12px]">
+                    <span className="min-w-0 truncate text-md-ink-soft" title={`${r.department} · ${r.type}`}>
+                      {r.department} · {r.type}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-md-ink-soft">
+                      Net{" "}
+                      <b
+                        className={cn(
+                          "font-bold text-md-ink",
+                          r.netPay != null && r.netPay < 0 && "font-black text-md-danger",
+                        )}
+                      >
+                        {r.netPay != null ? inr(r.netPay) : "—"}
+                      </b>
+                      {" · "}Gross <b className="font-bold text-md-ink">{r.grossPay != null ? inr(r.grossPay) : "—"}</b>
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[12px] leading-snug text-md-ink">{r.detail}</p>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="md-panel hidden overflow-hidden @lg:block">
             <Table className="md-money-table" data-testid="md-payroll-exceptions-table">
               <TableHeader>
                 <TableRow>

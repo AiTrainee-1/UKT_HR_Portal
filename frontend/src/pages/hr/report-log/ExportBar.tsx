@@ -80,13 +80,13 @@ export default function ExportBar({
   scope?: string;
 }) {
   return (
-    <div className="flex items-center gap-2" data-view-safe data-testid="export-bar">
+    <div className="flex w-full items-center gap-2 sm:w-auto" data-view-safe data-testid="export-bar">
       {FORMATS.filter((f) => formats.includes(f.format)).map(({ format, label, Icon, tone }) => (
         <Button
           key={format}
           type="button"
           variant="outline"
-          className={cn("h-10 gap-1.5 font-semibold", tone)}
+          className={cn("h-10 gap-1.5 font-semibold max-sm:flex-1", tone)}
           disabled={disabled || busy !== null}
           title={
             disabled ? disabledHint : scope ? `Download as ${label}: ${scope.toLowerCase()}` : `Download as ${label}`

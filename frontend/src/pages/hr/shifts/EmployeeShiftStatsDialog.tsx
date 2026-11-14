@@ -66,30 +66,40 @@ export default function EmployeeShiftStatsDialog({
     switch (status) {
       case "present":
         return (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700">
+          <span className="px-2 py-0.5 rounded-full text-[11px] sm:text-[10px] font-semibold bg-green-100 text-green-700">
             Present
           </span>
         );
       case "half_shift":
         return (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700">
+          <span className="px-2 py-0.5 rounded-full text-[11px] sm:text-[10px] font-semibold bg-amber-100 text-amber-700">
             Half Shift
           </span>
         );
       case "absent":
         return (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">Absent</span>
+          <span className="px-2 py-0.5 rounded-full text-[11px] sm:text-[10px] font-semibold bg-red-100 text-red-700">
+            Absent
+          </span>
         );
       case "on_leave":
         return (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700">Leave</span>
+          <span className="px-2 py-0.5 rounded-full text-[11px] sm:text-[10px] font-semibold bg-blue-100 text-blue-700">
+            Leave
+          </span>
         );
       case "holiday":
         return (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500">Holiday</span>
+          <span className="px-2 py-0.5 rounded-full text-[11px] sm:text-[10px] font-semibold bg-gray-100 text-gray-500">
+            Holiday
+          </span>
         );
       default:
-        return <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-50 text-gray-400">—</span>;
+        return (
+          <span className="px-2 py-0.5 rounded-full text-[11px] sm:text-[10px] font-semibold bg-gray-50 text-gray-400">
+            —
+          </span>
+        );
     }
   };
 
@@ -340,7 +350,7 @@ export default function EmployeeShiftStatsDialog({
                           return (
                             <tr key={log.date} className={`border-t ${rowBg}`}>
                               <td className="px-3 py-1.5 font-mono text-gray-700 whitespace-nowrap">
-                                {log.date} <span className="text-gray-400 text-[10px]">{log.day}</span>
+                                {log.date} <span className="text-gray-400 text-[11px] sm:text-[10px]">{log.day}</span>
                               </td>
                               <td className="px-3 py-1.5">{statusBadge(log.status)}</td>
                               <td className="px-3 py-1.5 font-mono text-gray-600">{log.firstPunch ?? "—"}</td>

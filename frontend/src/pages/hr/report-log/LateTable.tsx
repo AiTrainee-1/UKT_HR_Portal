@@ -214,7 +214,7 @@ export default function LateTable({
                 Total Minutes Late
                 <Info size={12} className="text-gray-400" aria-hidden />
               </span>
-              <span className="text-[10px] font-normal text-gray-500">late by (after grace)</span>
+              <span className="text-[11px] font-normal text-gray-500 sm:text-[10px]">late by (after grace)</span>
             </span>
           </SortHead>
         </TableRow>

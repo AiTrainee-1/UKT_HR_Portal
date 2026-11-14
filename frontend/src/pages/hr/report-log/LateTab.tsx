@@ -189,7 +189,7 @@ export default function LateTab({
       </div>
 
       <DailyFiltersBar filters={filters} onChange={changeFilters} testId="late-filters">
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+        <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 sm:ml-auto sm:w-auto sm:justify-end">
           <Chip
             className={
               pickedCount > 0

@@ -5,8 +5,9 @@ import BarList from "@/components/md/kit/BarList";
 import { CHART, axisStyle, gridProps, tooltipStyle } from "@/components/md/kit/chartTheme";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock } from "@/components/md/kit/states";
+import { useElementWidth } from "@/components/payroll/statement/use-element-width";
 import { inr, inrCompact, num } from "@/lib/md/format";
-import { bandRows, type BandKind } from "./logic";
+import { bandRows, bandTickLines, type BandKind } from "./logic";
 import { CardError, Metric, OVERLINE, SegTabs, emptyReason, failed } from "./parts";
 import type { PayrollQueries } from "./queries";
 
@@ -16,12 +17,32 @@ const KINDS: { value: BandKind; label: string }[] = [
   { value: "production", label: "Production" },
 ];
 
+/** Narrower than this (a phone's card) the histogram fits the card instead of scrolling, its band names on two lines. */
+const HISTOGRAM_NARROW = 440;
+
+/** A band's name under a narrow column, on two short lines (see bandTickLines). */
+function BandTick({ x = 0, y = 0, payload }: { x?: number; y?: number; payload?: { value?: string } }) {
+  const lines = bandTickLines(String(payload?.value ?? ""));
+  return (
+    <text x={x} y={y} textAnchor="middle" fontSize={11} fill={axisStyle.fill}>
+      {lines.map((line, i) => (
+        <tspan key={line} x={x} dy={i === 0 ? 10 : 12}>
+          {line}
+        </tspan>
+      ))}
+    </text>
+  );
+}
+
 /** How take-home pay is spread (people per net-pay band; counts only, never a name) and gross pay by designation. */
 export default function DistributionCard({ query, label }: { query: PayrollQueries["distribution"]; label: string }) {
   const [kind, setKind] = useState<BandKind>("all");
   const data = query.data;
   const rows = bandRows(data?.bands ?? [], kind);
   const stats = data?.stats;
+  // 0 until measured (and in a test DOM): the wide chart
+  const [measure, boxWidth] = useElementWidth<HTMLDivElement>();
+  const narrow = boxWidth > 0 && boxWidth < HISTOGRAM_NARROW;
   return (
     <SectionCard
       testId="md-payroll-distribution"
@@ -56,13 +77,31 @@ export default function DistributionCard({ query, label }: { query: PayrollQueri
             <Metric label="Under ₹10,000" value={num(stats.belowTenThousand)} sub={`of ${num(stats.people)} people`} />
           </div>
           <SegTabs label="People in the histogram" items={KINDS} value={kind} onChange={setKind} />
-          <div className="overflow-x-auto">
-            <div style={{ height: 220, minWidth: 440 }} data-testid="md-payroll-distribution-chart">
+          <div className="overflow-x-auto" ref={measure}>
+            <div
+              style={narrow ? { height: 210 } : { height: 220, minWidth: 440 }}
+              data-testid="md-payroll-distribution-chart"
+              data-layout={narrow ? "fit" : undefined}
+            >
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={rows} margin={{ top: 18, right: 8, left: -18, bottom: 0 }}>
+                {/* about 30 px of the axis stays visible either way: a three-figure count ("100") needs all of it */}
+                <BarChart data={rows} margin={{ top: 18, right: 8, left: narrow ? -2 : -10, bottom: 0 }}>
                   <CartesianGrid {...gridProps} />
-                  <XAxis dataKey="tick" tick={axisStyle} axisLine={false} tickLine={false} interval={0} />
-                  <YAxis allowDecimals={false} tick={axisStyle} axisLine={false} tickLine={false} width={40} />
+                  <XAxis
+                    dataKey="tick"
+                    tick={narrow ? <BandTick /> : axisStyle}
+                    {...(narrow ? { height: 36 } : {})}
+                    axisLine={false}
+                    tickLine={false}
+                    interval={0}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={axisStyle}
+                    axisLine={false}
+                    tickLine={false}
+                    width={narrow ? 32 : 40}
+                  />
                   <Tooltip
                     contentStyle={tooltipStyle}
                     cursor={{ fill: "var(--md-wine)", fillOpacity: 0.05 }}

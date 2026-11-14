@@ -941,7 +941,8 @@ class MonthlyPayrollTests(World):
                 "Overtime cost": 1000.0,
                 "Cost per head": 20000.0,
                 "Gross pay vs last month": -10.4,
-                "Payroll status": "Part paid",
+                # 2 of 6 slips are Cleared, which is HR's verification, not payment (staff month workflow 2026-11-10)
+                "Payroll status": "Generated, still open",
             },
         )
         rows = body["rows"]
@@ -984,7 +985,8 @@ class MonthlyPayrollTests(World):
     def test_the_notes_carry_the_status_and_the_main_drivers_of_the_bridge(self):
         body = self.report("md-monthly-payroll", {"period": "2026-09"})
         text = "\n".join(body["notes"])
-        self.assertIn("Payroll status for Sep 2026: Part paid (2 of 6 slips marked paid).", text)
+        # Cleared is HR's verification, not payment (staff month workflow 2026-11-10): nothing is paid yet
+        self.assertIn("Payroll status for Sep 2026: Generated, still open (0 of 6 slips marked paid).", text)
         self.assertIn("Gross pay moved from ₹1,34,000 (Aug 2026) to ₹1,20,000 (Sep 2026): -₹14,000 (-10.4%).", text)
         # Aug -> Sep: Gita's and Bala's pay changes carry no saved calculation, so they sit under Other (-28,000 + 4,000)
         self.assertIn(

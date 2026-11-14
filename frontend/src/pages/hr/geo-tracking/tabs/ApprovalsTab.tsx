@@ -68,7 +68,7 @@ function SessionCard({
               size={40}
             />
             {explainsWaiting(approval) ? (
-              <WaitingChip approval={approval} className="rounded-full" />
+              <WaitingChip approval={approval} className="rounded-full text-[11px] sm:text-[10px]" />
             ) : (
               <SessionChip status={session.status} />
             )}
@@ -226,7 +226,10 @@ export default function ApprovalsTab() {
     <div className="space-y-4" data-testid="tab-approvals">
       <PipelineNote workflow="on_duty" />
       <ToolbarCard>
-        <PillTabs items={FILTERS} value={statusFilter} onChange={(v) => setStatusFilter(v as Filter)} size="sm" />
+        {/* one row of status pills that scrolls sideways on a phone */}
+        <div className="flex min-w-0 max-w-full max-sm:overflow-x-auto" data-tab-row>
+          <PillTabs items={FILTERS} value={statusFilter} onChange={(v) => setStatusFilter(v as Filter)} size="sm" />
+        </div>
         {!isLoading && (
           <CountText testId="approvals-count">
             {rows.length} {statusFilter} request{rows.length === 1 ? "" : "s"}

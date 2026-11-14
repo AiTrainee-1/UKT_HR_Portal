@@ -64,7 +64,7 @@ export default function PositionsSection({ query }: { query: QueryLike<Recruitme
 
   return (
     <div className="@container" data-testid="md-recruitment-positions-section">
-      <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
+      <div className="grid grid-cols-1 items-start gap-4 @lg:gap-5 @4xl:grid-cols-12">
         <SectionCard
           className="min-w-0 @4xl:col-span-7"
           testId="md-recruitment-positions"

@@ -223,7 +223,11 @@ export default function HodsTab({ onOpenRequest }: { onOpenRequest: (openPath: s
               </button>
             )}
           </div>
-          <div className="flex flex-wrap gap-2" {...{ [VIEW_SAFE_ATTR]: "" }}>
+          {/* phones: Export and Share as two equal buttons side by side */}
+          <div
+            className="grid grid-cols-2 gap-2 max-sm:[&>span]:grid max-sm:[&_button]:w-full sm:flex sm:flex-wrap"
+            {...{ [VIEW_SAFE_ATTR]: "" }}
+          >
             <ExportMenu
               heading="Download the board"
               disabled={shown.length === 0}
@@ -265,7 +269,8 @@ export default function HodsTab({ onOpenRequest }: { onOpenRequest: (openPath: s
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        {/* phones: the two selects side by side, the switch on its own row under them */}
+        <div className="grid grid-cols-2 items-center gap-2 max-sm:[&>button]:w-full max-sm:[&>label]:col-span-2 max-sm:[&>:only-child]:col-span-2 sm:flex sm:flex-wrap">
           <BranchFilter value={filters.branch} onChange={(v) => set({ branch: v })} testId="hods-branch" />
           {deptList.length > 0 && (
             <Select value={filters.department || ALL} onValueChange={(v) => set({ department: v === ALL ? "" : v })}>

@@ -67,7 +67,7 @@ export default function MdRecruitment() {
 
   return (
     <MdLayout>
-      <div className="mx-auto max-w-[1500px] space-y-5" data-testid="md-recruitment">
+      <div className="mx-auto max-w-[1500px] space-y-4 @lg:space-y-5" data-testid="md-recruitment">
         <MdPageHeader
           icon={UserPlus}
           title="Recruitment"

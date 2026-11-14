@@ -32,6 +32,11 @@ import EmployeeAvatar from "@/components/EmployeeAvatar";
 import { FIRST_PORTION, SECOND_PORTION } from "@/lib/salary-split";
 import { Gate, useLevel } from "@/lib/tab-access";
 
+// Phones: the profile's cards are padded 14 px instead of 24 (the old padding comes back from `sm` up, so tablets and
+// desktops look as before).
+const HEAD = "p-3.5 pb-3 sm:p-6 sm:pb-3";
+const BODY = "px-3.5 pb-3.5 sm:px-6 sm:pb-6";
+
 export default function EmployeeDetail() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -159,14 +164,14 @@ export default function EmployeeDetail() {
     <HrLayout>
       {/* A column with a gap (not space-y): a section a role may only view is wrapped in a display:contents Gate, which
           space-y's margins would skip. */}
-      <div className="flex flex-col gap-5">
-        {/* Header */}
-        <div className="flex items-start gap-3">
+      <div className="flex flex-col gap-4 sm:gap-5">
+        {/* Header (phones: Download ID Card goes under the name, the whole width, instead of off the right edge) */}
+        <div className="flex flex-wrap items-start gap-3 sm:flex-nowrap">
           <Button variant="ghost" size="icon" onClick={() => navigate("/hr/employees")} data-testid="button-back">
             <ArrowLeft size={18} />
           </Button>
           <EmployeeAvatar photoUrl={employee.photoUrl} name={`${employee.firstName} ${employee.lastName}`} size={56} />
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-2xl font-black">{employee.firstName} {employee.lastName}</h2>
               <Badge variant="outline" className="font-mono">{employee.employeeCode}</Badge>
@@ -178,7 +183,7 @@ export default function EmployeeDetail() {
                 <Badge variant="outline" className="gap-1.5 text-teal-700 border-teal-200 bg-teal-50">
                   <Building size={11} /> {employee.branchName}
                   {employee.unitCode && (
-                    <span className="text-[10px] font-mono font-black text-teal-800">{employee.unitCode}</span>
+                    <span className="text-[11px] sm:text-[10px] font-mono font-black text-teal-800">{employee.unitCode}</span>
                   )}
                 </Badge>
               )}
@@ -190,7 +195,7 @@ export default function EmployeeDetail() {
             </p>
           </div>
           <Gate k="employees.profile.id_card">
-          <Button className="gap-2" onClick={handleDownloadIdCard} disabled={downloading || !idCard}>
+          <Button className="gap-2 max-sm:h-11 max-sm:w-full" onClick={handleDownloadIdCard} disabled={downloading || !idCard}>
             <Download size={15} />
             {downloading ? "Preparing…" : "Download ID Card"}
           </Button>
@@ -198,32 +203,32 @@ export default function EmployeeDetail() {
         </div>
 
         {/* This-month attendance snapshot */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           {[
             { label: "Working Days (This Month)", value: workingDaysThisMonth, icon: CalendarDays, cls: "text-gray-900", iconCls: "bg-gray-700" },
             { label: "Present Days", value: attendanceMonth?.totalPresent ?? "—", icon: CalendarCheck, cls: "text-green-700", iconCls: "bg-green-600" },
             { label: "Absent Days", value: attendanceMonth?.totalAbsent ?? "—", icon: CalendarX, cls: "text-red-600", iconCls: "bg-red-500" },
             { label: "Total Leave Days (Lifetime)", value: approvedLeaveDays, icon: Calendar, cls: "text-purple-700", iconCls: "bg-purple-600" },
           ].map(({ label, value, icon: Icon, cls, iconCls }) => (
-            <Card key={label} className="border">
-              <CardContent className="p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
-                  <div className={`p-1.5 rounded-lg ${iconCls}`}>
+            <Card key={label} className="border h-full">
+              <CardContent className="p-3.5 sm:p-5">
+                <div className="flex items-start sm:items-center justify-between gap-2 sm:gap-0 mb-3">
+                  <p className="min-w-0 text-[11px] sm:text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
+                  <div className={`shrink-0 p-1.5 rounded-lg ${iconCls}`}>
                     <Icon size={14} className="text-white" />
                   </div>
                 </div>
-                <p className={`text-3xl font-black leading-none ${cls}`}>{value}</p>
+                <p className={`text-3xl font-black leading-none tabular-nums ${cls}`}>{value}</p>
               </CardContent>
             </Card>
           ))}
         </div>
 
-        <div className="grid md:grid-cols-2 gap-5">
+        <div className="grid md:grid-cols-2 gap-3 sm:gap-5">
           {/* Personal Information */}
           <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Personal Information</CardTitle></CardHeader>
-            <CardContent className="space-y-3 text-sm">
+            <CardHeader className={HEAD}><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Personal Information</CardTitle></CardHeader>
+            <CardContent className={`${BODY} space-y-3 text-sm`}>
               <div className="flex items-center gap-3"><User size={15} className="text-muted-foreground" /><span className="capitalize">{employee.gender ?? "—"}</span></div>
               <div className="flex items-center gap-3"><Cake size={15} className="text-muted-foreground" /><span>{employee.dateOfBirth ? new Date(employee.dateOfBirth).toLocaleDateString("en-IN") : "—"}</span></div>
               <div className="flex items-center gap-3">
@@ -237,11 +242,11 @@ export default function EmployeeDetail() {
 
           {/* Contact */}
           <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Contact</CardTitle></CardHeader>
-            <CardContent className="space-y-3 text-sm">
+            <CardHeader className={HEAD}><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Contact</CardTitle></CardHeader>
+            <CardContent className={`${BODY} space-y-3 text-sm`}>
               <div className="flex items-center gap-3"><Phone size={15} className="text-muted-foreground" /><span>{employee.phone}</span></div>
-              <div className="flex items-center gap-3"><Mail size={15} className="text-muted-foreground" /><span>{employee.email}</span></div>
-              {employee.address && <div className="flex items-start gap-3"><MapPin size={15} className="text-muted-foreground mt-0.5" /><span>{employee.address}</span></div>}
+              <div className="flex items-center gap-3"><Mail size={15} className="max-sm:shrink-0 text-muted-foreground" /><span className="min-w-0 [overflow-wrap:anywhere]">{employee.email}</span></div>
+              {employee.address && <div className="flex items-start gap-3"><MapPin size={15} className="max-sm:shrink-0 text-muted-foreground mt-0.5" /><span className="min-w-0 [overflow-wrap:anywhere]">{employee.address}</span></div>}
               {employee.emergencyContact && <div className="flex items-center gap-3"><ShieldAlert size={15} className="text-amber-400" /><span>{employee.emergencyContact}</span></div>}
             </CardContent>
           </Card>
@@ -249,8 +254,8 @@ export default function EmployeeDetail() {
           {/* Salary */}
           <Gate k="employees.profile.salary">
           <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Salary</CardTitle></CardHeader>
-            <CardContent className="space-y-2 text-sm">
+            <CardHeader className={HEAD}><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Salary</CardTitle></CardHeader>
+            <CardContent className={`${BODY} space-y-2 text-sm`}>
               <div className="flex justify-between"><span className="text-muted-foreground">Type</span><span className="capitalize font-medium">{employee.salaryType}</span></div>
               <Separator />
               <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span className="font-black text-lg">₹{Number(employee.salaryAmount ?? 0).toLocaleString("en-IN")}</span></div>
@@ -280,8 +285,8 @@ export default function EmployeeDetail() {
           <Gate k="employees.profile.bank">
           {(employee.bankName || employee.bankAccount) && (
             <Card>
-              <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Banking</CardTitle></CardHeader>
-              <CardContent className="space-y-3 text-sm">
+              <CardHeader className={HEAD}><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Banking</CardTitle></CardHeader>
+              <CardContent className={`${BODY} space-y-3 text-sm`}>
                 {employee.bankName && <div className="flex items-center gap-3"><Building size={15} className="text-muted-foreground" /><span>{employee.bankName}</span></div>}
                 {employee.bankAccount && <div className="flex items-center gap-3"><CreditCard size={15} className="text-muted-foreground" /><span className="font-mono">{employee.bankAccount}</span></div>}
                 {employee.bankIfsc && <div className="flex items-center gap-3"><span className="text-muted-foreground text-xs w-4">IFSC</span><span className="font-mono">{employee.bankIfsc}</span></div>}
@@ -292,8 +297,8 @@ export default function EmployeeDetail() {
           {/* Compliance */}
           {(employee.pfNumber || employee.esiNumber) && (
             <Card>
-              <CardHeader className="pb-3"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Compliance</CardTitle></CardHeader>
-              <CardContent className="space-y-2 text-sm">
+              <CardHeader className={HEAD}><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Compliance</CardTitle></CardHeader>
+              <CardContent className={`${BODY} space-y-2 text-sm`}>
                 {employee.pfNumber && <div className="flex justify-between"><span className="text-muted-foreground">PF Number</span><span className="font-mono">{employee.pfNumber}</span></div>}
                 {employee.esiNumber && <div className="flex justify-between"><span className="text-muted-foreground">ESI Number</span><span className="font-mono">{employee.esiNumber}</span></div>}
                 {employee.idProof && <div className="flex justify-between"><span className="text-muted-foreground">ID Proof</span><span>{employee.idProof}</span></div>}
@@ -306,16 +311,16 @@ export default function EmployeeDetail() {
         {/* Documents -Offer Letter / Experience Letter generation */}
         <Gate k="employees.letters">
         <Card>
-          <CardHeader className="pb-3">
+          <CardHeader className={HEAD}>
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
               <FileSignature size={15} />Documents
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid md:grid-cols-2 gap-5">
+          <CardContent className={`${BODY} grid md:grid-cols-2 gap-4 sm:gap-5`}>
             <div className="space-y-2">
               <p className="text-sm font-semibold flex items-center gap-2"><FileSignature size={14} className="text-emerald-700" /> Offer Letter</p>
               <p className="text-xs text-muted-foreground">Generated from this employee's current designation, department, and salary.</p>
-              <div className="flex items-center gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1 sm:flex sm:items-center">
                 <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleOfferLetter("preview")} disabled={offerLetterBusy !== null}>
                   <Eye size={14} />{offerLetterBusy === "preview" ? "Generating…" : "Preview"}
                 </Button>
@@ -330,7 +335,7 @@ export default function EmployeeDetail() {
                 <Label className="text-xs">Last Working Day</Label>
                 <Input type="date" className="h-8 w-44" value={lastWorkingDay} onChange={(e) => setLastWorkingDay(e.target.value)} />
               </div>
-              <div className="flex items-center gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2 pt-1 sm:flex sm:items-center">
                 <Button size="sm" variant="outline" className="gap-1.5" onClick={() => handleExperienceLetter("preview")} disabled={experienceLetterBusy !== null}>
                   <Eye size={14} />{experienceLetterBusy === "preview" ? "Generating…" : "Preview"}
                 </Button>
@@ -346,7 +351,7 @@ export default function EmployeeDetail() {
         {/* Uploaded Documents -read-only here; upload/delete happens on the dedicated Documents page */}
         <Gate k="employees.profile.documents">
         <Card>
-          <CardHeader className="pb-3 flex flex-row items-center justify-between">
+          <CardHeader className={`${HEAD} flex flex-row items-center justify-between`}>
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
               <FolderOpen size={15} />Uploaded Documents
             </CardTitle>
@@ -354,7 +359,7 @@ export default function EmployeeDetail() {
               Manage <ExternalLink size={12} />
             </Link>
           </CardHeader>
-          <CardContent>
+          <CardContent className={BODY}>
             {!uploadedDocuments || uploadedDocuments.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">
                 No documents uploaded yet. Use the Documents page to add PAN, Aadhaar, certificates, and more.
@@ -373,14 +378,14 @@ export default function EmployeeDetail() {
                             <span className="flex-1 truncate text-muted-foreground">{doc.originalFilename}</span>
                             <button
                               onClick={() => previewDocumentPdf(doc.fileUrl, () => token)}
-                              className="p-1 rounded hover:bg-gray-100 text-gray-500"
+                              className="p-2 sm:p-1 rounded hover:bg-gray-100 text-gray-500"
                               title="View"
                             >
                               <Eye size={12} />
                             </button>
                             <button
                               onClick={() => downloadDocumentPdf(doc.fileUrl, () => token)}
-                              className="p-1 rounded hover:bg-gray-100 text-gray-500"
+                              className="p-2 sm:p-1 rounded hover:bg-gray-100 text-gray-500"
                               title="Download"
                             >
                               <Download size={12} />
@@ -400,12 +405,12 @@ export default function EmployeeDetail() {
         {/* Employee ID Card -view only, download is the only action */}
         <Gate k="employees.profile.id_card">
         <Card>
-          <CardHeader className="pb-3">
+          <CardHeader className={HEAD}>
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
               <CreditCard size={15} />Employee ID Card
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className={BODY}>
             {idCard ? (
               <div ref={cardRef} className="inline-flex gap-4 flex-wrap bg-white p-2">
                 {idCard.employmentType === "production" ? (
@@ -430,7 +435,7 @@ export default function EmployeeDetail() {
         {/* Salary History */}
         <Gate k="employees.profile.salary">
         <Card>
-          <CardHeader className="pb-3"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2"><Calendar size={15} />Salary History</CardTitle></CardHeader>
+          <CardHeader className={HEAD}><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2"><Calendar size={15} />Salary History</CardTitle></CardHeader>
           <CardContent className="p-0">
             {salaryRecords && salaryRecords.length > 0 ? (
               <Table>

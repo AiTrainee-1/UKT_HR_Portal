@@ -10,6 +10,7 @@ import { LiveChip, ModeTabs, UpdatedRefresh, type FrameTab } from "../kit/MdHead
 import MdPageHeader from "../kit/MdPageHeader";
 import { SkeletonBlock } from "../kit/states";
 import { pageAt } from "./pageAt";
+import { InsightsReveal } from "./InsightsReveal";
 import { insightsFor } from "./registry";
 import { useTitleMark } from "./titleMark";
 import { useHeaderAdoption } from "./useHeaderAdoption";
@@ -73,6 +74,8 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
     if (pageId) rememberTab(pageId, next);
   };
 
+  // the MD insights strip starts folded away on every page (InsightsReveal); opened, it stays open while on the page
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [ops, setOps] = useState<HTMLDivElement | null>(null);
   const adopted = useHeaderAdoption(ops, GRID_HEADER_PAGES.has(page?.id ?? ""));
   // a page with no title row of its own (a form, a record): its first heading is still its title
@@ -125,9 +128,11 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
 
   const { Strip, Body } = insightsFor(page.id);
   const strip = (
-    <Suspense fallback={null}>
-      <Strip />
-    </Suspense>
+    <InsightsReveal open={insightsOpen} onOpenChange={setInsightsOpen}>
+      <Suspense fallback={null}>
+        <Strip />
+      </Suspense>
+    </InsightsReveal>
   );
 
   // The page's own title row carries the switch while the page is showing; otherwise the frame draws the row itself.
@@ -147,13 +152,20 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
 
       {!inRow && (
         <div className="mb-4">
-          <MdPageHeader title={adopted?.title || page.title} subtitle={adopted?.subtitle} tabs={tabs()} />
+          <MdPageHeader
+            title={adopted?.title || page.title}
+            subtitle={adopted?.subtitle}
+            tabs={tabs("md-shell-modeslot")}
+          />
         </div>
       )}
       {inRow && (
         <>
           {createPortal(<LiveChip />, inRow.adoption.live)}
-          {createPortal(<div className="ml-3 mr-auto self-start">{tabs()}</div>, inRow.adoption.mid)}
+          {createPortal(
+            <div className="md-shell-modeslot mr-auto self-start sm:ml-3">{tabs()}</div>,
+            inRow.adoption.mid,
+          )}
           {createPortal(<UpdatedRefresh className="ml-auto" />, inRow.adoption.end)}
           {createPortal(strip, inRow.adoption.below)}
         </>

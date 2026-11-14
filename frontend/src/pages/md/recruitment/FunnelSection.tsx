@@ -118,7 +118,7 @@ export default function FunnelSection({
 
   return (
     <div className="@container" data-testid="md-recruitment-funnel-section">
-      <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
+      <div className="grid grid-cols-1 items-start gap-4 @lg:gap-5 @4xl:grid-cols-12">
         <SectionCard
           className="min-w-0 @container @4xl:col-span-8"
           testId="md-recruitment-funnel"

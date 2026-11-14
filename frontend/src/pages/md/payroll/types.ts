@@ -6,10 +6,17 @@ import type { MdEnvelope } from "@/lib/md/types";
 /** A change against a comparison figure: `pct` is null when the comparison was 0. */
 export type Change = { abs: number; pct: number | null };
 
+/** Where a month stands. Staff follows HR's month workflow (2026-11-10): generated = still open (HR can change it),
+ *  finalized = "Payroll Done" (locked for good, payment pending), paid = "Mark as Paid". Production has no lock: a
+ *  production slip is paid when HR clears it. */
 export type PayrollState =
-  "paid" | "part_paid" | "generated" | "in_progress" | "not_generated" | "not_started" | "no_data";
+  "paid" | "part_paid" | "finalized" | "generated" | "in_progress" | "not_generated" | "not_started" | "no_data";
 
-/** The payment state of one month: slips, how many are marked paid, how many staff slips are provisional... */
+/** The staff part or the production part of a month (null when the selection has none of that kind). */
+export type PartState = "paid" | "part_paid" | "finalized" | "generated" | "in_progress";
+
+/** The payment state of one month: slips, how many are paid, how many staff slips are provisional... The workflow keys
+ *  (from `staffSlips` on) are absent on an answer from before the staff month workflow. */
 export type MonthStatus = {
   month: string;
   label: string;
@@ -18,16 +25,41 @@ export type MonthStatus = {
   monthEnded: boolean;
   slips: number;
   headcount: number;
+  /** Slips that are PAID: staff by Mark as Paid (or paid separately), production by Cleared. */
   paidSlips: number;
   unpaidSlips: number;
-  /** Net pay of the slips not yet marked paid. */
+  /** Net pay of the slips not paid yet. */
   unpaidNet: number;
   provisionalSlips: number;
   /** Paid, with no provisional slip, and the month is over. */
   final: boolean;
   productionPeriods: number;
   generatedAt: string | null;
+  /** When the month's payment was recorded: Mark as Paid (staff), the last clearing (production). */
   paidAt: string | null;
+  staffSlips?: number;
+  productionSlips?: number;
+  staffState?: PartState | null;
+  productionState?: PartState | null;
+  /** HR pressed Payroll Done: the staff month is locked for good. */
+  locked?: boolean;
+  finalizedAt?: string | null;
+  /** When HR pressed Mark as Paid. */
+  markedPaidAt?: string | null;
+  /** Finalized and not paid yet: whole days since Payroll Done. */
+  paymentPendingDays?: number | null;
+  /** Paid: days from Payroll Done to Mark as Paid. */
+  daysToPay?: number | null;
+  /** Slips HR verified ("Cleared"). On a staff slip this is a check, NOT a payment. */
+  clearedSlips?: number;
+  /** Staff salaries on hold: in the figures (they are on the Salary Statement), not paid with the month. */
+  onHold?: number;
+  onHoldNet?: number;
+  /** New joiners HR has not added to the payroll yet: left out of every figure. */
+  newJoinersWaiting?: number;
+  newJoinersNet?: number;
+  /** Held salaries or new joiners released and paid on their own after the lock. */
+  paidSeparately?: number;
 };
 
 /** The headline figures of a group of slips. */

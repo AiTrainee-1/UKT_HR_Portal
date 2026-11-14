@@ -511,7 +511,7 @@ export const ME = {
     page("employees", "Employees", "Workforce composition, tenure, movement and a people directory."),
     page("visitors", "Outpass & Visitors", "Visitors and employee outpasses: volumes, time out, approvals."),
     page("tea-break", "Tea Break", "Tea-break discipline: overruns, minutes lost, by department and shift."),
-    page("payroll", "Payroll Analysis", "Payroll cost and its trend, what changed against last month and why."),
+    page("payroll", "Payroll", "Payroll cost and its trend, what changed against last month and why."),
     page("reports", "Reports", "Executive reports and the full report library."),
     page("recruitment", "Recruitment", "Open positions, the hiring funnel, new joinees and resignations."),
     page("activity", "Activity Logs", "What people did in the system: volume, sensitive actions, sign-ins."),

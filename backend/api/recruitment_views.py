@@ -498,19 +498,19 @@ def my_resignation(request: Request) -> Response:
 @api_view(["PATCH"])
 @require_auth
 def manager_resignation_action(request: Request, pk: int) -> Response:
-    """Dept head approves or rejects a resignation from the mobile app."""
+    """Dept head approves or rejects a resignation from the mobile app: see hod_decide_resignation."""
+    from .manager_views import hod_display_name, manager_from_token
+
+    m, refused = manager_from_token(request)
+    if refused is not None:
+        return refused
+    return hod_decide_resignation(m, pk, request.data, hod_display_name(m).strip())
+
+
+def hod_decide_resignation(m: DepartmentManager, pk: int, data, actor: str) -> Response:
+    """One Department Head decision on a resignation ({"action": "approve"|"reject", "comment"}), recorded under
+    `actor`. The request stays filed under this Department Head (dept_head = m.employee)."""
     from django.db.models import Q
-
-    token_emp_id = get_token_employee_id(request)
-    if not token_emp_id:
-        return _error("Employee authentication required", 403)
-
-    try:
-        m = DepartmentManager.objects.prefetch_related(
-            "department_assignments", "employee_assignments"
-        ).get(employee_id=token_emp_id, is_active=True)
-    except DepartmentManager.DoesNotExist:
-        return _error("Not a department manager", 403)
 
     if not m.can_approve_resignations:
         return _error(
@@ -523,7 +523,7 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
 
     emp_filter = Q(employee_id__in=managed_employee_ids(m))
     # A head never decides their own request.
-    emp_filter &= ~Q(employee_id=token_emp_id)
+    emp_filter &= ~Q(employee_id=m.employee_id)
 
     r = (
         ResignationRequest.objects.select_related("employee", "employee__department", "dept_head")
@@ -534,14 +534,13 @@ def manager_resignation_action(request: Request, pk: int) -> Response:
     if not r:
         return _error("Resignation request not found or not in your scope", 404)
 
-    action = request.data.get("action")
-    comment = request.data.get("comment")
+    action = data.get("action")
+    comment = data.get("comment")
 
     if action not in ("approve", "reject"):
         return _error("action must be 'approve' or 'reject'", 400)
 
-    dept_head_emp = Employee.objects.filter(id=token_emp_id).first()
-    actor = f"{dept_head_emp.first_name} {dept_head_emp.last_name}".strip() if dept_head_emp else ""
+    dept_head_emp = m.employee
     try:
         resolve_resignation(
             r, approval.HOD, "approved" if action == "approve" else "rejected", actor, comment, hod_employee=dept_head_emp

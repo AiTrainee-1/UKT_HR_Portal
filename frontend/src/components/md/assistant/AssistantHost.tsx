@@ -15,7 +15,6 @@ const STYLES = `
   @keyframes md-assistant-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
   @keyframes md-assistant-orb { 0%,100% { transform: scale(.92); opacity: .75; } 50% { transform: scale(1.1); opacity: 1; } }
   @keyframes md-assistant-ring { 0%,100% { transform: scale(.97); opacity: .45; } 50% { transform: scale(1.05); opacity: 1; } }
-  @keyframes md-assistant-slide { 0% { background-position: -60% 0; } 100% { background-position: 160% 0; } }
   @keyframes md-assistant-bob { 0%,100% { translate: 0 0; } 50% { translate: 0 -3px; } }
   @keyframes md-assistant-face-pulse {
     0%,100% { box-shadow: 0 0 0 2px rgba(255,255,255,.96), 0 0 0 3px color-mix(in srgb, var(--md-wine) 16%, transparent), 0 8px 18px -6px color-mix(in srgb, var(--md-wine) 45%, transparent); }

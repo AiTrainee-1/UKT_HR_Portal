@@ -332,12 +332,10 @@ test("the MD only views requests: no Approve or Reject on Leave, Requests or the
     await expect(decisionButtons(page.locator("main"))).toHaveCount(0);
     await expect(page.getByTestId("md-view-only")).toBeVisible();
 
-    // the dashboard lists them as waiting, with who they wait for, and no way to decide
+    // the dashboard (redesigned 2026-11-13) only counts them in its welcome card, with no way to decide anything
     await open(page, "/md/dashboard");
-    await expect(page.getByTestId(`md-request-leave-${leaveId}`)).toBeVisible();
-    await expect(page.getByTestId(`md-request-permission-${permissionId}`)).toBeVisible();
-    await expect(page.getByTestId(`md-request-leave-${leaveId}-waiting-for`)).toContainText("Waiting for");
-    await expect(decisionButtons(page.getByTestId("md-home-requests"))).toHaveCount(0);
+    await expect(page.getByTestId("md-home-pulse")).toContainText("requests waiting");
+    await expect(decisionButtons(page.getByTestId("md-dashboard-page"))).toHaveCount(0);
 
     // and the server says no to every way of deciding, editing or deleting them
     const refused = async (method: string, url: string, data?: unknown) => {

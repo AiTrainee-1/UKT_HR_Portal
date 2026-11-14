@@ -136,17 +136,23 @@ function IntroPanel() {
   ];
   return (
     <Card className="border-0 shadow-sm" data-testid="attendance-search-intro">
-      <CardContent className="px-6 py-12">
-        <div className="mx-auto mb-8 flex max-w-md flex-col items-center text-center">
+      <CardContent className="px-3.5 py-8 sm:px-6 sm:py-12">
+        <div className="mx-auto mb-6 flex max-w-md sm:mb-8 flex-col items-center text-center">
           <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-teal-50 text-teal-600">
             <UserSearch size={26} />
           </div>
           <p className="text-base font-bold text-gray-900">Who are you looking for?</p>
           <p className="mt-1 text-sm text-gray-500">Type an employee code or part of a name above.</p>
         </div>
-        <div className="mx-auto grid max-w-3xl gap-3 sm:grid-cols-3">
-          {hints.map((h) => (
-            <div key={h.title} className="rounded-xl bg-gray-50 p-4">
+        <div className="mx-auto grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-3">
+          {hints.map((h, i) => (
+            <div
+              key={h.title}
+              className={cn(
+                "rounded-xl bg-gray-50 p-3.5 sm:p-4",
+                i === hints.length - 1 && i % 2 === 0 && "col-span-2 sm:col-span-1",
+              )}
+            >
               <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-lg bg-white text-gray-600 shadow-sm">
                 {h.icon}
               </div>
@@ -235,7 +241,7 @@ function DayCell({ day, onPick }: { day: AttendanceSearchDay; onPick: (date: str
           aria-label={label}
           onClick={() => onPick(day.date)}
           className={cn(
-            "relative flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold tabular-nums transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900",
+            "relative flex h-7 w-7 items-center justify-center rounded-md text-[11px] font-bold tabular-nums sm:text-[10px] transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900",
             statusMeta(day.status).cell,
             (day.isLate || earlyOut) && "ring-2 ring-orange-400 ring-offset-1",
           )}
@@ -243,7 +249,7 @@ function DayCell({ day, onPick }: { day: AttendanceSearchDay; onPick: (date: str
           {parseYMD(day.date).getDate()}
           {compensation && (
             <span className="pointer-events-none absolute -right-1.5 -top-1.5" aria-hidden="true">
-              <CompensationSymbol day={day} decorative />
+              <CompensationSymbol day={day} decorative className="max-sm:h-4 max-sm:text-[11px]" />
             </span>
           )}
         </button>
@@ -303,11 +309,11 @@ function DayRow({
           tone,
         )}
       >
-        <span className="text-[10px] font-bold uppercase tracking-wide opacity-75">
+        <span className="text-[11px] font-bold uppercase tracking-wide opacity-75 sm:text-[10px]">
           {d.toLocaleDateString("en-IN", { weekday: "short" })}
         </span>
         <span className="text-xl font-black leading-tight tabular-nums">{d.getDate()}</span>
-        <span className="text-[10px] font-semibold uppercase opacity-75">
+        <span className="text-[11px] font-semibold uppercase opacity-75 sm:text-[10px]">
           {d.toLocaleDateString("en-IN", { month: "short" })}
         </span>
       </div>
@@ -318,7 +324,7 @@ function DayRow({
             {statusMeta(day.status).label}
           </span>
           {isToday && (
-            <span className="rounded-md bg-gray-900 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+            <span className="rounded-md bg-gray-900 px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white sm:text-[10px]">
               Today
             </span>
           )}
@@ -341,7 +347,12 @@ function DayRow({
                 <span className="text-sm font-bold tabular-nums text-gray-900" title={p.time}>
                   {p.time.slice(0, 5)}
                 </span>
-                <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold", sourceStyle(p.sourceLabel))}>
+                <span
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[11px] font-bold sm:text-[10px]",
+                    sourceStyle(p.sourceLabel),
+                  )}
+                >
                   {p.sourceLabel}
                 </span>
               </div>
@@ -562,7 +573,7 @@ export default function AttendancePunchSearch() {
       <div className="space-y-4">
         <Card className="overflow-hidden border-0 shadow-sm" data-testid="attendance-employee-card">
           <CardContent className="p-0">
-            <div className="flex flex-wrap items-start justify-between gap-4 p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3 p-3.5 sm:gap-4 sm:p-5">
               <div className="flex min-w-[16rem] flex-1 items-start gap-4">
                 <Initials name={rangeData.employeeName} size={56} />
                 <div className="min-w-0 flex-1">
@@ -607,7 +618,7 @@ export default function AttendancePunchSearch() {
             </div>
 
             {rangeData.days.length > 1 && (
-              <div className="space-y-4 border-t bg-gray-50/70 p-4 sm:p-5" data-testid="attendance-summary">
+              <div className="space-y-4 border-t bg-gray-50/70 p-3.5 sm:p-5" data-testid="attendance-summary">
                 <StatusBar summary={summary} />
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
                   <StatTile label="Present" value={summary.present} dot="bg-green-500" />
@@ -629,7 +640,10 @@ export default function AttendancePunchSearch() {
                     Select a day to jump to it. An orange outline marks a late arrival or an early out; a small symbol
                     marks a day the employee used a compensation.
                   </p>
-                  <CompensationLegend counts={countMarks(rangeData.days)} className="mt-2" />
+                  <CompensationLegend
+                    counts={countMarks(rangeData.days)}
+                    className="mt-2 max-sm:[&_[data-kind]]:h-4 max-sm:[&_[data-kind]]:min-w-[1.3rem] max-sm:[&_[data-kind]]:text-[11px]"
+                  />
                 </div>
               </div>
             )}
@@ -654,7 +668,7 @@ export default function AttendancePunchSearch() {
                   disabled={summary.issues === 0}
                   onClick={() => setIssuesOnly((v) => !v)}
                   className={cn(
-                    "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                    "inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:h-8",
                     issuesOnly ? "border-gray-900 bg-gray-900 text-white" : "bg-white text-gray-600 hover:bg-gray-50",
                   )}
                 >
@@ -684,7 +698,7 @@ export default function AttendancePunchSearch() {
 
   return (
     <HrLayout>
-      <div className="space-y-5">
+      <div className="space-y-4 sm:space-y-5">
         <div>
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-2xl font-black text-gray-900">Attendance Search</h2>
@@ -696,7 +710,7 @@ export default function AttendancePunchSearch() {
         </div>
 
         <Card className="border-0 shadow-sm">
-          <CardContent className="space-y-4 p-4 sm:p-5">
+          <CardContent className="space-y-4 p-3.5 sm:p-5">
             <div className="relative">
               {searching ? (
                 <Loader2
@@ -822,7 +836,7 @@ export default function AttendancePunchSearch() {
                     aria-pressed={chosenPreset === p.key}
                     onClick={() => applyPreset(p.key)}
                     className={cn(
-                      "h-8 rounded-full border px-3 text-xs font-semibold transition-colors",
+                      "h-9 rounded-full border px-3 text-xs font-semibold transition-colors sm:h-8",
                       chosenPreset === p.key
                         ? "border-gray-900 bg-gray-900 text-white"
                         : "bg-white text-gray-600 hover:bg-gray-50",

@@ -130,6 +130,23 @@ describe("the saved rules", () => {
     await open();
     expect(text(q("rules-error"))).toContain("You are not allowed to see the tracking rules.");
   });
+
+  it("does not ask for the rules when the account cannot open the Attendance settings, and says where they are", async () => {
+    // the Managing Director's account (or a role with Geo Attendance alone): the server would only answer 403
+    h.user.current = {
+      role: "hr",
+      employeeId: null,
+      isSuperAdmin: false,
+      isMd: true,
+      permissions: { geo_attendance: "edit" },
+    };
+    mount("/hr/geo-attendance?tab=tracking", TrackingRulesCard);
+    await waitFor(() => q("rules-no-access") !== null, "the no-access note");
+    await settle();
+    expect(text(q("rules-no-access"))).toContain("Settings → Attendance");
+    expect(h.fetch.mock.calls.some(([url]) => String(url).includes("tracking/settings"))).toBe(false);
+    expect(q("rules-loading")).toBeNull();
+  });
 });
 
 describe("editing", () => {

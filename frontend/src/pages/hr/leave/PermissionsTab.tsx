@@ -94,7 +94,7 @@ export default function PermissionsTab() {
   const [year, setYear] = useState(now.getFullYear());
   const [filters, setFilters] = useState<PermissionFilters>(NO_PERMISSION_FILTERS);
   const set = (patch: Partial<PermissionFilters>) => setFilters((f) => ({ ...f, ...patch }));
-  const visible = useVisibleCount();
+  const visible = useVisibleCount(60, 20);
 
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState<PermissionForm>(emptyPermissionForm);
@@ -295,7 +295,7 @@ export default function PermissionsTab() {
             label="Search permissions"
             testId="perm-search"
           />
-          <div className="grid grid-cols-2 gap-2 lg:flex">
+          <div className="grid grid-cols-2 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 lg:flex">
             <FilterSelect
               value={filters.branch}
               onChange={(branch) => set({ branch })}
@@ -336,14 +336,15 @@ export default function PermissionsTab() {
             />
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
+        {/* phones: Month | Year, From | To, then Export | Add Permission, each pair in two equal columns */}
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
+          <label className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-gray-500">
             Month
             <select
               value={month}
               onChange={(e) => setMonth(e.target.value)}
               aria-label="Month"
-              className="h-10 rounded-md border bg-background px-2 text-sm"
+              className="h-10 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm sm:flex-none"
               data-testid="perm-month"
             >
               <option value={ALL}>All months</option>
@@ -354,13 +355,13 @@ export default function PermissionsTab() {
               ))}
             </select>
           </label>
-          <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
+          <label className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-gray-500">
             Year
             <select
               value={year}
               onChange={(e) => setYear(Number(e.target.value))}
               aria-label="Year"
-              className="h-10 rounded-md border bg-background px-2 text-sm"
+              className="h-10 min-w-0 flex-1 rounded-md border bg-background px-2 text-sm sm:flex-none"
               data-testid="perm-year"
             >
               {years
@@ -372,12 +373,13 @@ export default function PermissionsTab() {
                 ))}
             </select>
           </label>
-          <DateField label="From" value={filters.from} onChange={(from) => set({ from })} testId="perm-from" />
-          <DateField label="To" value={filters.to} onChange={(to) => set({ to })} testId="perm-to" />
-          <div className="ml-auto flex items-center gap-2">
+          <DateField label="From" value={filters.from} onChange={(from) => set({ from })} testId="perm-from" fill />
+          <DateField label="To" value={filters.to} onChange={(to) => set({ to })} testId="perm-to" fill />
+          <div className="col-span-2 grid grid-cols-2 items-center gap-2 sm:ml-auto sm:flex">
             <ExportButton
               disabled={shown.length === 0}
               testId="perm-export"
+              className="w-full sm:w-auto"
               onClick={() =>
                 exportSheet(
                   "Permissions",
@@ -408,13 +410,16 @@ export default function PermissionsTab() {
                 )
               }
             />
-            <Button onClick={() => setShowAdd(true)} className="h-10 gap-1.5">
+            <Button onClick={() => setShowAdd(true)} className="h-10 w-full gap-1.5 sm:w-auto">
               <Plus size={15} /> Add Permission
             </Button>
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <PillTabs size="sm" items={STATUS_PILLS} value={filters.status} onChange={(status) => set({ status })} />
+          {/* one row of status pills that scrolls sideways on a phone */}
+          <div className="flex min-w-0 max-w-full max-sm:overflow-x-auto" data-tab-row>
+            <PillTabs size="sm" items={STATUS_PILLS} value={filters.status} onChange={(status) => set({ status })} />
+          </div>
           <ResultLine
             shown={shown.length}
             total={rows.length}
@@ -485,7 +490,7 @@ export default function PermissionsTab() {
                   )}
                   onClick={() => open(p)}
                 >
-                  <CardContent className="p-4">
+                  <CardContent className="p-3.5 sm:p-4">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0 flex-1 space-y-1.5">
                         <PersonCell id={p.employeeId} name={p.employeeName} code={p.employeeCode} sub={where || null} />
@@ -549,7 +554,11 @@ export default function PermissionsTab() {
                           </div>
                         )}
                       </div>
-                      <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <div
+                        className="flex shrink-0 items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                        data-row-actions
+                      >
                         {p.status === "pending" && hrCanAct(p.approval, true) && (
                           <Button
                             size="sm"

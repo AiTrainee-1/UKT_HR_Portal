@@ -8,8 +8,9 @@ THE SCENARIO (August and September 2026; "today" is pinned to Monday 12 October 
   S1 Stitching/Unit 1  Supervisor   26,000                   26,000      26,000     +1,000 OT       overtime in Sep
   S2 Stitching/Unit 1  Operator     20,000 -> 22,000         20,000      20,307.69  (24 of 26 days) increment + 2 days lost
   S3 Cutting/Unit 1    Operator     18,000                   18,000      18,000                     slip generated before month end
-  S4 Accounts/Unit 2   Supervisor   40,000                   40,000      -                          left (inactive)
-  S5 Accounts/Unit 2   Operator     30,000                   -           15,000     (13 of 26 days) joined in Sep
+  S4 Accounts/Unit 2   Supervisor   40,000                   40,000      -                          left (inactive): still
+                                                                                                   August's cost
+  S5 Accounts/Unit 2   Operator     30,000                   -           15,000     (13 of 26 days) joined in Sep (added to payroll)
   S6 Accounts/Unit 2   (none)       no snapshot on the slip  10,000      9,000                      cannot be split: "Other"
   production (rate per shift)
   P1 Stitching/Unit 1  Operator     500 -> 520               12,500 (12+13 shifts)  12,480 (12+12)   two pay periods a month
@@ -19,6 +20,11 @@ THE SCENARIO (August and September 2026; "today" is pinned to Monday 12 October 
   bridge: joined +15,000.00, left -40,000.00, pay rate +2,480.00 (S2 +2,000, P1 +480), overtime +1,000.00,
           attendance -1,392.31 (S2 -1,692.31, P1 -500, P2 +800), one-offs 0, other -1,000.00 (S6)
   Sep deductions 2,195.00 (S1 PF 1,560, S2 late 500, S3 ESI 135), net pay 108,392.69
+
+  where the months stand (the staff month workflow, 2026-11-10)
+  Aug  HR pressed Payroll Done on 5 Sep 18:00 and Mark as Paid on 6 Sep 09:00 (every staff salary paid); production
+       cleared (= paid): the month is Paid and final
+  Sep  open (Payroll Done not pressed): S1 and S2 are Cleared, which is HR's verification only, so nothing is paid
 """
 
 import json
@@ -45,6 +51,7 @@ from .models import (
     Employee,
     HRUser,
     Payroll,
+    PayrollMonthClose,
     PayrollSettings,
     SalarySlip,
 )
@@ -96,12 +103,20 @@ def make_slip(
     snapshot=True,
     generated=None,
     paid_at=None,
+    payment_paid=None,
+    on_hold=False,
+    parked=False,
+    released=None,
 ):
     """A salary slip shaped like the payroll engine's (same columns, same breakdown snapshot keys), with its Payroll row.
     ``gross`` is the slip's gross_salary (before overtime). A production slip has a ``period`` (start, end) and ``shifts``.
     ``other`` is a deduction no column itemises (it shows as "Other deductions"). Without ``statutory`` the slip is OLD
     style (written before the Co Emp / TDS rules: no ``tds`` / ``statutory`` keys); with it (the engine's ``statutory``
-    block as a dict) the slip carries the keys the engine writes today."""
+    block as a dict) the slip carries the keys the engine writes today.
+
+    The Payroll row: ``paid`` = HR's Cleared (status "paid"); ``payment_paid`` (a moment) = the payment status Paid that
+    Mark as Paid writes; ``on_hold`` / ``parked`` (a new joiner not added to the payroll) / ``released`` ("hold" or
+    "new_joiner": released and paid separately) are the month workflow's flags."""
     gross, ot = D(gross), D(ot)
     deductions = D(pf) + D(esi) + D(tds) + D(adv) + D(late) + D(other)
     production = period is not None
@@ -174,10 +189,18 @@ def make_slip(
         year=ym[0],
         base_salary=gross,
         gross_salary=gross,
+        ot_amount=ot,
+        deductions=deductions,
+        tds_deduction=D(tds),
         final_salary=net,
         status="paid" if paid else "pending",
         period_start=period[0] if production else None,
         period_end=period[1] if production else None,
+        on_hold=on_hold,
+        new_joiner_parked=parked,
+        released_from=released,
+        payment_status="paid" if payment_paid else "not_paid",
+        payment_paid_at=payment_paid,
     )
     if generated is not None:  # auto_now_add / auto_now cannot be set on create: update() bypasses them
         SalarySlip.objects.filter(pk=slip.pk).update(generated_at=generated)
@@ -204,6 +227,24 @@ def make_employee(
         join_date=join_date,
         **extra,
     )
+
+
+def close_month(ym, finalized, paid=None, *, pay_staff=True):
+    """HR's Payroll Done (``finalized``) and, with ``paid``, Mark as Paid of a staff month, as payroll_month_workflow
+    writes them: the close row, and every staff salary in the main payroll (not held, not parked, not released) marked
+    Paid on that moment. Times are set exactly (the workflow itself stamps 'now')."""
+    PayrollMonthClose.objects.create(
+        month=ym[1], year=ym[0], finalized_at=finalized, finalized_by="HR", paid_at=paid, paid_by="HR" if paid else ""
+    )
+    if paid and pay_staff:
+        Payroll.objects.filter(
+            month=ym[1],
+            year=ym[0],
+            salary_mode="monthly",
+            on_hold=False,
+            new_joiner_parked=False,
+            released_from__isnull=True,
+        ).update(payment_status="paid", payment_paid_at=paid)
 
 
 class PayrollBase(MdApiTestCase):
@@ -323,7 +364,7 @@ class ScenarioBase(PayrollBase):
             generated=aug_gen,
             paid_at=at(2026, 9, 6),
         )
-        # ── September (S1 and S2 are marked paid; S3's slip was generated before the month ended) ──
+        # ── September (open: S1 and S2 Cleared = verified, not paid; S3's slip generated before the month ended) ──
         make_slip(
             cls.s1,
             SEP,
@@ -363,6 +404,8 @@ class ScenarioBase(PayrollBase):
         make_slip(
             cls.p2, SEP, 8800, period=(date(2026, 9, 1), date(2026, 9, 30)), shifts=22, rate=400, generated=sep_gen
         )
+        # August went through HR's month workflow: Payroll Done on 5 Sep, Mark as Paid on 6 Sep
+        close_month(AUG, at(2026, 9, 5, 18), at(2026, 9, 6))
         # people with no September slip: S7 should have one (flagged), S8 joined after the month, S9 has no salary
         cls.s7 = e("S7", "Ilan", "staff", cls.cutting, cls.u1, cls.operator, salary=16000, join_date="2026-01-05")
         cls.s8 = e("S8", "Jaya", "staff", cls.cutting, cls.u1, cls.operator, salary=16000, join_date="2026-10-03")
@@ -435,13 +478,21 @@ class SummaryTests(ScenarioBase):
 
     def test_the_payment_status_of_the_month(self):
         st = self.api("summary", month="2026-09")["status"]
-        self.assertEqual(st["state"], "part_paid")
-        self.assertEqual((st["slips"], st["paidSlips"], st["unpaidSlips"]), (8, 2, 6))
-        near(self, st["unpaidNet"], 63145.00)  # S3 17,865 + S5 15,000 + S6 9,000 + P1 12,480 + P2 8,800
+        self.assertEqual((st["state"], st["stateLabel"]), ("generated", "Generated, still open"))
+        self.assertEqual((st["staffState"], st["productionState"]), ("generated", "generated"))
+        self.assertEqual((st["slips"], st["paidSlips"], st["unpaidSlips"]), (8, 0, 8))
+        self.assertEqual(st["clearedSlips"], 2)  # S1 and S2: verified by HR, NOT paid
+        near(self, st["unpaidNet"], 108392.69)  # everything: nothing is paid until Mark as Paid
         self.assertEqual(st["provisionalSlips"], 1)  # S3's slip was generated on 25 Sep
         self.assertFalse(st["final"])
+        self.assertFalse(st["locked"])
         self.assertEqual(st["generatedAt"], "2026-10-01T09:00:00")
-        self.assertEqual(st["paidAt"], "2026-10-06T10:00:00")
+        self.assertIsNone(st["paidAt"])
+        self.assertIsNone(st["finalizedAt"])
+        self.assertIsNone(st["paymentPendingDays"])
+        self.assertEqual((st["staffSlips"], st["productionSlips"]), (5, 3))
+        self.assertEqual((st["onHold"], st["newJoinersWaiting"], st["paidSeparately"]), (0, 0, 0))
+        self.assertEqual(self.api("summary", month="2026-09")["payable"], {"slips": 8, "netPay": 108392.69})
 
     def test_provisional_staff_slips_are_called_out(self):
         notes = self.api("summary", month="2026-09")["notes"]
@@ -451,9 +502,15 @@ class SummaryTests(ScenarioBase):
 
     def test_august_is_fully_paid_and_final(self):
         st = self.api("summary", month="2026-08")["status"]
-        self.assertEqual(st["state"], "paid")
+        self.assertEqual((st["state"], st["stateLabel"]), ("paid", "Paid"))
         self.assertTrue(st["final"])
-        self.assertEqual(st["unpaidSlips"], 0)
+        self.assertEqual((st["unpaidSlips"], st["paidSlips"], st["clearedSlips"]), (0, 8, 8))
+        self.assertTrue(st["locked"])
+        self.assertEqual(st["finalizedAt"], "2026-09-05T18:00:00")
+        self.assertEqual(st["markedPaidAt"], "2026-09-06T09:00:00")
+        self.assertEqual(st["paidAt"], "2026-09-06T09:00:00")
+        self.assertEqual(st["daysToPay"], 1)
+        self.assertIsNone(st["paymentPendingDays"])
 
     def test_a_month_without_payroll_says_so_and_has_no_figures(self):
         body = self.api("summary", month="2026-06")
@@ -509,7 +566,7 @@ class TrendTests(ScenarioBase):
 
     def test_states_and_provisional_slips_per_month(self):
         rows = {r["month"]: r for r in self.api("trend")["months"]}
-        self.assertEqual((rows["2026-08"]["state"], rows["2026-09"]["state"]), ("paid", "part_paid"))
+        self.assertEqual((rows["2026-08"]["state"], rows["2026-09"]["state"]), ("paid", "generated"))
         self.assertEqual((rows["2026-08"]["provisionalSlips"], rows["2026-09"]["provisionalSlips"]), (0, 1))
         self.assertEqual(rows["2026-07"]["state"], "no_data")  # before payroll began
 
@@ -812,8 +869,11 @@ class ComponentsTests(ScenarioBase):
 
     def test_what_is_still_payable(self):
         pay = self.api("components", month="2026-09")["payable"]
-        self.assertEqual(pay["slips"], 6)
-        near(self, pay["netPay"], 63145.00)
+        self.assertEqual(pay["slips"], 8)  # September is still open: Cleared (S1, S2) is not paid
+        near(self, pay["netPay"], 108392.69)
+        Payroll.objects.filter(year=2026, month=9, salary_mode="shift").update(status="paid")  # production: paid
+        pay = self.api("components", month="2026-09", type="production")["payable"]
+        self.assertEqual((pay["slips"], pay["netPay"]), (0, 0.0))
 
     def test_the_statutory_bonus_is_shown_apart_from_the_slips(self):
         for emp, amount, status in (
@@ -873,11 +933,12 @@ class StatusTests(ScenarioBase):
         self.assertEqual((body["months"][0]["month"], body["months"][-1]["month"]), ("2025-11", "2026-10"))
         self.assertEqual(months["2026-07"]["state"], "no_data")  # before payroll began: not a failure
         self.assertEqual(months["2026-08"]["state"], "paid")
-        self.assertEqual(months["2026-09"]["state"], "part_paid")
+        self.assertEqual(months["2026-09"]["state"], "generated")
         self.assertEqual(
             months["2026-10"]["state"], "not_started"
         )  # this month: nothing generated yet, which is normal
-        self.assertEqual(months["2026-09"]["stateLabel"], "Part paid")
+        self.assertEqual(months["2026-09"]["stateLabel"], "Generated, still open")
+        self.assertIsNone(months["2026-10"]["staffState"])
 
     def test_which_month_the_page_opens_on(self):
         body = self.api("status")
@@ -906,18 +967,32 @@ class StatusTests(ScenarioBase):
             months = {m["month"]: m for m in self.api("status")["months"]}
         self.assertEqual(months["2026-10"]["state"], "not_generated")
 
-    def test_paid_means_the_word_paid_whatever_its_case(self):
+    def test_cleared_means_the_word_paid_whatever_its_case(self):
         Payroll.objects.filter(employee=self.s3, year=2026, month=9).update(status="  PAID ")
-        self.assertEqual(self.api("summary", month="2026-09")["status"]["paidSlips"], 3)
+        Payroll.objects.filter(employee=self.p2, year=2026, month=9).update(status="Paid")
+        status = self.api("summary", month="2026-09")["status"]
+        self.assertEqual(status["clearedSlips"], 4)  # S1, S2, S3 and P2
+        self.assertEqual(status["paidSlips"], 1)  # only P2: a cleared PRODUCTION slip is paid, a staff one is not
+
+    def test_cleared_staff_salaries_are_verified_not_paid(self):
+        for emp in (self.s3, self.s5, self.s6):
+            Payroll.objects.filter(employee=emp, year=2026, month=9).update(status="paid")
+        st = self.api("summary", month="2026-09", type="staff")["status"]
+        self.assertEqual((st["clearedSlips"], st["paidSlips"], st["unpaidSlips"]), (5, 0, 5))
+        self.assertEqual(st["state"], "generated")  # every staff salary verified, the month still open
+        near(self, st["unpaidNet"], 87112.69)  # every staff net: 25,440 + 19,807.69 + 17,865 + 15,000 + 9,000
 
     def test_a_production_slip_pairs_with_the_row_of_its_pay_period(self):
         Payroll.objects.filter(employee=self.p1, period_start=date(2026, 9, 15)).update(status="paid")
         status = self.api("summary", month="2026-09")["status"]
-        self.assertEqual(status["paidSlips"], 3)  # only P1's second period, not both
-        near(self, status["unpaidNet"], 63145.00 - 6240.00)
+        self.assertEqual(status["paidSlips"], 1)  # only P1's second period, not both
+        self.assertEqual(status["productionState"], "part_paid")
+        self.assertEqual(status["state"], "part_paid")  # some of the month is paid
+        near(self, status["unpaidNet"], 108392.69 - 6240.00)
 
     def test_a_month_is_final_when_paid_and_not_provisional(self):
-        for emp in (self.s3, self.s5, self.s6, self.p1, self.p2):
+        close_month(SEP, at(2026, 10, 7, 15), at(2026, 10, 9, 11))
+        for emp in (self.p1, self.p2):
             Payroll.objects.filter(employee=emp, year=2026, month=9).update(status="paid")
         SalarySlip.objects.filter(employee=self.s3, year=2026, month=9).update(generated_at=at(2026, 10, 2))
         Payroll.objects.filter(employee=self.s3, year=2026, month=9).update(updated_at=at(2026, 10, 2))
@@ -939,6 +1014,167 @@ class StatusTests(ScenarioBase):
         body = self.api("status", branch="Unit 2")
         sep = {m["month"]: m for m in body["months"]}["2026-09"]
         self.assertEqual((sep["slips"], sep["unpaidSlips"]), (2, 2))  # S5 and S6
+
+
+class MonthWorkflowTests(ScenarioBase):
+    """The staff month workflow (payroll_month_workflow.py, 2026-11-10): Payroll Done, Mark as Paid, Hold, new joiners
+    parked until added, release and pay; Cleared is a verification; production keeps Cleared = paid."""
+
+    def status(self, **scope):
+        return self.api("summary", month="2026-09", **scope)["status"]
+
+    def items(self):
+        return {i["id"]: i for i in P._attention(P._context(Scope(), None, TODAY))}
+
+    def test_a_finalized_month_is_payment_pending(self):
+        close_month(SEP, at(2026, 10, 7, 15))  # Payroll Done, no Mark as Paid yet
+        st = self.status()
+        self.assertEqual((st["state"], st["stateLabel"]), ("finalized", "Payroll Done, payment pending"))
+        self.assertTrue(st["locked"])
+        self.assertEqual(st["finalizedAt"], "2026-10-07T15:00:00")
+        self.assertEqual(st["paymentPendingDays"], 5)  # 7 Oct to today, 12 Oct
+        self.assertIsNone(st["markedPaidAt"])
+        self.assertIsNone(st["paidAt"])
+        self.assertIsNone(st["daysToPay"])
+        near(self, st["unpaidNet"], 108392.69)
+        self.assertEqual(self.status(type="staff")["state"], "finalized")
+        production = self.status(type="production")
+        self.assertEqual(
+            (production["state"], production["locked"], production["finalizedAt"]), ("generated", False, None)
+        )
+
+    def test_payment_pending_is_its_own_finding_after_the_salary_day(self):
+        close_month(SEP, at(2026, 10, 7, 15))
+        item = self.items()["payroll.payment-pending-2026-09"]
+        self.assertEqual(item["title"], "Sep 2026 payroll is done but not paid: payment pending for 5 days")
+        self.assertEqual((item["severity"], item["metric"]), ("warning", "5 days pending"))
+        self.assertIn("HR pressed Payroll Done on 7 Oct 2026", item["detail"])
+        self.assertIn("Salary day was the 5th, 7 days ago", item["detail"])
+        self.assertNotIn("payroll.unpaid-2026-09", self.items())
+
+    def test_a_paid_month(self):
+        close_month(SEP, at(2026, 10, 7, 15), at(2026, 10, 9, 11))
+        st = self.status(type="staff")
+        self.assertEqual((st["state"], st["stateLabel"]), ("paid", "Paid"))
+        self.assertEqual((st["paidSlips"], st["unpaidSlips"], st["unpaidNet"]), (5, 0, 0.0))
+        self.assertEqual((st["markedPaidAt"], st["paidAt"], st["daysToPay"]), ("2026-10-09T11:00:00",) * 2 + (2,))
+        self.assertIsNone(st["paymentPendingDays"])
+        # production is not cleared yet: the whole month is part paid, and its unpaid slips are production's
+        both = self.status()
+        self.assertEqual(
+            (both["state"], both["staffState"], both["productionState"]), ("part_paid", "paid", "generated")
+        )
+        self.assertEqual(both["unpaidSlips"], 3)
+        self.assertNotIn("payroll.payment-pending-2026-09", self.items())
+        self.assertEqual(self.items()["payroll.unpaid-2026-09"]["title"], "3 of 8 slips for Sep 2026 are not paid")
+        Payroll.objects.filter(year=2026, month=9, salary_mode="shift").update(status="paid")
+        self.assertEqual(self.status()["state"], "paid")
+
+    def test_an_open_month_past_the_salary_day_says_it_is_still_open(self):
+        item = self.items()["payroll.unpaid-2026-09"]
+        self.assertEqual(item["title"], "Sep 2026 payroll is not done yet: it is still open and not paid")
+        self.assertIn("not pressed Payroll Done", item["detail"])
+        self.assertIn("HR has verified (cleared) 2 of 8 salaries", item["detail"])
+
+    def test_a_held_salary_is_counted_but_not_paid_with_the_month(self):
+        Payroll.objects.filter(employee=self.s3, year=2026, month=9).update(on_hold=True)
+        body = self.api("summary", month="2026-09")
+        near(self, body["totals"]["grossPay"], 110587.69)  # on the Salary Statement, so in the figures
+        self.assertEqual(body["totals"]["headcount"], 7)
+        self.assertEqual(body["status"]["onHold"], 1)
+        near(self, body["status"]["onHoldNet"], 17865.00)
+        close_month(SEP, at(2026, 10, 7, 15), at(2026, 10, 9, 11))  # Mark as Paid pays everyone but the held salary
+        st = self.status(type="staff")
+        self.assertEqual((st["state"], st["paidSlips"], st["unpaidSlips"]), ("paid", 4, 1))
+        near(self, st["unpaidNet"], 17865.00)
+        # after the lock HR releases and pays them on their own
+        Payroll.objects.filter(employee=self.s3, year=2026, month=9).update(
+            on_hold=False, released_from="hold", payment_status="paid", payment_paid_at=at(2026, 10, 11)
+        )
+        st = self.status(type="staff")
+        self.assertEqual((st["onHold"], st["paidSeparately"], st["paidSlips"], st["unpaidSlips"]), (0, 1, 5, 0))
+        near(self, self.api("summary", month="2026-09")["totals"]["grossPay"], 110587.69)  # still on the statement
+
+    def test_a_new_joiner_waits_outside_the_figures_until_added(self):
+        Payroll.objects.filter(employee=self.s5, year=2026, month=9).update(new_joiner_parked=True)
+        body = self.api("summary", month="2026-09")
+        near(self, body["totals"]["grossPay"], 110587.69 - 15000.00)
+        self.assertEqual((body["totals"]["headcount"], body["totals"]["slips"]), (6, 7))
+        near(self, body["byType"]["staff"]["grossPay"], 74307.69)
+        self.assertEqual((body["status"]["newJoinersWaiting"], body["status"]["slips"]), (1, 7))
+        near(self, body["status"]["newJoinersNet"], 15000.00)
+        steps = {s["id"]: s for s in self.api("bridge", month="2026-09")["steps"]}
+        self.assertEqual(steps["joined"]["people"], 0)  # not on the payroll yet, so not a joiner yet
+        # HR presses "Add to payroll"
+        Payroll.objects.filter(employee=self.s5, year=2026, month=9).update(
+            new_joiner_parked=False, added_to_payroll_at=at(2026, 10, 3)
+        )
+        body = self.api("summary", month="2026-09")
+        near(self, body["totals"]["grossPay"], 110587.69)
+        self.assertEqual(body["status"]["newJoinersWaiting"], 0)
+
+    def test_a_new_joiner_released_after_the_lock_is_paid_separately_and_counted(self):
+        close_month(SEP, at(2026, 10, 7, 15), at(2026, 10, 9, 11))
+        Payroll.objects.filter(employee=self.s5, year=2026, month=9).update(
+            released_from="new_joiner", payment_status="paid", payment_paid_at=at(2026, 10, 11)
+        )
+        body = self.api("summary", month="2026-09", type="staff")
+        near(self, body["totals"]["grossPay"], 89307.69)  # paid (separately): it is the month's cost
+        self.assertEqual((body["status"]["paidSeparately"], body["status"]["newJoinersWaiting"]), (1, 0))
+
+    def test_held_salaries_and_waiting_new_joiners_are_called_out(self):
+        Payroll.objects.filter(employee=self.s3, year=2026, month=9).update(on_hold=True)
+        Payroll.objects.filter(employee=self.s5, year=2026, month=9).update(new_joiner_parked=True)
+        item = self.items()["payroll.set-aside-2026-09"]
+        self.assertEqual(item["title"], "1 salary on hold and 1 new joiner not yet added to payroll in Sep 2026")
+        self.assertEqual((item["severity"], item["metric"]), ("info", "2 people"))
+        self.assertIn("₹17,865 held", item["detail"])
+        self.assertIn("₹15,000 for new joiners", item["detail"])
+
+    def test_production_keeps_cleared_as_paid_and_ignores_the_staff_lock(self):
+        close_month(SEP, at(2026, 10, 7, 15))
+        Payroll.objects.filter(employee=self.p1, period_start=date(2026, 9, 1)).update(status="paid")
+        st = self.status(type="production")
+        self.assertEqual((st["state"], st["paidSlips"], st["staffState"], st["locked"]), ("part_paid", 1, None, False))
+        Payroll.objects.filter(year=2026, month=9, salary_mode="shift").update(
+            status="paid", updated_at=at(2026, 10, 8, 12)
+        )
+        st = self.status(type="production")
+        self.assertEqual((st["state"], st["paidAt"], st["clearedSlips"]), ("paid", "2026-10-08T12:00:00", 3))
+
+    def test_someone_who_has_left_is_still_the_cost_of_the_months_they_were_paid(self):
+        self.assertEqual(Employee.objects.get(pk=self.s4.pk).status, "inactive")
+        aug = self.api("summary", month="2026-08")["totals"]
+        near(self, aug["grossPay"], 134500.00)  # S4's 40,000 included: August's cost stays August's cost
+        self.assertEqual(aug["headcount"], 7)
+        steps = {s["id"]: s for s in self.api("bridge", month="2026-09")["steps"]}
+        near(self, steps["left"]["amount"], -40000.00)
+
+    def test_staff_figures_and_the_salary_statement(self):
+        """HR's Salary Statement of the month and the MD's staff summary: a held salary is on both, a parked new joiner
+        on neither, and someone who has since left is only here (the statement lists active employees only): the
+        difference is exactly that person's slip."""
+        Payroll.objects.filter(employee=self.s3, year=2026, month=9).update(on_hold=True)
+        Payroll.objects.filter(employee=self.s5, year=2026, month=9).update(new_joiner_parked=True)
+        make_slip(self.s4, SEP, 12000, generated=at(2026, 10, 1))  # S4 has left (inactive): paid 12,000 in September
+        admin = HRUser.objects.create(username="st_admin", password_hash="x", is_super_admin=True)
+        r = self.client.get("/api/payroll/salary-statement", {"month": 9, "year": 2026}, **md_headers(admin))
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        statement = r.json()
+        total = statement["total"]["values"]
+        mine = self.api("summary", month="2026-09", type="staff")["totals"]
+        near(self, total["eSalary"], 74307.69)  # 27,000 + 20,307.69 + 18,000 (held) + 9,000
+        near(self, mine["grossPay"] - total["eSalary"], 12000.00)
+        near(self, mine["totalDeductions"], total["totalDeduction"])
+        near(self, mine["netPay"] - total["net"], 12000.00)
+        self.assertEqual(mine["headcount"] - statement["counts"]["employees"], 1)
+        Employee.objects.filter(pk=self.s4.pk).update(status="active")  # nobody has left: they agree to the paisa
+        r = self.client.get("/api/payroll/salary-statement", {"month": 9, "year": 2026}, **md_headers(admin))
+        near(
+            self,
+            self.api("summary", month="2026-09", type="staff")["totals"]["netPay"],
+            r.json()["total"]["values"]["net"],
+        )
 
 
 class ExceptionsBase(PayrollBase):
@@ -1418,8 +1654,12 @@ class YearBoundaryTests(PayrollBase):
         self.assertEqual(dec["provisionalSlips"], 1)  # Yami's slip, generated on 20 December
         jan = self.api("summary", month="2026-01")["status"]
         self.assertEqual(jan["provisionalSlips"], 0)  # generated on 2 February: after January ended
-        self.assertEqual(dec["state"], "part_paid")
-        self.assertEqual(jan["state"], "paid")
+        self.assertEqual(
+            (dec["state"], dec["clearedSlips"], dec["paidSlips"]), ("generated", 1, 0)
+        )  # Cleared: not paid
+        close_month(self.JAN, at(2026, 2, 3, 10), at(2026, 2, 4, 10))
+        jan = self.api("summary", month="2026-01")["status"]
+        self.assertEqual((jan["state"], jan["daysToPay"]), ("paid", 1))
 
     def test_the_same_month_last_year_is_found_across_the_year(self):
         make_slip(self.emp, (2027, 1), 12000, generated=at(2027, 2, 2), paid=True)
@@ -1613,8 +1853,9 @@ class PermissionTests(PayrollBase):
 
         admin = HRUser.objects.create(username="root", password_hash="x", is_super_admin=True)
         clerk = HRUser.objects.create(username="clerk", password_hash="x")
+        someone = make_employee("R1", "Ravi", "staff", self.stitching, self.u1, self.operator, salary=10000)
         for route in routes.urlpatterns:
-            url = BASE + str(route.pattern)
+            url = BASE + str(route.pattern).replace("<int:employee_id>", str(someone.id))
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 401)
                 for user in (admin, clerk):
@@ -1636,7 +1877,9 @@ TOOL_NAMES = {
     "payroll_advances",
     "payroll_exceptions",
     "payroll_status",
+    "employee_salary",  # md_portal/analytics/people.py: one person's slips (it needs an employee to run)
 }
+TOOL_ARGS = {"employee_salary": {"employee": "S1"}}
 
 
 class ToolsTests(AdvancesBase):
@@ -1656,7 +1899,7 @@ class ToolsTests(AdvancesBase):
     def test_every_tool_runs_read_only_returns_plain_json_with_provenance_and_stays_small(self):
         for name in sorted(TOOL_NAMES):
             with self.subTest(tool=name):
-                result = self.run_tool(name)
+                result = self.run_tool(name, TOOL_ARGS.get(name))
                 text = json.dumps(result)  # plain JSON: no Decimal, no date
                 self.assertLess(len(text), 20_000, "a tool result must be compact")
                 self.assertTrue(result["provenance"])
@@ -1666,7 +1909,9 @@ class ToolsTests(AdvancesBase):
         self.assertIn("rupees", self.tools["payroll_summary"].description)
         self.assertIn("latest CLOSED month", self.tools["payroll_summary"].properties["month"]["description"])
         self.assertIn("add up exactly", self.tools["payroll_bridge"].description)
-        self.assertIn("no 'finalised' switch", self.tools["payroll_status"].description)
+        self.assertIn("'Payroll Done'", self.tools["payroll_status"].description)
+        self.assertIn("NOT the same as paid", self.tools["payroll_status"].description)  # Cleared is a verification
+        self.assertIn("Salary Statement", self.tools["payroll_summary"].description)
         self.assertIn("TDS", self.tools["payroll_components"].description)
 
     def test_the_summary_tool_gives_the_same_numbers_as_the_page(self):
@@ -1731,13 +1976,14 @@ class InsightsTests(AdvancesBase):
             self.assertTrue(item["id"].startswith("payroll."))
         json.dumps(items)
 
-    def test_the_salary_day_has_passed_and_the_month_is_not_marked_paid(self):
+    def test_the_salary_day_has_passed_and_the_month_is_not_paid(self):
         items = {i["id"]: i for i in P.insights(today=TODAY)}
         unpaid = items["payroll.unpaid-2026-09"]
-        self.assertEqual(unpaid["title"], "6 of 8 slips for Sep 2026 are not marked paid")
+        self.assertEqual(unpaid["title"], "Sep 2026 payroll is not done yet: it is still open and not paid")
         self.assertEqual(unpaid["severity"], "warning")  # seven days late: critical only beyond a week
-        self.assertEqual(unpaid["metric"], "₹63,145")
+        self.assertEqual(unpaid["metric"], "₹1.1 L")
         self.assertIn("Salary day was the 5th, 7 days ago", unpaid["detail"])
+        self.assertIn("₹1,08,393 net pay is not paid", unpaid["detail"])
 
     def test_more_than_a_week_late_is_critical(self):
         with mock.patch.object(P, "_today", return_value=date(2026, 10, 20)):
@@ -1819,6 +2065,24 @@ class InsightsTests(AdvancesBase):
         SalarySlip.objects.all().delete()
         self.assertEqual(P.insights(today=TODAY), [])
 
+    def test_staff_only_and_production_only(self):
+        """The strip above the Staff / Production Payroll pages: only that kind's figures, status and exceptions."""
+        staff = {i["id"]: i for i in P.insights(today=TODAY, type="staff")}
+        self.assertEqual(
+            staff["payroll.unpaid-2026-09"]["title"], "Sep 2026 payroll is not done yet: it is still open and not paid"
+        )
+        self.assertIn("₹87,113 net pay is not paid", staff["payroll.unpaid-2026-09"]["detail"])  # staff nets only
+        self.assertEqual(staff["payroll.exceptions"]["title"], "1 payroll exception in Sep 2026")  # S7: staff
+        production = {i["id"]: i for i in P.insights(today=TODAY, type="production")}
+        self.assertEqual(production["payroll.unpaid-2026-09"]["title"], "3 of 3 slips for Sep 2026 are not paid")
+        self.assertNotIn("payroll.provisional-2026-09", production)  # S3's provisional slip is staff
+        self.assertNotIn("payroll.exceptions", production)
+        self.assertNotIn("payroll.advances-ex-employees", production)  # S4 was staff
+        for items in (staff, production):
+            self.assertLessEqual(len(items), 5)
+        with read_only_db():
+            P.insights(today=TODAY, type="staff")
+
     def test_the_page_attention_list_follows_the_scope_and_month(self):
         body = self.api("attention", month="2026-09", branch="Unit 2")
         ids = {i["id"] for i in body["items"]}
@@ -1869,6 +2133,21 @@ class HeadlineTests(ScenarioBase):
         h = P.headline(today=TODAY)
         self.assertIsNone(h["kpis"][0]["value"])
         self.assertEqual(h["kpis"][0]["sub"], "No payroll processed yet")
+
+    def test_staff_only_and_production_only(self):
+        """The strip above the Staff / Production Payroll pages: the same figures, of one kind of slip only."""
+        staff = P.headline(today=TODAY, type="staff")["kpis"]
+        near(self, staff[0]["value"], 89307.69)
+        self.assertEqual(staff[0]["sub"], "Sep 2026 · 5 people paid")
+        near(self, staff[2]["value"], 1000.00)  # S1's overtime: staff only
+        production = P.headline(today=TODAY, type="production")["kpis"]
+        near(self, production[0]["value"], 21280.00)
+        self.assertEqual(production[0]["sub"], "Sep 2026 · 2 people paid")
+        near(self, production[2]["value"], 0.0)
+        near(self, production[0]["delta"]["abs"], 21280.00 - 20500.00)
+        near(self, P.headline(today=TODAY)["kpis"][0]["value"], 110587.69)  # no type: everyone, as before
+        with self.assertRaises(MdParamError):
+            P.headline(today=TODAY, type="contract")
 
 
 def build_company(n_staff, n_production, branch, dept, desig, *, prefix="B"):
@@ -2100,6 +2379,15 @@ class ReportCentreConsistencyTests(ScenarioBase):
             near(self, row["netPay"], month["netPay"], msg=month["label"])
             self.assertEqual(row["employeesPaid"], month["headcount"], month["label"])
 
+    def test_the_report_centre_still_counts_a_new_joiner_waiting_to_be_added(self):
+        """The one known difference (documented in the module): the Report Center's slip reports count every slip, the
+        MD leaves out a new joiner HR has not added to the payroll yet. The gap is exactly that person's pay."""
+        Payroll.objects.filter(employee=self.s5, year=2026, month=9).update(new_joiner_parked=True)
+        sep = self.report("department-salary-cost", period="2026-09")["totals"]
+        near(self, sep["totalEarnings"] - self.api("summary", month="2026-09")["totals"]["grossPay"], 15000.00)  # S5
+        aug = self.report("department-salary-cost", period="2026-08")["totals"]
+        near(self, aug["totalEarnings"], self.api("summary", month="2026-08")["totals"]["grossPay"])  # S4 left: counted
+
 
 def _manual_day(emp, d, shifts="1.00"):
     from .models import AttendanceDayRecord
@@ -2175,7 +2463,24 @@ class EngineContractTests(PayrollBase):
     def test_the_status_reads_the_engines_payroll_rows(self):
         Payroll.objects.filter(employee=self.staff, month=3, year=2026).update(status="paid")
         st = self.api("summary", month="2026-03")["status"]
-        self.assertEqual((st["slips"], st["paidSlips"], st["state"]), (2, 1, "part_paid"))
+        self.assertEqual((st["slips"], st["clearedSlips"], st["paidSlips"], st["state"]), (2, 1, 0, "generated"))
+        Payroll.objects.filter(employee=self.worker, month=3, year=2026).update(status="paid")
+        st = self.api("summary", month="2026-03")["status"]
+        self.assertEqual((st["paidSlips"], st["state"]), (1, "part_paid"))  # the production slip: Cleared IS paid
+
+    def test_the_status_reads_the_real_month_workflow(self):
+        """Payroll Done and Mark as Paid through payroll_month_workflow itself (the functions HR's buttons call)."""
+        from . import payroll_month_workflow as wf
+
+        Payroll.objects.filter(employee=self.worker, month=3, year=2026).update(status="paid")
+        wf.finalize(3, 2026, "HR")
+        st = self.api("summary", month="2026-03", type="staff")["status"]
+        self.assertEqual((st["state"], st["locked"], st["paidSlips"]), ("finalized", True, 0))
+        self.assertEqual(st["paymentPendingDays"], 0)  # pressed "now", after the pinned date: never negative
+        wf.mark_paid(3, 2026, "HR")
+        st = self.api("summary", month="2026-03")["status"]
+        self.assertEqual((st["state"], st["paidSlips"], st["unpaidSlips"]), ("paid", 2, 0))
+        self.assertIsNotNone(st["markedPaidAt"])
 
 
 def stat_block(category, wages=0, tds=None):

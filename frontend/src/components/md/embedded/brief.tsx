@@ -4,6 +4,7 @@ import { useMdQuery } from "@/lib/api-client/custom-hooks/md";
 import { describeMdError } from "@/lib/api-client/custom-hooks/md";
 import type { MdInsightDto, MdKpiDto, Provenance } from "@/lib/md/types";
 import { cn } from "@/lib/utils";
+import { HideInsightsButton } from "./InsightsReveal";
 import { kpiDelta, kpiValueText, sortInsights, toInsight } from "../kit/dto";
 import AskAiButton from "../kit/AskAiButton";
 import InsightList from "../kit/InsightList";
@@ -56,7 +57,7 @@ export function BriefStrip({ page }: { page: string }) {
   }
 
   return (
-    <div className="md-shell-strip mb-4 p-4" data-testid="md-brief-strip">
+    <div className="md-shell-strip mb-4 p-3 sm:p-4" data-testid="md-brief-strip">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
         <span className="mr-1 flex items-center gap-2">
           <span className="md-shell-strip-mark">
@@ -65,24 +66,34 @@ export function BriefStrip({ page }: { page: string }) {
           <span className="md-shell-overline text-md-wine">MD insights</span>
         </span>
         {brief.isLoading && <span className="text-xs font-medium text-md-ink-soft">Working out the figures…</span>}
-        {kpis.map((kpi) => {
-          const delta = kpiDelta(kpi);
-          return (
-            <span key={kpi.id} className="md-shell-strip-kpi" data-testid={`strip-kpi-${kpi.id}`}>
-              <span className="text-[11px] font-semibold leading-tight text-md-ink-soft">{kpi.label}</span>
-              <span className="flex items-center gap-2">
-                <b className="text-base font-black leading-tight tabular-nums text-md-ink">{kpiValueText(kpi)}</b>
-                {delta && <DeltaChip {...delta} />}
-              </span>
-            </span>
-          );
-        })}
-        <span className="ml-auto">
+        {kpis.length > 0 && (
+          <div
+            className={cn(
+              "contents max-sm:order-last max-sm:grid max-sm:w-full max-sm:gap-2",
+              kpis.length % 3 === 0 ? "max-sm:grid-cols-3" : "max-sm:grid-cols-2",
+            )}
+          >
+            {kpis.map((kpi) => {
+              const delta = kpiDelta(kpi);
+              return (
+                <span key={kpi.id} className="md-shell-strip-kpi max-sm:min-w-0" data-testid={`strip-kpi-${kpi.id}`}>
+                  <span className="text-[11px] font-semibold leading-tight text-md-ink-soft">{kpi.label}</span>
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <b className="text-base font-black leading-tight tabular-nums text-md-ink">{kpiValueText(kpi)}</b>
+                    {delta && <DeltaChip {...delta} />}
+                  </span>
+                </span>
+              );
+            })}
+          </div>
+        )}
+        <span className="ml-auto flex items-center gap-1">
           <AskAiButton
             question={pageQuestion(meta?.title ?? data?.title ?? "this page")}
             label="Ask AI about this page"
             size="md"
           />
+          <HideInsightsButton />
         </span>
       </div>
       {insights.length > 0 && (
@@ -96,7 +107,11 @@ export function BriefStrip({ page }: { page: string }) {
                   <b className="font-bold">{item.title}</b>
                   {item.detail && <span className="text-md-ink-soft"> — {item.detail}</span>}
                 </span>
-                {item.ask && <AskAiButton question={item.ask} label="Explain" />}
+                {item.ask && (
+                  <span className="max-sm:ml-[1.45rem] max-sm:basis-full">
+                    <AskAiButton question={item.ask} label="Explain" />
+                  </span>
+                )}
               </li>
             );
           })}
@@ -121,7 +136,7 @@ export function BriefBody({ page }: { page: string }) {
   return (
     <div className="space-y-5" data-testid="md-brief-body">
       {kpis.length > 0 && (
-        <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 @4xl:grid-cols-4 [&>*:last-child:nth-child(odd)]:col-span-2 @4xl:[&>*:last-child:nth-child(odd)]:col-span-1">
           {kpis.map((kpi) => (
             <KpiCard key={kpi.id} kpi={kpi} icon={Activity} loading={brief.isLoading} provenance={data?.provenance} />
           ))}

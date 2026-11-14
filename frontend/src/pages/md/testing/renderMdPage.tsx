@@ -44,6 +44,8 @@ export const SHELL_FIXTURES: Fixtures = {
     serverTime: "2026-10-05T10:42:10",
     pages: [],
   },
+  // the sidebar's HOD sub-menu (none by default: a page test that wants heads gives its own)
+  "/api/md/approvals/hods": { hods: [], mdDepartments: [{ id: 44, name: "MD", branch: "Head Office" }] },
   "/api/md/org": {
     branches: [
       { id: 1, name: "Unit 1", isHeadOffice: false, isActive: true },

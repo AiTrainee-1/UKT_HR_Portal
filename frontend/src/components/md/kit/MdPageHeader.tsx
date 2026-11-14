@@ -1,5 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import { clockText } from "@/lib/md/format";
+import { cn } from "@/lib/utils";
 import { LiveChip, UpdatedRefresh } from "./MdHeaderParts";
 
 /**
@@ -26,11 +27,19 @@ export default function MdPageHeader({
   updatedAt?: string | null;
   live?: boolean;
 }) {
+  // on a phone a switch in `tabs` sits at the right of the title, level with it (areas/shell.css .md-shell-modeslot): the
+  // row is its frame and the title wraps before it
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-3" data-testid="md-page-header">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <h2 className="text-[22px] font-black leading-7 tracking-tight text-md-ink" data-testid="md-page-title">
+    <div
+      className={cn("flex flex-wrap items-center gap-x-4 gap-y-3", tabs && "max-sm:relative")}
+      data-testid="md-page-header"
+    >
+      <div className="min-w-0 max-sm:w-full">
+        <div className={cn("flex flex-wrap items-center gap-2.5", tabs && "max-sm:pr-[4.875rem]")}>
+          <h2
+            className="text-xl font-black leading-7 tracking-tight text-md-ink sm:text-[22px]"
+            data-testid="md-page-title"
+          >
             {title}
           </h2>
           {live && <LiveChip />}
@@ -40,8 +49,11 @@ export default function MdPageHeader({
         )}
       </div>
       {tabs}
-      <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>
-      <UpdatedRefresh stamp={updatedAt ? `Numbers as of ${clockText(updatedAt)}` : undefined} />
+      {actions && <div className="flex flex-wrap items-center gap-2 sm:ml-auto">{actions}</div>}
+      <UpdatedRefresh
+        className={actions ? undefined : "sm:ml-auto"}
+        stamp={updatedAt ? `Numbers as of ${clockText(updatedAt)}` : undefined}
+      />
     </div>
   );
 }

@@ -61,7 +61,8 @@ function StatTile({
       </span>
     </>
   );
-  const cls = "flex items-center gap-3 rounded-2xl bg-white p-4 shadow-sm";
+  // phones: 14 px padding and a tighter gap so the label has room in a half-width tile; the old values from sm up
+  const cls = "flex h-full items-center gap-2.5 rounded-2xl bg-white p-3.5 shadow-sm sm:gap-3 sm:p-4";
   return onClick ? (
     <button
       type="button"
@@ -206,36 +207,39 @@ export default function ManageShift() {
             Nothing on this page is open to your role.
           </p>
         )}
+        {/* one row that scrolls sideways on a phone (data-tab-row: the MD skin keeps its pills on one line too) */}
         {visibleTabs.length > 0 && (
-          <PillTabs
-            items={visibleItems(
-              [
-                { value: "shifts", label: "Shifts", count: shifts.length, icon: <Layers size={13} /> },
-                {
-                  value: "assignments",
-                  label: (
-                    <>
-                      <span className="hidden sm:inline">Assignments</span>
-                      <span className="sm:hidden">Assigned</span>
-                    </>
-                  ),
-                  count: assignments.length,
-                  icon: <Users size={13} />,
-                },
-                {
-                  value: "unassigned",
-                  label: "Unassigned",
-                  count: without,
-                  icon: <UserMinus size={13} />,
-                  color: "#dc2626",
-                },
-              ],
-              (t) => TAB_KEY[t.value as Tab],
-              level,
-            )}
-            value={tab}
-            onChange={(v) => setTab(v as Tab)}
-          />
+          <div className="max-w-full max-sm:overflow-x-auto" data-tab-row>
+            <PillTabs
+              items={visibleItems(
+                [
+                  { value: "shifts", label: "Shifts", count: shifts.length, icon: <Layers size={13} /> },
+                  {
+                    value: "assignments",
+                    label: (
+                      <>
+                        <span className="hidden sm:inline">Assignments</span>
+                        <span className="sm:hidden">Assigned</span>
+                      </>
+                    ),
+                    count: assignments.length,
+                    icon: <Users size={13} />,
+                  },
+                  {
+                    value: "unassigned",
+                    label: "Unassigned",
+                    count: without,
+                    icon: <UserMinus size={13} />,
+                    color: "#dc2626",
+                  },
+                ],
+                (t) => TAB_KEY[t.value as Tab],
+                level,
+              )}
+              value={tab}
+              onChange={(v) => setTab(v as Tab)}
+            />
+          </div>
         )}
         <ViewOnlyTabNote show={tabViewOnly} />
 

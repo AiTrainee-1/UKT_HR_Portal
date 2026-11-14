@@ -54,7 +54,7 @@ class Status(Base):
         body = self.get("/api/md/assistant/status").json()
         self.assertTrue(body["ready"])
         self.assertEqual(body["model"], "gemini-3.5-flash-lite")
-        self.assertTrue(body["privacyMode"])
+        self.assertFalse(body["privacyMode"])  # off by default since 2026-11-13 (answers by name and code)
         self.assertTrue(body["voice"]["serverTranscription"])
         self.assertIn("requests", body["usage"])
         self.assertNotIn("AIza", json.dumps(body))

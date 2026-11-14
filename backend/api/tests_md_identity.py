@@ -220,7 +220,7 @@ class OnlyTheMdReachesTheMdApi(Base):
         self.assertEqual(r.status_code, 200, r.content)
         body = r.json()
         self.assertEqual((body["username"], body["name"]), ("md.sir", "R. Murugan"))
-        self.assertEqual([p["id"] for p in body["pages"]][:3], ["dashboard", "employees", "branches"])
+        self.assertEqual([p["id"] for p in body["pages"]][:3], ["dashboard", "employees", "approvals"])
         self.assertIn("serverTime", body)
 
     def test_everyone_else_is_refused(self):

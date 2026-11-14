@@ -55,7 +55,7 @@ function TabLabel({ text, count }: { text: string; count?: number }) {
       {text}
       {count ? (
         <span
-          className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold leading-none text-white"
+          className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1.5 text-[11px] sm:text-[10px] font-bold leading-none text-white"
           data-testid="tab-badge"
         >
           {count}
@@ -180,7 +180,7 @@ export default function GeoAttendance() {
 
         {/* On a phone the six tabs scroll sideways inside their own box instead of pushing the page wider. The strip is made
             again when a count changes, so the pills measure themselves with the badge in place. */}
-        <div ref={strip} className="overflow-x-auto pb-1" data-testid="geo-tabs">
+        <div ref={strip} className="overflow-x-auto pb-1" data-testid="geo-tabs" data-tab-row>
           <PillTabs
             key={`${sessions}-${punches}`}
             items={tabs}

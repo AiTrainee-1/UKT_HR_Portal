@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { HideInsightsButton } from "@/components/md/embedded/InsightsReveal";
 import { Sparkles } from "lucide-react";
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import type { Tone } from "@/lib/md/format";
@@ -47,8 +48,9 @@ export function StripShell({
         </span>
         {loading && <span className="md-analytics-figure-label">Working out the figures…</span>}
         {children}
-        <span className="md-analytics-strip-ask">
+        <span className="md-analytics-strip-ask inline-flex items-center gap-1">
           <AskAiButton question={question} label="Ask AI about this page" />
+          <HideInsightsButton />
         </span>
       </div>
       {below}

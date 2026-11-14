@@ -33,8 +33,8 @@ export default function SectionCard({
   children?: ReactNode;
 }) {
   return (
-    <section className={cn("md-card relative p-5 @2xl:p-6", className)} data-testid={testId}>
-      <header className="mb-4 flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+    <section className={cn("md-card relative p-3.5 sm:p-5 @2xl:p-6", className)} data-testid={testId}>
+      <header className="mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-2 sm:mb-4">
         <div className="min-w-0">
           <h3 className="text-[15px] font-extrabold leading-snug tracking-tight text-md-ink">{title}</h3>
           {subtitle && <p className="mt-0.5 text-xs leading-snug text-md-ink-soft">{subtitle}</p>}

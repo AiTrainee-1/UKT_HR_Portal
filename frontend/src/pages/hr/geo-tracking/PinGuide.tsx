@@ -23,7 +23,7 @@ export default function PinGuide() {
         Latest position / end
       </span>
       <span className="flex items-center gap-1.5">
-        <span className={`${SWATCH} h-5 w-5 text-[10px] font-bold`} aria-hidden>
+        <span className={`${SWATCH} h-5 w-5 text-[11px] sm:text-[10px] font-bold`} aria-hidden>
           1
         </span>
         Stop

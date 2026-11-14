@@ -226,9 +226,14 @@ export default function BalancesTab() {
               No leave types yet. Add one, then allocate its days to employees.
             </p>
           ) : (
-            <div className="flex flex-wrap gap-2">
+            // phones: two equal columns of leave types instead of a ragged row
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
               {typeList.map((t) => (
-                <div key={t.id} className="rounded-xl border bg-gray-50 px-3 py-2" data-testid={`leave-type-${t.id}`}>
+                <div
+                  key={t.id}
+                  className="min-w-0 rounded-xl border bg-gray-50 px-3 py-2"
+                  data-testid={`leave-type-${t.id}`}
+                >
                   <p className="text-sm font-bold text-gray-900">
                     {t.name} <span className="font-mono text-xs font-semibold text-gray-400">{t.code}</span>
                   </p>
@@ -268,13 +273,19 @@ export default function BalancesTab() {
               <ChevronRight size={16} />
             </Button>
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          {/* phones: Export and Add Allocation as two equal buttons on their own row */}
+          <div className="grid w-full grid-cols-2 items-center gap-2 sm:ml-auto sm:flex sm:w-auto">
             <ExportButton
               disabled={shown.length === 0}
               testId="bal-export"
+              className="w-full sm:w-auto"
               onClick={() => exportSheet(`Leave balances ${year}`, BALANCE_EXPORT_HEADERS, balanceExportRows(shown))}
             />
-            <Button className="h-10 gap-1.5" onClick={() => openAllocate(null)} data-testid="bal-allocate">
+            <Button
+              className="h-10 w-full gap-1.5 sm:w-auto"
+              onClick={() => openAllocate(null)}
+              data-testid="bal-allocate"
+            >
               <Plus size={15} /> Add Allocation
             </Button>
           </div>
@@ -287,7 +298,7 @@ export default function BalancesTab() {
             label="Search balances"
             testId="bal-search"
           />
-          <div className="grid grid-cols-2 gap-2 lg:flex">
+          <div className="grid grid-cols-2 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 lg:flex">
             <FilterSelect
               value={filters.leaveType}
               onChange={(leaveType) => set({ leaveType })}
@@ -326,16 +337,19 @@ export default function BalancesTab() {
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <PillTabs
-            size="sm"
-            items={[
-              { value: "all", label: "All" },
-              { value: "low", label: "Low or exhausted", count: summary.low + summary.exhausted },
-              { value: "exhausted", label: "Exhausted", count: summary.exhausted },
-            ]}
-            value={filters.flag}
-            onChange={(flag) => set({ flag })}
-          />
+          {/* one row of pills that scrolls sideways on a phone */}
+          <div className="flex min-w-0 max-w-full max-sm:overflow-x-auto" data-tab-row>
+            <PillTabs
+              size="sm"
+              items={[
+                { value: "all", label: "All" },
+                { value: "low", label: "Low or exhausted", count: summary.low + summary.exhausted },
+                { value: "exhausted", label: "Exhausted", count: summary.exhausted },
+              ]}
+              value={filters.flag}
+              onChange={(flag) => set({ flag })}
+            />
+          </div>
           <ResultLine
             shown={shown.length}
             total={rows.length}
@@ -429,7 +443,7 @@ export default function BalancesTab() {
                           </TableCell>
                           <TableCell className="w-32">
                             <UsageBar b={b} />
-                            <p className="mt-0.5 text-[10px] text-gray-400">
+                            <p className="mt-0.5 text-[11px] sm:text-[10px] text-gray-400">
                               {fmtDays(b.used)} of {fmtDays(entitlementOf(b))}
                             </p>
                           </TableCell>

@@ -16,7 +16,10 @@ import { cn } from "@/lib/utils";
 export function FilterBar({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={cn("md-shell-filterbar flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3", className)}
+      className={cn(
+        "md-shell-filterbar flex flex-wrap items-center gap-x-4 gap-y-2.5 px-3 py-2.5 sm:gap-y-3 sm:px-4 sm:py-3",
+        className,
+      )}
       data-testid="md-filter-bar"
     >
       {children}
@@ -141,7 +144,10 @@ export function ScopeBar({
   const trigger = "md-field h-9 text-xs font-semibold";
 
   return (
-    <div className="flex flex-wrap items-center gap-2" data-testid="scope-bar">
+    <div
+      className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center [&>*:last-child:nth-child(odd)]:col-span-2"
+      data-testid="scope-bar"
+    >
       <Select
         value={value.branch || ALL}
         onValueChange={(v) => {
@@ -153,7 +159,7 @@ export function ScopeBar({
           onChange({ ...value, branch, department: stillThere ? value.department : "" });
         }}
       >
-        <SelectTrigger className={cn(trigger, "w-[10.5rem]")} aria-label="Unit" data-testid="scope-branch">
+        <SelectTrigger className={cn(trigger, "w-full sm:w-[10.5rem]")} aria-label="Unit" data-testid="scope-branch">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -171,7 +177,11 @@ export function ScopeBar({
           value={value.department || ALL}
           onValueChange={(v) => onChange({ ...value, department: v === ALL ? "" : v })}
         >
-          <SelectTrigger className={cn(trigger, "w-[11.5rem]")} aria-label="Department" data-testid="scope-department">
+          <SelectTrigger
+            className={cn(trigger, "w-full sm:w-[11.5rem]")}
+            aria-label="Department"
+            data-testid="scope-department"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -190,7 +200,7 @@ export function ScopeBar({
           onValueChange={(v) => onChange({ ...value, type: v === ALL ? "" : (v as ScopeChoice["type"]) })}
         >
           <SelectTrigger
-            className={cn(trigger, "w-[10.5rem]")}
+            className={cn(trigger, "w-full sm:w-[10.5rem]")}
             aria-label="Staff or production"
             data-testid="scope-type"
           >

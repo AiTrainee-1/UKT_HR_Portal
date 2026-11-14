@@ -31,8 +31,11 @@ export default function AdvancesCard({ query, label }: { query: PayrollQueries["
           No salary advance or loan is outstanding or moved in this selection.
         </EmptyBlock>
       ) : (
-        <div className="space-y-5">
-          <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2" data-testid="md-payroll-advances-metrics">
+        <div className="space-y-4 @lg:space-y-5">
+          <div
+            className="grid grid-cols-2 gap-2.5 @lg:grid-cols-1 @lg:gap-3 @xl:grid-cols-2"
+            data-testid="md-payroll-advances-metrics"
+          >
             <Metric
               emphasis
               testId="md-payroll-advances-outstanding"

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { CalendarDays, CalendarRange, Clock, Gift, Scale, Sunrise } from "lucide-react";
@@ -66,6 +66,16 @@ export default function LeaveHoliday() {
   useViewOnlyLock(tabViewOnly, tab);
   // The leave list feeds the Leave Requests, Half-Day and Calendar tabs only: not loaded when all three are hidden.
   const needsLeaves = visibleTabs.some((t) => t === "leaves" || t === "halfDay" || t === "calendar");
+  // on a phone the tab row scrolls: the open tab is brought into view (a link to ?tab=balances opens it out of sight
+  // otherwise). Only the row itself scrolls, never the page.
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = strip.current;
+    const pill = box?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!box || !pill || box.scrollWidth <= box.clientWidth) return;
+    const at = pill.getBoundingClientRect().left - box.getBoundingClientRect().left;
+    box.scrollLeft += at - (box.clientWidth - pill.offsetWidth) / 2;
+  }, [tab]);
   const [selected, setSelected] = useState<LeaveRow | null>(null);
   const [toDelete, setToDelete] = useState<LeaveRow | null>(null);
   const today = useMemo(localToday, []);
@@ -143,7 +153,8 @@ export default function LeaveHoliday() {
               Nothing on this page is open to your role.
             </p>
           )}
-          <div className="max-w-full overflow-x-auto pb-1" hidden={visibleTabs.length === 0}>
+          {/* one row that scrolls sideways on a phone (data-tab-row: the MD skin keeps its pills on one line too) */}
+          <div ref={strip} className="max-w-full overflow-x-auto pb-1" hidden={visibleTabs.length === 0} data-tab-row>
             <PillTabs
               items={visibleItems(
                 [

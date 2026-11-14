@@ -25,6 +25,8 @@ TOOL_MODULES = (
     "shifts",
     "leave",
     "requests",
+    # questions about one employee (by name or code) and the people of one day (2026-11-13)
+    "people",
 )
 
 

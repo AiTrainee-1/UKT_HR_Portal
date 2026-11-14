@@ -92,7 +92,7 @@ function Chip({ rule, onFlip, onRemove }: { rule: Rule; onFlip: () => void; onRe
         aria-label={`${inc ? "Exclude" : "Include"} ${rule.label} instead`}
         data-testid={`chip-flip-${rule.kind}-${rule.id}`}
         className={cn(
-          "rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+          "rounded-full px-1.5 py-0.5 text-[11px] sm:text-[10px] font-bold uppercase tracking-wide",
           inc ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-red-600 text-white hover:bg-red-700",
         )}
       >
@@ -269,7 +269,9 @@ export default function SelectionBuilder({
                 <Icon size={13} />
                 <span className="truncate">{t.label}</span>
                 {n > 0 && (
-                  <span className="rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">{n}</span>
+                  <span className="rounded-full bg-primary px-1.5 text-[11px] sm:text-[10px] text-primary-foreground">
+                    {n}
+                  </span>
                 )}
               </button>
             );

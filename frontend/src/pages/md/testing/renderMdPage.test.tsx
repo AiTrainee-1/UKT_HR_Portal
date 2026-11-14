@@ -11,7 +11,7 @@ afterEach(() => {
 describe("renderMdPage", () => {
   it("mounts a page inside the shell and shows its content", async () => {
     page = await renderMdPage(() => <PlaceholderPage id="payroll" />, {}, { path: "/md/payroll" });
-    expect(page.text()).toContain("Payroll Analysis");
+    expect(page.text()).toContain("Payroll");
     expect(page.text()).toContain("Test MD"); // the signed-in MD in the sidebar
     expect(page.text()).toContain("Managing Director");
   });

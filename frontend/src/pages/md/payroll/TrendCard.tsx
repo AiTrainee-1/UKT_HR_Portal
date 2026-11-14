@@ -54,8 +54,13 @@ export default function TrendCard({ query }: { query: PayrollQueries["trend"] })
               Lighter bars are months still running or with staff slips generated before month end: they understate pay.
             </p>
           )}
-          <div className="mt-4 grid grid-cols-1 gap-3 @xl:grid-cols-3">
-            <Metric label="Average month" value={data?.average != null ? inrCompact(data.average) : "—"} />
+          {/* on a phone: the average across the top, the highest and lowest months side by side under it */}
+          <div className="mt-3 grid grid-cols-2 gap-2.5 @lg:mt-4 @lg:grid-cols-1 @lg:gap-3 @xl:grid-cols-3">
+            <Metric
+              className="col-span-2 @lg:col-span-1"
+              label="Average month"
+              value={data?.average != null ? inrCompact(data.average) : "—"}
+            />
             <Metric
               label="Highest month"
               value={data?.highest ? inrCompact(data.highest.grossPay) : "—"}

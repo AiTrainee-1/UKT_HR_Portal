@@ -17,6 +17,7 @@ import {
   failedSub,
   feedParams,
   heatmapShape,
+  turnHeatmap,
   hourLabel,
   hourText,
   initialsOf,
@@ -162,6 +163,17 @@ describe("the heatmap", () => {
     expect(shape.values[4][16]).toBe(3);
     expect(shape.values[0][1]).toBeNull();
     expect(shape.values.flat().filter((v) => v !== null)).toHaveLength(11);
+  });
+
+  it("turns on its side for a phone (hours down, days across) and keeps every value", () => {
+    const shape = heatmapShape(heatmap);
+    const turned = turnHeatmap(shape);
+    expect(turned.rows).toEqual(shape.cols);
+    expect(turned.cols).toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+    expect(turned.values).toHaveLength(24);
+    expect(turned.values.every((row) => row.length === 7)).toBe(true);
+    expect(turned.values[16][4]).toBe(3); // Fri 4 pm
+    expect(turned.values.flat().filter((v) => v !== null)).toHaveLength(11);
   });
 
   it("names the busiest cell", () => {

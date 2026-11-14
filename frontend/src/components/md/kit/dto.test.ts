@@ -10,7 +10,7 @@ describe("toInsight", () => {
       page: "payroll",
       ask: "Why?",
     });
-    expect(insight.page).toEqual({ path: "/md/payroll", label: "Payroll Analysis" });
+    expect(insight.page).toEqual({ path: "/md/payroll", label: "Payroll" });
     expect(insight.ask).toBe("Why?");
   });
 

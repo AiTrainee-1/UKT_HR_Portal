@@ -47,7 +47,7 @@ export default function Heatmap({
       >
         <div />
         {cols.map((c) => (
-          <div key={c} className="truncate text-center text-[10px] font-semibold text-md-ink-soft">
+          <div key={c} className="truncate text-center text-[11px] font-semibold text-md-ink-soft">
             {c}
           </div>
         ))}
@@ -72,8 +72,8 @@ export default function Heatmap({
                   title={v == null ? `${r} · ${c}: no data` : `${r} · ${c}: ${format(v)}`}
                   className={
                     v == null
-                      ? "flex items-center justify-center rounded-lg bg-md-ink/[0.05] text-[9.5px] font-semibold text-md-ink-500"
-                      : "md-shell-heat-cell flex items-center justify-center rounded-lg text-[9.5px] font-bold"
+                      ? "flex items-center justify-center rounded-lg bg-md-ink/[0.05] text-[11px] font-semibold text-md-ink-500"
+                      : "md-shell-heat-cell flex items-center justify-center rounded-lg text-[11px] font-bold"
                   }
                   style={
                     v == null
@@ -88,7 +88,7 @@ export default function Heatmap({
           </div>
         ))}
       </div>
-      <div className="mt-3 flex items-center justify-end gap-2 text-[10px] font-semibold text-md-ink-soft">
+      <div className="mt-3 flex items-center justify-end gap-2 text-[11px] font-semibold text-md-ink-soft">
         <span>{invert ? format(hi) : format(lo)}</span>
         <span className="md-shell-ramp flex h-2 w-24 overflow-hidden rounded-full">
           {CHART.ramp.map((c) => (

@@ -302,7 +302,7 @@ export default function LiveMapTab({ onOpenJourney }: { onOpenJourney: (id: numb
                     </span>
                   </span>
                   {m.isOnDutyToday && (
-                    <Chip tone="warning" className="shrink-0 !px-1.5 !py-0 !text-[9px] uppercase">
+                    <Chip tone="warning" className="shrink-0 !px-1.5 !py-0 !text-[11px] uppercase sm:!text-[9px]">
                       On-Duty
                     </Chip>
                   )}

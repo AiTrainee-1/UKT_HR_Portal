@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useListOutpassRequests, type OutpassRequestItem } from "@/lib/api-client/custom-hooks";
-import { RecordsPagination, fmtDateTime } from "../shared";
+import { RecordsPagination, fmtDateTime, RowNote } from "../shared";
 import { SCAN_STATUS_BADGE, fmtDuration, formatApprover } from "./logic";
 
 // ── In/Out (exit + return leg, one row per employee who has actually exited
@@ -52,13 +52,13 @@ export function InOutSection() {
               {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
-                    Loading…
+                    <RowNote>Loading…</RowNote>
                   </TableCell>
                 </TableRow>
               ) : !rows.length ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
-                    No gate exits recorded yet.
+                    <RowNote>No gate exits recorded yet.</RowNote>
                   </TableCell>
                 </TableRow>
               ) : (
@@ -71,7 +71,9 @@ export function InOutSection() {
                         <div className="flex items-center gap-2">
                           <Avatar className="size-7">
                             <AvatarImage src={r.employee?.photoUrl ?? undefined} />
-                            <AvatarFallback className="text-[10px]">{r.employee?.name?.[0] ?? "?"}</AvatarFallback>
+                            <AvatarFallback className="text-[11px] sm:text-[10px]">
+                              {r.employee?.name?.[0] ?? "?"}
+                            </AvatarFallback>
                           </Avatar>
                           <div className="min-w-0">
                             <p className="font-medium truncate">{r.employee?.name ?? `#${r.employeeId}`}</p>

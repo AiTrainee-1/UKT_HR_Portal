@@ -218,7 +218,7 @@ export const DayList = memo(function DayList({
           value={department}
           onChange={(e) => setDepartment(e.target.value)}
           aria-label="Department"
-          className="h-9 min-w-0 max-w-full rounded-xl border border-slate-200 bg-white px-2.5 text-sm text-slate-700"
+          className="h-9 min-w-0 max-w-full flex-1 basis-36 rounded-xl border border-slate-200 bg-white px-2.5 text-sm text-slate-700 sm:flex-none sm:basis-auto"
           data-testid="day-list-department"
         >
           <option value="">All departments</option>
@@ -308,7 +308,7 @@ export const DayList = memo(function DayList({
                 <li
                   key={row.employeeId}
                   onClick={() => onOpen(row.employeeId)}
-                  className="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-slate-50"
+                  className="flex cursor-pointer items-start gap-3 px-3.5 py-2.5 hover:bg-slate-50 sm:px-4 sm:py-3"
                   data-testid="day-list-card"
                 >
                   <Avatar name={row.employeeName} size={34} />

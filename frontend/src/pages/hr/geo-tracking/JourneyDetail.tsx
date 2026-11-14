@@ -171,7 +171,8 @@ export default function JourneyDetail({
     <div className="space-y-4" data-testid="journey-detail" data-journey-id={track.id} data-status={track.status}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         {back}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* phones: the buttons as a two-column grid of equal buttons (an odd last one across the row) */}
+        <div className="grid w-full grid-cols-2 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 max-sm:[&>button]:w-full sm:flex sm:w-auto sm:flex-wrap sm:items-center">
           {onSimulate && (
             <Button
               size="sm"
@@ -311,7 +312,8 @@ export default function JourneyDetail({
 
       <JourneySummary detail={detail} stats={stats} />
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+      {/* one column below xl that never grows past the screen (an implicit auto column took its widest content) */}
+      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         <div className="space-y-4 xl:sticky xl:top-3">
           <SectionCard
             title="Route"
@@ -356,7 +358,7 @@ export default function JourneyDetail({
 
       <Timeline rows={rows} selectedKey={selected} onSelect={setSelected} active={active} />
 
-      <div className="grid items-start gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
         <DeviceCard detail={detail} />
         <Card className="clay-card rounded-2xl border border-slate-100" data-testid="journey-facts">
           <CardContent className="space-y-1 p-4 text-xs text-gray-600">

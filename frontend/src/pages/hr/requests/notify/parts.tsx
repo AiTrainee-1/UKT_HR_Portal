@@ -110,7 +110,7 @@ export function MasterCard({
           {form.enabled ? `${scheduleText(form)} (India time)` : "Nothing is sent automatically. Send now still works."}
         </p>
       </div>
-      <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 px-3 py-2.5">
           <dt className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Next reminder</dt>
           <dd className="font-bold text-gray-900" data-testid="notify-next-run">

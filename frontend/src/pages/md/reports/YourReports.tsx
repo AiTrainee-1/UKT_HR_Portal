@@ -23,7 +23,7 @@ function Strip({
       <h3 className="mb-2.5 flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-md-ink-soft">
         {icon} {title}
       </h3>
-      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2.5 @lg:grid-cols-1 @lg:gap-3 @xl:grid-cols-2 @4xl:grid-cols-3 @max-lg:[&>*:last-child:nth-child(odd)]:col-span-2">
         {items.map(({ report }) => (
           <CompactLink
             key={report.id}

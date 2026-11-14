@@ -159,10 +159,12 @@ export default function CalendarTab({ leaves, loading, failed, onRetry, today }:
       <FilterPanel>
         <div className="flex flex-wrap items-center gap-3">
           <MonthPicker year={year} month={month} onChange={setMonth} testId="cal-month" />
-          <div className="ml-auto">
+          {/* phones: Export across the row under the month picker */}
+          <div className="w-full sm:ml-auto sm:w-auto">
             <ExportButton
               disabled={people.length === 0}
               testId="cal-export"
+              className="w-full sm:w-auto"
               onClick={() =>
                 exportSheet(
                   `Leave calendar ${MONTHS[month - 1]} ${year}`,
@@ -191,7 +193,7 @@ export default function CalendarTab({ leaves, loading, failed, onRetry, today }:
             label="Search the leave calendar"
             testId="cal-search"
           />
-          <div className="grid grid-cols-2 gap-2 lg:flex">
+          <div className="grid grid-cols-2 gap-2 max-sm:[&>:last-child:nth-child(odd)]:col-span-2 lg:flex">
             <FilterSelect
               value={filters.branch}
               onChange={(branch) => set({ branch })}
@@ -365,7 +367,7 @@ export default function CalendarTab({ leaves, loading, failed, onRetry, today }:
                       />
                       <div className="flex shrink-0 flex-col items-end gap-1">
                         <span className="text-[11px] font-medium text-gray-600">{e.label}</span>
-                        <StatusChip status={e.status} className="text-[10px]" />
+                        <StatusChip status={e.status} className="text-[11px] sm:text-[10px]" />
                       </div>
                     </div>
                   ))}

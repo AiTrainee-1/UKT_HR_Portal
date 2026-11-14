@@ -224,7 +224,10 @@ export default function VerificationsTab() {
   return (
     <div className="space-y-4" data-testid="tab-verifications">
       <ToolbarCard>
-        <PillTabs items={FILTERS} value={statusFilter} onChange={(v) => setStatusFilter(v as Filter)} size="sm" />
+        {/* one row of status pills that scrolls sideways on a phone */}
+        <div className="flex min-w-0 max-w-full max-sm:overflow-x-auto" data-tab-row>
+          <PillTabs items={FILTERS} value={statusFilter} onChange={(v) => setStatusFilter(v as Filter)} size="sm" />
+        </div>
         {!isLoading && (
           <CountText testId="verifications-count">
             {punchTotal} {statusFilter} punch{punchTotal === 1 ? "" : "es"} · {groups.length} request

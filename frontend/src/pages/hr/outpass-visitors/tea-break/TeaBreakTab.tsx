@@ -21,7 +21,7 @@ import { Filter, Save } from "lucide-react";
 import { SubtabBar } from "@/components/ui/subtab-nav";
 import { useLevel, visibleItems } from "@/lib/tab-access";
 import { gateKey, gatePagePath, subsOf } from "../routes";
-import { KpiRow, RANGE_LABEL, RangeFilter, RecordsPagination, fmtDateTime } from "../shared";
+import { KpiRow, RANGE_LABEL, RangeFilter, RecordsPagination, fmtDateTime, RowNote } from "../shared";
 
 // ── Tea Break tab ─────────────────────────────────────────────────────────
 // A permanent per-employee QR, no approval -see backend/api/tea_break_views.py.
@@ -162,13 +162,13 @@ function TeaBreakRecords({
                 {isLoading && !page_ ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
-                      Loading…
+                      <RowNote>Loading…</RowNote>
                     </TableCell>
                   </TableRow>
                 ) : !rows.length ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
-                      No tea breaks recorded for {RANGE_LABEL[range].toLowerCase()}.
+                      <RowNote>No tea breaks recorded for {RANGE_LABEL[range].toLowerCase()}.</RowNote>
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -180,7 +180,9 @@ function TeaBreakRecords({
                           <div className="flex items-center gap-2">
                             <Avatar className="size-7">
                               <AvatarImage src={r.employee.photoUrl ?? undefined} />
-                              <AvatarFallback className="text-[10px]">{r.employee.name[0]}</AvatarFallback>
+                              <AvatarFallback className="text-[11px] sm:text-[10px]">
+                                {r.employee.name[0]}
+                              </AvatarFallback>
                             </Avatar>
                             <p className="font-medium">{r.employee.name}</p>
                           </div>

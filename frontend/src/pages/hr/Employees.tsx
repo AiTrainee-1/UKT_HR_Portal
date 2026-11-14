@@ -44,6 +44,12 @@ const TAB_KEY: Record<EmployeesTab, string> = {
 };
 const TDS_KEY = "employees.co_emp.tds";
 
+// Phones only (below `sm`), so tablets and desktops keep their layout:
+/** a header button: half the row (two a row, gap included), the whole row when it is alone on it */
+const PHONE_HALF = "max-sm:grow max-sm:basis-[calc(50%-0.25rem)]";
+/** a filter select: half the row next to the search (a lone one takes the row) */
+const PHONE_FILTER = "max-sm:min-w-0 max-sm:grow max-sm:basis-[calc(50%-0.375rem)]";
+
 export default function Employees() {
   const [location, navigate] = useLocation();
   const [search, setSearch] = useState("");
@@ -168,8 +174,8 @@ export default function Employees() {
 
   return (
     <HrLayout>
-      <div className="min-h-[calc(100vh-140px)] flex flex-col justify-between gap-6">
-        <div className="space-y-5 flex-1">
+      <div className="min-h-[calc(100vh-140px)] flex flex-col justify-between gap-4 sm:gap-6">
+        <div className="space-y-4 sm:space-y-5 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-black">Employees</h2>
@@ -200,7 +206,8 @@ export default function Employees() {
             </div>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          {/* phones: the buttons fill the width, two a row (a lone one takes the row) */}
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
             {noTabOpen ? null : viewingCoEmp ? (
               // Co Emp has no Inactive / Bulk Upload / Add Employee here: one button opens the TDS panel (and closes it again).
               tdsLevel !== "hidden" && (
@@ -208,6 +215,7 @@ export default function Employees() {
                 variant={viewingTds ? "default" : "outline"}
                 onClick={() => setUrlState({ view: viewingTds ? "" : "tds" })}
                 aria-pressed={viewingTds}
+                className="max-sm:grow"
                 data-testid="button-tds"
               >
                 <Landmark size={16} className="mr-2" />
@@ -222,25 +230,26 @@ export default function Employees() {
                 <Button
                   variant={viewingInactive ? "default" : "outline"}
                   onClick={() => setStatusFilter(viewingInactive ? "active" : "inactive")}
+                  className={PHONE_HALF}
                   data-testid="button-toggle-inactive"
                   title={viewingInactive ? "Back to active employees" : "Show inactive employees only"}
                 >
                   <UserX size={16} className="mr-2" />
                   {viewingInactive ? "Viewing Inactive" : "Inactive"}
                   {!viewingInactive && inactiveCount > 0 && (
-                    <span className="ml-2 rounded-full bg-gray-200 px-1.5 py-0.5 text-[10px] font-bold text-gray-700">
+                    <span className="ml-2 rounded-full bg-gray-200 px-1.5 py-0.5 text-[11px] sm:text-[10px] font-bold text-gray-700">
                       {inactiveCount}
                     </span>
                   )}
                 </Button>
                 {/* Only opens the Bulk Upload page, which locks itself when this role may only view it. */}
                 {level("employees.bulk_upload") !== "hidden" && (
-                <Button variant="outline" onClick={() => navigate("/hr/employees/bulk-upload")} data-testid="button-bulk-upload">
+                <Button variant="outline" onClick={() => navigate("/hr/employees/bulk-upload")} className={PHONE_HALF} data-testid="button-bulk-upload">
                   <UploadCloud size={16} className="mr-2" /> Bulk Upload
                 </Button>
                 )}
                 <Gate k="employees.add">
-                <Button onClick={() => navigate("/hr/employees/new")} data-testid="button-add-employee">
+                <Button onClick={() => navigate("/hr/employees/new")} className={`${PHONE_HALF} max-sm:h-11`} data-testid="button-add-employee">
                   <Plus size={16} className="mr-2" /> Add Employee
                 </Button>
                 </Gate>
@@ -268,8 +277,8 @@ export default function Employees() {
 
         {/* Filters */}
         <Card>
-          <CardContent className="p-4 flex flex-col sm:flex-row gap-3">
-            <div className="relative flex-1">
+          <CardContent className="p-3.5 sm:p-4 flex flex-wrap sm:flex-nowrap sm:flex-row gap-3">
+            <div className="relative flex-1 max-sm:basis-full">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
                 className="pl-9"
@@ -280,7 +289,7 @@ export default function Employees() {
               />
             </div>
             <Select value={deptFilter} onValueChange={setDeptFilter}>
-              <SelectTrigger className="w-full sm:w-44" data-testid="select-department">
+              <SelectTrigger className={`w-full sm:w-44 ${PHONE_FILTER}`} data-testid="select-department">
                 <SelectValue placeholder="Department" />
               </SelectTrigger>
               <SelectContent>
@@ -292,7 +301,7 @@ export default function Employees() {
             </Select>
             {!isBranchScoped && (
               <Select value={branchFilter} onValueChange={setBranchFilter}>
-                <SelectTrigger className="w-full sm:w-44" data-testid="select-branch">
+                <SelectTrigger className={`w-full sm:w-44 ${PHONE_FILTER}`} data-testid="select-branch">
                   <SelectValue placeholder="Branch" />
                 </SelectTrigger>
                 <SelectContent>
@@ -304,7 +313,7 @@ export default function Employees() {
               </Select>
             )}
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full sm:w-36" data-testid="select-status">
+              <SelectTrigger className={`w-full sm:w-36 ${PHONE_FILTER}`} data-testid="select-status">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
@@ -342,15 +351,16 @@ export default function Employees() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="pl-4">Code</TableHead>
-                  <TableHead>Unit Code</TableHead>
-                  <TableHead>Name</TableHead>
+                  {/* phones: Code, Unit Code and Status go under the name (below), so the row fits the screen */}
+                  <TableHead className="pl-4 hidden sm:table-cell">Code</TableHead>
+                  <TableHead className="hidden sm:table-cell">Unit Code</TableHead>
+                  <TableHead className="max-sm:pl-3.5">Name</TableHead>
                   <TableHead className="hidden md:table-cell">Department</TableHead>
                   <TableHead className="hidden md:table-cell">Branch</TableHead>
                   <TableHead className="hidden lg:table-cell">Phone</TableHead>
                   <TableHead className="hidden lg:table-cell">Salary</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="pr-4 text-right">Actions</TableHead>
+                  <TableHead className="hidden sm:table-cell">Status</TableHead>
+                  <TableHead className="pr-4 text-right max-sm:pr-3.5">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody
@@ -369,10 +379,10 @@ export default function Employees() {
                 ) : paginatedEmployees.length > 0 ? (
                   paginatedEmployees.map((emp) => (
                     <TableRow key={emp.id} data-testid={`row-employee-${emp.id}`}>
-                      <TableCell className="pl-4">
+                      <TableCell className="pl-4 hidden sm:table-cell">
                         <Badge variant="outline" className="font-mono text-xs">{emp.employeeCode}</Badge>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         {emp.unitCode ? (
                           <span
                             className="text-xs font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-1 rounded"
@@ -384,12 +394,27 @@ export default function Employees() {
                           <span className="text-xs text-muted-foreground">—</span>
                         )}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="max-sm:pl-3.5">
                         <div className="flex items-center gap-2.5">
                           <EmployeeAvatar photoUrl={emp.photoUrl} name={`${emp.firstName} ${emp.lastName}`} size={32} />
-                          <div>
+                          <div className="max-sm:min-w-0">
                             <p className="font-semibold text-sm">{emp.firstName} {emp.lastName}</p>
-                            <p className="text-xs text-muted-foreground">{emp.email}</p>
+                            <p className="text-xs text-muted-foreground max-sm:[overflow-wrap:anywhere]">{emp.email}</p>
+                            {/* phones only: the Code, Unit Code and Status columns, which are hidden there */}
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:hidden">
+                              <Badge variant="outline" className="font-mono text-xs">{emp.employeeCode}</Badge>
+                              {emp.unitCode && (
+                                <span
+                                  className="text-xs font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.5 rounded"
+                                  title={emp.branchName ?? undefined}
+                                >
+                                  {emp.unitCode}
+                                </span>
+                              )}
+                              <StatusBadge tone={emp.status === "active" ? "success" : "neutral"} className="text-xs font-semibold capitalize">
+                                {emp.status}
+                              </StatusBadge>
+                            </div>
                           </div>
                         </div>
                       </TableCell>
@@ -411,13 +436,14 @@ export default function Employees() {
                         ₹{Number(emp.salaryAmount ?? 0).toLocaleString("en-IN")}
                         <span className="text-muted-foreground text-xs ml-1">/{emp.salaryType === "monthly" ? "mo" : "wk"}</span>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         <StatusBadge tone={emp.status === "active" ? "success" : "neutral"} className="text-xs font-semibold capitalize">
                           {emp.status}
                         </StatusBadge>
                       </TableCell>
-                      <TableCell className="pr-4 text-right">
-                        <div className="flex items-center gap-1 justify-end">
+                      <TableCell className="pr-4 text-right max-sm:pr-3.5">
+                        {/* phones: the four buttons two by two, which leaves the name its room */}
+                        <div className="grid grid-cols-2 gap-1 justify-items-end sm:flex sm:items-center sm:justify-end">
                           <Gate k="employees.profile">
                           <ActionTooltip label="View profile" color="blue">
                             <Button

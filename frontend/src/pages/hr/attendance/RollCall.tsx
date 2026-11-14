@@ -81,7 +81,7 @@ export const RollCall = memo(function RollCall({
 
   return (
     <section
-      className="clay-card min-w-0 rounded-2xl border border-slate-100 bg-white p-4 sm:p-5"
+      className="clay-card min-w-0 rounded-2xl border border-slate-100 bg-white p-3.5 sm:p-5"
       aria-labelledby="rollcall-title"
       data-testid="attendance-rollcall"
     >
@@ -178,7 +178,7 @@ export const RollCall = memo(function RollCall({
 
       {/* the cards: the strip's legend and the list's filters */}
       <div
-        className="mt-4 grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 xl:grid-cols-6"
+        className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-y-4 xl:grid-cols-6"
         role="group"
         aria-label="Filter the list by status"
       >

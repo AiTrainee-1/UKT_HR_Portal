@@ -124,7 +124,7 @@ const CAPABILITIES = [
 export default function AssistantPanel() {
   const { open, prompt } = useAssistantState();
   const { user } = useAuth();
-  const [location, navigate] = useLocation();
+  const [location] = useLocation();
   const reduce = useReducedMotion();
   const me = useMdMe();
   const status = useQuery({ queryKey: ["/api/md", "assistant", "status"], queryFn: getStatus, staleTime: 30_000 });
@@ -264,12 +264,16 @@ export default function AssistantPanel() {
             <p
               className="mt-1 flex min-w-0"
               data-testid="assistant-subtitle"
-              title="Read-only, names protected, and every answer explains how it was reached"
+              title={
+                status.data?.privacyMode === false
+                  ? "Read-only. It answers by employee name and code, so names and codes are sent to Google Gemini; phone numbers, addresses, bank and government ids never are. Hiding names: Account Management, MD profile."
+                  : "Read-only, and employee names are hidden from Google Gemini"
+              }
             >
               {status.data?.privacyMode === false ? (
-                <span className="md-chip md-chip-warning min-w-0 max-w-full">
+                <span className="md-chip min-w-0 max-w-full">
                   <ShieldOff size={11} className="shrink-0" />
-                  <span className="truncate">Names are not hidden from Gemini</span>
+                  <span className="truncate">Read-only · uses names</span>
                 </span>
               ) : (
                 <span className="md-chip md-chip-success min-w-0 max-w-full">
@@ -440,11 +444,6 @@ export default function AssistantPanel() {
                   speechSupported={speech.supported}
                   onSpeak={onSpeak}
                   onStopSpeaking={speech.stop}
-                  onFollowUp={(text) => submit(text)}
-                  onOpenPage={(path) => {
-                    speech.stop();
-                    navigate(path);
-                  }}
                   onRetry={() => lastQuestion.current && submit(lastQuestion.current)}
                 />
               ))}
