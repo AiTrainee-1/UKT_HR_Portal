@@ -386,7 +386,7 @@ def _production_late_days(emp: Employee, records, ps, prod_config=None) -> tuple
             config = ProductionShiftConfig.get()
         ruleset = psr.rules_for_day(config, rec.date)
         if ruleset is not None:
-            judged = psr.judge_day(ruleset, rec.date, rec.first_punch, rec.last_punch)
+            judged = psr.judge_day(ruleset, rec.date, rec.first_punch, rec.last_punch, emp.id)
             if judged.group is not None:
                 # The day record's own verdict, with the rule that produced it.
                 parts = []
@@ -1040,6 +1040,7 @@ def _generate_production_payroll(
     pay_cycle: str | None = None,
     prod_config=None,
     pay_ranges=None,
+    replace_drafts: bool = False,
 ) -> dict:
     """
     Shift-based payroll for production employees -completely separate from
@@ -1079,6 +1080,17 @@ def _generate_production_payroll(
     (owner 2026-11-05/06, as on Staff Payroll): only the figures are worked
     out again.
     """
+    from . import production_period_workflow as period_workflow
+
+    # A period finalized with Payroll Done is locked for good, and a salary marked Paid is never worked out again (owner
+    # 2026-11-16, production_period_workflow.py): checked here too, whoever calls the engine.
+    if pay_cycle and period_workflow.is_locked(pay_cycle, period_start, period_end):
+        raise PayrollSkip(period_workflow.locked_message(pay_cycle, period_start, period_end))
+    if Payroll.objects.filter(
+        employee=emp, period_start=period_start, period_end=period_end, payment_status=Payroll.PAYMENT_PAID
+    ).exists():
+        raise PayrollSkip("This salary is already marked Paid: a paid salary is never worked out again.")
+
     if not emp.salary_per_shift or emp.salary_per_shift <= 0:
         raise PayrollSkip("No Salary Per Shift set on this employee's profile")
 
@@ -1094,6 +1106,20 @@ def _generate_production_payroll(
         plan = coverage.PeriodPlan.plain(period_start, period_end, pay_cycle)
     if plan.refused:
         raise PayrollSkip(plan.refusal_reason())
+    # DRAFT payrolls of other periods that share a day with this one (owner 2026-11-16, production_drafts.py): replaced
+    # (deleted, their advance repayments released) only when the run is told to; the plan already leaves them out, so the
+    # period is never worked out while they still pay the same days
+    replaced = {"rows": [], "days": [], "carryAdded": None}
+    if plan.drafts:
+        if not replace_drafts:
+            raise PayrollSkip(plan.drafts_reason())
+        from .production_drafts import DraftReplaceRefused
+        from .production_drafts import replace_drafts as _replace_drafts
+
+        try:
+            replaced = _replace_drafts(emp, [d.payroll_id for d in plan.drafts], pay_cycle)
+        except DraftReplaceRefused as exc:
+            raise PayrollSkip(str(exc)) from None
     paid = plan.paid_ranges
     date_from, date_to = paid[0][0], paid[-1][1]
     records = []
@@ -1201,6 +1227,10 @@ def _generate_production_payroll(
         "payRanges": coverage.ranges_json(plan.pay_ranges),
         "alreadyPaid": [part.json() for part in plan.already_paid],
         "catchUp": [part.json() for part in plan.catch_up],
+        # the draft payslips of other periods this run replaced (deleted) before working the period out
+        "replacedDrafts": [
+            {k: v for k, v in row.items() if k != "releasedRepayments"} for row in replaced["rows"]
+        ],
         "salaryPerShift": float(salary_per_shift),
         "days": days_detail,
         "summary": {
@@ -1308,7 +1338,16 @@ def _generate_production_payroll(
     if advance_details:
         _mark_repayments_processed(advance_details)
 
-    return {"payroll": payroll, "slip": slip}
+    # A worker who joined during the period, or whose first period on this cycle this is after moving here from another
+    # cycle, is parked in the period's New Joiners until HR adds them (owner 2026-11-16); "added" survives regeneration.
+    # A replaced draft of this same cycle that HR had already added to the payroll hands "added" on to its replacement.
+    if replaced["carryAdded"] and payroll.added_to_payroll_at is None:
+        added_at, added_by = replaced["carryAdded"]
+        Payroll.objects.filter(pk=payroll.pk).update(added_to_payroll_at=added_at, added_to_payroll_by=added_by)
+        payroll.added_to_payroll_at, payroll.added_to_payroll_by = added_at, added_by
+    period_workflow.park_if_needed(payroll, emp, pay_cycle)
+
+    return {"payroll": payroll, "slip": slip, "replaced": replaced}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1403,8 +1442,10 @@ def _payroll_json(p: Payroll, employee_name: str | None = None, holidays_by_mont
         "notes": p.notes,
         "createdAt": p.created_at.isoformat() if p.created_at else None,
         # Staff month workflow (2026-11-10): on hold, parked new joiner, paid as the employee sees it, released after the
-        # lock. Never figures; always false / "not_paid" / null on production rows.
+        # lock. Never figures. Production (2026-11-16) uses the parked new joiner and the payment status too.
         **month_workflow.payroll_flags(p),
+        # production only: why the row is parked in the period's New Joiners ("new_joiner" | "transfer"), else null
+        "parkedReason": p.parked_reason or None,
     }
 
 
@@ -1889,6 +1930,92 @@ def generate_payroll_progress(request: Request) -> Response:
 #  Payroll detail PATCH (status / bonus / deductions)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _money_field(data, key: str) -> Decimal | None:
+    """A bonus / deductions amount from a PATCH body: a finite number of at most two decimals, never negative. Raises
+    ValueError with a plain message."""
+    raw = data.get(key)
+    try:
+        value = Decimal(str(raw))
+    except Exception:
+        raise ValueError(f"{key} must be a number") from None
+    if not value.is_finite() or value < 0:
+        raise ValueError(f"{key} must be a number that is not negative")
+    if value != value.quantize(Decimal("0.01")) or value > Decimal("99999999"):
+        raise ValueError(f"{key} must be an amount in rupees with at most two decimals")
+    return value
+
+
+def patch_production_payroll(request: Request, p: Payroll) -> Response:
+    """A change to one PRODUCTION payroll (owner 2026-11-16), from either PATCH /api/payroll/production/<id> or the staff
+    route. Production Payroll rights decide, not the staff payroll's: Mark as Cleared / back to pending needs Production
+    Payroll edit and the account's "Mark a salary as cleared" switch; bonus, deductions and notes need
+    production_payroll.adjust. A finalized period and a salary marked Paid are never changed. The deductions can never
+    drop below what PF, ESI, TDS and the advance already took (that would make the statement's "Others" negative), and
+    the payslip (SalarySlip) follows the change so the payslip and the statement always agree."""
+    from . import production_period_workflow as period_workflow
+
+    if period_workflow.level(request, period_workflow.KEY_SECTION) != "edit":
+        return _error("You do not have access to this section.", 403)
+    if period_workflow.row_locked(p):
+        return _error(period_workflow.row_locked_message(p), 409)
+    if p.payment_status == Payroll.PAYMENT_PAID:
+        return _error("This salary is already marked Paid: it can no longer be changed.", 409)
+    d = request.data
+    status_change = "status" in d and d["status"] != p.status
+    if "status" in d and d["status"] not in (Payroll.STATUS_PENDING, Payroll.STATUS_PAID):
+        return _error("status must be pending or paid (Cleared)")
+    if status_change and not period_workflow.may_clear(request):
+        return _error(
+            "Your login may not mark a salary as cleared (Account Management -> Approvals -> Mark a salary as cleared).",
+            403,
+        )
+    adjusting = any(k in d for k in ("bonus", "deductions", "notes"))
+    if adjusting and not period_workflow.can(request, period_workflow.KEY_ADJUST):
+        return _error("Your role may not adjust production payroll (bonus, deductions or notes).", 403)
+    try:
+        bonus = _money_field(d, "bonus") if "bonus" in d else p.bonus
+        deductions = _money_field(d, "deductions") if "deductions" in d else p.deductions
+    except ValueError as exc:
+        return _error(str(exc))
+    slip = SalarySlip.objects.filter(
+        employee_id=p.employee_id, period_start=p.period_start, period_end=p.period_end
+    ).first()
+    if "deductions" in d and slip is not None:
+        floor = _d2(
+            Decimal(slip.pf_deduction or 0)
+            + Decimal(slip.esi_deduction or 0)
+            + Decimal(p.tds_deduction or 0)
+            + Decimal(slip.advance_deduction or 0)
+        )
+        if deductions < floor:
+            return _error(
+                f"Deductions cannot be less than Rs {floor} (PF, ESI, TDS and the advance already deducted from this pay)."
+            )
+    if "status" in d:
+        p.status = d["status"]
+    p.bonus = bonus
+    p.deductions = deductions
+    if "notes" in d:
+        p.notes = d["notes"]
+    p.final_salary = round_up_rupee(p.gross_salary + p.ot_amount + p.bonus - p.deductions)
+    with transaction.atomic():
+        p.save()
+        if slip is not None and ("bonus" in d or "deductions" in d):
+            slip.bonuses = p.bonus
+            slip.total_deductions = p.deductions
+            slip.other_deductions = _d2(
+                p.deductions
+                - Decimal(slip.pf_deduction or 0)
+                - Decimal(slip.esi_deduction or 0)
+                - Decimal(p.tds_deduction or 0)
+                - Decimal(slip.advance_deduction or 0)
+            )
+            slip.net_salary = p.final_salary
+            slip.save(update_fields=["bonuses", "total_deductions", "other_deductions", "net_salary"])
+    emp = p.employee
+    return Response(_payroll_json(p, f"{emp.first_name} {emp.last_name}" if emp else None))
+
+
 @api_view(["PATCH"])
 @require_hr
 def payroll_detail(request: Request, pk: int) -> Response:
@@ -1897,6 +2024,9 @@ def payroll_detail(request: Request, pk: int) -> Response:
     ).filter(pk=pk).first()
     if not p:
         return _error("Not found", 404)
+    if p.period_start is not None and p.salary_mode == Payroll.SALARY_MODE_SHIFT:
+        # a production period row follows the Production Payroll rights and its period's lock (2026-11-16), also here
+        return patch_production_payroll(request, p)
     # a staff month finalized with Payroll Done is locked: no bonus / deduction change, no Mark as Cleared (2026-11-10)
     if month_workflow.is_staff_month_row(p) and month_workflow.is_locked(p.month, p.year):
         return _error(month_workflow.locked_message(p.month, p.year), 409)
@@ -1939,7 +2069,17 @@ def payroll_breakdown(request: Request, pk: int) -> Response:
     ).filter(pk=pk).first()
     if not p:
         return _error("Not found", 404)
+    if p.period_start is not None:
+        # a production row is Production Payroll's (2026-11-16): its rights decide, also on this route
+        from . import production_period_workflow as period_workflow
 
+        if period_workflow.level(request, period_workflow.KEY_SECTION) == "hidden":
+            return _error("You do not have access to this section.", 403)
+    return breakdown_response(p)
+
+
+def breakdown_response(p: Payroll) -> Response:
+    """The breakdown of one payroll (staff or production) as GET .../breakdown answers it."""
     if p.period_start:
         # New-style, configurable-period production row -period_start/end
         # is the identity, not month/year/week_number (week_number is null).

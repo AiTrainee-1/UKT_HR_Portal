@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { ORG_CATEGORY_LABEL, type OrgCategory } from "@/lib/departments";
 import { cn } from "@/lib/utils";
 import type { Person } from "./api";
 import { NO_PEOPLE_FILTERS, filterPeople, plural, summarizePeople, type PeopleFilters } from "./logic";
@@ -27,6 +28,8 @@ type Props = {
   onAssign: () => void;
   onRemove: (p: Person) => void;
   removingId: number | null;
+  /** Staff or Production: the department / designation is of this kind, so its people are too. */
+  category?: OrgCategory;
 };
 
 /** Who is in a department or holds a designation: staff and production told apart, searchable, inactive on request. */
@@ -44,6 +47,7 @@ export default function PeopleDrawer({
   onAssign,
   onRemove,
   removingId,
+  category,
 }: Props) {
   const [filters, setFilters] = useState<PeopleFilters>(NO_PEOPLE_FILTERS);
   const all = useMemo(() => people ?? [], [people]);
@@ -51,12 +55,30 @@ export default function PeopleDrawer({
   const shown = useMemo(() => filterPeople(all, filters), [all, filters]);
   const set = (patch: Partial<PeopleFilters>) => setFilters((f) => ({ ...f, ...patch }));
   const narrowed = filters.query.trim() !== "" || filters.type !== "all" || filters.status !== "active";
+  // One kind only: no Staff / Production pills, unless somebody of the other kind is there (from before the split).
+  const otherKind = category === "production" ? summary.staff : category === "staff" ? summary.production : 0;
+  const typePills = !category || otherKind > 0;
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-lg" data-testid="people-drawer">
         <SheetHeader className="space-y-2 border-b p-5 pr-12 text-left">
-          <SheetTitle className="text-xl font-black text-gray-900">{title}</SheetTitle>
+          <SheetTitle className="text-xl font-black text-gray-900">
+            {title}
+            {category && (
+              <span
+                className={cn(
+                  "ml-2 inline-flex translate-y-[-2px] items-center rounded-full border px-2 py-0.5 align-middle text-[11px] font-semibold",
+                  category === "production"
+                    ? "border-amber-200 bg-amber-50 text-amber-800"
+                    : "border-blue-200 bg-blue-50 text-blue-700",
+                )}
+                data-testid="drawer-category"
+              >
+                {ORG_CATEGORY_LABEL[category]}
+              </span>
+            )}
+          </SheetTitle>
           <SheetDescription asChild>
             <div className="flex flex-wrap items-center gap-1.5 text-sm">{subtitle}</div>
           </SheetDescription>
@@ -97,16 +119,18 @@ export default function PeopleDrawer({
             )}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <PillTabs
-              size="sm"
-              items={[
-                { value: "all", label: "All" },
-                { value: "staff", label: "Staff", count: summary.staff, color: "#2563eb" },
-                { value: "production", label: "Production", count: summary.production, color: "#d97706" },
-              ]}
-              value={filters.type}
-              onChange={(v) => set({ type: v as PeopleFilters["type"] })}
-            />
+            {typePills && (
+              <PillTabs
+                size="sm"
+                items={[
+                  { value: "all", label: "All" },
+                  { value: "staff", label: "Staff", count: summary.staff, color: "#2563eb" },
+                  { value: "production", label: "Production", count: summary.production, color: "#d97706" },
+                ]}
+                value={filters.type}
+                onChange={(v) => set({ type: v as PeopleFilters["type"] })}
+              />
+            )}
             <PillTabs
               size="sm"
               items={[

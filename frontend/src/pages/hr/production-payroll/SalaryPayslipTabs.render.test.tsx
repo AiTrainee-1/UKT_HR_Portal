@@ -256,7 +256,7 @@ describe("the row actions of the statement", () => {
     await waitFor(() => world.writes.length === 1, "the update");
     expect(world.writes[0]).toMatchObject({
       method: "PATCH",
-      url: "/api/payroll/11",
+      url: "/api/payroll/production/11",
       body: { bonus: 100, deductions: 500 },
     });
     expect(h.toast).toHaveBeenCalledWith({ title: "Adjustment applied successfully" });
@@ -296,7 +296,11 @@ describe("the row actions of the statement", () => {
     expect(text(q("pcp-salary-pay-11"))).toBe("Mark as Cleared");
     click(must("pcp-salary-pay-11"));
     await waitFor(() => world.writes.length === 1, "the update");
-    expect(world.writes[0]).toMatchObject({ method: "PATCH", url: "/api/payroll/11", body: { status: "paid" } });
+    expect(world.writes[0]).toMatchObject({
+      method: "PATCH",
+      url: "/api/payroll/production/11",
+      body: { status: "paid" },
+    });
     await waitFor(() => !q("pcp-salary-pay-11"), "the button to go");
     expect(text(q("statement-chip-paid"))).toBe("1 cleared");
   });

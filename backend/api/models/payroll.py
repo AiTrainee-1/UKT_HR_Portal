@@ -367,6 +367,12 @@ class Payroll(models.Model):
     new_joiner_parked = models.BooleanField(default=False, db_default=False, db_column="new_joiner_parked")
     added_to_payroll_at = models.DateTimeField(null=True, blank=True, db_column="added_to_payroll_at")
     added_to_payroll_by = models.TextField(null=True, blank=True, db_column="added_to_payroll_by")
+    # Production (owner 2026-11-16): a production payroll is parked in the period's "New Joiners" section either because
+    # the worker joined during the period or because they moved here from another pay cycle (see
+    # ProductionCycleTransfer). Empty for staff and for every payroll that is not parked.
+    PARKED_NEW_JOINER = "new_joiner"
+    PARKED_TRANSFER = "transfer"
+    parked_reason = models.TextField(blank=True, default="", db_default="", db_column="parked_reason")
     # Paid or not, as the EMPLOYEE sees it (mobile app, Employee Web App). Only "Mark as Paid" of the month, or the
     # release-and-pay of a held / parked employee, sets it. `status` = "paid" is HR's "Cleared" (verified), not paid.
     PAYMENT_NOT_PAID = "not_paid"
@@ -417,6 +423,66 @@ class PayrollMonthClose(models.Model):
     class Meta:
         db_table = "payroll_month_closes"
         constraints = [models.UniqueConstraint(fields=["month", "year"], name="uniq_payroll_month_close")]
+
+
+class ProductionPeriodClose(models.Model):
+    """One production pay period's close (owner 2026-11-16): the Staff month workflow for production, per pay period of a
+    cycle (Weekly / BiWeekly / Monthly). "Payroll Done" (finalized) LOCKS the period for good (no generate, regenerate,
+    adjust or Cleared on it, no reopen); "Mark as Paid" sets every included payroll of the period to paid. One row per
+    cycle period, company-wide, made on finalization. The snapshot records what the period looked like when it was
+    finalized."""
+
+    cycle = models.TextField(choices=CYCLE_CHOICES, db_column="cycle")
+    period_start = models.DateField(db_column="period_start")
+    period_end = models.DateField(db_column="period_end")
+    finalized_at = models.DateTimeField(db_column="finalized_at")
+    finalized_by = models.TextField(blank=True, default="", db_column="finalized_by")
+    paid_at = models.DateTimeField(null=True, blank=True, db_column="paid_at")
+    paid_by = models.TextField(blank=True, default="", db_column="paid_by")
+    # the day the money was actually paid, as HR enters it on "Mark as Paid" (paid_at is when HR pressed the button)
+    paid_on = models.DateField(null=True, blank=True, db_column="paid_on")
+    first_generated_at = models.DateTimeField(null=True, blank=True, db_column="first_generated_at")
+    last_computed_at = models.DateTimeField(null=True, blank=True, db_column="last_computed_at")
+    snapshot = models.JSONField(default=dict, blank=True, db_column="snapshot")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "production_period_closes"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["cycle", "period_start", "period_end"], name="uniq_production_period_close"
+            )
+        ]
+
+
+class ProductionCycleTransfer(models.Model):
+    """A production worker moved from one pay cycle to another (owner 2026-11-16), or into / out of having none. Written
+    by the assignment on the Production Employees page; read by the cycle pages (the "Moved out" tab of the old cycle for
+    its next two generated periods, and the "New Joiners" section of the new one) and by the payroll engine, which pays
+    the new cycle only for days no payroll has paid (production_coverage.py). Never edited after it is written."""
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="production_cycle_transfers"
+    )
+    # None = the worker had / has no cycle (Unassigned)
+    from_cycle = models.TextField(choices=CYCLE_CHOICES, null=True, blank=True, db_column="from_cycle")
+    to_cycle = models.TextField(choices=CYCLE_CHOICES, null=True, blank=True, db_column="to_cycle")
+    changed_at = models.DateTimeField(db_column="changed_at")
+    changed_by = models.TextField(blank=True, default="", db_column="changed_by")
+    reason = models.TextField(blank=True, default="", db_column="reason")
+    # the last day any payroll had paid when the move was made (None: never paid), and the first day the new cycle pays
+    last_paid_through = models.DateField(null=True, blank=True, db_column="last_paid_through")
+    pays_from = models.DateField(null=True, blank=True, db_column="pays_from")
+    # what the old cycle had paid this worker (count of payrolls, net total) at the time of the move
+    paid_periods = models.IntegerField(default=0, db_column="paid_periods")
+    paid_net = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"), db_column="paid_net")
+
+    class Meta:
+        db_table = "production_cycle_transfers"
+        indexes = [
+            models.Index(fields=["from_cycle", "changed_at"], name="idx_prod_transfer_from"),
+            models.Index(fields=["to_cycle", "changed_at"], name="idx_prod_transfer_to"),
+        ]
 
 
 def _default_late_deduction_slabs() -> list[dict]:
@@ -1607,12 +1673,42 @@ class ProductionShiftGroup(models.Model):
     main_out_next_day = models.BooleanField(default=False, db_column="main_out_next_day")
     enabled = models.BooleanField(default=True)
     order = models.IntegerField(default=0)
+    # A SPECIAL shift (owner 2026-11-16): made on Manage Shifts for a few workers, never picked by the first punch for
+    # anyone else. Only the workers on a ProductionSpecialShiftAssignment covering a date are judged AND paid by it that
+    # day (on the days it applies to); everyone else, and those workers on its other days, use the default groups that
+    # Settings -> Production Shifts edits. db_default: older rows are default groups.
+    is_special = models.BooleanField(default=False, db_default=False, db_column="is_special")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
     class Meta:
         db_table = "production_shift_groups"
         ordering = ["order", "id"]
+
+
+class ProductionSpecialShiftAssignment(models.Model):
+    """
+    A production worker on a special shift (a ProductionShiftGroup with is_special) from effective_from to effective_to
+    (both included; no end = until further notice). One worker has at most one covering a date (checked by the API).
+    Ending one keeps its history: the days it covered stay judged by it.
+    """
+    employee = models.ForeignKey(
+        "Employee", on_delete=models.CASCADE, db_column="employee_id", related_name="production_special_shifts",
+    )
+    group = models.ForeignKey(
+        ProductionShiftGroup, on_delete=models.PROTECT, db_column="group_id", related_name="special_assignments",
+    )
+    effective_from = models.DateField(db_column="effective_from")
+    effective_to = models.DateField(null=True, blank=True, db_column="effective_to")
+    note = models.TextField(blank=True, default="")
+    created_by = models.TextField(blank=True, default="", db_column="created_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "production_special_shift_assignments"
+        ordering = ["employee_id", "effective_from"]
+        indexes = [models.Index(fields=["employee", "effective_from"], name="prod_special_emp_from")]
 
 
 class ProductionShiftRule(models.Model):

@@ -45,6 +45,7 @@ def _missing_punch_dict(r: MissingPunchRequest, cfg: approval.Config | None = No
         "employeeId": emp.id,
         "employeeCode": emp.employee_code,
         "employeeName": f"{emp.first_name} {emp.last_name}",
+        "employmentType": emp.employment_type,
         "department": emp.department.name if emp.department_id and emp.department else None,
         "designation": emp.designation.title if emp.designation_id and emp.designation else None,
         "branchId": emp.branch_id,

@@ -7,6 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WaitingChip } from "@/components/ApprovalTrail";
 import { explainsWaiting, type ApprovalProgress } from "@/lib/approval-workflow";
+import type { OrgChoice } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { REQUEST_STATUS_TONE } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { ALL, MONTHS, shiftMonth, type Option } from "./logic";
@@ -245,11 +247,16 @@ export function FilterSelect({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={ALL}>{allLabel}</SelectItem>
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
+        {options.length > 0 && options.every((o) => o.category) ? (
+          // departments: both kinds sit under Staff / Production headings (two CUTTINGs told apart)
+          <OrgSelectItems options={options as OrgChoice[]} />
+        ) : (
+          options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))
+        )}
       </SelectContent>
     </Select>
   );

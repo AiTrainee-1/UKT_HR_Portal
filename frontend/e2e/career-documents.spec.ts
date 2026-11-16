@@ -58,8 +58,8 @@ async function seed(page: Page) {
       phone: "9000000077",
       employmentType: kind,
       branchId,
-      departmentId: dept.id,
-      designationId: operator.id,
+      // CAR Dept and its designations are Staff ones: only staff can be in them (production has its own)
+      ...(kind === "staff" ? { departmentId: dept.id, designationId: operator.id } : {}),
       salaryType: "monthly",
       joinDate,
       ...(kind === "staff" ? { salaryAmount: 20000 } : { salaryPerShift: 400 }),

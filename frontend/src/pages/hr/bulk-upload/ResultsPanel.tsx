@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { ROW_STATUS_META, ROW_STATUS_ORDER } from "./config";
+import { CATEGORIES, ROW_STATUS_META, ROW_STATUS_ORDER } from "./config";
 import { downloadResultReport } from "./excel";
 import { countsOfRows, filterRows, problemCount, type RowFilter } from "./logic";
 import type { BulkResult, RowReport, RowStatus, UploadContext } from "./types";
@@ -198,12 +198,14 @@ export default function ResultsPanel({ result, context }: Props) {
           <ul className="space-y-1 text-xs text-emerald-900">
             {(result.newDepartments ?? []).map((d) => (
               <li key={`d-${d.name}`} data-testid="bulk-new-department">
-                Department <span className="font-semibold">{d.name}</span> · {d.rows} employee{d.rows === 1 ? "" : "s"}
+                {/* staff and production have departments of their own: one is made in the section's kind */}
+                {CATEGORIES[context.category].label} department <span className="font-semibold">{d.name}</span> ·{" "}
+                {d.rows} employee{d.rows === 1 ? "" : "s"}
               </li>
             ))}
             {(result.newDesignations ?? []).map((d) => (
               <li key={`g-${d.department ?? ""}-${d.title}`} data-testid="bulk-new-designation">
-                Designation <span className="font-semibold">{d.title}</span>
+                {CATEGORIES[context.category].label} designation <span className="font-semibold">{d.title}</span>
                 {d.department ? ` in ${d.department}` : ""} · {d.rows} employee{d.rows === 1 ? "" : "s"}
               </li>
             ))}

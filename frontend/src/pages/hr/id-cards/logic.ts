@@ -2,6 +2,14 @@
 
 import type { Employee } from "@/lib/api-client/generated/api.schemas";
 import type { IdCardData } from "@/lib/api-client/custom-hooks";
+import {
+  categoryForEmploymentType,
+  departmentOptions,
+  inCategory,
+  keepIfOffered,
+  type OrgDepartment,
+  type OrgOption,
+} from "@/lib/departments";
 
 export type TypeFilter = "all" | "staff" | "production";
 /** What is known about an employee's card details: every card shows the photo, blood group and an emergency number. */
@@ -80,19 +88,41 @@ export function filterEmployees(employees: Employee[], f: PickerFilters): Employ
 
 export type Option = { value: string; label: string };
 
-/** The branches and departments that occur among the employees (scoped to what the viewer may see), for the filters. */
-export function facetsOf(employees: Employee[]): { branches: Option[]; departments: Option[] } {
+/**
+ * The branches and departments that occur among the employees (scoped to what the viewer may see), for the filters.
+ * A department carries its Staff / Production kind (that of the people in it: staff and production have departments
+ * of their own), so the filter can offer one kind or group both (lib/departments.ts).
+ */
+export function facetsOf(employees: Employee[]): { branches: Option[]; departments: OrgOption[] } {
   const branches = new Map<number, string>();
-  const departments = new Map<number, string>();
+  const departments = new Map<number, OrgDepartment>();
   for (const e of employees) {
     if (e.branchId != null && e.branchName) branches.set(e.branchId, e.branchName);
-    if (e.departmentId != null && e.departmentName) departments.set(e.departmentId, e.departmentName);
+    if (e.departmentId != null && e.departmentName && !departments.has(e.departmentId)) {
+      departments.set(e.departmentId, {
+        id: e.departmentId,
+        name: e.departmentName,
+        category: categoryForEmploymentType(e.employmentType) ?? "staff",
+        branchId: e.branchId ?? null,
+        branchName: e.branchName ?? null,
+      });
+    }
   }
   const toOptions = (m: Map<number, string>) =>
     [...m]
       .map(([id, label]) => ({ value: String(id), label }))
       .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
-  return { branches: toOptions(branches), departments: toOptions(departments) };
+  return { branches: toOptions(branches), departments: departmentOptions([...departments.values()]) };
+}
+
+/** The department choices of the Staff / Production pill ("all" = both, shown under the two headings). */
+export function departmentsForType(departments: OrgOption[], type: TypeFilter): OrgOption[] {
+  return type === "all" ? departments : inCategory(departments, type);
+}
+
+/** The filters with a new type: a picked department of the other kind is dropped. */
+export function withType(f: PickerFilters, type: TypeFilter, departments: OrgOption[]): PickerFilters {
+  return { ...f, type, department: keepIfOffered(f.department, departmentsForType(departments, type), "all") };
 }
 
 export type PickerSummary = {

@@ -402,19 +402,22 @@ test("the controls can be reached with the keyboard and say what they are", asyn
   await expect(page.getByTestId("save-bar")).toHaveAttribute("data-dirty", "false");
 });
 
-test("Manage Shifts shows a read-only summary of the rules instead of the old editor, with a link to Settings", async ({
+test("Manage Shifts shows the Settings shift groups as the default production shifts, with a link to Settings", async ({
   page,
 }) => {
   await ready(page);
   await page.goto("/hr/shifts");
   await page.getByTestId("type-chip-production").click();
-  const summary = page.getByTestId("production-rules-summary");
-  await expect(summary).toBeVisible();
-  await expect(summary).toContainText("Production shift rules");
-  await expect(page.getByTestId("production-rules-summary-groups")).toContainText(/day/i);
+  // owner 2026-11-16: the Settings groups ARE the production shifts (detection timings, Earned Shift table), no template
+  const panel = page.getByTestId("production-shifts-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('[data-testid^="production-default-"][data-testid$="-name"]').first()).toContainText(
+    /day/i,
+  );
+  await expect(panel.locator('[data-testid$="-detections"]').first()).toContainText("On time until");
   await expect(page.getByRole("button", { name: "Save Punch Times" })).toHaveCount(0);
   await expect(page.getByText("Shift-Value Segments")).toHaveCount(0);
-  await page.getByTestId("production-rules-edit-link").click();
+  await page.getByTestId("production-shifts-settings-link").click();
   await expect(page).toHaveURL(/\/hr\/settings\?tab=production_shifts/);
   await expect(page.getByTestId("production-shifts-tab")).toBeVisible();
 });

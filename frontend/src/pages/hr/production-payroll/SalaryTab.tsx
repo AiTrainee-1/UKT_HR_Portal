@@ -11,13 +11,20 @@ import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { SalaryStatementPanel } from "@/components/payroll/statement";
 import { Button } from "@/components/ui/button";
 import { canApprove, useAuth } from "@/contexts/AuthContext";
-import { useListProductionPayroll, type CyclePeriod, type PayCycle } from "@/lib/api-client/custom-hooks";
+import {
+  useListProductionPayroll,
+  useProductionPeriodWorkflow,
+  type CyclePeriod,
+  type PayCycle,
+} from "@/lib/api-client/custom-hooks";
+import { useLevel } from "@/lib/tab-access";
 import { formatPeriod, productionScope, type UrlSetter } from "./logic";
 
 /**
  * Salary tab of a cycle page: the period's Production Salary Statement in the printed statement's format (departments,
  * running serial numbers, shift columns, totals), with Excel / PDF / Print. Every row opens the payroll's details page,
- * can be adjusted (bonus and deductions) and, while pending, marked paid.
+ * can be adjusted (bonus and deductions) and, while pending, marked Cleared - until the period is finalized (Payroll
+ * Done, 2026-11-16): then nothing on it changes. Workers waiting in New Joiners are not on the statement.
  */
 export function SalaryTab({
   cycle,
@@ -32,10 +39,16 @@ export function SalaryTab({
 }) {
   const [, navigate] = useLocation();
   const { user } = useAuth();
+  const level = useLevel();
+  // the period's workflow: a finalized period (Payroll Done) is locked; the status says what this login may do
+  const workflow = useProductionPeriodWorkflow(cycle, period);
+  const locked = !!workflow.data?.locked;
   // Mark as Cleared is an approval of its own (payroll_mark_cleared)
-  const mayMarkCleared = canApprove(user, "payroll_mark_cleared");
+  const mayMarkCleared = !locked && (workflow.data?.can.markCleared ?? canApprove(user, "payroll_mark_cleared"));
+  // Adjust (bonus / deductions / notes) is Production Payroll -> Adjust
+  const mayAdjust = !locked && level("production_payroll.adjust") !== "hidden";
   const [adjust, setAdjust] = useState<AdjustTarget | null>(null);
-  const { markPaid, markingId } = useMarkPaid();
+  const { markPaid, markingId } = useMarkPaid("production");
   const refresh = useRefreshPayroll();
 
   const scope = useMemo(() => productionScope(cycle, period), [cycle, period]);
@@ -45,7 +58,6 @@ export function SalaryTab({
     cycle,
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
-    limit: 500,
   });
   const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
   const runById = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs]);
@@ -94,18 +106,20 @@ export function SalaryTab({
           const name = run.employeeName ?? run.employeeCode ?? "employee";
           return (
             <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-amber-600 hover:text-amber-800"
-                aria-label={`Edit the bonus and deductions of ${name}`}
-                title="Edit bonus and deductions"
-                onClick={() => setAdjust(adjustTargetFromRun(run, periodLabel))}
-                data-testid={`pcp-salary-adjust-${run.id}`}
-              >
-                <Pencil size={13} />
-              </Button>
+              {mayAdjust && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-amber-600 hover:text-amber-800"
+                  aria-label={`Edit the bonus and deductions of ${name}`}
+                  title="Edit bonus and deductions"
+                  onClick={() => setAdjust(adjustTargetFromRun(run, periodLabel))}
+                  data-testid={`pcp-salary-adjust-${run.id}`}
+                >
+                  <Pencil size={13} />
+                </Button>
+              )}
               {run.status === "pending" && mayMarkCleared && (
                 <Button
                   type="button"
@@ -129,6 +143,7 @@ export function SalaryTab({
       <AdjustPayrollDialog
         target={adjust}
         accent="amber"
+        kind="production"
         onClose={() => setAdjust(null)}
         onApplied={() => void refresh({ skipCheck: false })}
       />

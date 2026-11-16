@@ -9,11 +9,13 @@ import { exportElementToFile } from "@/lib/exportUtils";
 import { ALL } from "../leave/logic";
 import { Chip, EmptyState, ErrorState, ListSkeleton, ResultLine, StatCard } from "../leave/parts";
 import DailyFiltersBar, { departmentParam, type DailyFilters } from "./DailyFilters";
+import { useKindText, useReportLogKind } from "./kind";
 import ExportBar, { type ExportFormat } from "./ExportBar";
 import LateImageSheet from "./LateImageSheet";
 import LateTable, { LATE_BY_HELP, SeverityLegend } from "./LateTable";
 import {
   DEFAULT_SORT,
+  LATE_REPORT_TITLE,
   clock,
   filterNote,
   formatMinutes,
@@ -51,6 +53,10 @@ export default function LateTab({
 }) {
   const { toast } = useToast();
   const company = useCompany();
+  const kind = useReportLogKind();
+  const words = useKindText();
+  // the downloads say whose list it is: "Production Daily Late Report" on that page, "Daily Late Report" as before
+  const reportTitle = `${words.titlePrefix}${LATE_REPORT_TITLE}`;
   const { data: departments } = useListDepartments();
   const [sort, setSort] = useState<LateSort>(DEFAULT_SORT);
   // the report is made unit by unit: on, the table has a section per unit (HO first) with the longest delay first inside it
@@ -60,16 +66,20 @@ export default function LateTab({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const imageRef = useRef<HTMLDivElement>(null);
 
-  const query = useAttendanceReportDaily({
-    date: filters.date,
-    department: departmentParam(filters.department),
-    search: filters.search || undefined,
-  });
+  const query = useAttendanceReportDaily(
+    {
+      date: filters.date,
+      department: departmentParam(filters.department),
+      search: filters.search || undefined,
+    },
+    true,
+    kind,
+  );
 
   // how many were late on the date whatever the department and search say, for "Showing 3 of 8 late employees" (the same
   // request as the list itself while nothing narrows it, so it costs nothing then)
   const narrowed = filters.department !== ALL || filters.search.trim() !== "";
-  const wholeDay = useAttendanceReportDaily({ date: filters.date }, narrowed);
+  const wholeDay = useAttendanceReportDaily({ date: filters.date }, narrowed, kind);
   const lateOnTheDay = narrowed ? (wholeDay.data ? lateRows(wholeDay.data.rows).length : null) : null;
 
   const everyone = useMemo(() => lateEntries(query.data?.rows ?? []), [query.data]);
@@ -107,6 +117,7 @@ export default function LateTab({
     logoDataUrl: company.excel.logoDataUrl,
     filter: [filterNote(departmentName, filters.search), selectionNote].filter(Boolean).join("; "),
     now: new Date(),
+    title: reportTitle,
   };
 
   // Grouped, only the minutes column sorts (inside each unit); a click on any other column gives a flat list sorted across all
@@ -139,7 +150,7 @@ export default function LateTab({
       } else {
         // the picture is taken from the off-screen sheet below, as tall as the list is long
         if (!imageRef.current) throw new Error("The report is not on screen");
-        await exportElementToFile(imageRef.current, lateFileStem(filters.date), "png");
+        await exportElementToFile(imageRef.current, lateFileStem(filters.date, reportTitle), "png");
       }
     } catch {
       toast({
@@ -157,15 +168,15 @@ export default function LateTab({
         <StatCard
           label={`Late on ${niceDate}`}
           value={hasData ? total : "-"}
-          sub="Staff marked late by the attendance engine"
+          sub={`${words.people} marked late by the attendance engine`}
           icon={AlarmClock}
           tone="bg-amber-50 text-amber-800"
           testId="figure-late"
         />
         <StatCard
-          label="Staff checked"
+          label={`${words.people} checked`}
           value={hasData ? (query.data?.count ?? 0) : "-"}
-          sub="Active staff on the roll"
+          sub={kind === "production" ? "Active production employees on the roll" : "Active staff on the roll"}
           icon={Users}
           tone="bg-blue-50 text-blue-800"
           testId="figure-checked"
@@ -268,8 +279,8 @@ export default function LateTab({
           <p className="flex items-start gap-1.5 text-xs text-gray-500" data-testid="late-note">
             <Info size={14} className="mt-0.5 shrink-0 text-gray-400" />
             <span>
-              {LATE_BY_HELP} Staff only: production workers are not part of this report, and Late is the attendance
-              engine&apos;s own flag (the same one Staff Attendance shows).
+              {LATE_BY_HELP} {words.people} only: {words.others} are not part of this report, and Late is the attendance
+              engine&apos;s own flag (the same one {words.attendancePage} shows).
             </span>
           </p>
         </div>
@@ -283,7 +294,7 @@ export default function LateTab({
               icon={AlarmClock}
               tone="bg-green-50 text-green-600"
               title={`Nobody was late on ${niceDate}`}
-              text="Every staff member who punched in was on time, or no one matches the search and department."
+              text={`Every ${words.person} who punched in was on time, or no one matches the search and department.`}
               testId="late-empty"
             />
           ) : (

@@ -191,33 +191,72 @@ def is_cycle_period(period_start: date_type, period_end: date_type, ps, cycle: s
     return resolve_cycle_period(period_start, ps, cycle) == (period_start, period_end)
 
 
-def last_generated_cycle_end(cycle: str, branch_id: int | None = None):
-    """The latest period_end among the payroll already generated for this cycle, or None. Periods are one schedule
-    for everyone the caller can see: a login scoped to a branch counts only that branch's payroll, so another branch
-    generating a period never moves this branch's "next period"."""
-    from django.db.models import Max
+def period_ended(period_end: date_type, today: date_type | None = None) -> bool:
+    """A period has ended -and can be generated- only from the day AFTER its last day (owner 2026-11-16): on the last day
+    itself a night shift that started that evening, and the punches of that day, are not complete yet."""
+    return period_end < (today or ist_today())
+
+
+def _cycle_rows(cycle: str, branch_id: int | None = None):
     from .models import Payroll
 
     rows = Payroll.objects.filter(salary_mode="shift", pay_cycle=cycle, period_start__isnull=False)
     if branch_id is not None:
         rows = rows.filter(employee__branch_id=branch_id)
-    return rows.aggregate(Max("period_end"))["period_end__max"]
+    return rows
+
+
+def last_generated_cycle_end(cycle: str, branch_id: int | None = None):
+    """The latest period_end among the payroll already generated for this cycle, or None. Periods are one schedule
+    for everyone the caller can see: a login scoped to a branch counts only that branch's payroll, so another branch
+    generating a period never moves this branch's "next period"."""
+    from django.db.models import Max
+
+    return _cycle_rows(cycle, branch_id).aggregate(Max("period_end"))["period_end__max"]
+
+
+def last_generated_cycle_period(cycle: str, branch_id: int | None = None) -> tuple[date_type, date_type] | None:
+    """(start, end) of the latest period generated on this cycle (by its last day), or None."""
+    return _cycle_rows(cycle, branch_id).order_by("-period_end", "-period_start").values_list(
+        "period_start", "period_end"
+    ).first()
 
 
 def next_cycle_period(
     ps, cycle: str, today: date_type | None = None, branch_id: int | None = None
 ) -> tuple[date_type, date_type]:
-    """The period a cycle should be generated for next: the one right after the latest generated period, or --on
-    the very first run-- the most recent period that has already ended, so the last finished week/fortnight/month
-    can be paid straight away (the period holding today cannot be generated yet)."""
+    """The period a cycle has to be worked on next (owner 2026-11-16, the period workflow):
+
+    * the latest generated period while it is still open (a draft: due until HR presses Payroll Done on it);
+    * a latest generated period that is no longer one of the cycle's periods (the week start was changed since): the
+      current period holding its first day (generating it replaces those drafts);
+    * a finalized latest period: the one right after it;
+    * never a period that has not ended while an ended one is waiting: if the choice above has not ended yet, the most
+      recent period that HAS ended is due instead, unless that one is finalized already;
+    * on the very first run, the most recent period that has already ended, so the last finished week / fortnight / month
+      can be paid straight away (a period can be generated only from the day after its last day)."""
+    from .models import ProductionPeriodClose
+
     today = today or ist_today()
-    last_end = last_generated_cycle_end(cycle, branch_id)
-    if last_end is not None:
-        return resolve_cycle_period(last_end + timedelta(days=1), ps, cycle)
     current = resolve_cycle_period(today, ps, cycle)
-    if current[1] <= today:
-        return current
-    return resolve_cycle_period(current[0] - timedelta(days=1), ps, cycle)
+    latest_ended = current if period_ended(current[1], today) else resolve_cycle_period(current[0] - timedelta(days=1), ps, cycle)
+    last = last_generated_cycle_period(cycle, branch_id)
+    if last is None:
+        return latest_ended
+
+    def finalized(period) -> bool:
+        return ProductionPeriodClose.objects.filter(cycle=cycle, period_start=period[0], period_end=period[1]).exists()
+
+    start, end = last
+    if finalized(last):
+        candidate = resolve_cycle_period(end + timedelta(days=1), ps, cycle)
+    elif is_cycle_period(start, end, ps, cycle):
+        candidate = (start, end)
+    else:
+        candidate = resolve_cycle_period(start, ps, cycle)
+    if not period_ended(candidate[1], today) and latest_ended != candidate and not finalized(latest_ended):
+        return latest_ended
+    return candidate
 
 
 def recent_cycle_periods(

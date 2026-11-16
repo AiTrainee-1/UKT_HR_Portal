@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { AlertTriangle, ArrowRight, ArrowUpRight, CalendarClock, CheckCircle2, Play, RefreshCcw } from "lucide-react";
 import { Link } from "wouter";
-import { inr, plural } from "@/components/payroll/kit/format";
+import { dateShort, inr, plural } from "@/components/payroll/kit/format";
 import { SEVERITY_META } from "@/components/payroll/kit/issue-meta";
 import { Avatar, Chip } from "@/components/payroll/kit/parts";
 import type { PayrollIssueSummary } from "@/components/payroll/panels/filters";
@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
 import { coverageLines } from "./coverage";
 import { ROSTER_STATE_LABEL, rosterState, type RosterState } from "./logic";
+import { moveRoute } from "./period-workflow";
 
 const STATE_TONE: Record<RosterState, Tone> = {
   ready: "neutral",
@@ -80,6 +81,8 @@ export type RosterRowProps = {
   selected: boolean;
   /** The period has ended: only then can payroll be generated for it. */
   ended: boolean;
+  /** The period is finalized (Payroll Done): nothing can be generated or generated again. */
+  locked?: boolean;
   /** A generation is running: nothing else may be started. */
   busy: boolean;
   /** This payslip's issues (`buildIssueSummaries(issues).get(payrollId)`). */
@@ -98,6 +101,7 @@ function RosterRowImpl({
   employee: e,
   selected,
   ended,
+  locked = false,
   busy,
   issues,
   issuesState,
@@ -115,6 +119,8 @@ function RosterRowImpl({
   const fix = state === "blocked" ? classifySkipReason(e.blockedReason ?? "", e.employeeId) : null;
   // after a pay-cycle change: which days this payslip pays (a blocked row already says why in its reason)
   const coverage = state === "blocked" ? null : coverageLines(e.coverage);
+  // a salary marked Paid (the period's Mark as Paid) is never worked out again
+  const paidOut = p?.paymentStatus === "paid";
 
   return (
     <li
@@ -144,6 +150,29 @@ function RosterRowImpl({
             <span data-testid={`pcp-roster-state-${code}`}>
               <Chip tone={STATE_TONE[state]}>{ROSTER_STATE_LABEL[state]}</Chip>
             </span>
+            {p?.newJoinerParked && (
+              <span data-testid={`pcp-roster-parked-${code}`}>
+                <Chip tone="warning" title="Calculated, but kept out of the payroll until HR adds them (New Joiners)">
+                  In New Joiners
+                </Chip>
+              </span>
+            )}
+            {e.movedIn && (
+              <span data-testid={`pcp-roster-moved-${code}`}>
+                <Chip
+                  tone="accent"
+                  title={`Moved by ${e.movedIn.changedBy || "HR"}${e.movedIn.reason ? `: ${e.movedIn.reason}` : ""}`}
+                >
+                  Moved {moveRoute(e.movedIn)} · {dateShort(e.movedIn.changedOn)}
+                </Chip>
+              </span>
+            )}
+            {e.joinedOn && !e.movedIn && (
+              <span data-testid={`pcp-roster-joined-${code}`}>
+                <Chip tone="info">Joined {dateShort(e.joinedOn)}</Chip>
+              </span>
+            )}
+            {paidOut && <Chip tone="success">Paid</Chip>}
             {p && (
               <IssueBadge
                 summary={issues}
@@ -178,6 +207,12 @@ function RosterRowImpl({
               ))}
               {coverage.legacy && <p className="pl-4 text-gray-500">{coverage.legacy}</p>}
             </div>
+          )}
+          {(e.drafts?.length ?? 0) > 0 && state !== "blocked" && (
+            <p className="mt-1 text-[11px] font-medium text-violet-700" data-testid={`pcp-roster-drafts-${code}`}>
+              Generating this period replaces the draft payslip{e.drafts!.length === 1 ? "" : "s"} for{" "}
+              {e.drafts!.map((d) => `${d.periodLabel} (${d.label})`).join(", ")}
+            </p>
           )}
           {state === "blocked" && (
             <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-red-700">
@@ -237,7 +272,7 @@ function RosterRowImpl({
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1 text-xs"
-                disabled={busy || !ended}
+                disabled={busy || !ended || locked}
                 onClick={() => onGenerate(e)}
                 data-testid={`pcp-generate-${code}`}
               >
@@ -252,12 +287,16 @@ function RosterRowImpl({
                 variant="ghost"
                 className={cn("h-8 w-8", state === "paid" ? "text-emerald-700" : "text-amber-700")}
                 title={
-                  state === "paid"
-                    ? `Generate again for ${e.name}: recompute this payslip (it stays Cleared)`
-                    : `Generate again for ${e.name}: recompute this payslip`
+                  locked
+                    ? "This period is finalized (Payroll Done): its payroll is locked for good"
+                    : paidOut
+                      ? "This salary is already marked Paid: it is never worked out again"
+                      : state === "paid"
+                        ? `Generate again for ${e.name}: recompute this payslip (it stays Cleared)`
+                        : `Generate again for ${e.name}: recompute this payslip`
                 }
                 aria-label={`Generate again for ${e.name}`}
-                disabled={busy}
+                disabled={busy || locked || paidOut}
                 onClick={() => onGenerateAgain(e)}
                 data-testid={`pcp-regenerate-${code}`}
               >

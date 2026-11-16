@@ -1,129 +1,231 @@
 import type { ReactNode } from "react";
-import { Factory } from "lucide-react";
-import type { PayrollSettingsItem } from "@/lib/api-client/custom-hooks";
+import { ArrowRight, Factory } from "lucide-react";
+import { useProductionCycles, type PayrollSettingsItem } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "../kit/SettingBlock";
 import { TextLink } from "../payroll/ui";
 import { cycleLateRules } from "../late_detection/production";
-import { CYCLE_INFO, CYCLES, cycleAnchor, describeCycleRule } from "./cycles";
+import { formatPercent, formatRupees, MONTHS } from "../payroll/preview";
+import {
+  CYCLE_INFO,
+  CYCLES,
+  cycleAnchor,
+  formatDayLong,
+  formatPeriodLong,
+  LENGTH_WORDS,
+  parseIsoDay,
+  resolveCyclePeriod,
+  weekRunsArrow,
+  type Day,
+  type PayCycle,
+} from "./cycles";
 import { savedProduction } from "./sections";
 
-function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+/** One step of how a production payslip is worked out: a number, a title, a line, and where it is set. */
+function Step({ n, title, children, last }: { n: number; title: string; children: ReactNode; last?: boolean }) {
   return (
-    <li className="flex gap-2.5 rounded-xl bg-white p-3 ring-1 ring-slate-100">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-black text-amber-800">
+    <li className="relative flex min-w-0 gap-2.5 rounded-xl border border-slate-200 bg-white p-3">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#eff6fb] text-xs font-bold text-[#006496]">
         {n}
       </span>
-      <div className="min-w-0 space-y-1 text-[12px] leading-snug text-gray-700">
-        <p className="text-[13px] font-bold text-gray-900">{title}</p>
+      <div className="min-w-0 space-y-1 text-[12px] leading-snug text-slate-600">
+        <p className="text-[13px] font-semibold text-slate-900">{title}</p>
         {children}
       </div>
+      {!last && (
+        <ArrowRight
+          size={14}
+          className="absolute -right-3 top-1/2 hidden -translate-y-1/2 text-slate-300 xl:block"
+          aria-hidden
+        />
+      )}
     </li>
   );
 }
 
-/** A list of links inside a sentence: "Weekly, BiWeekly and Monthly". */
-function CycleLinks({ to }: { to: (cycle: (typeof CYCLES)[number]) => string }) {
+/** One "label: value" line of a cycle's card. */
+function Line({ label, children, tone }: { label: string; children: ReactNode; tone?: "bad" }) {
   return (
-    <>
-      {CYCLES.map((cycle, i) => (
-        <span key={cycle}>
-          {i === 0 ? "" : i === CYCLES.length - 1 ? " and " : ", "}
-          <TextLink to={to(cycle)}>{CYCLE_INFO[cycle].label}</TextLink>
-        </span>
-      ))}
-    </>
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t border-slate-100 py-1.5 first:border-t-0">
+      <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
+      <dd className={cn("text-[13px] font-medium tabular-nums", tone === "bad" ? "text-red-800" : "text-slate-800")}>
+        {children}
+      </dd>
+    </div>
   );
 }
 
+const isoPeriod = (start: string, end: string) => {
+  const s = parseIsoDay(start);
+  const e = parseIsoDay(end);
+  return s && e ? formatPeriodLong({ start: s, end: e }) : `${start} – ${end}`;
+};
+
 /**
- * How a production payslip is put together, and where each part is set. Production pay is configured in several places
- * (Manage Shifts, the employee, the employee's pay cycle, this tab and Late Detection), so the Overview opens with the
- * whole chain, from the SAVED settings, and with each cycle's rule in one line.
+ * How a production payslip is put together, in four steps, each linked to where it is set; then each pay cycle as a card
+ * from the SAVED settings (its week, length, first period, current period, the next period the server would generate,
+ * the PF / ESI factor and its late rules) and the production bonus in a line.
  */
-export function ProductionOverview({ settings }: { settings: PayrollSettingsItem }) {
-  const forms = savedProduction(settings).cycles;
-  const cycles = CYCLES.map((cycle) => {
-    const rule = forms[cycle];
-    const late = cycleLateRules(settings, cycle);
-    return {
-      cycle,
-      ...CYCLE_INFO[cycle],
-      rule: describeCycleRule(cycle, rule),
-      blocked: "error" in cycleAnchor(cycle, rule),
-      late: `${late.allowance} free, ${late.slabs.length} slab${late.slabs.length === 1 ? "" : "s"}${late.own ? "" : " (shared)"}`,
-    };
-  });
+export function ProductionOverview({ settings, today }: { settings: PayrollSettingsItem; today: Day }) {
+  const saved = savedProduction(settings);
+  const summary = useProductionCycles();
+  const perShift = Number(saved.payBonus.defaultSalaryPerShift) || 0;
+  const fyStart = settings.bonusFyStartMonth ?? 4;
 
   return (
     <SettingsSection
       icon={Factory}
       title="How a production payslip is worked out"
-      purpose={
-        <>
-          Production pay is set in several places. This tab holds each pay cycle's period, the rate suggested for new
-          production employees and the production bonus; the rest is linked here. What a late day costs is on the{" "}
-          <TextLink to="/hr/settings?tab=late_detection#prod-late-switch">Late Detection</TextLink> tab, Production
-          page.
-        </>
-      }
+      purpose="Four steps, each set in one place. This tab holds the pay cycles' periods, the rate for new production employees and the production bonus."
       testId="production-pay-overview"
     >
-      <ol className="mt-3 grid gap-2 md:grid-cols-2">
+      <ol className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="production-pay-steps">
         <Step n={1} title="Shifts earned each day">
-          Each day's punches are worked out by the production shift rules (groups, ladders and breaks): that decides how
-          many shifts (0.25, 0.5, 1, 1.5 ...) the day earns.{" "}
-          <TextLink to="/hr/settings?tab=production_shifts">Settings - Production Shifts</TextLink>
+          <p>A day's punches become shifts (0.25, 0.5, 1, 1.5 ...) by the shift groups, ladders and breaks.</p>
+          <TextLink to="/hr/settings?tab=production_shifts">Production Shifts</TextLink>
         </Step>
-        <Step n={2} title="Pay = shifts earned x the worker's own rate">
-          Each employee's Salary Per Shift (on the employee). New production employees start from the suggestion on{" "}
-          <TextLink to="/hr/settings?tab=production_payroll#default-salary-per-shift">Pay &amp; Bonus</TextLink>.
+        <Step n={2} title="× the worker's Salary Per Shift">
+          <p>
+            Each worker's own rate.{" "}
+            {perShift > 0
+              ? `New production employees start from ${formatRupees(perShift)} a shift.`
+              : "No rate is suggested for new employees."}
+          </p>
+          <TextLink to="/hr/settings?tab=production_payroll#default-salary-per-shift">Pay &amp; Bonus</TextLink>
         </Step>
-        <Step n={3} title="PF and ESI">
-          Only workers switched ON in Employees - Co Emp pay PF and ESI. Each one is the percentage of the matching
-          rule, taken from the period's first-portion pay, using the production rules on the{" "}
-          <TextLink to="/hr/settings?tab=pf_esi#prod-pf-rules">PF &amp; ESI tab</TextLink>.
+        <Step n={3} title="Paid per pay cycle">
+          <p>Weekly, BiWeekly or Monthly (four weeks), depending on the employee's pay cycle.</p>
+          <TextLink to="/hr/employees/productionEmployee">Production Employees</TextLink>
         </Step>
-        <Step n={4} title="The pay cycle and late deductions">
-          Pay is worked out weekly, every two weeks or every four weeks depending on the employee's pay cycle (set on{" "}
-          <TextLink to="/hr/employees/productionEmployee">Employees - Production Employees</TextLink>); each cycle's
-          period is on its sub-tab:{" "}
-          <CycleLinks to={(cycle) => `/hr/settings?tab=production_payroll#${cycle}-week-start`} />. Late deductions are{" "}
-          {settings.prodLateDetectionEnabled ? "ON" : "OFF"} for every cycle (
-          <TextLink to="/hr/settings?tab=late_detection#prod-late-switch">Late Detection - Production</TextLink>, with
-          each cycle's free late days and slabs). HR then generates each period on that cycle's Production Payroll page
-          once it has ended: <CycleLinks to={(cycle) => CYCLE_INFO[cycle].path} />.
-        </Step>
-        <Step n={5} title="Statutory bonus">
-          Production workers have a bonus rate and ceilings of their own (
-          <TextLink to="/hr/settings?tab=production_payroll#prod-bonus-percent">Pay &amp; Bonus</TextLink>), apart from
-          staff (<TextLink to="/hr/settings?tab=payroll#bonus-percent">Staff Payroll - Bonus</TextLink>). The financial
-          year start month is one company-wide value on{" "}
-          <TextLink to="/hr/settings?tab=payroll#fy-start-month">Staff Payroll - Payroll Rules</TextLink>.
+        <Step n={4} title="Less PF, ESI and late days" last>
+          <p>
+            PF and ESI for Co Emp workers only. Late deductions are{" "}
+            <strong className={settings.prodLateDetectionEnabled ? "text-emerald-700" : "text-slate-700"}>
+              {settings.prodLateDetectionEnabled ? "ON" : "OFF"}
+            </strong>
+            .
+          </p>
+          <p className="flex flex-wrap gap-x-3">
+            <TextLink to="/hr/settings?tab=pf_esi#prod-pf-rules">PF &amp; ESI</TextLink>
+            <TextLink to="/hr/settings?tab=late_detection#prod-late-switch">Late Detection</TextLink>
+          </p>
         </Step>
       </ol>
-      <ul className="mt-2 grid gap-2 md:grid-cols-3" data-testid="production-cycle-summary">
-        {cycles.map((c) => (
-          <li
-            key={c.cycle}
-            className={cn(
-              "rounded-xl px-3 py-2 text-[12px] leading-snug ring-1",
-              c.blocked ? "bg-red-50 text-red-900 ring-red-100" : "bg-white text-gray-700 ring-slate-100",
-            )}
-            data-testid={`production-cycle-summary-${c.cycle}`}
-          >
-            <p className="font-bold text-gray-900">
-              {c.label} <span className="font-normal text-gray-400">({c.days} days)</span>
-            </p>
-            <p>{c.rule}</p>
-            <p className="text-gray-500">
-              Late: {c.late}{" "}
-              <TextLink to={`/hr/settings?tab=late_detection#${c.cycle}-late-allowance`}>Change</TextLink>
-            </p>
-            {c.blocked && <p className="font-semibold">Payroll cannot be generated until the date is set.</p>}
-          </li>
+
+      <h4 className="mb-2 mt-5 text-sm font-semibold text-slate-900">The three pay cycles</h4>
+      <ul className="grid gap-3 md:grid-cols-3" data-testid="production-cycle-summary">
+        {CYCLES.map((cycle) => (
+          <CycleSummaryCard
+            key={cycle}
+            cycle={cycle}
+            settings={settings}
+            today={today}
+            server={summary.data?.cycles.find((c) => c.cycle === cycle)}
+            serverFailed={summary.isError}
+          />
         ))}
       </ul>
+
+      <div
+        className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-[13px] text-slate-700"
+        data-testid="production-bonus-summary"
+      >
+        <span className="font-semibold text-slate-900">Statutory bonus</span>
+        <span>{formatPercent(Number(saved.payBonus.prodBonusPercent))} of the bonus wage</span>
+        <span>wage counted up to {formatRupees(Number(saved.payBonus.prodBonusWageCeiling))} a payslip</span>
+        <span>workers up to {formatRupees(Number(saved.payBonus.prodBonusEligibilityCeiling))}</span>
+        <span className="flex flex-wrap gap-x-3">
+          <TextLink to="/hr/settings?tab=production_payroll#prod-bonus-percent">Pay &amp; Bonus</TextLink>
+          <TextLink to="/hr/settings?tab=payroll#fy-start-month">
+            Year from {MONTHS[fyStart - 1] ?? fyStart} (Staff Payroll)
+          </TextLink>
+        </span>
+      </div>
     </SettingsSection>
+  );
+}
+
+/** One cycle's card on the Overview, from the saved settings and the server's next period. */
+function CycleSummaryCard({
+  cycle,
+  settings,
+  today,
+  server,
+  serverFailed,
+}: {
+  cycle: PayCycle;
+  settings: PayrollSettingsItem;
+  today: Day;
+  server:
+    | {
+        next: { periodStart: string; periodEnd: string; periodEnded: boolean } | null;
+        configError: string | null;
+        assigned: number;
+      }
+    | undefined;
+  serverFailed: boolean;
+}) {
+  const info = CYCLE_INFO[cycle];
+  const rule = savedProduction(settings).cycles[cycle];
+  const anchored = cycleAnchor(cycle, rule);
+  const blocked = "error" in anchored;
+  const current = resolveCyclePeriod(today, cycle, rule);
+  const late = cycleLateRules(settings, cycle);
+  const typed = parseIsoDay(rule.anchorDate);
+
+  return (
+    <li
+      className={cn(
+        "flex min-w-0 flex-col rounded-xl border p-3.5",
+        blocked ? "border-red-200 bg-red-50/60" : "border-slate-200 bg-white",
+      )}
+      data-testid={`production-cycle-summary-${cycle}`}
+    >
+      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-2">
+        <p className="text-[15px] font-semibold text-slate-900">{info.label}</p>
+        <p className="text-xs text-slate-500">
+          {LENGTH_WORDS[cycle].days}, paid {info.every}
+          {server ? ` · ${server.assigned} ${server.assigned === 1 ? "worker" : "workers"}` : ""}
+        </p>
+      </div>
+      <dl>
+        <Line label="Week runs">{weekRunsArrow(rule.weekStart)}</Line>
+        <Line label="First period" tone={blocked ? "bad" : undefined}>
+          {"anchor" in anchored && typed ? formatDayLong(anchored.anchor) : blocked ? "Not set" : "Not needed"}
+        </Line>
+        <Line label="Current period">{"period" in current ? formatPeriodLong(current.period) : "Not known"}</Line>
+        <Line label="Next to generate" tone={server?.configError ? "bad" : undefined}>
+          {server?.next
+            ? `${isoPeriod(server.next.periodStart, server.next.periodEnd)}${
+                // a newer server says when the period is generated and still open (it stays next until Payroll Done)
+                (server.next as { state?: string }).state === "generated"
+                  ? " (generated, still open)"
+                  : server.next.periodEnded
+                    ? " (ended)"
+                    : ""
+              }`
+            : server?.configError
+              ? "Not known"
+              : serverFailed
+                ? "Could not be read"
+                : "..."}
+        </Line>
+        <Line label="PF / ESI estimate">× {info.monthlyFactor} a period's pay</Line>
+        <Line label="Late days">
+          {late.allowance} free, {late.slabs.length} slab{late.slabs.length === 1 ? "" : "s"}
+          {late.own ? "" : " (shared)"}{" "}
+          <TextLink to={`/hr/settings?tab=late_detection#${cycle}-late-allowance`}>Change</TextLink>
+        </Line>
+      </dl>
+      {blocked && (
+        <p className="mt-1.5 text-[12px] font-semibold text-red-800">
+          Payroll cannot be generated until the date is set.
+        </p>
+      )}
+      <p className="mt-auto flex flex-wrap gap-x-4 pt-2 text-[12px]">
+        <TextLink to={`/hr/settings?tab=production_payroll#${cycle}-week-start`}>{info.label} settings</TextLink>
+        <TextLink to={info.path}>{info.label} payroll</TextLink>
+      </p>
+    </li>
   );
 }

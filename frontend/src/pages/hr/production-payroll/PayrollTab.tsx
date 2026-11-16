@@ -8,6 +8,8 @@ import {
   FileText,
   Info,
   ListChecks,
+  Lock,
+  LogOut,
   Play,
   RefreshCw,
   SearchX,
@@ -17,13 +19,12 @@ import { Link, useLocation } from "wouter";
 import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import { Button } from "@/components/ui/button";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
-import { dateTime, plural } from "@/components/payroll/kit/format";
+import { dateShort, dateTime, plural } from "@/components/payroll/kit/format";
 import { addSkipped } from "@/components/payroll/kit/issue-summary";
 import { EmptyNote, PayrollLoader, SectionCard } from "@/components/payroll/kit/parts";
 import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { ViewSwitch, type ViewOption } from "@/components/payroll/kit/ViewSwitch";
-import { PayrollDashboard } from "@/components/payroll/panels/dashboard";
 import {
   ALL,
   DEFAULT_FILTERS,
@@ -49,12 +50,14 @@ import { SkippedPanel } from "@/components/payroll/panels/skipped";
 import { canApprove, isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useListDepartments } from "@/lib/api-client";
+import { inCategory } from "@/lib/departments";
 import {
   PAY_CYCLE_INFO,
   useListProductionPayroll,
   usePayrollIssues,
   usePayrollRules,
   useProductionPeriodStatus,
+  useProductionPeriodWorkflow,
   type CyclePeriod,
   type PayCycle,
 } from "@/lib/api-client/custom-hooks";
@@ -64,6 +67,10 @@ import { downloadReportFile } from "@/lib/report-download";
 import { Gate, pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { NotEndedNote, PeriodError } from "./CycleNotices";
 import { GenerateDialog } from "./GenerateDialog";
+import { MovedOutView } from "./MovedOutView";
+import { NewJoinersSection } from "./NewJoinersSection";
+import { periodBankRows } from "./period-workflow";
+import { PeriodStatusButton, PeriodTimeline } from "./PeriodStatusButton";
 import {
   PRODUCTION_VIEWS,
   formatPeriod,
@@ -83,13 +90,16 @@ const VIEW_KEY: Record<ProductionView, string> = {
   issues: "production_payroll.payroll.issues",
   skipped: "production_payroll.payroll.skipped",
   rules: "production_payroll.payroll.rules",
+  moved: "production_payroll.payroll.moved_out",
 };
 
 /**
- * Payroll tab of a cycle page: the actions (Generate, Skipped Employees, Export), the dashboard of the period and its four
- * views - Records, Issues, Skipped and Rules - all about the one pay period the page chose and the employees on this cycle.
- * Like Staff Payroll's (2026-11-06): the records are a table by default, listed one department at a time, and Export is
- * the printed Production Salary Statement (Excel / PDF) of the Report Center.
+ * Payroll tab of a cycle page: the actions (Generate, Skipped Employees, Payroll Done / Payment Pending / Paid, Export,
+ * bank file), the period's timeline (no dashboard of tiles and charts: owner 2026-11-16), its New Joiners and its five
+ * views - Records, Issues, Skipped, Rules and Moved out - all about the one pay period the page chose and the workers on this cycle. Like Staff Payroll's: the
+ * records are a table by default, listed one department at a time, and Export is the printed Production Salary Statement
+ * (Excel / PDF) of the Report Center. The period workflow (owner 2026-11-16): a period is generated only once it has
+ * ended; New Joiners wait until added; Payroll Done locks the period for good; Mark as Paid records the paid day.
  */
 export function PayrollTab({
   cycle,
@@ -109,14 +119,17 @@ export function PayrollTab({
   const { user } = useAuth();
   const level = useLevel();
   const [showGenerate, setShowGenerate] = useState(false);
-  const { markPaid, markingId } = useMarkPaid();
+  const { markPaid, markingId } = useMarkPaid("production");
   const info = PAY_CYCLE_INFO[cycle];
   // Only the views this role may see (Records / Issues / Skipped / Rules); a hidden one is never shown nor loaded.
   const canSee = (v: ProductionView) => level(VIEW_KEY[v]) !== "hidden";
   const visibleViews = visibleItems(PRODUCTION_VIEWS, (v) => VIEW_KEY[v], level);
   const mayGenerate = level("production_payroll.generate") !== "hidden";
-  // Mark as Cleared is an approval of its own (payroll_mark_cleared)
-  const mayMarkCleared = canApprove(user, "payroll_mark_cleared");
+  // The period's workflow (owner 2026-11-16): Not generated / Generated / Payroll Done (locked) / Paid
+  const workflow = useProductionPeriodWorkflow(cycle, period);
+  const wf = workflow.data;
+  // Mark as Cleared is an approval of its own (payroll_mark_cleared); the period's status says it for this login
+  const mayMarkCleared = wf ? wf.can.markCleared : canApprove(user, "payroll_mark_cleared");
 
   const scope = useMemo(() => productionScope(cycle, period), [cycle, period]);
   const periodLabel = formatPeriod(period);
@@ -133,14 +146,15 @@ export function PayrollTab({
   const issueFilters = useMemo(() => issueFiltersFromUrl(url), [url]);
 
   const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
+  // production payroll lists production departments only (owner 2026-11-16: every department is Staff or Production)
   const departments = useListDepartments();
   // The roster answers "who is on this cycle, and who cannot be paid": it is also where the Skipped view comes from.
   const status = useProductionPeriodStatus(cycle, period);
+  // the period's whole payroll (every row of it, New Joiners waiting to be added left out by the server)
   const runsQuery = useListProductionPayroll({
     cycle,
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
-    limit: 500,
   });
   // A production row already is a payroll row (`ProductionPayrollItem` extends `PayrollRunItem`): the panels take it as it is.
   const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
@@ -165,8 +179,16 @@ export function PayrollTab({
   const roster = status.data?.employees.length;
   const skipped = useMemo(() => (status.data ? skippedFromRoster(status.data.employees) : undefined), [status.data]);
   const skippedCount = skipped?.length ?? 0;
-  // what the dashboard tile and the view's count say: the issues plus the employees who cannot be paid, as the view lists them
+  // what the Issues view's count says: the issues plus the employees who cannot be paid, as the view lists them
   const dashIssues = useMemo(() => addSkipped(issues?.summary, skippedCount), [issues, skippedCount]);
+
+  const locked = !!(wf?.locked ?? status.data?.locked);
+  const lockedTitle = `${info.label} ${periodLabel} is finalized (Payroll Done): its payroll is locked for good`;
+  // (a period that has not ended still opens the dialog: it explains, and cannot be confirmed)
+  const generateBlocked = locked ? lockedTitle : "";
+  // The bank file pays the period's whole payroll, whatever the filters show (owner 2026-11-16, staff's rules)
+  const bankRows = useMemo(() => periodBankRows(runs), [runs]);
+  const paidOn = wf?.state === "paid" ? (wf.paidOn ?? wf.paidAt?.slice(0, 10) ?? null) : null;
 
   const setView = (next: ProductionView) => {
     if (canSee(next)) setUrl({ view: next });
@@ -210,6 +232,7 @@ export function PayrollTab({
         tone: "warning",
       },
       { value: "rules", label: "Rules", icon: BookOpenCheck },
+      { value: "moved", label: "Moved out", icon: LogOut },
     ],
     (o) => VIEW_KEY[o.value],
     level,
@@ -251,13 +274,15 @@ export function PayrollTab({
         testId="pcp-empty-period"
         action={
           <Gate k="production_payroll.generate">
-            <Button
-              className="mt-2 gap-2 bg-amber-600 hover:bg-amber-700"
-              onClick={() => setShowGenerate(true)}
-              disabled={!status.data}
-            >
-              <Play size={14} /> Generate Payroll
-            </Button>
+            <span title={generateBlocked || undefined}>
+              <Button
+                className="mt-2 gap-2 bg-amber-600 hover:bg-amber-700"
+                onClick={() => setShowGenerate(true)}
+                disabled={!status.data || !!generateBlocked}
+              >
+                <Play size={14} /> Generate Payroll
+              </Button>
+            </span>
           </Gate>
         }
       />
@@ -278,10 +303,18 @@ export function PayrollTab({
           <p className="text-sm font-semibold text-gray-900" data-testid="pcp-record-count">
             {runsQuery.isLoading ? periodLabel : `${periodLabel} · ${plural(runs.length, "record")}`}
           </p>
-          <p className="text-xs text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
             {issues?.detectedAt
               ? `Last computed ${dateTime(issues.detectedAt)}`
               : `${info.label} production payroll for the period, worked out from attendance`}
+            {locked && (
+              <span
+                className="inline-flex items-center gap-1 font-semibold text-violet-700"
+                data-testid="pcp-period-locked"
+              >
+                <Lock size={11} /> Finalized: locked
+              </span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -295,62 +328,61 @@ export function PayrollTab({
               <AlertTriangle size={14} /> Skipped Employees
             </Button>
           </Gate>
-          <ExportMenu
-            items={exportItems}
-            label="Export"
-            heading={`Export ${info.label} ${periodLabel} payroll`}
-            testId="pcp-export"
-          />
-          <Button
-            variant="outline"
-            className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-            disabled={shown.length === 0}
-            onClick={() =>
-              void exportPayrollToExcel(shown, "Production", `${info.label}_${period.periodStart}_${period.periodEnd}`)
-            }
-            data-testid="pcp-export-bank"
-          >
-            <Download size={14} /> Export bank file
-          </Button>
-          <Gate k="production_payroll.generate">
-            <Button
-              className="h-9 gap-2 bg-amber-600 hover:bg-amber-700"
-              onClick={() => setShowGenerate(true)}
-              disabled={!status.data}
-              data-testid="pcp-generate-open"
+          <PeriodStatusButton cycle={cycle} period={period} status={wf} loading={workflow.isLoading} />
+          <Gate k="production_payroll.exports">
+            <ExportMenu
+              items={exportItems}
+              label="Export"
+              heading={`Export ${info.label} ${periodLabel} payroll`}
+              testId="pcp-export"
+            />
+            <span
+              title={
+                paidOn
+                  ? `This period was already marked Paid on ${dateShort(paidOn)}: the file is for your records`
+                  : `Every worker in the period's payroll (${bankRows.length}), whatever the filters show; never anyone waiting in New Joiners`
+              }
             >
-              <Play size={14} /> Generate Payroll
-            </Button>
+              <Button
+                variant="outline"
+                className="h-9 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                disabled={bankRows.length === 0}
+                onClick={() =>
+                  void exportPayrollToExcel(
+                    bankRows,
+                    "Production",
+                    `${info.label}_${period.periodStart}_${period.periodEnd}`,
+                  )
+                }
+                data-testid="pcp-export-bank"
+              >
+                <Download size={14} /> Export bank file
+              </Button>
+            </span>
+          </Gate>
+          <Gate k="production_payroll.generate">
+            <span title={generateBlocked || undefined}>
+              <Button
+                className="h-9 gap-2 bg-amber-600 hover:bg-amber-700"
+                onClick={() => setShowGenerate(true)}
+                disabled={!status.data || !!generateBlocked}
+                data-testid="pcp-generate-open"
+              >
+                <Play size={14} /> Generate Payroll
+              </Button>
+            </span>
           </Gate>
         </div>
       </div>
 
       <PayrollGenerationPipeline active={showPipeline} data={progress} onDismiss={dismissPipeline} />
       {status.data && !status.data.periodEnded && <NotEndedNote period={period} />}
+      {wf && (runs.length > 0 || wf.state !== "not_generated") && <PeriodTimeline status={wf} compact />}
 
-      <PayrollDashboard
-        kind="production"
-        accent="amber"
-        periodLabel={periodLabel}
-        runs={runs}
-        loading={runsQuery.isLoading}
-        expected={
-          status.data ? { count: status.data.employees.length, label: `on the ${info.label} cycle` } : undefined
-        }
-        issues={canSee("issues") ? dashIssues : undefined}
-        issuesLoading={issuesQuery.isLoading}
-        skipped={
-          status.data && canSee("skipped") ? { count: skippedCount, total: status.data.employees.length } : undefined
-        }
-        skippedLoading={status.isLoading}
-        onOpenIssues={
-          canSee("issues") ? (code) => setUrl({ view: "issues", ...(code ? { icode: code } : {}) }) : undefined
-        }
-        onOpenSkipped={canSee("skipped") ? () => setView("skipped") : undefined}
-        onFilterStatus={
-          canSee("records") ? (statusFilter) => setUrl({ view: "records", status: statusFilter }) : undefined
-        }
-        testIdPrefix="pcp-dash"
+      <NewJoinersSection
+        cycle={cycle}
+        period={period}
+        onOpenDetails={(id) => openPayrollDetails(navigate, "production", id)}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -388,7 +420,10 @@ export function PayrollTab({
           <PayrollFilterBar
             value={filters}
             onChange={(next) => setUrl(filtersToUrl(next) as Record<string, string>)}
-            departments={departments.data}
+            departments={inCategory<{ id: number; name: string; category?: string | null }>(
+              departments.data,
+              "production",
+            )}
             issueOptions={issues?.summary.byCode}
             issuesLoading={issuesQuery.isLoading}
             shown={shown.length}
@@ -415,8 +450,9 @@ export function PayrollTab({
             rulesLoading={rulesQuery.isLoading}
             onOpenDetails={(run) => openPayrollDetails(navigate, "production", run.id)}
             onOpenIssues={(run) => openPayrollDetails(navigate, "production", run.id, "issues")}
-            onMarkPaid={mayMarkCleared ? (run) => void markPaid(run) : undefined}
+            onMarkPaid={locked || !mayMarkCleared ? undefined : (run) => void markPaid(run)}
             markingId={markingId}
+            showPayment
             layout={url.layout === "cards" ? "cards" : "table"}
             onLayoutChange={(layout: RecordLayout) => setUrl({ layout })}
             empty={empty}
@@ -446,6 +482,8 @@ export function PayrollTab({
           kind="production"
           accent="amber"
         />
+      ) : view === "moved" ? (
+        <MovedOutView cycle={cycle} onOpenDetails={(id) => openPayrollDetails(navigate, "production", id)} />
       ) : (
         <RulesPanel scope={scope} accent="amber" />
       )}
@@ -483,6 +521,17 @@ export function PayrollTab({
           <strong>Generating again</strong> never overwrites payroll that exists: employees who already have a payslip
           for the period are left as they are (use Employees → Generate again for one pending payslip). Advances are
           auto-deducted from the monthly repayment schedule configured in the Advances module.
+        </p>
+        <p>
+          <strong>A period is generated only once it has ended</strong> (from the day after its last day), so the night
+          shifts of its last day are complete. Workers who joined during the period or moved here from another pay cycle
+          wait in <strong>New Joiners</strong> until you add them; a day already paid on another cycle is never paid
+          again.
+        </p>
+        <p>
+          <strong>Payroll Done</strong> locks the period for good (it waits until nobody is left in New Joiners);{" "}
+          <strong>Mark as Paid</strong> then records the day the wages were paid. Mark as Cleared stays your own check
+          that a payslip is right.
         </p>
       </SectionCard>
 

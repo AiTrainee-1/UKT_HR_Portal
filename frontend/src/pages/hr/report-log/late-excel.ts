@@ -44,6 +44,9 @@ export type LateReportInput = {
   /** What narrows the list ("Department: Admin"), "" for nothing. */
   filter?: string;
   now?: Date;
+  /** The report's name on the files and in their file names (default "Daily Late Report"; the Production Report Log's
+   *  is "Production Daily Late Report"). */
+  title?: string;
 };
 
 const argb = (hex: string) => `FF${hex.replace("#", "").toUpperCase()}`;
@@ -76,7 +79,7 @@ export async function buildLateWorkbook(input: LateReportInput): Promise<Workboo
       printTitlesRow: `${HEADER_ROW}:${HEADER_ROW}`,
       margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.6, header: 0.3, footer: 0.3 },
     },
-    headerFooter: { oddFooter: "&LDaily Late Report&RPage &P of &N" },
+    headerFooter: { oddFooter: `&L${input.title ?? LATE_REPORT_TITLE}&RPage &P of &N` },
   });
   ws.columns = [...LATE_COLUMNS.map((c) => ({ width: c.chars })), { width: 11 }];
 
@@ -85,7 +88,7 @@ export async function buildLateWorkbook(input: LateReportInput): Promise<Workboo
     totalCols: cols,
     company: input.company,
     branchLabel: input.branchLabel,
-    title: LATE_REPORT_TITLE,
+    title: input.title ?? LATE_REPORT_TITLE,
     logoDataUrl: input.logoDataUrl,
   });
   const title = ws.getCell(3, 1);
@@ -173,9 +176,9 @@ export async function buildLateWorkbook(input: LateReportInput): Promise<Workboo
   return wb;
 }
 
-export const lateExcelName = (date: string) => `${lateFileStem(date)}.xlsx`;
+export const lateExcelName = (date: string, title?: string) => `${lateFileStem(date, title)}.xlsx`;
 
 /** Builds the workbook and downloads it. */
 export async function downloadLateExcel(input: LateReportInput): Promise<void> {
-  await downloadWorkbook(await buildLateWorkbook(input), lateExcelName(input.date));
+  await downloadWorkbook(await buildLateWorkbook(input), lateExcelName(input.date, input.title));
 }

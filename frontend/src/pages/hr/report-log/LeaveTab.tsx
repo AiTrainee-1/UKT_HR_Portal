@@ -9,6 +9,7 @@ import { useAttendanceReportDaily, useSetDayInformed, type ReportLogDailyRow } f
 import { cn } from "@/lib/utils";
 import { Chip, EmptyState, ErrorState, ListSkeleton, ResultLine, StatCard } from "../leave/parts";
 import DailyFiltersBar, { departmentParam, type DailyFilters } from "./DailyFilters";
+import { useKindText, useReportLogKind } from "./kind";
 import ExportBar, { useSheetExport } from "./ExportBar";
 import ReportSheet from "./ReportSheet";
 import SelectAllBox from "./SelectAllBox";
@@ -46,15 +47,21 @@ export default function LeaveTab({
 }) {
   const { toast } = useToast();
   const company = useCompany();
+  const kind = useReportLogKind();
+  const words = useKindText();
   const [informedFilter, setInformedFilter] = useState<InformedFilter>("all");
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
-  const query = useAttendanceReportDaily({
-    date: filters.date,
-    department: departmentParam(filters.department),
-    search: filters.search || undefined,
-  });
-  const setInformed = useSetDayInformed();
+  const query = useAttendanceReportDaily(
+    {
+      date: filters.date,
+      department: departmentParam(filters.department),
+      search: filters.search || undefined,
+    },
+    true,
+    kind,
+  );
+  const setInformed = useSetDayInformed(kind);
 
   const absent = useMemo(() => absentRows(query.data?.rows ?? []), [query.data]);
   const shown = useMemo(() => filterByInformed(absent, informedFilter), [absent, informedFilter]);
@@ -70,7 +77,7 @@ export default function LeaveTab({
   // what gets downloaded: the rows ticked AND still on the list (a row hidden by a filter is not exported)
   const picked = useMemo(() => pickedRows(shown, selected), [shown, selected]);
 
-  const spec = useMemo(() => leaveSpec(filters.date, picked), [filters.date, picked]);
+  const spec = useMemo(() => leaveSpec(filters.date, picked, words.listWord), [filters.date, picked, words.listWord]);
   const exporter = useSheetExport(spec, company.excel);
 
   const changeFilters = (next: DailyFilters) => {
@@ -103,7 +110,7 @@ export default function LeaveTab({
         <StatCard
           label={`Absent on ${niceDate}`}
           value={hasData ? absent.length : "-"}
-          sub="Staff with no punch and no leave"
+          sub={`${words.people} with no punch and no leave`}
           icon={UserX}
           tone="bg-rose-50 text-rose-800"
           onClick={() => setInformedFilter("all")}

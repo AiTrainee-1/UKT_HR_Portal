@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { dateTime, inr, plural } from "@/components/payroll/kit/format";
+import { UnlockPanel } from "@/components/payroll/kit/UnlockPanel";
 import { useToast } from "@/hooks/use-toast";
 import { usePayrollMonthActions, type PayrollMonthStatus } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
@@ -48,7 +49,7 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message.replace(
  */
 export function MonthStatusButton({ status, loading }: { status: PayrollMonthStatus | undefined; loading?: boolean }) {
   const { toast } = useToast();
-  const { finalize, markPaid } = usePayrollMonthActions();
+  const { finalize, markPaid, unlock } = usePayrollMonthActions();
   const [open, setOpen] = useState<"finalize" | "payment" | null>(null);
   const [confirmPaid, setConfirmPaid] = useState(false);
   const now = useNow(status?.state === "finalized");
@@ -86,6 +87,22 @@ export function MonthStatusButton({ status, loading }: { status: PayrollMonthSta
       setOpen(null);
     } catch (err) {
       toast({ title: "Could not mark the month as paid", description: errorText(err), variant: "destructive" });
+    }
+  };
+
+  // a finalized month nothing of which is paid, open again (owner 2026-11-16), with a reason; a paid one stays locked
+  const doUnlock = async (reason: string) => {
+    try {
+      await unlock.mutateAsync({ month: status.month, year: status.year, reason });
+      toast({
+        title: `${status.label} payroll is unlocked`,
+        description: "It is open again: generate or work it out again, then press Payroll Done.",
+      });
+      setOpen(null);
+      return true;
+    } catch (err) {
+      toast({ title: "Could not unlock the month", description: errorText(err), variant: "destructive" });
+      return false;
     }
   };
 
@@ -235,7 +252,18 @@ export function MonthStatusButton({ status, loading }: { status: PayrollMonthSta
               </p>
             </div>
           ) : (
-            <MonthTimeline status={status} now={now} />
+            <>
+              <MonthTimeline status={status} now={now} />
+              <UnlockPanel
+                what="this month"
+                blocked={
+                  status.state === "paid" ? (status.unlockBlocked ?? "Paid: locked for good.") : status.unlockBlocked
+                }
+                allowed={!!status.can.unlock}
+                busy={unlock.isPending}
+                onUnlock={doUnlock}
+              />
+            </>
           )}
 
           <DialogFooter className="gap-2">

@@ -447,6 +447,7 @@ class LockTests(WorkflowBase):
                 "addToPayroll": False,
                 "releaseAndPay": True,
                 "markCleared": False,  # added 2026-11-11 (a finalized month refuses Mark as Cleared: 409)
+                "unlock": True,  # added 2026-11-16 (finalized, nothing paid: it can be unlocked)
             },
         )
         self.assertEqual(s["counts"]["onHold"], 1)

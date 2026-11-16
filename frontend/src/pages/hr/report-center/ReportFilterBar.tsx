@@ -12,7 +12,8 @@ import type {
 } from "@/lib/report-center";
 import { DateRangeFilter } from "./filters/DateRangeFilter";
 import { EmployeeMultiPicker } from "./filters/EmployeeMultiPicker";
-import { MultiSelectFilter, SelectionChips } from "./filters/MultiSelectFilter";
+import { MultiSelectFilter, SelectionChips, optionLabel } from "./filters/MultiSelectFilter";
+import { orgFilterOptions, prunePicked, reportOrgKind } from "./filters/org-options";
 import { PeriodPicker } from "./filters/PeriodPicker";
 
 /** Radix Select forbids an empty item value, so "no filter" travels as this sentinel. */
@@ -75,6 +76,23 @@ export function ReportFilterBar({
   options: ReportCatalog["options"];
 }) {
   const departmentIds = asList(values.department);
+  // Staff and production have departments and designations of their own (lib/departments.ts): with the report's
+  // Employee type on one kind only that kind is offered; on "All types" (or a report without it) both are, under two
+  // headings.
+  const kind = reportOrgKind(values.employmentType);
+  const orgOptions = (k: "department" | "designation", forKind = kind) =>
+    orgFilterOptions(k, k === "department" ? options.departments : options.designations, forKind);
+  // A department / designation of the kind the type filter just left would filter the report to nobody: dropped.
+  const changeType = (key: string, next: string) => {
+    onChange(key, next);
+    const nextKind = reportOrgKind(next);
+    for (const f of filters) {
+      if (f.kind !== "department" && f.kind !== "designation") continue;
+      const picked = asList(values[f.key]);
+      const kept = prunePicked(picked, orgOptions(f.kind, nextKind));
+      if (kept.length !== picked.length) onChange(f.key, kept);
+    }
+  };
 
   return (
     <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -120,7 +138,7 @@ export function ReportFilterBar({
                 : f.kind === "designation"
                   ? options.designations
                   : options.branches;
-            const opts = toOptions(list);
+            const opts = f.kind === "branch" ? toOptions(list) : orgOptions(f.kind);
             const sel = asList(v);
             return (
               <Field key={f.key} filter={f}>
@@ -133,7 +151,10 @@ export function ReportFilterBar({
                 />
                 {sel.length > 1 && (
                   <SelectionChips
-                    items={sel.map((id) => ({ value: id, label: opts.find((o) => o.value === id)?.label ?? id }))}
+                    items={sel.map((id) => ({
+                      value: id,
+                      label: ((o) => (o ? optionLabel(o) : id))(opts.find((o) => o.value === id)),
+                    }))}
                     onRemove={(id) =>
                       onChange(
                         f.key,
@@ -159,7 +180,7 @@ export function ReportFilterBar({
           case "employmentType":
             return (
               <Field key={f.key} filter={f}>
-                <SingleSelect filter={f} value={String(v ?? "")} onChange={(x) => onChange(f.key, x)} includeAny />
+                <SingleSelect filter={f} value={String(v ?? "")} onChange={(x) => changeType(f.key, x)} includeAny />
               </Field>
             );
           case "employeeStatus":

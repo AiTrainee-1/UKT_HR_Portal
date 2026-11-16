@@ -525,10 +525,15 @@ export type PayrollGenerateProgress = {
   finishedAt: string | null;
 };
 
-export const useGeneratePayrollProgress = (enabled: boolean) =>
+/** `kind` "production" polls /api/payroll/production/generate-progress (the same run, read under the Production Payroll
+ *  rights, so a production-only role can follow its own run). */
+export const useGeneratePayrollProgress = (enabled: boolean, kind: "staff" | "production" = "staff") =>
   useQuery<PayrollGenerateProgress>({
-    queryKey: ["/api/payroll/generate-progress"],
-    queryFn: () => customFetch<PayrollGenerateProgress>("/api/payroll/generate-progress"),
+    queryKey: [kind === "production" ? "/api/payroll/production/generate-progress" : "/api/payroll/generate-progress"],
+    queryFn: () =>
+      customFetch<PayrollGenerateProgress>(
+        kind === "production" ? "/api/payroll/production/generate-progress" : "/api/payroll/generate-progress",
+      ),
     enabled,
     refetchInterval: enabled ? 1500 : false,
     // The pipeline only cares about the freshest snapshot -never serve a stale one.

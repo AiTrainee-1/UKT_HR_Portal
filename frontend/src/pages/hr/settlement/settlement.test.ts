@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hasBothCategories, namedOrgOptions } from "@/lib/departments";
 import {
   DEFAULT_FILTERS,
   appliedByEmployee,
@@ -156,6 +157,41 @@ describe("filters", () => {
     expect(filterRows(rows, { ...NO_FILTERS, employeeType: "staff" })).toHaveLength(1);
     expect(filterRows(rows, { ...NO_FILTERS, employee: "left" }).map((r) => r.employeeCode)).toEqual(["E003"]);
     expect(filterRows(rows, { ...NO_FILTERS, employee: "active" })).toHaveLength(2);
+  });
+
+  it("tells a Staff and a Production department of the same name apart (namedOrgOptions)", () => {
+    const split = [
+      adv({ employeeCode: "S1", employeeType: "staff", employeeDepartment: "Cutting" }),
+      adv({ employeeCode: "P1", employeeType: "production", employeeDepartment: "Cutting" }),
+      adv({ employeeCode: "P2", employeeType: "production", employeeDepartment: "Sewing" }),
+    ];
+    const options = namedOrgOptions(
+      split,
+      (r) => r.employeeDepartment,
+      (r) => r.employeeType,
+    );
+    expect(options.map((o) => [o.value, o.label, o.group])).toEqual([
+      ["production|Cutting", "Cutting", "Production"],
+      ["staff|Cutting", "Cutting", "Staff"],
+      ["production|Sewing", "Sewing", "Production"],
+    ]);
+    expect(hasBothCategories(options)).toBe(true);
+    // one employee type offers only its own kind
+    const production = namedOrgOptions(
+      split,
+      (r) => r.employeeDepartment,
+      (r) => r.employeeType,
+      "production",
+    );
+    expect(production.map((o) => o.value)).toEqual(["production|Cutting", "production|Sewing"]);
+    expect(filterRows(split, { ...NO_FILTERS, department: "production|Cutting" }).map((r) => r.employeeCode)).toEqual([
+      "P1",
+    ]);
+    expect(filterRows(split, { ...NO_FILTERS, department: "staff|Cutting" }).map((r) => r.employeeCode)).toEqual([
+      "S1",
+    ]);
+    // a plain name (an older saved filter) still matches every Cutting
+    expect(filterRows(split, { ...NO_FILTERS, department: "Cutting" })).toHaveLength(2);
   });
 
   it("filters by the day the advance was raised, both ends included", () => {

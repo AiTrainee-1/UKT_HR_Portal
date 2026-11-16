@@ -216,31 +216,49 @@ export type NextCyclePeriod = {
   then: Period[];
   /** Days of it that a period already generated on this cycle covers (workers paid for them are skipped). */
   overlap: Period | null;
-  /** Production Payroll refuses a period whose last day is after today: this is the first day it can be generated. */
+  /** A period can be generated only from the day after its last day: this is that day. */
   generateFrom: Day;
   ended: boolean;
+  /** It is the latest period generated, still open (Payroll Done not pressed on it yet), so it stays the next one. */
+  stillOpen: boolean;
 };
 
+/** Whether `p` is exactly one of the cycle's periods under `rule` (production_period.py is_cycle_period). */
+export function isCyclePeriod(p: Period, cycle: PayCycle, rule: CycleRule): boolean {
+  const held = resolveCyclePeriod(p.start, cycle, rule);
+  return "period" in held && compareDays(held.period.start, p.start) === 0 && compareDays(held.period.end, p.end) === 0;
+}
+
+/** Two periods with the same first and last day. */
+export const samePeriod = (a: Period, b: Period): boolean =>
+  compareDays(a.start, b.start) === 0 && compareDays(a.end, b.end) === 0;
+
 /**
- * What the cycle's page would generate next (production_period.py next_cycle_period): the period holding the day after
- * the latest period already generated on this cycle, or, on the first run, the most recent period that has ended (the
- * period holding today when today is its last day). A rule changed after periods were generated decides which period
- * holds that next day, so the next period can start before it: `overlap` is that stretch.
+ * What the cycle's page would generate next (production_period.py next_cycle_period): the latest period generated while
+ * it is still open (`open`: Payroll Done not pressed on it, and still one of the cycle's periods under the rule), else the
+ * period holding the day after the latest period already generated on this cycle, or, on the first run, the most recent
+ * period that has ended. A period has ended, and can be generated, only from the day after its last day (owner,
+ * 2026-11-16: the night shifts of the last day are not complete before then). A rule changed after periods were generated
+ * decides which period holds that next day, so the next period can start before it: `overlap` is that stretch.
  */
 export function nextCyclePeriod(
   cycle: PayCycle,
   rule: CycleRule,
   lastEnd: Day | null,
   today: Day,
+  open: Period | null = null,
 ): NextCyclePeriod | { error: string } {
   let resolved: { period: Period } | { error: string };
-  if (lastEnd) {
+  const stillOpen = open !== null && isCyclePeriod(open, cycle, rule);
+  if (stillOpen && open) {
+    resolved = { period: open };
+  } else if (lastEnd) {
     resolved = resolveCyclePeriod(addDays(lastEnd, 1), cycle, rule);
   } else {
     const current = resolveCyclePeriod(today, cycle, rule);
     if ("error" in current) return current;
     resolved =
-      compareDays(current.period.end, today) <= 0
+      compareDays(current.period.end, today) < 0
         ? current
         : resolveCyclePeriod(addDays(current.period.start, -1), cycle, rule);
   }
@@ -248,8 +266,88 @@ export function nextCyclePeriod(
   const { period } = resolved;
   const days = CYCLE_INFO[cycle].days;
   const then = [1, 2].map((k) => ({ start: addDays(period.start, k * days), end: addDays(period.end, k * days) }));
-  const overlap = lastEnd && compareDays(period.start, lastEnd) <= 0 ? { start: period.start, end: lastEnd } : null;
-  return { period, then, overlap, generateFrom: period.end, ended: compareDays(period.end, today) <= 0 };
+  // an open period that is generated again is the same period, not a second payment of its days
+  const overlap =
+    !stillOpen && lastEnd && compareDays(period.start, lastEnd) <= 0 ? { start: period.start, end: lastEnd } : null;
+  return {
+    period,
+    then,
+    overlap,
+    generateFrom: addDays(period.end, 1),
+    ended: compareDays(period.end, today) < 0,
+    stillOpen,
+  };
+}
+
+// ── the cycle cards (Settings -> Production Payroll) ──
+
+/** "Monday → Sunday": the weekdays a week starting on `weekStart` runs between. */
+export const weekRunsArrow = (weekStart: string): string =>
+  weekRunsText(normalizeWeekStart(weekStart)).replace(" to ", " → ");
+
+/** How long one period of a cycle is, in the words of its card. */
+export const LENGTH_WORDS: Record<PayCycle, { days: string; weeks: string }> = {
+  weekly: { days: "7 days", weeks: "one week, paid every week: about 52 payslips a year" },
+  biweekly: { days: "14 days", weeks: "two weeks, paid every two weeks: 26 payslips a year" },
+  monthly: { days: "28 days", weeks: "Monthly = four weeks (28 days), not a calendar month: 13 payslips a year" },
+};
+
+/** The PF / ESI monthly estimate of a cycle's payslip, in plain words (pf_esi.py production_amounts). */
+export const FACTOR_WORDS: Record<PayCycle, string> = {
+  weekly: "One week's pay times four is the monthly pay the PF and ESI rules are tested on.",
+  biweekly: "Two weeks' pay times two is the monthly pay the PF and ESI rules are tested on.",
+  monthly: "The four weeks' pay, as it is, is the monthly pay the PF and ESI rules are tested on.",
+};
+
+const MONTH_DAY = (d: Day) => `${WEEKDAYS[weekdayOf(d)]} ${d.day} ${SHORT_MONTHS[d.month - 1]}`;
+
+/** "Mon 12 Oct – Sun 18 Oct 2026", "Mon 28 Dec 2026 – Sun 3 Jan 2027": a period with its weekdays. */
+export function formatPeriodLong(p: Period): string {
+  const end = `${MONTH_DAY(p.end)} ${p.end.year}`;
+  const start = p.start.year === p.end.year ? MONTH_DAY(p.start) : `${MONTH_DAY(p.start)} ${p.start.year}`;
+  return `${start} – ${end}`;
+}
+
+/** Whether `day` falls inside `p` (both ends counted). */
+export const holds = (p: Period, day: Day): boolean => compareDays(day, p.start) >= 0 && compareDays(day, p.end) <= 0;
+
+/** "Today is day 1 of 7." for the period holding today. */
+export const dayOfPeriodText = (p: Period, today: Day): string =>
+  `Today is day ${daysFrom(p.start, today) + 1} of ${periodDays(p)}.`;
+
+export type StripTag = "generated" | "next" | "today" | "overlap";
+export type StripItem = { period: Period; tags: StripTag[] };
+
+/**
+ * The few periods a cycle's card lines up as a calendar strip: the latest period generated (when known), the next one to
+ * generate and the `after` periods following it, each tagged (generated, next, holds today, overlaps a generated one).
+ * The engine's refusal when the rule is not complete.
+ */
+export function periodStrip(
+  cycle: PayCycle,
+  rule: CycleRule,
+  lastGenerated: Period | null,
+  today: Day,
+  after = 3,
+  open: Period | null = null,
+): StripItem[] | { error: string } {
+  const next = nextCyclePeriod(cycle, rule, lastGenerated?.end ?? null, today, open);
+  if ("error" in next) return next;
+  const days = CYCLE_INFO[cycle].days;
+  const tagged = (period: Period, tags: StripTag[]): StripItem => ({
+    period,
+    tags: holds(period, today) ? [...tags, "today"] : tags,
+  });
+  const items: StripItem[] = [];
+  const nextIsGenerated = lastGenerated !== null && samePeriod(lastGenerated, next.period);
+  if (lastGenerated && !nextIsGenerated) items.push(tagged(lastGenerated, ["generated"]));
+  items.push(
+    tagged(next.period, nextIsGenerated ? ["generated", "next"] : next.overlap ? ["next", "overlap"] : ["next"]),
+  );
+  for (let k = 1; k <= after; k += 1) {
+    items.push(tagged({ start: addDays(next.period.start, k * days), end: addDays(next.period.end, k * days) }, []));
+  }
+  return items;
 }
 
 /** A saved rule in words: "Monday weeks", "Monday weeks counted from Mon 2 Feb 2026", "first period start not set". */

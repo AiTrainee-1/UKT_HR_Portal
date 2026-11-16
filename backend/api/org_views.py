@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import org_category
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .models import Branch, Designation, Department
@@ -33,6 +34,9 @@ def designation_json(d, employee_count: int | None = None):
         "departmentId": d.department_id,
         "departmentName": d.department.name if d.department else None,
         "level": d.level,
+        # Staff or Production (org_category.py): its department's, or its own when it has none.
+        "category": d.category,
+        "branchId": d.department.branch_id if d.department else None,
         "createdAt": d.created_at.isoformat() if d.created_at else None,
     }
     if employee_count is not None:
@@ -122,11 +126,51 @@ def branch_detail(request: Request, pk: int) -> Response:
 
 # ── Designations ──────────────────────────────────────────────────────────────
 
+
+def _clean_title(value) -> str:
+    """A designation title with surrounding and repeated spaces removed (" Sr.  Tailor " is "Sr. Tailor")."""
+    return " ".join(str(value if value is not None else "").split())
+
+
+def _department_for(request: Request, raw):
+    """The department a designation is filed under, from a body's departmentId: (department or None, error response).
+
+    Scoped to the requester's branch (a branch login can only use its own departments); a value that is not a number
+    or names no department the requester can see is a plain 404, never a 500."""
+    if raw in (None, ""):
+        return None, None
+    try:
+        dept_id = int(raw)
+    except (TypeError, ValueError):
+        return None, Response({"error": "Department not found"}, status=404)
+    dept = scope_to_branch(Department.objects, request).filter(pk=dept_id).first()
+    if dept is None:
+        return None, Response({"error": "Department not found"}, status=404)
+    return dept, None
+
+
+def _title_taken(title: str, dept, category: str, exclude_pk=None) -> bool:
+    """Another designation of the same department (or, with none, of no department and the same kind) has the title."""
+    qs = Designation.objects.filter(title__iexact=title)
+    qs = qs.filter(department_id=dept.id) if dept is not None else qs.filter(department__isnull=True, category=category)
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    return qs.exists()
+
+
+def _title_taken_message(title: str, dept, category: str) -> str:
+    where = f'in "{dept.name}"' if dept is not None else f"among {org_category.label(category)} designations"
+    return f'A designation called "{title}" already exists {where}'
+
+
 @api_view(["GET", "POST"])
 @require_hr
 def designations(request: Request) -> Response:
     if request.method == "GET":
         dept_id = request.query_params.get("departmentId")
+        category, problem = org_category.query_category(request.query_params)
+        if problem:
+            return Response({"error": problem}, status=400)
         qs = Designation.objects.select_related("department").annotate(
             employee_count=Count("employees", filter=Q(employees__status="active"))
         ).order_by("title")
@@ -136,30 +180,42 @@ def designations(request: Request) -> Response:
         # applied consistently rather than a special case for this page.
         qs = scope_to_branch(qs, request, field="department__branch_id")
         if dept_id:
-            qs = qs.filter(department_id=dept_id)
+            try:
+                qs = qs.filter(department_id=int(dept_id))
+            except (TypeError, ValueError):
+                return Response({"error": "departmentId must be a number"}, status=400)
+        if category:
+            qs = qs.filter(category=category)
         return Response([designation_json(d, d.employee_count) for d in qs])
 
     data = request.data
-    if not data.get("title"):
+    title = _clean_title(data.get("title"))
+    if not title:
         return Response({"error": "title is required"}, status=400)
 
+    dept, refused = _department_for(request, data.get("departmentId"))
+    if refused:
+        return refused
     # A branch user may only file a designation under one of their own
     # departments -otherwise they could plant a row in another branch that
     # they then cannot see, and that branch never asked for.
-    dept_id = data.get("departmentId")
-    if get_branch_scope(request) is not None:
-        if not dept_id:
-            return Response(
-                {"error": "Select a department -a designation must belong to one"},
-                status=400,
-            )
-        if not scope_to_branch(Department.objects, request).filter(pk=dept_id).exists():
-            return Response({"error": "Department not found"}, status=404)
+    if dept is None and get_branch_scope(request) is not None:
+        return Response({"error": "Select a department -a designation must belong to one"}, status=400)
+
+    # Staff or Production: always its department's; one with no department takes what was sent (Staff for an older
+    # client that sends nothing).
+    requested, problem = org_category.body_category(data, default=org_category.STAFF)
+    if problem:
+        return Response({"error": problem}, status=400)
+    category = dept.category if dept is not None else requested
+    if _title_taken(title, dept, category):
+        return Response({"error": _title_taken_message(title, dept, category)}, status=400)
 
     d = Designation.objects.create(
-        title=data["title"],
-        department_id=dept_id,
-        level=data.get("level", "staff"),
+        title=title,
+        department=dept,
+        level=data.get("level") or "staff",
+        category=category,
     )
     return Response(designation_json(d), status=201)
 
@@ -183,19 +239,33 @@ def designation_detail(request: Request, pk: int) -> Response:
 
     if request.method == "PUT":
         data = request.data
-        if "title" in data and not str(data.get("title") or "").strip():
-            return Response({"error": "title is required"}, status=400)
-        # Same rule as create: a branch user may only keep a designation under one of their own departments.
-        if "departmentId" in data and get_branch_scope(request) is not None:
-            if not data["departmentId"]:
+        title = d.title
+        if "title" in data:
+            title = _clean_title(data.get("title"))
+            if not title:
+                return Response({"error": "title is required"}, status=400)
+        dept = d.department
+        if "departmentId" in data:
+            dept, refused = _department_for(request, data.get("departmentId"))
+            if refused:
+                return refused
+            # Same rule as create: a branch user may only keep a designation under one of their own departments.
+            if dept is None and get_branch_scope(request) is not None:
                 return Response({"error": "Select a department -a designation must belong to one"}, status=400)
-            if not scope_to_branch(Department.objects, request).filter(pk=data["departmentId"]).exists():
-                return Response({"error": "Department not found"}, status=404)
-        for field, attr in [
-            ("title", "title"), ("departmentId", "department_id"), ("level", "level"),
-        ]:
-            if field in data:
-                setattr(d, attr, data[field])
+        requested, problem = org_category.body_category(data, default=d.category)
+        if problem:
+            return Response({"error": problem}, status=400)
+        category = dept.category if dept is not None else requested
+        problem = org_category.designation_change_problem(d, category)
+        if problem:
+            return Response({"error": problem}, status=400)
+        if _title_taken(title, dept, category, exclude_pk=d.pk):
+            return Response({"error": _title_taken_message(title, dept, category)}, status=400)
+        d.title = title
+        d.department = dept
+        d.category = category
+        if "level" in data:
+            d.level = data.get("level") or "staff"
         d.save()
         emp_count = d.employees.filter(status="active").count()
         return Response(designation_json(d, emp_count))

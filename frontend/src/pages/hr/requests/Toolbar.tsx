@@ -1,3 +1,5 @@
+import { categoryForEmploymentType, departmentOptions, keepIfOffered } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { Download, FileSpreadsheet, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,10 +57,22 @@ export default function Toolbar({
   onExport: (format: "xlsx" | "csv") => void;
 }) {
   const set = (patch: Partial<Filters>) => onFilters({ ...filters, ...patch });
-  const departments =
-    filters.branch === "all"
-      ? options.departments
-      : options.departments.filter((d) => String(d.branchId ?? "") === filters.branch || d.branchId == null);
+  // Staff / Production have departments of their own: an employee type offers only its kind's, "all" both kinds under
+  // Staff and Production headings (two CUTTINGs told apart).
+  const departmentsFor = (type: string, branch: string) =>
+    departmentOptions(
+      options.departments
+        .filter((d) => branch === "all" || String(d.branchId ?? "") === branch || d.branchId == null)
+        .map((d) => ({
+          id: d.id,
+          name: d.name,
+          category: d.category ?? null,
+          branchId: d.branchId,
+          branchName: options.branches.find((b) => b.id === d.branchId)?.name ?? null,
+        })),
+      { category: categoryForEmploymentType(type) },
+    );
+  const departments = departmentsFor(filters.type, filters.branch);
   const narrowed = activeFilterCount(filters);
 
   return (
@@ -189,15 +203,16 @@ export default function Toolbar({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All departments</SelectItem>
-              {departments.map((d) => (
-                <SelectItem key={d.id} value={String(d.id)}>
-                  {d.name}
-                </SelectItem>
-              ))}
+              <OrgSelectItems options={departments} />
             </SelectContent>
           </Select>
         )}
-        <Select value={filters.type} onValueChange={(v) => set({ type: v })}>
+        <Select
+          value={filters.type}
+          onValueChange={(v) =>
+            set({ type: v, department: keepIfOffered(filters.department, departmentsFor(v, filters.branch), "all") })
+          }
+        >
           <SelectTrigger className="h-9 lg:w-40" aria-label="Filter by employee type" data-testid="filter-type">
             <SelectValue />
           </SelectTrigger>

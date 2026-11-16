@@ -213,6 +213,7 @@ const SIDEBAR_CHILDREN = [
   "/hr/attendance/production",
   "/hr/attendance/search",
   "/hr/attendance/report-log",
+  "/hr/attendance/production-report-log",
   "/hr/missing-punch",
   "/hr/geo-attendance/approvals",
   "/hr/geo-attendance/journeys",

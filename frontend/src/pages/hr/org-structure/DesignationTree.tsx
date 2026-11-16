@@ -1,11 +1,11 @@
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 import { Briefcase, Building2, ChevronDown, ChevronRight, FolderTree, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { DesignationRow } from "./api";
 import { plural, type BranchNode, type DeptNode } from "./logic";
-import { Headcount, LevelChip, SplitBar } from "./parts";
+import { Headcount, LevelChip, OrgCategoryContext, SplitBar } from "./parts";
 
 type Handlers = {
   onOpen: (d: DesignationRow) => void;
@@ -171,6 +171,8 @@ function DepartmentGroup({
 
 /** Branch -> Department -> Designation, every level collapsible, with head-count and the staff / production split on each. */
 export default function DesignationTree({ nodes, collapsed, forceOpen, onToggle, ...handlers }: Props) {
+  // On a Staff / Production page an empty branch has none of THAT kind (it may have departments of the other).
+  const kind = useContext(OrgCategoryContext);
   const isOpen = (key: string) => forceOpen || !collapsed.has(key);
   return (
     <div className="space-y-3" data-testid="designation-tree">
@@ -236,7 +238,7 @@ export default function DesignationTree({ nodes, collapsed, forceOpen, onToggle,
                 <div className="space-y-2 border-t bg-white px-3 py-3">
                   {b.departments.length === 0 ? (
                     <p className="px-1 py-2 text-sm text-gray-500" data-testid={`branch-empty-${b.name}`}>
-                      No departments in this branch yet.
+                      No {kind ? `${kind} ` : ""}departments in this branch yet.
                     </p>
                   ) : (
                     b.departments.map((dn) => (

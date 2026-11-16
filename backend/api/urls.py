@@ -90,6 +90,7 @@ from .org_views import (
     branches, branch_detail,
     designations, designation_detail,
 )
+from .department_views import assign_department, assign_designation
 from .recruitment_views import (
     recruitment_dashboard, new_joinees,
     resignations, my_resignation, resignation_action, resignation_delete,
@@ -153,11 +154,17 @@ from .reception_views import (
     reception_devices, reception_device_detail, reception_login_info, reception_login,
     reception_summary, reception_visits,
 )
+from .production_special_shifts_views import (
+    production_shifts_overview, production_special_shifts, production_special_shift_detail,
+    production_special_shift_assign, production_special_assignment_end, production_special_assignment_detail,
+)
 from .attendance_views import (
     attendance_summary, attendance_daily, attendance_monthly_trend,
     attendance_employee_history, biometric_punch, manual_attendance,
     attendance_employee_punches, attendance_monthly_summary,
     sync_biometric_api, sync_biometric_progress, attendance_report_log, attendance_report_log_sheet,
+    attendance_production_report_log, attendance_production_report_log_sheet,
+    set_production_day_informed, report_log_day_punches, production_report_log_day_punches,
     set_day_informed, compute_shift_logs,
     attendance_search, attendance_search_range,
     attendance_late_summary, employee_shift_monthly_stats, attendance_sync_status,
@@ -204,12 +211,18 @@ from .auto_sync_views import auto_sync_rules, auto_sync_rule_detail
 from .production_employee_views import (
     assign_production_pay_cycle,
     production_cycle_change_preview,
+    production_employee_transfers,
     production_employees,
 )
 from .production_payroll_views import (
     production_cycles_summary, production_next_period, production_generate_payroll,
     production_period_status, production_periods,
     production_skip_check, production_payroll_list,
+    production_payroll_detail, production_payroll_breakdown, production_generate_progress,
+)
+from .production_period_workflow_views import (
+    production_period_workflow, production_period_finalize, production_period_paid, production_period_unlock,
+    production_new_joiners, production_new_joiners_add, production_moved_out,
 )
 from .payroll_insights_views import (
     staff_payroll_details, staff_payroll_issues, staff_payroll_rules,
@@ -218,7 +231,7 @@ from .payroll_insights_views import (
 from .payroll_statement_views import staff_salary_statement, production_salary_statement
 from .payroll_month_workflow_views import (
     payroll_month_status, payroll_month_skipped, payroll_hold, payroll_add_to_payroll, payroll_release_and_pay,
-    payroll_month_finalize, payroll_month_paid,
+    payroll_month_finalize, payroll_month_paid, payroll_month_unlock,
 )
 from .pf_esi_coverage_export import pf_esi_coverage_export
 from .pf_esi_views import pf_esi_coverage, pf_esi_settings
@@ -286,16 +299,21 @@ urlpatterns = [
     path("departments/<int:pk>", views.delete_department),
     path("departments/overview", departments_overview),
     path("departments/<int:pk>/employees", department_employees),
+    # Set one employee's department / designation from the two org pages (department_views.py): under the pages' own
+    # prefixes, so they take employees.departments / employees.designations edit rather than the Employees module.
+    path("departments/assign", assign_department),
     path("designations", designations),
     path("designations/<int:pk>", designation_detail),
     path("designations/tree", designations_tree),
     path("designations/<int:pk>/employees", designation_employees),
+    path("designations/assign", assign_designation),
 
     # ── Employees ───────────────────────────────────────────────────────────
     path("employees", views.employees),
     path("employees/production", production_employees),
     path("employees/production/assign", assign_production_pay_cycle),
     path("employees/production/cycle-change-preview", production_cycle_change_preview),
+    path("employees/production/<int:pk>/transfers", production_employee_transfers),
     path("employees/<int:pk>", views.employee_detail),
     path("employees/<int:pk>/photo", views.employee_photo),
     path("employees/<int:pk>/status", views.employee_status),
@@ -306,6 +324,13 @@ urlpatterns = [
     # ── Shift Management ────────────────────────────────────────────────────
     path("shifts", shift_templates),
     path("shifts/<int:pk>", shift_template_detail),
+    # Production shifts (owner 2026-11-16): the Settings shift groups as the default shifts + special shifts
+    path("shifts/production", production_shifts_overview),
+    path("shifts/production/special", production_special_shifts),
+    path("shifts/production/special/<int:pk>", production_special_shift_detail),
+    path("shifts/production/special/<int:pk>/assign", production_special_shift_assign),
+    path("shifts/production/special-assignments/<int:pk>/end", production_special_assignment_end),
+    path("shifts/production/special-assignments/<int:pk>", production_special_assignment_detail),
     path("shift-assignments", shift_assignments),
     path("shift-assignments/bulk", bulk_shift_assignments),
     path("shift-assignments/plan", shift_assignment_plan),
@@ -478,6 +503,12 @@ urlpatterns = [
     path("connector/punches", connector_punches),
     path("attendance/report-log", attendance_report_log),
     path("attendance/report-log/sheet", attendance_report_log_sheet),
+    path("attendance/report-log/day-punches", report_log_day_punches),
+    # Production Report Log (owner 2026-11-16): the same reports for production employees, at their own addresses
+    path("attendance/production-report-log", attendance_production_report_log),
+    path("attendance/production-report-log/sheet", attendance_production_report_log_sheet),
+    path("attendance/production-report-log/day-punches", production_report_log_day_punches),
+    path("attendance/production-report-log/day-informed", set_production_day_informed),
     path("attendance/day-informed", set_day_informed),
 
     # ── Outpass / Visitors -pure gate data-collection, see outpass_visitor_views.py ──
@@ -720,6 +751,7 @@ urlpatterns = [
     path("payroll/month-skipped", payroll_month_skipped),
     path("payroll/month-finalize", payroll_month_finalize),
     path("payroll/month-paid", payroll_month_paid),
+    path("payroll/month-unlock", payroll_month_unlock),
     path("payroll/<int:pk>/hold", payroll_hold),
     path("payroll/<int:pk>/add-to-payroll", payroll_add_to_payroll),
     path("payroll/<int:pk>/release-and-pay", payroll_release_and_pay),
@@ -729,7 +761,16 @@ urlpatterns = [
     path("payroll/production/period-status", production_period_status),
     path("payroll/production/next-period", production_next_period),
     path("payroll/production/generate", production_generate_payroll),
+    path("payroll/production/generate-progress", production_generate_progress),
     path("payroll/production/skip-check", production_skip_check),
+    # The period workflow (2026-11-16, production_period_workflow.py): Payroll Done, Mark as Paid, New Joiners, Moved out
+    path("payroll/production/period-workflow", production_period_workflow),
+    path("payroll/production/period-finalize", production_period_finalize),
+    path("payroll/production/period-paid", production_period_paid),
+    path("payroll/production/period-unlock", production_period_unlock),
+    path("payroll/production/new-joiners", production_new_joiners),
+    path("payroll/production/new-joiners/add", production_new_joiners_add),
+    path("payroll/production/moved-out", production_moved_out),
     # Payroll insights (read-only): details of one payroll, the issues payroll detected, the rules in force and the printed
     # Salary Statement. Staff under payroll/ (module `payroll`), production under payroll/production/ (`production_payroll`).
     path("payroll/issues", staff_payroll_issues),
@@ -739,6 +780,8 @@ urlpatterns = [
     path("payroll/production/rules", production_payroll_rules),
     path("payroll/production/salary-statement", production_salary_statement),
     path("payroll/production/<int:pk>/details", production_payroll_details),
+    path("payroll/production/<int:pk>/breakdown", production_payroll_breakdown),
+    path("payroll/production/<int:pk>", production_payroll_detail),
     path("payroll/<int:pk>/details", staff_payroll_details),
     path("payroll/<int:pk>/breakdown", payroll_breakdown),
     path("payroll/<int:pk>", payroll_detail),

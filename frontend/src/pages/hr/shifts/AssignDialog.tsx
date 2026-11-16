@@ -36,6 +36,7 @@ import {
   type PlanResult,
   type ShiftItem,
 } from "@/lib/api-client/custom-hooks";
+import { categoryForEmploymentType, inCategory, type OrgDepartment } from "@/lib/departments";
 import { cn } from "@/lib/utils";
 import PlanPreview from "./PlanPreview";
 import SelectionBuilder from "./SelectionBuilder";
@@ -138,6 +139,14 @@ export default function AssignDialog({
   const { data: assignments = [] } = useListShiftAssignments({ activeOnly: true });
 
   const shift = shifts.find((s) => s.id === state.shiftId) ?? null;
+  // A staff shift goes to staff, a production shift to production: only that kind's departments and designations can
+  // be included or excluded (lib/departments.ts); before a shift is picked, both.
+  const shiftKind = categoryForEmploymentType(shift?.shiftType);
+  const kindDepartments = useMemo(
+    () => inCategory(departments as OrgDepartment[], shiftKind),
+    [departments, shiftKind],
+  );
+  const kindDesignations = useMemo(() => inCategory(designations, shiftKind), [designations, shiftKind]);
   const currentShift = useMemo(() => new Map(assignments.map((a) => [a.employeeId, a.shiftName ?? ""])), [assignments]);
 
   const request = buildRequest(state);
@@ -315,8 +324,8 @@ export default function AssignDialog({
                   includeAll={state.includeAll}
                   onIncludeAll={(includeAll) => patch({ includeAll })}
                   employees={employees}
-                  departments={departments}
-                  designations={designations}
+                  departments={kindDepartments}
+                  designations={kindDesignations}
                   currentShift={currentShift}
                 />
               </Step>

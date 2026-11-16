@@ -21,7 +21,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval
+from . import approval_workflow as approval, org_category
 from .audit_utils import log_action
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name
 from .user_settings import settings_for, settings_for_employee
@@ -183,7 +183,8 @@ def _resolve_override_fields(record: AttendanceDayRecord, emp: Employee, data: d
 
             ruleset = psr.rules_for_day(ProductionShiftConfig.get(), record.date)
             if ruleset is not None:
-                max_shifts = max(point.value for group in ruleset.groups for point in group.points)
+                groups = (*ruleset.groups, *ruleset.special)  # a special shift's table can pay more
+                max_shifts = max(point.value for group in groups for point in group.points)
         shifts = min(Decimal(str(record.shifts_earned or 0)) or Decimal("1.00"), max_shifts)
         if shifts < Decimal("1.00"):
             shifts = Decimal("1.00")
@@ -485,6 +486,15 @@ def promotions(request: Request) -> Response:
 
     if new_dept == emp.department and new_desig == emp.designation:
         return Response({"error": "No change -select a new designation or department"}, status=400)
+    # A promotion stays within the employee's kind: a staff employee moves to a Staff department / designation, a
+    # production employee to a Production one (org_category.py). Only what the promotion changes is checked.
+    mismatch = org_category.employee_mismatch(
+        emp.employment_type,
+        new_dept if new_dept != emp.department else None,
+        new_desig if new_desig != emp.designation else None,
+    )
+    if mismatch:
+        return Response({"error": mismatch}, status=400)
 
     try:
         eff = date_type.fromisoformat(str(data.get("effectiveDate")))

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
@@ -28,6 +28,8 @@ import { Landmark, Plus, Search, UserCheck, UserX, Trash2, Eye, Pencil, UploadCl
 import { DataPagination } from "@/components/ui/DataPagination";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { moduleForPath } from "@/lib/permission-modules";
+import { categoryForEmploymentType, departmentOptions, keepIfOffered } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { Gate, ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import { CoEmpTab } from "./co-emp/CoEmpTab";
 import { TdsPanel } from "./co-emp/TdsPanel";
@@ -104,8 +106,25 @@ export default function Employees() {
     return () => clearTimeout(t);
   }, [search]);
 
+  // Staff and production have departments of their own (lib/departments.ts): the Staff tab offers only Staff
+  // departments, the Production tab only Production ones (and only the picked branch's, when one is picked). A
+  // department of the other kind picked before the tab changed is dropped instead of filtering the list to nobody.
+  const { data: departments } = useListDepartments();
+  const deptOptions = useMemo(
+    () =>
+      departmentOptions(departments, {
+        category: categoryForEmploymentType(typeFilter),
+        branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : null,
+      }),
+    [departments, typeFilter, isBranchScoped, branchFilter],
+  );
+  const deptValue: string = departments ? keepIfOffered(deptFilter, deptOptions, "all") : deptFilter;
+  useEffect(() => {
+    if (deptValue !== deptFilter) setDeptFilter(deptValue);
+  }, [deptValue, deptFilter]);
+
   const filterParams = {
-    departmentId: deptFilter !== "all" ? Number(deptFilter) : undefined,
+    departmentId: deptValue !== "all" ? Number(deptValue) : undefined,
     branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
     employmentType: viewingCoEmp ? undefined : typeFilter,
@@ -129,7 +148,6 @@ export default function Employees() {
     status: "inactive",
   }, { enabled: rosterOpen });
 
-  const { data: departments } = useListDepartments();
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
   const deleteMutation = useDeleteEmployee();
   const statusMutation = useUpdateEmployeeStatus();
@@ -288,15 +306,15 @@ export default function Employees() {
                 data-testid="input-search"
               />
             </div>
-            <Select value={deptFilter} onValueChange={setDeptFilter}>
+            <Select value={deptValue} onValueChange={setDeptFilter}>
               <SelectTrigger className={`w-full sm:w-44 ${PHONE_FILTER}`} data-testid="select-department">
                 <SelectValue placeholder="Department" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Departments</SelectItem>
-                {departments?.map((d) => (
-                  <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
-                ))}
+                <SelectItem value="all">
+                  All {typeFilter === "production" ? "Production" : "Staff"} Departments
+                </SelectItem>
+                <OrgSelectItems options={deptOptions} />
               </SelectContent>
             </Select>
             {!isBranchScoped && (

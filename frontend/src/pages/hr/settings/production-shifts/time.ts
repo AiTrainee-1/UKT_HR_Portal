@@ -33,6 +33,36 @@ export function clock12(text: string): string {
   return minutes === null ? text : formatClock(minutes);
 }
 
+/**
+ * "13:30" -> "01:30 PM": the 12-hour clock with two-digit hours, the way the time boxes show a time, for the summary
+ * and the From / To ranges. A text that is not a time comes back as it is.
+ */
+export function clockPadded(text: string): string {
+  const minutes = toMinutes(text);
+  if (minutes === null) return text;
+  const hour = Math.floor(minutes / 60);
+  const twelve = hour % 12 === 0 ? 12 : hour % 12;
+  return `${String(twelve).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")} ${hour < 12 ? "AM" : "PM"}`;
+}
+
+/** A minute count from the shift day's midnight in words: 1200 -> "08:00 PM", 1770 -> "05:30 AM next day". */
+export function atText(minutes: number): string {
+  return `${clockPadded(toHHMM(minutes))}${minutes >= MINUTES_PER_DAY ? " next day" : ""}`;
+}
+
+/** "From 08:30 AM to 08:00 PM", "From 09:00 PM to 05:30 AM next day" (minutes from the shift day's midnight). */
+export function rangeText(start: number, end: number): string {
+  return `From ${atText(start)} to ${atText(end)}`;
+}
+
+/** A length of time: 690 -> "11 h 30 min", 45 -> "45 min", 60 -> "1 h", 0 -> "0 min". */
+export function spanText(minutes: number): string {
+  const whole = Math.max(0, Math.round(minutes));
+  const h = Math.floor(whole / 60);
+  const m = whole % 60;
+  return h === 0 ? `${m} min` : m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
 /** A point of a ladder in words: "8:00 PM", or "5:30 AM next day". */
 export function pointText(time: string, nextDay: boolean): string {
   return `${clock12(time)}${nextDay ? " next day" : ""}`;

@@ -78,6 +78,7 @@ export const navGroups: NavGroupData[] = [
           { path: '/hr/attendance/production', label: 'Production Attendance' },
           { path: '/hr/attendance/search', label: 'Attendance Search' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
+          { path: '/hr/attendance/production-report-log', label: 'Production Report Log' },
           { path: '/hr/missing-punch', label: 'Missing Punch' },
         ],
       },

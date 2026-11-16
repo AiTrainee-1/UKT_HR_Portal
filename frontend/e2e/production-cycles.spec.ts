@@ -89,11 +89,12 @@ async function cycleOf(page: Page, code: string) {
 }
 
 async function payrollRows(page: Page, cycle: string, period = WEEK1) {
+  // includeParked: a worker who moved here waits in New Joiners in their first period (2026-11-16), still a payroll row
   return (
     await api(
       page,
       "GET",
-      `/api/payroll/production?cycle=${cycle}&periodStart=${period.periodStart}&periodEnd=${period.periodEnd}`,
+      `/api/payroll/production?cycle=${cycle}&periodStart=${period.periodStart}&periodEnd=${period.periodEnd}&includeParked=1`,
     )
   ).body as { employeeCode: string; status: string; payCycle: string }[];
 }
@@ -321,19 +322,15 @@ test("Generate Payroll pays the rest of the cycle and leaves existing payroll al
   expect((await payrollRows(page, "biweekly", FORTNIGHT1)).map((r) => r.employeeCode)).toEqual([]);
 });
 
-test("the dashboard of the period counts the payslips, the issues and the employee who was skipped", async ({
-  page,
-}) => {
+test("the views of the period count the payslips, the issues and the employee who was skipped", async ({ page }) => {
   await loginAsHr(page);
   await page.goto(`/hr/production-payroll/weekly?period=${WEEK1_PARAM}&layout=cards`);
-  const dash = page.getByTestId("pcp-dash-root");
-  await expect(dash).toBeVisible({ timeout: 30_000 });
   // two payslips of the three people on the cycle; Esha has no rate per shift, so she is the one skipped
-  await expect(page.getByTestId("pcp-dash-kpi-employees")).toContainText("2 of 3");
-  await expect(page.getByTestId("pcp-dash-kpi-skipped")).toContainText("1");
-  await expect(page.getByTestId("pcp-dash-kpi-skipped")).toContainText("of 3 checked");
-  await expect(page.getByTestId("pcp-dash-kpi-issues")).toBeVisible();
+  await expect(page.getByTestId("view-records-count")).toHaveText("2", { timeout: 30_000 });
   await expect(page.getByTestId("view-skipped-count")).toHaveText("1");
+  await expect(page.getByTestId("view-issues-count")).toBeVisible();
+  // no dashboard of tiles and charts on the cycle pages (owner 2026-11-16)
+  await expect(page.getByTestId("pcp-dash-root")).toHaveCount(0);
   // each payslip is a card with its figures, the issues payroll found and the rules the employee is paid under
   const asha = card(page, "Asha Worker");
   await expect(asha).toBeVisible();
@@ -898,9 +895,12 @@ async function idOf(page: Page, code: string): Promise<number> {
 }
 
 async function assignTo(page: Page, code: string, cycle: string | null) {
+  // a worker who already has payroll moves only with confirm + a reason (2026-11-16); harmless for anyone else
   const res = await api(page, "POST", "/api/employees/production/assign", {
     employeeIds: [await idOf(page, code)],
     cycle,
+    confirm: true,
+    reason: "E2E move",
   });
   expect(res.status, JSON.stringify(res.body)).toBe(200);
 }
@@ -952,8 +952,16 @@ test("Weekly -> Monthly: the move warns with the real dates, and Monthly pays on
   await assignTo(page, "PC-WM", "weekly");
   await assignTo(page, "PC-MX", "monthly");
   expect((await generateFor(page, "weekly", WEEK1, "PC-WM")).generated).toBe(1);
-  // Hema's month fixes Monthly's next period at 2 Feb - 1 Mar 2026, whatever today is
+  // finalized (Payroll Done): only a FINAL payroll is already paid; a draft would be replaced by Monthly (2026-11-16)
+  const weekDone = await api(page, "POST", "/api/payroll/production/period-finalize", { cycle: "weekly", ...WEEK1 });
+  expect(weekDone.status, JSON.stringify(weekDone.body)).toBe(201);
+  // Hema's month, finalized (Payroll Done), fixes Monthly's next period at 2 Feb - 1 Mar 2026, whatever today is
   expect((await generateFor(page, "monthly", MONTH_BEFORE, "PC-MX")).generated).toBe(1);
+  const done = await api(page, "POST", "/api/payroll/production/period-finalize", {
+    cycle: "monthly",
+    ...MONTH_BEFORE,
+  });
+  expect(done.status, JSON.stringify(done.body)).toBe(201);
 
   // somebody never paid is not warned
   const fresh = await api(
@@ -970,13 +978,16 @@ test("Weekly -> Monthly: the move warns with the real dates, and Monthly pays on
   await page.getByTestId("pe-select-PC-WM").check();
   await page.getByTestId("pe-bulk-monthly").click();
   await expect(page.getByRole("alertdialog")).toContainText("Move 1 employee from Weekly to Monthly?");
-  await expect(page.getByTestId("pe-preview-warning-PC-WM")).toContainText(
-    "This employee was previously assigned to Weekly Payroll, and payroll has already been generated for the " +
-      "previous period (2 Feb – 8 Feb 2026). If you change the payroll category to Monthly, the system will " +
-      "calculate salary only for the remaining unpaid days (9 Feb – 1 Mar 2026). Previously generated salary will " +
-      "not be calculated or paid again.",
-    { timeout: 15_000 },
-  );
+  // the owner's warning (2026-11-16): up to which day, how many periods, how much, and from when Monthly pays
+  const warned = page.getByTestId("pe-preview-warning-PC-WM");
+  await expect(warned).toContainText("has already received salary under Weekly up to 8 Feb 2026: 1 pay period", {
+    timeout: 15_000,
+  });
+  await expect(warned).toContainText("the salary already paid for that time will not be paid again");
+  await expect(warned).toContainText("First Monthly period: 2 Feb – 1 Mar 2026, paying 21 days (9 Feb – 1 Mar 2026)");
+  // the move needs a reason
+  await expect(page.getByTestId("pe-confirm")).toBeDisabled();
+  await page.getByTestId("pe-reason").fill("Moved to the monthly line");
   await page.getByTestId("pe-confirm").click();
   await expect.poll(() => cycleOf(page, "PC-WM")).toBe("monthly");
 
@@ -1015,10 +1026,20 @@ test("Monthly -> Weekly: the days neither cycle paid are added to the first Week
   await assignTo(page, "PC-MW", "monthly");
   await assignTo(page, "PC-WX", "weekly");
   expect((await generateFor(page, "monthly", MONTH_BEFORE, "PC-MW")).generated).toBe(1);
-  // Weekly has paid 2-8 Feb (Jaya; the others too in a full run), so its next period is 9-15 Feb: 2-8 Feb would be paid
-  // by neither cycle for Indra
+  // finalized (Payroll Done): only a FINAL payroll is already paid (2026-11-16)
+  const monthDone = await api(page, "POST", "/api/payroll/production/period-finalize", {
+    cycle: "monthly",
+    ...MONTH_BEFORE,
+  });
+  expect(monthDone.status, JSON.stringify(monthDone.body)).toBe(201);
+  // Weekly has paid 2-8 Feb (Jaya; the others too in a full run). The week stays due until its Payroll Done (2026-11-16);
+  // once finalized, Weekly's next period is 9-15 Feb, and 2-8 Feb would be paid by neither cycle for Indra
   await generateFor(page, "weekly", WEEK1, "PC-WX");
-  const next = await api(page, "GET", "/api/payroll/production/next-period?cycle=weekly");
+  let next = await api(page, "GET", "/api/payroll/production/next-period?cycle=weekly");
+  expect([next.body.periodStart, next.body.periodEnd]).toEqual([WEEK1.periodStart, WEEK1.periodEnd]);
+  const done = await api(page, "POST", "/api/payroll/production/period-finalize", { cycle: "weekly", ...WEEK1 });
+  expect(done.status, JSON.stringify(done.body)).toBe(201);
+  next = await api(page, "GET", "/api/payroll/production/next-period?cycle=weekly");
   expect([next.body.periodStart, next.body.periodEnd]).toEqual([WEEK2.periodStart, WEEK2.periodEnd]);
 
   await loginAsHr(page);
@@ -1029,16 +1050,14 @@ test("Monthly -> Weekly: the days neither cycle paid are added to the first Week
   await page.getByTestId("pe-row-assign-PC-MW-weekly").click();
   await expect(page.getByRole("alertdialog")).toContainText("Move 1 employee from Monthly to Weekly?");
   const warning = page.getByTestId("pe-preview-warning-PC-MW");
+  await expect(warning).toContainText("has already received salary under Monthly up to 1 Feb 2026: 1 pay period", {
+    timeout: 15_000,
+  });
   await expect(warning).toContainText(
-    "This employee was previously assigned to Monthly Payroll, and payroll has already been generated for the " +
-      "previous period (5 Jan – 1 Feb 2026). If you change the payroll category to Weekly, the system will " +
-      "calculate salary only for the remaining unpaid days (9 Feb – 15 Feb 2026).",
-    { timeout: 15_000 },
+    "First Weekly period: 9 Feb – 15 Feb 2026, paying 14 days (2 Feb – 15 Feb 2026). 2 Feb – 8 Feb 2026 were not " +
+      "paid by any payroll, so they are added to that first Weekly payroll as catch-up days.",
   );
-  await expect(warning).toContainText(
-    "2 Feb – 8 Feb 2026 were not paid on Monthly and fall before the first Weekly period (9 Feb – 15 Feb 2026), " +
-      "so they are added to that first Weekly payroll as catch-up days.",
-  );
+  await page.getByTestId("pe-reason").fill("Moved to the weekly line");
   await page.getByTestId("pe-confirm").click();
   await expect.poll(() => cycleOf(page, "PC-MW")).toBe("weekly");
 
@@ -1052,13 +1071,16 @@ test("Monthly -> Weekly: the days neither cycle paid are added to the first Week
   expect(row.paidRanges).toEqual([{ from: "2026-02-02", to: "2026-02-15" }]);
   expect(row.totalWorkingDays).toBe(14);
 
-  // the caught-up week can never be paid again on its own
-  const again = await generateFor(page, "weekly", WEEK1, "PC-MW");
-  expect(again.generated).toBe(0);
-  expect(again.skippedDetails[0].reason).toContain(
-    "Already paid: every day of 2 Feb – 8 Feb 2026 is already in the Weekly payroll for 9 Feb – 15 Feb 2026",
-  );
+  // the caught-up week can never be paid again on its own: it is finalized, and its days are paid in 9-15 Feb
+  const again = await api(page, "POST", "/api/payroll/production/generate", {
+    cycle: "weekly",
+    ...WEEK1,
+    employeeIds: [await idOf(page, "PC-MW")],
+  });
+  expect(again.status).toBe(409);
+  expect(JSON.stringify(again.body)).toContain("finalized");
   await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
   await expect(page.getByTestId("pcp-roster-state-PC-MW")).toHaveText(/cannot be generated/i);
-  await expect(page.getByTestId("pcp-roster-row-PC-MW")).toContainText("Already paid: every day of 2 Feb – 8 Feb 2026");
+  // (the week is finalized: nothing more is generated in it)
+  await expect(page.getByTestId("pcp-roster-row-PC-MW")).toContainText("is finalized (Payroll Done)");
 });

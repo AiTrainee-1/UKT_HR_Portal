@@ -1,3 +1,5 @@
+import { categoryForEmploymentType, keepIfOffered, namedOrgOptions } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { useMemo } from "react";
 import { Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -32,7 +34,16 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
   const set = (patch: Partial<Filters>) => onFilters({ ...filters, ...patch });
   const counts = useMemo(() => statusCounts(rows, filters), [rows, filters]);
   const branches = useMemo(() => distinct(rows.map((r) => r.employeeBranch)), [rows]);
-  const departments = useMemo(() => distinct(rows.map((r) => r.employeeDepartment)), [rows]);
+  // Staff / Production have departments of their own: an employee type offers only its kind's, "all" both kinds under
+  // Staff and Production headings (two CUTTINGs told apart).
+  const departmentsFor = (type: string) =>
+    namedOrgOptions(
+      rows,
+      (r) => r.employeeDepartment,
+      (r) => r.employeeType,
+      categoryForEmploymentType(type),
+    );
+  const departments = departmentsFor(filters.employeeType);
   const problem = rangeProblem(filters.from, filters.to);
   const active = filtersActive(filters);
 
@@ -104,14 +115,15 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All departments</SelectItem>
-            {departments.map((d) => (
-              <SelectItem key={d} value={d}>
-                {d}
-              </SelectItem>
-            ))}
+            <OrgSelectItems options={departments} />
           </SelectContent>
         </Select>
-        <Select value={filters.employeeType} onValueChange={(v) => set({ employeeType: v })}>
+        <Select
+          value={filters.employeeType}
+          onValueChange={(v) =>
+            set({ employeeType: v, department: keepIfOffered(filters.department, departmentsFor(v), "all") })
+          }
+        >
           <SelectTrigger className={TRIGGER} aria-label="Filter by employee type" data-testid="filter-employee-type">
             <SelectValue />
           </SelectTrigger>

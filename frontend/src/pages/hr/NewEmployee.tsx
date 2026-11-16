@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ArrowLeft } from "lucide-react";
+import { categoryForEmploymentType, departmentOptions, designationOptions } from "@/lib/departments";
+import { OrgNativeOptions } from "@/lib/org-select";
 import { EMPTY_SPLIT, defaultSplit, splitPayload, type SplitKey, type SplitValues } from "@/lib/salary-split";
 import { addSplitIssue, splitErrorMessage, splitSchema } from "@/lib/salary-split-form";
 
@@ -98,6 +100,32 @@ export default function NewEmployee() {
 
   const employmentType = form.watch("employmentType");
   const salaryAmount = form.watch("salaryAmount");
+
+  // Staff and production have departments and designations of their own (lib/departments.ts): only the employee's
+  // kind is offered, and switching the type drops a department / designation of the other kind.
+  const orgCategory = categoryForEmploymentType(employmentType) ?? "staff";
+  const deptOptions = useMemo(
+    () => departmentOptions(departments, { category: orgCategory }),
+    [departments, orgCategory],
+  );
+  const desigOptions = useMemo(
+    () => designationOptions(designations, { category: orgCategory }),
+    [designations, orgCategory],
+  );
+  useEffect(() => {
+    if (!departments) return;
+    const current = form.getValues("departmentId");
+    if (current && !deptOptions.some((o) => o.value === current)) {
+      form.setValue("departmentId", "");
+      form.setValue("designationId", "");
+      setSelectedDeptId("");
+    }
+  }, [departments, deptOptions, form]);
+  useEffect(() => {
+    if (!designations) return;
+    const current = form.getValues("designationId");
+    if (current && !desigOptions.some((o) => o.value === current)) form.setValue("designationId", "");
+  }, [designations, desigOptions, form]);
   const splitValues = form.watch("split");
 
   // The split is worked out as soon as the salary is typed (and whenever it changes); every amount stays editable.
@@ -272,10 +300,10 @@ export default function NewEmployee() {
                         }}
                         className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                       >
-                        <option value="">-Select Department —</option>
-                        {(departments ?? []).map((d) => (
-                          <option key={d.id} value={String(d.id)}>{d.name}</option>
-                        ))}
+                        <option value="">
+                          -Select {orgCategory === "production" ? "Production" : "Staff"} Department —
+                        </option>
+                        <OrgNativeOptions options={deptOptions} />
                       </select>
                     </FormControl>
                     <FormMessage />
@@ -290,13 +318,13 @@ export default function NewEmployee() {
                         onChange={field.onChange}
                         className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                       >
-                        <option value="">-Select Designation —</option>
-                        {(designations ?? []).map((d) => (
-                          <option key={d.id} value={String(d.id)}>{d.title}</option>
-                        ))}
+                        <option value="">
+                          -Select {orgCategory === "production" ? "Production" : "Staff"} Designation —
+                        </option>
+                        <OrgNativeOptions options={desigOptions} />
                       </select>
                     </FormControl>
-                    {selectedDeptId && (designations ?? []).length === 0 && (
+                    {selectedDeptId && designations && desigOptions.length === 0 && (
                       <p className="text-xs text-muted-foreground mt-1">
                         No designations in this department yet.
                       </p>

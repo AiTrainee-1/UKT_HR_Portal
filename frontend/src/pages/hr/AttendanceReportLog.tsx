@@ -11,10 +11,12 @@ import { cn } from "@/lib/utils";
 import { AttendanceSheetContent } from "./AttendanceSheet";
 import { ALL } from "./leave/logic";
 import type { DailyFilters } from "./report-log/DailyFilters";
+import { KIND_TEXT, ReportLogKindProvider, type ReportLogKind } from "./report-log/kind";
 import LatePenaltyCard from "./report-log/LatePenaltyCard";
 import LateTab from "./report-log/LateTab";
 import LeaveTab from "./report-log/LeaveTab";
 import { TAB_LABELS, localToday, parseTab, searchWithTab, type TabKey } from "./report-log/logic";
+import ProductionLateNote from "./report-log/ProductionLateNote";
 
 /** The sub-tab the address names (`?tab=monthly|leave|late`; the old `daily` is the leave report). */
 const readTab = (): TabKey => {
@@ -74,12 +76,25 @@ const REGISTER_ON_PHONES = [
   "max-sm:[&_.ml-auto>button]:flex-1",
 ].join(" ");
 
-/** Each sub-tab's own permission key (Account Management -> Roles & Permissions); one without a setting follows the page. */
-const TAB_KEY: Record<TabKey, string> = {
-  monthly: "attendance.report_log.monthly",
-  leave: "attendance.report_log.leave",
-  late: "attendance.report_log.late",
+/** Each sub-tab's own permission key (Account Management -> Roles & Permissions); one without a setting follows the page
+ *  (the Production Report Log's keys, unset, follow the staff Report Log's: permission_tree.py). */
+const TAB_KEYS: Record<ReportLogKind, Record<TabKey, string>> = {
+  staff: {
+    monthly: "attendance.report_log.monthly",
+    leave: "attendance.report_log.leave",
+    late: "attendance.report_log.late",
+  },
+  production: {
+    monthly: "attendance.production_report_log.monthly",
+    leave: "attendance.production_report_log.leave",
+    late: "attendance.production_report_log.late",
+  },
 };
+
+/** The Report Log (staff): /hr/attendance/report-log. */
+export default function AttendanceReportLog() {
+  return <ReportLogPage kind="staff" />;
+}
 
 /**
  * Report Log: three sub-tabs.
@@ -89,14 +104,22 @@ const TAB_KEY: Record<TabKey, string> = {
  *     Excel / PDF / Image of the paper "STAFF LEAVE LIST".
  *   Daily Late Report: the staff who arrived late on one date, per unit, with their first punch, and the same three downloads.
  * The tab is in the address (`?tab=`), so a refresh or a shared link opens the same one.
+ *
+ * The Production Report Log (/hr/attendance/production-report-log, owner 2026-11-16) is this same page for production
+ * employees (`kind`): the same tabs, filters, tables and downloads over its own API addresses, its own departments and
+ * permission keys, "PRODUCTION LEAVE LIST" / "Production Daily Late Report" on its downloads, the production attendance mode
+ * on the badge, and in place of the Late-Penalty Breakdown (a staff-only monthly figure) a card saying where production
+ * late deductions are worked out (per pay period).
  */
-export default function AttendanceReportLog() {
+export function ReportLogPage({ kind }: { kind: ReportLogKind }) {
   const [asked, setTab] = useState<TabKey>(readTab);
   // the two daily lists share their date, department and search: switching between them keeps what was picked
   const [daily, setDaily] = useState<DailyFilters>(() => ({ date: localToday(), department: ALL, search: "" }));
+  const words = KIND_TEXT[kind];
+  const TAB_KEY = TAB_KEYS[kind];
 
   const { data: settings } = usePayrollSettings();
-  const simpleMode = settings?.attendanceMode === "simple";
+  const simpleMode = (kind === "production" ? settings?.prodAttendanceMode : settings?.attendanceMode) === "simple";
 
   // Only the sub-tabs this role may see are offered; a hidden one asked for (by the address too) opens the first it may see.
   const { user } = useAuth();
@@ -122,58 +145,61 @@ export default function AttendanceReportLog() {
 
   return (
     <HrLayout>
-      <div className="space-y-4 sm:space-y-5" data-testid="report-log-page">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900">
-              <ClipboardList size={22} className="text-indigo-600" />
-              Report Log
-            </h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              The colored attendance register, the late-penalty breakdown behind payroll&apos;s deductions, and the
-              daily leave and late lists
-            </p>
-          </div>
-          <span
-            className={cn(
-              "rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide sm:text-[10px]",
-              simpleMode ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700",
-            )}
-            title="Attendance calculation mode: change it in Settings → Attendance"
-            data-testid="mode-badge"
-          >
-            {simpleMode ? "Simple Mode" : "Strict Mode"}
-          </span>
-        </div>
-
-        {items.length === 0 ? (
-          <p
-            className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
-            data-testid="nothing-open"
-          >
-            Nothing on this page is open to your role.
-          </p>
-        ) : (
-          <>
-            <div className="max-w-full overflow-x-auto pb-1" data-testid="report-log-tabs">
-              <PillTabs items={items} value={tab} onChange={selectTab} baseColor="#4f46e5" size="sm" />
+      <ReportLogKindProvider value={kind}>
+        <div className="space-y-4 sm:space-y-5" data-testid="report-log-page" data-kind={kind}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900" data-testid="report-log-title">
+                <ClipboardList size={22} className="text-indigo-600" />
+                {words.pageTitle}
+              </h2>
+              <p className="mt-0.5 text-sm text-muted-foreground">{words.pageHelp}</p>
             </div>
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide sm:text-[10px]",
+                simpleMode ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700",
+              )}
+              title={
+                kind === "production"
+                  ? "Production attendance calculation mode: change it in Settings → Attendance → Production"
+                  : "Attendance calculation mode: change it in Settings → Attendance"
+              }
+              data-testid="mode-badge"
+            >
+              {simpleMode ? "Simple Mode" : "Strict Mode"}
+            </span>
+          </div>
 
-            <ViewOnlyTabNote show={tabViewOnly} />
-
-            {tab === "monthly" && (
-              <div className="space-y-4 sm:space-y-5" data-testid="monthly-tab">
-                <div className={REGISTER_ON_PHONES} data-testid="monthly-register">
-                  <AttendanceSheetContent />
-                </div>
-                <LatePenaltyCard />
+          {items.length === 0 ? (
+            <p
+              className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
+              data-testid="nothing-open"
+            >
+              Nothing on this page is open to your role.
+            </p>
+          ) : (
+            <>
+              <div className="max-w-full overflow-x-auto pb-1" data-testid="report-log-tabs">
+                <PillTabs items={items} value={tab} onChange={selectTab} baseColor="#4f46e5" size="sm" />
               </div>
-            )}
-            {tab === "leave" && <LeaveTab filters={daily} onFilters={setDaily} />}
-            {tab === "late" && <LateTab filters={daily} onFilters={setDaily} />}
-          </>
-        )}
-      </div>
+
+              <ViewOnlyTabNote show={tabViewOnly} />
+
+              {tab === "monthly" && (
+                <div className="space-y-4 sm:space-y-5" data-testid="monthly-tab">
+                  <div className={REGISTER_ON_PHONES} data-testid="monthly-register">
+                    <AttendanceSheetContent />
+                  </div>
+                  {kind === "production" ? <ProductionLateNote /> : <LatePenaltyCard />}
+                </div>
+              )}
+              {tab === "leave" && <LeaveTab filters={daily} onFilters={setDaily} />}
+              {tab === "late" && <LateTab filters={daily} onFilters={setDaily} />}
+            </>
+          )}
+        </div>
+      </ReportLogKindProvider>
     </HrLayout>
   );
 }

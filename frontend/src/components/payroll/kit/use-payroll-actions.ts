@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useUpdatePayrollRecord } from "@/lib/api-client";
+import { useUpdatePayrollOf, type PayrollKind } from "@/lib/api-client/custom-hooks";
 
 const PAYROLL_KEY_PREFIXES = ["/api/payroll", "/api/salary-slips"];
 // "Who would be skipped" depends only on who has a salary and working days, and it is the heaviest question the page asks
@@ -41,11 +42,13 @@ export function useIsRefreshingPayroll(): boolean {
 
 /**
  * "Mark as Cleared" on one payroll record, shared by the record lists and the Salary tabs. `markingId` is the record whose update
- * is running (its button spins and waits); a success reloads the payroll figures (not the skipped-employees check).
+ * is running (its button spins and waits); a success reloads the payroll figures (not the skipped-employees check). A
+ * production record is changed on its own route (/api/payroll/production/<id>, Production Payroll rights, 2026-11-16).
  */
-export function useMarkPaid() {
+export function useMarkPaid(kind: PayrollKind = "staff") {
   const { toast } = useToast();
   const { mutateAsync: updateRecord } = useUpdatePayrollRecord();
+  const { mutateAsync: updateOf } = useUpdatePayrollOf();
   const refresh = useRefreshPayroll();
   const [markingId, setMarkingId] = useState<number | null>(null);
 
@@ -53,16 +56,21 @@ export function useMarkPaid() {
     async (run: { id: number; employeeName?: string | null }) => {
       setMarkingId(run.id);
       try {
-        await updateRecord({ id: run.id, data: { status: "paid" } });
+        if (kind === "production") await updateOf({ kind, id: run.id, data: { status: "paid" } });
+        else await updateRecord({ id: run.id, data: { status: "paid" } });
         toast({ title: `${run.employeeName ?? "Employee"}'s salary marked as cleared` });
         await refresh({ skipCheck: false });
-      } catch {
-        toast({ title: "Failed to update status", variant: "destructive" });
+      } catch (err) {
+        toast({
+          title: "Failed to update status",
+          description: kind === "production" && err instanceof Error ? err.message : undefined,
+          variant: "destructive",
+        });
       } finally {
         setMarkingId(null);
       }
     },
-    [updateRecord, toast, refresh],
+    [kind, updateRecord, updateOf, toast, refresh],
   );
 
   return { markPaid, markingId };

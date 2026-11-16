@@ -25,6 +25,12 @@ import {
   splitPercent,
   summarizeDepartments,
   summarizeDesignations,
+  parseOrgCategory,
+  countByCategory,
+  treeOfCategory,
+  unassignedOf,
+  departmentCategoryLock,
+  designationCategoryLock,
   summarizePeople,
 } from "./logic";
 
@@ -178,6 +184,7 @@ describe("departments", () => {
     expect(summarizeDepartments(DEPTS, { active: 6, staff: 5, production: 1 })).toEqual({
       departments: 5,
       branches: 3,
+      designations: 0,
       active: 19,
       staff: 7,
       production: 12,
@@ -185,6 +192,9 @@ describe("departments", () => {
       empty: 2,
       unassigned: 6,
     });
+    // on a Staff / Production page "with no department" counts only that kind's employees
+    expect(summarizeDepartments(DEPTS, { active: 6, staff: 5, production: 1 }, "production").unassigned).toBe(1);
+    expect(summarizeDepartments(DEPTS, { active: 6, staff: 5, production: 1 }, "staff").unassigned).toBe(5);
     expect(summarizeDepartments([], undefined)).toMatchObject({
       departments: 0,
       branches: 0,
@@ -207,8 +217,10 @@ describe("departments", () => {
   });
   it("lays the export out as a header and a row each", () => {
     const sheet = departmentSheet(DEPTS.slice(0, 1));
-    expect(sheet[0]).toHaveLength(8);
-    expect(sheet[1]).toEqual(["Cutting", "Head Office", "Cut room", 2, 3, 5, 1, 0]);
+    expect(sheet[0]).toHaveLength(9);
+    expect(sheet[0][1]).toBe("Type");
+    expect(sheet[1]).toEqual(["Cutting", "Staff", "Head Office", "Cut room", 2, 3, 5, 1, 0]);
+    expect(departmentSheet([{ ...DEPTS[0], category: "production" }])[1][1]).toBe("Production");
   });
 });
 
@@ -273,6 +285,7 @@ describe("designations", () => {
       designations: 5,
       departments: 2,
       active: 7,
+      inactive: 1,
       staff: 3,
       production: 4,
       empty: 2,
@@ -287,8 +300,8 @@ describe("designations", () => {
   });
   it("lays the export out with Unassigned for a designation with no department", () => {
     const sheet = designationSheet([TREE.designations[3], TREE.designations[0]]);
-    expect(sheet[1]).toEqual(["", "Unassigned", "Floating", "Manager", 0, 0, 0, 0]);
-    expect(sheet[2]).toEqual(["Head Office", "Cutting", "Master", "Senior", 2, 0, 2, 0]);
+    expect(sheet[1]).toEqual(["", "Unassigned", "Floating", "Staff", "Manager", 0, 0, 0, 0]);
+    expect(sheet[2]).toEqual(["Head Office", "Cutting", "Master", "Staff", "Senior", 2, 0, 2, 0]);
   });
 });
 
@@ -453,5 +466,57 @@ describe("people", () => {
     expect(initials("Asha Kumar")).toBe("AK");
     expect(initials("  madonna ")).toBe("M");
     expect(initials("")).toBe("?");
+  });
+});
+
+describe("the Staff / Production switch", () => {
+  it("reads the kind from the address, Staff unless it says production", () => {
+    expect(parseOrgCategory("production")).toBe("production");
+    expect(parseOrgCategory("staff")).toBe("staff");
+    expect(parseOrgCategory("anything")).toBe("staff");
+    expect(parseOrgCategory(undefined)).toBe("staff");
+  });
+  it("counts each kind (a row with no category is Staff)", () => {
+    expect(countByCategory([{ category: "staff" }, { category: "production" }, {}, { category: null }])).toEqual({
+      staff: 3,
+      production: 1,
+    });
+  });
+  it("cuts the tree down to one kind and keeps the branches", () => {
+    const mixed = {
+      ...TREE,
+      departments: [
+        ...TREE.departments,
+        { id: 99, name: "Cutting", category: "production" as const, branchId: 1, branchName: "Head Office", active: 3 },
+      ],
+      designations: [
+        ...TREE.designations,
+        { ...TREE.designations[0], id: 98, title: "Cutter", departmentId: 99, category: "production" as const },
+      ],
+    };
+    const production = treeOfCategory(mixed, "production");
+    expect(production.departments.map((d) => d.id)).toEqual([99]);
+    expect(production.designations.map((d) => d.id)).toEqual([98]);
+    expect(production.branches).toEqual(TREE.branches);
+    const staff = treeOfCategory(mixed, "staff");
+    expect(staff.departments).toHaveLength(TREE.departments.length);
+    expect(staff.designations).toHaveLength(TREE.designations.length);
+  });
+  it("picks the unassigned figure of the kind", () => {
+    const u = { active: 9, staff: 7, production: 2 };
+    expect(unassignedOf(u, "staff")).toBe(7);
+    expect(unassignedOf(u, "production")).toBe(2);
+    expect(unassignedOf(u, null)).toBe(9);
+    expect(unassignedOf(undefined, "staff")).toBe(0);
+  });
+  it("locks the kind of a department or designation that has people", () => {
+    expect(departmentCategoryLock(dept(1, "Cutting", 1, "HO", hc(0, 0, 0)))).toBeNull();
+    expect(departmentCategoryLock(dept(1, "Cutting", 1, "HO", hc(2, 0, 1)))).toContain(
+      "3 employees are in this department",
+    );
+    expect(departmentCategoryLock(dept(1, "Cutting", 1, "HO", hc(0, 0, 1)))).toContain("1 employee is in");
+    expect(departmentCategoryLock(null)).toBeNull();
+    expect(designationCategoryLock(TREE.designations[3])).toBeNull();
+    expect(designationCategoryLock(TREE.designations[1])).toContain("hold this designation");
   });
 });

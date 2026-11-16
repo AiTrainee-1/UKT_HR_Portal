@@ -27,7 +27,12 @@ cycle that holds the dates is printed. Dates that touch two or more generated pe
 (pick dates inside one); left empty, the latest generated period of the cycle is printed. The filters echo (screen, file
 header, audit log) names the period printed.
 
-Gated on the ``production_payroll`` module, exactly like GET /api/payroll/production/salary-statement.
+Gated on ``production_payroll.exports`` (the Payroll tab's Export; a role that never set it follows ``production_payroll``,
+so nothing changed for an existing role).
+
+The period workflow (owner 2026-11-16, production_period_workflow.py): a worker parked in the period's New Joiners (joined
+during the period, or moved here from another cycle, not added to the payroll yet) is NOT on the statement (scope_payrolls
+leaves them out, as the staff statement leaves a parked new joiner out); a note says how many are waiting.
 """
 
 from __future__ import annotations
@@ -62,8 +67,8 @@ from .hr_reports_salary_statement_files import StatementLayout
 
 REPORT_ID = "hr-production-salary-statement"
 CATEGORY = "hr"
-# The production statement endpoint is gated on the production_payroll module alone; so is this report.
-MODULES = ("production_payroll",)
+# The Payroll tab's Export (production_payroll.exports, which follows production_payroll until a role sets it).
+MODULES = ("production_payroll.exports",)
 
 # The money columns that add up (sub totals, unit totals, TOTAL); the rate and the day counts are not added up.
 SUM_KEYS = ("eSalary", "pf", "esi", "tds", "advance", "others", "totalDeduction", "net")
@@ -190,6 +195,21 @@ def resolve_period(ctx, cycle: str) -> tuple[date | None, date | None]:
     )
 
 
+def _parked_count(ctx, cycle: str, start: date, end: date) -> int:
+    """Payrolls of the period, in the report's scope, parked in New Joiners (not on the statement until added)."""
+    return (
+        Payroll.objects.filter(
+            salary_mode=Payroll.SALARY_MODE_SHIFT,
+            period_start=start,
+            period_end=end,
+            new_joiner_parked=True,
+            employee__status="active",
+        )
+        .filter(_cycle_q(cycle), ctx.emp_q("employee__"))
+        .count()
+    )
+
+
 def _no_payroll_count(ctx, cycle: str, start: date, end: date) -> int:
     """Active production employees on the cycle, in the report's scope, who had joined by the period's last day and have
     no payroll for the period."""
@@ -278,6 +298,12 @@ def _run(ctx) -> ReportResult:
         ]
         if not payrolls:
             notes.append(f"No {label} production payroll has been generated for this period and selection.")
+        waiting = _parked_count(ctx, cycle, start, end)
+        if waiting:
+            notes.append(
+                f"{waiting} worker(s) of this period are waiting in New Joiners on the {label} page (joined during the "
+                "period or moved here from another pay cycle) and are not listed until HR adds them to the payroll."
+            )
         missing = _no_payroll_count(ctx, cycle, start, end)
         if missing:
             notes.append(

@@ -88,9 +88,15 @@ export function DetailsHeader({
   const { user } = useAuth();
   const pending = details.status === "pending";
   const wf = workflow?.applies ? workflow : null;
+  // production (2026-11-16): the pay period's lock, New Joiners and payment status (no Hold)
+  const prod = workflow?.production ? workflow : null;
+  const flags = wf ?? prod;
   // Mark as Cleared is an approval of its own (a View-only role still sees it disabled, a finalized month as before)
-  const mayMarkCleared = canApprove(user, "payroll_mark_cleared");
-  const locked = !!wf?.locked;
+  const mayMarkCleared = prod?.markCleared ?? canApprove(user, "payroll_mark_cleared");
+  const locked = !!flags?.locked;
+  const lockedText = prod
+    ? "This pay period is finalized (Payroll Done): nothing on it can change"
+    : "This month is finalized (Payroll Done): nothing on it can change";
   const computed = details.generatedAt;
   const regenerated = !!details.firstGeneratedAt && details.firstGeneratedAt !== details.generatedAt;
   // production, after a pay-cycle change: the days this payroll pays, and the ones another payroll already paid
@@ -123,7 +129,7 @@ export function DetailsHeader({
           <div className="flex flex-wrap items-center gap-2 print:hidden" data-testid="pd-actions">
             {employee.phone && <PhoneButton phone={employee.phone} name={employee.name} />}
             {pending && mayMarkCleared && (
-              <span title={locked ? "This month is finalized (Payroll Done): nothing on it can change" : undefined}>
+              <span title={locked ? lockedText : undefined}>
                 <Button
                   size="sm"
                   className="h-9 gap-2 bg-emerald-600 bg-none text-white hover:bg-emerald-700"
@@ -245,20 +251,40 @@ export function DetailsHeader({
                   <span data-testid="pd-on-hold">On hold</span>
                 </Chip>
               )}
-              {wf?.parked && (
-                <Chip tone="info" title="Add them to the payroll on Payroll > Skipped Employees">
-                  <span data-testid="pd-new-joiner">New joiner: not in the payroll yet</span>
+              {flags?.parked && (
+                <Chip
+                  tone="info"
+                  title={
+                    prod
+                      ? "Waiting in New Joiners on the cycle page: add them to the payroll there"
+                      : "Add them to the payroll on Payroll > Skipped Employees"
+                  }
+                >
+                  <span data-testid="pd-new-joiner">
+                    {prod ? "In New Joiners: not in the payroll yet" : "New joiner: not in the payroll yet"}
+                  </span>
                 </Chip>
               )}
               {wf?.releasedFrom && <Chip tone="success">Paid separately</Chip>}
-              {wf?.paidAt && (
-                <Chip tone="success" title="Paid as the employee sees it">
-                  <span data-testid="pd-paid">Paid {dateShort(wf.paidAt.slice(0, 10))}</span>
+              {flags?.paidAt && (
+                <Chip
+                  tone="success"
+                  title={prod ? "The pay period was marked as paid" : "Paid as the employee sees it"}
+                >
+                  <span data-testid="pd-paid">Paid {dateShort(flags.paidAt.slice(0, 10))}</span>
                 </Chip>
               )}
               {locked && (
-                <Chip tone="accent" icon={Lock} title="Payroll Done: this month is locked for good">
-                  <span data-testid="pd-locked">Month finalized</span>
+                <Chip
+                  tone="accent"
+                  icon={Lock}
+                  title={
+                    prod
+                      ? "Payroll Done: this pay period is locked for good"
+                      : "Payroll Done: this month is locked for good"
+                  }
+                >
+                  <span data-testid="pd-locked">{prod ? "Period finalized" : "Month finalized"}</span>
                 </Chip>
               )}
             </div>

@@ -1283,3 +1283,179 @@ describe("Settings -> Production Shifts: a copy that went stale, checks found be
     expect(advice).not.toContain("1:00 PM");
   });
 });
+
+describe("Settings -> Production Shifts: the shift timings at a glance", () => {
+  const glance = (kind: string) => q(`[data-testid="glance-card"][data-kind="${kind}"]`)!;
+  const glanceText = (kind: string, part: string) =>
+    (glance(kind).querySelector(`[data-testid="${part}"]`)?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+  it("opens with a card for every group: its days, From / To, the first-punch window, what the day pays and a 24-hour bar", async () => {
+    await open();
+    expect(q('[data-testid="production-shifts-glance"]')).not.toBeNull();
+    expect(qa('[data-testid="glance-card"]').map((c) => c.dataset.kind)).toEqual(["day", "night", "sunday"]);
+    expect(glanceText("day", "glance-days")).toBe("Monday – Saturday");
+    expect(glanceText("day", "glance-range")).toBe(
+      "Shift timeFrom 08:30 AM to 08:00 PM11 h 30 min, of which 1 h 30 min is unpaid break",
+    );
+    expect(glanceText("day", "glance-window")).toBe("First punchPunch in between 04:00 AM and 04:59 PM");
+    expect(glanceText("day", "glance-pays")).toBe(
+      "The day pays1.50 shifts by 08:00 PM; up to 3.00 shifts by 05:30 AM next day",
+    );
+    expect(glanceText("night", "glance-range")).toContain("From 09:00 PM to 05:30 AM next day");
+    expect(glanceText("night", "glance-pays")).toContain("1.50 shifts by 05:30 AM next day, the most this shift pays");
+    expect(glanceText("sunday", "glance-days")).toBe("Sunday");
+    expect(glanceText("sunday", "glance-range")).toContain("From 08:30 AM to 05:00 PM");
+    // the bar: the shift in blue, the paid time after 8:00 PM, the breaks (and the morning ones again), a tick a row
+    const bar = glance("day").querySelector('[data-testid="glance-timeline"]')!;
+    expect(bar.querySelectorAll('[data-part="shift"]')).toHaveLength(1);
+    expect(bar.querySelectorAll('[data-part="after-end"]')).toHaveLength(1);
+    expect(bar.querySelectorAll('[data-part="point"]')).toHaveLength(8);
+    expect(bar.querySelectorAll('[data-part="break"]').length).toBeGreaterThanOrEqual(5);
+    expect(bar.textContent).toContain("Midnight");
+    // every group's end is set, so nothing asks for one
+    expect(q('[data-testid="glance-no-end"]')).toBeNull();
+    expect(text('[data-testid="glance-breaks-total"]')).toBe("5 breaks, 2 h 30 min unpaid each day");
+    expect(text('[data-testid="glance-breaks"]')).toContain("12:45 PM – 01:30 PM · Lunch");
+    expect(q('[data-testid="glance-unsaved"]')).toBeNull();
+  });
+
+  it("follows the boxes below at once, says the changes are not saved, and asks for an end time when there is none", async () => {
+    await open();
+    await page!.type(aria("Day shift: standard departure"), "19:00");
+    expect(glanceText("day", "glance-range")).toContain("From 08:30 AM to 07:00 PM");
+    expect(glanceText("day", "glance-pays")).toContain("About 1.25 shifts by 07:00 PM");
+    expect(q('[data-testid="glance-unsaved"]')).not.toBeNull();
+    // the editor says the same From / To in words
+    expect(text('[data-testid="group-card"][data-kind="day"] [data-testid="group-shift-time-text"]')).toBe(
+      "08:30 AM to 07:00 PM: 10 h 30 min, of which 1 h 30 min is unpaid break.",
+    );
+
+    // no end time: the card says what it shows instead, and the button goes to the box
+    await clickIn(groupCard("day"), '[aria-label="Day shift: clear the end time"]');
+    expect(value(aria("Day shift: standard departure"))).toBe("");
+    expect((q(aria("Day shift: standard departure is the next day")) as HTMLInputElement).checked).toBe(false);
+    const missing = glance("day").querySelector('[data-testid="glance-no-end"]')!;
+    expect(missing.textContent).toContain("its last paid leaving time (05:30 AM next day) is shown as the end");
+    expect(glanceText("day", "glance-range")).toContain("From 08:30 AM to 05:30 AM next day");
+    expect(text('[data-testid="group-card"][data-kind="day"] [data-testid="group-shift-time-text"]')).toContain(
+      "with no end time: leaving early is never flagged",
+    );
+    await clickIn(glance("day"), '[data-testid="glance-set-end"]');
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Day shift: standard departure");
+    // a group without an end is allowed (the server keeps none): the save is not blocked
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it("marks the row at the shift's end, and puts the rows after midnight under their own heading", async () => {
+    await open();
+    const day = rowsOf("day");
+    expect(day.map((r) => !!r.querySelector('[data-testid="rule-end-mark"]'))).toEqual([
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(day.map((r) => r.dataset.nextDay)).toEqual([
+      "false",
+      "false",
+      "false",
+      "false",
+      "false",
+      "false",
+      "true",
+      "true",
+    ]);
+    expect(groupCard("day").querySelectorAll('[data-testid="ladder-next-day"]')).toHaveLength(1);
+    expect(groupCard("night").querySelectorAll('[data-testid="ladder-next-day"]')).toHaveLength(1);
+    expect(groupCard("sunday").querySelectorAll('[data-testid="ladder-next-day"]')).toHaveLength(0);
+  });
+
+  it("shows each break as From / To with its length and that it is not paid, and the total of a day", async () => {
+    await open();
+    expect(text('[data-testid="breaks-total"]')).toBe("5 breaks, 2 h 30 min unpaid each day");
+    expect(qa('[data-testid="break-paid"]').map((c) => c.textContent)).toEqual(Array(5).fill("not paid"));
+    await page!.click('button[role="switch"][aria-label="Break 5: in use"]');
+    expect(text('[data-testid="breaks-total"]')).toBe("4 breaks, 1 h 30 min unpaid each day");
+    expect(qa('[data-testid="break-paid"]')[4].textContent).toBe("off: paid");
+    expect(text('[data-testid="glance-breaks-total"]')).toBe("4 breaks, 1 h 30 min unpaid each day");
+    await page!.type(aria("Break 1: to"), "11:00");
+    expect(text('[data-testid="breaks-total"]')).toBe("4 breaks, 1 h 45 min unpaid each day");
+  });
+});
+
+describe("Settings -> Production Shifts: confirming the owner's handwriting, and the server's own limits", () => {
+  it("confirms a row as it is: its name says it was checked, the note goes, and the save sends only the new name", async () => {
+    await open();
+    expect(qa('[data-testid="unverified-row"]')).toHaveLength(2);
+    await clickIn(rowsOf("day")[6], '[data-testid="unverified-confirm"]');
+    expect(value(aria("Day shift, row 7: name"))).toBe(
+      "Works until 00:30 (1 shift + 1.5 OT) - checked: 12:30 AM next day",
+    );
+    expect(qa('[data-testid="unverified-row"]')).toHaveLength(1);
+    expect(text('[data-testid="unverified-banner"]')).toContain("Check this row with HR");
+    expect(saveBar().dataset.dirty).toBe("true");
+    await press("Save Production Shift Rules");
+    expect(changeLines()).toEqual([
+      "Day shift: 12:30 AM next day row name | Works until 00:30 (1 shift + 1.5 OT) | Works until 00:30 (1 shift + 1.5 OT) - checked: 12:30 AM next day",
+    ]);
+    await page!.click('[data-testid="confirm-production-shifts-confirm"]');
+    expect(server.puts[0].groups[0].rules[6]).toEqual({
+      id: 7,
+      label: "Works until 00:30 (1 shift + 1.5 OT) - checked: 12:30 AM next day",
+      outTime: "00:30",
+      outNextDay: true,
+      shiftValue: 2.5,
+      enabled: true,
+    });
+    // read back from the server, the row stays checked
+    expect(qa('[data-testid="unverified-row"]')).toHaveLength(1);
+    expect(rowsOf("night")[0].querySelector('[data-testid="unverified-row"]')).not.toBeNull();
+  });
+
+  it("does not let a view-only login confirm a row", async () => {
+    await open(SEEDED, { readOnly: true });
+    const buttons = qa('[data-testid="unverified-confirm"]') as HTMLButtonElement[];
+    expect(buttons).toHaveLength(2);
+    expect(buttons.every((b) => b.disabled)).toBe(true);
+    expect(q('[data-testid="glance-set-end"]')).toBeNull();
+  });
+
+  it("allows a 100-character name, as the server does, and refuses a longer one", async () => {
+    await open();
+    await page!.type(aria("Day shift: name"), "D".repeat(100));
+    expect(saveButton().disabled).toBe(false);
+    await page!.type(aria(`${"D".repeat(100)}: name`), "D".repeat(101));
+    expect(saveButton().disabled).toBe(true);
+    expect(page!.text()).toContain("Keep the name to 100 characters.");
+  });
+
+  it("lets the start date be blank while the rules are off, and sends none", async () => {
+    await open();
+    await page!.click("#production-rules-switch");
+    await page!.type("#production-rules-from", "");
+    expect(q('[data-testid="rules-from-error"]')).toBeNull();
+    expect(saveButton().disabled).toBe(false);
+    await saveAndConfirm();
+    expect(server.puts[0]).toMatchObject({ enabled: false, effectiveFrom: null });
+  });
+
+  it("does not check the ladder of a group that is switched off, and checks it again once it is on", async () => {
+    await open();
+    await page!.click('button[role="switch"][aria-label="Sunday shift: in use"]');
+    await page!.type(aria("Sunday shift, row 1: leaves at"), "07:00"); // before its 8:30 AM start
+    expect(q('[data-testid="group-card"][data-kind="sunday"] [data-testid="rule-time-error"]')).toBeNull();
+    expect(text('[data-testid="group-card"][data-kind="sunday"] [data-testid="group-off-note"]')).toContain(
+      "not checked for order yet",
+    );
+    expect(saveButton().disabled).toBe(false);
+    await page!.click('button[role="switch"][aria-label="Sunday shift: in use"]');
+    expect(text('[data-testid="group-card"][data-kind="sunday"] [data-testid="rule-time-error"]')).toContain(
+      "Must be later than the start (8:30 AM)",
+    );
+    expect(saveButton().disabled).toBe(true);
+  });
+});

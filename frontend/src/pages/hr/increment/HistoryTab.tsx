@@ -1,3 +1,4 @@
+import { categoryForEmploymentType, keepIfOffered, namedOrgOptions } from "@/lib/departments";
 import { useMemo, useState } from "react";
 import { ArrowRight, Download, History, Loader2, Route, SearchX, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -86,13 +87,28 @@ export default function HistoryTab({
   const active = filtersActive(filters);
   const options = useMemo(
     () => ({
-      departments: distinct(records.map((r) => r.department)),
-      designations: distinct(records.map((r) => r.designation)),
       branches: distinct(records.map((r) => r.branchName)),
       types: distinct(records.map((r) => r.employmentType)),
     }),
     [records],
   );
+  // Staff / Production have departments and designations of their own: a picked employee type offers only its kind's,
+  // "all" both kinds under Staff and Production headings.
+  const orgFor = (type: string) => ({
+    departments: namedOrgOptions(
+      records,
+      (r) => r.department,
+      (r) => r.employmentType,
+      categoryForEmploymentType(type),
+    ),
+    designations: namedOrgOptions(
+      records,
+      (r) => r.designation,
+      (r) => r.employmentType,
+      categoryForEmploymentType(type),
+    ),
+  });
+  const org = orgFor(filters.type);
   const asOptions = (values: string[]) => values.map((v) => ({ value: v, label: v }));
 
   const doExport = async () => {
@@ -169,7 +185,7 @@ export default function HistoryTab({
           <FilterSelect
             value={filters.department}
             onChange={(department) => update({ department })}
-            options={asOptions(options.departments)}
+            options={org.departments}
             allLabel="All departments"
             label="Filter by department"
             testId="filter-department"
@@ -177,7 +193,7 @@ export default function HistoryTab({
           <FilterSelect
             value={filters.designation}
             onChange={(designation) => update({ designation })}
-            options={asOptions(options.designations)}
+            options={org.designations}
             allLabel="All designations"
             label="Filter by designation"
             testId="filter-designation"
@@ -194,7 +210,14 @@ export default function HistoryTab({
           )}
           <FilterSelect
             value={filters.type}
-            onChange={(type) => update({ type })}
+            onChange={(type) => {
+              const next = orgFor(type);
+              update({
+                type,
+                department: keepIfOffered(filters.department, next.departments, "all"),
+                designation: keepIfOffered(filters.designation, next.designations, "all"),
+              });
+            }}
             options={options.types.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
             allLabel="Staff and production"
             label="Filter by employee type"

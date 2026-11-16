@@ -75,6 +75,13 @@ export interface ReportCategory {
 export interface NamedOption {
   id: number;
   name: string;
+  /** Departments and designations: Staff or Production (lib/departments.ts). */
+  category?: "staff" | "production" | null;
+  /** Departments: the branch, which tells two same-named departments of one kind apart. */
+  branchId?: number | null;
+  branchName?: string | null;
+  /** Designations: their department. */
+  departmentId?: number | null;
 }
 
 export interface ReportCatalog {

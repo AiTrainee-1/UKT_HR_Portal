@@ -5,7 +5,7 @@ import { dateTime } from "@/components/payroll/kit/format";
 import { explainStatutory } from "@/components/payroll/kit/statutory";
 import { cameFromPayroll, payrollDetailsPath, payrollListPath } from "@/components/payroll/kit/url-state";
 import {
-  usePayrollBreakdown,
+  usePayrollBreakdownOf,
   usePayrollSettings,
   type PayrollDetails,
   type PayrollKind,
@@ -165,7 +165,7 @@ function DetailsBody({
   const filters = useIssueFilters();
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const degraded = isDegraded(details);
-  const { markPaid, busy } = useMarkPaid();
+  const { markPaid, busy } = useMarkPaid(kind);
   // staff only: Hold / Unhold beside Mark as Cleared, and the month's Payroll Done lock (2026-11-10)
   const workflow = useDetailsWorkflow(details, kind);
   const settings = usePayrollSettings();
@@ -176,7 +176,8 @@ function DetailsBody({
   const exportItems = useMemo(() => detailsExportItems({ details, company }), [details, company]);
   // How PF / ESI / TDS were decided is stored in the payslip's breakdown, not in the details: read it from there (a payroll
   // with no breakdown, a legacy one, or a failed request simply has no such card).
-  const breakdown = usePayrollBreakdown(details.kind === "legacy_session" ? null : details.payrollId);
+  // (a production payroll is read on its own route, under the Production Payroll rights)
+  const breakdown = usePayrollBreakdownOf(kind, details.kind === "legacy_session" ? null : details.payrollId);
   const statutory = useMemo(
     () =>
       explainStatutory(

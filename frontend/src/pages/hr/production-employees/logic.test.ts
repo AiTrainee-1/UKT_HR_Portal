@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
+import { ApiError } from "@/lib/api-client/custom-fetch";
 import type {
   AssignProductionCycleResult,
   CycleChangePreview,
   CycleChangePreviewEmployee,
+  CycleMove,
   ProductionEmployeeRow,
 } from "@/lib/api-client/custom-hooks";
 import {
   ALL_DEPARTMENTS,
+  ALL_BRANCHES,
   NO_FILTERS,
   NO_SELECTION,
   TABS,
+  assignBody,
   assignmentToast,
+  branchOptions,
   chooseDefaultTab,
   confirmWording,
   deselectRows,
@@ -24,16 +29,24 @@ import {
   isTab,
   listSelection,
   matchesTab,
+  moveConflict,
+  moveDetails,
+  moveSentence,
+  moveText,
   nameMap,
   needsConfirmation,
   paginate,
   payrollStatus,
   planAssignment,
   previewWarnings,
+  productionDepartmentOptions,
+  reasonLimit,
+  reasonRequired,
   requestFilters,
   selectRows,
   selectedRows,
   selectionText,
+  shortDay,
   showingText,
   tabCount,
   tabLabel,
@@ -92,6 +105,8 @@ describe("filters", () => {
     expect(filtersActive({ ...NO_FILTERS, search: "ravi" })).toBe(true);
     expect(filtersActive({ ...NO_FILTERS, department: "3" })).toBe(true);
     expect(filtersActive({ ...NO_FILTERS, status: "all" })).toBe(true);
+    expect(filtersActive({ ...NO_FILTERS, branch: "2" })).toBe(true);
+    expect(filtersActive({ ...NO_FILTERS, branch: ALL_BRANCHES })).toBe(false);
     expect(isStatusFilter("inactive")).toBe(true);
     expect(isStatusFilter("fired")).toBe(false);
   });
@@ -103,16 +118,65 @@ describe("filters", () => {
       search: undefined,
       departmentId: undefined,
     });
-    expect(requestFilters("weekly", { search: " ravi ", department: "7", status: "all" })).toEqual({
+    expect(requestFilters("weekly", { search: " ravi ", department: "7", status: "all", branch: "3" })).toEqual({
       cycle: "weekly",
       status: "all",
       search: "ravi",
       departmentId: 7,
+      branchId: 3,
     });
+    expect(requestFilters("all", { ...NO_FILTERS, branch: "x" }).branchId).toBeUndefined();
     // the debounced search wins over what is in the box right now
     expect(requestFilters("all", { ...NO_FILTERS, search: "rav" }, "ra").search).toBe("ra");
     expect(requestFilters("all", { ...NO_FILTERS, department: ALL_DEPARTMENTS }).departmentId).toBeUndefined();
     expect(requestFilters("all", { ...NO_FILTERS, department: "x" }).departmentId).toBeUndefined();
+  });
+});
+
+describe("the department and unit filters", () => {
+  const split = [
+    { id: 1, name: "Stitching", category: "production" as const, branchId: 1, branchName: "Unit 1" },
+    { id: 2, name: "Accounts", category: "staff" as const, branchId: 1, branchName: "Unit 1" },
+    { id: 3, name: "Cutting", category: "production" as const, branchId: 2, branchName: "Unit 2" },
+    { id: 4, name: "Stitching", category: "production" as const, branchId: 2, branchName: "Unit 2" },
+  ];
+
+  it("offers production departments only, the same name told apart by its unit", () => {
+    expect(productionDepartmentOptions(split).map((o) => o.label)).toEqual([
+      "Cutting",
+      "Stitching · Unit 1",
+      "Stitching · Unit 2",
+    ]);
+  });
+
+  it("offers only the picked unit's departments", () => {
+    expect(productionDepartmentOptions(split, "2").map((o) => [o.value, o.label])).toEqual([
+      ["3", "Cutting"],
+      ["4", "Stitching"],
+    ]);
+    expect(productionDepartmentOptions(split, ALL_BRANCHES)).toHaveLength(3);
+  });
+
+  it("offers every department from a server that does not know Staff / Production yet", () => {
+    const old = [
+      { id: 1, name: "Stitching" },
+      { id: 2, name: "Accounts" },
+    ];
+    expect(productionDepartmentOptions(old).map((o) => o.label)).toEqual(["Accounts", "Stitching"]);
+    expect(productionDepartmentOptions(undefined)).toEqual([]);
+  });
+
+  it("lists the units by name", () => {
+    expect(
+      branchOptions([
+        { id: 2, name: "Unit 2" },
+        { id: 1, name: "head office" },
+      ]),
+    ).toEqual([
+      { value: "1", label: "head office" },
+      { value: "2", label: "Unit 2" },
+    ]);
+    expect(branchOptions(undefined)).toEqual([]);
   });
 });
 
@@ -286,6 +350,170 @@ describe("the payroll warning of a move", () => {
     expect(warningsHeading(1, 1)).toBe("Payroll already generated");
     expect(warningsHeading(3, 3)).toBe("Payroll already generated for 3 employees");
     expect(warningsHeading(1, 4)).toBe("Payroll already generated for 1 of these 4 employees");
+  });
+});
+
+describe("a move of workers who already have payroll needs a reason", () => {
+  const base: CycleChangePreview = {
+    cycle: "weekly",
+    label: "Weekly",
+    nextPeriod: null,
+    configError: null,
+    warnCount: 0,
+    employees: [],
+    skipped: [],
+  };
+
+  it("is asked for when the preview says so, when anyone is warned, or after the server refused", () => {
+    expect(reasonRequired(base)).toBe(false);
+    expect(reasonRequired(undefined)).toBe(false);
+    expect(reasonRequired({ ...base, needsReason: true })).toBe(true);
+    const warned = {
+      ...base,
+      employees: [
+        {
+          employeeId: 1,
+          employeeCode: "P1",
+          name: "A",
+          fromCycle: "weekly" as const,
+          toCycle: "monthly" as const,
+          changes: true,
+          warn: true,
+          lastPayroll: null,
+          nextPeriod: null,
+          payRanges: [],
+          alreadyPaid: [],
+          catchUp: [],
+          legacyGap: null,
+          refused: false,
+          message: "A has already received salary under Weekly up to 8 Feb 2026.",
+        },
+      ],
+    };
+    expect(reasonRequired(warned)).toBe(true);
+    expect(reasonRequired(undefined, warned.employees)).toBe(true);
+    expect(reasonRequired(base, [])).toBe(false);
+    expect(reasonLimit(base)).toBe(500);
+    expect(reasonLimit({ ...base, reasonMax: 120 })).toBe(120);
+  });
+
+  it("is sent with the confirmation; a move with no reason asked is the plain request", () => {
+    const plan = { ids: [3, 1], target: "weekly" as const };
+    expect(assignBody(plan, "  Moved to the fortnightly line ")).toEqual({
+      employeeIds: [3, 1],
+      cycle: "weekly",
+      confirm: true,
+      reason: "Moved to the fortnightly line",
+    });
+    expect(assignBody(plan, null)).toEqual({ employeeIds: [3, 1], cycle: "weekly" });
+    expect(assignBody({ ids: [4], target: null }, "Left the line")).toEqual({
+      employeeIds: [4],
+      cycle: null,
+      confirm: true,
+      reason: "Left the line",
+    });
+  });
+
+  it("reads the server's refusal (409 confirm_cycle_change) as the facts to show again", () => {
+    const refused = new ApiError(
+      new Response(null, { status: 409, statusText: "Conflict" }),
+      {
+        code: "confirm_cycle_change",
+        error: "Some of these workers have already received salary ...",
+        employees: [
+          {
+            employeeId: 3,
+            employeeCode: "P003",
+            name: "Selvi Rani",
+            fromCycle: "biweekly",
+            toCycle: "weekly",
+            paidThrough: "2026-02-15",
+            paysFrom: "2026-02-16",
+            firstPeriod: { start: "2026-02-16", end: "2026-02-22" },
+            message: "Selvi Rani has already received salary under BiWeekly up to 15 Feb 2026.",
+          },
+        ],
+      },
+      { method: "POST", url: "/api/employees/production/assign" },
+    );
+    const facts = moveConflict(refused)!;
+    expect(facts).toHaveLength(1);
+    expect(facts[0]).toMatchObject({
+      employeeId: 3,
+      employeeCode: "P003",
+      warn: true,
+      paysFrom: "2026-02-16",
+      nextPeriod: { start: "2026-02-16", end: "2026-02-22" },
+      message: "Selvi Rani has already received salary under BiWeekly up to 15 Feb 2026.",
+    });
+    // any other failure is not a request for a reason
+    const other = new ApiError(
+      new Response(null, { status: 409, statusText: "Conflict" }),
+      { error: "busy" },
+      {
+        method: "POST",
+        url: "/x",
+      },
+    );
+    expect(moveConflict(other)).toBeNull();
+    expect(moveConflict(new Error("HTTP 409"))).toBeNull();
+  });
+});
+
+describe("a worker's moves between cycles", () => {
+  const NOW = new Date(2026, 10, 16);
+  const move = (over: Partial<CycleMove> = {}): CycleMove => ({
+    id: 1,
+    fromCycle: "weekly",
+    fromLabel: "Weekly",
+    cameFrom: "weekly",
+    cameFromLabel: "Weekly",
+    toCycle: "biweekly",
+    toLabel: "BiWeekly",
+    changedAt: "2026-11-10T09:30:00+05:30",
+    changedOn: "2026-11-10",
+    changedBy: "Priya HR",
+    reason: "Shifted to the fortnightly line",
+    lastPaidThrough: "2026-11-08",
+    paysFrom: "2026-11-09",
+    paidPeriods: 6,
+    paidNet: 21000,
+    ...over,
+  });
+
+  it("reads on the row as a short line", () => {
+    expect(moveText(move(), NOW)).toBe("Moved from Weekly · 10 Nov");
+    expect(moveText(move({ fromCycle: null, fromLabel: "Unassigned" }), NOW)).toBe("Assigned from Unassigned · 10 Nov");
+    expect(moveText(move({ toCycle: null, toLabel: "Unassigned" }), NOW)).toBe("Taken off Weekly · 10 Nov");
+    expect(moveText(move({ changedOn: "2025-12-30" }), NOW)).toBe("Moved from Weekly · 30 Dec 2025");
+    expect(shortDay("soon", NOW)).toBe("soon");
+  });
+
+  it("says in one sentence who moved them, when and why", () => {
+    expect(moveSentence(move())).toBe(
+      "Weekly → BiWeekly on 10 Nov 2026 by Priya HR. Reason: Shifted to the fortnightly line",
+    );
+    expect(moveSentence(move({ changedBy: null, reason: "" }))).toBe("Weekly → BiWeekly on 10 Nov 2026");
+  });
+
+  it("lists what the old cycle had paid and from when the new one pays", () => {
+    expect(moveDetails(move())).toEqual([
+      "Reason: Shifted to the fortnightly line",
+      "Salary already paid on Weekly up to 8 Nov 2026: 6 pay periods, ₹21,000 net. It is never paid again.",
+      "BiWeekly pays from 9 Nov 2026.",
+    ]);
+    expect(
+      moveDetails(
+        move({ fromCycle: null, fromLabel: "Unassigned", lastPaidThrough: null, reason: "", paysFrom: null }),
+      ),
+    ).toEqual(["No salary had been paid to this worker before the move."]);
+    expect(
+      moveDetails(move({ toCycle: null, toLabel: "Unassigned", paysFrom: null, paidPeriods: 1, paidNet: 3500 })),
+    ).toEqual([
+      "Reason: Shifted to the fortnightly line",
+      "Salary already paid on Weekly up to 8 Nov 2026: 1 pay period, ₹3,500 net. It is never paid again.",
+      "Not in any payroll until assigned to a cycle again.",
+    ]);
   });
 });
 

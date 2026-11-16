@@ -18,7 +18,7 @@ from decimal import Decimal
 from django.test import SimpleTestCase
 
 from .models import Advance, AdvanceRepayment, AttendanceDayRecord, Branch, Employee, Payroll, Role, SalarySlip
-from .payroll_views import _generate_production_payroll
+from .payroll_views import PayrollSkip, _generate_production_payroll
 from .production_coverage import (
     PeriodPlan,
     day_count,
@@ -223,7 +223,11 @@ class _MoveCase(CycleDbTestCase):
         return r.json()
 
     def move(self, emp, cycle):
-        r = self.post(ASSIGN, {"employeeIds": [emp.id], "cycle": cycle})
+        # The old cycle's payroll is paid before the move: only a FINAL payroll covers days (2026-11-16); a draft (only
+        # Generated) would be replaced by the new cycle's overlapping period (tests_production_period_workflow covers it).
+        Payroll.objects.filter(employee=emp, period_start__isnull=False).update(payment_status=Payroll.PAYMENT_PAID)
+        # a worker with payroll moves only on purpose (2026-11-16): confirmed, with a reason
+        r = self.post(ASSIGN, {"employeeIds": [emp.id], "cycle": cycle, "confirm": True, "reason": "Test move"})
         self.assertEqual(r.json()["updated"], 1, r.content)
 
     def row(self, emp, start, end) -> Payroll:
@@ -338,7 +342,13 @@ class SixMovesTests(_MoveCase):
         for emp in (m, other):
             _shifts(emp, D(2026, 1, 5), D(2026, 3, 1))
         self.gen("monthly", D(2026, 1, 5), D(2026, 2, 1), m)
-        self.gen("weekly", D(2026, 2, 9), D(2026, 2, 15), other)  # Weekly's pointer is now 16-22 Feb
+        self.gen("weekly", D(2026, 2, 9), D(2026, 2, 15), other)
+        # Weekly's pointer moves on to 16-22 Feb once that week is finalized (Payroll Done, 2026-11-16)
+        done = self.post(
+            "/api/payroll/production/period-finalize",
+            {"cycle": "weekly", "periodStart": "2026-02-09", "periodEnd": "2026-02-15"},
+        )
+        self.assertEqual(done.status_code, 201, done.content)
         self.move(m, "weekly")
 
         body = self.gen("weekly", emp=m)  # no period: the next due one
@@ -359,7 +369,8 @@ class SixMovesTests(_MoveCase):
 
         # the caught-up week cannot be paid again on its own; the next week is ordinary
         again = self.gen("weekly", D(2026, 2, 2), D(2026, 2, 8), m)
-        self.assertIn("already in the Weekly payroll for 16 Feb – 22 Feb 2026", again["skippedDetails"][0]["reason"])
+        # (that row is a draft: generating 2-8 Feb on its own would have to replace it, which needs replaceDrafts)
+        self.assertIn("in the draft payslip for 16 Feb – 22 Feb 2026 (Weekly)", again["skippedDetails"][0]["reason"])
         self.gen("weekly", D(2026, 2, 23), D(2026, 3, 1), m)
         self.assertIsNone(self.row(m, D(2026, 2, 23), D(2026, 3, 1)).paid_ranges)
         self.assert_each_day_paid_once(m, D(2026, 1, 5), D(2026, 3, 1))
@@ -514,8 +525,11 @@ class StatutoryAndAdvanceTests(_MoveCase):
         self.assertEqual((month.gross_salary, month.deductions), (Decimal("10500.00"), Decimal("0.00")))
         self.gen("monthly", D(2026, 2, 2), D(2026, 3, 1), w, regenerate=True)
         self.assertEqual(self.row(w, D(2026, 2, 2), D(2026, 3, 1)).deductions, Decimal("0.00"))
-        again = _generate_production_payroll(w, D(2026, 2, 23), D(2026, 3, 1), pay_cycle="weekly")["payroll"]
-        self.assertEqual(again.deductions, Decimal("1000.00"))  # the week keeps what it took
+        # the week was paid before the move (FINAL): it is never worked out again, and keeps what it took
+        with self.assertRaisesMessage(PayrollSkip, "already marked Paid"):
+            _generate_production_payroll(w, D(2026, 2, 23), D(2026, 3, 1), pay_cycle="weekly")
+        week.refresh_from_db()
+        self.assertEqual(week.deductions, Decimal("1000.00"))
         adv.refresh_from_db()
         self.assertEqual(adv.total_repaid, Decimal("1000.00"))
         self.assertEqual(sum(p.deductions for p in Payroll.objects.filter(employee=w)), Decimal("1000.00"))
@@ -579,7 +593,8 @@ class ReadViewsTests(_MoveCase):
 
     def test_a_fully_paid_employee_is_blocked_with_the_reason_and_the_skip_check_lists_part_payers(self):
         Payroll.objects.filter(employee=self.full).delete()
-        _row(self.full, D(2026, 1, 26), D(2026, 3, 8), cycle=None)
+        # an older payslip, already paid (FINAL), covering the whole month: only a final payroll blocks (2026-11-16)
+        _row(self.full, D(2026, 1, 26), D(2026, 3, 8), cycle=None, payment_status="paid")
         body = self.get(f"/api/payroll/production/period-status?{self.q}").json()
         by = {e["employeeCode"]: e for e in body["employees"]}
         self.assertTrue(by["RV2"]["blockedReason"].startswith("Already paid: every day of 2 Feb – 1 Mar 2026"))
@@ -599,7 +614,9 @@ class ReadViewsTests(_MoveCase):
         self.assertEqual(named.get("2026-02-03"), "Already paid on Weekly")
         self.assertEqual(body["summary"]["totalDays"], 21)
         self.assertEqual(body["summary"]["periodDays"], 28)
-        listed = self.get("/api/payroll/production?cycle=monthly").json()
+        # the worker's first Monthly period after the move waits in New Joiners (2026-11-16): listed with includeParked
+        self.assertNotIn(row.id, [r["id"] for r in self.get("/api/payroll/production?cycle=monthly").json()])
+        listed = self.get("/api/payroll/production?cycle=monthly&includeParked=1").json()
         self.assertEqual(
             next(r for r in listed if r["id"] == row.id)["paidRanges"], _iso((D(2026, 2, 9), D(2026, 3, 1)))
         )
@@ -626,17 +643,24 @@ class PreviewTests(_MoveCase):
         w = _worker("PV2", cycle="weekly")
         _shifts(w, D(2026, 2, 2), D(2026, 2, 8))
         self.gen("weekly", D(2026, 2, 2), D(2026, 2, 8), w)
+        # paid (FINAL): only a final payroll is "already paid" (2026-11-16)
+        Payroll.objects.filter(employee=w).update(payment_status=Payroll.PAYMENT_PAID)
         before = Payroll.objects.count()
         body = self.preview([w.id], "monthly").json()
         self.assertEqual(Payroll.objects.count(), before)  # a preview writes nothing
         emp = body["employees"][0]
         self.assertTrue(emp["warn"])
+        # the owner's warning (2026-11-16): up to which day, how many periods, how much, and from when the new cycle pays
         self.assertEqual(
             emp["message"],
-            "This employee was previously assigned to Weekly Payroll, and payroll has already been generated for the "
-            "previous period (2 Feb – 8 Feb 2026). If you change the payroll category to Monthly, the system will "
-            "calculate salary only for the remaining unpaid days (9 Feb – 1 Mar 2026). Previously generated salary "
-            "will not be calculated or paid again.",
+            "PV2 Worker has already received salary under Weekly up to 8 Feb 2026: 1 pay period, ₹3,500 net (paid "
+            "or finalized). If you move them to Monthly, the salary already paid for that time will not be paid again: "
+            "only the remaining eligible days are calculated under Monthly, from 9 Feb 2026. First Monthly period: 2 "
+            "Feb – 1 Mar 2026, paying 21 days (9 Feb – 1 Mar 2026). They will be listed under New Joiners on the "
+            "Monthly page until HR adds them.",
+        )
+        self.assertEqual(
+            (emp["paidThrough"], emp["paysFrom"], emp["oldCycle"]["periods"]), ("2026-02-08", "2026-02-09", 1)
         )
         self.assertEqual(emp["lastPayroll"]["cycle"], "weekly")
         self.assertEqual(emp["nextPeriod"], {"start": "2026-02-02", "end": "2026-03-01"})
@@ -655,9 +679,10 @@ class PreviewTests(_MoveCase):
         by = {e["employeeCode"]: e for e in body["employees"]}
         self.assertEqual((by["PV3"]["warn"], by["PV4"]["warn"], body["warnCount"]), (True, False, 1))
         self.assertEqual(by["PV3"]["catchUp"][0]["from"], "2026-02-02")
+        # the Weekly period due is the one already generated for PV5 (open until Payroll Done): 9-15 Feb, plus catch-up
         self.assertIn(
-            "2 Feb – 15 Feb 2026 were not paid on Monthly and fall before the first Weekly period "
-            "(16 Feb – 22 Feb 2026), so they are added to that first Weekly payroll as catch-up days.",
+            "First Weekly period: 9 Feb – 15 Feb 2026, paying 14 days (2 Feb – 15 Feb 2026). 2 Feb – 8 Feb 2026 were "
+            "not paid by any payroll, so they are added to that first Weekly payroll as catch-up days.",
             by["PV3"]["message"],
         )
 
@@ -666,7 +691,7 @@ class PreviewTests(_MoveCase):
         _row(w, D(2026, 2, 2), D(2026, 2, 8), cycle="weekly")
         off = self.preview([w.id], "unassigned").json()["employees"][0]
         self.assertTrue(off["warn"])
-        self.assertIn("If you take this employee off their pay cycle", off["message"])
+        self.assertIn("If you take them off their pay cycle", off["message"])
         self.assertIsNone(off["nextPeriod"])
         _settings(prod_cycles={"weekly": {"weekStart": "monday"}})
         body = self.preview([w.id], "biweekly").json()

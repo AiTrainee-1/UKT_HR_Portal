@@ -70,7 +70,8 @@ export type ShiftRulesDraft = {
   breaks: BreakRow[];
 };
 
-export const LABEL_MAX = 80;
+/** The longest name the server keeps (production_shift_rules_views.py MAX_LABEL). */
+export const LABEL_MAX = 100;
 export const GRACE: NumberRule = { min: 0, max: 30, decimals: 0 };
 export const SHIFT_VALUE: NumberRule = { min: 0.01, max: 9.99, decimals: 2 };
 export const MIN_CREDIT: NumberRule = { min: 0, max: 9.99, decimals: 2 };
@@ -287,7 +288,7 @@ const sharesADay = (a: ProductionShiftAppliesOn, b: ProductionShiftAppliesOn) =>
  * The enabled breaks that can be read, as [start, end] minutes of a day (merged, so two that touch count once). Like the
  * engine, each break also repeats the morning after the shift day began.
  */
-function breakSpans(breaks: BreakRow[]): [number, number][] {
+export function breakSpans(breaks: BreakRow[]): [number, number][] {
   const spans = breaks.flatMap((b) => {
     const start = toMinutes(b.startTime);
     const end = toMinutes(b.endTime);
@@ -304,7 +305,7 @@ function breakSpans(breaks: BreakRow[]): [number, number][] {
 }
 
 /** Minutes worked from the start to `at` (both counted from the shift day's midnight) without the breaks: the engine's paid_seconds. */
-function paidMinutes(start: number, at: number, spans: [number, number][]): number {
+export function paidMinutes(start: number, at: number, spans: [number, number][]): number {
   if (at <= start) return 0;
   let total = at - start;
   for (const [from, to] of spans) {
@@ -321,11 +322,25 @@ function paidMinutes(start: number, at: number, spans: [number, number][]): numb
 const valueOf = (text: string): number | null => parseNumber(text, SHIFT_VALUE).value;
 
 /**
- * Everything the server would refuse, in plain words. Rows that are switched off are only checked for being readable;
- * the order, the rising values and the one-group-per-day rules look at the rows that are on.
+ * The start date's problem, as the server sees it: a real date between 2000 and 2100, needed while the rules are on; while
+ * they are off it may be left blank (the server keeps none and starts them today when they are switched on).
+ */
+function dateProblem(draft: ShiftRulesDraft): string | null {
+  const text = draft.effectiveFrom.trim();
+  if (text === "") return draft.enabled ? "Pick the date the rules apply from." : null;
+  if (!isIsoDate(text)) return "Pick the date the rules apply from.";
+  const year = Number(text.slice(0, 4));
+  return year < 2000 || year > 2100 ? "Pick a date between the years 2000 and 2100." : null;
+}
+
+/**
+ * Everything the server would refuse, in plain words, and nothing it would accept. Rows that are switched off, and every
+ * row of a group that is switched off, are only checked for being readable (a time and a shift value in range): like the
+ * server, the start, the order, the rising values, the paid time and the one-group-per-day rules look only at the rows
+ * that are on in the groups that are on.
  */
 export function validateDraft(draft: ShiftRulesDraft): Validation {
-  const effectiveFrom = isIsoDate(draft.effectiveFrom) ? null : "Pick the date the rules apply from.";
+  const effectiveFrom = dateProblem(draft);
   const grace = parseNumber(draft.graceMinutes, GRACE).error;
   const minCreditBad = parseNumber(draft.minCredit, MIN_CREDIT).error;
   let minCreditTooHigh: string | null = null;
@@ -362,7 +377,8 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
       const value = valueOf(row.shiftValue);
       const valueError = parseNumber(row.shiftValue, SHIFT_VALUE).error;
       if (valueError) e.value = valueError;
-      if (!row.enabled || at === null) return;
+      // a group that is off is not judged by the server beyond this: its ladder is checked once it is switched on
+      if (!g.enabled || !row.enabled || at === null) return;
       const startAt = start;
       if (startAt !== null && at <= startAt) {
         e.time = `Must be later than the start (${clock12(g.startTime)}).${row.outNextDay ? "" : ' For a time after midnight tick "Next day".'}`;
@@ -559,14 +575,44 @@ export function newAdvice(advice: string[], savedAdvice: string[], serverWarning
 // ── the handwriting the owner has not confirmed ──
 
 /**
+ * The names the two rows were set up with (backend migration 0121). A row still under one of them (or with no name of its
+ * own) is the row as it was set up; any other name is HR's own, typed or set by "Yes, it is right".
+ */
+const SET_UP_NAMES: Partial<Record<ProductionShiftGroupKind, string[]>> = {
+  day: ["Works until 00:30 (1 shift + 1.5 OT)"],
+  night: ["Leaves at midnight"],
+};
+
+/**
  * The two rows that follow the owner's handwritten table exactly as it reads, though the handwriting could mean something
- * else (12:30 AM or PM, 12:00 AM or PM). The note goes away from a row once its time or its value is changed.
+ * else (12:30 AM or PM, 12:00 AM or PM), while they are still exactly as they were set up. The note goes away from a row
+ * once its time, its shifts or its name is changed: "Yes, it is right" (confirmedRowLabel) changes the name to one that
+ * says which reading was checked, so the check is saved with the rules and nothing else needs storing.
  */
 export function isUnverifiedRow(group: Pick<GroupRow, "kind">, row: RuleRow): boolean {
   const value = num(row.shiftValue);
+  const name = row.label.trim();
+  const asSetUp =
+    name === "" || name === autoRuleLabel(row.outTime, row.outNextDay) || !!SET_UP_NAMES[group.kind]?.includes(name);
+  if (!asSetUp) return false;
   if (group.kind === "day") return row.outTime === "00:30" && row.outNextDay && value === 2.5;
   if (group.kind === "night") return row.outTime === "00:00" && row.outNextDay && value === 0.5;
   return false;
+}
+
+/**
+ * The name a checked row gets: its own name (or the automatic one) and the reading HR confirmed with the owner, within the
+ * server's 100 characters. "Works until 00:30 (1 shift + 1.5 OT) - checked: 12:30 AM next day".
+ */
+export function confirmedRowLabel(row: RuleRow): string {
+  const tail = ` - checked: ${pointText(row.outTime, row.outNextDay)}`;
+  const base = row.label.trim() || autoRuleLabel(row.outTime, row.outNextDay);
+  return `${base.slice(0, LABEL_MAX - tail.length).trimEnd()}${tail}`;
+}
+
+/** The ladder with one row marked as checked with the owner (its name says so; its time and shifts stay as they are). */
+export function confirmRow(rows: RuleRow[], key: string): RuleRow[] {
+  return rows.map((row) => (row.key === key ? { ...row, label: confirmedRowLabel(row) } : row));
 }
 
 /** What else the handwriting of an unverified row could mean, for the note about it. */
@@ -574,6 +620,9 @@ const UNVERIFIED_HINT: Partial<Record<ProductionShiftGroupKind, string>> = {
   day: "the handwriting may mean 12:30 PM",
   night: "the handwriting may mean 12:00 PM (noon)",
 };
+
+/** What else the handwriting of a group's unverified row could mean ("" for a group without one). */
+export const unverifiedHint = (kind: ProductionShiftGroupKind): string => UNVERIFIED_HINT[kind] ?? "";
 
 /** The unverified rows of the form, with the group they sit in and what the handwriting could mean, in reading order. */
 export function unverifiedRows(draft: ShiftRulesDraft): { group: string; row: RuleRow; hint: string }[] {
@@ -606,7 +655,8 @@ export function toInput(draft: ShiftRulesDraft, expectedVersion?: string | null)
   return {
     ...(expectedVersion ? { expectedVersion } : {}),
     enabled: draft.enabled,
-    effectiveFrom: draft.effectiveFrom,
+    // blank only while the rules are off (validateDraft): the server keeps no date then
+    effectiveFrom: draft.effectiveFrom.trim() === "" ? null : draft.effectiveFrom,
     graceMinutes: num(draft.graceMinutes),
     minCredit: num(draft.minCredit),
     roundingStep: num(draft.roundingStep),
@@ -815,7 +865,12 @@ export function draftChanges(draft: ShiftRulesDraft, saved: ShiftRulesDraft): Ch
     for (const r of g.rules) {
       const old = r.id === null ? undefined : beforeRules.get(r.id);
       if (!old) push(`r-new-${r.key}`, `${name}: row`, "-", `added ${rowSummary(r)}`);
-      else if (!sameRule(r, old)) push(`r${r.id}`, `${name}: row`, rowSummary(old), rowSummary(r));
+      else if (!sameRule(r, old)) {
+        // only the name changed (a row checked with the owner, or renamed): say so, it moves no pay
+        if (rowSummary(r) === rowSummary(old)) {
+          push(`r${r.id}`, `${name}: ${pointText(r.outTime, r.outNextDay)} row name`, old.label, r.label, false);
+        } else push(`r${r.id}`, `${name}: row`, rowSummary(old), rowSummary(r));
+      }
     }
   });
 

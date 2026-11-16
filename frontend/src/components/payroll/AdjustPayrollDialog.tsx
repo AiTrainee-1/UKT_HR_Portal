@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useUpdatePayrollRecord } from "@/lib/api-client";
+import { useUpdatePayrollOf, type PayrollKind } from "@/lib/api-client/custom-hooks";
 import { roundUpRupee } from "@/lib/round-up-rupee";
 import { cn } from "@/lib/utils";
 import { inr2 } from "./kit/format";
@@ -70,14 +71,23 @@ export function AdjustPayrollDialog({
   accent,
   onClose,
   onApplied,
+  kind = "staff",
 }: {
   target: AdjustTarget | null;
   accent: "indigo" | "amber";
   onClose: () => void;
   onApplied?: () => void;
+  /** A production payroll is changed on its own route (Production Payroll rights, 2026-11-16). */
+  kind?: PayrollKind;
 }) {
   const { toast } = useToast();
-  const update = useUpdatePayrollRecord();
+  const updateStaff = useUpdatePayrollRecord();
+  const updateOf = useUpdatePayrollOf();
+  const update = {
+    isPending: updateStaff.isPending || updateOf.isPending,
+    mutateAsync: (args: { id: number; data: { bonus: number; deductions: number; notes?: string } }) =>
+      kind === "production" ? updateOf.mutateAsync({ kind, ...args }) : updateStaff.mutateAsync(args),
+  };
   const colors = ACCENT[accent];
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),

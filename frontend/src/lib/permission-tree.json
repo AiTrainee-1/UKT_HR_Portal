@@ -405,6 +405,38 @@
               ]
             },
             {
+              "key": "attendance.production_report_log",
+              "label": "Production Report Log",
+              "type": "page",
+              "help": "The same monthly sheet and daily leave / late reports for production employees.",
+              "routes": ["/hr/attendance/production-report-log"],
+              "inherits": "attendance.report_log",
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "attendance.production_report_log.monthly",
+                  "label": "Monthly Report",
+                  "type": "tab",
+                  "help": "The month's attendance sheet of production employees.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "attendance.production_report_log.leave",
+                  "label": "Daily Leave Report",
+                  "type": "tab",
+                  "help": "Which production employees were absent on a day, and whether they informed.",
+                  "enforce": "server"
+                },
+                {
+                  "key": "attendance.production_report_log.late",
+                  "label": "Daily Late Report",
+                  "type": "tab",
+                  "help": "Which production employees came late on a day.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
               "key": "attendance.punch_view",
               "label": "Punch View",
               "type": "page",
@@ -716,6 +748,13 @@
               "label": "Assign production staff with no shift",
               "type": "feature",
               "help": "Puts every production employee without a shift on the default one.",
+              "enforce": "server"
+            },
+            {
+              "key": "shifts.production_special",
+              "label": "Special production shifts",
+              "type": "feature",
+              "help": "Create, change and delete special production shifts, and put workers on them or take them off.",
               "enforce": "server"
             }
           ]
@@ -1202,7 +1241,7 @@
               "label": "Payroll tab (every cycle)",
               "type": "tab",
               "help": "The period's payroll.",
-              "enforce": "screen",
+              "enforce": "parts",
               "children": [
                 {
                   "key": "production_payroll.payroll.records",
@@ -1231,8 +1270,50 @@
                   "type": "view",
                   "help": "The rules the period was worked out with.",
                   "enforce": "screen"
+                },
+                {
+                  "key": "production_payroll.payroll.moved_out",
+                  "label": "Moved out",
+                  "type": "view",
+                  "help": "Workers who moved from this cycle to another, with what this cycle paid them.",
+                  "enforce": "server"
                 }
               ]
+            },
+            {
+              "key": "production_payroll.new_joiners",
+              "label": "New Joiners",
+              "type": "view",
+              "help": "Workers who joined during the period or moved here from another cycle: kept out of the payroll until added (Edit: Add to payroll).",
+              "enforce": "server"
+            },
+            {
+              "key": "production_payroll.finalize",
+              "label": "Payroll Done",
+              "type": "feature",
+              "help": "Finalize a pay period, and unlock a finalized one that is not paid yet (a whole-company login only).",
+              "enforce": "server"
+            },
+            {
+              "key": "production_payroll.mark_paid",
+              "label": "Mark as Paid",
+              "type": "feature",
+              "help": "Record the day a finalized pay period was paid (a whole-company login only).",
+              "enforce": "server"
+            },
+            {
+              "key": "production_payroll.exports",
+              "label": "Salary statement and bank file",
+              "type": "feature",
+              "help": "The Excel / PDF Production Salary Statement and the bank file (the statement also needs Reports).",
+              "enforce": "server"
+            },
+            {
+              "key": "production_payroll.adjust",
+              "label": "Adjust bonus / deductions",
+              "type": "feature",
+              "help": "Change one worker's bonus, deductions or notes on a pay period that is not finalized.",
+              "enforce": "server"
             },
             {
               "key": "production_payroll.employees",

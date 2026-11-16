@@ -2588,8 +2588,10 @@ class LoaderOneSnapshotTests(TestCase):
     def test_the_fallback_for_another_database_reads_the_same_rules(self):
         config = ProductionShiftConfig.get()
         with CaptureQueriesContext(connection) as ctx:
-            groups, rules, breaks = psr._read_tables_orm()
-        self.assertEqual(len(ctx), 3)
+            groups, rules, breaks, assignments = psr._read_tables_orm()
+        # the special-shift assignments are a fourth read (owner 2026-11-16: special production shifts)
+        self.assertEqual(len(ctx), 4)
         self.assertEqual(
-            psr.build_ruleset(config, groups, rules, breaks), psr.load_ruleset(ProductionShiftConfig.get())
+            psr.build_ruleset(config, groups, rules, breaks, assignments),
+            psr.load_ruleset(ProductionShiftConfig.get()),
         )

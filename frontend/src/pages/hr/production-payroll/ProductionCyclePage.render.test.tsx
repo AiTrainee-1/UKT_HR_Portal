@@ -10,7 +10,6 @@ import {
   mountPage,
   must,
   params,
-  press,
   q,
   settle,
   tab,
@@ -93,7 +92,7 @@ const WEEK_PARAM = "2026-02-02_2026-02-08";
 /** Opens a cycle's page and waits until its Payroll tab has the figures of the period on screen. */
 async function openPayroll(url = WEEKLY, cycle: "weekly" | "biweekly" | "monthly" = "weekly") {
   mountPage(url, cycle);
-  await waitFor(() => !!q("pcp-dash-kpi-net-value"), "the Payroll tab");
+  await waitFor(() => !!q("view-records-count"), "the Payroll tab");
 }
 
 // The page's own tab row (the first pill row on the page; the statement's Scroll / Pages switch is another). It draws
@@ -200,7 +199,7 @@ describe("a Production Payroll cycle page", () => {
     expect(text(q("payroll-loader"))).toContain("Loading the pay cycle");
     expect(q("pcp-period")).toBeNull();
     release();
-    await waitFor(() => !!q("pcp-dash-kpi-net-value"), "the Payroll tab");
+    await waitFor(() => !!q("view-records-count"), "the Payroll tab");
     expect(q("payroll-loader")).toBeNull();
   });
 
@@ -211,7 +210,7 @@ describe("a Production Payroll cycle page", () => {
     expect(text(q("pcp-periods-error"))).toContain("The pay periods could not be loaded");
     world.failing.delete("/api/payroll/production/periods");
     click(must("pcp-periods-error").querySelector("button"));
-    await waitFor(() => !!q("pcp-dash-kpi-net-value"), "the Payroll tab");
+    await waitFor(() => !!q("view-records-count"), "the Payroll tab");
     expect(q("pcp-periods-error")).toBeNull();
   });
 });
@@ -220,8 +219,13 @@ describe("the page's state in its address", () => {
   it("opens on the Payroll tab and on the next due period when the address says nothing", async () => {
     await openPayroll();
     expect(selectedTab()).toEqual(["Payroll"]);
-    expect(text(q("pcp-period"))).toContain("2 Feb - 8 Feb 2026");
-    expect(text(q("pcp-period"))).toContain("next due");
+    expect(text(q("pcp-period"))).toBe("2 Feb - 8 Feb 2026 Next due");
+    // the calendar is hidden on every visit (owner 2026-11-16); opened, it shows the period: February with January
+    // beside it, the week filled in
+    expect(q("pcp-calendar")).toBeNull();
+    click(must("pcp-cal-toggle"));
+    expect(text(q("pcp-cal-month-1"))).toBe("February 2026");
+    expect(must("pcp-cal-day-2026-02-04").dataset.selected).toBe("true");
     expect(text(q("pcp-record-count"))).toBe("2 Feb - 8 Feb 2026 · 1 record");
     expect(here()).toBe(WEEKLY); // following the next due period leaves nothing in the address
   });
@@ -245,7 +249,7 @@ describe("the page's state in its address", () => {
 
   it("opens the Payroll tab for a tab that does not exist", async () => {
     mountPage(`${WEEKLY}?tab=settings`);
-    await waitFor(() => !!q("pcp-dash-kpi-net-value"), "the Payroll tab");
+    await waitFor(() => !!q("view-records-count"), "the Payroll tab");
     expect(selectedTab()).toEqual(["Payroll"]);
   });
 
@@ -267,7 +271,7 @@ describe("the page's state in its address", () => {
     await waitFor(() => !!q("pcp-roster-list"), "the roster");
     expect((must("pcp-roster-search") as HTMLInputElement).value).toBe("bala");
     click(tab("Payroll"));
-    await waitFor(() => !!q("pcp-dash-kpi-net-value"), "the Payroll tab");
+    await waitFor(() => !!q("view-records-count"), "the Payroll tab");
     expect(q("issues-panel")).not.toBeNull(); // the view it was left on
   });
 
@@ -302,25 +306,41 @@ describe("the page's state in its address", () => {
     expect(text(q("pcp-record-count"))).toBe("2 Feb - 8 Feb 2026 · 1 record");
   });
 
-  it("puts a period chosen from the list in the address", async () => {
+  it("puts a period picked on the calendar in the address: any day picks its whole week", async () => {
     await openPayroll();
-    press(must("pcp-period"), "Enter");
-    const options = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')];
-    expect(options.map((o) => text(o))).toEqual([
-      "2 Feb - 8 Feb 2026 · 1 of 3 generated · next due",
-      "26 Jan - 1 Feb 2026 · not generated",
-    ]);
-    press(options[1], "Enter");
+    click(must("pcp-cal-toggle"));
+    expect(must("pcp-cal-day-2026-02-04").dataset.kind).toBe("generated");
+    expect(must("pcp-cal-day-2026-01-28").dataset.kind).toBe("due");
+    click(must("pcp-cal-day-2026-01-28"));
     await waitFor(() => params().period === "2026-01-26_2026-02-01", "the period in the address");
     await waitFor(() => text(q("pcp-record-count")).startsWith("26 Jan - 1 Feb 2026"), "the new period");
+    expect(text(q("pcp-period"))).toBe("26 Jan - 1 Feb 2026");
+    expect((must("pcp-period-date") as HTMLInputElement).value).toBe("2026-01-26");
+    expect(text(q("pcp-period-to"))).toBe("01-02-2026");
+    // Next due brings the next due week back
+    click(must("pcp-quick-next"));
+    await waitFor(() => params().period === WEEK_PARAM, "the next due period in the address");
   });
 
-  it("opens the period holding a date that was typed, and puts it in the address", async () => {
-    await openPayroll();
+  it("opens the period holding a date typed into From, and puts it in the address", async () => {
+    await openPayroll(`${WEEKLY}?period=2026-01-26_2026-02-01`);
     typeInto(must("pcp-period-date") as HTMLInputElement, "2026-02-04");
     await waitFor(() => params().period === WEEK_PARAM, "the period in the address");
-    expect(world.requests()).toContain("/api/payroll/production/periods?cycle=weekly&around=2026-02-04");
     await waitFor(() => text(q("pcp-period")).includes("2 Feb - 8 Feb 2026"), "the picker");
+    await waitFor(() => (must("pcp-period-date") as HTMLInputElement).value === "2026-02-02", "From to snap");
+  });
+
+  it("asks the server for a typed date whose week no list holds yet, and opens it", async () => {
+    await openPayroll();
+    click(must("pcp-cal-toggle"));
+    typeInto(must("pcp-period-date") as HTMLInputElement, "2025-11-05");
+    await waitFor(
+      () => params().period === `${OLD_WEEK.periodStart}_${OLD_WEEK.periodEnd}`,
+      "the period in the address",
+    );
+    expect(world.requests()).toContain("/api/payroll/production/periods?cycle=weekly&around=2025-11-05");
+    await waitFor(() => text(q("pcp-period")).includes("3 Nov - 9 Nov 2025"), "the picker");
+    await waitFor(() => text(q("pcp-cal-month-1")) === "November 2025", "the calendar to move to it");
   });
 
   it("keeps the Payslip tab's month in the address", async () => {

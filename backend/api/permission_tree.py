@@ -277,7 +277,7 @@ ATTENDANCE = N(
             "Monthly Report",
             "tab",
             "The month's attendance sheet and the late-penalty card.",
-            api=["attendance/report-log/sheet", "attendance/late-summary"],
+            api=["attendance/report-log/sheet", "attendance/report-log/day-punches", "attendance/late-summary"],
         ),
         N(
             "attendance.report_log.leave",
@@ -289,6 +289,36 @@ ATTENDANCE = N(
         N("attendance.report_log.late", "Daily Late Report", "tab", "Who came late on a day."),
         routes=["/hr/attendance/report-log"],
         api=["attendance/report-log"],
+    ),
+    N(
+        "attendance.production_report_log",
+        "Production Report Log",
+        "page",
+        "The same monthly sheet and daily leave / late reports for production employees.",
+        N(
+            "attendance.production_report_log.monthly",
+            "Monthly Report",
+            "tab",
+            "The month's attendance sheet of production employees.",
+            api=["attendance/production-report-log/sheet", "attendance/production-report-log/day-punches"],
+        ),
+        N(
+            "attendance.production_report_log.leave",
+            "Daily Leave Report",
+            "tab",
+            "Which production employees were absent on a day, and whether they informed.",
+            api=["attendance/production-report-log/day-informed"],
+        ),
+        N(
+            "attendance.production_report_log.late",
+            "Daily Late Report",
+            "tab",
+            "Which production employees came late on a day.",
+        ),
+        routes=["/hr/attendance/production-report-log"],
+        api=["attendance/production-report-log"],
+        # a role with nothing set here gets what it has on the staff Report Log page; the tabs follow this page (2026-11-16)
+        inherits="attendance.report_log",
     ),
     N(
         "attendance.punch_view",
@@ -546,6 +576,13 @@ SHIFTS = N(
         "Puts every production employee without a shift on the default one.",
         api=["shift-assignments/sync-production"],
     ),
+    N(
+        "shifts.production_special",
+        "Special production shifts",
+        "feature",
+        "Create, change and delete special production shifts, and put workers on them or take them off.",
+        api=["shifts/production/special", "shifts/production/special-assignments"],
+    ),
 )
 
 LEAVE = N(
@@ -801,6 +838,49 @@ PRODUCTION_PAYROLL = N(
         N("production_payroll.payroll.issues", "Issues", "view", "Problems found in the period."),
         N("production_payroll.payroll.skipped", "Skipped", "view", "Who is not in the period's payroll."),
         N("production_payroll.payroll.rules", "Rules", "view", "The rules the period was worked out with."),
+        N(
+            "production_payroll.payroll.moved_out",
+            "Moved out",
+            "view",
+            "Workers who moved from this cycle to another, with what this cycle paid them.",
+            api=["payroll/production/moved-out"],
+        ),
+    ),
+    N(
+        "production_payroll.new_joiners",
+        "New Joiners",
+        "view",
+        "Workers who joined during the period or moved here from another cycle: kept out of the payroll until added "
+        "(Edit: Add to payroll).",
+        api=["payroll/production/new-joiners"],
+    ),
+    N(
+        "production_payroll.finalize",
+        "Payroll Done",
+        "feature",
+        "Finalize a pay period, and unlock a finalized one that is not paid yet (a whole-company login only).",
+        api=["payroll/production/period-finalize", "payroll/production/period-unlock"],
+    ),
+    N(
+        "production_payroll.mark_paid",
+        "Mark as Paid",
+        "feature",
+        "Record the day a finalized pay period was paid (a whole-company login only).",
+        api=["payroll/production/period-paid"],
+    ),
+    N(
+        "production_payroll.exports",
+        "Salary statement and bank file",
+        "feature",
+        "The Excel / PDF Production Salary Statement and the bank file (the statement also needs Reports).",
+        viewCheck=True,
+    ),
+    N(
+        "production_payroll.adjust",
+        "Adjust bonus / deductions",
+        "feature",
+        "Change one worker's bonus, deductions or notes on a pay period that is not finalized.",
+        viewCheck=True,
     ),
     N(
         "production_payroll.employees",
@@ -826,7 +906,7 @@ PRODUCTION_PAYROLL = N(
         "Generate payroll",
         "feature",
         "Work out the period's payroll.",
-        api=["payroll/production/generate", "payroll/production/skip-check"],
+        api=["payroll/production/generate", "payroll/production/generate-progress", "payroll/production/skip-check"],
     ),
     N(
         "production_payroll.details",
@@ -834,7 +914,7 @@ PRODUCTION_PAYROLL = N(
         "page",
         "One employee's production payroll page.",
         routes=["/hr/production-payroll/details"],
-        apiPatterns=[r"payroll/production/\d+/details"],
+        apiPatterns=[r"payroll/production/\d+/(details|breakdown)"],
     ),
 )
 

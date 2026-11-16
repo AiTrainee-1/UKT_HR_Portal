@@ -387,9 +387,11 @@ describe("lists of assignments", () => {
         employmentType: "production",
         departmentName: "Cutting",
       },
+      { id: 55, employeeCode: "E55", firstName: "New", lastName: "Joiner", employmentType: "staff" },
     ];
-    expect(unassignedOf(people, list).map((p) => p.id)).toEqual([99]);
-    expect(filterPeople(people, "staff", "").map((p) => p.id)).toEqual([10]);
+    // production workers are all on the default production shifts from Settings (owner 2026-11-16): never unassigned
+    expect(unassignedOf(people, list).map((p) => p.id)).toEqual([55]);
+    expect(filterPeople(people, "staff", "").map((p) => p.id)).toEqual([10, 55]);
     expect(filterPeople(people, "all", "cutting").map((p) => p.id)).toEqual([99]);
     expect(filterPeople(people, "all", "free b").map((p) => p.id)).toEqual([99]);
   });

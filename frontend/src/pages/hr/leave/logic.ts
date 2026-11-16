@@ -2,6 +2,13 @@
 // balance maths), kept apart from the screens so they can be tested on their own.
 
 import type { ApprovalProgress } from "@/lib/approval-workflow";
+import {
+  categoryForEmploymentType,
+  departmentOptions as orgDepartmentOptions,
+  keepIfOffered,
+  type OrgCategory,
+  type OrgDepartment,
+} from "@/lib/departments";
 
 // ─── Shapes: what the lists carry beyond the generated client types (branch / department ids and the employee's
 //     type were added to the API for these filters; an older backend leaves them out, which every rule tolerates) ───
@@ -151,7 +158,8 @@ export function matchesPerson(p: PersonFields, f: PersonFilters): boolean {
   return matchesQuery(f.query, p.employeeName, p.employeeCode, p.department, p.designation, p.branch, p.employmentType);
 }
 
-export type Option = { value: string; label: string };
+/** A filter choice. A department's carries its Staff / Production kind (FilterSelect then groups both kinds). */
+export type Option = { value: string; label: string; category?: OrgCategory };
 
 /** The distinct branches / departments among some rows, as filter options (A to Z). Only ones that actually occur. */
 export function branchOptions(rows: PersonFields[]): Option[] {
@@ -160,10 +168,40 @@ export function branchOptions(rows: PersonFields[]): Option[] {
   return sortedOptions(seen);
 }
 
-export function departmentOptions(rows: PersonFields[]): Option[] {
-  const seen = new Map<string, string>();
-  for (const r of rows) if (r.departmentId != null && r.department) seen.set(String(r.departmentId), r.department);
-  return sortedOptions(seen);
+/**
+ * The departments among some rows, A to Z, each with its Staff / Production kind (the kind of the employees in it:
+ * staff and production have departments of their own, lib/departments.ts). With an employee type ("staff" /
+ * "production") only that kind's; with "all" both, which the filter shows under Staff and Production headings.
+ */
+export function departmentOptions(rows: PersonFields[], employeeType: string = ALL): Option[] {
+  const seen = new Map<number, OrgDepartment>();
+  for (const r of rows) {
+    if (r.departmentId == null || !r.department || seen.has(r.departmentId)) continue;
+    seen.set(r.departmentId, {
+      id: r.departmentId,
+      name: r.department,
+      category: categoryForEmploymentType(r.employmentType) ?? "staff",
+      branchId: r.branchId ?? null,
+      branchName: r.branch ?? null,
+    });
+  }
+  return orgDepartmentOptions([...seen.values()], { category: categoryForEmploymentType(employeeType) }).map((o) => ({
+    value: o.value,
+    label: o.label,
+    category: o.category,
+  }));
+}
+
+/** Only the department choices of one employee type ("all" = every one). */
+export function departmentsOfType(options: Option[], employeeType: string): Option[] {
+  const kind = categoryForEmploymentType(employeeType);
+  return kind ? options.filter((o) => (o.category ?? "staff") === kind) : options;
+}
+
+/** The filters with a new employee type: a picked department of the other kind is dropped (back to "all"). */
+export function withEmployeeType<F extends PersonFilters>(filters: F, employeeType: string, departments: Option[]): F {
+  const offered = departmentsOfType(departments, employeeType).map((o) => ({ ...o, category: o.category ?? "staff" }));
+  return { ...filters, employeeType, department: keepIfOffered(filters.department, offered, ALL) };
 }
 
 const sortedOptions = (seen: Map<string, string>): Option[] =>

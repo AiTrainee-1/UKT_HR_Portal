@@ -1,21 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
 import { STATEMENT_URL_DEFAULTS } from "@/components/payroll/kit/statement-url";
-import type {
-  CyclePeriodRow,
-  PayrollRunItem,
-  PeriodEmployee,
-  ProductionPayrollItem,
-} from "@/lib/api-client/custom-hooks";
+import type { CyclePeriodRow, PeriodEmployee, ProductionPayrollItem } from "@/lib/api-client/custom-hooks";
 import {
   ISSUE_URL_DEFAULTS,
-  PRODUCTION_REGISTER_COLUMNS,
   PRODUCTION_TABS,
   PRODUCTION_URL_DEFAULTS,
   PRODUCTION_VIEWS,
   ROSTER_URL_DEFAULTS,
   cycleBlurb,
-  cycleTitle,
   defaultPeriod,
   filterRoster,
   formatPeriod,
@@ -29,7 +22,6 @@ import {
   periodOptionLabel,
   periodValue,
   productionScope,
-  readyCount,
   resolveSlipMonth,
   rosterState,
   rosterStateCounts,
@@ -177,16 +169,6 @@ describe("the roster", () => {
     expect(filterRoster(people, "p002", "ready")).toEqual([]);
   });
 
-  it("counts what a Generate click would compute", () => {
-    expect(
-      readyCount([
-        person(),
-        person({ employeeId: 2, blockedReason: "x" }),
-        person({ employeeId: 3, payroll: payroll() }),
-      ]),
-    ).toBe(1);
-  });
-
   it("counts the people in each state, for the filter chips", () => {
     const people = [
       person({ employeeId: 1 }),
@@ -250,7 +232,6 @@ describe("who Payroll skipped, from the roster", () => {
 
 describe("wording", () => {
   it("names each cycle's page", () => {
-    expect(cycleTitle("weekly")).toBe("Production Payroll - Weekly");
     expect(cycleBlurb("biweekly")).toContain("Two-week calculation");
     expect(cycleBlurb("biweekly")).toContain("14-day");
     expect(cycleBlurb("monthly")).toContain("28-day");
@@ -294,7 +275,7 @@ describe("the page's state in its address", () => {
 
   it("knows its tabs and its views", () => {
     expect(PRODUCTION_TABS).toEqual(["payroll", "employees", "salary", "payslip"]);
-    expect(PRODUCTION_VIEWS).toEqual(["records", "issues", "skipped", "rules"]);
+    expect(PRODUCTION_VIEWS).toEqual(["records", "issues", "skipped", "rules", "moved"]);
     expect(isProductionTab("salary")).toBe(true);
     expect(isProductionTab("settings")).toBe(false);
     expect(isProductionTab("")).toBe(false);
@@ -378,56 +359,5 @@ describe("the page's state in its address", () => {
     expect(state.groupBy).toBe("date");
     expect(state.from).toBe("");
     expect(state.to).toBe("");
-  });
-});
-
-describe("the Payroll register", () => {
-  const run = {
-    ...payroll({ id: 5, employeeName: "Bala Worker", employeeCode: "PC-W2" }),
-    payCycle: "weekly",
-    periodStart: "2026-02-02",
-    periodEnd: "2026-02-08",
-    notes: "Production period (2026-02-02 to 2026-02-08): 7 shifts",
-  } as PayrollRunItem;
-  const cell = (key: string) => {
-    const col = PRODUCTION_REGISTER_COLUMNS.find((c) => c.key === key)!;
-    return col.value ? col.value(run) : (run as unknown as Record<string, unknown>)[key];
-  };
-
-  it("lists shifts and the pay cycle, not the days of a month", () => {
-    const labels = PRODUCTION_REGISTER_COLUMNS.map((c) => c.label);
-    expect(labels).toContain("Shifts earned");
-    expect(labels).toContain("Pay cycle");
-    expect(labels).toContain("Period start");
-    expect(labels).toContain("Net payable");
-    expect(labels).not.toContain("Monthly salary");
-    expect(labels).not.toContain("Overtime");
-  });
-
-  it("has a unique key per column", () => {
-    const keys = PRODUCTION_REGISTER_COLUMNS.map((c) => c.key);
-    expect(new Set(keys).size).toBe(keys.length);
-  });
-
-  it("reads each cell from the payroll row", () => {
-    expect(cell("employeeCode")).toBe("PC-W2");
-    expect(cell("payCycle")).toBe("Weekly");
-    expect(cell("periodStart")).toBe("2026-02-02");
-    expect(cell("presentDays")).toBe(7);
-    expect(cell("finalSalary")).toBe(3000);
-  });
-
-  it("writes the period as real dates and the money with paise", () => {
-    const type = (key: string) => PRODUCTION_REGISTER_COLUMNS.find((c) => c.key === key)!.type;
-    expect(type("periodStart")).toBe("date");
-    expect(type("periodEnd")).toBe("date");
-    expect(type("grossSalary")).toBe("money");
-    expect(type("presentDays")).toBe("money");
-  });
-
-  it("leaves the cycle blank for a row from before the cycles", () => {
-    const old = { ...run, payCycle: null } as PayrollRunItem;
-    const col = PRODUCTION_REGISTER_COLUMNS.find((c) => c.key === "payCycle")!;
-    expect(col.value!(old)).toBe("");
   });
 });

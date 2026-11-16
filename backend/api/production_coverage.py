@@ -15,6 +15,16 @@ Weekly, BiWeekly and Monthly (production_cycles.py) never pays the same day twic
                   first run never pays ancient history.
     refused       nothing of [s, e] is left to pay: every day is already in another payroll.
 
+FINAL and DRAFT (owner 2026-11-16): a production payroll is FINAL once its salary is marked Paid (payment_status) or its pay
+period is finalized (Payroll Done, ProductionPeriodClose of its cycle; a row with no cycle stamped is final when ANY cycle
+closed exactly its dates); every other production payroll is a DRAFT ("Generated": HR may work it out again whenever they
+like). A staff month always counts as covering, as before. Only FINAL rows -and drafts of other periods that do not share a
+day with [s, e]- cover days: a draft of another period that shares a day with [s, e] (the old week-start grid, the
+employee's old cycle after a move) is in the way. It never blocks: the plan lists it in `drafts`, and generating the
+period with "replace the drafts" deletes it first (payroll_views._generate_production_payroll), so its days are paid once,
+by this period (the days of the deleted draft outside [s, e] wait for their own period). A draft of an earlier period
+that does NOT touch [s, e] still marks its own days, so catch-up never reaches into days a draft already pays.
+
 A row's paid days (catch-up + pay days) are stored on Payroll.paid_ranges, and only when they differ from the plain
 period: an ordinary run stores NULL and is computed exactly as before.
 
@@ -163,6 +173,9 @@ class PayrollRef:
     status: str
     period_start: date
     period_end: date
+    # FINAL (paid, or its period finalized; always for a staff month) or a DRAFT that a run may replace
+    final: bool = True
+    net: Decimal | None = None
 
     @property
     def label(self) -> str:
@@ -199,10 +212,12 @@ def spans_of_row(
     paid_ranges,
     pay_cycle: str | None,
     status: str,
+    final: bool = True,
+    net: Decimal | None = None,
 ) -> list[PaidSpan]:
-    """The days one payroll row pays."""
+    """The days one payroll row pays. `final`: a production row that is paid or in a finalized period (False: a draft)."""
     if period_start is not None and period_end is not None:
-        ref = PayrollRef(payroll_id, pay_cycle, False, status, period_start, period_end)
+        ref = PayrollRef(payroll_id, pay_cycle, False, status, period_start, period_end, final, net)
         ranges = parse_ranges(paid_ranges) if paid_ranges else [(period_start, period_end)]
         return [PaidSpan(a, b, ref) for a, b in ranges]
     if salary_mode == "monthly" and month and year:
@@ -223,11 +238,33 @@ _ROW_FIELDS = (
     "paid_ranges",
     "pay_cycle",
     "status",
+    "payment_status",
+    "final_salary",
 )
 
 
+class FinalRule:
+    """Is a production payroll FINAL? Paid (payment status), or its period finalized: a ProductionPeriodClose of its cycle
+    and dates; a row with no cycle stamped (generated before the cycles existed) is final when any cycle closed exactly
+    its dates. Reads the closes once."""
+
+    def __init__(self):
+        from .models import ProductionPeriodClose
+
+        self.closed = set(ProductionPeriodClose.objects.values_list("cycle", "period_start", "period_end"))
+        self.closed_dates = {(s, e) for _c, s, e in self.closed}
+
+    def __call__(self, cycle: str | None, start: date, end: date, payment_status: str | None) -> bool:
+        if payment_status == "paid":
+            return True
+        if cycle:
+            return (cycle, start, end) in self.closed
+        return (start, end) in self.closed_dates
+
+
 def spans_for_employees(employee_ids) -> dict[int, list[PaidSpan]]:
-    """employee id -> every day their payroll rows pay (one query for the whole list)."""
+    """employee id -> every day their payroll rows pay, each span knowing whether its row is FINAL or a draft (two
+    queries for the whole list: the rows and the period closes)."""
     from django.db.models import Q
 
     from .models import Payroll
@@ -240,7 +277,9 @@ def spans_for_employees(employee_ids) -> dict[int, list[PaidSpan]]:
         .filter(Q(period_start__isnull=False) | Q(salary_mode=Payroll.SALARY_MODE_MONTHLY))
         .values_list(*_ROW_FIELDS)
     )
-    for pk, emp_id, mode, month, year, start, end, ranges, cycle, status in rows:
+    is_final = FinalRule()
+    for pk, emp_id, mode, month, year, start, end, ranges, cycle, status, payment, net in rows:
+        final = True if start is None or end is None else is_final(cycle, start, end, payment)
         out[emp_id].extend(
             spans_of_row(
                 payroll_id=pk,
@@ -252,6 +291,8 @@ def spans_for_employees(employee_ids) -> dict[int, list[PaidSpan]]:
                 paid_ranges=ranges,
                 pay_cycle=cycle,
                 status=status,
+                final=final,
+                net=net,
             )
         )
     return out
@@ -306,6 +347,21 @@ class CatchUp:
         }
 
 
+def draft_json(row: PayrollRef) -> dict:
+    """A draft payroll of another period that a run replaces (deletes) before it works out this period."""
+    return {
+        "payrollId": row.payroll_id,
+        "cycle": row.cycle,
+        "label": row.label,
+        "periodStart": row.period_start.isoformat(),
+        "periodEnd": row.period_end.isoformat(),
+        "periodLabel": fmt_range(row.period_start, row.period_end),
+        "status": row.status,
+        "cleared": row.status == "paid",
+        "net": float(row.net) if row.net is not None else None,
+    }
+
+
 @dataclass
 class PeriodPlan:
     """What a payroll for one employee and one period of a cycle pays."""
@@ -316,6 +372,9 @@ class PeriodPlan:
     pay_ranges: list[Range]
     already_paid: list[PaidPart] = field(default_factory=list)
     catch_up: list[CatchUp] = field(default_factory=list)
+    # DRAFT payrolls of other periods that share a day with this one: replaced (deleted) when the run is told to, refused
+    # otherwise; the plan already leaves them out, so it is right only once they are gone
+    drafts: list[PayrollRef] = field(default_factory=list)
     # days after a row with no cycle stamped that no payroll paid: reported, never added
     legacy_gap: CatchUp | None = None
     # the employee has payroll rows other than the one being (re)generated
@@ -386,6 +445,19 @@ class PeriodPlan:
             "Nothing is paid twice."
         )
 
+    def drafts_text(self) -> str:
+        """'draft payslips for 12 Oct – 25 Oct 2026 (BiWeekly) and 26 Oct – 8 Nov 2026 (BiWeekly)'."""
+        names = [f"{fmt_range(d.period_start, d.period_end)} ({d.label})" for d in self.drafts]
+        joined = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+        return f"draft payslip{'s' if len(names) != 1 else ''} for {joined}"
+
+    def drafts_reason(self) -> str:
+        """Why a run without "replace the drafts" leaves the employee out."""
+        return (
+            f'Some of these days are in the {self.drafts_text()} (generated, not finalized). Generate with "Replace the '
+            'overlapping draft payslips" to work them out for this period instead; nothing is paid twice.'
+        )
+
     def note(self) -> str | None:
         """One plain sentence about what is different from an ordinary run; None for an ordinary run."""
         if self.is_plain and self.legacy_gap is None:
@@ -427,6 +499,8 @@ class PeriodPlan:
             "partial": not self.is_plain,
             "refused": self.refused,
             "note": self.note(),
+            # draft payslips of other periods this period replaces (generated with "replace the drafts")
+            "drafts": [draft_json(d) for d in self.drafts],
         }
 
 
@@ -436,8 +510,16 @@ def _own_row(span: PaidSpan, start: date, end: date) -> bool:
 
 def plan_period(spans, start: date, end: date, cycle: str | None) -> PeriodPlan:
     """What a payroll of `cycle` for [start, end] pays an employee whose payroll rows pay `spans`. The row for this same
-    period (if it exists) is left out, so generating it again gives the same answer as the first time."""
+    period (if it exists) is left out, so generating it again gives the same answer as the first time. A DRAFT of another
+    period that shares a day with [start, end] is left out too (whole: every day it pays) and listed in `drafts`: the run
+    replaces it, so its days are paid by this period and never twice."""
     others = [s for s in spans if not _own_row(s, start, end)]
+    in_way = {
+        s.row.payroll_id: s.row
+        for s in others
+        if not s.row.final and not s.row.staff and intersect((s.start, s.end), (start, end)) is not None
+    }
+    others = [s for s in others if s.row.payroll_id not in in_way]
     covered = [(s.start, s.end) for s in others]
     pay = subtract((start, end), covered)
 
@@ -451,7 +533,15 @@ def plan_period(spans, start: date, end: date, cycle: str | None) -> PeriodPlan:
         else:
             already.append(PaidPart(part[0], part[1], s.row))
 
-    plan = PeriodPlan(start, end, cycle, pay, already_paid=already, has_history=bool(others))
+    plan = PeriodPlan(
+        start,
+        end,
+        cycle,
+        pay,
+        already_paid=already,
+        has_history=bool(others) or bool(in_way),
+        drafts=sorted(in_way.values(), key=lambda r: (r.period_start, r.payroll_id)),
+    )
 
     # the latest covered day before the period, and the row that pays it
     before = [(min(s.end, start - ONE_DAY), s) for s in others if s.start < start]

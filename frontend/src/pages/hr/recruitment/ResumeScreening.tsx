@@ -16,6 +16,8 @@ import { customFetch } from "@/lib/api-client/custom-fetch";
 import { useResumeScreening } from "@/contexts/ResumeScreeningContext";
 import { canApprove, isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
+import { departmentOptions } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock, visibleItems } from "@/lib/tab-access";
 import ResumeScreeningPipeline from "@/components/ResumeScreeningPipeline";
 import { CircleLoader } from "@/components/ui/CircleLoader";
@@ -306,6 +308,8 @@ function RuleSetDialog({ ruleSet, onClose }: { ruleSet: HiringRuleSetItem | null
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { data: departments } = useListDepartments();
+  // Hiring rules may be for a staff or a production department: both kinds, under two headings.
+  const deptOptions = departmentOptions(departments);
   const createMutation = useCreateHiringRuleSet();
   const updateMutation = useUpdateHiringRuleSet();
 
@@ -390,11 +394,7 @@ function RuleSetDialog({ ruleSet, onClose }: { ruleSet: HiringRuleSetItem | null
                 <SelectValue placeholder="Select department" />
               </SelectTrigger>
               <SelectContent>
-                {(departments ?? []).map((d) => (
-                  <SelectItem key={d.id} value={String(d.id)}>
-                    {d.name}
-                  </SelectItem>
-                ))}
+                <OrgSelectItems options={deptOptions} />
               </SelectContent>
             </Select>
           </div>

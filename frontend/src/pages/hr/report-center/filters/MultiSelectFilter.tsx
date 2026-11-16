@@ -9,7 +9,12 @@ import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
 export interface MultiOption {
   value: string;
   label: string;
+  /** A heading the option is listed under (Staff / Production departments); options without one are not grouped. */
+  group?: string;
 }
+
+/** What a picked option reads on its own (a chip, the closed picker): its label, plus the group it sits under. */
+export const optionLabel = (o: MultiOption) => (o.group ? `${o.label} (${o.group})` : o.label);
 
 /** Popover checklist for "all / some of" filters (departments, designations, branches, fixed choices). */
 export function MultiSelectFilter({
@@ -38,7 +43,7 @@ export function MultiSelectFilter({
     value.length === 0
       ? placeholder
       : value.length === 1
-        ? (options.find((o) => o.value === value[0])?.label ?? "1 selected")
+        ? ((o) => (o ? optionLabel(o) : "1 selected"))(options.find((o) => o.value === value[0]))
         : `${value.length} selected`;
 
   return (
@@ -93,15 +98,26 @@ export function MultiSelectFilter({
           {shown.length === 0 && (
             <p className="px-3 py-4 text-center text-xs text-muted-foreground">Nothing matches “{q}”.</p>
           )}
-          {shown.map((o) => (
-            <label
-              key={o.value}
-              className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-slate-50"
-            >
-              <Checkbox checked={selected.has(o.value)} onCheckedChange={() => toggle(o.value)} aria-label={o.label} />
-              <span className="truncate">{o.label}</span>
-              {selected.has(o.value) && <Check size={12} className="ml-auto text-sky-600" />}
-            </label>
+          {shown.map((o, i) => (
+            <div key={o.value}>
+              {o.group && o.group !== shown[i - 1]?.group && (
+                <p
+                  className="px-3 pb-0.5 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                  data-testid="multi-option-group"
+                >
+                  {o.group}
+                </p>
+              )}
+              <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-slate-50">
+                <Checkbox
+                  checked={selected.has(o.value)}
+                  onCheckedChange={() => toggle(o.value)}
+                  aria-label={optionLabel(o)}
+                />
+                <span className="truncate">{o.label}</span>
+                {selected.has(o.value) && <Check size={12} className="ml-auto text-sky-600" />}
+              </label>
+            </div>
           ))}
         </div>
       </PopoverContent>

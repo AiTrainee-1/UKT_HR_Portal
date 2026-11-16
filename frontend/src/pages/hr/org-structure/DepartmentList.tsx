@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import type { DepartmentRow } from "./api";
 import { plural } from "./logic";
-import { BranchChip, Headcount, SplitBar } from "./parts";
+import { useSplitHeading, BranchChip, Headcount, SplitBar } from "./parts";
 
 type Props = {
   rows: DepartmentRow[];
@@ -69,6 +69,7 @@ function Name({ d, onOpen }: { d: DepartmentRow; onOpen: (d: DepartmentRow) => v
 
 /** The departments, as a table on wide screens and as cards on phones. */
 export default function DepartmentList({ rows, onOpen, onEdit, onDelete }: Props) {
+  const splitHeading = useSplitHeading();
   return (
     <Card className="overflow-hidden rounded-2xl">
       <CardContent className="p-0">
@@ -78,7 +79,7 @@ export default function DepartmentList({ rows, onOpen, onEdit, onDelete }: Props
               <TableRow>
                 <TableHead className={HEAD}>Department</TableHead>
                 <TableHead className={HEAD}>Branch</TableHead>
-                <TableHead className={cn(HEAD, "w-56")}>Staff / production</TableHead>
+                <TableHead className={cn(HEAD, "w-56")}>{splitHeading}</TableHead>
                 <TableHead className={cn(HEAD, "text-right")}>Employees</TableHead>
                 <TableHead className={cn(HEAD, "text-right")}>Designations</TableHead>
                 <TableHead className={cn(HEAD, "text-right")}>Actions</TableHead>

@@ -16,11 +16,12 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { useListShiftAssignments, type ShiftAssignment } from "@/lib/api-client/custom-hooks";
+import { useListShiftAssignments, useProductionShifts, type ShiftAssignment } from "@/lib/api-client/custom-hooks";
 import { Gate } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import EmployeeShiftStatsDialog from "./EmployeeShiftStatsDialog";
 import { EditScheduleDialog, RemoveFromShiftDialog } from "./ManageAssignmentDialogs";
+import { ProductionAssignmentsView } from "./production/ProductionShiftsPanel";
 import {
   filterAssignments,
   groupAssignments,
@@ -356,7 +357,12 @@ export default function AssignmentsTab({
   const [removing, setRemoving] = useState<ShiftAssignment[]>([]);
   const [editing, setEditing] = useState<ShiftAssignment | null>(null);
   const [stats, setStats] = useState<ShiftAssignment | null>(null);
-  const { data = [], isLoading } = useListShiftAssignments({ activeOnly: true });
+  const { data: rows = [], isLoading } = useListShiftAssignments({ activeOnly: true });
+  // production workers are on the default production shifts from Settings (owner 2026-11-16): the retired Production
+  // Shift template's rows are not listed; the Production filter shows the special-shift assignments instead
+  const data = useMemo(() => rows.filter((a) => a.employmentType !== "production"), [rows]);
+  const production = useProductionShifts();
+  const specialNow = (production.data?.special ?? []).reduce((n, s) => n + s.activeCount, 0);
   const focused = useRef<number | null>(null);
 
   useEffect(() => {
@@ -375,11 +381,11 @@ export default function AssignmentsTab({
 
   const counts: Record<TypeFilter, number> = useMemo(
     () => ({
-      all: data.length,
+      all: data.length + specialNow,
       staff: data.filter((a) => (a.employmentType ?? "staff") === "staff").length,
-      production: data.filter((a) => a.employmentType === "production").length,
+      production: specialNow,
     }),
-    [data],
+    [data, specialNow],
   );
   const groups = useMemo(() => groupAssignments(filterAssignments(data, type, query)), [data, type, query]);
   const toggle = (id: number) =>
@@ -402,7 +408,9 @@ export default function AssignmentsTab({
         />
       </div>
 
-      {isLoading ? (
+      {type === "production" ? (
+        <ProductionAssignmentsView />
+      ) : isLoading ? (
         <div className="space-y-3">
           {[0, 1, 2].map((i) => (
             <Card key={i} className="flex items-center gap-4 border-0 p-4 shadow-sm">

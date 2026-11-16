@@ -3,6 +3,7 @@
 // payroll deducts it. The schedule preview is a twin of settlement_views._auto_create_repayments, only to show HR what an
 // approval will create.
 
+import { matchesNamedOrgOption } from "@/lib/departments";
 import type { Advance } from "@/lib/api-client";
 import type { Tone } from "@/lib/statusTones";
 import {
@@ -177,7 +178,8 @@ export function filterRows(rows: SettlementRow[], f: Filters, ignoreStatus = fal
     if (!ignoreStatus && f.status !== "all" && a.status !== f.status) return false;
     if (f.type !== "all" && a.advanceType !== f.type) return false;
     if (f.branch !== "all" && (a.employeeBranch ?? "") !== f.branch) return false;
-    if (f.department !== "all" && (a.employeeDepartment ?? "") !== f.department) return false;
+    // a department choice is "<staff|production>|<name>" (lib/departments.ts): staff and production have their own
+    if (!matchesNamedOrgOption(f.department, a.employeeDepartment, a.employeeType)) return false;
     if (f.employeeType !== "all" && (a.employeeType ?? "") !== f.employeeType) return false;
     if (f.employee === "left" && !hasLeft(a)) return false;
     if (f.employee === "active" && hasLeft(a)) return false;

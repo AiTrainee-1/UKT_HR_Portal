@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,15 +13,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useCreateDesignation } from "@/lib/api-client/custom-hooks";
+import { ORG_CATEGORY_LABEL, orgCategoryOf, type OrgCategory } from "@/lib/departments";
 import { errorMessage, useRefreshOrg, useUpdateDesignation, type DesignationRow, type TreeDepartment } from "./api";
-import { LEVELS, NONE, levelInfo } from "./logic";
+import { KindPicker } from "./KindPicker";
+import { LEVELS, NONE, designationCategoryLock, levelInfo } from "./logic";
 
 type Props = {
   /** The designation being edited; null to create one. */
   designation: DesignationRow | null;
+  /** Every department of both kinds: the list follows the Staff / Production choice. */
   departments: TreeDepartment[];
   /** Every designation, to warn about a title that already exists in the chosen department. */
   designations: DesignationRow[];
+  /** The kind the page's switch is on: a new designation starts as it. */
+  category: OrgCategory;
   /** The department of the group "Add designation" was pressed in. */
   defaultDepartmentId?: number | null;
   /** A branch login must file a designation under one of its departments (the server refuses otherwise). */
@@ -35,6 +40,7 @@ export default function DesignationDialog({
   designations,
   defaultDepartmentId,
   requireDepartment,
+  category: pageCategory,
   onClose,
 }: Props) {
   const { toast } = useToast();
@@ -58,13 +64,24 @@ export default function DesignationDialog({
   );
   const [error, setError] = useState<string | null>(null);
   const busy = createMutation.isPending || updateMutation.isPending;
+  // Staff or Production: a designation is of its department's kind, so the department list follows this choice.
+  const [category, setCategory] = useState<OrgCategory>(designation ? orgCategoryOf(designation) : pageCategory);
+  const lock = designation ? designationCategoryLock(designation) : null;
+  const pickCategory = (c: OrgCategory) => {
+    setCategory(c);
+    // a department of the other kind cannot stay picked
+    const dept = departments.find((d) => String(d.id) === departmentId);
+    if (dept && orgCategoryOf(dept) !== c) setDepartmentId(NONE);
+  };
 
   const grouped = useMemo(() => {
     const groups = new Map<string, TreeDepartment[]>();
-    for (const d of departments)
+    for (const d of departments) {
+      if (orgCategoryOf(d) !== category) continue;
       groups.set(d.branchName ?? "No branch", [...(groups.get(d.branchName ?? "No branch") ?? []), d]);
+    }
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [departments]);
+  }, [departments, category]);
 
   const levelKnown = LEVELS.some((l) => l.value === level);
   const clash =
@@ -73,7 +90,8 @@ export default function DesignationDialog({
       (d) =>
         d.id !== designation?.id &&
         (d.departmentId == null ? NONE : String(d.departmentId)) === departmentId &&
-        d.title.trim().toLowerCase() === title.trim().toLowerCase(),
+        (departmentId !== NONE || orgCategoryOf(d) === category) &&
+        d.title.trim().toLowerCase() === title.trim().replace(/\s+/g, " ").toLowerCase(),
     );
 
   const submit = async () => {
@@ -85,9 +103,9 @@ export default function DesignationDialog({
     const dept = departmentId === NONE ? null : Number(departmentId);
     try {
       if (editing) {
-        await updateMutation.mutateAsync({ id: designation.id, title: trimmed, departmentId: dept, level });
+        await updateMutation.mutateAsync({ id: designation.id, title: trimmed, departmentId: dept, level, category });
       } else {
-        await createMutation.mutateAsync({ title: trimmed, departmentId: dept, level });
+        await createMutation.mutateAsync({ title: trimmed, departmentId: dept, level, category });
       }
     } catch (e) {
       const message = errorMessage(e) ?? "Please try again.";
@@ -108,13 +126,32 @@ export default function DesignationDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md" data-testid="designation-dialog">
         <DialogHeader>
-          <DialogTitle>{editing ? `Edit ${designation.title}` : "New designation"}</DialogTitle>
+          <DialogTitle>
+            {editing ? `Edit ${designation.title}` : `New ${ORG_CATEGORY_LABEL[category]} designation`}
+          </DialogTitle>
           <DialogDescription>
             A designation sits under a department, and the department under a branch.
             {editing && " Moving it to another department moves everyone who holds it."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
+          <div className="space-y-1.5">
+            <Label>
+              Type <span className="text-red-500">*</span>
+            </Label>
+            <KindPicker value={category} onChange={pickCategory} disabled={!!lock} testId="designation-category" />
+            {lock ? (
+              <p className="flex items-start gap-1.5 text-xs text-gray-500" data-testid="designation-category-lock">
+                <Lock size={12} className="mt-0.5 shrink-0" />
+                {lock}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Only {category === "production" ? "production employees" : "staff"} can hold it; it goes under a{" "}
+                {ORG_CATEGORY_LABEL[category]} department.
+              </p>
+            )}
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="des-title">
               Title <span className="text-red-500">*</span>
@@ -138,7 +175,11 @@ export default function DesignationDialog({
               className="h-9 w-full rounded-md border bg-background px-3 text-sm"
               data-testid="designation-department"
             >
-              <option value={NONE}>{requireDepartment ? "Select a department" : "No department (unassigned)"}</option>
+              <option value={NONE}>
+                {requireDepartment
+                  ? `Select a ${ORG_CATEGORY_LABEL[category]} department`
+                  : "No department (unassigned)"}
+              </option>
               {grouped.map(([branch, list]) => (
                 <optgroup key={branch} label={branch}>
                   {list.map((d) => (

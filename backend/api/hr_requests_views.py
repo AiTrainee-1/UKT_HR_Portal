@@ -739,7 +739,9 @@ def _filter_options(request: Request) -> dict:
     departments = scope_to_branch(Department.objects.all(), request, field="branch_id").order_by("name")
     return {
         "branches": [{"id": b.id, "name": b.name} for b in branches],
-        "departments": [{"id": d.id, "name": d.name, "branchId": d.branch_id} for d in departments],
+        "departments": [
+            {"id": d.id, "name": d.name, "branchId": d.branch_id, "category": d.category} for d in departments
+        ],
     }
 
 

@@ -277,8 +277,9 @@ export function summarize(entries: LateEntry[]): LateSummary {
 
 // ─── Files ───
 
-/** The file name (without the extension): Daily_Late_Report_2026-10-16. */
-export const lateFileStem = (iso: string): string => `${LATE_REPORT_TITLE.replace(/\s+/g, "_")}_${iso}`;
+/** The file name (without the extension): Daily_Late_Report_2026-10-16 (Production_Daily_Late_Report_... for that page). */
+export const lateFileStem = (iso: string, title: string = LATE_REPORT_TITLE): string =>
+  `${title.replace(/\s+/g, "_")}_${iso}`;
 
 /** "26 Oct 2026, 11:45 AM", the moment a file was made. */
 export function generatedStamp(now: Date): string {

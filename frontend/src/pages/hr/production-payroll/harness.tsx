@@ -9,8 +9,11 @@ import type {
   PayrollIssue,
   PeriodEmployee,
   ProductionCyclesSummary,
+  ProductionMovedOut,
+  ProductionNewJoiners,
   ProductionPayrollItem,
   ProductionPeriodStatus,
+  ProductionPeriodWorkflow,
   ProductionPeriods,
   ProductionSkipCheck,
   SalarySlipItem,
@@ -47,6 +50,11 @@ export type World = {
   pfEsi: Record<string, unknown>;
   departments: { id: number; name: string }[];
   skipCheck: ProductionSkipCheck;
+  /** The period workflow's answer (Payroll Done / Mark as Paid): derived from the payrolls of the period unless set. */
+  workflow: Partial<ProductionPeriodWorkflow> | null;
+  /** The period's New Joiners (nobody by default) and the cycle's Moved out list (nobody by default). */
+  newJoiners: Partial<ProductionNewJoiners> | null;
+  movedOut: Partial<ProductionMovedOut> | null;
   /** What the server says today is (YYYY-MM-DD): a period ends once its last day is not after it. */
   today: string;
   /** Paths (without the query) that fail with this HTTP status. */
@@ -118,6 +126,9 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
       { id: 5, name: "Stitching" },
     ],
     skipCheck: skipCheckOf(),
+    workflow: null,
+    newJoiners: null,
+    movedOut: null,
     today: TODAY,
     failing: new Map(),
     hold: (path) => {
@@ -156,7 +167,8 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
     const payrolls = payrollsOf(world.people);
 
     if (method === "PATCH") {
-      const m = /^\/api\/payroll\/(\d+)$/.exec(path);
+      // a production payroll is changed on its own route (Production Payroll rights, 2026-11-16)
+      const m = /^\/api\/payroll(?:\/production)?\/(\d+)$/.exec(path);
       const target = m ? payrolls.find((p) => p.id === Number(m[1])) : undefined;
       if (!target) {
         world.unexpected.push(`${method} ${url}`);
@@ -167,6 +179,58 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
       Object.assign(target, body);
       target.finalSalary = target.grossSalary + target.bonus - target.deductions;
       return copy(target);
+    }
+
+    if (method === "POST") {
+      // the period workflow's buttons (2026-11-16): Payroll Done, Mark as Paid, Add to payroll
+      const body = JSON.parse(String(options?.body ?? "{}")) as Record<string, unknown>;
+      world.writes.push({ method, url, body });
+      if (path === "/api/payroll/production/period-finalize") {
+        world.workflow = {
+          ...(world.workflow ?? {}),
+          state: "finalized",
+          locked: true,
+          finalizedAt: "2026-02-10T10:00:00+05:30",
+          finalizedBy: "HR",
+        };
+        return { ...world.workflow };
+      }
+      if (path === "/api/payroll/production/period-paid") {
+        world.workflow = {
+          ...(world.workflow ?? {}),
+          state: "paid",
+          locked: true,
+          paidAt: "2026-02-11T10:00:00+05:30",
+          paidOn: String(body.paidOn),
+          paidBy: "HR",
+        };
+        return { ...world.workflow, workersPaid: 1 };
+      }
+      if (path === "/api/payroll/production/period-unlock") {
+        world.workflow = {
+          ...(world.workflow ?? {}),
+          state: "generated",
+          locked: false,
+          finalizedAt: null,
+          finalizedBy: null,
+          unlockBlocked: null,
+          can: { finalize: true, markPaid: false, addToPayroll: true, adjust: true, markCleared: true, generate: true },
+        };
+        return { ...world.workflow };
+      }
+      if (path === "/api/payroll/production/new-joiners/add") {
+        const waiting = world.newJoiners?.waiting ?? [];
+        const ids = body.all ? waiting.map((r) => r.id) : ((body.payrollIds as number[] | undefined) ?? []);
+        const moved = waiting.filter((r) => ids.includes(r.id)).map((r) => ({ ...r, parked: false }));
+        world.newJoiners = {
+          ...(world.newJoiners ?? {}),
+          waiting: waiting.filter((r) => !ids.includes(r.id)),
+          added: [...(world.newJoiners?.added ?? []), ...moved],
+        };
+        return { added: moved.length, payrollIds: moved.map((r) => r.id) };
+      }
+      world.unexpected.push(`${method} ${url}`);
+      throw apiError(404);
     }
 
     switch (path) {
@@ -224,6 +288,73 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
         return copy(statementOf(payrolls.filter(inPeriod), period));
       case "/api/payroll/production/skip-check":
         return copy(world.skipCheck);
+      case "/api/payroll/production/period-workflow": {
+        const rows = payrolls.filter(inPeriod);
+        const workflow: ProductionPeriodWorkflow = {
+          cycle: (qs.get("cycle") ?? "weekly") as PayCycle,
+          label: "Weekly",
+          ...period,
+          periodLabel: period.periodStart,
+          state: rows.length ? "generated" : "not_generated",
+          stateLabel: rows.length ? "Generated" : "Not generated",
+          locked: false,
+          periodEnded: period.periodEnd <= world.today,
+          finalizedAt: null,
+          finalizedBy: null,
+          paidAt: null,
+          paidBy: null,
+          paidOn: null,
+          daysToPay: null,
+          firstGeneratedAt: rows.length ? "2026-02-09T10:00:00+05:30" : null,
+          lastComputedAt: rows.length ? "2026-02-09T10:00:00+05:30" : null,
+          counts: {
+            generated: rows.length,
+            inPayroll: rows.length,
+            notCleared: rows.filter((r) => r.status !== "paid").length,
+            parked: 0,
+            newJoiners: 0,
+            movedIn: 0,
+            addedToPayroll: 0,
+            paid: 0,
+            notPaid: rows.length,
+            mainNet: rows.reduce((sum, r) => sum + r.finalSalary, 0),
+          },
+          snapshot: null,
+          finalizeBlockers: rows.length ? [] : ["There is no payroll for this period yet: generate it first."],
+          wholeCompany: true,
+          can: {
+            finalize: rows.length > 0,
+            markPaid: false,
+            addToPayroll: true,
+            adjust: true,
+            markCleared: true,
+            generate: true,
+          },
+          ...(world.workflow ?? {}),
+        };
+        return copy(workflow);
+      }
+      case "/api/payroll/production/new-joiners":
+        return copy({
+          cycle: (qs.get("cycle") ?? "weekly") as PayCycle,
+          ...period,
+          locked: false,
+          canAdd: true,
+          waiting: [],
+          added: [],
+          waitingNet: 0,
+          ...(world.newJoiners ?? {}),
+        } satisfies ProductionNewJoiners);
+      case "/api/payroll/production/moved-out":
+        return copy({
+          cycle: (qs.get("cycle") ?? "weekly") as PayCycle,
+          label: "Weekly",
+          visibleGenerations: 2,
+          includeOlder: qs.get("older") === "1",
+          olderCount: 0,
+          moves: [],
+          ...(world.movedOut ?? {}),
+        } satisfies ProductionMovedOut);
       case "/api/payroll-settings":
         return copy(world.settings);
       case "/api/pf-esi-settings":

@@ -56,7 +56,11 @@ export type PayrollMonthStatus = {
     releaseAndPay: boolean;
     /** May this login mark a payroll Cleared (its approval switch)? Missing on an older backend: allowed. */
     markCleared?: boolean;
+    /** A finalized month nothing of which is paid, back to open (Payroll Done's rights; 2026-11-16). */
+    unlock?: boolean;
   };
+  /** A finalized month that cannot be unlocked: why ("Paid: locked for good ..."); null / absent otherwise. */
+  unlockBlocked?: string | null;
   /** Mark as Paid only: how many employees it paid. */
   employeesPaid?: number;
 };
@@ -131,5 +135,10 @@ export function usePayrollMonthActions() {
       post<PayrollMonthStatus>("/api/payroll/month-paid", { month, year }),
     onSuccess,
   });
-  return { hold, addToPayroll, releaseAndPay, finalize, markPaid };
+  const unlock = useMutation({
+    mutationFn: ({ month, year, reason }: { month: number; year: number; reason: string }) =>
+      post<PayrollMonthStatus>("/api/payroll/month-unlock", { month, year, reason }),
+    onSuccess,
+  });
+  return { hold, addToPayroll, releaseAndPay, finalize, markPaid, unlock };
 }

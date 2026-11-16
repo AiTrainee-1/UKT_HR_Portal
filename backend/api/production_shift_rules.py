@@ -165,6 +165,11 @@ class RuleSet:
     night_session_hours: int = DEFAULT_SESSION_HOURS
     groups: tuple[ShiftGroup, ...] = ()
     breaks: tuple[BreakWindow, ...] = ()
+    # SPECIAL shifts (owner 2026-11-16, made on Manage Shifts): never picked by a first punch; a worker on one is judged
+    # and paid by it on the dates of their assignment (and the days it applies to). `special_assignments` rows are
+    # (employee id, from, to or None, group id). See special_group_for / select_group.
+    special: tuple[ShiftGroup, ...] = ()
+    special_assignments: tuple[tuple[int, date_type, date_type | None, int], ...] = ()
 
     def __post_init__(self):
         # overlapping or duplicate break windows are one window (their union): a minute is never subtracted twice
@@ -177,11 +182,31 @@ class RuleSet:
         departures, plus CLOSE_BY_MARGIN_MIN minutes (05:30 + 90 min = 07:00 with the default tables). No setting of its
         own: it follows the rules, so adding a later night row moves it."""
         latest = 0
-        for g in self.groups:
+        for g in (*self.groups, *self.special):
             for out in [p.out_s for p in g.points] + ([g.main_out_s] if g.main_out_s is not None else []):
                 if out >= DAY_S:
                     latest = max(latest, out - DAY_S)
         return latest + CLOSE_BY_MARGIN_MIN * 60
+
+    @cached_property
+    def _special_index(self) -> dict:
+        by_id = {g.id: g for g in self.special}
+        index: dict[int, list[tuple[date_type, date_type | None, ShiftGroup]]] = {}
+        for emp_id, start, end, group_id in self.special_assignments:
+            group = by_id.get(group_id)
+            if group is not None:  # a special shift that is switched off (or has no rule left) pays by the defaults
+                index.setdefault(emp_id, []).append((start, end, group))
+        return index
+
+    def special_group_for(self, employee_id: int | None, d: date_type) -> ShiftGroup | None:
+        """The special shift employee `employee_id` is on for day `d` (its assignment covers `d`), whatever weekday;
+        select_group then uses it only on the days it applies to. None: the default groups."""
+        if employee_id is None:
+            return None
+        for start, end, group in self._special_index.get(employee_id, ()):
+            if start <= d and (end is None or d <= end):
+                return group
+        return None
 
     def applies(self, d: date_type) -> bool:
         """True when the new rules judge day `d`: switched on, `d` on/after the effective date, and a usable group.
@@ -289,10 +314,11 @@ def _collapse_refs(items: Sequence[tuple[int, Any]] | None) -> list[tuple[int, A
 # ── Building a RuleSet from stored rows ────────────────────────────────────
 
 
-def build_ruleset(config, groups, rules, breaks) -> RuleSet:
+def build_ruleset(config, groups, rules, breaks, assignments=()) -> RuleSet:
     """A RuleSet from the ORM rows. `groups`/`rules`/`breaks` may include disabled rows: they are dropped here. A
     group with no enabled rule can pay nothing, so it is dropped as well (the callers then fall back to the legacy
-    calculation when no group is left)."""
+    calculation when no group is left). Groups with `is_special` go to RuleSet.special (never picked by a first punch);
+    `assignments` are the special-shift assignment rows (employee_id, group_id, effective_from, effective_to)."""
     points_by_group: dict[int, list[RulePoint]] = {}
     for r in rules:
         if not r.enabled:
@@ -300,6 +326,7 @@ def build_ruleset(config, groups, rules, breaks) -> RuleSet:
         out = time_to_s(r.out_time) + (DAY_S if r.out_next_day else 0)
         points_by_group.setdefault(r.group_id, []).append(RulePoint(r.label or "", out, _dec(r.shift_value)))
     built: list[ShiftGroup] = []
+    special: list[ShiftGroup] = []
     for g in sorted(groups, key=lambda x: (x.order, x.id or 0)):
         if not g.enabled:
             continue
@@ -315,7 +342,7 @@ def build_ruleset(config, groups, rules, breaks) -> RuleSet:
         main_out = None
         if g.main_out_time is not None:
             main_out = time_to_s(g.main_out_time) + (DAY_S if g.main_out_next_day else 0)
-        built.append(
+        (special if getattr(g, "is_special", False) else built).append(
             ShiftGroup(
                 label=g.label,
                 kind=g.kind,
@@ -347,7 +374,17 @@ def build_ruleset(config, groups, rules, breaks) -> RuleSet:
         night_session_hours=max(0, int(_attr(config, "rules_night_session_hours", DEFAULT_SESSION_HOURS))),
         groups=tuple(built),
         breaks=windows,
+        special=tuple(special),
+        special_assignments=tuple(
+            (a.employee_id, _as_date(a.effective_from), _as_date(a.effective_to), a.group_id) for a in assignments
+        ),
     )
+
+
+def _as_date(value) -> date_type | None:
+    if value is None or isinstance(value, date_type):
+        return value
+    return date_type.fromisoformat(str(value)[:10])
 
 
 # ── Paid time, the ladder and V(t) ─────────────────────────────────────────
@@ -403,8 +440,13 @@ def snap_out(group: ShiftGroup, t: int, grace_s: int, limit: int | None = None) 
 # ── Group selection ────────────────────────────────────────────────────────
 
 
-def select_group(ruleset: RuleSet, d: date_type, first_clock_s: int) -> ShiftGroup | None:
+def select_group(
+    ruleset: RuleSet, d: date_type, first_clock_s: int, employee_id: int | None = None
+) -> ShiftGroup | None:
     """The group that judges day `d`, from the clock time of its first punch.
+
+    A worker on a SPECIAL shift that day (`employee_id` given, RuleSet.special_group_for) is judged by it on the days it
+    applies to, whatever the first punch; on its other days (a Monday-Saturday special on a Sunday) the defaults below.
 
     Sunday -> groups for Sunday / every day; any other day -> Monday-Saturday / every day. Among those, the first (by
     order) group whose first-punch window contains the punch; else the group whose start time is nearest to it (CIRCULAR
@@ -414,6 +456,9 @@ def select_group(ruleset: RuleSet, d: date_type, first_clock_s: int) -> ShiftGro
     The window is compared in whole minutes at both ends: a window that ends 16:59:59 (the seed) and one saved as 16:59
     (the Settings page) both contain a punch made at 16:59:30."""
     wanted = ("sunday", "all") if d.weekday() == 6 else ("mon_sat", "all")
+    special = ruleset.special_group_for(employee_id, d)
+    if special is not None and special.applies_on in wanted:
+        return special
     candidates = [g for g in ruleset.groups if g.applies_on in wanted]
     if not candidates:
         return None
@@ -442,7 +487,7 @@ def _round_total(total: Fraction, ruleset: RuleSet) -> Decimal:
     return (Decimal(rounded.numerator) / Decimal(rounded.denominator)).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
-def evaluate_day(ruleset: RuleSet, d: date_type, punches: Sequence) -> dict | None:
+def evaluate_day(ruleset: RuleSet, d: date_type, punches: Sequence, employee_id: int | None = None) -> dict | None:
     """The result of production day `d` under the new rules, from its RESOLVED punches (seconds since this day's
     midnight, a next-morning exit being +86400; times are accepted too). Same keys as the legacy production result
     (status, is_late, is_half_shift, early_leave, shifts_earned, first_punch, last_punch) plus `rule_group` and
@@ -453,26 +498,15 @@ def evaluate_day(ruleset: RuleSet, d: date_type, punches: Sequence) -> dict | No
     if not secs:
         return {"status": "absent", "shifts_earned": _ZERO}
     kept = collapse_taps(secs)
-    group = select_group(ruleset, d, kept[0] % DAY_S)
+    group = select_group(ruleset, d, kept[0] % DAY_S, employee_id)
     if group is None:
         return None
 
     grace_s = ruleset.grace_minutes * 60
-    breaks = ruleset.breaks
     cm = [_minute(s) for s in kept]
     top = max(p.value for p in group.points)
 
-    total = Fraction(0)
-    pairs: list[tuple[int, int, int, int]] = []  # (in, out, counted in, counted out)
-    for i in range(len(cm) // 2):
-        t_in, t_out = cm[2 * i], cm[2 * i + 1]
-        counted_in = t_in
-        if i == 0 and t_in <= group.start_s + grace_s:
-            counted_in = min(t_in, group.start_s)  # on time (or early): counts as the start
-        following = cm[2 * i + 2] if 2 * i + 2 < len(cm) else None
-        counted_out = snap_out(group, t_out, grace_s, following)
-        pairs.append((t_in, t_out, counted_in, counted_out))
-        total += value_at(group, breaks, counted_out) - value_at(group, breaks, counted_in)
+    pairs, _values, total = _count_pairs(ruleset, group, cm)
     minimum_applied = False
     if pairs and total < Fraction(ruleset.min_credit):
         total = Fraction(ruleset.min_credit)
@@ -493,6 +527,83 @@ def evaluate_day(ruleset: RuleSet, d: date_type, punches: Sequence) -> dict | No
         "last_punch": s_to_time(kept[-1]) if len(kept) > 1 else None,
         "rule_group": group.label,
         "rule_note": _note(group, ruleset, cm, pairs, shifts, is_late, minimum_applied),
+    }
+
+
+def _count_pairs(
+    ruleset: RuleSet, group: ShiftGroup, cm: Sequence[int]
+) -> tuple[list[tuple[int, int, int, int]], list[Fraction], Fraction]:
+    """The day's punches (whole-minute seconds, oldest first) taken two by two: each pair as (in, out, counted in,
+    counted out), the shift value each pair adds (the ladder value at the counted out minus at the counted in) and their
+    sum. An on-time first in counts as the start; an out within grace of a rule point counts as that point. A last
+    unpaired punch is not counted. The one place evaluate_day and explain_day count pairs, so they never differ."""
+    grace_s = ruleset.grace_minutes * 60
+    breaks = ruleset.breaks
+    total = Fraction(0)
+    pairs: list[tuple[int, int, int, int]] = []
+    values: list[Fraction] = []
+    for i in range(len(cm) // 2):
+        t_in, t_out = cm[2 * i], cm[2 * i + 1]
+        counted_in = t_in
+        if i == 0 and t_in <= group.start_s + grace_s:
+            counted_in = min(t_in, group.start_s)  # on time (or early): counts as the start
+        following = cm[2 * i + 2] if 2 * i + 2 < len(cm) else None
+        counted_out = snap_out(group, t_out, grace_s, following)
+        value = value_at(group, breaks, counted_out) - value_at(group, breaks, counted_in)
+        pairs.append((t_in, t_out, counted_in, counted_out))
+        values.append(value)
+        total += value
+    return pairs, values, total
+
+
+def _frac_text(v: Fraction) -> str:
+    return _shifts_text(Decimal(v.numerator) / Decimal(v.denominator))
+
+
+def explain_day(ruleset: RuleSet, d: date_type, punches: Sequence, employee_id: int | None = None) -> dict | None:
+    """The working behind evaluate_day for one production day, for HR's day card (owner 2026-11-16: "earned shift
+    breakdown" beside the punches): the shift group the first punch selected, each counted pair with the shift it adds,
+    and how their sum became the day's shifts (the minimum credit, the rounding step, the table's top). Same RESOLVED
+    punches as evaluate_day (a next-morning exit is +86400). None when no group applies (or there is no punch). Pure:
+    evaluate_day stays what decides the day; this only shows its arithmetic."""
+    result = evaluate_day(ruleset, d, punches, employee_id)
+    if result is None or "rule_group" not in result:
+        return None
+    kept = collapse_taps(sorted(time_to_s(p) for p in punches))
+    group = select_group(ruleset, d, kept[0] % DAY_S, employee_id)
+    cm = [_minute(s) for s in kept]
+    pairs, values, total = _count_pairs(ruleset, group, cm)
+    top = max(p.value for p in group.points)
+    return {
+        "group": group.label,
+        "groupId": group.id,
+        "special": any(g is group for g in ruleset.special),
+        "kind": group.kind,
+        "start": hhmm(group.start_s),
+        "standardOut": hhmm(group.main_out_s) if group.main_out_s is not None else None,
+        "standardOutNextDay": bool(group.main_out_s is not None and group.main_out_s >= DAY_S),
+        "graceMinutes": ruleset.grace_minutes,
+        "pairs": [
+            {
+                "in": hhmm(t_in),
+                "out": hhmm(t_out),
+                "countedIn": hhmm(ci),
+                "countedOut": hhmm(co),
+                "outNextDay": t_out >= DAY_S,
+                "shifts": _frac_text(v),
+            }
+            for (t_in, t_out, ci, co), v in zip(pairs, values)
+        ],
+        "pairTotal": _frac_text(total),
+        "minimumApplied": bool(pairs) and total < Fraction(ruleset.min_credit),
+        "minimumCredit": _shifts_text(ruleset.min_credit),
+        "roundingStep": _shifts_text(ruleset.rounding_step),
+        "maxShifts": _shifts_text(top),
+        "unpaired": hhmm(cm[-1]) if len(cm) % 2 else None,
+        "shifts": _shifts_text(result["shifts_earned"]),
+        "isLate": bool(result.get("is_late")),
+        "earlyLeave": bool(result.get("early_leave")),
+        "note": result["rule_note"],
     }
 
 
@@ -547,7 +658,11 @@ def _note(group, ruleset, cm, pairs, shifts, is_late, minimum_applied) -> str:
 
 
 def judge_day(
-    ruleset: RuleSet, d: date_type, first_punch: time_type | int, last_punch: time_type | int | None
+    ruleset: RuleSet,
+    d: date_type,
+    first_punch: time_type | int,
+    last_punch: time_type | int | None,
+    employee_id: int | None = None,
 ) -> DayJudgement:
     """Late / early-leave of a stored day, from its first and last punch clock times: the ONE helper every report and
     detector uses for days on/after the effective date instead of the legacy punch1/punch4/10-minute rule.
@@ -555,7 +670,7 @@ def judge_day(
     A last punch whose clock is earlier than the first punch's is a next-morning punch (a night exit). Returns an
     all-False judgement without a group when none applies."""
     first_s = time_to_s(first_punch)
-    group = select_group(ruleset, d, first_s)
+    group = select_group(ruleset, d, first_s, employee_id)
     grace_s = ruleset.grace_minutes * 60
     if group is None:
         return DayJudgement(None, ruleset.grace_minutes, None, None, False, False, 0, False, 0)
@@ -722,7 +837,7 @@ def resolve_day_times(
 
 
 def evaluate_with_session(
-    ruleset: RuleSet, d: date_type, by_date: Mapping[date_type, Sequence], manual=None
+    ruleset: RuleSet, d: date_type, by_date: Mapping[date_type, Sequence], manual=None, employee_id: int | None = None
 ) -> dict | None:
     """The whole pure pipeline for a report: resolve the night session of day `d` from the employee's raw punches and
     evaluate it. None when the new rules do not judge `d` (before the effective date, switched off, no group): the
@@ -730,7 +845,7 @@ def evaluate_with_session(
     punches are never taken from or given to a neighbour)."""
     if not ruleset.applies(d):
         return None
-    return evaluate_day(ruleset, d, resolve_day_times(by_date, d, **session_kwargs(ruleset, manual)))
+    return evaluate_day(ruleset, d, resolve_day_times(by_date, d, **session_kwargs(ruleset, manual)), employee_id)
 
 
 # ── Loading from the database ──────────────────────────────────────────────
@@ -747,10 +862,17 @@ def _read_tables_orm():
     three statements, so a save committing between them could be seen half way: see load_ruleset)."""
     from .models import ProductionBreak, ProductionShiftGroup, ProductionShiftRule
 
+    from .models import ProductionSpecialShiftAssignment
+
     groups = list(ProductionShiftGroup.objects.filter(enabled=True).order_by("order", "id"))
     rules = list(ProductionShiftRule.objects.filter(enabled=True, group__enabled=True).order_by("order", "id"))
     breaks = list(ProductionBreak.objects.filter(enabled=True).order_by("order", "id"))
-    return groups, rules, breaks
+    assignments = list(
+        ProductionSpecialShiftAssignment.objects.filter(group__enabled=True, group__is_special=True).only(
+            "employee_id", "group_id", "effective_from", "effective_to"
+        )
+    )
+    return groups, rules, breaks, assignments
 
 
 def _read_tables_sql():
@@ -762,17 +884,18 @@ def _read_tables_sql():
 
     from django.db import connection
 
-    from .models import ProductionBreak, ProductionShiftGroup, ProductionShiftRule
+    from .models import ProductionBreak, ProductionShiftGroup, ProductionShiftRule, ProductionSpecialShiftAssignment
 
     q = connection.ops.quote_name
-    groups_t, rules_t, breaks_t = (
-        q(m._meta.db_table) for m in (ProductionShiftGroup, ProductionShiftRule, ProductionBreak)
+    groups_t, rules_t, breaks_t, assign_t = (
+        q(m._meta.db_table)
+        for m in (ProductionShiftGroup, ProductionShiftRule, ProductionBreak, ProductionSpecialShiftAssignment)
     )
     sql = f"""
         SELECT
           (SELECT COALESCE(json_agg(row_to_json(g) ORDER BY g."order", g.id), '[]'::json)
              FROM (SELECT id, label, kind, applies_on, start_time, first_punch_from, first_punch_to, main_out_time,
-                          main_out_next_day, enabled, "order"
+                          main_out_next_day, enabled, "order", is_special
                      FROM {groups_t} WHERE enabled) g)::text,
           (SELECT COALESCE(json_agg(row_to_json(r) ORDER BY r."order", r.id), '[]'::json)
              FROM (SELECT r.id, r.group_id, r.label, r.out_time, r.out_next_day, r.shift_value, r.enabled, r."order"
@@ -780,11 +903,15 @@ def _read_tables_sql():
                     WHERE r.enabled AND g.enabled) r)::text,
           (SELECT COALESCE(json_agg(row_to_json(b) ORDER BY b."order", b.id), '[]'::json)
              FROM (SELECT id, label, start_time, end_time, enabled, "order"
-                     FROM {breaks_t} WHERE enabled) b)::text
+                     FROM {breaks_t} WHERE enabled) b)::text,
+          (SELECT COALESCE(json_agg(row_to_json(a) ORDER BY a.id), '[]'::json)
+             FROM (SELECT a.id, a.employee_id, a.group_id, a.effective_from, a.effective_to
+                     FROM {assign_t} a JOIN {groups_t} g ON g.id = a.group_id
+                    WHERE g.enabled AND g.is_special) a)::text
     """  # noqa: S608 (table names come from the model Meta, not from input)
     with connection.cursor() as cursor:
         cursor.execute(sql)
-        groups_json, rules_json, breaks_json = cursor.fetchone()
+        groups_json, rules_json, breaks_json, assign_json = cursor.fetchone()
 
     def rows(text, times=(), decimals=()):
         out = []
@@ -800,7 +927,8 @@ def _read_tables_sql():
     groups = rows(groups_json, times=("start_time", "first_punch_from", "first_punch_to", "main_out_time"))
     rules = rows(rules_json, times=("out_time",), decimals=("shift_value",))
     breaks = rows(breaks_json, times=("start_time", "end_time"))
-    return groups, rules, breaks
+    assignments = rows(assign_json)
+    return groups, rules, breaks, assignments
 
 
 def load_ruleset(config=None) -> RuleSet:
@@ -825,8 +953,8 @@ def load_ruleset(config=None) -> RuleSet:
     cached = getattr(config, "_production_ruleset", None)
     if cached is not None:
         return cached
-    groups, rules, breaks = _read_tables_sql() if connection.vendor == "postgresql" else _read_tables_orm()
-    ruleset = build_ruleset(config, groups, rules, breaks)
+    groups, rules, breaks, assignments = _read_tables_sql() if connection.vendor == "postgresql" else _read_tables_orm()
+    ruleset = build_ruleset(config, groups, rules, breaks, assignments)
     config._production_ruleset = ruleset
     return ruleset
 

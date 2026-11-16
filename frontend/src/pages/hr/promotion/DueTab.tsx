@@ -24,7 +24,9 @@ import {
   dueForReview,
   filterDue,
   fullName,
+  keepOrgFilter,
   NO_DUE_FILTERS,
+  orgNameOptions,
   type DueFilters,
   type DueRow,
   type PromoEmployee,
@@ -75,11 +77,16 @@ export default function DueTab({
   const asOptions = (values: string[]) => values.map((v) => ({ value: v, label: v }));
   const options = useMemo(
     () => ({
-      departments: distinct(due.rows.map((r) => r.employee.departmentName)),
+      departments: orgNameOptions(
+        due.rows,
+        (r) => r.employee.departmentName,
+        (r) => r.employee.employmentType,
+        filters.type,
+      ),
       branches: distinct(due.rows.map((r) => r.employee.branchName)),
       types: distinct(due.rows.map((r) => r.employee.employmentType)),
     }),
-    [due.rows],
+    [due.rows, filters.type],
   );
 
   return (
@@ -135,7 +142,7 @@ export default function DueTab({
           <FilterSelect
             value={filters.department}
             onChange={(department) => update({ department })}
-            options={asOptions(options.departments)}
+            options={options.departments}
             allLabel="All departments"
             label="Filter by department"
             testId="due-filter-department"
@@ -152,7 +159,7 @@ export default function DueTab({
           )}
           <FilterSelect
             value={filters.type}
-            onChange={(type) => update({ type })}
+            onChange={(type) => update({ type, department: keepOrgFilter(filters.department, type) })}
             options={options.types.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
             allLabel="Staff and production"
             label="Filter by employee type"

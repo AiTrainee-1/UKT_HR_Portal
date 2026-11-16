@@ -1,3 +1,4 @@
+import { categoryForEmploymentType, keepIfOffered, namedOrgOptions } from "@/lib/departments";
 import { useMemo, useState } from "react";
 import { CalendarClock, Info, PartyPopper, SearchX, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -75,12 +76,21 @@ export default function DueTab({
   const asOptions = (values: string[]) => values.map((v) => ({ value: v, label: v }));
   const options = useMemo(
     () => ({
-      departments: distinct(due.rows.map((r) => r.employee.departmentName)),
       branches: distinct(due.rows.map((r) => r.employee.branchName)),
       types: distinct(due.rows.map((r) => r.employee.employmentType)),
     }),
     [due.rows],
   );
+  // Staff / Production have departments of their own: a picked employee type offers only its kind's, "all" both kinds
+  // under Staff and Production headings (two CUTTINGs told apart).
+  const departmentsFor = (type: string) =>
+    namedOrgOptions(
+      due.rows,
+      (r) => r.employee.departmentName,
+      (r) => r.employee.employmentType,
+      categoryForEmploymentType(type),
+    );
+  const departments = departmentsFor(filters.type);
 
   return (
     <div className="space-y-3 pt-3">
@@ -135,7 +145,7 @@ export default function DueTab({
           <FilterSelect
             value={filters.department}
             onChange={(department) => update({ department })}
-            options={asOptions(options.departments)}
+            options={departments}
             allLabel="All departments"
             label="Filter by department"
             testId="due-filter-department"
@@ -152,7 +162,9 @@ export default function DueTab({
           )}
           <FilterSelect
             value={filters.type}
-            onChange={(type) => update({ type })}
+            onChange={(type) =>
+              update({ type, department: keepIfOffered(filters.department, departmentsFor(type), "all") })
+            }
             options={options.types.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
             allLabel="Staff and production"
             label="Filter by employee type"

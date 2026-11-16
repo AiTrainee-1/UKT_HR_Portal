@@ -13,6 +13,9 @@ gates them exactly like the list and write endpoints (module employees.departmen
 enough to read). Branch isolation follows the Employees list, not the department: a branch-scoped HR login counts the
 employees whose OWN branch is theirs (scope_to_branch(Employee)), and only sees the departments / designations of
 that branch. Active means status == "active"; every other status counts as inactive and is reported apart.
+
+Staff and Production departments / designations are separate (org_category.py): every row carries its ``category``,
+and ``?category=staff|production`` lists only that kind (no parameter: both, as before).
 """
 
 from django.db.models import Count, Q
@@ -20,6 +23,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import org_category
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .models import Branch, Department, Designation, Employee, ManagerDepartmentAssignment
@@ -104,7 +108,11 @@ def _people_response(request: Request, qs, head: dict) -> Response:
 @api_view(["GET"])
 @require_hr
 def departments_overview(request: Request) -> Response:
-    depts = list(scope_to_branch(Department.objects, request).select_related("branch").order_by("name", "id"))
+    category, problem = org_category.query_category(request.query_params)
+    if problem:
+        return _error(problem)
+    depts = scope_to_branch(Department.objects, request).select_related("branch").order_by("name", "id")
+    depts = list(depts.filter(category=category) if category else depts)
     counts = _employee_counts(request, "department_id")
     ids = [d.id for d in depts]
     designations = {
@@ -131,6 +139,7 @@ def departments_overview(request: Request) -> Response:
                 "id": d.id,
                 "name": d.name,
                 "description": d.description,
+                "category": d.category,
                 "branchId": d.branch_id,
                 "branchName": d.branch.name if d.branch_id else None,
                 "designationCount": designations.get(d.id, 0),
@@ -163,6 +172,7 @@ def department_employees(request: Request, pk: int) -> Response:
         "department": {
             "id": dept.id,
             "name": dept.name,
+            "category": dept.category,
             "branchId": dept.branch_id,
             "branchName": dept.branch.name if dept.branch_id else None,
         }
@@ -173,14 +183,18 @@ def department_employees(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def designations_tree(request: Request) -> Response:
-    depts = list(scope_to_branch(Department.objects, request).select_related("branch").order_by("name", "id"))
-    desigs = list(
-        scope_to_branch(
-            Designation.objects.select_related("department", "department__branch"),
-            request,
-            field="department__branch_id",
-        ).order_by("title", "id")
-    )
+    category, problem = org_category.query_category(request.query_params)
+    if problem:
+        return _error(problem)
+    depts = scope_to_branch(Department.objects, request).select_related("branch").order_by("name", "id")
+    desigs = scope_to_branch(
+        Designation.objects.select_related("department", "department__branch"),
+        request,
+        field="department__branch_id",
+    ).order_by("title", "id")
+    if category:
+        depts, desigs = depts.filter(category=category), desigs.filter(category=category)
+    depts, desigs = list(depts), list(desigs)
     counts = _employee_counts(request, "designation_id")
     dept_counts = _employee_counts(request, "department_id")
 
@@ -193,6 +207,7 @@ def designations_tree(request: Request) -> Response:
                 "id": d.id,
                 "title": d.title,
                 "level": d.level,
+                "category": d.category,
                 "departmentId": d.department_id,
                 "departmentName": dept.name if dept else None,
                 "branchId": dept.branch_id if dept else None,
@@ -209,6 +224,7 @@ def designations_tree(request: Request) -> Response:
             {
                 "id": d.id,
                 "name": d.name,
+                "category": d.category,
                 "branchId": d.branch_id,
                 "branchName": d.branch.name if d.branch_id else None,
                 "active": c["active"],
@@ -245,6 +261,7 @@ def designation_employees(request: Request, pk: int) -> Response:
             "id": desig.id,
             "title": desig.title,
             "level": desig.level,
+            "category": desig.category,
             "departmentId": desig.department_id,
             "departmentName": dept.name if dept else None,
             "branchName": dept.branch.name if dept and dept.branch_id else None,

@@ -25,8 +25,10 @@ import {
   distinct,
   filterPromotions,
   filtersActive,
+  keepOrgFilter,
   KIND_LABEL,
   NO_FILTERS,
+  orgNameOptions,
   promotionKind,
   sortPromotions,
   type HistoryFilters,
@@ -94,12 +96,25 @@ export default function HistoryTab({
 
   const options = useMemo(
     () => ({
-      departments: distinct(records.flatMap((p) => [p.previousDepartment, p.newDepartment])),
-      designations: distinct(records.map((p) => p.newDesignation)),
+      departments: orgNameOptions(
+        records.flatMap((p) => [
+          { name: p.previousDepartment, type: p.employmentType },
+          { name: p.newDepartment, type: p.employmentType },
+        ]),
+        (r) => r.name,
+        (r) => r.type,
+        filters.type,
+      ),
+      designations: orgNameOptions(
+        records,
+        (p) => p.newDesignation,
+        (p) => p.employmentType,
+        filters.type,
+      ),
       branches: distinct(records.map((p) => p.branchName)),
       types: distinct(records.map((p) => p.employmentType)),
     }),
-    [records],
+    [records, filters.type],
   );
   const asOptions = (values: string[]) => values.map((v) => ({ value: v, label: v }));
 
@@ -173,7 +188,7 @@ export default function HistoryTab({
           <FilterSelect
             value={filters.department}
             onChange={(department) => update({ department })}
-            options={asOptions(options.departments)}
+            options={options.departments}
             allLabel="All departments"
             label="Filter by department"
             testId="filter-department"
@@ -181,7 +196,7 @@ export default function HistoryTab({
           <FilterSelect
             value={filters.designation}
             onChange={(designation) => update({ designation })}
-            options={asOptions(options.designations)}
+            options={options.designations}
             allLabel="Promoted to: any"
             label="Filter by the designation promoted to"
             testId="filter-designation"
@@ -198,7 +213,13 @@ export default function HistoryTab({
           )}
           <FilterSelect
             value={filters.type}
-            onChange={(type) => update({ type })}
+            onChange={(type) =>
+              update({
+                type,
+                department: keepOrgFilter(filters.department, type),
+                designation: keepOrgFilter(filters.designation, type),
+              })
+            }
             options={options.types.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
             allLabel="Staff and production"
             label="Filter by employee type"

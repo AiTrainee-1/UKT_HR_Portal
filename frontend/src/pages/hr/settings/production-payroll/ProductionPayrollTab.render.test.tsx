@@ -164,6 +164,29 @@ async function open(
         return { ...base, prodCycles: respond() };
       },
       "/api/payroll/production/next-period": (params) => NEXT[params.get("cycle") ?? ""] as object,
+      // the Overview's cards: one request for all three cycles (production_cycles_summary), as the server answers it
+      "/api/payroll/production/cycles": () => ({
+        cycles: (["weekly", "biweekly", "monthly"] as const).map((cycle) => {
+          const next = NEXT[cycle] as { periodStart?: string; periodEnd?: string; periodEnded?: boolean };
+          const refused = (NEXT[cycle] as { body?: { error: string } }).body;
+          return {
+            cycle,
+            label: { weekly: "Weekly", biweekly: "BiWeekly", monthly: "Monthly" }[cycle],
+            days: { weekly: 7, biweekly: 14, monthly: 28 }[cycle],
+            assigned: { weekly: 12, biweekly: 1, monthly: 0 }[cycle],
+            configured: !refused,
+            configError: refused ? refused.error : null,
+            weekStart: stored[cycle]?.weekStart ?? "monday",
+            anchorDate: stored[cycle]?.anchorDate ?? null,
+            next: refused
+              ? null
+              : { periodStart: next.periodStart, periodEnd: next.periodEnd, periodEnded: next.periodEnded },
+            pending: { records: 0, employees: 0, amount: 0 },
+          };
+        }),
+        totalProduction: 13,
+        unassigned: 0,
+      }),
       "/api/payroll/production": (params) => RUNS[params.get("cycle") ?? ""] ?? [],
       "/api/shifts": SHIFTS,
     },
@@ -218,14 +241,30 @@ describe("Settings -> Production Payroll", () => {
     expect(overview).toContain("depending on the employee's pay cycle");
     expect(overview).toContain("Late deductions are ON");
     expect(overview).toContain("Statutory bonus");
-    expect(text('[data-testid="production-cycle-summary-biweekly"]')).toContain(
-      "Monday weeks counted from Mon 21 Sep 2026",
-    );
-    expect(text('[data-testid="production-cycle-summary-biweekly"]')).toContain("Late: 1 free, 1 slab");
-    expect(text('[data-testid="production-cycle-summary-monthly"]')).toContain(
-      "Payroll cannot be generated until the date is set.",
-    );
-    expect(text('[data-testid="production-cycle-summary-weekly"]')).toContain("Late: 3 free, 2 slabs (shared)");
+    // one card a cycle: its week, first period, current period (today is Mon 12 Oct), the server's next period, the
+    // PF / ESI factor and its late rules
+    const biweekly = text('[data-testid="production-cycle-summary-biweekly"]');
+    expect(biweekly).toContain("14 days, paid every two weeks · 1 worker");
+    expect(biweekly).toContain("Week runsMonday → Sunday");
+    expect(biweekly).toContain("First periodMon 21 Sep 2026");
+    expect(biweekly).toContain("Current periodMon 5 Oct – Sun 18 Oct 2026");
+    expect(biweekly).toContain("Next to generateMon 21 Sep – Sun 4 Oct 2026 (ended)");
+    expect(biweekly).toContain("× 2 a period's pay");
+    expect(biweekly).toContain("Late days1 free, 1 slab");
+    const monthly = text('[data-testid="production-cycle-summary-monthly"]');
+    expect(monthly).toContain("First periodNot set");
+    expect(monthly).toContain("Next to generateNot known");
+    expect(monthly).toContain("Payroll cannot be generated until the date is set.");
+    const weekly = text('[data-testid="production-cycle-summary-weekly"]');
+    expect(weekly).toContain("First periodNot needed");
+    expect(weekly).toContain("Late days3 free, 2 slabs (shared)");
+    expect(weekly).toContain("× 4 a period's pay");
+    // the three cycles come from one request
+    expect(requestsTo("/api/payroll/production/cycles")).toHaveLength(1);
+    // the steps, short, and the production bonus in a line (from the saved values)
+    expect(text('[data-testid="production-pay-steps"]')).toContain("New production employees start from ₹300 a shift.");
+    expect(text('[data-testid="production-bonus-summary"]')).toContain("10% of the bonus wage");
+    expect(text('[data-testid="production-bonus-summary"]')).toContain("workers up to ₹25,000");
     // links to where each part is set now
     const hrefs = [
       ...document.body.querySelectorAll<HTMLAnchorElement>('[data-testid="production-pay-overview"] a'),
@@ -281,7 +320,7 @@ describe("Settings -> Production Payroll", () => {
     expect(preview).toContain("now (it has ended)");
     expect(preview).toContain("12 Oct - 18 Oct 2026, 19 Oct - 25 Oct 2026");
     expect(preview).toContain("2026-10-05 to 2026-10-11 (ended)");
-    expect(text('[data-testid="weekly-today-preview"]')).toContain("Mon 12 Oct 2026 to Sun 18 Oct 2026");
+    expect(text('[data-testid="weekly-current"]')).toContain("Mon 12 Oct – Sun 18 Oct 2026");
     // only the open cycle's rows and next period are asked for
     expect(requestsTo("/api/payroll/production?cycle=weekly&limit=20")).toHaveLength(1);
     expect(requestsTo("/api/payroll/production?cycle=biweekly")).toHaveLength(0);
@@ -291,7 +330,7 @@ describe("Settings -> Production Payroll", () => {
     await open();
     await openSubTab("Weekly");
     await choose("#weekly-week-start-input", "sunday");
-    expect(text('[data-testid="weekly-today-preview"]')).toContain("Sun 11 Oct 2026 to Sat 17 Oct 2026");
+    expect(text('[data-testid="weekly-current"]')).toContain("Sun 11 Oct – Sat 17 Oct 2026");
     // Sunday weeks: the period holding Mon 5 Oct is 4-10 Oct, and Sun 4 Oct is already in a Weekly payslip
     const preview = text('[data-testid="weekly-next-period-preview"]');
     expect(preview).toContain("4 Oct - 10 Oct 2026 (7 days)");
@@ -325,7 +364,7 @@ describe("Settings -> Production Payroll", () => {
 
     await choose("#weekly-week-start-input", "wednesday");
     // Wednesday weeks: the one holding Mon 12 Oct runs Wed 7 Oct to Tue 13 Oct
-    expect(text('[data-testid="weekly-today-preview"]')).toContain("Wed 7 Oct 2026 to Tue 13 Oct 2026");
+    expect(text('[data-testid="weekly-current"]')).toContain("Wed 7 Oct – Tue 13 Oct 2026");
     // and the one holding Mon 5 Oct (the day after the latest generated Weekly period) starts inside that period
     const preview = text('[data-testid="weekly-next-period-preview"]');
     expect(preview).toContain("30 Sep - 6 Oct 2026 (7 days)");
@@ -334,7 +373,7 @@ describe("Settings -> Production Payroll", () => {
     await press("Save anyway");
     expect(puts).toEqual([{ prodCycles: { weekly: { weekStart: "wednesday", anchorDate: null } } }]);
     await openSubTab("Overview");
-    expect(text('[data-testid="production-cycle-summary-weekly"]')).toContain("Wednesday weeks");
+    expect(text('[data-testid="production-cycle-summary-weekly"]')).toContain("Week runsWednesday → Tuesday");
   });
 
   it("Monthly says it cannot be generated until a first period start is chosen, and moves any date back to the start weekday", async () => {
@@ -348,7 +387,7 @@ describe("Settings -> Production Payroll", () => {
     expect(preview).toContain(
       "Set the first period start date for Monthly in Settings -> Production Payroll -> Monthly.",
     );
-    expect(text('[data-testid="monthly-today-preview"]')).toContain("set the first period start below");
+    expect(text('[data-testid="monthly-current"]')).toContain("Set the first period start below.");
     expect(buttonNamed("Save Monthly settings")?.disabled).toBe(false);
 
     await page!.type("#monthly-first-period-input", "2026-10-07"); // a Wednesday
@@ -359,16 +398,14 @@ describe("Settings -> Production Payroll", () => {
     expect(preview).toContain("7 Sep - 4 Oct 2026 (28 days)");
     expect(preview).toContain("now (it has ended)");
     expect(preview).toContain("5 Oct - 1 Nov 2026, 2 Nov - 29 Nov 2026");
-    expect(text('[data-testid="monthly-today-preview"]')).toContain("Mon 5 Oct 2026 to Sun 1 Nov 2026");
+    expect(text('[data-testid="monthly-current"]')).toContain("Mon 5 Oct – Sun 1 Nov 2026");
 
     await press("Save Monthly settings");
     expect(q('[role="alertdialog"]')).toBeNull();
     expect(puts).toEqual([{ prodCycles: { monthly: { weekStart: "monday", anchorDate: "2026-10-07" } } }]);
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Monthly settings saved" }));
     await openSubTab("Overview");
-    expect(text('[data-testid="production-cycle-summary-monthly"]')).toContain(
-      "Monday weeks counted from Mon 5 Oct 2026",
-    );
+    expect(text('[data-testid="production-cycle-summary-monthly"]')).toContain("First periodMon 5 Oct 2026");
   });
 
   it("a cycle's period save never carries a late value, so it cannot overwrite what Late Detection saved", async () => {
@@ -403,13 +440,62 @@ describe("Settings -> Production Payroll", () => {
     expect(page!.text()).not.toContain("Not saved yet");
   });
 
-  it("tells a branch login the latest generated period is not known, and locks nothing by itself", async () => {
+  it("tells a branch login its next period follows its own branch's latest generated one, and locks nothing by itself", async () => {
+    // the server counts the latest generated period per branch (production_period.py last_generated_cycle_end), and the
+    // payroll list a branch login reads is its own branch's: so its own latest period is shown, not hidden
     await open({ saved: { companyWideRulesEditable: false } });
-    expect(q('[data-testid="settings-branch-notice"]')).not.toBeNull();
+    const notice = text('[data-testid="settings-branch-notice"]');
+    expect(notice).toContain("continues from the latest period generated for your branch's own employees");
+    expect(notice).not.toContain("company-wide");
     await openSubTab("Weekly");
-    expect(text('[data-testid="weekly-next-period-preview"]')).toContain("could not be read with this login");
-    expect(requestsTo("/api/payroll/production?")).toHaveLength(0);
+    expect(text('[data-testid="weekly-next-period-preview"]')).toContain(
+      "Latest Weekly period generated for your branch: 28 Sep - 4 Oct 2026",
+    );
+    expect(text('[data-testid="weekly-next"]')).toContain(
+      "It follows the latest Weekly period generated for your branch.",
+    );
+    expect(requestsTo("/api/payroll/production?cycle=weekly&limit=20")).toHaveLength(1);
     expect(input("#weekly-week-start-input").disabled).toBe(false);
+  });
+
+  it("shows each cycle at a glance: the week, the length, the first period, the PF / ESI factor and the periods ahead", async () => {
+    await open();
+    await openSubTab("BiWeekly");
+    expect(text('[data-testid="biweekly-week-runs"]')).toContain("Monday → Sunday");
+    expect(text('[data-testid="biweekly-length"]')).toContain("14 days");
+    expect(text('[data-testid="biweekly-first-start"]')).toContain("Mon 21 Sep 2026");
+    expect(text('[data-testid="biweekly-factor"]')).toContain("× 2");
+    expect(text('[data-testid="biweekly-factor"]')).toContain("Two weeks' pay times two");
+    expect(text('[data-testid="biweekly-current"]')).toContain("Mon 5 Oct – Sun 18 Oct 2026");
+    expect(text('[data-testid="biweekly-current"]')).toContain("Today is day 8 of 14.");
+    // nothing generated on BiWeekly yet: the first is the latest period that has ended
+    expect(text('[data-testid="biweekly-next"]')).toContain("Mon 21 Sep – Sun 4 Oct 2026");
+    expect(text('[data-testid="biweekly-next"]')).toContain("It has ended: it can be generated now.");
+    expect(
+      [...document.body.querySelectorAll<HTMLElement>('[data-testid="biweekly-strip"] li')].map(
+        (li) => li.dataset.tags,
+      ),
+    ).toEqual(["next", "today", "", ""]);
+    // editing the box moves the card at once, and says it is not saved
+    await choose("#biweekly-week-start-input", "wednesday");
+    expect(text('[data-testid="biweekly-week-runs"]')).toContain("Wednesday → Tuesday");
+    expect(text('[data-testid="biweekly-week-runs-line"]')).toBe("Week runs Wednesday → Tuesday");
+    expect(text('[data-testid="biweekly-first-start"]')).toContain("Wed 16 Sep 2026");
+    expect(q('[data-testid="biweekly-card-unsaved"]')).not.toBeNull();
+
+    await openSubTab("Monthly");
+    expect(text('[data-testid="monthly-length"]')).toContain("Monthly = four weeks (28 days), not a calendar month");
+    expect(text('[data-testid="monthly-first-start"]')).toContain("Not set");
+    expect(text('[data-testid="monthly-next"]')).toContain("Not known yet");
+    expect(q('[data-testid="monthly-strip"]')).toBeNull();
+
+    await openSubTab("Weekly");
+    expect(text('[data-testid="weekly-first-start"]')).toContain("Not needed");
+    expect(text('[data-testid="weekly-factor"]')).toContain("× 4");
+    // the latest generated Weekly period comes first in the strip, then the next one to generate
+    expect(
+      [...document.body.querySelectorAll<HTMLElement>('[data-testid="weekly-strip"] li')].map((li) => li.dataset.tags),
+    ).toEqual(["generated", "next", "today", "", ""]);
   });
 
   it("view only: every field and every Save button is disabled", async () => {
@@ -473,6 +559,29 @@ describe("Settings -> Production Payroll -> Pay & Bonus", () => {
     // no financial-year control here
     expect(q("#fy-start-month-input")).toBeNull();
     expect(buttonNamed("Save Pay & Bonus settings")?.disabled).toBe(true);
+  });
+
+  it("shows the four values as cards, each with a line and an example, and follows the boxes", async () => {
+    await open();
+    await openSubTab("Pay & Bonus");
+    const card = (id: string) => text(`[data-testid="pay-bonus-glance-${id}"]`);
+    expect(card("default-salary-per-shift")).toContain("₹300 a shift");
+    expect(card("default-salary-per-shift")).toContain("Pre-fills Salary Per Shift on Add Employee");
+    expect(card("default-salary-per-shift")).toContain("Example: 26 shifts at ₹300 = ₹7,800.00");
+    expect(card("prod-bonus-percent")).toContain("10%");
+    expect(card("prod-bonus-percent")).toContain("Example: BiWeekly, 26 payslips of ₹9,600: bonus ₹20,800.00");
+    expect(card("prod-bonus-wage-ceiling")).toContain("₹8,000 a payslip");
+    expect(card("prod-bonus-wage-ceiling")).toContain("Example: A ₹9,600 payslip counts as ₹8,000");
+    expect(card("prod-bonus-eligibility-ceiling")).toContain("₹25,000");
+    expect(card("prod-bonus-eligibility-ceiling")).toContain("Example: Latest payslip ₹24,600: eligible");
+    expect(text('[data-testid="prod-bonus-formula"]')).toContain("Bonus = bonus wage × 10%");
+    expect(q('[data-testid="pay-bonus-glance-unsaved"]')).toBeNull();
+    await page!.type("#prod-bonus-percent-input", "12");
+    expect(card("prod-bonus-percent")).toContain("12%");
+    expect(text('[data-testid="prod-bonus-formula"]')).toContain("Bonus = bonus wage × 12%");
+    expect(q('[data-testid="pay-bonus-glance-unsaved"]')).not.toBeNull();
+    await page!.type("#default-salary-per-shift-input", "0");
+    expect(card("default-salary-per-shift")).toContain("No suggestion");
   });
 
   it("saves the suggested rate alone, sending that one key and no bonus value", async () => {

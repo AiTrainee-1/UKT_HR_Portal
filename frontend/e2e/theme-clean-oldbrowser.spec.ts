@@ -393,10 +393,6 @@ for (const mode of MODES) {
         await page.goto(path);
         await ready(page);
         await simulationIsOn(page, mode);
-        if (label === "production payroll") {
-          const tile = '[data-testid="pcp-dash-kpis"] [data-testid^="pcp-dash-kpi-"] > [class~="bg-white/60"]';
-          expect((await solidBrand(page, tile)).solid, "a KPI tile's icon chip is not solid brand").toBe(false);
-        }
         const row = page.locator("tbody tr").first();
         if (await row.count()) {
           await row.hover({ timeout: 3000 }).catch(() => {});

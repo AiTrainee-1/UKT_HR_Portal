@@ -4,8 +4,10 @@ import { useToast } from "@/hooks/use-toast";
 import { customFetch } from "@/lib/api-client/custom-fetch";
 import {
   getListPayrollRunsQueryKey,
+  useListProductionPayroll,
   usePayrollMonthActions,
   usePayrollMonthStatus,
+  useProductionPeriodWorkflow,
   type PayrollDetails,
   type PayrollKind,
   type PayrollRunItem,
@@ -14,6 +16,8 @@ import {
 export type DetailsWorkflow = {
   /** A staff payroll: the only kind with Hold / Unhold and a month lock. */
   applies: boolean;
+  /** A production payroll (2026-11-16): its pay period's lock, New Joiners and payment status (no Hold). */
+  production?: boolean;
   onHold: boolean;
   /** A new joiner not added to the payroll yet (added on Skipped Employees). */
   parked: boolean;
@@ -39,6 +43,18 @@ export function useDetailsWorkflow(details: PayrollDetails, kind: PayrollKind): 
   const { toast } = useToast();
   const applies = kind === "staff" && details.kind === "staff";
   const { month, year } = details.context;
+  // production: the pay period's workflow (Payroll Done lock, can-clear) and the payroll's own row (New Joiners, Paid)
+  const ctx = details.context;
+  const production = kind === "production" && details.kind === "production";
+  const prodPeriod =
+    production && ctx.cycle && ctx.periodStart && ctx.periodEnd
+      ? { periodStart: ctx.periodStart, periodEnd: ctx.periodEnd }
+      : null;
+  const prodStatus = useProductionPeriodWorkflow(ctx.cycle ?? "weekly", prodPeriod);
+  const prodRows = useListProductionPayroll(
+    { employeeId: details.employee.id, periodStart: ctx.periodStart ?? "", periodEnd: ctx.periodEnd ?? "" },
+    { enabled: !!prodPeriod },
+  );
   const params = { employeeId: details.employee.id, month, year };
   const status = usePayrollMonthStatus(month, year, applies);
   const own = useQuery<PayrollRunItem[]>({
@@ -77,6 +93,25 @@ export function useDetailsWorkflow(details: PayrollDetails, kind: PayrollKind): 
       });
     }
   }, [hold, payrollId, onHold, name, toast]);
+
+  if (production) {
+    const own = prodRows.data?.find((r) => r.id === details.payrollId);
+    const wf = prodStatus.data;
+    return {
+      applies: false,
+      production: true,
+      onHold: false,
+      parked: !!own?.newJoinerParked,
+      releasedFrom: null,
+      paidAt: own?.paymentStatus === "paid" ? (wf?.paidOn ?? own.paymentPaidAt ?? null) : null,
+      locked: !!wf?.locked,
+      canHold: false,
+      markCleared: wf?.can.markCleared,
+      holdBlocked: "",
+      busy: false,
+      toggleHold: async () => {},
+    };
+  }
 
   return {
     applies,

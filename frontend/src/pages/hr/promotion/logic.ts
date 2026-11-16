@@ -6,6 +6,13 @@ import type { Employee } from "@/lib/api-client";
 import type { PromotionItem } from "@/lib/api-client/custom-hooks";
 import { compareNumber, compareText, distinct, matchesWords, sortBy, type SortDir } from "../career/common";
 import { inRange, monthsBetween, parseYmd, periodRange, type Period } from "../career/dates";
+import {
+  categoryForEmploymentType,
+  hasBothCategories,
+  matchesNamedOrgOption,
+  namedOrgOptions,
+  optionText,
+} from "@/lib/departments";
 
 /** A promotion as the list endpoint sends it: the branch and employment type are additive fields. */
 export type PromotionRecord = PromotionItem & {
@@ -96,9 +103,14 @@ export const filtersActive = (f: HistoryFilters) =>
 export function filterPromotions(rows: PromotionRecord[], f: HistoryFilters, today: string): PromotionRecord[] {
   const range = periodRange(f.period, today, { from: f.from, to: f.to });
   return rows.filter((p) => {
-    if (f.department !== "all" && p.previousDepartment !== f.department && p.newDepartment !== f.department)
+    // department / designation values are "<staff|production>|<name>" (orgNameOptions): CUTTING of the staff is not the
+    // production CUTTING
+    if (
+      !matchesNamedOrgOption(f.department, p.previousDepartment, p.employmentType) &&
+      !matchesNamedOrgOption(f.department, p.newDepartment, p.employmentType)
+    )
       return false;
-    if (f.designation !== "all" && p.newDesignation !== f.designation) return false;
+    if (!matchesNamedOrgOption(f.designation, p.newDesignation, p.employmentType)) return false;
     if (f.branch !== "all" && p.branchName !== f.branch) return false;
     if (f.type !== "all" && p.employmentType !== f.type) return false;
     if (f.kind !== "all" && promotionKind(p) !== f.kind) return false;
@@ -228,12 +240,35 @@ export const dueFiltersActive = (f: DueFilters) =>
 
 export function filterDue(rows: DueRow[], f: DueFilters): DueRow[] {
   return rows.filter(({ employee: e, basis }) => {
-    if (f.department !== "all" && e.departmentName !== f.department) return false;
+    if (!matchesNamedOrgOption(f.department, e.departmentName, e.employmentType)) return false;
     if (f.branch !== "all" && e.branchName !== f.branch) return false;
     if (f.type !== "all" && e.employmentType !== f.type) return false;
     if (f.basis !== "all" && basis !== f.basis) return false;
     return matchesWords(f.query, fullName(e), e.employeeCode, e.designationTitle, e.departmentName);
   });
+}
+
+/**
+ * Department / designation filter choices from the names in the rows (Staff and production have their own: the kind is
+ * the employee's). With a type filter on, only that kind; with both kinds listed a name reads "CUTTING (Staff)".
+ */
+export function orgNameOptions<T>(
+  rows: readonly T[],
+  name: (row: T) => string | null | undefined,
+  employmentType: (row: T) => string | null | undefined,
+  type: string,
+): { value: string; label: string }[] {
+  const opts = namedOrgOptions(rows, name, employmentType, categoryForEmploymentType(type));
+  const both = hasBothCategories(opts);
+  return opts.map((o) => ({ value: o.value, label: optionText(o, both) }));
+}
+
+/** A department / designation filter value that the new type filter no longer offers goes back to "all". */
+export function keepOrgFilter(value: string, type: string): string {
+  if (value === "all") return value;
+  const kind = categoryForEmploymentType(type);
+  const cut = value.indexOf("|");
+  return kind && cut > 0 && value.slice(0, cut) !== kind ? "all" : value;
 }
 
 // ─── The form ───────────────────────────────────────────────────────────────────────────────────────────────────────

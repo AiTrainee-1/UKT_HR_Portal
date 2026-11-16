@@ -7,6 +7,7 @@
     POST /api/payroll/month-finalize     {month, year}   Payroll Done: the month is locked for good
     POST /api/payroll/month-paid         {month, year}   Mark as Paid: everyone in the main payroll is Paid and notified
     POST /api/payroll/<id>/release-and-pay          after the lock: one held / parked employee is released and paid
+    POST /api/payroll/month-unlock       {month, year, reason}   a finalized month nothing of which is paid, open again
 
 Every route is under /api/payroll, so the permission middleware maps it to the `payroll` module: a view-only role can read
 the status and the lists but every POST is refused (403). Payroll Done, Mark as Paid and Release & pay also need a
@@ -260,6 +261,44 @@ def payroll_month_finalize(request: Request) -> Response:
         new_values={"finalizedAt": close.finalized_at.isoformat(), **snap},
     )
     return Response(wf.month_status(request, month, year), status=201)
+
+
+@api_view(["POST"])
+@require_hr
+def payroll_month_unlock(request: Request) -> Response:
+    """Unlock a finalized staff month (owner 2026-11-16): only when nothing in it is paid; Payroll Done's rights (payroll
+    edit, a whole-company login, the account's Payroll Done switch) and a short reason."""
+    if not (wf.can_edit_payroll(request) and wf.is_whole_company(request)):
+        return _error(WHOLE_COMPANY_ONLY, 403)
+    if refused := hr_access.approval_refusal(request, "payroll_finalize"):
+        return refused
+    period = _period(request.data)
+    if period is None:
+        return _error("month (1-12) and year are required")
+    month, year = period
+    try:
+        reason = wf.unlock_reason(request.data.get("reason"))
+    except ValueError as exc:
+        return _error(str(exc))
+    from . import payroll_progress
+
+    if not payroll_progress.try_begin_run():
+        return _error("A payroll run is in progress. Wait for it to finish, then unlock again.", 409)
+    try:
+        was = wf.unlock(month, year, wf.actor_name(request), reason)
+    except ValueError as exc:
+        return _error(str(exc), 409)
+    finally:
+        payroll_progress.end_run()
+    log_action(
+        request,
+        "update",
+        "payroll",
+        description=f"Unlocked the finalized {wf.month_label(month, year)} staff payroll (open again). Reason: {reason}",
+        old_values=was,
+        new_values={"state": "open", "reason": reason},
+    )
+    return Response(wf.month_status(request, month, year))
 
 
 @api_view(["POST"])

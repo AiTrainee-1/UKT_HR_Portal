@@ -202,6 +202,19 @@ export function PayStatusChip({ status }: { status: string }) {
   return <Chip tone={tone}>{payStatusLabel(status)}</Chip>;
 }
 
+/** Paid or not as the period's / month's Mark as Paid recorded it (payment status), apart from HR's Cleared check. */
+export function PaymentChip({ status, title }: { status: string | null | undefined; title?: string }) {
+  return status === "paid" ? (
+    <Chip tone="success" title={title ?? "Paid: the pay period was marked as paid"}>
+      Paid
+    </Chip>
+  ) : (
+    <Chip tone="neutral" title={title ?? "Not paid yet: the pay period has not been marked as paid"}>
+      Not paid
+    </Chip>
+  );
+}
+
 const AVATAR_TONES = [
   "bg-blue-100 text-blue-700",
   "bg-emerald-100 text-emerald-700",

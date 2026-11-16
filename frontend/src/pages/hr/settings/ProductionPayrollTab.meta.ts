@@ -38,7 +38,7 @@ function cycleBlocks(cycle: PayCycle): ProductionSettingMeta[] {
       subTab: cycle,
       section: CYCLE_SECTIONS[cycle].period,
       title: `Week starts on (${label})`,
-      purpose: `Which weekday each ${label} pay period starts on, any of the seven. A week ends on the day before its start weekday comes round again: a Monday start ends on a Sunday, a Wednesday start on a Tuesday, a Sunday start on a Saturday. A ${label} period is ${length}, ${days} days, paid ${every}.`,
+      purpose: `Which weekday each ${label} pay period starts on, any of the seven; the week ends the day before (Monday → Sunday, Wednesday → Tuesday). A ${label} period is ${length}, ${days} days, paid ${every}.`,
       keywords: [
         ...words,
         "week start",
@@ -76,7 +76,7 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.shift,
     title: "How a production day earns pay",
     purpose:
-      "Each day's punches are worked out by the production shift rules on the Production Shifts tab: the group the day belongs to, the shifts its leaving time earns on that group's ladder, with the unpaid breaks left out. Pay is the shifts earned times the worker's own Salary Per Shift. Days before the rules' start date keep the old calculation (the old punch times and segments). Nothing on this tab changes that.",
+      "A day's punches become shifts earned by the rules on the Production Shifts tab (the day's group, its ladder, the unpaid breaks left out). Pay is the shifts earned times the worker's own Salary Per Shift. Days before the rules' start date keep the old calculation.",
     keywords: [
       "shifts earned",
       "production shifts",
@@ -94,7 +94,7 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.shift,
     title: "PF and ESI on production payslips",
     purpose:
-      "Production PF and ESI are set on the PF & ESI tab, Production page, as rules: a salary range, what the range is measured on and a percentage. Only workers switched ON in Employees, Co Emp pay them. The first rule that fits the worker applies; with none, nothing is deducted. Here you only see how the pay cycle scales a month.",
+      "Production PF and ESI are rules on the PF & ESI tab, Production page: a salary range, what it is measured on and a percentage. Only workers switched ON in Employees, Co Emp pay them. Here you only see how the pay cycle scales a month.",
     keywords: ["pf", "esi", "provident fund", "production", "monthly estimate", "co emp", "rules", "pf & esi"],
   },
   {
@@ -103,7 +103,7 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.shift,
     title: "Assigned production shift rules",
     purpose:
-      "Read-only: the production shifts kept in Manage Shifts. Before the Production Shifts rules start, production late detection compares each worker's punches with the start, end and grace of the shift they are assigned on that day, and a worker with no assigned shift is never late. From their start date the day's group on the Production Shifts tab (its start, its departure and the grace there) is used instead.",
+      "Read-only: the production shifts kept in Manage Shifts. Before the Production Shifts rules start, late detection compares a worker's punches with the shift assigned that day (no assigned shift: never late). From their start date the day's group on the Production Shifts tab is used instead.",
     keywords: ["assigned shift", "grace", "shift template", "manage shift", "late"],
   },
   ...CYCLES.flatMap(cycleBlocks),
@@ -122,7 +122,7 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.bonus,
     title: "Production bonus rate",
     purpose:
-      "The percentage of each eligible production worker's bonus wage for the financial year that is paid as statutory bonus. Staff have their own rate on Staff Payroll. The Payment of Bonus Act sets 8.33% as the minimum and 20% as the maximum.",
+      "The share of an eligible production worker's bonus wage for the financial year that is paid as statutory bonus. The Payment of Bonus Act allows 8.33% to 20%. Staff have their own rate on Staff Payroll.",
     keywords: ["bonus percent", "8.33", "payment of bonus act", "statutory", "production", "worker"],
   },
   {
@@ -131,7 +131,7 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.bonus,
     title: "Production bonus wage ceiling",
     purpose:
-      "The most pay per production payslip that counts towards a worker's bonus. A production payslip's Basic is its whole period pay, and anything above this amount counts as this amount. Staff have their own ceiling on Staff Payroll.",
+      "The most of one payslip's pay that counts towards a worker's bonus wage: a payslip above it counts as this amount (a production payslip's Basic is its whole period pay). Staff have their own ceiling.",
     keywords: ["7000", "wage ceiling", "bonus", "cap", "production", "per payslip"],
   },
   {
@@ -140,7 +140,7 @@ const BLOCKS: ProductionSettingMeta[] = [
     section: S.bonus,
     title: "Production bonus eligibility limit",
     purpose:
-      "Who gets a bonus at all: production workers whose latest payslip in the year has period pay above this amount get none. Staff have their own limit on Staff Payroll.",
+      "Who gets a bonus at all: a production worker whose latest payslip in the year is above this amount gets none. Staff have their own limit.",
     keywords: ["eligibility ceiling", "21000", "bonus", "eligible", "production"],
   },
 ];

@@ -19,6 +19,7 @@ import { PillTabs } from "@/components/ui/pill-tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Employee } from "@/lib/api-client/generated/api.schemas";
+import { OrgSelectItems } from "@/lib/org-select";
 import { cn } from "@/lib/utils";
 import {
   GAP_LABEL,
@@ -27,6 +28,7 @@ import {
   addIds,
   allSelected,
   cardGaps,
+  departmentsForType,
   facetsOf,
   filterEmployees,
   filtersActive,
@@ -35,6 +37,7 @@ import {
   removeIds,
   summarizeEmployees,
   toggleId,
+  withType,
   type DetailsFilter,
   type PickerFilters,
   type TypeFilter,
@@ -105,7 +108,7 @@ export default function EmployeePicker({ employees, loading, error, onRetry, sel
             { value: "production", label: "Production", count: summary.production },
           ]}
           value={filters.type}
-          onChange={(v) => set({ type: v as TypeFilter })}
+          onChange={(v) => setFilters((f) => withType(f, v as TypeFilter, facets.departments))}
         />
 
         <div className="grid grid-cols-2 gap-2">
@@ -130,11 +133,7 @@ export default function EmployeePicker({ employees, loading, error, onRetry, sel
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All departments</SelectItem>
-              {facets.departments.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
+              <OrgSelectItems options={departmentsForType(facets.departments, filters.type)} />
             </SelectContent>
           </Select>
           <Select value={filters.details} onValueChange={(v) => set({ details: v as DetailsFilter })}>

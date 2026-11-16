@@ -6,6 +6,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
+import type { OrgCategory } from "@/lib/departments";
 
 /** The head-count figures every row carries: active people by employment type, and everyone not active. */
 export type Headcount = {
@@ -21,6 +22,8 @@ export type DepartmentRow = Headcount & {
   id: number;
   name: string;
   description: string | null;
+  /** Staff or Production (missing from an older server: Staff). */
+  category?: OrgCategory;
   branchId: number | null;
   branchName: string | null;
   designationCount: number;
@@ -44,6 +47,8 @@ export type DesignationRow = Headcount & {
   id: number;
   title: string;
   level: string | null;
+  /** Staff or Production: its department's, or its own when it has none. */
+  category?: OrgCategory;
   departmentId: number | null;
   departmentName: string | null;
   branchId: number | null;
@@ -54,6 +59,7 @@ export type DesignationRow = Headcount & {
 export type TreeDepartment = {
   id: number;
   name: string;
+  category?: OrgCategory;
   branchId: number | null;
   branchName: string | null;
   /** Active employees in the department, with or without a designation. */
@@ -81,7 +87,13 @@ export type Person = {
 };
 
 export type DepartmentPeople = {
-  department: { id: number; name: string; branchId: number | null; branchName: string | null };
+  department: {
+    id: number;
+    name: string;
+    category?: OrgCategory;
+    branchId: number | null;
+    branchName: string | null;
+  };
   employees: Person[];
 };
 
@@ -90,6 +102,7 @@ export type DesignationPeople = {
     id: number;
     title: string;
     level: string | null;
+    category?: OrgCategory;
     departmentId: number | null;
     departmentName: string | null;
     branchName: string | null;
@@ -128,14 +141,24 @@ export const useDesignationPeople = (id: number | null) =>
     enabled: id != null,
   });
 
-/** Name and description only: a department never changes branch. */
+/** Name, description and (while it is empty) Staff / Production: a department never changes branch. */
 export const useUpdateDepartment = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, name, description }: { id: number; name: string; description: string }) =>
+    mutationFn: ({
+      id,
+      name,
+      description,
+      category,
+    }: {
+      id: number;
+      name: string;
+      description: string;
+      category?: OrgCategory;
+    }) =>
       customFetch<{ id: number; name: string }>(`/api/departments/${id}`, {
         method: "PUT",
-        body: JSON.stringify({ name, description }),
+        body: JSON.stringify({ name, description, ...(category ? { category } : {}) }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/departments"] });
@@ -152,15 +175,18 @@ export const useUpdateDesignation = () => {
       title,
       departmentId,
       level,
+      category,
     }: {
       id: number;
       title: string;
       departmentId: number | null;
       level: string;
+      /** Only read for a designation with no department (one with a department is of its department's kind). */
+      category?: OrgCategory;
     }) =>
       customFetch<{ id: number; title: string }>(`/api/designations/${id}`, {
         method: "PUT",
-        body: JSON.stringify({ title, departmentId, level }),
+        body: JSON.stringify({ title, departmentId, level, ...(category ? { category } : {}) }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/designations"] });

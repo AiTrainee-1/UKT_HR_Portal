@@ -74,7 +74,7 @@ export function ShiftPanel({
           <PreviewCard scenario={`A worker whose Salary Per Shift is ${formatPaise(PER_SHIFT * 100)}.`}>
             <PreviewLine label="A day earning 1 shift" result={formatPaise(PER_SHIFT * 100)} />
             <PreviewLine
-              label="A day earning 1.5 shifts (the extra segment too)"
+              label="A day earning 1.5 shifts (leaving at the 8:00 PM departure)"
               result={formatPaise(PER_SHIFT * 150)}
             />
             <PreviewLine
@@ -162,7 +162,7 @@ export function ShiftPanel({
         affects={[
           {
             where: "Production Payroll - every cycle",
-            what: "while late deductions are on, each day's first (and in Strict mode last) punch is compared with the start, end and grace of the day's group on the Production Shifts tab (for days before its rules start: of the assigned shift), to the second.",
+            what: "while late deductions are on, each day's first (and in Strict mode last) punch is compared with the start, end and grace of the day's group on the Production Shifts tab, to the minute (8:35:59 counts as 8:35). Days before those rules start use the assigned shift instead.",
             to: CYCLE_INFO.weekly.path,
           },
         ]}

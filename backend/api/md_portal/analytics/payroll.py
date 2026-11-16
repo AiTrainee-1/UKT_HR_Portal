@@ -51,9 +51,11 @@ WHERE A MONTH STANDS (``status``; owner 2026-11-10 staff month workflow, ``payro
          when its payroll row's ``payment_status`` is paid (Mark as Paid, or released and paid separately later), the
          rule the employee apps use. "Cleared" (``Payroll.status`` = "paid") only means HR verified the row: it is
          reported as a count (``clearedSlips``), never as paid.
-* production has no month lock and no payment step: a production slip is paid when its payroll row is Cleared (the
-         status word "paid", ``payroll_month_workflow.employee_sees_paid``), so its months are Paid / Part paid /
-         Generated as before.
+* production is paid per pay period (owner 2026-11-16, ``production_period_workflow.py``: Payroll Done -> Mark as Paid of
+         the cycle's period): a production slip is PAID when its payroll row's ``payment_status`` is paid, exactly like
+         staff; "Cleared" is only HR's verification there too. No staff month lock applies to it, so its months are Paid /
+         Part paid / Generated. (Migration 0151 marked every production payroll Cleared before then as paid, so no past
+         month's figure changed.)
 * a month with both is Paid when both are, Payroll Done while the staff payment is pending, Part paid when only some of
   it is paid and In progress while the month runs. Held salaries and parked new joiners are counted apart (``onHold``,
   ``newJoinersWaiting``, ``paidSeparately``): Mark as Paid does not pay them.
@@ -537,15 +539,13 @@ def _cleared_case() -> Case:
 
 
 def _paid_case() -> Case:
-    """Is this slip PAID, by the rule the employee apps use (payroll_month_workflow.employee_sees_paid)? A staff slip once
-    its payroll row has payment status Paid (Mark as Paid, or released and paid separately after the lock); a production
-    slip once its row is Cleared (production has no payment step of its own)."""
+    """Is this slip PAID? Once its payroll row has payment status Paid: a staff slip by the month's Mark as Paid (or a
+    release and pay after the lock), a production slip by its pay period's Mark as Paid (production_period_workflow.py,
+    2026-11-16). Cleared alone is HR's verification, never paid."""
+    paid = Payroll.objects.filter(payment_status=Payroll.PAYMENT_PAID)
     return Case(
-        When(
-            period_start__isnull=True,
-            then=_staff_row_of_slip(Payroll.objects.filter(payment_status=Payroll.PAYMENT_PAID)),
-        ),
-        default=_production_row_of_slip(_cleared_rows()),
+        When(period_start__isnull=True, then=_staff_row_of_slip(paid)),
+        default=_production_row_of_slip(paid),
         output_field=BooleanField(),
     )
 
@@ -587,7 +587,8 @@ def _staff_state(slips: int, close: PayrollMonthClose | None, ended: bool) -> st
 
 
 def _production_state(slips: int, paid: int, ended: bool) -> str | None:
-    """Where the production part stands: a production slip is paid once its row is Cleared (no lock, no payment step)."""
+    """Where the production part stands: a production slip is paid once its row's payment status is Paid (its pay
+    period's Mark as Paid); the staff month lock does not apply to it."""
     if not slips:
         return None
     if paid >= slips:
@@ -619,7 +620,7 @@ def _ist_date(value: datetime) -> date:
 
 def _month_states(scope: Scope, pairs: Sequence[Ym], today: date, available: Sequence[Ym]) -> dict[Ym, dict]:
     """Where each month stands: its state, slips, how many are paid (staff: Mark as Paid / paid separately; production:
-    Cleared), how many staff slips are verified (Cleared), held or provisional, the net pay still to be paid, the new
+    the pay period's Mark as Paid), how many staff slips are verified (Cleared), held or provisional, the net pay still to be paid, the new
     joiners waiting to be added, and when it was generated, finalized (Payroll Done) and paid. Three queries however many
     months: the slips, the payroll rows and the month closes."""
     first = min(available) if available else None
@@ -656,7 +657,7 @@ def _month_states(scope: Scope, pairs: Sequence[Ym], today: date, available: Seq
         )
         rows = {(r["year"], r["month"]): r for r in grouped}
         # the payroll rows: new joiners waiting to be added (their slips are not counted above), people released and
-        # paid separately after the lock, and when production was last cleared (its payment)
+        # paid separately after the lock, and when production was last paid (its pay periods' Mark as Paid)
         waiting_q = Q(period_start__isnull=True, new_joiner_parked=True, added_to_payroll_at__isnull=True)
         extra = {
             (r["year"], r["month"]): r
@@ -668,7 +669,10 @@ def _month_states(scope: Scope, pairs: Sequence[Ym], today: date, available: Seq
                 waiting=Count("id", filter=waiting_q),
                 waiting_net=_sum(Case(When(waiting_q, then=F("final_salary")), default=zero, output_field=DEC)),
                 separately=Count("id", filter=Q(period_start__isnull=True, released_from__isnull=False)),
-                cleared_at=Max("updated_at", filter=Q(period_start__isnull=False, status_norm="paid")),
+                cleared_at=Max(
+                    "payment_paid_at",
+                    filter=Q(period_start__isnull=False, payment_status=Payroll.PAYMENT_PAID),
+                ),
             )
         }
         # Payroll Done / Mark as Paid are company-wide: one row per staff month, whatever the unit

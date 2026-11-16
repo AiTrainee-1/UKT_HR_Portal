@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import { Link } from "wouter";
-import { AlertTriangle, ChevronDown, Factory, Info, SearchX } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, ChevronDown, Factory, History, Info, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -24,7 +24,7 @@ import {
 import { TONE } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { Chip } from "../account-management/parts";
-import { formatPeriod, formatRupees, payrollStatus, type EmptyInfo } from "./logic";
+import { formatPeriod, formatRupees, moveSentence, moveText, payrollStatus, type EmptyInfo } from "./logic";
 
 export { LoadError } from "../org-structure/parts";
 
@@ -178,6 +178,47 @@ export function LastPayrollCell({
         <span className="text-[11px] text-gray-400">on {PAY_CYCLE_INFO[payroll.payCycle].label}</span>
       )}
     </div>
+  );
+}
+
+/** The worker's latest move between cycles, small, under their name: "Moved from Weekly · 10 Nov". */
+export function MoveChip({ row }: { row: ProductionEmployeeRow }) {
+  const move = row.lastMove;
+  if (!move) return null;
+  return (
+    <span
+      className="inline-flex max-w-full items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-700"
+      title={moveSentence(move)}
+      data-testid={`pe-move-chip-${row.employeeCode}`}
+    >
+      <ArrowRightLeft size={11} className="shrink-0 text-slate-500" />
+      <span className="truncate">{moveText(move)}</span>
+    </span>
+  );
+}
+
+/** Opens the worker's history of moves between cycles (only shown for someone who has moved at least once). */
+export function HistoryButton({
+  row,
+  onOpen,
+}: {
+  row: ProductionEmployeeRow;
+  onOpen: (row: ProductionEmployeeRow) => void;
+}) {
+  if (!row.lastMove && !(row.moveCount && row.moveCount > 0)) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-8 gap-1 px-2 text-xs text-slate-600"
+      onClick={() => onOpen(row)}
+      aria-label={`History of ${row.name}'s pay cycle moves`}
+      title="Every move between pay cycles, and what was already paid"
+      data-testid={`pe-history-${row.employeeCode}`}
+    >
+      <History size={13} /> History
+    </Button>
   );
 }
 

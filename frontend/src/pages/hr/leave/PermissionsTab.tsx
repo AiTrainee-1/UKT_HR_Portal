@@ -36,6 +36,8 @@ import {
   NO_PERMISSION_FILTERS,
   branchOptions,
   departmentOptions,
+  departmentsOfType,
+  withEmployeeType,
   filterPermissions,
   longDate,
   permissionFiltersActive,
@@ -134,6 +136,11 @@ export default function PermissionsTab() {
   const shown = useMemo(() => filterPermissions(rows as PermissionRow[], filters) as PermissionFull[], [rows, filters]);
   const branches = useMemo(() => branchOptions(rows), [rows]);
   const departments = useMemo(() => departmentOptions(rows), [rows]);
+  // Staff / Production have departments of their own: with an employee type picked only that kind's are offered.
+  const departmentChoices = useMemo(
+    () => departmentsOfType(departments, filters.employeeType),
+    [departments, filters.employeeType],
+  );
   const active = permissionFiltersActive(filters) || month !== ALL;
   const clear = () => {
     setFilters(NO_PERMISSION_FILTERS);
@@ -309,12 +316,12 @@ export default function PermissionsTab() {
               onChange={(department) => set({ department })}
               label="Filter by department"
               allLabel="All departments"
-              options={departments}
+              options={departmentChoices}
               testId="perm-filter-department"
             />
             <FilterSelect
               value={filters.employeeType}
-              onChange={(employeeType) => set({ employeeType })}
+              onChange={(employeeType) => setFilters((f) => withEmployeeType(f, employeeType, departments))}
               label="Filter by employee type"
               allLabel="Staff and production"
               options={[

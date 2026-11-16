@@ -15,21 +15,24 @@ import {
   normalizeWeekStart,
   parseIsoDay,
   periodDays,
-  resolveCyclePeriod,
+  samePeriod,
   snapToWeekStart,
+  weekRunsArrow,
   WEEK_START_NAME,
   WEEK_START_OPTIONS,
   type Day,
 } from "./cycles";
+import { CycleAtAGlance } from "./CycleCard";
 import { cycleErrors, hasCycleErrors, latestGeneratedPeriod, type CycleForm } from "./sections";
 
 const block = (id: string) => ({ id, ...productionText(id) });
 
 /**
- * Settings -> Production Payroll -> Weekly / BiWeekly / Monthly: one pay cycle's period rule (which weekday its weeks
- * start on, which date its periods are counted from), saved with one button that sends only this cycle's period keys.
- * What a late day costs on the cycle is not here: it is on Late Detection -> Production, which saves the cycle's late keys
- * (the server merges `prodCycles` key by key, so neither save overwrites the other).
+ * Settings -> Production Payroll -> Weekly / BiWeekly / Monthly: one pay cycle at a glance (the week it runs, the period
+ * length, the first period start, the PF / ESI factor, the current and the next period and a strip of the periods after
+ * it), then its period rule (which weekday its weeks start on, which date its periods are counted from), saved with one
+ * button that sends only this cycle's period keys. What a late day costs on the cycle is not here: it is on Late
+ * Detection -> Production, which saves the cycle's late keys (the server merges `prodCycles` key by key).
  */
 export function CyclePanel({
   cycle,
@@ -45,7 +48,7 @@ export function CyclePanel({
   cycle: PayCycle;
   draft: Draft<CycleForm>;
   saved: CycleForm;
-  /** A branch login cannot read the company-wide pointer (the latest generated period). */
+  /** A branch login: its periods continue from its own branch's latest generated period. */
   branchLogin: boolean;
   today: Day;
   readOnly: boolean;
@@ -61,17 +64,24 @@ export function CyclePanel({
   const rule = { weekStart: form.weekStart, anchorDate: form.anchorDate };
 
   // The server's own next period for the SAVED rule, and the latest period generated on this cycle (what the engine
-  // continues from). The Production Payroll list is scoped to a branch login's branch while that pointer is
-  // company-wide, so a branch login is told it is not known rather than shown a wrong one.
+  // continues from). Both are counted per branch for a branch login (production_period.py last_generated_cycle_end with
+  // the login's branch; the Production Payroll list is scoped the same way), so a branch login sees its own branch's.
   const serverNext = useProductionNextPeriod(cycle);
-  const runs = useListProductionPayroll({ cycle, limit: 20 }, { enabled: !branchLogin });
-  const lastGenerated = branchLogin || !runs.data ? undefined : latestGeneratedPeriod(runs.data, cycle);
+  const runs = useListProductionPayroll({ cycle, limit: 20 });
+  const lastGenerated = runs.data ? latestGeneratedPeriod(runs.data, cycle) : undefined;
   const serverNextError = serverNext.isError
     ? (saveErrorText(serverNext.error) ?? "the saved rule is not complete")
     : null;
+  const forBranch = branchLogin ? " for your branch" : "";
+  // the server keeps the latest generated period as the next one while it is open (Payroll Done not pressed on it): when
+  // its answer is that very period, the screen does the same
+  const serverPeriod =
+    serverNext.data && parseIsoDay(serverNext.data.periodStart) && parseIsoDay(serverNext.data.periodEnd)
+      ? { start: parseIsoDay(serverNext.data.periodStart)!, end: parseIsoDay(serverNext.data.periodEnd)! }
+      : null;
+  const open = lastGenerated && serverPeriod && samePeriod(lastGenerated, serverPeriod) ? lastGenerated : null;
 
-  const around = resolveCyclePeriod(today, cycle, rule);
-  const live = nextCyclePeriod(cycle, rule, lastGenerated?.end ?? null, today);
+  const live = nextCyclePeriod(cycle, rule, lastGenerated?.end ?? null, today, open);
   const overlap = "error" in live ? null : live.overlap;
   const typedDate = parseIsoDay(form.anchorDate);
   const snapped = typedDate ? snapToWeekStart(typedDate, form.weekStart) : null;
@@ -101,7 +111,7 @@ export function CyclePanel({
       <SettingsSection
         icon={CalendarRange}
         title={CYCLE_SECTIONS[cycle].period}
-        purpose={`Which dates one ${info.label} payslip covers: ${info.every}, in ${info.weeks === 1 ? "one whole week" : `${info.weeks} whole weeks`} (${info.days} days). Only employees assigned to the ${info.label} cycle are paid on it; each period is generated on the ${info.label} payroll page once it has ended.`}
+        purpose={`Which dates one ${info.label} payslip covers: ${info.days} days, paid ${info.every}. Only employees assigned to the ${info.label} cycle are paid on it, once a period has ended. The card shows the values on screen; change them below.`}
         usedBy={[
           { label: `Production Payroll - ${info.label}`, to: info.path },
           { label: "Production Employees", to: "/hr/employees/productionEmployee" },
@@ -109,37 +119,39 @@ export function CyclePanel({
         ]}
         testId={`${cycle}-period-section`}
       >
+        <CycleAtAGlance
+          cycle={cycle}
+          rule={rule}
+          lastGenerated={lastGenerated}
+          open={open}
+          checking={runs.isLoading}
+          today={today}
+          branchLogin={branchLogin}
+        />
+        {draft.dirty && (
+          <p
+            className="mt-2 inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200"
+            data-testid={`${cycle}-card-unsaved`}
+          >
+            The card shows your changes, which are not saved yet
+          </p>
+        )}
+
         <SettingBlock
           {...block(`${cycle}-week-start`)}
           labelFor={`${cycle}-week-start-input`}
           defaultText="Monday"
+          className="mt-4 border-t pt-5 first:border-t"
           affects={[
             {
               ...pageLink,
-              what: `every ${info.label} period is ${info.days} days starting on this weekday; the page offers the periods accordingly.`,
-            },
-            {
-              where: "Production Shift Register report",
-              what: "notes the production pay period.",
-              to: "/hr/reports",
+              what: `every ${info.label} period is ${info.days} days starting on this weekday.`,
             },
           ]}
           note={
             lastGenerated
-              ? `Periods already generated keep their dates. ${info.label} payroll continues from the day after its latest generated period, so a new start weekday can make the next period start earlier and cover days already paid: the Next period example says when.`
+              ? `Periods already generated keep their dates. A new start weekday can make the next period start earlier and cover days already paid: the Next to generate card says when.`
               : undefined
-          }
-          preview={
-            <PreviewCard scenario="The pay period holding today, with these values." testId={`${cycle}-today-preview`}>
-              {"period" in around ? (
-                <PreviewLine
-                  label="This period"
-                  result={`${formatDayLong(around.period.start)} to ${formatDayLong(around.period.end)}`}
-                />
-              ) : (
-                <PreviewLine tone="warn" label="Not known yet" result="set the first period start below" />
-              )}
-            </PreviewCard>
           }
         >
           <SelectInput
@@ -149,6 +161,9 @@ export function CyclePanel({
             disabled={readOnly}
             options={WEEK_START_OPTIONS}
           />
+          <p className="text-[13px] font-semibold text-slate-800" data-testid={`${cycle}-week-runs-line`}>
+            Week runs {weekRunsArrow(form.weekStart)}
+          </p>
         </SettingBlock>
 
         <SettingBlock
@@ -173,10 +188,12 @@ export function CyclePanel({
               title="Next period"
               scenario={
                 lastGenerated === undefined
-                  ? `Worked out from the values on screen, starting from today (${formatDayLong(today)}): the latest generated period could not be read with this login.`
+                  ? runs.isError
+                    ? `Worked out from the values on screen, starting from today (${formatDayLong(today)}): the latest generated period could not be read.`
+                    : "Worked out from the values on screen..."
                   : lastGenerated
-                    ? `Worked out from the values on screen. Latest ${info.label} period generated: ${formatPeriod(lastGenerated)}.`
-                    : `Worked out from the values on screen. No ${info.label} period has been generated yet, so the first is the most recent period that has ended.`
+                    ? `Worked out from the values on screen. Latest ${info.label} period generated${forBranch}: ${formatPeriod(lastGenerated)}.`
+                    : `Worked out from the values on screen. No ${info.label} period has been generated yet${forBranch}, so the first is the most recent period that has ended.`
               }
               testId={`${cycle}-next-period-preview`}
             >
@@ -203,13 +220,17 @@ export function CyclePanel({
                     <PreviewLine
                       tone="bad"
                       label={`${formatPeriod(overlap)} is already generated`}
-                      result="workers paid for those days are skipped"
+                      result="draft payslips there are replaced when the new periods are generated; finalized or paid ones never"
                     />
                   )}
                   <PreviewLine
                     label="Can be generated"
                     result={
-                      live.ended ? "now (it has ended)" : `from ${formatDayLong(live.generateFrom)}, its last day`
+                      live.stillOpen
+                        ? "it is generated and still open (until Payroll Done)"
+                        : live.ended
+                          ? "now (it has ended)"
+                          : `from ${formatDayLong(live.generateFrom)}, the day after its last day`
                     }
                   />
                   <PreviewLine label="Then" result={live.then.map(formatPeriod).join(", ")} />
@@ -287,9 +308,11 @@ export function CyclePanel({
         {overlap && !("error" in live) && (
           <p className="text-red-700">
             The next {info.label} period becomes {formatPeriod(live.period)}, but {info.label} payroll is already
-            generated up to {formatDayLong(overlap.end)}: workers already paid for {formatPeriod(overlap)} are skipped
-            for that period. Check the {info.label} payroll page before generating, or choose values that make the next
-            period start on {formatDayLong(overlap.end)} plus one day.
+            generated up to {formatDayLong(overlap.end)}. Payslips of {formatPeriod(overlap)} that are only Generated
+            (drafts) are replaced when the new periods are generated, so those days are paid once, in the new periods;
+            payslips of a finalized (Payroll Done) or paid period are never replaced, and their days stay paid. Check
+            the {info.label} payroll page before generating, or choose values that make the next period start on{" "}
+            {formatDayLong(overlap.end)} plus one day.
           </p>
         )}
         {branchLogin && <p>You are signed in to a branch: this applies to your branch's employees only.</p>}

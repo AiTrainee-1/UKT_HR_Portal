@@ -77,11 +77,11 @@ afterEach(() => {
 const WEEKLY = "/hr/production-payroll/weekly";
 const WEEK_PARAM = "2026-02-02_2026-02-08";
 
-/** Opens the Payroll tab and waits until the dashboard, the issues and the roster are all in. */
+/** Opens the Payroll tab and waits until the payslips, the issues and the roster are all in (the views show their counts). */
 async function openPayroll(url = WEEKLY) {
   mountPage(url);
   await waitFor(
-    () => !!q("pcp-dash-kpi-net-value") && !!q("pcp-dash-kpi-issues-value") && !!q("pcp-dash-kpi-skipped-value"),
+    () => !!q("view-records-count") && !!q("view-issues-count") && !!q("view-skipped-count"),
     "the Payroll tab",
   );
 }
@@ -95,46 +95,15 @@ const shownIds = () =>
 /** One payslip of the list: its card, or its table row. */
 const rec = (id: number) => q(`payroll-record-${id}`) ?? q(`payroll-record-row-${id}`);
 
-describe("the dashboard of the period", () => {
-  it("counts who is in the payroll against the cycle's roster, and what is still to be released", async () => {
+describe("the counts of the period", () => {
+  it("has no dashboard of tiles and charts (owner 2026-11-16): the views carry the counts", async () => {
     await openPayroll();
-    expect(text(q("pcp-dash-kpi-employees"))).toContain("1 of 3");
-    expect(text(q("pcp-dash-kpi-employees"))).toContain("on the Weekly cycle");
-    expect(text(q("pcp-dash-kpi-gross-value"))).toBe("₹3,500");
-    expect(text(q("pcp-dash-kpi-deductions-value"))).toBe("₹500");
-    expect(text(q("pcp-dash-kpi-net-value"))).toBe("₹3,000");
-    expect(text(q("pcp-dash-kpi-pending-value"))).toBe("₹3,000");
-    expect(text(q("pcp-dash-kpi-pending"))).toContain("1 employee waiting");
-  });
-
-  it("says how many issues payroll detected, and how many employees it skipped", async () => {
-    await openPayroll();
-    // 3 detected + 1 skipped: the tile counts what the Issues view lists
-    expect(text(q("pcp-dash-kpi-issues-value"))).toBe("4");
-    expect(text(q("pcp-dash-kpi-skipped-value"))).toBe("1");
-    expect(text(q("pcp-dash-kpi-skipped"))).toContain("of 3 checked");
-    // the views carry the same counts: 3 detected + 1 skipped, and 1 skipped
+    expect(q("pcp-dash-root")).toBeNull();
+    expect(q("pcp-dash-kpi-net-value")).toBeNull();
+    // 3 detected + 1 skipped: the Issues view counts what it lists; 1 skipped; 1 payslip
     expect(text(q("view-issues-count"))).toBe("4");
     expect(text(q("view-skipped-count"))).toBe("1");
     expect(text(q("view-records-count"))).toBe("1");
-  });
-
-  it("opens the Issues view from the issues tile, and the Skipped view from the skipped tile", async () => {
-    await openPayroll();
-    click(must("pcp-dash-kpi-issues"));
-    expect(params().view).toBe("issues");
-    click(must("pcp-dash-kpi-skipped"));
-    expect(params().view).toBe("skipped");
-  });
-
-  it("shows the shape of the dashboard while the figures are on their way", async () => {
-    const release = world.hold("/api/payroll/production");
-    mountPage(WEEKLY);
-    await waitFor(() => !!q("pcp-dash-root"), "the dashboard");
-    expect(q("pcp-dash-kpi-net-value")).toBeNull(); // a skeleton where the figure will be
-    release();
-    await waitFor(() => !!q("pcp-dash-kpi-net-value"), "the figures");
-    expect(text(q("pcp-dash-kpi-net-value"))).toBe("₹3,000");
   });
 });
 
@@ -161,7 +130,8 @@ describe("the Records view", () => {
     await openPayroll();
     const asked = world.requests();
     expect(asked).toContain(
-      "/api/payroll/production?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08&limit=500",
+      // the period's whole payroll: no first-page limit (2026-11-16)
+      "/api/payroll/production?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08",
     );
     expect(asked).toContain("/api/payroll/production/issues?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08");
     expect(asked).toContain("/api/payroll/production/rules?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08");
@@ -204,11 +174,9 @@ describe("the Records view", () => {
     expect(text(q("pcp-pf-count"))).toBe("Showing 1 of 2");
   });
 
-  it("the pending tile shows only what is still to be released", async () => {
+  it("the Pending status filter shows only what is still to be released", async () => {
     world.people = [...world.people.slice(0, 1), balaPaid(), world.people[2]];
-    await openPayroll();
-    await waitFor(() => shownIds().length === 2, "both cards");
-    click(must("pcp-dash-kpi-pending"));
+    await openPayroll(`${WEEKLY}?status=pending`);
     expect(params().status).toBe("pending");
     await waitFor(() => shownIds().length === 1, "the pending card");
     expect(shownIds()).toEqual(["payroll-record-11"]);
@@ -252,11 +220,15 @@ describe("the Records view", () => {
     await waitFor(() => !!q("payroll-record-markpaid-11"), "the card");
     click(must("payroll-record-markpaid-11"));
     await waitFor(() => world.writes.length === 1, "the update");
-    expect(world.writes[0]).toMatchObject({ method: "PATCH", url: "/api/payroll/11", body: { status: "paid" } });
+    // a production payroll is changed on its own route (Production Payroll rights, 2026-11-16)
+    expect(world.writes[0]).toMatchObject({
+      method: "PATCH",
+      url: "/api/payroll/production/11",
+      body: { status: "paid" },
+    });
     expect(h.toast).toHaveBeenCalledWith({ title: "Asha Worker's salary marked as cleared" });
     await waitFor(() => !q("payroll-record-markpaid-11"), "the button to go");
     expect(rec(11)!.getAttribute("data-status")).toBe("paid");
-    await waitFor(() => text(q("pcp-dash-kpi-pending")).includes("Everything is released"), "the dashboard");
   });
 });
 
@@ -605,7 +577,12 @@ describe("a View Only role", () => {
     for (const view of ["records", "issues", "skipped", "rules"]) {
       expect((must(`view-${view}`) as HTMLButtonElement).disabled).toBe(false);
     }
-    expect((must("pcp-period") as HTMLButtonElement).disabled).toBe(false);
+    // the pay-period calendar only chooses what to look at (hidden until shown: its button is not locked either)
+    expect((must("pcp-cal-toggle") as HTMLButtonElement).disabled).toBe(false);
+    click(must("pcp-cal-toggle"));
+    expect((must("pcp-cal-day-2026-02-04") as HTMLButtonElement).disabled).toBe(false);
+    expect((must("pcp-quick-next") as HTMLButtonElement).disabled).toBe(false);
+    expect((must("pcp-period-date") as HTMLInputElement).disabled).toBe(false);
     // and the export menu works
     press(must("pcp-export"), "Enter");
     await waitFor(() => !!q("pcp-export-statement-xlsx"), "the menu");
@@ -629,16 +606,32 @@ describe("Generate Payroll", () => {
     expect(text(dialog)).toContain("Generate Weekly Payroll");
     expect(text(q("pcp-generate-period"))).toBe("2 Feb - 8 Feb 2026");
     expect(text(q("pcp-generate-ready"))).toBe("1 employee");
-    expect(text(dialog)).toContain("1 employee already has payroll");
+    // the payslip already made is worked out again too (ticked by default: owner 2026-11-16)
+    expect(text(q("pcp-generate-again-count"))).toBe("1 payslip");
+    expect((must("pcp-generate-again") as HTMLInputElement).checked).toBe(true);
     expect(text(dialog)).toContain("1 employee cannot be generated");
     // who cannot be generated, and why
     expect(text(q("pcp-generate-who"))).toContain("Esha Worker");
     expect(text(q("pcp-generate-who"))).toContain(NO_RATE);
     expect(text(dialog)).toContain("This period has ended - ready to generate.");
+    expect(text(q("pcp-generate-confirm"))).toBe("Generate 1 · work out 1 again");
     click(must("pcp-generate-confirm"));
     expect(h.trigger).toHaveBeenCalledTimes(1);
-    expect(h.trigger).toHaveBeenCalledWith({ cycle: "weekly", periodStart: "2026-02-02", periodEnd: "2026-02-08" });
+    expect(h.trigger).toHaveBeenCalledWith({
+      cycle: "weekly",
+      periodStart: "2026-02-02",
+      periodEnd: "2026-02-08",
+      regenerate: true,
+    });
     expect(q("pcp-generate-dialog")).toBeNull();
+  });
+
+  it("unticked, it generates only the employees who have no payslip yet", async () => {
+    await openDialog();
+    click(must("pcp-generate-again"));
+    expect(text(q("pcp-generate-confirm"))).toBe("Generate for 1 employee");
+    click(must("pcp-generate-confirm"));
+    expect(h.trigger).toHaveBeenCalledWith({ cycle: "weekly", periodStart: "2026-02-02", periodEnd: "2026-02-08" });
   });
 
   it("keeps the page on the period it was started for", async () => {
@@ -740,12 +733,32 @@ describe("Generate Payroll", () => {
     expect(h.trigger).not.toHaveBeenCalled();
   });
 
-  it("cannot be confirmed when nobody is left to generate", async () => {
+  it("can be pressed again when everyone already has a payslip: it works the payslips out again", async () => {
+    // the root cause of 'I cannot regenerate after the first run' (owner 2026-11-16): with nobody left without a
+    // payslip, the dialog used to offer nothing and could not be confirmed
     world.people = world.people.slice(0, 1).concat(world.people[2]);
     await openPayroll();
     await waitFor(() => !(must("pcp-generate-open") as HTMLButtonElement).disabled, "Generate Payroll to be ready");
     click(must("pcp-generate-open"));
     expect(text(q("pcp-generate-ready"))).toBe("0 employees");
+    const confirm = must("pcp-generate-confirm") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+    expect(text(confirm)).toBe("Work out 1 payslip again");
+    click(confirm);
+    expect(h.trigger).toHaveBeenCalledWith({
+      cycle: "weekly",
+      periodStart: "2026-02-02",
+      periodEnd: "2026-02-08",
+      regenerate: true,
+    });
+  });
+
+  it("cannot be confirmed when there is nothing to generate and working out again is unticked", async () => {
+    world.people = world.people.slice(0, 1).concat(world.people[2]);
+    await openPayroll();
+    await waitFor(() => !(must("pcp-generate-open") as HTMLButtonElement).disabled, "Generate Payroll to be ready");
+    click(must("pcp-generate-open"));
+    click(must("pcp-generate-again"));
     expect((must("pcp-generate-confirm") as HTMLButtonElement).disabled).toBe(true);
   });
 

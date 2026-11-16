@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useDebounced } from "@/hooks/use-debounced";
 import { downloadWorkbook, newWorkbook, styleHeaderCell } from "@/lib/exportUtils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,6 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import { useListDepartments } from "@/lib/api-client";
+import { categoryForEmploymentType, departmentOptions, keepIfOffered } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import {
   useListBranches,
   getListBranchesQueryKey,
@@ -94,9 +96,20 @@ export default function CtcBreakdownTab({ isBranchScoped }: { isBranchScoped: bo
 
   const { data: departments } = useListDepartments();
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
+  // Staff and production have departments of their own (lib/departments.ts): a type picked offers only its kind (and
+  // a department of the other kind picked before stops applying); "All Types" groups both under two headings.
+  const deptOptions = useMemo(
+    () =>
+      departmentOptions(departments, {
+        category: categoryForEmploymentType(typeFilter),
+        branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : null,
+      }),
+    [departments, typeFilter, isBranchScoped, branchFilter],
+  );
+  const deptValue: string = departments ? keepIfOffered(deptFilter, deptOptions, "all") : deptFilter;
 
   const { data, isLoading } = useCompensation({
-    departmentId: deptFilter !== "all" ? Number(deptFilter) : undefined,
+    departmentId: deptValue !== "all" ? Number(deptValue) : undefined,
     branchId: !isBranchScoped && branchFilter !== "all" ? Number(branchFilter) : undefined,
     employmentType: typeFilter !== "all" ? typeFilter : undefined,
     search: debouncedSearch || undefined,
@@ -133,17 +146,13 @@ export default function CtcBreakdownTab({ isBranchScoped }: { isBranchScoped: bo
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Select value={deptFilter} onValueChange={setDeptFilter}>
+          <Select value={deptValue} onValueChange={setDeptFilter}>
             <SelectTrigger className="w-full sm:w-44">
               <SelectValue placeholder="Department" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Departments</SelectItem>
-              {departments?.map((d) => (
-                <SelectItem key={d.id} value={String(d.id)}>
-                  {d.name}
-                </SelectItem>
-              ))}
+              <OrgSelectItems options={deptOptions} />
             </SelectContent>
           </Select>
           {!isBranchScoped && (

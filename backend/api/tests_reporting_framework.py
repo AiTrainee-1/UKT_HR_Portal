@@ -142,7 +142,10 @@ class CatalogTests(_Base):
         drange = next(f for f in probe["filters"] if f["key"] == "dateRange")
         self.assertEqual(set(drange["default"]), {"dateFrom", "dateTo"})
         self.assertEqual(drange["maxDays"], 31)
-        self.assertIn({"id": self.cutting.id, "name": "CUTTING"}, body["options"]["departments"])
+        # each department option also says Staff / Production and its branch (two CUTTINGs can be told apart)
+        cutting = next(d for d in body["options"]["departments"] if d["id"] == self.cutting.id)
+        self.assertEqual((cutting["name"], cutting["category"]), ("CUTTING", "staff"))
+        self.assertEqual(cutting["branchId"], self.cutting.branch_id)
         self.assertTrue(any(c["id"] == "employees" and c["count"] >= 1 for c in body["categories"]))
 
     def test_branch_scoped_user_gets_no_branch_filter_and_only_own_lists(self):

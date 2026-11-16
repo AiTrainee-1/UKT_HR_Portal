@@ -23,7 +23,7 @@ import { addressSetting, saveErrorText, useDraft, useSubTabFromAddress, type Dra
 import { dayOf } from "./payroll/preview";
 import { BranchNotice } from "./payroll/ui";
 import { CyclePanel } from "./production-payroll/CyclePanel";
-import { CYCLE_INFO, CYCLES } from "./production-payroll/cycles";
+import { CYCLE_INFO, CYCLES, type Day } from "./production-payroll/cycles";
 import { PayBonusPanel } from "./production-payroll/PayBonusPanel";
 import { ProductionOverview } from "./production-payroll/ProductionOverview";
 import { ShiftPanel } from "./production-payroll/ShiftPanel";
@@ -45,11 +45,11 @@ const SUB_TABS: { value: ProductionPayrollSubTab; label: string; icon: ReactNode
 const SUB_TAB_VALUES = SUB_TABS.map((t) => t.value);
 
 /** The Overview sub-tab with its shift list: the list is asked for only while the Overview is open. */
-function OverviewPanel({ settings }: { settings: PayrollSettingsItem }) {
+function OverviewPanel({ settings, today }: { settings: PayrollSettingsItem; today: Day }) {
   const shifts = useListShifts();
   return (
     <>
-      <ProductionOverview settings={settings} />
+      <ProductionOverview settings={settings} today={today} />
       <ShiftPanel shifts={shifts.data} shiftsLoading={shifts.isLoading} shiftsError={shifts.isError} />
     </>
   );
@@ -158,8 +158,8 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
         <BranchNotice>
           You are signed in to a branch. What you save on this tab is kept apart from the company values: each cycle's
           pay period is used when you generate that cycle's production payroll, and the suggested rate and the
-          production bonus apply to your branch's employees. The latest generated period that a cycle's next period
-          continues from is company-wide, so it cannot be shown here.
+          production bonus apply to your branch's employees. Each cycle's next period continues from the latest period
+          generated for your branch's own employees: another branch generating a period never moves yours.
         </BranchNotice>
       )}
 
@@ -195,7 +195,7 @@ export default function ProductionPayrollTab({ readOnly = false }: { readOnly?: 
         </div>
       ) : (
         <>
-          {subTab === "overview" && <OverviewPanel settings={settings} />}
+          {subTab === "overview" && <OverviewPanel settings={settings} today={today} />}
 
           {CYCLES.map(
             (cycle) =>

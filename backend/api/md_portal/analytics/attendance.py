@@ -356,7 +356,7 @@ class Frame:
                         # the group the first punch falls in, its start and the rules' grace. A day not measurable
                         # under them (the table changed since the day was computed) gets no entry, never a guess.
                         ruleset = psr.rules_for_day(pcfg, d)
-                        judged = psr.judge_day(ruleset, d, first_punch, None) if ruleset and first_punch else None
+                        judged = psr.judge_day(ruleset, d, first_punch, None, eid) if ruleset and first_punch else None
                         if judged is not None and judged.group is not None:
                             if judged.is_late:
                                 out[(eid, d)] = judged.late_minutes

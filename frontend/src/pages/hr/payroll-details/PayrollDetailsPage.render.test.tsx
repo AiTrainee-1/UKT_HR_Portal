@@ -57,6 +57,8 @@ vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
 vi.mock("@/lib/api-client/custom-hooks", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-hooks")>()),
   useUpdatePayrollRecord: () => ({ mutateAsync: h.mutateAsync, isPending: false }),
+  // a production payroll is changed on its own route (2026-11-16): the same spy, with its kind
+  useUpdatePayrollOf: () => ({ mutateAsync: h.mutateAsync, isPending: false }),
   previewDocumentPdf: h.preview,
   downloadDocumentPdf: h.download,
 }));
@@ -751,7 +753,7 @@ describe("a Production payroll", () => {
     expect(world.requests()).toContain("/api/payroll/production/301/details");
     click(q("pd-mark-paid"));
     await settle(10);
-    expect(h.mutateAsync).toHaveBeenCalledWith({ id: 301, data: { status: "paid" } });
+    expect(h.mutateAsync).toHaveBeenCalledWith({ kind: "production", id: 301, data: { status: "paid" } });
   });
 
   it("the staff page refuses a production-only address with the production kind unaffected", async () => {

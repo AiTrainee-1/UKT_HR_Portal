@@ -3,6 +3,7 @@
 // server: the one calculation the page shows, the preview, is `projectSalary` in ../career/common, which is that same
 // arithmetic.
 
+import { matchesNamedOrgOption } from "@/lib/departments";
 import type { Employee } from "@/lib/api-client";
 import type { IncrementItem } from "@/lib/api-client/custom-hooks";
 import {
@@ -114,8 +115,10 @@ export const filtersActive = (f: HistoryFilters) =>
 export function filterIncrements(rows: IncrementRecord[], f: HistoryFilters, today: string): IncrementRecord[] {
   const range = periodRange(f.period, today, { from: f.from, to: f.to });
   return rows.filter((r) => {
-    if (f.department !== "all" && r.department !== f.department) return false;
-    if (f.designation !== "all" && r.designation !== f.designation) return false;
+    // department / designation choices are "<staff|production>|<name>" (lib/departments.ts namedOrgOptions): staff and
+    // production have departments of their own, so two CUTTINGs are told apart by the employee's type
+    if (!matchesNamedOrgOption(f.department, r.department, r.employmentType)) return false;
+    if (!matchesNamedOrgOption(f.designation, r.designation, r.employmentType)) return false;
     if (f.branch !== "all" && r.branchName !== f.branch) return false;
     if (f.type !== "all" && r.employmentType !== f.type) return false;
     if (!inBand(r.percent, f.band)) return false;
@@ -323,7 +326,7 @@ export const dueFiltersActive = (f: DueFilters) =>
 
 export function filterDue(rows: DueRow[], f: DueFilters): DueRow[] {
   return rows.filter(({ employee: e, basis }) => {
-    if (f.department !== "all" && e.departmentName !== f.department) return false;
+    if (!matchesNamedOrgOption(f.department, e.departmentName, e.employmentType)) return false;
     if (f.branch !== "all" && e.branchName !== f.branch) return false;
     if (f.type !== "all" && e.employmentType !== f.type) return false;
     if (f.basis !== "all" && basis !== f.basis) return false;

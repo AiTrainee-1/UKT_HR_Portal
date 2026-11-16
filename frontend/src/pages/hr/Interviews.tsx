@@ -42,6 +42,8 @@ import {
   buildJobApplyUrl,
 } from "@/lib/api-client";
 import type { Applicant } from "@/lib/api-client";
+import { departmentOptions } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { canApprove, useAuth } from "@/contexts/AuthContext";
@@ -84,6 +86,8 @@ export default function Interviews() {
 
   const { data: jobs, isLoading: jobsLoading } = useListJobs({});
   const { data: departments } = useListDepartments();
+  // A job may be for staff or production: both kinds are offered, under two headings (two CUTTINGs told apart).
+  const deptOptions = departmentOptions(departments);
   const { data: summary } = useGetInterviewSummary();
   const { data: applicants, isLoading: appLoading } = useListApplicants(
     selectedJobId ? { jobId: selectedJobId } : {},
@@ -462,11 +466,7 @@ export default function Interviews() {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {departments?.map((d) => (
-                          <SelectItem key={d.id} value={String(d.id)}>
-                            {d.name}
-                          </SelectItem>
-                        ))}
+                        <OrgSelectItems options={deptOptions} />
                       </SelectContent>
                     </Select>
                     <FormMessage />

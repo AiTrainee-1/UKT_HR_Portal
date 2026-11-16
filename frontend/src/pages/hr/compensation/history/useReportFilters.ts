@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useListDepartments } from "@/lib/api-client";
+import { departmentOptions, hasBothCategories, optionText } from "@/lib/departments";
 import { getListBranchesQueryKey, useListBranches, type ReportType } from "@/lib/api-client/custom-hooks";
 import { todayIst, type CompensationUrl } from "../logic";
 import { isPeriod } from "../period";
@@ -22,7 +23,14 @@ export function useReportFilters(url: CompensationUrl, isBranchScoped: boolean, 
   const { data: departments } = useListDepartments();
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
 
-  const departmentName = departments?.find((d) => d.id === departmentId)?.name ?? null;
+  // Staff and production departments both apply here (the type is a report type, not Staff / Production): the
+  // picker cannot show headings, so a name both kinds use reads "CUTTING (Staff)" / "CUTTING (Production)".
+  const departmentChoices = useMemo(() => {
+    const opts = departmentOptions(departments);
+    const both = hasBothCategories(opts);
+    return opts.map((o) => ({ value: o.value, label: optionText(o, both) }));
+  }, [departments]);
+  const departmentName = departmentChoices.find((d) => d.value === String(departmentId))?.label ?? null;
   const branchName = branches?.find((b) => b.id === branchId)?.name ?? null;
 
   return {
@@ -33,6 +41,8 @@ export function useReportFilters(url: CompensationUrl, isBranchScoped: boolean, 
     departmentId,
     branchId,
     departments,
+    /** The department picker's choices (both kinds, each name telling its kind when both are listed). */
+    departmentChoices,
     branches,
     departmentName,
     branchName,

@@ -408,7 +408,10 @@ class FilterTests(HubFixture):
     def test_the_filter_options_are_the_branches_and_departments_in_scope(self):
         options = self.body()["options"]
         self.assertEqual({b["name"] for b in options["branches"]} >= {"RQ Head Office", "RQ Unit 2"}, True)
-        self.assertIn({"id": self.cutting.id, "name": "RQ Cutting", "branchId": self.ho.id}, options["departments"])
+        self.assertIn(
+            {"id": self.cutting.id, "name": "RQ Cutting", "branchId": self.ho.id, "category": "staff"},
+            options["departments"],
+        )
         role = Role.objects.create(name="rq_scoped", permissions={"requests": "edit"})
         scoped = HRUser.objects.create(username="rq_scoped", password_hash="x", role=role, branch=self.u2)
         own = self.body(scoped)["options"]

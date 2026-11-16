@@ -478,3 +478,10 @@ api/md_portal/analytics/people.py
 api/md_portal/hod_approvals.py
 api/md_portal/routes/approvals.py
 api/tests_md_hod_approvals.py
+api/org_category.py
+api/tests_org_category.py
+api/production_period_workflow.py
+api/production_period_workflow_views.py
+api/production_transfers.py
+api/tests_production_period_workflow.py
+api/production_drafts.py

@@ -138,7 +138,14 @@ export function installWorld(fetchMock: Mock): World {
       world.flags.set(id, { ...world.flags.get(id), onHold: hold });
       return { id, onHold: hold };
     }
-    const stored = /^\/api\/payroll\/(\d+)\/breakdown$/.exec(url);
+    // the period workflow of a production payroll (2026-11-16): open, and this login may clear
+    if (url.startsWith("/api/payroll/production/period-workflow")) {
+      return { state: "generated", locked: false, paidOn: null, paidAt: null, can: { markCleared: true } };
+    }
+    // the production payroll's own row (New Joiners, payment status): none listed
+    if (/^\/api\/payroll\/production\?employeeId=/.test(url)) return [];
+    // (a production payroll's breakdown is read on its own route, Production Payroll rights)
+    const stored = /^\/api\/payroll(?:\/production)?\/(\d+)\/breakdown$/.exec(url);
     if (stored) {
       const answer = world.breakdowns.get(Number(stored[1]));
       if (!answer) throw apiError(404);

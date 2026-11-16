@@ -3,7 +3,7 @@ import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs, type PillTabItem } from "@/components/ui/pill-tabs";
-import type { Option, PersonFilters } from "../leave/logic";
+import { departmentsOfType, withEmployeeType, type Option, type PersonFilters } from "../leave/logic";
 import {
   EmptyState,
   ErrorState,
@@ -101,13 +101,13 @@ export default function ClTab({
               onChange={(department) => set({ department })}
               label="Filter by department"
               allLabel="All departments"
-              options={departments}
+              options={departmentsOfType(departments, filters.employeeType)}
               testId={`${id}-filter-department`}
             />
             {showEmployeeType && (
               <FilterSelect
                 value={filters.employeeType}
-                onChange={(employeeType) => set({ employeeType })}
+                onChange={(employeeType) => onFilters(withEmployeeType(filters, employeeType, departments))}
                 label="Filter by employee type"
                 allLabel="Staff and production"
                 options={[

@@ -13,31 +13,39 @@ import {
 } from "@/components/ui/dialog";
 import { useDebounced } from "@/hooks/use-debounced";
 import { useToast } from "@/hooks/use-toast";
-import { useAssignEmployee, useSearchEmployees, type Employee } from "@/lib/api-client";
+import { useAssignOrg, useSearchEmployees, type Employee } from "@/lib/api-client";
+import { ORG_CATEGORY_LABEL, type OrgCategory } from "@/lib/departments";
 import { errorMessage, useRefreshOrg } from "./api";
 import { PersonAvatar, TypeChip } from "./parts";
 
-type Target = { kind: "department" | "designation"; id: number; name: string };
+type Target = {
+  kind: "department" | "designation";
+  id: number;
+  name: string;
+  /** Staff or Production: only employees of that type can be put in it, so only they are searched. */
+  category: OrgCategory;
+};
 
-/** Search an active employee by name, code or phone and give them this department / designation. */
+/** Search an active employee of the right type by name, code or phone and give them this department / designation. */
 export default function AssignDialog({ target, onClose }: { target: Target; onClose: () => void }) {
   const { toast } = useToast();
   const refresh = useRefreshOrg();
   const [query, setQuery] = useState("");
   // asked once typing pauses; until then the list reads as "Searching…", never as "no match"
   const debouncedQuery = useDebounced(query);
-  const { data: results, isFetching } = useSearchEmployees(debouncedQuery);
+  const { data: results, isFetching } = useSearchEmployees(debouncedQuery, true, target.category);
   const typedEnough = query.trim().length >= 2;
   const searching = typedEnough && (isFetching || query !== debouncedQuery);
   // the last matches stay listed while the next search loads, never under fewer than 2 characters
   const shown = typedEnough ? (results ?? []) : [];
-  const assignMutation = useAssignEmployee();
+  const assignMutation = useAssignOrg();
   const isDept = target.kind === "department";
+  const who = target.category === "production" ? "production employee" : "staff member";
 
   const assign = async (emp: Employee) => {
     try {
       await assignMutation.mutateAsync(
-        isDept ? { id: emp.id, departmentId: target.id } : { id: emp.id, designationId: target.id },
+        isDept ? { employeeId: emp.id, departmentId: target.id } : { employeeId: emp.id, designationId: target.id },
       );
       await refresh();
       toast({ title: `${emp.firstName} ${emp.lastName} assigned to ${target.name}` });
@@ -52,7 +60,8 @@ export default function AssignDialog({ target, onClose }: { target: Target; onCl
         <DialogHeader>
           <DialogTitle>Assign employee to {target.name}</DialogTitle>
           <DialogDescription>
-            Search an active employee. Their {isDept ? "department" : "designation"} changes straight away.
+            {ORG_CATEGORY_LABEL[target.category]} {isDept ? "department" : "designation"}: search an active {who}. Their{" "}
+            {isDept ? "department" : "designation"} changes straight away.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-1">
@@ -76,7 +85,7 @@ export default function AssignDialog({ target, onClose }: { target: Target; onCl
           <div className="max-h-64 space-y-2 overflow-y-auto">
             {searching && <p className="py-4 text-center text-xs text-muted-foreground">Searching…</p>}
             {!searching && typedEnough && shown.length === 0 && (
-              <p className="py-4 text-center text-xs text-muted-foreground">No active employee matches.</p>
+              <p className="py-4 text-center text-xs text-muted-foreground">No active {who} matches.</p>
             )}
             {shown.map((emp) => {
               const already = isDept ? emp.departmentId === target.id : emp.designationId === target.id;

@@ -65,7 +65,8 @@ export function minutesOf(time: string | null | undefined): number {
   return match ? Number(match[1]) * 60 + Number(match[2]) : Number.POSITIVE_INFINITY;
 }
 
-export const leaveTitle = (iso: string) => `${formatDMY(iso)} STAFF LEAVE LIST`;
+/** The paper list's title: "03.10.2026 STAFF LEAVE LIST" (the Production Report Log's says PRODUCTION). */
+export const leaveTitle = (iso: string, listWord = "STAFF") => `${formatDMY(iso)} ${listWord} LEAVE LIST`;
 
 // ─── Informed / Not informed (the Daily Leave Report's remark) ───
 

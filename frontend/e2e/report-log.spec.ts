@@ -85,8 +85,8 @@ test.beforeAll(async ({ browser }) => {
     code: string,
     first: string,
     branchId: number,
-    departmentId: number,
-    designationId: number,
+    departmentId: number | null,
+    designationId: number | null,
     type = "staff",
   ) =>
     make("/api/employees", {
@@ -108,7 +108,8 @@ test.beforeAll(async ({ browser }) => {
     babu: await employee("RL-03", "Babu", unit, prod, qc),
     early: await employee("RL-04", "Early", head.id, admin, accounts),
     absent: await employee("RL-05", "Absent", unit, prod, qc),
-    worker: await employee("RL-06", "Worker", unit, prod, qc, "production"),
+    // RL Production is a Staff department (staff and production have departments of their own): the worker has none
+    worker: await employee("RL-06", "Worker", unit, null, null, "production"),
   };
 
   const assign = await api(page, "POST", "/api/shift-assignments/apply", {

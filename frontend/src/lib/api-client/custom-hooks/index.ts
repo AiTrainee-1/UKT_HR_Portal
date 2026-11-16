@@ -22,6 +22,7 @@ export * from "./pf-esi";
 export * from "./pf-esi-settings";
 export * from "./production-cycles";
 export * from "./production-shift-rules";
+export * from "./production-shifts";
 export * from "./shared-endpoints";
 export * from "./payroll-insights";
 export * from "./payroll-month";

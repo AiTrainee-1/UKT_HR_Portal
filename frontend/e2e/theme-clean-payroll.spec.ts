@@ -217,22 +217,8 @@ for (const width of WIDTHS) {
 }
 
 test("the figure tiles are white tiles with a 1px line and a tinted icon chip, not pastel boxes", async ({ page }) => {
-  // the production payroll page keeps its dashboard of the period (the staff page has none)
-  await open(page, "clean", "/hr/production-payroll/weekly");
-  for (const id of ["pcp-dash-kpi-gross", "pcp-dash-kpi-deductions", "pcp-dash-kpi-net", "pcp-dash-kpi-pending"]) {
-    const tile = `[data-testid="${id}"]`;
-    expect(isWhite(await colourOf(page, tile, "background-color")), `${id} is white`).toBe(true);
-    expect(await styleOf(page, tile, ["border-top-width", "border-top-left-radius", "box-shadow"])).toEqual({
-      "border-top-width": "1px",
-      "border-top-left-radius": "8px",
-      "box-shadow": "none",
-    });
-    // the icon box is the tile's own colour at a low strength: tinted, neither white nor solid
-    const chip = await colourOf(page, `${tile} > div:first-child`, "background-color");
-    expect(chip[3], `${id} icon chip is tinted`).toBeGreaterThan(0.03);
-    expect(chip[3]).toBeLessThan(0.3);
-  }
-  // the same tile on the pages that write their own copy of it
+  // (the production payroll pages had their own dashboard of tiles until 2026-11-16, when the owner removed it: the
+  // pages below write their own copy of the tile)
   for (const [path, ids] of [
     ["/hr/settlement", ["stat-pending", "stat-active", "stat-recovered", "stat-left"]],
     ["/hr/promotion", ["stat-this-year", "stat-employees", "stat-dept-moves", "stat-due"]],
@@ -457,15 +443,6 @@ function over([r, g, b, a]: number[], [br, bg, bb]: number[]) {
 test("the same pages in the default theme keep the look they always had", async ({ page }) => {
   await open(page, "default", FEB);
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("default");
-  // a pastel figure tile (on the production page, which keeps its dashboard): 16px corners, no border, not white
-  await open(page, "default", "/hr/production-payroll/weekly");
-  expect(
-    await styleOf(page, '[data-testid="pcp-dash-kpi-gross"]', ["border-top-width", "border-top-left-radius"]),
-  ).toEqual({
-    "border-top-width": "0px",
-    "border-top-left-radius": "16px",
-  });
-  expect(isWhite(await colourOf(page, '[data-testid="pcp-dash-kpi-gross"]', "background-color"))).toBe(false);
   await open(page, "default", `${FEB}&layout=cards`);
   // the green Export button
   expect(isGreen(await colourOf(page, '[data-testid="staff-export"]', "color"))).toBe(true);

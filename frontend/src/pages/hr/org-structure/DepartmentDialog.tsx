@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,7 +13,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useCreateDepartmentWithBranch } from "@/lib/api-client/custom-hooks";
+import { ORG_CATEGORY_LABEL, orgCategoryOf, type OrgCategory } from "@/lib/departments";
 import { errorMessage, useRefreshOrg, useUpdateDepartment, type BranchRef, type DepartmentRow } from "./api";
+import { departmentCategoryLock } from "./logic";
+import { KindPicker } from "./KindPicker";
 
 type Props = {
   /** The department being edited; null to create one. */
@@ -20,19 +24,27 @@ type Props = {
   branches: BranchRef[];
   /** An unscoped login must choose the branch; a branch login's own branch is implied by the server. */
   needsBranch: boolean;
-  /** Names already taken, per branch, so a clash is caught before the server has to say so. */
+  /** A branch login's own branch (where a department it creates goes), for the duplicate-name check. */
+  scopedBranchId?: number | null;
+  /** Every department (both kinds), so a clash is caught before the server has to say so. */
   existing: DepartmentRow[];
   /** The branch the filter is on, offered first when creating. */
   defaultBranchId?: number | null;
+  /** The kind the page's switch is on: a new department starts as it. */
+  category: OrgCategory;
   onClose: () => void;
 };
+
+const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 export default function DepartmentDialog({
   department,
   branches,
   needsBranch,
+  scopedBranchId,
   existing,
   defaultBranchId,
+  category: pageCategory,
   onClose,
 }: Props) {
   const { toast } = useToast();
@@ -45,28 +57,52 @@ export default function DepartmentDialog({
   const [branchId, setBranchId] = useState(
     department?.branchId != null ? String(department.branchId) : defaultBranchId != null ? String(defaultBranchId) : "",
   );
+  const [category, setCategory] = useState<OrgCategory>(editing ? orgCategoryOf(department) : pageCategory);
   const [error, setError] = useState<string | null>(null);
   const busy = createMutation.isPending || updateMutation.isPending;
+  // An edited department keeps its kind while anybody is in it (the server says the same).
+  const lock = editing ? departmentCategoryLock(department) : null;
 
   const submit = async () => {
-    const trimmed = name.trim();
+    const trimmed = name.trim().replace(/\s+/g, " ");
     if (!trimmed) return setError("Department name is required");
     if (!editing && needsBranch && !branchId) {
       return setError("Select a branch. A department with no branch is hidden from every branch login.");
     }
-    const inBranch = editing ? department.branchId : branchId ? Number(branchId) : null;
-    if (existing.some((d) => d.id !== department?.id && d.branchId === inBranch && d.name === trimmed)) {
-      return setError(`A department called "${trimmed}" already exists in this branch`);
+    // The branch the department is (or will be) in: its own, the one picked, or a branch login's own.
+    const inBranch = editing
+      ? department.branchId
+      : needsBranch
+        ? branchId
+          ? Number(branchId)
+          : null
+        : scopedBranchId;
+    if (
+      existing.some(
+        (d) =>
+          d.id !== department?.id &&
+          (d.branchId ?? null) === (inBranch ?? null) &&
+          orgCategoryOf(d) === category &&
+          sameName(d.name, trimmed),
+      )
+    ) {
+      return setError(`A ${ORG_CATEGORY_LABEL[category]} department called "${trimmed}" already exists in this branch`);
     }
     setError(null);
     try {
       if (editing) {
-        await updateMutation.mutateAsync({ id: department.id, name: trimmed, description: description.trim() });
+        await updateMutation.mutateAsync({
+          id: department.id,
+          name: trimmed,
+          description: description.trim(),
+          ...(category !== orgCategoryOf(department) ? { category } : {}),
+        });
       } else {
         await createMutation.mutateAsync({
           name: trimmed,
           description: description.trim() || undefined,
           branchId: branchId ? Number(branchId) : undefined,
+          category,
         });
       }
     } catch (e) {
@@ -80,7 +116,9 @@ export default function DepartmentDialog({
       return;
     }
     await refresh();
-    toast({ title: editing ? "Department updated" : "Department created" });
+    toast({
+      title: editing ? "Department updated" : `${ORG_CATEGORY_LABEL[category]} department created`,
+    });
     onClose();
   };
 
@@ -88,21 +126,43 @@ export default function DepartmentDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md" data-testid="department-dialog">
         <DialogHeader>
-          <DialogTitle>{editing ? `Edit ${department.name}` : "New department"}</DialogTitle>
+          <DialogTitle>
+            {editing ? `Edit ${department.name}` : `New ${ORG_CATEGORY_LABEL[category]} department`}
+          </DialogTitle>
           <DialogDescription>
             {editing
               ? "Rename it or change the description. A department stays in its branch."
-              : "A department belongs to one branch; its name only has to be unique within that branch."}
+              : "A department belongs to one branch and is for staff or for production employees; its name only has to be unique within that branch and type."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-1">
+          <div className="space-y-1.5">
+            <Label>
+              Type <span className="text-red-500">*</span>
+            </Label>
+            <KindPicker value={category} onChange={setCategory} disabled={!!lock} testId="department-category" />
+            {lock ? (
+              <p className="flex items-start gap-1.5 text-xs text-gray-500" data-testid="department-category-lock">
+                <Lock size={12} className="mt-0.5 shrink-0" />
+                {lock}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Only {category === "production" ? "production employees" : "staff"} can be put in it.
+                {editing &&
+                  department.designationCount > 0 &&
+                  category !== orgCategoryOf(department) &&
+                  " Its designations switch with it."}
+              </p>
+            )}
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="dept-name">
               Name <span className="text-red-500">*</span>
             </Label>
             <Input
               id="dept-name"
-              placeholder="e.g. Production"
+              placeholder={category === "production" ? "e.g. Cutting" : "e.g. Accounts"}
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submit()}

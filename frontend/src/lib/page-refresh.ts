@@ -26,6 +26,7 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/attendance/production",
   "/hr/attendance/search",
   "/hr/attendance/report-log",
+  "/hr/attendance/production-report-log",
   "/hr/promotion",
   "/hr/increment",
   "/hr/bonus",

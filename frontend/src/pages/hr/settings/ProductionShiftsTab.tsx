@@ -46,10 +46,12 @@ import {
 import { GroupsSection } from "./production-shifts/GroupsSection";
 import { TryItSection } from "./production-shifts/TryItSection";
 import { StaffShiftsPage } from "./production-shifts/StaffPage";
+import { SummarySection } from "./production-shifts/SummarySection";
 import { RulesStrip } from "./production-shifts/ui";
 import { WhenSection } from "./production-shifts/WhenSection";
 
 const CONTENTS = [
+  { id: "production-shifts-glance", label: "At a glance" },
   { id: "production-shifts-when", label: "When it applies" },
   { id: "production-shifts-groups", label: "Shift groups" },
   { id: "production-shifts-breaks", label: "Breaks" },
@@ -101,7 +103,8 @@ function stamp(iso: string): string {
  * page that holds the rules).
  *
  * Production (production employees only): how a production day's punches become shifts earned. The default timings are the
- * factory's own (Day from 8:30, Night from 9:00 PM, Sunday, the breaks, a 5-minute grace) and all of it is editable. One form
+ * factory's own (Day from 8:30, Night from 9:00 PM, Sunday, the breaks, a 5-minute grace) and all of it is editable. It opens
+ * with every shift at a glance (From / To, the first-punch window, what the day pays, a 24-hour bar, the breaks). One form
  * with one Save: the switch and the date the rules start, the grace, the shift groups with their ladders, the breaks and four
  * advanced numbers. A save is all-or-nothing and asks first, because it changes how every production day from the start date
  * is judged (and so what production payroll pays once it is generated again).
@@ -299,6 +302,7 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
         </div>
       )}
 
+      <SummarySection draft={draft} dirty={dirty} readOnly={locked} />
       <WhenSection {...sectionProps} legacy={legacyText(data.legacy)} />
       <GroupsSection {...sectionProps} />
       <BreaksSection {...sectionProps} />

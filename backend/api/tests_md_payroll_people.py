@@ -165,7 +165,9 @@ def staff_slip(
 
 
 def production_slip(emp, ym, start, end, *, shifts, rate, worked, absent, late=None, cycle="biweekly", cleared=False):
-    """A production period slip (payroll_views._generate_production_payroll's shape) and its Payroll row."""
+    """A production period slip (payroll_views._generate_production_payroll's shape) and its Payroll row. `cleared`: HR's
+    Cleared AND paid by the pay period's Mark as Paid (2026-11-16; what migration 0151 made of every production payroll
+    Cleared before the period workflow)."""
     gross = D(shifts) * D(rate)
     ded = D(late or 0)
     span = (end - start).days + 1
@@ -212,6 +214,8 @@ def production_slip(emp, ym, start, end, *, shifts, rate, worked, absent, late=N
         period_start=start,
         period_end=end,
         pay_cycle=cycle,
+        payment_status="paid" if cleared else "not_paid",
+        payment_paid_at=datetime(end.year, end.month, end.day, 12, tzinfo=FACTORY_TZ) if cleared else None,
     )
 
 

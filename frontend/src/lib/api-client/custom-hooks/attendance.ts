@@ -757,6 +757,18 @@ export const useSyncStatusLive = () =>
     refetchInterval: 30_000,
   });
 
+/**
+ * Whose Report Log a request is for: the staff Report Log (/api/attendance/report-log) or the Production Report Log
+ * (/api/attendance/production-report-log, owner 2026-11-16). Same answers, production employees only; its own addresses so
+ * a role can be given one page and not the other. Every hook below takes it last and defaults to staff, so a staff caller
+ * (and its cache keys) is exactly as before.
+ */
+export type ReportLogKind = "staff" | "production";
+
+/** The base address of a kind's Report Log. */
+export const reportLogBase = (kind: ReportLogKind = "staff") =>
+  kind === "production" ? "/api/attendance/production-report-log" : "/api/attendance/report-log";
+
 export type ReportLogSummaryParams = {
   month: number;
   year: number;
@@ -778,26 +790,34 @@ const reportLogQueryString = (params: Record<string, string | number | undefined
   return qs.toString();
 };
 
-export const getReportLogSummaryQueryKey = (params: ReportLogSummaryParams) =>
-  ["/api/attendance/report-log", "summary", params] as const;
+export const getReportLogSummaryQueryKey = (params: ReportLogSummaryParams, kind: ReportLogKind = "staff") =>
+  [reportLogBase(kind), "summary", params] as const;
 
 // Mode A -one row per employee for the month, optionally narrowed by
 // department and/or an employee code/name search.
-export const useAttendanceReportSummary = (params: ReportLogSummaryParams, enabled = true) =>
+export const useAttendanceReportSummary = (
+  params: ReportLogSummaryParams,
+  enabled = true,
+  kind: ReportLogKind = "staff",
+) =>
   useQuery<ReportLogSummaryResponse>({
-    queryKey: getReportLogSummaryQueryKey(params),
-    queryFn: () => customFetch<ReportLogSummaryResponse>(`/api/attendance/report-log?${reportLogQueryString(params)}`),
+    queryKey: getReportLogSummaryQueryKey(params, kind),
+    queryFn: () => customFetch<ReportLogSummaryResponse>(`${reportLogBase(kind)}?${reportLogQueryString(params)}`),
     enabled,
   });
 
-export const getReportLogDetailQueryKey = (params: ReportLogDetailParams) =>
-  ["/api/attendance/report-log", "detail", params] as const;
+export const getReportLogDetailQueryKey = (params: ReportLogDetailParams, kind: ReportLogKind = "staff") =>
+  [reportLogBase(kind), "detail", params] as const;
 
 // Mode B -one employee's full day-by-day month.
-export const useAttendanceReportDetail = (params: ReportLogDetailParams, enabled = true) =>
+export const useAttendanceReportDetail = (
+  params: ReportLogDetailParams,
+  enabled = true,
+  kind: ReportLogKind = "staff",
+) =>
   useQuery<ReportLogDetailResponse>({
-    queryKey: getReportLogDetailQueryKey(params),
-    queryFn: () => customFetch<ReportLogDetailResponse>(`/api/attendance/report-log?${reportLogQueryString(params)}`),
+    queryKey: getReportLogDetailQueryKey(params, kind),
+    queryFn: () => customFetch<ReportLogDetailResponse>(`${reportLogBase(kind)}?${reportLogQueryString(params)}`),
     enabled,
   });
 
@@ -851,31 +871,37 @@ export type ReportLogDailyParams = {
   search?: string;
 };
 
-export const getReportLogDailyQueryKey = (params: ReportLogDailyParams) =>
-  ["/api/attendance/report-log", "daily", params] as const;
+export const getReportLogDailyQueryKey = (params: ReportLogDailyParams, kind: ReportLogKind = "staff") =>
+  [reportLogBase(kind), "daily", params] as const;
 
-export const useAttendanceReportDaily = (params: ReportLogDailyParams, enabled = true) => {
-  const queryKey = getReportLogDailyQueryKey(params);
+export const useAttendanceReportDaily = (
+  params: ReportLogDailyParams,
+  enabled = true,
+  kind: ReportLogKind = "staff",
+) => {
+  const queryKey = getReportLogDailyQueryKey(params, kind);
   return useQuery<ReportLogDailyResponse>({
     queryKey,
     queryFn: ({ signal }) =>
-      customFetch<ReportLogDailyResponse>(`/api/attendance/report-log?${reportLogQueryString(params)}`, { signal }),
+      customFetch<ReportLogDailyResponse>(`${reportLogBase(kind)}?${reportLogQueryString(params)}`, { signal }),
     // a new search keeps the list on screen until its rows arrive; a new date or department shows the loader
     placeholderData: keepPreviousWhileSearching(queryKey),
     enabled,
   });
 };
 
-export const useSetDayInformed = () => {
+export const useSetDayInformed = (kind: ReportLogKind = "staff") => {
   const queryClient = useQueryClient();
+  // the staff call keeps its old address (it accepts any employee); the production one marks production employees only
+  const url = kind === "production" ? `${reportLogBase(kind)}/day-informed` : "/api/attendance/day-informed";
   return useMutation({
     mutationFn: ({ employeeId, date, isInformed }: { employeeId: number; date: string; isInformed: boolean | null }) =>
-      customFetch<{ employeeId: number; date: string; isInformed: boolean | null }>("/api/attendance/day-informed", {
+      customFetch<{ employeeId: number; date: string; isInformed: boolean | null }>(url, {
         method: "PATCH",
         body: JSON.stringify({ employeeId, date, isInformed }),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/attendance/report-log", "daily"] });
+      queryClient.invalidateQueries({ queryKey: [reportLogBase(kind), "daily"] });
     },
   });
 };
@@ -929,30 +955,52 @@ export type AttendanceSheetEmployeeRow = {
   summary: AttendanceSheetEmployeeSummary;
 };
 
+/** The pay period a production register was asked for by pay cycle (the same grid production payroll uses). */
+export type AttendanceSheetPeriod = {
+  cycle: "weekly" | "biweekly" | "monthly";
+  label: string;
+  days: number;
+  periodStart: string;
+  periodEnd: string;
+  /** Active production workers on each cycle (the register's tabs show them). */
+  cycleCounts?: Record<"weekly" | "biweekly" | "monthly", number>;
+};
+
 export type AttendanceSheetResponse = {
   dateFrom: string;
   dateTo: string;
   dates: string[];
   employees: AttendanceSheetEmployeeRow[];
   strength: number[];
+  /** Only when asked by `payCycle` (Production Report Log). */
+  period?: AttendanceSheetPeriod;
 };
 
 export type AttendanceSheetParams = {
-  dateFrom: string;
-  dateTo: string;
+  /** A plain range (at most 31 days)... */
+  dateFrom?: string;
+  dateTo?: string;
+  /** ...or, on the Production Report Log, a pay cycle: the server works out its pay period holding `around` (today
+   *  when left out) and lists only the workers on that cycle ("auto": the cycle with the most workers). */
+  payCycle?: "weekly" | "biweekly" | "monthly" | "auto";
+  around?: string;
   department?: number;
   search?: string;
 };
 
-export const getAttendanceSheetQueryKey = (params: AttendanceSheetParams) =>
-  ["/api/attendance/report-log/sheet", params] as const;
+export const getAttendanceSheetQueryKey = (params: AttendanceSheetParams, kind: ReportLogKind = "staff") =>
+  [`${reportLogBase(kind)}/sheet`, params] as const;
 
-export const useAttendanceReportSheet = (params: AttendanceSheetParams, enabled = true) => {
-  const queryKey = getAttendanceSheetQueryKey(params);
+export const useAttendanceReportSheet = (
+  params: AttendanceSheetParams,
+  enabled = true,
+  kind: ReportLogKind = "staff",
+) => {
+  const queryKey = getAttendanceSheetQueryKey(params, kind);
   return useQuery<AttendanceSheetResponse>({
     queryKey,
     queryFn: ({ signal }) =>
-      customFetch<AttendanceSheetResponse>(`/api/attendance/report-log/sheet?${reportLogQueryString(params)}`, {
+      customFetch<AttendanceSheetResponse>(`${reportLogBase(kind)}/sheet?${reportLogQueryString(params)}`, {
         signal,
       }),
     // a new search keeps the grid on screen until its rows arrive; a new range or department shows the loader
@@ -960,6 +1008,79 @@ export const useAttendanceReportSheet = (params: AttendanceSheetParams, enabled 
     enabled,
   });
 };
+
+/** One punch of a day, as the Report Log register's day card lists it. */
+export type ReportLogDayPunch = {
+  /** "HH:MM:SS", local. */
+  time: string;
+  /** By order: the first IN, the next OUT, and so on. */
+  type: "IN" | "OUT";
+  source: string;
+  sourceLabel: string;
+  /** A production night shift's closing punch made after midnight (it belongs to the shift day it began on). */
+  nextDay?: boolean;
+};
+
+/** What the engine flagged on the day (late, early out, permissions, compensation ...). */
+export type ReportLogDayDetection = {
+  key: string;
+  label: string;
+  detail: string | null;
+  tone: "bad" | "warn" | "good" | "info";
+};
+
+/** One line of the earned-shift breakdown: a base (Full / Half day), a minus / plus, a worked pair, or a note. */
+export type ReportLogEarnedStep = {
+  label: string;
+  /** "1.00", "-0.25", "+0.50" */
+  shifts: string;
+  kind: "base" | "minus" | "plus" | "pair" | "note";
+  pair?: number;
+};
+
+export type ReportLogDayPunches = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  date: string;
+  count: number;
+  punches: ReportLogDayPunch[];
+  /** The shift the day was judged against (a production shift group, or the employee's shift); null: none. */
+  shift?: {
+    name: string;
+    source: "production_rules" | "shift";
+    start: string | null;
+    end: string | null;
+    endNextDay: boolean;
+    graceMinutes: number;
+  } | null;
+  /** How the day's shift credit was earned, adding up to the stored credit payroll reads. */
+  earned?: {
+    method: "staff" | "production_rules" | "production_legacy" | "manual";
+    steps: ReportLogEarnedStep[];
+    total: string;
+    note: string | null;
+  };
+  detections?: ReportLogDayDetection[];
+  status?: string;
+};
+
+/** Every punch of one employee's day (the register's day card asks only when a day is opened). */
+export const useReportLogDayPunches = (
+  employeeId: number,
+  date: string,
+  kind: ReportLogKind = "staff",
+  enabled = true,
+) =>
+  useQuery<ReportLogDayPunches>({
+    queryKey: [reportLogBase(kind), "day-punches", employeeId, date],
+    queryFn: ({ signal }) =>
+      customFetch<ReportLogDayPunches>(`${reportLogBase(kind)}/day-punches?employeeId=${employeeId}&date=${date}`, {
+        signal,
+      }),
+    enabled,
+    staleTime: 30_000,
+  });
 
 export type AttendanceSearchPunch = {
   time: string;

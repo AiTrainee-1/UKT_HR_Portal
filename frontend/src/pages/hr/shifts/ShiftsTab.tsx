@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Factory, Info, Plus, RefreshCw, TriangleAlert } from "lucide-react";
+import { Factory, Info, Plus, TriangleAlert } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,16 +16,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import {
+  useProductionShifts,
   useRemoveShiftTemplate,
   useSaveShiftTemplate,
-  useSyncProductionShifts,
   type ShiftItem,
   type ShiftType,
 } from "@/lib/api-client/custom-hooks";
-import { Gate } from "@/lib/tab-access";
-import { useQueryClient } from "@tanstack/react-query";
 import { TypeChips } from "./AssignmentsTab";
-import ProductionRulesSummary from "./ProductionRulesSummary";
+import ProductionShiftsPanel from "./production/ProductionShiftsPanel";
 import ShiftCard from "./ShiftCard";
 import { pluralize, type TypeFilter } from "./shift-logic";
 
@@ -47,6 +45,10 @@ function Note({ tone, children }: { tone: "blue" | "green" | "amber"; children: 
  * The shift templates. A shift can be edited, disabled (it keeps its people and history but cannot be given to anyone
  * new) or deleted (only while nobody has ever been on it: deleting a shift would erase the shift attendance and payroll
  * used for the days people worked it).
+ *
+ * Production (owner 2026-11-16) is not templates any more: the default production shifts are the groups of Settings ->
+ * Production Shifts and special shifts are made here (ProductionShiftsPanel). `shifts` are the staff templates; the old
+ * Production Shift template is retired (kept in the database for the days before the rules started).
  */
 export default function ShiftsTab({
   shifts,
@@ -64,22 +66,20 @@ export default function ShiftsTab({
   onViewPeople: (s: ShiftItem) => void;
 }) {
   const { toast } = useToast();
-  const queryClient = useQueryClient();
   const save = useSaveShiftTemplate();
   const remove = useRemoveShiftTemplate();
-  const sync = useSyncProductionShifts();
+  const production = useProductionShifts();
   const [type, setType] = useState<TypeFilter>("all");
   const [deleting, setDeleting] = useState<ShiftItem | null>(null);
 
-  const counts: Record<TypeFilter, number> = useMemo(
-    () => ({
-      all: shifts.length,
-      staff: shifts.filter((s) => s.shiftType === "staff").length,
-      production: shifts.filter((s) => s.shiftType === "production").length,
-    }),
-    [shifts],
-  );
-  const list = shifts.filter((s) => type === "all" || s.shiftType === type);
+  const staffShifts = useMemo(() => shifts.filter((s) => s.shiftType === "staff"), [shifts]);
+  const productionCount = (production.data?.defaults.length ?? 0) + (production.data?.special.length ?? 0);
+  const counts: Record<TypeFilter, number> = {
+    all: staffShifts.length + productionCount,
+    staff: staffShifts.length,
+    production: productionCount,
+  };
+  const list = type === "production" ? [] : staffShifts;
 
   const toggleActive = async (s: ShiftItem) => {
     try {
@@ -110,22 +110,6 @@ export default function ShiftsTab({
     }
   };
 
-  const syncProduction = async () => {
-    try {
-      const res = await sync.mutateAsync();
-      toast({
-        title:
-          res.synced === 0
-            ? "Every production employee already has a shift"
-            : `${pluralize(res.synced, "production employee")} given a shift`,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["/api/shift-assignments"] });
-      await queryClient.invalidateQueries({ queryKey: ["/api/shifts"] });
-    } catch {
-      toast({ title: "Sync failed", variant: "destructive" });
-    }
-  };
-
   const inUse = (deleting?.assignedCount ?? 0) > 0;
 
   return (
@@ -134,31 +118,6 @@ export default function ShiftsTab({
         <TypeChips value={type} onChange={setType} counts={counts} />
       </div>
 
-      {(type === "production" || (type === "all" && counts.production > 0)) && (
-        <div className="space-y-3">
-          <Note tone="blue">
-            <b>Production shift: the same for every production employee.</b> They share one shift, whatever their
-            gender, and the shifts they earn each day come from the production shift rules in Settings. New production
-            employees are assigned automatically when they are added.{" "}
-            <Gate k="shifts.sync_production">
-              <button
-                type="button"
-                onClick={() => void syncProduction()}
-                disabled={sync.isPending || counts.production === 0}
-                className="ml-1 inline-flex items-center gap-1 font-semibold underline underline-offset-2 disabled:opacity-50"
-                data-testid="sync-production"
-              >
-                <RefreshCw size={11} className={sync.isPending ? "animate-spin" : ""} />
-                {sync.isPending ? "Syncing…" : "Assign any without a shift"}
-              </button>
-            </Gate>
-          </Note>
-          <Note tone="amber">
-            Production employees are paid <b>bi-weekly</b>: pay = total shifts earned × salary per shift. Sunday is a
-            normal working day.
-          </Note>
-        </div>
-      )}
       {type === "staff" && (
         <Note tone="green">
           Staff employees are paid <b>monthly</b>. A staff shift can go to individual employees, whole departments or
@@ -166,9 +125,7 @@ export default function ShiftsTab({
         </Note>
       )}
 
-      {type === "production" && <ProductionRulesSummary />}
-
-      {loading ? (
+      {type === "production" ? null : loading ? (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
           {[0, 1, 2, 3].map((i) => (
             <Skeleton key={i} className="h-52 rounded-2xl" />
@@ -179,11 +136,11 @@ export default function ShiftsTab({
           <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-500">
             <Factory size={22} />
           </span>
-          <p className="font-semibold text-gray-700">No {type === "all" ? "" : `${type} `}shifts yet</p>
+          <p className="font-semibold text-gray-700">No staff shifts yet</p>
           <p className="mt-1 text-sm text-muted-foreground">
             A shift is a set of working hours. Create one, then assign people to it.
           </p>
-          <Button className="mt-4 gap-2" onClick={() => onCreate(type === "production" ? "production" : "staff")}>
+          <Button className="mt-4 gap-2" onClick={() => onCreate("staff")}>
             <Plus size={14} /> New Shift
           </Button>
         </Card>
@@ -200,6 +157,13 @@ export default function ShiftsTab({
               onViewPeople={() => onViewPeople(s)}
             />
           ))}
+        </div>
+      )}
+
+      {/* production: the Settings shifts and the special shifts (on All, after the staff shifts) */}
+      {(type === "production" || (type === "all" && productionCount > 0)) && (
+        <div className={type === "all" ? "space-y-2 border-t pt-4" : undefined}>
+          <ProductionShiftsPanel />
         </div>
       )}
 

@@ -54,13 +54,22 @@ class Department(models.Model):
         Branch, on_delete=models.SET_NULL, null=True, blank=True,
         db_column="branch_id", related_name="departments"
     )
+    # Staff and production employees have departments of their own (owner, 2026-11-16): a department is one or the
+    # other, and only employees of that type belong in it. The same name may exist once per branch AND category (a
+    # Unit1 CUTTING for staff and one for production).
+    CATEGORY_STAFF = "staff"
+    CATEGORY_PRODUCTION = "production"
+    CATEGORY_CHOICES = [(CATEGORY_STAFF, "Staff"), (CATEGORY_PRODUCTION, "Production")]
+    category = models.TextField(
+        choices=CATEGORY_CHOICES, default=CATEGORY_STAFF, db_default=CATEGORY_STAFF, db_column="category"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "departments"
         constraints = [
             models.UniqueConstraint(
-                fields=["name", "branch"], name="uniq_department_name_per_branch",
+                fields=["name", "branch", "category"], name="uniq_department_name_per_branch_category",
             ),
         ]
 
@@ -72,6 +81,14 @@ class Designation(models.Model):
         db_column="department_id", related_name="designations"
     )
     level = models.TextField(default="staff")  # junior/mid/senior/manager/executive
+    # Staff or production job title (owner, 2026-11-16), as its department (Department.category); a designation with no
+    # department keeps its own. Not the same thing as `level` above, whose old default happens to be the word "staff".
+    category = models.TextField(
+        choices=Department.CATEGORY_CHOICES,
+        default=Department.CATEGORY_STAFF,
+        db_default=Department.CATEGORY_STAFF,
+        db_column="category",
+    )
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:

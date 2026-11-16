@@ -209,18 +209,32 @@ describe("the next period to generate", () => {
     expect(formatPeriod(next("biweekly", MON, null).period)).toBe("16 Feb - 1 Mar 2026");
     expect(formatPeriod(next("monthly", MON, null).period)).toBe("2 Feb - 1 Mar 2026");
     const weekly = next("weekly", MON, null);
-    expect([weekly.ended, weekly.overlap, weekly.generateFrom]).toEqual([true, null, day("2026-03-08")]);
+    // it can be generated from the day after its last day
+    expect([weekly.ended, weekly.overlap, weekly.generateFrom]).toEqual([true, null, day("2026-03-09")]);
     expect(weekly.then.map(formatPeriod)).toEqual(["9 Mar - 15 Mar 2026", "16 Mar - 22 Mar 2026"]);
   });
 
-  it("when today is the last day of a period, that period is offered", () => {
-    expect(formatPeriod(next("weekly", MON, null, day("2026-03-08")).period)).toBe("2 Mar - 8 Mar 2026");
+  it("on the last day of a period the one before it is offered: a period ends only the day after its last day", () => {
+    // as the engine since 2026-11-16 (production_period.py period_ended): the last day's night shifts are not complete
+    expect(formatPeriod(next("weekly", MON, null, day("2026-03-08")).period)).toBe("23 Feb - 1 Mar 2026");
+    expect(formatPeriod(next("weekly", MON, null, day("2026-03-09")).period)).toBe("2 Mar - 8 Mar 2026");
+  });
+
+  it("keeps the latest generated period as the next one while it is still open (Payroll Done not pressed)", () => {
+    const open = { start: day("2026-03-02"), end: day("2026-03-08") };
+    const r = nextCyclePeriod("weekly", MON, open.end, TODAY, open);
+    if ("error" in r) throw new Error(r.error);
+    expect([formatPeriod(r.period), r.stillOpen, r.overlap]).toEqual(["2 Mar - 8 Mar 2026", true, null]);
+    // a generated period that is no longer one of the cycle's periods (the week start changed) is passed over
+    const moved = nextCyclePeriod("weekly", SUN, open.end, TODAY, open);
+    if ("error" in moved) throw new Error(moved.error);
+    expect([formatPeriod(moved.period), moved.stillOpen]).toEqual(["8 Mar - 14 Mar 2026", false]);
   });
 
   it("after a generated period the next one follows it, even when it has not ended", () => {
     const r = next("weekly", MON, "2026-03-08");
     expect(formatPeriod(r.period)).toBe("9 Mar - 15 Mar 2026");
-    expect([r.ended, r.overlap, r.generateFrom]).toEqual([false, null, day("2026-03-15")]);
+    expect([r.ended, r.overlap, r.generateFrom, r.stillOpen]).toEqual([false, null, day("2026-03-16"), false]);
     expect(next("biweekly", MON, "2026-02-15").then.map(formatPeriod)).toEqual([
       "2 Mar - 15 Mar 2026",
       "16 Mar - 29 Mar 2026",

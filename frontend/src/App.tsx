@@ -84,6 +84,7 @@ const ResumeScreening = lazy(() => import("@/pages/hr/recruitment/ResumeScreenin
 const Documents = lazy(() => import("@/pages/hr/recruitment/Documents"));
 const Attendance = lazy(() => import("@/pages/hr/Attendance"));
 const AttendanceReportLog = lazy(() => import("@/pages/hr/AttendanceReportLog"));
+const ProductionReportLog = lazy(() => import("@/pages/hr/ProductionReportLog"));
 const OutpassVisitors = lazy(() => import("@/pages/hr/OutpassVisitors"));
 const Departments = lazy(() => import("@/pages/hr/Departments"));
 const Designations = lazy(() => import("@/pages/hr/Designations"));
@@ -338,6 +339,9 @@ function Router() {
         <Route path="/hr/branches">{() => <ProtectedRoute component={Branches} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/attendance/report-log">
           {() => <ProtectedRoute component={AttendanceReportLog} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/attendance/production-report-log">
+          {() => <ProtectedRoute component={ProductionReportLog} allowedRoles={["hr"]} />}
         </Route>
         <Route path="/hr/outpass-visitors/outpass/*?">
           {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}

@@ -178,6 +178,9 @@ def scope_payrolls(request: Request, scope: Scope):
         qs = qs.filter(
             salary_mode=Payroll.SALARY_MODE_SHIFT, period_start=scope.period_start, period_end=scope.period_end
         ).filter(Q(pay_cycle=scope.cycle) | Q(pay_cycle__isnull=True, employee__production_pay_cycle=scope.cycle))
+        # a worker parked in the period's New Joiners (joined during it, or moved here from another cycle) is not in the
+        # payroll until HR adds them (owner 2026-11-16): not on the statement, the issues or the rules, as on staff
+        qs = qs.filter(new_joiner_parked=False)
     qs = scope_to_branch(qs, request, field="employee__branch_id")
     # active employees only (owner 2026-11-10): the issues, rules and Salary Statement of the payroll pages never list a
     # deactivated employee's payroll, as the Payroll list and the exports do not

@@ -28,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import { useToast } from "@/hooks/use-toast";
 import { useCreatePromotion } from "@/lib/api-client/custom-hooks";
+import { ORG_CATEGORY_LABEL, categoryForEmploymentType, inCategory } from "@/lib/departments";
 import { cn } from "@/lib/utils";
 import { formatDate, tenureLabel } from "../career/dates";
 import { Chip, EmptyState, PersonCell } from "../career/parts";
@@ -42,8 +43,8 @@ import {
 } from "./logic";
 import Timeline from "./Timeline";
 
-type Designation = { id: number; title: string; departmentName?: string | null };
-type Department = { id: number; name: string };
+type Designation = { id: number; title: string; departmentName?: string | null; category?: string | null };
+type Department = { id: number; name: string; category?: string | null };
 
 const KEEP = "keep";
 
@@ -215,13 +216,18 @@ function PromoteForm({
   const check = checkPromotion(employee, { newDesignationId, newDepartmentId, effectiveDate }, today, lastPromotion);
   const chosenDesignation = designations.find((d) => String(d.id) === newDesignationId);
   const chosenDepartment = departments.find((d) => String(d.id) === newDepartmentId);
+  // Staff and production have departments and designations of their own (lib/departments.ts): only the employee's
+  // kind is offered (a production worker is promoted within Production).
+  const kind = categoryForEmploymentType(employee.employmentType) ?? "staff";
   const sortedDesignations = useMemo(
-    () => [...designations].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" })),
-    [designations],
+    () =>
+      inCategory(designations, kind).sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" })),
+    [designations, kind],
   );
   const sortedDepartments = useMemo(
-    () => [...departments].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
-    [departments],
+    () =>
+      inCategory(departments, kind).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
+    [departments, kind],
   );
   const untouched = newDesignationId === "" && newDepartmentId === "";
 
@@ -255,7 +261,7 @@ function PromoteForm({
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="promo-designation" className="text-xs">
-              New designation
+              New designation <span className="font-normal text-gray-500">({ORG_CATEGORY_LABEL[kind]})</span>
             </Label>
             <Select value={newDesignationId || KEEP} onValueChange={(v) => setNewDesignationId(v === KEEP ? "" : v)}>
               <SelectTrigger id="promo-designation" className="h-10 bg-white" data-testid="promo-designation">
@@ -274,7 +280,7 @@ function PromoteForm({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="promo-department" className="text-xs">
-              New department
+              New department <span className="font-normal text-gray-500">({ORG_CATEGORY_LABEL[kind]})</span>
             </Label>
             <Select value={newDepartmentId || KEEP} onValueChange={(v) => setNewDepartmentId(v === KEEP ? "" : v)}>
               <SelectTrigger id="promo-department" className="h-10 bg-white" data-testid="promo-department">

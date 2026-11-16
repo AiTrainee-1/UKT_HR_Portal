@@ -345,7 +345,7 @@ def _punches_run(ctx) -> ReportResult:
                 stored, is_late, is_early = manual_e[day]
                 shifts, group_label, note = float(stored or 0), MANUAL_SHIFT, MANUAL_NOTE
             else:
-                result = production_day_result(day, by_secs, config, segments, ruleset, set(manual_e))
+                result = production_day_result(day, by_secs, config, segments, ruleset, set(manual_e), e.id)
                 shifts = float(result.get("shifts_earned") or 0)
                 is_late, is_early = bool(result.get("is_late")), bool(result.get("early_leave"))
                 group_label = result.get("rule_group") or LEGACY_SHIFT

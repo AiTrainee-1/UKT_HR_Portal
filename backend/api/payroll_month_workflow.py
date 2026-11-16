@@ -18,6 +18,8 @@ records (and tells the employee) that a salary was paid.
                   payroll" on Skipped. Once added they stay added through every regeneration.
     Payroll Done  finalize(): the month is LOCKED for good. No generate, regenerate, bonus / deduction change, Mark as
                   Cleared, hold or unhold, add to payroll; there is no reopen. The ONE exception: release_and_pay().
+    Unlock        unlock() (owner 2026-11-16): a finalized month in which NOTHING is paid (no Mark as Paid, nobody released and
+                  paid separately) goes back to open, with a reason; same rights as Payroll Done. A paid month stays locked.
     Mark as Paid  mark_paid(): every employee in the main payroll gets payment status Paid with the date, and a phone
                   notification (no amount). The employee apps say Paid only from this status (mobile_pay.py): Cleared
                   (Payroll.status = "paid") is HR's own check and no longer reads as paid to the employee.
@@ -262,6 +264,7 @@ def month_status(request, month: int, year: int) -> dict:
     paid = bool(close and close.paid_at)
     counts = _counts(rows)
     last_day = date(year, month, calendar.monthrange(year, month)[1])
+    unlock_problem = unlock_blocker(month, year, close) if locked else None
     return {
         "month": month,
         "year": year,
@@ -292,7 +295,10 @@ def month_status(request, month: int, year: int) -> dict:
             "releaseAndPay": edit and whole and locked and may_decide(request, "payroll_release"),
             # added 2026-11-11: Mark as Cleared (one row's payroll as paid; staff and production)
             "markCleared": edit and not locked and may_decide(request, "payroll_mark_cleared"),
+            # added 2026-11-16: a finalized month nothing of which is paid, back to open (Payroll Done's rights)
+            "unlock": edit and whole and locked and unlock_problem is None and may_decide(request, "payroll_finalize"),
         },
+        "unlockBlocked": unlock_problem,
     }
 
 
@@ -346,6 +352,55 @@ def finalize(month: int, year: int, actor: str) -> PayrollMonthClose:
             )
     except IntegrityError:
         raise MonthLocked(f"{month_label(month, year)} payroll was already finalized.") from None
+
+
+UNLOCK_PAID = "Paid: locked for good. Once salaries of a month are paid its payroll can never be changed or unlocked."
+UNLOCK_REASON_MIN, UNLOCK_REASON_MAX = 3, 500
+
+
+def unlock_blocker(month: int, year: int, close: PayrollMonthClose | None) -> str | None:
+    """Why the month cannot be unlocked (None: it can): not finalized, or anything in it is paid (the month's Mark as
+    Paid, or a held / new employee released and paid separately)."""
+    if close is None:
+        return f"{month_label(month, year)} payroll is not finalized: there is nothing to unlock."
+    paid = Payroll.objects.filter(
+        salary_mode=Payroll.SALARY_MODE_MONTHLY,
+        month=month,
+        year=year,
+        week_number=None,
+        period_start__isnull=True,
+        payment_status=Payroll.PAYMENT_PAID,
+    ).exists()
+    if close.paid_at is not None or paid:
+        return UNLOCK_PAID
+    return None
+
+
+def unlock_reason(raw) -> str:
+    """The reason HR gives for unlocking: a few words. Raises ValueError."""
+    text = " ".join(str(raw or "").split())
+    if len(text) < UNLOCK_REASON_MIN:
+        raise ValueError("Give a short reason for unlocking (a few words).")
+    return text[:UNLOCK_REASON_MAX]
+
+
+def unlock(month: int, year: int, actor: str, reason: str) -> dict:
+    """Unlock a finalized month nothing of which is paid: it is open again (generate, recompute, adjust, hold, Payroll
+    Done again). Returns what the close said (for the audit log). Raises ValueError."""
+    with transaction.atomic():
+        close = PayrollMonthClose.objects.select_for_update().filter(month=month, year=year).first()
+        problem = unlock_blocker(month, year, close)
+        if problem:
+            raise ValueError(problem)
+        was = {
+            "finalizedAt": _iso(close.finalized_at),
+            "finalizedBy": close.finalized_by or None,
+            "snapshot": close.snapshot or {},
+            "unlockedBy": actor,
+            "reason": reason,
+        }
+        close.delete()
+    return was
 
 
 def mark_paid(month: int, year: int, actor: str) -> tuple[PayrollMonthClose, list[int]]:

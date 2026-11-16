@@ -12,6 +12,7 @@ import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import {
   PAY_CYCLE_INFO,
   useProductionCycles,
+  useProductionPeriodWorkflow,
   useProductionPeriods,
   type CyclePeriod,
   type PayCycle,
@@ -33,6 +34,8 @@ import {
 import { PayrollTab } from "./PayrollTab";
 import { PRODUCTION_PAGE_URL_DEFAULTS } from "./payroll-tab-logic";
 import { PayslipTab } from "./PayslipTab";
+import { periodStateOf } from "./period-workflow";
+import { PeriodStateChip } from "./PeriodStatusButton";
 import { PeriodPicker } from "./PeriodPicker";
 import { SalaryTab } from "./SalaryTab";
 
@@ -115,6 +118,8 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
   };
 
   const showPeriodBar = visibleTabs.length > 0 && tab !== "payslip" && !cycles.isLoading && !needsSetup;
+  // where the chosen pay period stands (Not generated / Generated / Payroll Done / Paid), beside the cycle's name
+  const periodWorkflow = useProductionPeriodWorkflow(cycle, showPeriodBar ? period : null);
 
   let body: ReactNode;
   if (visibleTabs.length === 0) {
@@ -176,6 +181,9 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
               >
                 {info.label}
               </span>
+              {showPeriodBar && periodWorkflow.data && (
+                <PeriodStateChip state={periodStateOf(periodWorkflow.data.state)} testId="pcp-header-state" />
+              )}
             </h2>
             <p className="mt-0.5 text-sm text-muted-foreground">{cycleBlurb(cycle)}</p>
           </div>
@@ -226,11 +234,13 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
 
         {showPeriodBar && (
           <PeriodPicker
+            cycle={cycle}
             periods={periods.data}
             period={period}
             onChange={changePeriod}
             onPickDate={pickDate}
             loading={periods.isLoading}
+            workflow={periodWorkflow.data}
           />
         )}
 

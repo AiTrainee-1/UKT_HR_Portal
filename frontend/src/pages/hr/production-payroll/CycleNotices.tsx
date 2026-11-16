@@ -103,7 +103,19 @@ export function PeriodError({
   );
 }
 
-/** A period that has not ended yet cannot be generated: payroll for it opens on its last day. */
+/** "9 Mar 2026": the day after a period's last day, when it can first be generated. */
+export function dayAfter(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return "the day after its last day";
+  d.setUTCDate(d.getUTCDate() + 1);
+  const next = d.toISOString().slice(0, 10);
+  return formatPeriod({ periodStart: next, periodEnd: next }).split(" - ")[1] ?? next;
+}
+
+/**
+ * A period that has not ended yet cannot be generated (owner 2026-11-16): payroll for it opens the day AFTER its last day,
+ * once the night shifts of that day are complete.
+ */
 export function NotEndedNote({ period }: { period: CyclePeriod }) {
   return (
     <p
@@ -111,7 +123,8 @@ export function NotEndedNote({ period }: { period: CyclePeriod }) {
       data-testid="pcp-not-ended"
     >
       <CalendarClock size={14} className="shrink-0 text-amber-600" />
-      {formatPeriod(period)} has not ended yet: payroll for it can be generated from its last day.
+      {formatPeriod(period)} has not ended yet: payroll for it can be generated from {dayAfter(period.periodEnd)}, once
+      every shift of its last day is complete.
     </p>
   );
 }

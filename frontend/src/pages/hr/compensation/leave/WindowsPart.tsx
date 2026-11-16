@@ -19,6 +19,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useListDepartments } from "@/lib/api-client";
+import { departmentOptions } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import {
   getListBranchesQueryKey,
   useCompensationWindows,
@@ -116,7 +118,9 @@ export function WindowsPart({
   const dateRange = useMemo(() => windowDateRange(serverToday), [serverToday]);
   const check = checkWindow(form, serverToday);
   const branchName = branches?.find((b) => String(b.id) === form.branchId)?.name ?? null;
-  const departmentName = departments?.find((d) => String(d.id) === form.departmentId)?.name ?? null;
+  // A window only ever covers staff (production employees never are), so only Staff departments are offered.
+  const deptOptions = useMemo(() => departmentOptions(departments, { category: "staff" }), [departments]);
+  const departmentName = deptOptions.find((o) => o.value === form.departmentId)?.label ?? null;
   const sentence = windowSentence(form, {
     branch: isBranchScoped ? null : branchName,
     department: departmentName,
@@ -307,11 +311,7 @@ export function WindowsPart({
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value={ANY}>Any department</SelectItem>
-                        {departments?.map((d) => (
-                          <SelectItem key={d.id} value={String(d.id)}>
-                            {d.name}
-                          </SelectItem>
-                        ))}
+                        <OrgSelectItems options={deptOptions} />
                       </SelectContent>
                     </Select>
                   </Field>

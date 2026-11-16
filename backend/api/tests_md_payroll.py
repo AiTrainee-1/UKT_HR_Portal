@@ -116,7 +116,9 @@ def make_slip(
 
     The Payroll row: ``paid`` = HR's Cleared (status "paid"); ``payment_paid`` (a moment) = the payment status Paid that
     Mark as Paid writes; ``on_hold`` / ``parked`` (a new joiner not added to the payroll) / ``released`` ("hold" or
-    "new_joiner": released and paid separately) are the month workflow's flags."""
+    "new_joiner": released and paid separately) are the month workflow's flags. A PRODUCTION slip with ``paid`` is also
+    paid by its pay period's Mark as Paid (2026-11-16: what migration 0151 made of every production payroll Cleared
+    before the period workflow), on ``paid_at`` / ``generated`` when given."""
     gross, ot = D(gross), D(ot)
     deductions = D(pf) + D(esi) + D(tds) + D(adv) + D(late) + D(other)
     production = period is not None
@@ -199,7 +201,7 @@ def make_slip(
         on_hold=on_hold,
         new_joiner_parked=parked,
         released_from=released,
-        payment_status="paid" if payment_paid else "not_paid",
+        payment_status="paid" if payment_paid or (production and paid) else "not_paid",
         payment_paid_at=payment_paid,
     )
     if generated is not None:  # auto_now_add / auto_now cannot be set on create: update() bypasses them
@@ -207,7 +209,15 @@ def make_slip(
         Payroll.objects.filter(pk=payroll.pk).update(updated_at=paid_at or generated)
     elif paid_at is not None:
         Payroll.objects.filter(pk=payroll.pk).update(updated_at=paid_at)
+    if production and paid and payment_paid is None:
+        Payroll.objects.filter(pk=payroll.pk).update(payment_paid_at=paid_at or generated or payroll.updated_at)
     return slip
+
+
+def pay_production(rows, when=None):
+    """A production pay period's Payroll Done + Mark as Paid of these payroll rows (production_period_workflow.mark_paid,
+    2026-11-16), which were Cleared too: payment status Paid on `when`."""
+    return rows.update(status="paid", payment_status="paid", payment_paid_at=when or at(2026, 10, 10))
 
 
 def make_employee(
@@ -871,7 +881,7 @@ class ComponentsTests(ScenarioBase):
         pay = self.api("components", month="2026-09")["payable"]
         self.assertEqual(pay["slips"], 8)  # September is still open: Cleared (S1, S2) is not paid
         near(self, pay["netPay"], 108392.69)
-        Payroll.objects.filter(year=2026, month=9, salary_mode="shift").update(status="paid")  # production: paid
+        pay_production(Payroll.objects.filter(year=2026, month=9, salary_mode="shift"))  # production: paid
         pay = self.api("components", month="2026-09", type="production")["payable"]
         self.assertEqual((pay["slips"], pay["netPay"]), (0, 0.0))
 
@@ -972,7 +982,10 @@ class StatusTests(ScenarioBase):
         Payroll.objects.filter(employee=self.p2, year=2026, month=9).update(status="Paid")
         status = self.api("summary", month="2026-09")["status"]
         self.assertEqual(status["clearedSlips"], 4)  # S1, S2, S3 and P2
-        self.assertEqual(status["paidSlips"], 1)  # only P2: a cleared PRODUCTION slip is paid, a staff one is not
+        # Cleared is verification, never payment: staff, and production since its pay periods have Mark as Paid (2026-11-16)
+        self.assertEqual(status["paidSlips"], 0)
+        pay_production(Payroll.objects.filter(employee=self.p2, year=2026, month=9))
+        self.assertEqual(self.api("summary", month="2026-09")["status"]["paidSlips"], 1)
 
     def test_cleared_staff_salaries_are_verified_not_paid(self):
         for emp in (self.s3, self.s5, self.s6):
@@ -983,7 +996,7 @@ class StatusTests(ScenarioBase):
         near(self, st["unpaidNet"], 87112.69)  # every staff net: 25,440 + 19,807.69 + 17,865 + 15,000 + 9,000
 
     def test_a_production_slip_pairs_with_the_row_of_its_pay_period(self):
-        Payroll.objects.filter(employee=self.p1, period_start=date(2026, 9, 15)).update(status="paid")
+        pay_production(Payroll.objects.filter(employee=self.p1, period_start=date(2026, 9, 15)))
         status = self.api("summary", month="2026-09")["status"]
         self.assertEqual(status["paidSlips"], 1)  # only P1's second period, not both
         self.assertEqual(status["productionState"], "part_paid")
@@ -993,7 +1006,7 @@ class StatusTests(ScenarioBase):
     def test_a_month_is_final_when_paid_and_not_provisional(self):
         close_month(SEP, at(2026, 10, 7, 15), at(2026, 10, 9, 11))
         for emp in (self.p1, self.p2):
-            Payroll.objects.filter(employee=emp, year=2026, month=9).update(status="paid")
+            pay_production(Payroll.objects.filter(employee=emp, year=2026, month=9))
         SalarySlip.objects.filter(employee=self.s3, year=2026, month=9).update(generated_at=at(2026, 10, 2))
         Payroll.objects.filter(employee=self.s3, year=2026, month=9).update(updated_at=at(2026, 10, 2))
         status = self.api("summary", month="2026-09")["status"]
@@ -1068,6 +1081,8 @@ class MonthWorkflowTests(ScenarioBase):
         self.assertNotIn("payroll.payment-pending-2026-09", self.items())
         self.assertEqual(self.items()["payroll.unpaid-2026-09"]["title"], "3 of 8 slips for Sep 2026 are not paid")
         Payroll.objects.filter(year=2026, month=9, salary_mode="shift").update(status="paid")
+        self.assertEqual(self.status()["state"], "part_paid")  # production Cleared: verified, not paid (2026-11-16)
+        pay_production(Payroll.objects.filter(year=2026, month=9, salary_mode="shift"))
         self.assertEqual(self.status()["state"], "paid")
 
     def test_an_open_month_past_the_salary_day_says_it_is_still_open(self):
@@ -1131,14 +1146,16 @@ class MonthWorkflowTests(ScenarioBase):
         self.assertIn("₹17,865 held", item["detail"])
         self.assertIn("₹15,000 for new joiners", item["detail"])
 
-    def test_production_keeps_cleared_as_paid_and_ignores_the_staff_lock(self):
+    def test_production_is_paid_by_its_own_pay_period_and_ignores_the_staff_lock(self):
         close_month(SEP, at(2026, 10, 7, 15))
         Payroll.objects.filter(employee=self.p1, period_start=date(2026, 9, 1)).update(status="paid")
         st = self.status(type="production")
+        # Cleared only: verified, not paid (2026-11-16: production pay periods have their own Mark as Paid)
+        self.assertEqual((st["state"], st["paidSlips"], st["clearedSlips"]), ("generated", 0, 1))
+        pay_production(Payroll.objects.filter(employee=self.p1, period_start=date(2026, 9, 1)), at(2026, 10, 8, 10))
+        st = self.status(type="production")
         self.assertEqual((st["state"], st["paidSlips"], st["staffState"], st["locked"]), ("part_paid", 1, None, False))
-        Payroll.objects.filter(year=2026, month=9, salary_mode="shift").update(
-            status="paid", updated_at=at(2026, 10, 8, 12)
-        )
+        pay_production(Payroll.objects.filter(year=2026, month=9, salary_mode="shift"), at(2026, 10, 8, 12))
         st = self.status(type="production")
         self.assertEqual((st["state"], st["paidAt"], st["clearedSlips"]), ("paid", "2026-10-08T12:00:00", 3))
 
@@ -2213,6 +2230,9 @@ def build_company(n_staff, n_production, branch, dept, desig, *, prefix="B"):
                     status="paid" if ym == AUG else "pending",
                     period_start=start,
                     period_end=end,
+                    # production: Cleared and paid by its pay period's Mark as Paid (2026-11-16)
+                    payment_status="paid" if ym == AUG and not staff else "not_paid",
+                    payment_paid_at=at(2026, 9, 6) if ym == AUG and not staff else None,
                 )
             )
     SalarySlip.objects.bulk_create(slips)
@@ -2466,13 +2486,16 @@ class EngineContractTests(PayrollBase):
         self.assertEqual((st["slips"], st["clearedSlips"], st["paidSlips"], st["state"]), (2, 1, 0, "generated"))
         Payroll.objects.filter(employee=self.worker, month=3, year=2026).update(status="paid")
         st = self.api("summary", month="2026-03")["status"]
-        self.assertEqual((st["paidSlips"], st["state"]), (1, "part_paid"))  # the production slip: Cleared IS paid
+        self.assertEqual((st["paidSlips"], st["state"]), (0, "generated"))  # production Cleared: verified, not paid
+        pay_production(Payroll.objects.filter(employee=self.worker, month=3, year=2026))
+        st = self.api("summary", month="2026-03")["status"]
+        self.assertEqual((st["paidSlips"], st["state"]), (1, "part_paid"))  # paid by its pay period's Mark as Paid
 
     def test_the_status_reads_the_real_month_workflow(self):
         """Payroll Done and Mark as Paid through payroll_month_workflow itself (the functions HR's buttons call)."""
         from . import payroll_month_workflow as wf
 
-        Payroll.objects.filter(employee=self.worker, month=3, year=2026).update(status="paid")
+        pay_production(Payroll.objects.filter(employee=self.worker, month=3, year=2026))
         wf.finalize(3, 2026, "HR")
         st = self.api("summary", month="2026-03", type="staff")["status"]
         self.assertEqual((st["state"], st["locked"], st["paidSlips"]), ("finalized", True, 0))

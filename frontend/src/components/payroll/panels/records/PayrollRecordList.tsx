@@ -40,6 +40,8 @@ export type PayrollRecordListProps = {
   onMarkPaid?: (run: PayrollRunItem) => void;
   /** The row whose "Mark as Cleared" is running. */
   markingId?: number | null;
+  /** Show the payment status (Paid / Not paid) of each row: production pages only (staff's look is unchanged). */
+  showPayment?: boolean;
   /** Shown instead of the list when there are no rows (the page knows whether a filter or no payroll is the reason). */
   empty: ReactNode;
   /** Cards or Table. Leave out to let the list keep it (it starts on Cards); give it to keep it in the address. */
@@ -103,6 +105,7 @@ export function PayrollRecordList({
   onOpenIssues,
   onMarkPaid,
   markingId = null,
+  showPayment = false,
   empty,
   layout: layoutProp,
   onLayoutChange,
@@ -158,6 +161,7 @@ export function PayrollRecordList({
           onOpenIssues={onOpenIssues}
           onMarkPaid={onMarkPaid}
           markingId={markingId}
+          showPayment={showPayment}
         />
       ) : (
         <div className="space-y-3" data-testid="payroll-record-cards">
@@ -178,6 +182,7 @@ export function PayrollRecordList({
                 onOpenIssues={onOpenIssues}
                 onMarkPaid={onMarkPaid}
                 marking={markingId === run.id}
+                showPayment={showPayment}
               />
             );
           })}

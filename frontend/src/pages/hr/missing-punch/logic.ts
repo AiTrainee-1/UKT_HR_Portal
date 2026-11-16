@@ -2,12 +2,19 @@
 // request is the approval pipeline's call (lib/approval-workflow.ts, which mirrors backend/api/approval_workflow.py); nothing
 // here decides that, it only asks.
 
+import { matchesNamedOrgOption } from "@/lib/departments";
 import { ROLE_LABEL, hrCanAct, hrCanReject, stepLabel, waitingText, type ApprovalRole } from "@/lib/approval-workflow";
 import type { MissingPunchItem, MissingPunchSlot } from "@/lib/api-client/custom-hooks";
 import { formatDate, formatDateTime, inDayRange, localDay, type ExportTable } from "../settlement/shared";
 
 /** A request as the list sends it. The branch is an additive field: an older backend does not send it. */
-export type MissingRow = MissingPunchItem & { branch?: string | null; branchId?: number | null };
+/** `employmentType`: the employee's Staff / Production (tells two same-named departments apart); a server that does
+ *  not send it leaves every row Staff for the department filter. */
+export type MissingRow = MissingPunchItem & {
+  branch?: string | null;
+  branchId?: number | null;
+  employmentType?: string | null;
+};
 
 /** The list endpoint returns at most this many requests (newest first). */
 export const LIST_CAP = 300;
@@ -220,7 +227,7 @@ export function filterRows(rows: MissingRow[], f: Filters, ignoreStatus = false)
     if (!ignoreStatus && !statusMatches(r, f.status)) return false;
     if (f.slot !== "all" && (f.slot === "other" ? r.punchSlot !== null : r.punchSlot !== f.slot)) return false;
     if (f.branch !== "all" && (r.branch ?? "") !== f.branch) return false;
-    if (f.department !== "all" && (r.department ?? "") !== f.department) return false;
+    if (!matchesNamedOrgOption(f.department, r.department, r.employmentType)) return false;
     if (!inDayRange(r.date, f.from, f.to)) return false;
     if (words.length === 0) return true;
     const text = searchTextOf(r);

@@ -12,6 +12,8 @@ import {
   awayPeople,
   branchOptions,
   departmentOptions,
+  departmentsOfType,
+  withEmployeeType,
   entriesByDay,
   entryFromCasual,
   entryFromLeave,
@@ -108,6 +110,11 @@ export default function CalendarTab({ leaves, loading, failed, onRetry, today }:
   const holidaysOn = useMemo(() => holidaysByDay(holidays.data ?? [], year, month), [holidays.data, year, month]);
   const branches = useMemo(() => branchOptions(all), [all]);
   const departments = useMemo(() => departmentOptions(all), [all]);
+  // Staff / Production have departments of their own: with an employee type picked only that kind's are offered.
+  const departmentChoices = useMemo(
+    () => departmentsOfType(departments, filters.employeeType),
+    [departments, filters.employeeType],
+  );
   const active = personFiltersActive(filters) || filters.status !== ALL || filters.kind !== ALL;
   const busiest = Math.max(0, ...[...byDay.values()].map((l) => l.length));
   const isThisMonth = year === now.getFullYear() && month === now.getMonth() + 1;
@@ -207,12 +214,12 @@ export default function CalendarTab({ leaves, loading, failed, onRetry, today }:
               onChange={(department) => set({ department })}
               label="Filter by department"
               allLabel="All departments"
-              options={departments}
+              options={departmentChoices}
               testId="cal-filter-department"
             />
             <FilterSelect
               value={filters.employeeType}
-              onChange={(employeeType) => set({ employeeType })}
+              onChange={(employeeType) => setFilters((f) => withEmployeeType(f, employeeType, departments))}
               label="Filter by employee type"
               allLabel="Staff and production"
               options={[

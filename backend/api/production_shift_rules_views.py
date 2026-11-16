@@ -232,9 +232,10 @@ def _load_state(config: ProductionShiftConfig | None = None) -> _State:
     so the old calculation) until somebody saves."""
     if config is None:
         config = ProductionShiftConfig.objects.filter(pk=1).first() or ProductionShiftConfig(pk=1)
-    groups = list(ProductionShiftGroup.objects.order_by("order", "id"))
+    # the DEFAULT groups only: special shifts (Manage Shifts, is_special) are never shown, saved or deleted here
+    groups = list(ProductionShiftGroup.objects.filter(is_special=False).order_by("order", "id"))
     rules_by_group: dict = {}
-    for rule in ProductionShiftRule.objects.order_by("order", "id"):
+    for rule in ProductionShiftRule.objects.filter(group__is_special=False).order_by("order", "id"):
         rules_by_group.setdefault(rule.group_id, []).append(rule)
     breaks = list(ProductionBreak.objects.order_by("order", "id"))
     return _State(config, groups, rules_by_group, breaks)
@@ -252,32 +253,7 @@ def _document(state: _State) -> dict:
         "roundingMode": config.rules_rounding_mode,
         "fullDayValue": Decimal(config.rules_full_day_value).quantize(CENT),
         "nightSessionHours": config.rules_night_session_hours,
-        "groups": [
-            {
-                "id": g.id,
-                "label": g.label,
-                "kind": g.kind,
-                "appliesOn": g.applies_on,
-                "startTime": _hhmm(g.start_time),
-                "firstPunchFrom": _hhmm(g.first_punch_from),
-                "firstPunchTo": _hhmm(g.first_punch_to),
-                "mainOutTime": _hhmm(g.main_out_time),
-                "mainOutNextDay": bool(g.main_out_next_day) if g.main_out_time is not None else False,
-                "enabled": g.enabled,
-                "rules": [
-                    {
-                        "id": r.id,
-                        "label": r.label,
-                        "outTime": _hhmm(r.out_time),
-                        "outNextDay": r.out_next_day,
-                        "shiftValue": Decimal(r.shift_value).quantize(CENT),
-                        "enabled": r.enabled,
-                    }
-                    for r in state.rules_by_group.get(g.id, [])
-                ],
-            }
-            for g in state.groups
-        ],
+        "groups": [group_doc(g, state.rules_by_group.get(g.id, [])) for g in state.groups],
         "breaks": [
             {
                 "id": b.id,
@@ -289,6 +265,49 @@ def _document(state: _State) -> dict:
             for b in state.breaks
         ],
     }
+
+
+def group_doc(g, rules) -> dict:
+    """One group and its ladder as the document has it (shared with the special shifts of Manage Shifts)."""
+    return {
+        "id": g.id,
+        "label": g.label,
+        "kind": g.kind,
+        "appliesOn": g.applies_on,
+        "startTime": _hhmm(g.start_time),
+        "firstPunchFrom": _hhmm(g.first_punch_from),
+        "firstPunchTo": _hhmm(g.first_punch_to),
+        "mainOutTime": _hhmm(g.main_out_time),
+        "mainOutNextDay": bool(g.main_out_next_day) if g.main_out_time is not None else False,
+        "enabled": g.enabled,
+        "rules": [
+            {
+                "id": r.id,
+                "label": r.label,
+                "outTime": _hhmm(r.out_time),
+                "outNextDay": r.out_next_day,
+                "shiftValue": Decimal(r.shift_value).quantize(CENT),
+                "enabled": r.enabled,
+            }
+            for r in rules
+        ],
+    }
+
+
+def special_group_docs() -> list[dict]:
+    """The special shifts (Manage Shifts) as group documents, switched-on or not."""
+    groups = list(ProductionShiftGroup.objects.filter(is_special=True).order_by("order", "id"))
+    rules_by_group: dict = {}
+    for rule in ProductionShiftRule.objects.filter(group__is_special=True).order_by("order", "id"):
+        rules_by_group.setdefault(rule.group_id, []).append(rule)
+    return [group_doc(g, rules_by_group.get(g.id, [])) for g in groups]
+
+
+def validate_special(group: dict, breaks: list, min_credit) -> None:
+    """A special shift checked by the same rules as a default group (its window, departure and ladder against the
+    shared breaks; the minimum credit within its table). It takes part in no first-punch selection, so its window may
+    overlap the default groups'."""
+    _validate({"enabled": False, "breaks": breaks, "groups": [group], "minCredit": min_credit})
 
 
 def _legacy(config: ProductionShiftConfig) -> dict:
@@ -930,6 +949,14 @@ def apply_rules(data: dict, today: date_type | None = None) -> SaveResult:
     proposed["groups"] = _parse_groups(data["groups"], before["groups"]) if "groups" in data else before["groups"]
     proposed["breaks"] = _parse_breaks(data["breaks"], before["breaks"]) if "breaks" in data else before["breaks"]
     _validate(proposed)
+    # the breaks and the minimum credit are shared with the special shifts: a change that would break one is refused
+    for special in special_group_docs():
+        try:
+            validate_special(special, proposed["breaks"], proposed["minCredit"])
+        except SettingsError as exc:
+            raise SettingsError(
+                f"This change would make the special shift {special['label']} (Manage Shifts) invalid: {exc}"
+            ) from exc
 
     if _plain(proposed) == before_plain:
         return SaveResult(False, [], {}, {})

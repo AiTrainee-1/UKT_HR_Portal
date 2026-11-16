@@ -105,7 +105,7 @@ export default function ReportsTab({
           <FilterSelect
             value={url.dept}
             onChange={(v) => setUrl({ dept: v })}
-            options={(f.departments ?? []).map((d) => ({ value: String(d.id), label: d.name }))}
+            options={f.departmentChoices}
             allLabel="All departments"
             label="Filter by department"
             testId="reports-dept"

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +21,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ArrowLeft } from "lucide-react";
+import { ORG_CATEGORY_LABEL, categoryForEmploymentType, departmentOptions, designationOptions } from "@/lib/departments";
+import { OrgNativeOptions } from "@/lib/org-select";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import SalarySplitFields from "@/components/SalarySplitFields";
 import {
@@ -183,6 +185,44 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
   const employmentType = form.watch("employmentType");
   const salaryAmount = form.watch("salaryAmount");
   const splitValues = form.watch("split");
+
+  // Staff and production have departments and designations of their own (lib/departments.ts): only the employee's
+  // kind is offered. Changing the Employment Type drops a department / designation of the other kind, so the save
+  // sends the new kind's (or none): the server refuses a type change that would leave one of the other kind behind.
+  const orgCategory = categoryForEmploymentType(employmentType) ?? "staff";
+  const kindLabel = ORG_CATEGORY_LABEL[orgCategory];
+  const deptOptions = useMemo(
+    () => departmentOptions(departments, { category: orgCategory }),
+    [departments, orgCategory],
+  );
+  const desigOptions = useMemo(
+    () => designationOptions(designations, { category: orgCategory }),
+    [designations, orgCategory],
+  );
+  const shownCategory = useRef(orgCategory);
+  useEffect(() => {
+    if (shownCategory.current === orgCategory || !departments) return;
+    shownCategory.current = orgCategory;
+    const dept = form.getValues("departmentId");
+    if (dept && !deptOptions.some((o) => o.value === dept)) {
+      form.setValue("departmentId", "", { shouldDirty: true });
+      form.setValue("designationId", "", { shouldDirty: true });
+      setSelectedDeptId("");
+      return;
+    }
+    const desig = form.getValues("designationId");
+    if (desig && !desigOptions.some((o) => o.value === desig)) form.setValue("designationId", "", { shouldDirty: true });
+  }, [orgCategory, departments, deptOptions, desigOptions, form]);
+  // What the employee has now but the list does not offer (a department of the other kind kept from before the two
+  // were separated, a designation of another department): still shown, so the select never reads empty while it is set.
+  const unlistedDept = (value: string | undefined) =>
+    value && departments && !deptOptions.some((o) => o.value === value)
+      ? (departments.find((d) => String(d.id) === value)?.name ?? "Current department")
+      : null;
+  const unlistedDesig = (value: string | undefined) =>
+    value && designations && !desigOptions.some((o) => o.value === value)
+      ? (String(employee.designationId ?? "") === value ? employee.designationTitle : null) ?? "Current designation"
+      : null;
 
   // No split on record yet (older employee): the one shown is a suggestion, and saving records it.
   const [splitNotRecorded] = useState(
@@ -370,10 +410,11 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                         className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                         data-testid="input-department"
                       >
-                        <option value="">-Select Department —</option>
-                        {(departments ?? []).map((d) => (
-                          <option key={d.id} value={String(d.id)}>{d.name}</option>
-                        ))}
+                        <option value="">-Select {kindLabel} Department —</option>
+                        {unlistedDept(field.value) && (
+                          <option value={field.value}>{unlistedDept(field.value)} (not a {kindLabel} department)</option>
+                        )}
+                        <OrgNativeOptions options={deptOptions} />
                       </select>
                     </FormControl>
                     <FormMessage />
@@ -388,13 +429,12 @@ function EditEmployeeForm({ empId, employee }: { empId: number; employee: Employ
                         onChange={field.onChange}
                         className="w-full h-9 rounded-md border px-3 text-sm bg-background"
                       >
-                        <option value="">-Select Designation —</option>
-                        {(designations ?? []).map((d) => (
-                          <option key={d.id} value={String(d.id)}>{d.title}</option>
-                        ))}
+                        <option value="">-Select {kindLabel} Designation —</option>
+                        {unlistedDesig(field.value) && <option value={field.value}>{unlistedDesig(field.value)}</option>}
+                        <OrgNativeOptions options={desigOptions} />
                       </select>
                     </FormControl>
-                    {selectedDeptId && (designations ?? []).length === 0 && (
+                    {selectedDeptId && designations && desigOptions.length === 0 && (
                       <p className="text-xs text-muted-foreground mt-1">
                         No designations in this department yet.
                       </p>

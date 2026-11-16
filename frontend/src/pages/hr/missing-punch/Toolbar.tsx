@@ -1,3 +1,5 @@
+import { namedOrgOptions } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { useMemo } from "react";
 import { Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -34,7 +36,16 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
   const set = (patch: Partial<Filters>) => onFilters({ ...filters, ...patch });
   const counts = useMemo(() => statusCounts(rows, filters), [rows, filters]);
   const branches = useMemo(() => distinct(rows.map((r) => r.branch)), [rows]);
-  const departments = useMemo(() => distinct(rows.map((r) => r.department)), [rows]);
+  // Staff and production have departments of their own: both kinds are listed under Staff and Production headings.
+  const departments = useMemo(
+    () =>
+      namedOrgOptions(
+        rows,
+        (r) => r.department,
+        (r) => r.employmentType,
+      ),
+    [rows],
+  );
   const problem = rangeProblem(filters.from, filters.to);
   const sortChanged = sort.key !== DEFAULT_SORT.key || sort.dir !== DEFAULT_SORT.dir;
 
@@ -110,11 +121,7 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All departments</SelectItem>
-            {departments.map((d) => (
-              <SelectItem key={d} value={d}>
-                {d}
-              </SelectItem>
-            ))}
+            <OrgSelectItems options={departments} />
           </SelectContent>
         </Select>
         <div className="flex items-center gap-1.5">

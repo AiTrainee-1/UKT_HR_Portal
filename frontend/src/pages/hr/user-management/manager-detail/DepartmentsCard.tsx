@@ -12,10 +12,18 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useListDepartments } from "@/lib/api-client";
+import {
+  ORG_CATEGORY_LABEL,
+  departmentOptions,
+  hasBothCategories,
+  orgCategoryOf,
+  type OrgDepartment,
+} from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import {
   useAssignDepartmentToManager,
@@ -62,7 +70,14 @@ export default function DepartmentsCard({
   const departments = roster?.departments ?? [];
   const openIds = open ?? initialOpen(departments, null);
   const assignedIds = new Set(departments.map((d) => d.id));
-  const available = allDepartments.filter((d) => !assignedIds.has(d.id));
+  // A HOD may head staff and production departments alike: the picker groups them under Staff / Production, and a
+  // section title says which kind it is when the HOD holds both (two CUTTINGs). lib/departments.ts
+  const available = departmentOptions(allDepartments as OrgDepartment[]).filter((o) => !assignedIds.has(o.id));
+  const kindOf = new Map((allDepartments as OrgDepartment[]).map((d) => [d.id, orgCategoryOf(d)]));
+  const heldKinds = departments.map((d) => ({ category: kindOf.get(d.id) ?? "staff" }));
+  const sayKind = hasBothCategories(heldKinds);
+  const titled = (d: RosterDepartment): RosterDepartment =>
+    sayKind ? { ...d, name: `${d.name} (${ORG_CATEGORY_LABEL[kindOf.get(d.id) ?? "staff"]})` } : d;
 
   // A department that was just added opens and scrolls into view once its people have arrived.
   useEffect(() => {
@@ -166,11 +181,7 @@ export default function DepartmentsCard({
                   <SelectValue placeholder="Choose a department…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {available.map((d) => (
-                    <SelectItem key={d.id} value={String(d.id)}>
-                      {d.name}
-                    </SelectItem>
-                  ))}
+                  <OrgSelectItems options={available} />
                 </SelectContent>
               </Select>
               <Button
@@ -216,7 +227,7 @@ export default function DepartmentsCard({
                 key={d.id}
                 managerId={managerId}
                 managerName={managerName}
-                department={d}
+                department={titled(d)}
                 open={openIds.has(d.id)}
                 onToggle={() => toggle(d.id)}
                 onRemoveDepartment={() => setRemoving(d)}

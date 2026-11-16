@@ -6,6 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableHead } from "@/components/ui/table";
 import EmployeeAvatar from "@/components/EmployeeAvatar";
+import type { OrgCategory, OrgChoice } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { cn } from "@/lib/utils";
 import type { SortDir } from "./common";
 
@@ -181,7 +183,9 @@ export function SearchBox({
   );
 }
 
-export type Option = { value: string; label: string };
+/** A filter choice. A department's / designation's carries its Staff / Production kind: both kinds are then listed
+ *  under Staff and Production headings (lib/departments.ts). */
+export type Option = { value: string; label: string; category?: OrgCategory };
 
 /** A dropdown filter whose first choice ("all") means no filter. */
 export function FilterSelect({
@@ -208,11 +212,15 @@ export function FilterSelect({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="all">{allLabel}</SelectItem>
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
+        {options.length > 0 && options.every((o) => o.category) ? (
+          <OrgSelectItems options={options as OrgChoice[]} />
+        ) : (
+          options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))
+        )}
       </SelectContent>
     </Select>
   );

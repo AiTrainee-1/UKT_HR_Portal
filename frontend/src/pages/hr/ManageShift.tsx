@@ -9,6 +9,7 @@ import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useListEmployeesLite } from "@/lib/api-client";
 import {
   useListShiftAssignments,
+  useProductionShifts,
   useShiftTemplates,
   type ShiftAssignment,
   type ShiftItem,
@@ -105,13 +106,25 @@ export default function ManageShift() {
   const [assign, setAssign] = useState<AssignDialogStart | null>(null);
   const [focusShiftId, setFocusShiftId] = useState<number | null>(null);
 
-  const { data: shifts = [], isLoading } = useShiftTemplates();
-  const { data: assignments = [] } = useListShiftAssignments({ activeOnly: true });
+  const { data: allShifts = [], isLoading } = useShiftTemplates();
+  const { data: allAssignments = [] } = useListShiftAssignments({ activeOnly: true });
   const { data: employees = [] } = useListEmployeesLite({ status: "active" });
+  const { data: production } = useProductionShifts();
+
+  // Production is not templates any more (owner 2026-11-16): the default production shifts are the Settings groups and
+  // every production worker is on them; special shifts are made on the Production filter. The old Production Shift
+  // template (and its assignments) stays in the database for the days before the rules started, but not on this page.
+  const shifts = useMemo(() => allShifts.filter((s) => s.shiftType !== "production"), [allShifts]);
+  const assignments = useMemo(
+    () => allAssignments.filter((a) => a.employmentType !== "production"),
+    [allAssignments],
+  );
+  const productionShifts = (production?.defaults.length ?? 0) + (production?.special.length ?? 0);
+  const productionWorkers = production?.roster.production ?? 0;
 
   const without = useMemo(() => unassignedOf<Person>(employees, assignments).length, [employees, assignments]);
   const unused = shifts.filter((s) => s.isActive && !(s.assignedCount ?? 0)).length;
-  const staff = shifts.filter((s) => s.shiftType === "staff").length;
+  const staff = shifts.length;
 
   const assignShift = (s: ShiftItem) =>
     setAssign({ shiftId: s.id, lockShift: true, includeAll: s.shiftType === "production" });
@@ -163,16 +176,17 @@ export default function ManageShift() {
             testId="stat-shifts"
             icon={<Layers size={18} />}
             tint="bg-blue-50 text-blue-600"
-            value={shifts.length}
+            value={staff + productionShifts}
             label="Shifts"
-            sub={`${staff} staff · ${shifts.length - staff} production`}
+            sub={`${staff} staff · ${productionShifts} production`}
           />
           <StatTile
             testId="stat-assigned"
             icon={<Users size={18} />}
             tint="bg-emerald-50 text-emerald-600"
-            value={assignments.length}
+            value={assignments.length + productionWorkers}
             label="Employees on a shift"
+            sub={productionWorkers ? `${productionWorkers} production on the Settings shifts` : undefined}
             onClick={visibleTabs.includes("assignments") ? () => setTab("assignments") : undefined}
           />
           <StatTile
@@ -213,7 +227,7 @@ export default function ManageShift() {
             <PillTabs
               items={visibleItems(
                 [
-                  { value: "shifts", label: "Shifts", count: shifts.length, icon: <Layers size={13} /> },
+                  { value: "shifts", label: "Shifts", count: staff + productionShifts, icon: <Layers size={13} /> },
                   {
                     value: "assignments",
                     label: (
@@ -222,7 +236,7 @@ export default function ManageShift() {
                         <span className="sm:hidden">Assigned</span>
                       </>
                     ),
-                    count: assignments.length,
+                    count: assignments.length + productionWorkers,
                     icon: <Users size={13} />,
                   },
                   {

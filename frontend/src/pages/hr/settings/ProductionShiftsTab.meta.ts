@@ -4,6 +4,7 @@ import type { ClassView } from "./kit/view";
 /** Section headings, so the blocks and this list cannot drift apart. */
 export const PRODUCTION_SHIFT_SECTIONS = {
   staff: "Staff shifts and grace",
+  glance: "Shift timings at a glance",
   when: "When the production rules apply",
   groups: "Shift groups and what each leaving time earns",
   breaks: "Breaks that are never paid",
@@ -62,7 +63,7 @@ const BLOCKS: Omit<SettingMeta, "tab">[] = [
     section: S.groups,
     title: "Shift groups and their ladders",
     purpose:
-      "A group is one kind of working day: Day (Monday to Saturday), Night and Sunday. A day belongs to the group whose first-punch window holds its first punch. A group's ladder is a list of leaving times and the shifts earned by leaving then. A worker who leaves between two rows earns a share of the difference, worked out by the minute without counting the breaks. Leaving after the last row earns the last row's shifts.",
+      "A group is one kind of working day: Day (Monday to Saturday), Night and Sunday, each with its shift time from a start to an end. A day belongs to the group whose first-punch window holds its first punch. A group's ladder is a list of leaving times and the shifts earned by leaving then. A worker who leaves between two rows earns a share of the difference, worked out by the minute without counting the breaks. Leaving after the last row earns the last row's shifts.",
     keywords: [
       "group",
       "day shift",
@@ -82,6 +83,10 @@ const BLOCKS: Omit<SettingMeta, "tab">[] = [
       "ot",
       "start time",
       "first punch",
+      "end time",
+      "shift time",
+      "from",
+      "to",
       "8:30",
       "9:00 pm",
       "5:30 am",

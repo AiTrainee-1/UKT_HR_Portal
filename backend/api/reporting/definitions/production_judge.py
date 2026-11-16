@@ -44,7 +44,7 @@ class ProductionJudge:
         ruleset = self.ruleset_for(rec.date)
         if ruleset is None:
             return None
-        j = psr.judge_day(ruleset, rec.date, rec.first_punch, rec.last_punch)
+        j = psr.judge_day(ruleset, rec.date, rec.first_punch, rec.last_punch, rec.employee_id)
         return j if j.group is not None else None
 
     def legacy_note(self, d: dt.date) -> str:

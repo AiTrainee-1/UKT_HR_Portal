@@ -16,7 +16,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/use-debounced";
 import {
-  useSearchEmployees, useAssignEmployee, useListEmployeesLite,
+  useSearchEmployees, useAssignOrg, useListEmployeesLite,
   getListEmployeesQueryKey, getListDepartmentsQueryKey,
 } from "@/lib/api-client";
 import { DataPagination } from "@/components/ui/DataPagination";
@@ -38,6 +38,10 @@ import { DataPagination } from "@/components/ui/DataPagination";
  * Both views show department AND designation, whichever page is hosting —
  * when you are setting someone's designation you almost always want their
  * department visible as context.
+ *
+ * With `employmentType` (the Staff / Production switch of the two pages) both
+ * views list only employees of that type, and `options` are that type's
+ * departments / designations: the server refuses any other pairing.
  */
 
 interface Option {
@@ -54,9 +58,12 @@ export function EmployeeAssignmentLookup({
   listSearch,
   onListSearchChange,
   subTabKeys,
+  employmentType,
 }: {
   /** Which assignment this instance manages. */
   kind: "department" | "designation";
+  /** Only employees of this type (the page's Staff / Production switch). */
+  employmentType?: "staff" | "production";
   /** The departments or designations that can be assigned. */
   options: Option[];
   /** The page's own department/designation filter, hosted here so the two
@@ -73,7 +80,7 @@ export function EmployeeAssignmentLookup({
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const assignMutation = useAssignEmployee();
+  const assignMutation = useAssignOrg();
   const { user } = useAuth();
   const [location] = useLocation();
 
@@ -103,12 +110,12 @@ export function EmployeeAssignmentLookup({
   // pause the box reads as "Searching…", never as "no match".
   const debouncedQuery = useDebounced(query);
   const searchPending = query !== debouncedQuery;
-  const { data: results, isFetching } = useSearchEmployees(debouncedQuery);
+  const { data: results, isFetching } = useSearchEmployees(debouncedQuery, true, employmentType);
 
   // Every active employee, so the unassigned set can be derived. Only
   // fetched while that tab is open -it is the whole roster.
   const { data: allEmployees, isLoading: allLoading } = useListEmployeesLite(
-    { status: "active" },
+    employmentType ? { status: "active", employmentType } : { status: "active" },
     { enabled: tab === "unassigned" },
   );
 
@@ -133,8 +140,8 @@ export function EmployeeAssignmentLookup({
     try {
       await assignMutation.mutateAsync(
         kind === "department"
-          ? { id: empId, departmentId: optionId }
-          : { id: empId, designationId: optionId },
+          ? { employeeId: empId, departmentId: optionId }
+          : { employeeId: empId, designationId: optionId },
       );
       // Both lists move: the employee leaves the unassigned set, and the
       // card's count goes up.
@@ -144,14 +151,17 @@ export function EmployeeAssignmentLookup({
         queryClient.invalidateQueries({ queryKey: ["/api/designations"] }),
       ]);
       toast({ title: `${name} assigned` });
-    } catch {
-      toast({ title: "Failed to assign", variant: "destructive" });
+    } catch (e) {
+      // the server says why (a department of the other type, say): "HTTP 400 Bad Request: <why>"
+      const why = e instanceof Error ? /^HTTP \d+ [^:]*: (.+)$/s.exec(e.message)?.[1] : undefined;
+      toast({ title: "Failed to assign", description: why, variant: "destructive" });
     } finally {
       setBusyId(null);
     }
   };
 
   const label = kind === "department" ? "department" : "designation";
+  const people = employmentType === "production" ? "production employee" : employmentType === "staff" ? "staff member" : "employee";
   const typedEnough = query.trim().length >= 2;
   // The last matches stay listed while the next search loads, but never under
   // a box holding fewer than 2 characters.
@@ -254,7 +264,7 @@ export function EmployeeAssignmentLookup({
               <p className="text-xs text-muted-foreground">Searching…</p>
             )}
             {typedEnough && !isFetching && !searchPending && shownResults.length === 0 && (
-              <p className="text-xs text-muted-foreground">No active employee matches “{query}”.</p>
+              <p className="text-xs text-muted-foreground">No active {people} matches “{query}”.</p>
             )}
 
             {shownResults.length > 0 && (
@@ -269,7 +279,7 @@ export function EmployeeAssignmentLookup({
           <>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">
-                Active employees with no {label} yet. Pick one to assign it straight away.
+                Active {people}s with no {label} yet. Pick one to assign it straight away.
               </p>
               <div className="relative w-full sm:w-64">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -302,7 +312,7 @@ export function EmployeeAssignmentLookup({
               <p className="py-6 text-center text-sm text-muted-foreground">
                 {unassignedQuery
                   ? `No unassigned employee matches “${unassignedQuery}”.`
-                  : `Every active employee has a ${label}.`}
+                  : `Every active ${people} has a ${label}.`}
               </p>
             ) : options.length === 0 ? (
               <p className="py-6 text-center text-sm text-amber-700">

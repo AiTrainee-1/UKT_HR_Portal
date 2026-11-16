@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isMutatingControl } from "@/lib/view-only-lock";
 import {
+  ALL,
   NO_BALANCE_FILTERS,
   NO_HOLIDAY_FILTERS,
   NO_LEAVE_FILTERS,
@@ -14,6 +15,7 @@ import {
   daysBetween,
   decidedByLine,
   departmentOptions,
+  departmentsOfType,
   entriesByDay,
   entryFromCasual,
   entryFromLeave,
@@ -52,6 +54,7 @@ import {
   type LeaveRow,
   type PermissionRow,
   type PersonFields,
+  withEmployeeType,
 } from "./logic";
 
 const leave = (over: Partial<LeaveRow> & { id: number }): LeaveRow => ({
@@ -224,11 +227,36 @@ describe("leave requests", () => {
       { value: "2", label: "Unit 2" },
     ]);
     expect(departmentOptions(rows)).toEqual([
-      { value: "1", label: "Cutting" },
-      { value: "2", label: "Stitching" },
+      { value: "1", label: "Cutting", category: "staff" },
+      { value: "2", label: "Stitching", category: "staff" },
     ]);
     // an older backend sends no ids: nothing to filter on, nothing offered
     expect(branchOptions([{ employeeId: 1, employeeName: "A" }])).toEqual([]);
+  });
+
+  it("keeps staff and production departments apart: one kind per employee type, both when it is All", () => {
+    // the split CUTTING of one branch: a Staff department (id 1) and a Production one (id 7)
+    const split: LeaveRow[] = [
+      leave({ id: 1 }),
+      leave({ id: 2, departmentId: 7, employmentType: "production" }),
+      leave({ id: 3, department: "Sewing", departmentId: 8, employmentType: "production" }),
+    ];
+    const all = departmentOptions(split);
+    expect(all).toEqual([
+      { value: "1", label: "Cutting", category: "staff" },
+      { value: "7", label: "Cutting", category: "production" },
+      { value: "8", label: "Sewing", category: "production" },
+    ]);
+    expect(departmentOptions(split, "production").map((o) => o.value)).toEqual(["7", "8"]);
+    expect(departmentOptions(split, "staff").map((o) => o.value)).toEqual(["1"]);
+    expect(departmentsOfType(all, "production").map((o) => o.value)).toEqual(["7", "8"]);
+    expect(departmentsOfType(all, ALL)).toBe(all);
+    // switching the employee type drops a department of the other kind, keeps one of the same kind
+    const picked = { ...NO_LEAVE_FILTERS, department: "1" };
+    expect(withEmployeeType(picked, "production", all)).toMatchObject({ employeeType: "production", department: ALL });
+    expect(withEmployeeType(picked, "staff", all)).toMatchObject({ employeeType: "staff", department: "1" });
+    // and the filter itself tells the two CUTTINGs apart by id
+    expect(filterLeaves(split, { ...NO_LEAVE_FILTERS, department: "7" }).map((l) => l.id)).toEqual([2]);
   });
 
   it("says who decided", () => {

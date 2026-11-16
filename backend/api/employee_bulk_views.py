@@ -27,7 +27,7 @@ import time
 from django.db import transaction
 from django.db.models import Count
 
-from . import salary_split
+from . import org_category, salary_split
 from .audit_utils import build_log_entry, save_log_entries
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
@@ -771,11 +771,15 @@ def _apply_row_updates(
 
     # Department / designation: a name that does not exist yet is created, so the employee ends up with what the
     # sheet says. Matching ignores case and stray spaces; "-", "N/A" and the like mean "none" and are left alone.
+    # Staff and production have departments / designations of their own (org_category.py): a name is looked up among
+    # those of the employee's kind (after the row's Employment Type), so the same name is re-matched when it changes.
+    kind = org_category.category_of_type(emp.employment_type)
     dept_name = cell("Department")
     if not is_blank_name(dept_name):
-        current_dept = emp.department.name if emp.department_id and emp.department else ""
-        if clean_name(dept_name).lower() != clean_name(current_dept).lower():
-            found = org.department(dept_name, target_branch_id, ctx.row)
+        current = emp.department if emp.department_id else None
+        current_dept = current.name if current is not None else ""
+        if clean_name(dept_name).lower() != clean_name(current_dept).lower() or current.category != kind:
+            found = org.department(dept_name, target_branch_id, ctx.row, category=kind)
             if found.problem:
                 warnings.append(f"{found.problem} -kept the current one")
             elif found.obj is not None:
@@ -787,10 +791,11 @@ def _apply_row_updates(
 
     desig_title = cell("Designation")
     if not is_blank_name(desig_title):
-        current_title = emp.designation.title if emp.designation_id and emp.designation else ""
-        if clean_name(desig_title).lower() != clean_name(current_title).lower():
+        current = emp.designation if emp.designation_id else None
+        current_title = current.title if current is not None else ""
+        if clean_name(desig_title).lower() != clean_name(current_title).lower() or current.category != kind:
             department = emp.department if emp.department_id else None
-            found = org.designation(desig_title, department, ctx.row)
+            found = org.designation(desig_title, department, ctx.row, category=kind)
             if found.problem:
                 warnings.append(f"{found.problem} -kept the current one")
             elif found.obj is not None:
@@ -800,6 +805,20 @@ def _apply_row_updates(
                 if found.created:
                     where = f" in {department.name}" if department is not None else ""
                     ctx.notes.append(f"Created designation '{found.obj.title}'{where}")
+
+    # What the row leaves the employee with must be of their kind: a row that changes the Employment Type needs the
+    # new kind's department and designation in the same row (the Edit Employee form asks the same).
+    if touched & {"employment_type", "department", "designation"}:
+        type_changed = "employment_type" in touched
+        problem = org_category.employee_mismatch(
+            emp.employment_type,
+            emp.department if emp.department_id and (type_changed or "department" in touched) else None,
+            emp.designation if emp.designation_id and (type_changed or "designation" in touched) else None,
+        )
+        if problem:
+            if type_changed:
+                problem += " Put a department and designation of the new type in this row's columns."
+            return [], [], problem
 
     if new_branch is not None:
         emp.branch = new_branch

@@ -74,7 +74,9 @@ const LateImageSheet = forwardRef<HTMLDivElement, { input: LateReportInput; test
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 28, fontWeight: 800, color: ACCENT, lineHeight: "32px" }}>{LATE_REPORT_TITLE}</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: ACCENT, lineHeight: "32px" }}>
+            {input.title ?? LATE_REPORT_TITLE}
+          </div>
           <div style={{ fontSize: 15, color: INK, marginTop: 2 }}>{longDate(input.date)}</div>
         </div>
       </div>

@@ -129,6 +129,9 @@ export const DayList = memo(function DayList({
 
   // a different filter starts at the first page
   useEffect(() => setPage(1), [filter, search, department, sort, date, view]);
+  // Staff and production have departments of their own (lib/departments.ts) and the list only holds the view's kind,
+  // so its choices are that kind's: a department picked on the other view is dropped.
+  useEffect(() => setDepartment(""), [view]);
 
   const totalPages = Math.max(1, Math.ceil(shown.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);

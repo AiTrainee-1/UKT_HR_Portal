@@ -20,6 +20,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useListBranches, useListDepartments, useHodPending, type HodPendingItem, type HodRow } from "@/lib/api-client";
+import { departmentOptions, hasBothCategories, optionText } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import { downloadBlob } from "@/lib/exportUtils";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
@@ -80,10 +82,12 @@ export default function HodsTab({ onOpenRequest }: { onOpenRequest: (openPath: s
   const openRow: HodRow | null = open ? (rows.find((r) => r.managerId === open.managerId) ?? null) : null;
 
   const set = (patch: Partial<HodFilters>) => setFilters((f) => ({ ...f, ...patch }));
-  const deptList = departments.data ?? [];
+  // A HoD may head staff and production departments: both kinds, under two headings (two CUTTINGs told apart).
+  const deptOptions = useMemo(() => departmentOptions(departments.data), [departments.data]);
+  const pickedDept = deptOptions.find((o) => o.value === filters.department);
   const names = {
     branch: (branches.data ?? []).find((b) => String(b.id) === filters.branch)?.name,
-    department: deptList.find((d) => String(d.id) === filters.department)?.name,
+    department: pickedDept ? optionText(pickedDept, hasBothCategories(deptOptions)) : undefined,
   };
   const scope = scopeText(filters, names);
   const report: HodReportInput = {
@@ -272,7 +276,7 @@ export default function HodsTab({ onOpenRequest }: { onOpenRequest: (openPath: s
         {/* phones: the two selects side by side, the switch on its own row under them */}
         <div className="grid grid-cols-2 items-center gap-2 max-sm:[&>button]:w-full max-sm:[&>label]:col-span-2 max-sm:[&>:only-child]:col-span-2 sm:flex sm:flex-wrap">
           <BranchFilter value={filters.branch} onChange={(v) => set({ branch: v })} testId="hods-branch" />
-          {deptList.length > 0 && (
+          {deptOptions.length > 0 && (
             <Select value={filters.department || ALL} onValueChange={(v) => set({ department: v === ALL ? "" : v })}>
               <SelectTrigger
                 className="h-9 w-full sm:w-52"
@@ -283,11 +287,7 @@ export default function HodsTab({ onOpenRequest }: { onOpenRequest: (openPath: s
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>All departments</SelectItem>
-                {deptList.map((d) => (
-                  <SelectItem key={d.id} value={String(d.id)}>
-                    {d.name}
-                  </SelectItem>
-                ))}
+                <OrgSelectItems options={deptOptions} />
               </SelectContent>
             </Select>
           )}

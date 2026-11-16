@@ -414,7 +414,7 @@ def _late_count(d: date_type, allowed_ids: set[int] | None = None) -> int:
                 late_ids.append(emp_id)  # HR overrode the day by hand: its record decides below
                 continue
             resolved = prod_days[emp_id]
-            if resolved and psr.judge_day(prod_ruleset, d, resolved[0][0], None).is_late:
+            if resolved and psr.judge_day(prod_ruleset, d, resolved[0][0], None, emp_id).is_late:
                 late_ids.append(emp_id)
             continue
         asgn = assignment_of.get(emp_id)
@@ -848,7 +848,9 @@ def attendance_daily(request: Request) -> Response:
             resolved = prod_days[emp.id]
             raw_logs = emp_logs
             emp_logs = [log for _secs, log in resolved]
-            shift_day = psr.evaluate_day(prod_ruleset, d, [secs for secs, _log in resolved]) if resolved else None
+            shift_day = (
+                psr.evaluate_day(prod_ruleset, d, [secs for secs, _log in resolved], emp.id) if resolved else None
+            )
 
         if emp_logs:
             from .attendance_final import _resolve_primary_source
@@ -1856,18 +1858,53 @@ def _late_timing(rec, shift) -> dict:
     return out
 
 
-def _attendance_report_log_daily(request: Request, date_param: str, department_param, search_param, settings) -> Response:
+def _production_late_timing(rec, ruleset, d, employee_id) -> dict:
+    """_late_timing for a production day judged by the shift-table rules: the group the day was judged against (the
+    worker's special shift, else the default group the first punch picked), its start and the rules' grace; never the
+    retired Production Shift template (its 15 min grace is not the rules' 5). Minutes as _late_timing."""
+    empty = {"shiftStart": None, "graceMinutes": None, "lateDeadline": None, "minutesAfterStart": None, "minutesLate": None}
+    if rec.first_punch is None:
+        group = ruleset.special_group_for(employee_id, d)
+        start_s = group.start_s if group is not None else None
+    else:
+        judged = psr.judge_day(ruleset, d, rec.first_punch, rec.last_punch, employee_id)
+        start_s = psr.time_to_s(judged.start_time) if judged.group is not None else None
+    if start_s is None:
+        return empty
+    grace = ruleset.grace_minutes
+    deadline_s = start_s + grace * 60
+    out = {
+        "shiftStart": psr.hhmm(start_s),
+        "graceMinutes": grace,
+        "lateDeadline": psr.hhmm(deadline_s),
+        "minutesAfterStart": None,
+        "minutesLate": None,
+    }
+    if rec.is_late and rec.first_punch is not None:
+        first_min = rec.first_punch.hour * 60 + rec.first_punch.minute
+        out["minutesAfterStart"] = max(0, first_min - start_s // 60)
+        out["minutesLate"] = max(1, first_min - deadline_s // 60)
+    return out
+
+
+def _attendance_report_log_daily(
+    request: Request, date_param: str, department_param, search_param, settings,
+    employment_type: str = Employee.EMPLOYMENT_TYPE_STAFF,
+) -> Response:
     """
-    Report Log -> Daily Leave / Late Report: one row per active staff employee for a
-    single date, for HR to filter (Late/Permission, On Leave, Informed) and
-    export. Mirrors attendance_company_summary's bulk-prefetch pattern
+    Report Log -> Daily Leave / Late Report: one row per active employee of `employment_type` (staff on the Report Log,
+    production on the Production Report Log) for a single date, for HR to filter (Late/Permission, On Leave, Informed)
+    and export. Mirrors attendance_company_summary's bulk-prefetch pattern
     (attendance_views.py) so a ~230-employee roster stays a handful of
     queries instead of one compute_day_record's worth of queries per
     employee, but keeps each employee's own row instead of collapsing to
-    counts. View-only aside from compute_day_record's own normal persistence
+    counts. Production days are judged by the production shift rules (config, segments, night look-back), exactly
+    like attendance_company_summary does. View-only aside from compute_day_record's own normal persistence
     side effect (same as every other page that reads attendance).
     """
-    from .attendance_final import compensation_prefetch_for_day, compute_day_record
+    from .attendance_final import (
+        compensation_prefetch_for_day, compute_day_record, production_prefetch_for, production_prefetch_for_day,
+    )
     from .models import AttendanceDayRecord, EmployeeShiftAssignment
     from .shift_engine import _get_shift_for_date
 
@@ -1878,7 +1915,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
 
     emps_qs = (
         scope_to_branch(Employee.objects, request)
-        .filter(status="active", employment_type="staff")
+        .filter(status="active", employment_type=employment_type)
         .select_related("department", "designation", "branch")
         # Grouped by department for the Daily Leave and Late reports (unrelated modes on this
         # same endpoint keep their own first_name-only ordering); employees
@@ -1895,8 +1932,13 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
     employees = list(emps_qs)
     emp_ids = [e.id for e in employees]
 
-    prod_config = None
-    prod_segments = None
+    is_production = employment_type == Employee.EMPLOYMENT_TYPE_PRODUCTION
+    prod_config = ProductionShiftConfig.get() if is_production else None
+    prod_segments = list(ProductionShiftSegment.objects.filter(is_active=True)) if is_production else None
+    # production night sessions: the whole roster's look-back punches in one query (nothing for staff)
+    prod_pf = production_prefetch_for_day(emp_ids, d, prod_config) if is_production else None
+    # the rules in force today judge production lateness, so the late columns show their group, not the old template
+    prod_rules_today = psr.rules_for_day(prod_config, d) if is_production else None
     leave_ids_today = _leave_ids(d)
     half_day_leave_slots_today = _half_day_leave_slots(d)
     is_holiday_today = Holiday.objects.filter(date=d).exists()
@@ -1944,6 +1986,7 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             "night_logs_by_date": emp_logs_by_date,
             "approved_permissions_by_date": permissions_by_emp.get(emp.id, {}),
             **comp_prefetch,
+            **(production_prefetch_for(prod_pf, emp.id) if is_production else {}),
         }
         rec = compute_day_record(
             emp, d,
@@ -1966,7 +2009,11 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
             # of the day as local "HH:MM" (punches are naive Tirupur wall-clock time, so no conversion) and the
             # unit block the employee belongs to.
             "firstPunch": rec.first_punch.strftime("%H:%M") if rec.first_punch else None,
-            **_late_timing(rec, _get_shift_for_date(emp, d, assignments=assignments_by_emp.get(emp.id, []))),
+            **(
+                _production_late_timing(rec, prod_rules_today, d, emp.id)
+                if prod_rules_today is not None and rec.source != "manual"
+                else _late_timing(rec, _get_shift_for_date(emp, d, assignments=assignments_by_emp.get(emp.id, [])))
+            ),
             "branchId": emp.branch_id,
             "branchName": emp.branch.name if emp.branch else None,
             "unitLabel": _unit_label(emp.branch),
@@ -1990,6 +2037,22 @@ def _attendance_report_log_daily(request: Request, date_param: str, department_p
 @api_view(["GET"])
 @require_hr
 def attendance_report_log(request: Request) -> Response:
+    """The Report Log (staff): see _attendance_report_log."""
+    return _attendance_report_log(request, Employee.EMPLOYMENT_TYPE_STAFF)
+
+
+@api_view(["GET"])
+@require_hr
+def attendance_production_report_log(request: Request) -> Response:
+    """
+    GET /api/attendance/production-report-log: the Production Report Log (owner 2026-11-16), the same three modes as
+    the staff Report Log (summary, detail, daily) for production employees only. Its own address so a role can be
+    given one page and not the other (permission_tree: attendance.production_report_log).
+    """
+    return _attendance_report_log(request, Employee.EMPLOYMENT_TYPE_PRODUCTION)
+
+
+def _attendance_report_log(request: Request, employment_type: str) -> Response:
     """
     GET /api/attendance/report-log?month=7&year=2026[&department=3&search=ram]
         → summary mode: one aggregate row per active staff employee for that
@@ -2007,6 +2070,9 @@ def attendance_report_log(request: Request) -> Response:
     View-only: nothing here writes anything HR didn't already trigger
     elsewhere (compute_month_records persists AttendanceDayRecord as a
     side effect, same as every other page that reads attendance).
+
+    `employment_type` is whose report it is: staff (/report-log) or production (/production-report-log); every mode
+    lists only employees of that type (the staff detail mode keeps answering for any employee, as it always has).
     """
     from .models import CasualLeaveRequest, EmployeePermission
     from .attendance_final import compensation_prefetch_for_range, compute_month_records, month_summary_from_records
@@ -2029,7 +2095,9 @@ def attendance_report_log(request: Request) -> Response:
     # fetched once for the whole roster) but keeps each employee's row
     # instead of collapsing to aggregate counts.
     if date_param:
-        return _attendance_report_log_daily(request, date_param, department_param, search_param, settings)
+        return _attendance_report_log_daily(
+            request, date_param, department_param, search_param, settings, employment_type=employment_type,
+        )
 
     if not month_param or not year_param:
         return Response({"error": "Provide month and year"}, status=400)
@@ -2041,12 +2109,10 @@ def attendance_report_log(request: Request) -> Response:
 
     # ── Detail mode: one employee, full day-by-day month ────────────────────
     if emp_id_param:
-        emp = (
-            scope_to_branch(Employee.objects, request)
-            .select_related("department", "designation")
-            .filter(pk=emp_id_param, status="active")
-            .first()
-        )
+        detail_qs = scope_to_branch(Employee.objects, request).select_related("department", "designation")
+        if employment_type == Employee.EMPLOYMENT_TYPE_PRODUCTION:
+            detail_qs = detail_qs.filter(employment_type=employment_type)
+        emp = detail_qs.filter(pk=emp_id_param, status="active").first()
         if not emp:
             return Response({"error": "Employee not found"}, status=404)
 
@@ -2108,7 +2174,7 @@ def attendance_report_log(request: Request) -> Response:
     # ── Summary mode: every matching employee, aggregate for the month ──────
     emps_qs = (
         scope_to_branch(Employee.objects, request)
-        .filter(status="active", employment_type="staff")
+        .filter(status="active", employment_type=employment_type)
         .select_related("department", "designation")
         .order_by("first_name")
     )
@@ -2157,8 +2223,21 @@ def attendance_report_log(request: Request) -> Response:
 @api_view(["GET"])
 @require_hr
 def attendance_report_log_sheet(request: Request) -> Response:
+    """The Report Log's register (staff): see _attendance_report_log_sheet."""
+    return _attendance_report_log_sheet(request, Employee.EMPLOYMENT_TYPE_STAFF)
+
+
+@api_view(["GET"])
+@require_hr
+def attendance_production_report_log_sheet(request: Request) -> Response:
+    """GET /api/attendance/production-report-log/sheet: the same register for production employees only."""
+    return _attendance_report_log_sheet(request, Employee.EMPLOYMENT_TYPE_PRODUCTION)
+
+
+def _attendance_report_log_sheet(request: Request, employment_type: str) -> Response:
     """
     GET /api/attendance/report-log/sheet?dateFrom=2026-09-01&dateTo=2026-09-30[&department=3&search=ram]
+    (and /production-report-log/sheet: `employment_type` is whose register it is.)
 
     The classic paper "Monthly Attendance Sheet" register, reborn as a grid:
     every matching staff employee is a row, every date in [dateFrom, dateTo]
@@ -2186,27 +2265,74 @@ def attendance_report_log_sheet(request: Request) -> Response:
     date_to_param = request.query_params.get("dateTo")
     department_param = request.query_params.get("department")
     search_param = request.query_params.get("search")
+    settings = settings_for(request)
 
-    if not date_from_param or not date_to_param:
-        return Response({"error": "Provide dateFrom and dateTo"}, status=400)
-    try:
-        date_from = date_type.fromisoformat(date_from_param)
-        date_to = date_type.fromisoformat(date_to_param)
-    except ValueError:
-        return Response({"error": "Invalid dateFrom/dateTo"}, status=400)
+    # Production register by pay cycle (owner 2026-11-16: "weekly, biweekly, monthly like payroll"):
+    # ?payCycle=weekly|biweekly|monthly|auto[&around=YYYY-MM-DD] lists the workers ON that cycle over the cycle's pay period
+    # that holds `around` (today when left out), worked out by the same grid production payroll uses
+    # (production_period.resolve_cycle_period), so the register and the payroll page always show the same dates.
+    # dateFrom/dateTo are then not needed. Staff have no pay cycles: the parameter is refused on the staff address.
+    pay_cycle = None
+    period_info = None
+    cycle_counts = None
+    pay_cycle_param = request.query_params.get("payCycle")
+    if pay_cycle_param:
+        from .production_cycles import CYCLE_DAYS, CYCLE_LABELS, CYCLES, normalize_cycle
+        from .production_period import InvalidPeriodConfig, resolve_cycle_period
+
+        is_production = employment_type == Employee.EMPLOYMENT_TYPE_PRODUCTION
+        if is_production:
+            # active workers on each cycle (the tabs show them); "auto" opens the cycle with the most (first on a tie)
+            on_cycle = dict(
+                scope_to_branch(Employee.objects, request)
+                .filter(status="active", employment_type=employment_type)
+                .values_list("production_pay_cycle")
+                .annotate(n=Count("id"))
+            )
+            cycle_counts = {c: on_cycle.get(c, 0) for c in CYCLES}
+        if is_production and pay_cycle_param == "auto":
+            pay_cycle = max(CYCLES, key=lambda c: cycle_counts[c])
+        else:
+            pay_cycle = normalize_cycle(pay_cycle_param) if is_production else None
+        if pay_cycle is None:
+            return Response({"error": "payCycle must be weekly, biweekly or monthly (production only)"}, status=400)
+        try:
+            around = date_type.fromisoformat(request.query_params.get("around") or ist_today().isoformat())
+        except ValueError:
+            return Response({"error": "Invalid around date"}, status=400)
+        try:
+            date_from, date_to = resolve_cycle_period(around, settings, pay_cycle)
+        except InvalidPeriodConfig as exc:
+            return Response({"error": str(exc)}, status=400)
+        period_info = {
+            "cycle": pay_cycle,
+            "label": CYCLE_LABELS.get(pay_cycle, pay_cycle),
+            "days": CYCLE_DAYS.get(pay_cycle),
+            "periodStart": date_from.isoformat(),
+            "periodEnd": date_to.isoformat(),
+            "cycleCounts": cycle_counts,
+        }
+    else:
+        if not date_from_param or not date_to_param:
+            return Response({"error": "Provide dateFrom and dateTo"}, status=400)
+        try:
+            date_from = date_type.fromisoformat(date_from_param)
+            date_to = date_type.fromisoformat(date_to_param)
+        except ValueError:
+            return Response({"error": "Invalid dateFrom/dateTo"}, status=400)
     if date_to < date_from:
         return Response({"error": "dateTo must not be before dateFrom"}, status=400)
     if (date_to - date_from).days > 30:
         return Response({"error": "Range too large -31 days maximum"}, status=400)
 
-    settings = settings_for(request)
-
     emps_qs = (
         scope_to_branch(Employee.objects, request)
-        .filter(status="active", employment_type="staff")
+        .filter(status="active", employment_type=employment_type)
         .select_related("department", "designation")
         .order_by("first_name")
     )
+    if pay_cycle:
+        emps_qs = emps_qs.filter(production_pay_cycle=pay_cycle)
     if department_param:
         emps_qs = emps_qs.filter(department_id=department_param)
     if search_param:
@@ -2283,12 +2409,98 @@ def attendance_report_log_sheet(request: Request) -> Response:
         "dates": date_strs,
         "employees": employees,
         "strength": [strength_by_date.get(ds, 0) for ds in date_strs],
+        # the pay period shown, when the register was asked by pay cycle (absent otherwise: old clients ignore it)
+        **({"period": period_info} if period_info else {}),
+    })
+
+
+@api_view(["GET"])
+@require_hr
+def report_log_day_punches(request: Request) -> Response:
+    """GET /api/attendance/report-log/day-punches?employeeId=&date=: see _report_log_day_punches (staff)."""
+    return _report_log_day_punches(request, Employee.EMPLOYMENT_TYPE_STAFF)
+
+
+@api_view(["GET"])
+@require_hr
+def production_report_log_day_punches(request: Request) -> Response:
+    """GET /api/attendance/production-report-log/day-punches?employeeId=&date=: the same, production employees."""
+    return _report_log_day_punches(request, Employee.EMPLOYMENT_TYPE_PRODUCTION)
+
+
+def _report_log_day_punches(request: Request, employment_type: str) -> Response:
+    """
+    Every punch one employee made on one day, for the Report Log register's day card (owner 2026-11-16: a click on a
+    day shows all the day's punches, how many and each time). Asked when a cell is opened, so the month grid itself stays
+    light. A production employee's day is the SHIFT day once the shift-table rules judge it (a night worker's 05:30
+    closing punch belongs to the night it began, flagged nextDay), exactly as Attendance Search lists it; anyone else
+    gets the date's punches in time order. IN / OUT follow the order (first IN, then OUT, ...), like Attendance Search.
+    Read only.
+    """
+    emp_id = request.query_params.get("employeeId")
+    date_str = request.query_params.get("date")
+    if not emp_id or not date_str:
+        return Response({"error": "employeeId and date are required"}, status=400)
+    try:
+        d = date_type.fromisoformat(date_str)
+    except ValueError:
+        return Response({"error": "Invalid date"}, status=400)
+    emp = (
+        scope_to_branch(Employee.objects, request)
+        .filter(pk=emp_id, employment_type=employment_type)
+        .only("id", "employee_code", "first_name", "last_name", "employment_type")
+        .first()
+        if str(emp_id).isdigit()
+        else None
+    )
+    if not emp:
+        return Response({"error": "Employee not found"}, status=404)
+
+    prod_rules, prod_days = _production_shift_days(emp, d, d)
+    if d in prod_days:
+        logs = [log for _secs, log in prod_days[d]]
+    else:
+        logs = list(AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time", "id"))
+    from .report_log_day_detail import day_detail
+
+    # the shift the day was judged against, how its credit was earned and what was detected (the card's left side)
+    detail = day_detail(emp, d, settings_for(request), prod_rules, prod_days.get(d))
+    punches = [
+        {
+            "time": log.punch_time.strftime("%H:%M:%S"),
+            "type": "IN" if i % 2 == 0 else "OUT",
+            "source": log.source,
+            "sourceLabel": source_label(log.source),
+            **({"nextDay": True} if log.date > d else {}),
+        }
+        for i, log in enumerate(logs)
+    ]
+    return Response({
+        "employeeId": emp.id,
+        "employeeCode": emp.employee_code,
+        "employeeName": f"{emp.first_name} {emp.last_name}".strip(),
+        "date": d.isoformat(),
+        "count": len(punches),
+        "punches": punches,
+        **detail,
     })
 
 
 @api_view(["PATCH"])
 @require_hr
 def set_day_informed(request: Request) -> Response:
+    """The Report Log's Informed call (staff address, any employee as before): see _set_day_informed."""
+    return _set_day_informed(request, None)
+
+
+@api_view(["PATCH"])
+@require_hr
+def set_production_day_informed(request: Request) -> Response:
+    """PATCH /api/attendance/production-report-log/day-informed: the same call, production employees only."""
+    return _set_day_informed(request, Employee.EMPLOYMENT_TYPE_PRODUCTION)
+
+
+def _set_day_informed(request: Request, employment_type: str | None) -> Response:
     """
     Report Log's Daily Leave Report: HR marks/updates whether an on-leave employee
     informed in advance. Body: {employeeId, date, isInformed}. A pure report
@@ -2308,7 +2520,10 @@ def set_day_informed(request: Request) -> Response:
     if "isInformed" not in data:
         return Response({"error": "isInformed is required"}, status=400)
 
-    emp = scope_to_branch(Employee.objects, request).filter(pk=emp_id).first()
+    emp_qs = scope_to_branch(Employee.objects, request)
+    if employment_type:
+        emp_qs = emp_qs.filter(employment_type=employment_type)
+    emp = emp_qs.filter(pk=emp_id).first()
     if not emp:
         return Response({"error": "Employee not found"}, status=404)
     try:

@@ -79,6 +79,8 @@ from .payroll import (
     WorkSession,
     Payroll,
     PayrollMonthClose,
+    ProductionPeriodClose,
+    ProductionCycleTransfer,
     _default_late_deduction_slabs,
     PayrollSettings,
     BranchSettingsOverride,
@@ -96,6 +98,7 @@ from .payroll import (
     ProductionShiftConfig,
     ProductionShiftSegment,
     ProductionShiftGroup,
+    ProductionSpecialShiftAssignment,
     ProductionShiftRule,
     ProductionBreak,
 )

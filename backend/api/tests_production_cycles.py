@@ -17,9 +17,20 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, TestCase
+from django.utils import timezone
 
 from .jwt_utils import sign_token
-from .models import AttendanceDayRecord, Branch, Employee, HRUser, Payroll, PayrollSettings, Role, SalarySlip
+from .models import (
+    AttendanceDayRecord,
+    Branch,
+    Employee,
+    HRUser,
+    Payroll,
+    PayrollSettings,
+    ProductionPeriodClose,
+    Role,
+    SalarySlip,
+)
 from .payroll_views import _generate_production_payroll, late_shift_deduction
 from .production_cycles import (
     CYCLES,
@@ -224,8 +235,10 @@ class NextPeriodTests(TestCase):
         self.assertEqual(next_cycle_period(self.ps, "biweekly", TODAY), (date(2026, 2, 16), date(2026, 3, 1)))
         self.assertEqual(next_cycle_period(self.ps, "monthly", TODAY), (date(2026, 2, 2), date(2026, 3, 1)))
 
-    def test_when_today_is_the_last_day_of_a_period_that_period_is_offered(self):
-        self.assertEqual(next_cycle_period(self.ps, "weekly", date(2026, 3, 8)), (date(2026, 3, 2), date(2026, 3, 8)))
+    def test_on_the_last_day_of_a_period_the_one_before_it_is_offered(self):
+        # a period can be generated only from the day after its last day (2026-11-16: night shifts of the last day)
+        self.assertEqual(next_cycle_period(self.ps, "weekly", date(2026, 3, 8)), (date(2026, 2, 23), date(2026, 3, 1)))
+        self.assertEqual(next_cycle_period(self.ps, "weekly", date(2026, 3, 9)), (date(2026, 3, 2), date(2026, 3, 8)))
 
     def test_after_a_generated_period_the_next_one_follows_it(self):
         emp = Employee.objects.create(employee_code="NP1", first_name="N", last_name="P", employment_type="production")
@@ -240,6 +253,11 @@ class NextPeriodTests(TestCase):
             period_start=date(2026, 2, 2),
             period_end=date(2026, 2, 8),
             pay_cycle="weekly",
+        )
+        # the generated week is due until HR presses Payroll Done on it (2026-11-16), then the next one is
+        self.assertEqual(next_cycle_period(self.ps, "weekly", TODAY), (date(2026, 2, 2), date(2026, 2, 8)))
+        ProductionPeriodClose.objects.create(
+            cycle="weekly", period_start=date(2026, 2, 2), period_end=date(2026, 2, 8), finalized_at=timezone.now()
         )
         self.assertEqual(next_cycle_period(self.ps, "weekly", TODAY), (date(2026, 2, 9), date(2026, 2, 15)))
         # another cycle's history never moves this cycle's pointer
@@ -430,7 +448,9 @@ def _shifts(emp, start, end, shifts="1.00"):
         day += timedelta(days=1)
 
 
-def _row(emp, start, end, cycle=None, status="pending", gross="100.00") -> Payroll:
+def _row(emp, start, end, cycle=None, status="pending", gross="100.00", payment_status="not_paid") -> Payroll:
+    """A payroll row. `payment_status="paid"` makes it FINAL (2026-11-16): only a final row covers days; a draft (only
+    Generated) is replaced when an overlapping period is generated with replaceDrafts."""
     return Payroll.objects.create(
         employee=emp,
         salary_mode="shift",
@@ -443,6 +463,7 @@ def _row(emp, start, end, cycle=None, status="pending", gross="100.00") -> Payro
         period_start=start,
         period_end=end,
         pay_cycle=cycle,
+        payment_status=payment_status,
     )
 
 
@@ -708,7 +729,13 @@ class AssignmentTests(CycleDbTestCase):
 
     def test_a_move_reports_unpaid_payroll_left_on_the_old_cycle(self):
         _row(self.w1, date(2026, 2, 2), date(2026, 2, 8), cycle="weekly", status="pending")
-        r = self.post(self.ASSIGN, {"employeeIds": [self.w1.id, self.w2.id], "cycle": "monthly"}).json()
+        # a worker with payroll moves only on purpose (2026-11-16): confirmed, with a reason
+        refused = self.post(self.ASSIGN, {"employeeIds": [self.w1.id, self.w2.id], "cycle": "monthly"})
+        self.assertEqual(refused.status_code, 409)
+        r = self.post(
+            self.ASSIGN,
+            {"employeeIds": [self.w1.id, self.w2.id], "cycle": "monthly", "confirm": True, "reason": "Line change"},
+        ).json()
         self.assertEqual(r["pendingOnOtherCycle"], 1)
 
     def test_a_branch_login_sees_and_assigns_only_its_own_branch(self):
@@ -801,6 +828,15 @@ class GenerateTests(CycleDbTestCase):
         body = self.post(GEN, {"cycle": "weekly"}).json()
         self.assertEqual((body["periodStart"], body["periodEnd"]), ("2026-03-02", "2026-03-08"))  # latest ended week
         self.assertEqual(set(self.rows().values_list("pay_cycle", flat=True)), {"weekly"})
+        # the generated week stays due until HR presses Payroll Done on it (2026-11-16) ...
+        after = self.get("/api/payroll/production/next-period?cycle=weekly").json()
+        self.assertEqual((after["periodStart"], after["periodEnded"]), ("2026-03-02", True))
+        done = self.post(
+            "/api/payroll/production/period-finalize",
+            {"cycle": "weekly", "periodStart": "2026-03-02", "periodEnd": "2026-03-08"},
+        )
+        self.assertEqual(done.status_code, 201, done.content)
+        # ... then the pointer moves on
         after = self.get("/api/payroll/production/next-period?cycle=weekly").json()
         self.assertEqual((after["periodStart"], after["periodEnded"]), ("2026-03-09", False))
         # the week holding today cannot be generated yet
@@ -887,8 +923,35 @@ class GenerateTests(CycleDbTestCase):
         row.refresh_from_db()
         self.assertEqual((row.status, row.gross_salary), ("paid", Decimal("3500.00")))  # 7 shifts x 500
 
+    def test_generate_again_for_the_whole_roster_takes_the_latest_changes_and_never_touches_a_paid_salary(self):
+        # owner 2026-11-16: after the first run Generate Payroll must work again, for everyone on the cycle, with the
+        # latest attendance; a Cleared payslip stays Cleared, one already marked Paid is never changed, nobody doubles
+        self.post(GEN, {"cycle": "weekly", **WEEK1})
+        w1_row, w2_row = self.rows().get(employee=self.w1), self.rows().get(employee=self.w2)
+        w2_before = (w2_row.gross_salary, w2_row.final_salary)
+        w1_row.status = "paid"  # Cleared (verified)
+        w1_row.save()
+        w2_row.payment_status = Payroll.PAYMENT_PAID  # paid: never recomputed
+        w2_row.save()
+        for emp in (self.w1, self.w2):
+            AttendanceDayRecord.objects.filter(employee=emp, date=date(2026, 2, 2)).update(
+                shifts_earned=Decimal("1.50")
+            )
+        again = self.post(GEN, {"cycle": "weekly", "regenerate": True, **WEEK1}).json()
+        self.assertEqual(again["generated"], 1)  # w1 only
+        reasons = {d["employeeId"]: d["reason"] for d in again["skippedDetails"]}
+        self.assertIn(self.w2.id, reasons)  # the paid salary, with the reason
+        w1_row.refresh_from_db()
+        w2_row.refresh_from_db()
+        self.assertEqual((w1_row.status, w1_row.gross_salary), ("paid", Decimal("3750.00")))  # 7.5 shifts x 500
+        self.assertEqual((w2_row.gross_salary, w2_row.final_salary), w2_before)
+        self.assertEqual(w2_row.payment_status, Payroll.PAYMENT_PAID)
+        # still one payslip each for the period: nothing doubled
+        self.assertEqual(self.rows().count(), 2)
+
     def test_days_already_paid_in_another_payslip_are_never_paid_twice(self):
-        _row(self.w1, date(2026, 2, 1), date(2026, 2, 14))  # an older payslip (no cycle) covering the whole week
+        # an older payslip (no cycle), already paid (FINAL), covering the whole week
+        _row(self.w1, date(2026, 2, 1), date(2026, 2, 14), payment_status="paid")
         r = self.post(GEN, {"cycle": "weekly", **WEEK1}).json()
         self.assertEqual(r["generated"], 1)  # w2 only
         self.assertEqual(
@@ -899,7 +962,8 @@ class GenerateTests(CycleDbTestCase):
         self.assertEqual(self.rows(employee=self.w1).count(), 1)
 
     def test_a_week_partly_paid_by_another_payslip_pays_only_the_rest(self):
-        _row(self.w1, date(2026, 1, 26), date(2026, 2, 4))  # an older payslip (no cycle) covering 2-4 Feb
+        # an older payslip (no cycle), already paid (FINAL), covering 2-4 Feb
+        _row(self.w1, date(2026, 1, 26), date(2026, 2, 4), payment_status="paid")
         r = self.post(GEN, {"cycle": "weekly", "employeeIds": [self.w1.id], **WEEK1}).json()
         self.assertEqual(r["generated"], 1)
         self.assertEqual(r["partialDetails"][0]["coverage"]["payRanges"], [{"from": "2026-02-05", "to": "2026-02-08"}])
@@ -977,7 +1041,8 @@ class ReadTests(CycleDbTestCase):
     def test_the_skip_check_changes_nothing_and_names_each_problem(self):
         self.w2.salary_per_shift = None
         self.w2.save()
-        _row(self.w1, date(2026, 2, 1), date(2026, 2, 4), cycle=None)  # pays 2-4 Feb of the week already
+        # pays 2-4 Feb of the week already, and is paid (FINAL)
+        _row(self.w1, date(2026, 2, 1), date(2026, 2, 4), cycle=None, payment_status="paid")
         before = Payroll.objects.count()
         body = self.get(
             "/api/payroll/production/skip-check?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08"
@@ -1036,7 +1101,20 @@ class ReadTests(CycleDbTestCase):
         body = self.get(
             "/api/payroll/production/period-status?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08"
         ).json()
-        self.assertEqual(body["counts"], {"generated": 1, "paid": 0, "ready": 0, "blocked": 1})
+        self.assertEqual(
+            body["counts"],
+            {
+                "generated": 1,
+                "paid": 0,
+                "ready": 0,
+                "blocked": 1,
+                "parked": 0,
+                "movedIn": 0,
+                "newJoiners": 0,
+                "drafts": 0,
+                "draftRows": 0,
+            },
+        )
         by = {e["employeeCode"]: e for e in body["employees"]}
         self.assertEqual(sorted(by), ["RD1", "RD2"])
         self.assertEqual(by["RD1"]["payroll"]["finalSalary"], 3500.0)
@@ -1087,6 +1165,7 @@ class BranchPointerTests(CycleDbTestCase):
         for_branch = self.get("/api/payroll/production/next-period?cycle=weekly", branch_hr).json()
         self.assertEqual(for_branch["periodStart"], "2026-03-02")  # nothing generated here yet: latest ended week
         for_company = self.get("/api/payroll/production/next-period?cycle=weekly").json()
-        self.assertEqual(for_company["periodStart"], "2026-02-16")  # the company's pointer follows the paid week
+        # the company's pointer stays on the generated week until it is finalized (2026-11-16)
+        self.assertEqual(for_company["periodStart"], "2026-02-09")
         summary = self.get("/api/payroll/production/cycles", branch_hr).json()
         self.assertEqual({c["cycle"]: c["next"]["periodStart"] for c in summary["cycles"]}["weekly"], "2026-03-02")

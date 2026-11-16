@@ -47,7 +47,7 @@ def summarize_branches(branch_scope: int | None = None) -> dict:
     by_branch: dict[int | None, list[dict]] = {}
     for d in departments.order_by("name"):
         by_branch.setdefault(d.branch_id, []).append(
-            {"id": d.id, "name": d.name, "activeCount": active_in_department.get(d.id, 0)}
+            {"id": d.id, "name": d.name, "category": d.category, "activeCount": active_in_department.get(d.id, 0)}
         )
 
     rows = []

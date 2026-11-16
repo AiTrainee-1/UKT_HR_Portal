@@ -1260,7 +1260,9 @@ def _production_bulk_prefetch(prefetch, emp, first_day, last_day, lookback, logs
     prefetch["prod_manual_dates"] = manual_dates
 
 
-def production_day_result(d: date_type, by_date, config=None, segments=None, ruleset=None, manual=None) -> dict:
+def production_day_result(
+    d: date_type, by_date, config=None, segments=None, ruleset=None, manual=None, employee_id=None
+) -> dict:
     """The production result of day `d` from the employee's RAW punches, never writing anything (for reports and
     previews): `by_date` is {calendar date: [time | seconds, ...]} covering d - NIGHT_LOOKBACK_DAYS .. d + 1 (d -
     MAX_CHAIN_DAYS for a night chain that long: a shorter window treats its first day as a fresh start). `manual` =
@@ -1276,7 +1278,8 @@ def production_day_result(d: date_type, by_date, config=None, segments=None, rul
     elif not ruleset.applies(d):
         ruleset = None
     if ruleset is not None:
-        result = psr.evaluate_with_session(ruleset, d, by_date, manual)
+        # `employee_id`: a worker on a special shift that day is judged by it (production_shift_rules.select_group)
+        result = psr.evaluate_with_session(ruleset, d, by_date, manual, employee_id)
         if result is not None:
             return result
     own = sorted(
@@ -1492,7 +1495,8 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         elif is_production:
             computed = None
             if prod_rules is not None:
-                computed = psr.evaluate_day(prod_rules, d, day_secs)
+                # a worker on a special shift that day is judged and paid by it (select_group)
+                computed = psr.evaluate_day(prod_rules, d, day_secs, emp.pk)
                 if computed is not None:
                     # rule_group / rule_note are for reports; they are not columns of the record
                     computed.pop("rule_group", None)

@@ -25,12 +25,17 @@ def _dt(value):
     return value
 
 
-def department_json(dept, employee_count: int | None = None) -> dict:
+def department_json(dept, employee_count: int | None = None, branch_name: str | None = None) -> dict:
     data = {
         "id": dept.id,
         "name": dept.name,
         "description": dept.description,
+        # Staff or Production (org_category.py); the branch tells two same-named departments apart in a picker.
+        "category": dept.category or "staff",
+        "branchId": dept.branch_id,
     }
+    if branch_name is not None:
+        data["branchName"] = branch_name
     if employee_count is not None:
         data["employeeCount"] = employee_count
     return data

@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { loginAsHr } from "./helpers";
 
-// Departments and Designations: the head-count split into staff and production, searching / filtering / sorting, the
-// people drawer, creating / editing / deleting, and the Branch -> Department -> Designation tree. (api/tests_org_structure.py
+// Departments and Designations: Staff and Production apart behind the switch at the top (?category=), searching /
+// filtering / sorting, the people drawer, creating / editing / deleting, and the Branch -> Department -> Designation tree. (api/tests_org_structure.py
 // covers the counts and the branch scoping; this is what HR sees and can do.) Everything made here is called "ORG ..."
 // and the employees have codes ORG-..., and all of it is removed again, so other specs see the seed data only.
 
@@ -29,18 +29,21 @@ async function purge(page: Page) {
 }
 
 /**
- * "ORG Cutting": 2 staff + 3 production + 1 inactive production, designations ORG Master (senior, the 2 staff) and
- * ORG Helper (junior, the production). "ORG Empty": nobody. "ORG Floating": a designation with no department.
+ * Staff and production have departments of their own (owner, 2026-11-16), so "ORG Cutting" exists twice:
+ * the Staff one holds 2 staff with ORG Master (senior); the Production one holds 3 production + 1 inactive production
+ * with ORG Helper (junior). "ORG Empty": a Staff department with nobody. "ORG Floating": a Staff designation with no
+ * department.
  */
 async function seed(page: Page) {
   const branches = (await api(page, "GET", "/api/branches")).body as { id: number; name: string }[];
   const branch = branches[0];
-  const dept = async (name: string) => {
-    const res = await api(page, "POST", "/api/departments", { name, branchId: branch.id });
+  const dept = async (name: string, category: "staff" | "production" = "staff") => {
+    const res = await api(page, "POST", "/api/departments", { name, branchId: branch.id, category });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     return res.body.id as number;
   };
   const cutting = await dept("ORG Cutting");
+  const prodCutting = await dept("ORG Cutting", "production");
   await dept("ORG Empty");
   const desig = async (title: string, departmentId: number | null, level: string) => {
     const res = await api(page, "POST", "/api/designations", { title, departmentId, level });
@@ -48,7 +51,7 @@ async function seed(page: Page) {
     return res.body.id as number;
   };
   const master = await desig("ORG Master", cutting, "senior");
-  const helper = await desig("ORG Helper", cutting, "junior");
+  const helper = await desig("ORG Helper", prodCutting, "junior");
   await desig("ORG Floating", null, "manager");
   const emp = async (
     code: string,
@@ -64,7 +67,7 @@ async function seed(page: Page) {
       phone: "9000000077",
       employmentType: kind,
       branchId: branch.id,
-      departmentId: cutting,
+      departmentId: kind === "production" ? prodCutting : cutting,
       designationId,
       salaryType: "monthly",
       salaryAmount: 24000,
@@ -95,30 +98,38 @@ test.afterEach(async ({ page }) => {
   await purge(page);
 });
 
-test("a department shows its active staff and production apart, and leaves the inactive out of the totals", async ({
+test("Staff and Production departments are apart behind the switch, the inactive left out of the totals", async ({
   page,
 }) => {
-  const before = (await api(page, "GET", "/api/departments")).body as unknown[];
+  const before = (await api(page, "GET", "/api/departments")).body as { category?: string }[];
+  const staffBefore = before.filter((d) => (d.category ?? "staff") === "staff").length;
   await seed(page);
   await page.goto("/hr/departments");
+  await expect(page.getByTestId("org-category-switch")).toHaveAttribute("data-value", "staff");
   await expect(deptRow(page, "ORG Cutting")).toBeVisible();
 
+  // the Staff ORG Cutting: its 2 staff only
   const cutting = deptRow(page, "ORG Cutting");
   await expect(cutting).toHaveAttribute("data-staff", "2");
-  await expect(cutting).toHaveAttribute("data-production", "3");
-  await expect(cutting).toHaveAttribute("data-active", "5");
-  await expect(cutting).toContainText("+1 inactive");
+  await expect(cutting).toHaveAttribute("data-production", "0");
+  await expect(cutting).toHaveAttribute("data-active", "2");
   await expect(cutting.getByTestId("split-bar")).toBeVisible();
   await expect(deptRow(page, "ORG Empty")).toHaveAttribute("data-active", "0");
+  await expect(page.getByTestId("stat-departments-value")).toHaveText(String(staffBefore + 2));
 
-  // the cards: the number of departments, and the company-wide staff / production totals
-  await expect(page.getByTestId("stat-departments-value")).toHaveText(String(before.length + 2));
-  const staff = Number(await page.getByTestId("stat-staff-value").innerText());
-  const production = Number(await page.getByTestId("stat-production-value").innerText());
-  const total = Number(await page.getByTestId("stat-employees-value").innerText());
-  expect(staff).toBeGreaterThanOrEqual(2);
-  expect(production).toBeGreaterThanOrEqual(3);
-  expect(staff + production).toBeLessThanOrEqual(total);
+  // the switch moves the whole page (and the address) to Production: the other ORG Cutting, no ORG Empty
+  await page.getByTestId("org-category-production").click();
+  await expect(page).toHaveURL(/category=production/);
+  const prod = deptRow(page, "ORG Cutting");
+  await expect(prod).toHaveAttribute("data-production", "3");
+  await expect(prod).toHaveAttribute("data-active", "3");
+  await expect(prod).toContainText("+1 inactive");
+  await expect(deptRow(page, "ORG Empty")).toHaveCount(0);
+  await expect(page.getByTestId("new-department")).toContainText("New Production Department");
+
+  // a link lands on the same view
+  await page.goto("/hr/departments?category=production");
+  await expect(page.getByTestId("org-category-switch")).toHaveAttribute("data-value", "production");
 });
 
 test("departments can be searched, filtered to the empty ones and sorted", async ({ page }) => {
@@ -139,7 +150,7 @@ test("departments can be searched, filtered to the empty ones and sorted", async
   await expect(deptRow(page, "ORG Cutting")).toHaveCount(0);
   await page.getByTestId("dept-clear-filters").click();
 
-  // most employees first: ORG Cutting (5) comes before ORG Empty (0)
+  // most employees first: ORG Cutting (2) comes before ORG Empty (0)
   await page.getByTestId("sort-departments").click();
   await page.getByRole("option", { name: "Most employees" }).click();
   await page.getByTestId("dept-search").fill("ORG ");
@@ -149,28 +160,24 @@ test("departments can be searched, filtered to the empty ones and sorted", async
   expect(names.indexOf("dept-row-ORG Cutting")).toBeLessThan(names.indexOf("dept-row-ORG Empty"));
 });
 
-test("the drawer lists a department's people with staff and production told apart", async ({ page }) => {
+test("the drawer lists a department's people, of the department's kind only", async ({ page }) => {
   await seed(page);
-  await page.goto("/hr/departments");
+  await page.goto("/hr/departments?category=production");
   await page.locator('[data-testid="dept-open-ORG Cutting"]:visible').click();
   const drawer = page.getByTestId("people-drawer");
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByTestId("drawer-counts")).toContainText("5 active");
-  await expect(drawer.getByTestId("person-ORG-S1")).toHaveAttribute("data-type", "staff");
+  await expect(drawer.getByTestId("drawer-category")).toHaveText("Production");
+  await expect(drawer.getByTestId("drawer-counts")).toContainText("3 active");
   await expect(drawer.getByTestId("person-ORG-P1")).toHaveAttribute("data-type", "production");
+  await expect(drawer.getByTestId("person-ORG-S1")).toHaveCount(0); // the staff are in the Staff ORG Cutting
   await expect(drawer.getByTestId("person-ORG-P4")).toHaveCount(0); // inactive: hidden until asked for
-
-  await drawer.getByRole("tab", { name: /^Production/ }).click();
-  await expect(drawer.getByTestId("person-ORG-P1")).toBeVisible();
-  await expect(drawer.getByTestId("person-ORG-S1")).toHaveCount(0);
-  await drawer.getByRole("tab", { name: /^All/ }).first().click();
 
   await drawer.getByRole("tab", { name: /^Both/ }).click();
   await expect(drawer.getByTestId("person-ORG-P4")).toHaveAttribute("data-status", "inactive");
-  await expect(drawer.getByTestId("drawer-showing")).toContainText("of 6 employees");
+  await expect(drawer.getByTestId("drawer-showing")).toContainText("of 4 employees");
 
-  await drawer.getByTestId("drawer-search").fill("master");
-  await expect(drawer.getByTestId("person-ORG-S1")).toBeVisible();
+  await drawer.getByTestId("drawer-search").fill("dev");
+  await expect(drawer.getByTestId("person-ORG-P2")).toBeVisible();
   await expect(drawer.getByTestId("person-ORG-P1")).toHaveCount(0);
 });
 
@@ -190,6 +197,12 @@ test("a department can be created, refused when the name is taken, renamed and d
   await expect(dialog).toHaveCount(0);
   await expect(deptRow(page, "ORG Brand New")).toBeVisible();
 
+  // a department with people keeps its kind; the dialog says why
+  await page.locator('[data-testid="dept-edit-ORG Cutting"]:visible').click();
+  await expect(page.getByTestId("department-category-lock")).toContainText("2 employees are in this department");
+  await expect(page.getByTestId("department-category-production")).toBeDisabled();
+  await page.getByRole("button", { name: "Cancel" }).click();
+
   await page.locator('[data-testid="dept-edit-ORG Brand New"]:visible').click();
   await page.getByTestId("department-name").fill("ORG Renamed");
   await page.getByTestId("department-description").fill("Edited in the test");
@@ -200,8 +213,8 @@ test("a department can be created, refused when the name is taken, renamed and d
   // the delete confirmation says what happens to the people and the designations first
   await page.locator('[data-testid="dept-delete-ORG Cutting"]:visible').click();
   const confirm = page.getByTestId("confirm-delete");
-  await expect(confirm).toContainText("6 employees (5 active, 1 inactive) will be left with no department");
-  await expect(confirm).toContainText("2 designations will lose their department");
+  await expect(confirm).toContainText("2 employees (2 active) will be left with no department");
+  await expect(confirm).toContainText("1 designation will lose its department");
   await confirm.getByTestId("confirm-cancel").click();
   await expect(deptRow(page, "ORG Cutting")).toBeVisible();
 
@@ -220,10 +233,10 @@ test("designations hang under their department and branch, and the tree opens an
   const branchNode = tree.getByTestId(`branch-node-${branch.name}`);
   const cutting = branchNode.getByTestId("dept-node-ORG Cutting");
   await expect(cutting.getByTestId("desig-row-ORG Master")).toBeVisible();
-  await expect(cutting.getByTestId("desig-row-ORG Helper")).toBeVisible();
   await expect(cutting.getByTestId("desig-row-ORG Master")).toHaveAttribute("data-staff", "2");
-  await expect(cutting.getByTestId("desig-row-ORG Helper")).toHaveAttribute("data-production", "3");
   await expect(cutting.getByTestId("desig-row-ORG Master").getByTestId("level-chip")).toHaveText("Senior");
+  // ORG Helper is a Production designation: on the other side of the switch
+  await expect(page.getByTestId("desig-row-ORG Helper")).toHaveCount(0);
   await expect(branchNode.getByTestId("dept-node-ORG Empty")).toBeVisible();
   // a designation with no department is under Unassigned
   await expect(tree.getByTestId("branch-node-Unassigned").getByTestId("desig-row-ORG Floating")).toBeVisible();
@@ -237,6 +250,13 @@ test("designations hang under their department and branch, and the tree opens an
   await expect(tree.getByTestId("dept-node-ORG Cutting")).toHaveCount(0);
   await page.getByTestId("toggle-all").click(); // Expand all
   await expect(tree.getByTestId("dept-node-ORG Cutting")).toBeVisible();
+
+  await page.getByTestId("org-category-production").click();
+  await expect(page).toHaveURL(/category=production/);
+  const prodCutting = tree.getByTestId(`branch-node-${branch.name}`).getByTestId("dept-node-ORG Cutting");
+  await expect(prodCutting.getByTestId("desig-row-ORG Helper")).toHaveAttribute("data-production", "3");
+  await expect(page.getByTestId("desig-row-ORG Master")).toHaveCount(0);
+  await expect(tree.getByTestId("dept-node-ORG Empty")).toHaveCount(0);
 });
 
 test("designations can be searched by title, department or branch and filtered", async ({ page }) => {
@@ -244,14 +264,13 @@ test("designations can be searched by title, department or branch and filtered",
   await page.goto("/hr/designations");
   await expect(page.getByTestId("desig-row-ORG Master")).toBeVisible();
 
-  await page.getByTestId("desig-search").fill("org helper");
-  await expect(page.getByTestId("desig-row-ORG Helper")).toBeVisible();
-  await expect(page.getByTestId("desig-row-ORG Master")).toHaveCount(0);
+  await page.getByTestId("desig-search").fill("org master");
+  await expect(page.getByTestId("desig-row-ORG Master")).toBeVisible();
+  await expect(page.getByTestId("desig-row-ORG Floating")).toHaveCount(0);
 
   // the department's name finds all of its designations
   await page.getByTestId("desig-search").fill("org cutting");
   await expect(page.getByTestId("desig-row-ORG Master")).toBeVisible();
-  await expect(page.getByTestId("desig-row-ORG Helper")).toBeVisible();
   await expect(page.getByTestId("desig-row-ORG Floating")).toHaveCount(0);
 
   // so does the branch's
@@ -260,12 +279,12 @@ test("designations can be searched by title, department or branch and filtered",
   await page.getByTestId("desig-clear-filters").click();
 
   await page.getByTestId("filter-level").click();
-  await page.getByRole("option", { name: "Junior" }).click();
-  await expect(page.getByTestId("desig-row-ORG Helper")).toBeVisible();
+  await page.getByRole("option", { name: "Manager" }).click();
+  await expect(page.getByTestId("desig-row-ORG Floating")).toBeVisible();
   await expect(page.getByTestId("desig-row-ORG Master")).toHaveCount(0);
   await page.getByTestId("desig-clear-filters").click();
 
-  // designations nobody holds: ORG Floating, but not the two that have people
+  // designations nobody holds: ORG Floating, but not ORG Master that has people
   await page.getByTestId("filter-empty").click();
   await expect(page.getByTestId("desig-row-ORG Floating")).toBeVisible();
   await expect(page.getByTestId("desig-row-ORG Master")).toHaveCount(0);
@@ -315,7 +334,7 @@ test("the list view is an alternative to the tree, and a designation is added fr
 
 test("a designation's people open in the drawer", async ({ page }) => {
   await seed(page);
-  await page.goto("/hr/designations");
+  await page.goto("/hr/designations?category=production");
   await page.getByTestId("desig-open-ORG Helper").click();
   const drawer = page.getByTestId("people-drawer");
   await expect(drawer.getByTestId("person-ORG-P1")).toHaveAttribute("data-type", "production");
@@ -328,6 +347,7 @@ test("on a phone the departments are cards and the page does not scroll sideways
   await seed(page);
   await page.setViewportSize({ width: 375, height: 800 });
   await page.goto("/hr/departments");
+  await expect(page.getByTestId("org-category-switch")).toBeVisible();
   await expect(page.getByTestId("dept-card-ORG Cutting")).toBeVisible();
   await expect(page.getByTestId("departments-table")).toBeHidden();
   const overflow = await page.evaluate(

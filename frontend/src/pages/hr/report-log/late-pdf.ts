@@ -100,6 +100,7 @@ export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
   const { jsPDF: JsPdf } = await import("jspdf");
   const doc = new JsPdf({ orientation: "landscape", unit: "mm", format: "a4" });
   const now = input.now ?? new Date();
+  const reportTitle = input.title ?? LATE_REPORT_TITLE;
   const stamp = generatedStamp(now);
   const { width: pageW, margin, headHeight, rowHeight } = PDF;
   const tableW = pageW - 2 * margin;
@@ -107,7 +108,7 @@ export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
   const dateText = pdfSafe(longDate(input.date));
 
   doc.setProperties({
-    title: `${LATE_REPORT_TITLE} ${input.date}`,
+    title: `${reportTitle} ${input.date}`,
     subject: dateText,
     author: "UKTextiles HRMS",
     creator: "UKTextiles HRMS",
@@ -162,7 +163,7 @@ export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
 
     ink(ACCENT);
     font(true, 17);
-    doc.text(LATE_REPORT_TITLE, pageW - margin, 16, { align: "right" });
+    doc.text(reportTitle, pageW - margin, 16, { align: "right" });
     ink(INK);
     font(false, 10);
     doc.text(dateText, pageW - margin, 22, { align: "right" });
@@ -182,7 +183,7 @@ export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
   const drawNextHead = () => {
     ink(ACCENT);
     font(true, 10);
-    doc.text(LATE_REPORT_TITLE, margin, 12);
+    doc.text(reportTitle, margin, 12);
     ink(MUTED);
     font(false, 9);
     doc.text(`${dateText}  -  ${pdfSafe(input.company)}`, margin + 40, 12);
@@ -295,10 +296,10 @@ export async function buildLatePdf(input: LateReportInput): Promise<jsPDF> {
   return doc;
 }
 
-export const latePdfName = (date: string) => `${lateFileStem(date)}.pdf`;
+export const latePdfName = (date: string, title?: string) => `${lateFileStem(date, title)}.pdf`;
 
 /** Builds the PDF and downloads it. */
 export async function downloadLatePdf(input: LateReportInput): Promise<void> {
   const doc = await buildLatePdf(input);
-  downloadBlob(doc.output("blob"), latePdfName(input.date));
+  downloadBlob(doc.output("blob"), latePdfName(input.date, input.title));
 }

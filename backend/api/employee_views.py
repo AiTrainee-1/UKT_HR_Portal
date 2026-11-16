@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from . import salary_split
+from . import org_category, salary_split
 from .audit_utils import log_action
 from .auth import get_token_employee_id, is_hr, require_auth, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
@@ -16,7 +16,7 @@ from .employee_photo import (
     signature_matches,
 )
 from .image_compress import PHOTO, compress_data_url
-from .models import Department, Employee
+from .models import Department, Designation, Employee
 from .serializers import employee_json, parse_decimal
 from .view_common import _error
 from django.db import transaction
@@ -276,6 +276,15 @@ def _assign_unit_code(branch_id: int | None) -> str | None:
         return f"{branch.code}-{branch.next_employee_seq}"
 
 
+def _as_id(raw) -> int:
+    """An id sent by a client, or 0 (which matches nothing) when it is not a number, so a bad value is "not found" and
+    never a 500."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _resolve_employee_relations(data: dict, request: Request, ctx=None) -> tuple[dict, list[str], list[str]]:
     """
     Resolve department/designation/branch from either an <field>Id (int FK —
@@ -297,6 +306,9 @@ def _resolve_employee_relations(data: dict, request: Request, ctx=None) -> tuple
     org = ctx.org
     warnings: list[str] = []
     notes: list[str] = []
+    # Staff and production employees have departments / designations of their own (org_category.py): a name is looked
+    # up (and created) among those of the employee's kind.
+    category = org_category.category_of_type(data.get("employmentType") or Employee.EMPLOYMENT_TYPE_STAFF)
 
     # Branch is resolved FIRST because the department lookup depends on it:
     # department names are unique per branch, not globally, so "CUTTING"
@@ -317,9 +329,9 @@ def _resolve_employee_relations(data: dict, request: Request, ctx=None) -> tuple
 
     dept = None
     if data.get("departmentId"):
-        dept = Department.objects.filter(pk=int(data["departmentId"])).first()
+        dept = Department.objects.filter(pk=_as_id(data["departmentId"])).first()
     elif not is_blank_name(data.get("department")):
-        found = org.department(data["department"], branch_id, ctx.row)
+        found = org.department(data["department"], branch_id, ctx.row, category=category)
         dept = found.obj
         if found.problem:
             warnings.append(f"{found.problem} -left blank")
@@ -333,9 +345,9 @@ def _resolve_employee_relations(data: dict, request: Request, ctx=None) -> tuple
 
     desig = None
     if data.get("designationId"):
-        desig = _Desig.objects.filter(pk=int(data["designationId"])).first()
+        desig = _Desig.objects.filter(pk=_as_id(data["designationId"])).first()
     elif not is_blank_name(data.get("designation")):
-        found = org.designation(data["designation"], dept, ctx.row)
+        found = org.designation(data["designation"], dept, ctx.row, category=category)
         desig = found.obj
         if found.problem:
             warnings.append(f"{found.problem} -left blank")
@@ -379,12 +391,19 @@ def _create_employee_from_data(
         return None, "Last name is required", []
     if strict and not phone:
         return None, "Phone is required", []
+    employment_type = str(data.get("employmentType") or Employee.EMPLOYMENT_TYPE_STAFF).strip().lower()
+    if employment_type not in (Employee.EMPLOYMENT_TYPE_STAFF, Employee.EMPLOYMENT_TYPE_PRODUCTION):
+        return None, "Employment type must be Staff or Production", []
     if ctx.code_taken(employee_code) if ctx else Employee.objects.filter(employee_code=employee_code).exists():
         return None, f"Employee code '{employee_code}' already exists", []
 
     relations, warnings, notes = _resolve_employee_relations(data, request, ctx)
     if ctx is not None:
         ctx.notes.extend(notes)
+    # A department / designation picked by id must be of the employee's kind (names were looked up in it already).
+    mismatch = org_category.employee_mismatch(employment_type, relations["department"], relations["designation"])
+    if mismatch:
+        return None, mismatch, []
 
     # An employee with no branch is invisible to EVERY branch login, and so
     # is every biometric punch they generate -it looks exactly like the
@@ -419,7 +438,7 @@ def _create_employee_from_data(
             email=data.get("email") or None,
             phone=phone,
             role=data.get("role") or None,
-            employment_type=data.get("employmentType") or "staff",
+            employment_type=employment_type,
             department=relations["department"],
             designation=relations["designation"],
             branch_id=relations["branch_id"],
@@ -503,17 +522,22 @@ def _employee_update_locked(request: Request, pk: int) -> Response:
 
     original_branch_id = emp.branch_id
     original_salary = emp.salary_amount
+    original_org = (emp.employment_type, emp.department_id, emp.designation_id)
 
     # Handle department: prefer departmentId (int FK); a plain name is looked up
     # (and created) below, once the branch it belongs to is known.
     if "departmentId" in request.data:
         raw = request.data.get("departmentId")
-        emp.department_id = int(raw) if raw else None
+        if raw and not Department.objects.filter(pk=_as_id(raw)).exists():
+            return _error("Department not found", 404)
+        emp.department_id = _as_id(raw) if raw else None
 
     # Handle designation
     if "designationId" in request.data:
         raw = request.data.get("designationId")
-        emp.designation_id = int(raw) if raw else None
+        if raw and not Designation.objects.filter(pk=_as_id(raw)).exists():
+            return _error("Designation not found", 404)
+        emp.designation_id = _as_id(raw) if raw else None
 
     # Handle branch: a branch-scoped HR user can't move an employee to
     # another branch (their own branch_id wins regardless of payload).
@@ -627,18 +651,23 @@ def _employee_update_locked(request: Request, pk: int) -> Response:
         from .org_lookup import OrgLookup
 
         org = OrgLookup()
+        kind = org_category.category_of_type(emp.employment_type)
         if names_dept:
-            found = org.department(request.data.get("department"), emp.branch_id)
+            found = org.department(request.data.get("department"), emp.branch_id, category=kind)
             if found.problem:
                 return _error(found.problem)
             if found.obj is not None:
                 emp.department = found.obj
         if names_desig:
-            found = org.designation(request.data.get("designation"), emp.department)
+            found = org.designation(request.data.get("designation"), emp.department, category=kind)
             if found.problem:
                 return _error(found.problem)
             if found.obj is not None:
                 emp.designation = found.obj
+    mismatch = _org_mismatch_on_update(emp, original_org)
+    if mismatch:
+        transaction.set_rollback(True)  # a department / designation created by name above goes too
+        return _error(mismatch)
     emp.save()
     # If employee type was changed to production, try to auto-assign a production shift
     if request.data.get("employmentType") == "production":
@@ -654,6 +683,26 @@ def _employee_update_locked(request: Request, pk: int) -> Response:
                    description=f"Moved {emp.employee_code} -{emp.first_name} {emp.last_name} from TDS to Co Emp "
                                "(PF/ESI category): Co Emp turned on, TDS removed")
     return Response(_serialize_employee(emp))
+
+
+def _org_mismatch_on_update(emp: Employee, original: tuple) -> str | None:
+    """Why the department / designation an edit leaves this employee with is not of their kind (org_category.py).
+
+    Checked for what the edit changes: a new department, a new designation, or a new employment type (which then needs
+    a department and designation of the new kind - or none - in the same save). An edit of anything else (a phone
+    number) never trips over an assignment that was there before the two kinds were separated."""
+    old_type, old_dept, old_desig = original
+    type_changed = emp.employment_type != old_type
+    department = emp.department if emp.department_id and (type_changed or emp.department_id != old_dept) else None
+    designation = emp.designation if emp.designation_id and (type_changed or emp.designation_id != old_desig) else None
+    problem = org_category.employee_mismatch(emp.employment_type, department, designation)
+    if problem and type_changed:
+        kind = org_category.label(org_category.category_of_type(emp.employment_type))
+        return (
+            f"{problem} Changing someone to {kind} needs a {kind} department and designation (or none) in the same "
+            "save."
+        )
+    return problem
 
 
 def _employee_delete(request: Request, pk: int) -> Response:

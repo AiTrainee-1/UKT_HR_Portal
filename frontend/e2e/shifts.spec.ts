@@ -60,7 +60,8 @@ type World = {
   emp: Record<string, number>;
 };
 
-// "SH Stitching": Sara (F, operator), Sunil (M, operator), Suma (F, helper) and a production employee Prem.
+// "SH Stitching": Sara (F, operator), Sunil (M, operator), Suma (F, helper). Prem is a production employee with no
+// department (SH Stitching is a Staff department: staff and production have departments of their own).
 // "SH Cutting": Chandra (M, operator), Chitra (F, helper).  Shifts: Morning, Evening, Ladies (female only).
 async function world(page: Page): Promise<World> {
   await purge(page);
@@ -78,7 +79,7 @@ async function world(page: Page): Promise<World> {
     code: string,
     firstName: string,
     gender: string,
-    departmentId: number,
+    departmentId: number | null,
     designationId: number | null,
     type = "staff",
   ) =>
@@ -99,7 +100,7 @@ async function world(page: Page): Promise<World> {
     "SH-S1": await employee("SH-S1", "Sara", "female", stitching, operator),
     "SH-S2": await employee("SH-S2", "Sunil", "male", stitching, operator),
     "SH-S3": await employee("SH-S3", "Suma", "female", stitching, helper),
-    "SH-PR": await employee("SH-PR", "Prem", "male", stitching, null, "production"),
+    "SH-PR": await employee("SH-PR", "Prem", "male", null, null, "production"),
     "SH-C1": await employee("SH-C1", "Chandra", "male", cutting, operator),
     "SH-C2": await employee("SH-C2", "Chitra", "female", cutting, helper),
   };
@@ -266,8 +267,9 @@ test("assigning to departments, designations and people with includes and exclud
   await expect(dialog(page).getByTestId("plan-empty")).toBeVisible();
   await expect(dialog(page).getByTestId("assign-confirm")).toBeDisabled();
 
-  // include the Stitching department, leave out Suma by name
+  // include the Stitching department and Prem by name, leave out Suma by name
   await include(page, "department", w.stitching);
+  await include(page, "employee", w.emp["SH-PR"]);
   await exclude(page, "employee", w.emp["SH-S3"]);
   await expect(dialog(page).getByTestId(`chip-department-${w.stitching}`)).toHaveAttribute("data-mode", "include");
   await expect(dialog(page).getByTestId(`chip-employee-${w.emp["SH-S3"]}`)).toHaveAttribute("data-mode", "exclude");
@@ -331,6 +333,7 @@ test("several departments and designations: an excluded designation is left out 
   await openAssign(page, w.morning);
   await include(page, "department", w.stitching);
   await include(page, "department", w.cutting);
+  await include(page, "employee", w.emp["SH-PR"]);
   await exclude(page, "designation", w.helper);
   await expect(row(page, "SH-S1")).toHaveAttribute("data-status", "new");
   await expect(row(page, "SH-S2")).toHaveAttribute("data-status", "new");

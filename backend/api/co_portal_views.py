@@ -34,6 +34,7 @@ def _designation_json(d: Designation) -> dict:
         "title": d.title,
         "departmentId": d.department_id,
         "level": d.level,
+        "category": d.category,
     }
 
 

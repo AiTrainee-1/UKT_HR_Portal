@@ -49,6 +49,7 @@ import { MONTH_NAMES } from "@/components/payroll/BreakdownDrawer";
 import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { usePayrollGeneration } from "@/contexts/PayrollGenerationContext";
 import { useListDepartments, useListPayrollRuns } from "@/lib/api-client";
+import { inCategory } from "@/lib/departments";
 import {
   getPayrollMonthSkippedQueryKey,
   getPayrollSkipCheckQueryKey,
@@ -142,6 +143,7 @@ export function PayrollTab({
   const issueFilters = useMemo(() => issueFiltersFromUrl(url), [url]);
 
   const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
+  // staff payroll lists staff departments only (owner 2026-11-16: every department is Staff or Production)
   const departments = useListDepartments();
   const runsQuery = useListPayrollRuns({ month, year });
   // Staff payroll only: Production payroll has its own pages.
@@ -398,7 +400,7 @@ export function PayrollTab({
           <PayrollFilterBar
             value={filters}
             onChange={(next) => setUrl(filtersToUrl(next) as Record<string, string>)}
-            departments={departments.data}
+            departments={inCategory<{ id: number; name: string; category?: string | null }>(departments.data, "staff")}
             issueOptions={issues?.summary.byCode}
             issuesLoading={issuesQuery.isLoading}
             shown={shown.length}

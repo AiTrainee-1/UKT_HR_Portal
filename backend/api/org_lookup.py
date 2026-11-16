@@ -9,6 +9,9 @@ Two rules live here, so every flow behaves the same:
   A designation belongs to a department (the Add/Edit Employee form offers only the employee's own department's
   designations, and a branch login sees a designation through its department), so it is looked up and created in the
   employee's department.
+* Staff and production employees have departments and designations of their own (org_category.py): a name is matched
+  only among those of the employee's kind, and one created for them is of that kind. "CUTTING" for a production worker
+  is the Production CUTTING of their branch, never the Staff one.
 
 The three tables are read ONCE per request and kept in memory (a 3,000-row upload used to run two or three lookups per
 row), and what the request creates is remembered so the next row naming it reuses it instead of creating it again.
@@ -21,6 +24,7 @@ from typing import Any
 from django.db import transaction
 
 from .models import Branch, Department, Designation
+from .org_category import STAFF
 
 # A cell that holds more than this is not a title (an address pasted into the wrong column, say): creating a record
 # named after it would only put junk in the list.
@@ -89,19 +93,21 @@ class OrgLookup:
 
     # --- department ---
 
-    def department(self, name: Any, branch_id: int | None, row: int | None = None) -> Resolved:
-        """The department called `name` for an employee of `branch_id`, created in that branch when there is none.
+    def department(self, name: Any, branch_id: int | None, row: int | None = None, category: str = STAFF) -> Resolved:
+        """The `category` (staff / production) department called `name` for an employee of `branch_id`, created in that
+        branch when there is none.
 
-        Department names are unique per branch, not globally ("CUTTING" is a different row in each unit), so the
-        employee's own branch comes first. A department of no branch, or (to keep older single-branch imports
-        working) of another one, is the fallback; only when nothing carries the name is one created."""
+        Department names are unique per branch and kind, not globally ("CUTTING" is a different row in each unit, and
+        for staff and production), so the employee's own branch comes first. A department of no branch, or (to keep
+        older single-branch imports working) of another one, is the fallback; only when nothing of the employee's kind
+        carries the name is one created."""
         text = clean_name(name)
         if is_blank_name(text):
             return Resolved()
         if len(text) > MAX_NAME_LENGTH:
             return Resolved(problem=f"Department '{text[:30]}...' is too long (over {MAX_NAME_LENGTH} characters)")
         self._load()
-        candidates = self._departments.get(text.lower(), [])
+        candidates = [d for d in self._departments.get(text.lower(), []) if d.category == category]
         found = (
             next((d for d in candidates if branch_id and d.branch_id == branch_id), None)
             or next((d for d in candidates if d.branch_id is None), None)
@@ -113,26 +119,35 @@ class OrgLookup:
         # Created IN the employee's branch: a department with no branch would be hidden from every branch login,
         # and so would the designations under it and the employees in it.
         with transaction.atomic():
-            dept, _ = Department.objects.get_or_create(name=text, branch_id=branch_id)
+            dept, _ = Department.objects.get_or_create(name=text, branch_id=branch_id, category=category)
         self._departments.setdefault(text.lower(), []).append(dept)
         self.new_departments[dept.id] = Created(dept.name, None, [row] if row else [])
         return Resolved(dept, created=True)
 
     # --- designation ---
 
-    def designation(self, title: Any, department: Department | None, row: int | None = None) -> Resolved:
+    def designation(
+        self, title: Any, department: Department | None, row: int | None = None, category: str = STAFF
+    ) -> Resolved:
         """The designation `title` in `department`, created there when the department has none by that title.
 
-        An employee with no department can't have one to hang it on: any designation of that title is reused, and one
-        with no department is created (visible to an unscoped login only, like every department-less designation)."""
+        An employee with no department can't have one to hang it on: any designation of that title and of the
+        employee's kind (`category`) is reused, and one with no department is created in that kind (visible to an
+        unscoped login only, like every department-less designation). With a department the kind is the
+        department's."""
         text = clean_name(title)
         if is_blank_name(text):
             return Resolved()
         if len(text) > MAX_NAME_LENGTH:
             return Resolved(problem=f"Designation '{text[:30]}...' is too long (over {MAX_NAME_LENGTH} characters)")
         self._load()
+        if department is not None and department.category != category:
+            # An employee left in a department of the other kind (from before the two were separated) still gets a
+            # designation of their own kind - with no department, since theirs cannot hold it.
+            department = None
         dept_id = department.id if department is not None else None
-        candidates = self._designations.get(text.lower(), [])
+        kind = department.category if department is not None else category
+        candidates = [g for g in self._designations.get(text.lower(), []) if g.category == kind]
         found = next((g for g in candidates if g.department_id == dept_id), None)
         if found is None and dept_id is None and candidates:
             found = candidates[0]
@@ -140,7 +155,7 @@ class OrgLookup:
             self._note_use(self.new_designations, found.id, row)
             return Resolved(found)
         with transaction.atomic():
-            made = Designation.objects.create(title=text, department_id=dept_id)
+            made = Designation.objects.create(title=text, department_id=dept_id, category=kind)
         self._designations.setdefault(text.lower(), []).append(made)
         self.new_designations[made.id] = Created(
             made.title, department.name if department is not None else None, [row] if row else []

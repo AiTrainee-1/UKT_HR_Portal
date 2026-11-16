@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import { useDraft } from "@/hooks/use-debounced";
 import { useListDepartments } from "@/lib/api-client";
+import { departmentOptions, type OrgCategory } from "@/lib/departments";
 import { ALL } from "../leave/logic";
 import { DateField, FilterPanel, FilterSelect, SearchBox } from "../leave/parts";
+import { useReportLogKind } from "./kind";
 
 /** What the two daily lists are narrowed by: one date (today at first), a department, and a search over code and name. They
  *  share it, so a date picked on one list is the date of the other when the tab is switched. */
@@ -19,6 +21,7 @@ export default function DailyFiltersBar({
   actions,
   children,
   testId,
+  category,
 }: {
   filters: DailyFilters;
   onChange: (next: DailyFilters) => void;
@@ -27,8 +30,13 @@ export default function DailyFiltersBar({
   /** More controls on the second row (an Informed filter, the export buttons). */
   children?: ReactNode;
   testId: string;
+  /** Whose departments the picker offers (lib/departments.ts); null offers both kinds. Left out, the page's own: Staff
+   *  departments on the Report Log, Production ones on the Production Report Log (its lists hold only those people). */
+  category?: OrgCategory | null;
 }) {
+  const kind = useReportLogKind();
   const { data: departments } = useListDepartments();
+  const deptOptions = departmentOptions(departments, { category: category === undefined ? kind : category });
   const set = (patch: Partial<DailyFilters>) => onChange({ ...filters, ...patch });
   // the box keeps its own text and hands the search up once typing pauses: one request per pause, not per letter
   const [search, setSearch] = useDraft(filters.search, (next) => set({ search: next }));
@@ -55,7 +63,7 @@ export default function DailyFiltersBar({
               onChange={(department) => set({ department })}
               label="Filter by department"
               allLabel="All Departments"
-              options={(departments ?? []).map((d) => ({ value: String(d.id), label: d.name }))}
+              options={deptOptions.map((o) => ({ value: o.value, label: o.label }))}
               testId="daily-department"
             />
           </div>

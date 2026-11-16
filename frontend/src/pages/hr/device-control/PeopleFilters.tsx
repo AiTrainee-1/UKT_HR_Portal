@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -7,6 +7,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { DeviceControlDevice, DeviceMode } from "@/lib/api-client/custom-hooks";
+import { categoryForEmploymentType, departmentOptions, keepIfOffered, type OrgDepartment } from "@/lib/departments";
+import { OrgSelectItems } from "@/lib/org-select";
 import { cn } from "@/lib/utils";
 import {
   LINK_LABEL,
@@ -38,11 +40,23 @@ export default function PeopleFilters({
   filters: PushFilters;
   onChange: (next: PushFilters) => void;
   devices: DeviceControlDevice[];
-  departments: { id: number; name: string }[];
+  departments: OrgDepartment[];
   shown: number;
   total: number;
 }) {
   const set = (patch: Partial<PushFilters>) => onChange({ ...filters, ...patch });
+  // Staff and production have departments of their own (lib/departments.ts): a type picked offers only its kind,
+  // "Staff and production" groups both under two headings.
+  const deptOptions = useMemo(
+    () => departmentOptions(departments, { category: categoryForEmploymentType(filters.employmentType) }),
+    [departments, filters.employmentType],
+  );
+  const setEmploymentType = (employmentType: PushFilters["employmentType"]) => {
+    // a department of the other kind would filter the list to nobody: it is dropped with the switch
+    const offered = departmentOptions(departments, { category: categoryForEmploymentType(employmentType) });
+    const kept = keepIfOffered(filters.departmentId, offered, null);
+    set({ employmentType, departmentId: kept == null ? null : Number(kept) });
+  };
 
   // The search box is typed into freely; the list asks the server once the typing pauses.
   const [text, setText] = useState(filters.search);
@@ -196,7 +210,7 @@ export default function PeopleFilters({
           </Select>
           <Select
             value={filters.employmentType || "all"}
-            onValueChange={(v) => set({ employmentType: v === "all" ? "" : (v as PushFilters["employmentType"]) })}
+            onValueChange={(v) => setEmploymentType(v === "all" ? "" : (v as PushFilters["employmentType"]))}
           >
             <SelectTrigger
               className="h-9 sm:w-52"
@@ -224,11 +238,7 @@ export default function PeopleFilters({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All departments</SelectItem>
-              {departments.map((d) => (
-                <SelectItem key={d.id} value={String(d.id)}>
-                  {d.name}
-                </SelectItem>
-              ))}
+              <OrgSelectItems options={deptOptions} />
             </SelectContent>
           </Select>
           <label className="col-span-2 flex items-center gap-2 text-xs font-medium text-slate-600 sm:col-span-1">

@@ -451,10 +451,11 @@ export type Person = {
   gender?: string | null;
 };
 
-/** Active employees with no shift at all. */
+/** Active employees with no shift at all. Production workers are never without one (owner 2026-11-16): they are all on
+ *  the default production shifts from Settings unless on a special shift, so only staff can be unassigned. */
 export function unassignedOf<T extends Person>(employees: T[], assignments: ShiftAssignment[]): T[] {
   const assigned = new Set(assignments.map((a) => a.employeeId));
-  return employees.filter((e) => !assigned.has(e.id));
+  return employees.filter((e) => (e.employmentType ?? "staff") !== "production" && !assigned.has(e.id));
 }
 
 export function filterPeople<T extends Person>(people: T[], type: TypeFilter, query: string): T[] {

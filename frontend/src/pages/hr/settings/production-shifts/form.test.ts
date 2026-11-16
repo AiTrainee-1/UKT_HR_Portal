@@ -5,6 +5,8 @@ import {
   addBreak,
   addRule,
   autoRuleLabel,
+  confirmedRowLabel,
+  confirmRow,
   dateNote,
   draftChanges,
   draftFrom,
@@ -169,7 +171,7 @@ describe("production shifts form: what a save sends", () => {
     });
     expect(input.groups[0].rules[6]).toEqual({
       id: 7,
-      label: "Past midnight",
+      label: "Works until 00:30 (1 shift + 1.5 OT)",
       outTime: "00:30",
       outNextDay: true,
       shiftValue: 2.5,
@@ -286,6 +288,48 @@ describe("production shifts form: what is wrong before anything is sent", () => 
     expect(validateDraft(edited((d) => (d.groups[0].rules[4].shiftValue = "1"))).ok).toBe(true);
   });
 
+  it("asks for a start date only while the rules are on, as the server does, and sends none when it is blank", () => {
+    const off = edited((d) => {
+      d.enabled = false;
+      d.effectiveFrom = "";
+    });
+    expect(validateDraft(off).effectiveFrom).toBeNull();
+    expect(validateDraft(off).ok).toBe(true);
+    expect(toInput(off).effectiveFrom).toBeNull();
+    // a date that is there must still be a real one, between 2000 and 2100
+    const notADate = edited((d) => {
+      d.enabled = false;
+      d.effectiveFrom = "2026-02-31";
+    });
+    expect(validateDraft(notADate).ok).toBe(false);
+    expect(validateDraft(edited((d) => (d.effectiveFrom = "1999-12-31"))).effectiveFrom).toBe(
+      "Pick a date between the years 2000 and 2100.",
+    );
+    expect(toInput(seeded()).effectiveFrom).toBe("2026-10-14");
+  });
+
+  it("does not check the ladder of a group that is switched off (the server does not), only that its rows are readable", () => {
+    const messy = edited((d) => {
+      d.groups[0].enabled = false;
+      d.groups[0].rules[3].outTime = "09:00"; // out of order, and a value below the row before it
+      d.groups[0].rules[4].shiftValue = "0.3";
+      d.groups[0].rules[0].outTime = "07:00"; // before the start
+    });
+    const v = validateDraft(messy);
+    expect(v.groups[0].rules.every((e) => Object.keys(e).length === 0)).toBe(true);
+    expect(v.ok).toBe(true);
+    // switched back on, the same ladder is refused
+    expect(
+      validateDraft({ ...messy, groups: messy.groups.map((g, i) => (i === 0 ? { ...g, enabled: true } : g)) }).ok,
+    ).toBe(false);
+    // a time or a shift value that cannot be read is refused in a group that is off too (the server parses every row)
+    const unreadable = edited((d) => {
+      d.groups[0].enabled = false;
+      d.groups[0].rules[2].shiftValue = "";
+    });
+    expect(validateDraft(unreadable).groups[0].rules[2].value).toBe("Enter a number.");
+  });
+
   it("does not hold a row that is switched off to the order or the rising values, but it must still be readable", () => {
     const off = validateDraft(
       edited((d) => {
@@ -309,7 +353,11 @@ describe("production shifts form: what is wrong before anything is sent", () => 
     expect(validateDraft(edited((d) => (d.groups[0].label = " "))).groups[0].errors.label).toBe(
       "Give the group a name.",
     );
-    expect(validateDraft(edited((d) => (d.groups[0].label = "x".repeat(81)))).groups[0].errors.label).toContain("80");
+    // the server keeps names of up to 100 characters (MAX_LABEL), so the screen allows exactly that many
+    expect(validateDraft(edited((d) => (d.groups[0].label = "x".repeat(100)))).ok).toBe(true);
+    expect(validateDraft(edited((d) => (d.groups[0].label = "x".repeat(101)))).groups[0].errors.label).toContain("100");
+    expect(validateDraft(edited((d) => (d.groups[0].rules[0].label = "x".repeat(100)))).ok).toBe(true);
+    expect(validateDraft(edited((d) => (d.breaks[0].label = "x".repeat(101)))).breaks[0].label).toContain("100");
     expect(validateDraft(edited((d) => (d.groups[0].startTime = ""))).groups[0].errors.start).toBe(
       "Enter the start time.",
     );
@@ -445,6 +493,51 @@ describe("production shifts form: the handwriting the owner has not confirmed", 
     expect(isUnverifiedRow(day, day.rules[7])).toBe(false);
     // the same figures in a group of another kind are not marked
     expect(isUnverifiedRow({ kind: "sunday" }, day.rules[6])).toBe(false);
+  });
+
+  it("stops marking a row once its name is HR's own, and still marks it with no name or the automatic one", () => {
+    const day = seeded().groups[0];
+    const row = day.rules[6];
+    expect(isUnverifiedRow(day, { ...row, label: "" })).toBe(true);
+    expect(isUnverifiedRow(day, { ...row, label: autoRuleLabel(row.outTime, row.outNextDay) })).toBe(true);
+    expect(isUnverifiedRow(day, { ...row, label: "Night overtime, owner said AM" })).toBe(false);
+  });
+
+  it("confirms a row as it is: the name says which reading was checked, the time and shifts stay, and the note goes", () => {
+    const d = seeded();
+    const day = d.groups[0];
+    const rules = confirmRow(day.rules, day.rules[6].key);
+    expect(rules[6]).toEqual({
+      ...day.rules[6],
+      label: "Works until 00:30 (1 shift + 1.5 OT) - checked: 12:30 AM next day",
+    });
+    expect(rules.filter((r, i) => r !== day.rules[i])).toHaveLength(1);
+    expect(isUnverifiedRow(day, rules[6])).toBe(false);
+    const after = { ...d, groups: d.groups.map((g, i) => (i === 0 ? { ...g, rules } : g)) };
+    expect(unverifiedRows(after).map((r) => r.group)).toEqual(["Night shift"]);
+    expect(validateDraft(after).ok).toBe(true);
+    // the question before the save says only the name changes, and that it moves no pay
+    expect(draftChanges(after, d)).toEqual([
+      {
+        key: "r7",
+        label: "Day shift: 12:30 AM next day row name",
+        from: "Works until 00:30 (1 shift + 1.5 OT)",
+        to: "Works until 00:30 (1 shift + 1.5 OT) - checked: 12:30 AM next day",
+        money: false,
+      },
+    ]);
+    // sent with the same time and shifts, the new name only
+    expect(toInput(after).groups[0].rules[6]).toMatchObject({
+      id: 7,
+      outTime: "00:30",
+      outNextDay: true,
+      shiftValue: 2.5,
+    });
+    // the server's 100 characters are kept, however long the name was
+    const long = confirmedRowLabel({ ...day.rules[6], label: "y".repeat(100) });
+    expect(long.length).toBe(100);
+    expect(long.endsWith(" - checked: 12:30 AM next day")).toBe(true);
+    expect(confirmedRowLabel(d.groups[1].rules[0])).toBe("Leaves at midnight - checked: 12:00 AM next day");
   });
 });
 

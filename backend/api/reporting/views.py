@@ -119,7 +119,13 @@ def reports_catalog(request):
         seen_families.add(key)
         counts[s.category] = counts.get(s.category, 0) + 1
 
-    departments = scope_to_branch(Department.objects.all(), request).order_by("name").values("id", "name")
+    # Each option carries its Staff / Production kind and branch, so the filter can offer only the kind the report's
+    # Employee type filter is on, or group both kinds (two CUTTINGs) when it is on neither.
+    departments = (
+        scope_to_branch(Department.objects.all(), request)
+        .order_by("name")
+        .values("id", "name", "category", "branch_id", "branch__name")
+    )
     branches = Branch.objects.all()
     if branch_scoped:
         branches = branches.filter(id=get_branch_scope(request))
@@ -134,10 +140,19 @@ def reports_catalog(request):
             ],
             "reports": [spec_json(s, today, branch_scoped) for s in specs],
             "options": {
-                "departments": [{"id": d["id"], "name": d["name"]} for d in departments],
+                "departments": [
+                    {
+                        "id": d["id"],
+                        "name": d["name"],
+                        "category": d["category"],
+                        "branchId": d["branch_id"],
+                        "branchName": d["branch__name"],
+                    }
+                    for d in departments
+                ],
                 "designations": [
-                    {"id": d["id"], "name": d["title"]}
-                    for d in Designation.objects.order_by("title").values("id", "title")
+                    {"id": d["id"], "name": d["title"], "category": d["category"], "departmentId": d["department_id"]}
+                    for d in Designation.objects.order_by("title").values("id", "title", "category", "department_id")
                 ],
                 "branches": [
                     {"id": b["id"], "name": b["name"]} for b in branches.order_by("name").values("id", "name")

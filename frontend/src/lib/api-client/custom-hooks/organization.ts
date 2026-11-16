@@ -28,6 +28,11 @@ export type Designation = {
   departmentId?: number | null;
   departmentName?: string | null;
   level?: string | null;
+  /** Staff or Production (its department's): lib/departments.ts decides which a page offers. */
+  category?: "staff" | "production" | null;
+  /** Its department's branch. */
+  branchId?: number | null;
+  employeeCount?: number | null;
   createdAt?: string | null;
 };
 
@@ -52,7 +57,8 @@ export const getListBranchesQueryKey = () => ["/api/branches"] as const;
 export const getListDesignationsQueryKey = (params?: { departmentId?: number }) =>
   ["/api/designations", params] as const;
 export const getListShiftsQueryKey = () => ["/api/shifts"] as const;
-export const getSearchEmployeesQueryKey = (search: string) => ["/api/employees", "search", search] as const;
+export const getSearchEmployeesQueryKey = (search: string, employmentType?: "staff" | "production") =>
+  ["/api/employees", "search", search, ...(employmentType ? [employmentType] : [])] as const;
 
 // ── Branches ──────────────────────────────────────────────────────────────────
 
@@ -77,7 +83,13 @@ export const useListBranches = <TData = Branch[]>(options?: UseQueryOptions<Bran
 // from the generated hook (not useCreateDepartment) -both are re-exported
 // through the same `export *` barrel in index.ts, and two same-named
 // exports there would silently shadow one another with no compile error.
-export type CreateDepartmentInput = { name: string; description?: string; branchId?: number };
+export type CreateDepartmentInput = {
+  name: string;
+  description?: string;
+  branchId?: number;
+  /** Staff or Production; the server makes it Staff when left out (an older client). */
+  category?: "staff" | "production";
+};
 
 export const useCreateDepartmentWithBranch = () => {
   const queryClient = useQueryClient();
@@ -146,7 +158,13 @@ export const useListDesignations = <TData = Designation[]>(
 
 export const useCreateDesignation = () =>
   useMutation({
-    mutationFn: (data: { title: string; departmentId?: number | null; level?: string }) =>
+    mutationFn: (data: {
+      title: string;
+      departmentId?: number | null;
+      level?: string;
+      /** Only used for a designation with no department (one with a department is of its department's kind). */
+      category?: "staff" | "production";
+    }) =>
       customFetch<Designation>("/api/designations", {
         method: "POST",
         body: JSON.stringify(data),
@@ -219,13 +237,15 @@ export const useDeleteShift = () =>
 
 // ── Employee Search & Assignment ─────────────────────────────────────────────
 
-export const useSearchEmployees = (search: string, enabled = true) => {
+/** Active employees matching `search` (2+ characters); only staff or only production ones with `employmentType`. */
+export const useSearchEmployees = (search: string, enabled = true, employmentType?: "staff" | "production") => {
   const searching = enabled && search.trim().length >= 2;
   return useQuery({
-    queryKey: getSearchEmployeesQueryKey(search),
+    queryKey: getSearchEmployeesQueryKey(search, employmentType),
     queryFn: ({ signal }) => {
       // lite: an embedded photo comes back as its /photo link instead of its bytes (no caller shows the picture)
       const qs = new URLSearchParams({ search, status: "active", lite: "1" });
+      if (employmentType) qs.set("employmentType", employmentType);
       return customFetch<import("../generated/api.schemas").Employee[]>(`/api/employees?${qs}`, { signal });
     },
     enabled: searching,
@@ -234,6 +254,22 @@ export const useSearchEmployees = (search: string, enabled = true) => {
     staleTime: 10_000,
   });
 };
+
+/**
+ * Set (or clear, with null) ONE employee's department or designation from the Departments / Designations pages:
+ * POST /api/departments/assign or /api/designations/assign, which take those pages' own permission (not the whole
+ * Employees module) and refuse a department / designation of the other kind (Staff vs Production).
+ */
+export const useAssignOrg = () =>
+  useMutation({
+    mutationFn: (
+      input: { employeeId: number; departmentId: number | null } | { employeeId: number; designationId: number | null },
+    ) =>
+      customFetch<{ id: number; departmentId?: number | null; designationId?: number | null }>(
+        "departmentId" in input ? "/api/departments/assign" : "/api/designations/assign",
+        { method: "POST", body: JSON.stringify(input) },
+      ),
+  });
 
 export const useAssignEmployee = () =>
   useMutation({
@@ -837,7 +873,10 @@ export const useEmployeeCount = (
  * photo is tens of MB on a real company. Takes the same filters as `useListEmployees` (e.g. `{ status: "active" }`;
  * the server applies them before dropping the photos). Same key prefix as the list, so invalidating "/api/employees"
  * refreshes it; the "lite" segment keeps it from sharing a cache entry with the photo-laden list. */
-export const useListEmployeesLite = (params?: ListEmployeesParams, options?: { enabled?: boolean }) =>
+export const useListEmployeesLite = (
+  params?: ListEmployeesParams & { employmentType?: "staff" | "production" },
+  options?: { enabled?: boolean },
+) =>
   useQuery<Employee[]>({
     queryKey: ["/api/employees", "lite", ...(params ? [params] : [])] as const,
     queryFn: ({ signal }) =>

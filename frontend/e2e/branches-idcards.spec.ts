@@ -64,7 +64,8 @@ async function seed(page: Page) {
       phone: "9000000055",
       employmentType: kind,
       branchId: alpha.id,
-      departmentId: dept.id,
+      // BI Dept is a Staff department: only staff can be in it (staff and production have departments of their own)
+      ...(kind === "staff" ? { departmentId: dept.id } : {}),
       salaryType: "monthly",
       ...(kind === "staff" ? { salaryAmount: 24000 } : { salaryPerShift: 400 }),
     });
@@ -133,7 +134,7 @@ test.describe("Manage Branch", () => {
     const drawer = page.getByTestId("branch-drawer");
     await expect(drawer).toBeVisible();
     await expect(drawer.getByTestId("drawer-departments")).toContainText("BI Dept");
-    await expect(drawer.getByTestId("drawer-departments")).toContainText("2 active");
+    await expect(drawer.getByTestId("drawer-departments")).toContainText("1 active");
     await expect(drawer.getByTestId("drawer-unit-code")).toContainText(`${ALPHA_CODE}-3`);
     await expect(drawer.getByTestId("drawer-geofence")).toContainText("150 metres");
 
@@ -185,7 +186,7 @@ test.describe("Manage Branch", () => {
     const alpha = branches.find((b) => b.name === "BI Alpha")!;
     const row = res.body.branches.find((r: { branchId: number }) => r.branchId === alpha.id);
     expect(row).toMatchObject({ staffActive: 1, productionActive: 1, inactive: 0 });
-    expect(row.departments).toEqual([expect.objectContaining({ name: "BI Dept", activeCount: 2 })]);
+    expect(row.departments).toEqual([expect.objectContaining({ name: "BI Dept", activeCount: 1 })]);
   });
 });
 

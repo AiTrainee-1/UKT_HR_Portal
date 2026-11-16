@@ -1,4 +1,4 @@
-import { Info, Moon, Plus, Sun, Trash2, Users } from "lucide-react";
+import { Info, Moon, Plus, Sun, Trash2, Users, X } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,9 @@ import { SettingBlock, SettingsSection } from "../kit/SettingBlock";
 import { PRODUCTION_SHIFT_SECTIONS, productionShiftText } from "../ProductionShiftsTab.meta";
 import { APPLIES_ON, KIND_LABEL, newGroup, unverifiedRows, type GroupRow } from "./form";
 import { LadderTable } from "./LadderTable";
-import { clock12 } from "./time";
+import { groupCardId, groupEndId } from "./SummarySection";
+import { DAYS_WORDS, groupSummary } from "./summary";
+import { absMinutes, atText, clock12, spanText, toMinutes } from "./time";
 import { Problem, type SectionProps } from "./ui";
 
 const block = (id: string) => ({ id, ...productionShiftText(id) });
@@ -26,30 +28,71 @@ const APPLIES_WORDS: Record<GroupRow["appliesOn"], string> = {
   all: "any day",
 };
 
-/** A labelled box of a group, with a line that says what it is. */
-function GroupField({
-  label,
-  hint,
-  children,
-  className,
-}: {
-  label: string;
-  hint?: string;
-  children: ReactNode;
-  className?: string;
-}) {
+/** A framed part of a group's card: "Shift time", "First punch". */
+function Part({ title, children, testId }: { title: string; children: ReactNode; testId?: string }) {
   return (
-    <div className={cn("min-w-0 space-y-1", className)}>
-      <p className="text-xs font-semibold text-gray-700">{label}</p>
+    <div className="min-w-0 space-y-2 rounded-lg border border-slate-200 bg-white p-3" data-testid={testId}>
+      <p className="text-xs font-semibold text-slate-700">{title}</p>
       {children}
-      {hint && <p className="text-[11px] leading-snug text-gray-500">{hint}</p>}
     </div>
   );
 }
 
+/** "From [08:30]" or "To [08:00 PM]": a word and a time box beside it (the pair wraps onto two lines on a phone). */
+function TimeBox({
+  word,
+  ariaLabel,
+  id,
+  value,
+  onChange,
+  disabled,
+  invalid,
+}: {
+  word: string;
+  ariaLabel: string;
+  id?: string;
+  value: string;
+  onChange: (next: string) => void;
+  disabled: boolean;
+  invalid: boolean;
+}) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className="w-9 shrink-0 text-xs font-semibold text-slate-500">{word}</span>
+      <Input
+        id={id}
+        type="time"
+        aria-label={ariaLabel}
+        value={value}
+        disabled={disabled}
+        aria-invalid={invalid ? true : undefined}
+        className={cn("h-9 w-[8.75rem]", invalid && "border-red-400")}
+        onChange={(ev) => onChange(ev.target.value)}
+      />
+    </span>
+  );
+}
+
+/** The sentence under a group's From / To: the hours, or what is missing. */
+function shiftTimeText(g: GroupRow, lastPoint: number | null, unpaid: number): string {
+  const start = toMinutes(g.startTime);
+  if (start === null) return "Enter the start time.";
+  if (g.mainOutTime.trim() === "") {
+    return `Starts at ${atText(start)}, with no end time: leaving early is never flagged.${
+      lastPoint === null ? "" : ` Its last paid leaving time is ${atText(lastPoint)}.`
+    }`;
+  }
+  const end = absMinutes(g.mainOutTime, g.mainOutNextDay);
+  if (end === null || end <= start) return "The end must be after the start.";
+  return `${atText(start)} to ${atText(end)}: ${spanText(end - start)}${
+    unpaid > 0 ? `, of which ${spanText(unpaid)} is unpaid break` : ""
+  }.`;
+}
+
 /**
- * The shift groups: one card for each (Day, Night, Sunday, and any HR adds), with the boxes that decide which days it is
- * used for and its ladder. A group HR adds starts switched off, because a group that is on must not share a first-punch
+ * The shift groups: one card for each (Day, Night, Sunday, and any HR adds). Each says its shift time as From [start] To
+ * [end] (the end is the standard departure, which may be the next day), its first-punch window as From / To, the days it
+ * is used on, and its ladder. A group HR adds starts switched off, because a group that is on must not share a first-punch
  * window with another that can be used on the same day.
  */
 export function GroupsSection({ draft, patch, readOnly, validation }: SectionProps) {
@@ -63,7 +106,7 @@ export function GroupsSection({ draft, patch, readOnly, validation }: SectionPro
       id="production-shifts-groups"
       icon={Sun}
       title={PRODUCTION_SHIFT_SECTIONS.groups}
-      purpose="The default timings of the factory: the Day shift from 8:30 AM, the Night shift from 9:00 PM and the Sunday shift. Each ladder says what leaving at each time earns. Change a time or a figure, switch a row off, add a row, or add a group of your own."
+      purpose="The factory's shifts: the Day shift from 8:30 AM, the Night shift from 9:00 PM and the Sunday shift. Set each one's start and end, the window its first punch falls in, and what leaving at each time earns."
       usedBy={[
         { label: "Production Attendance", to: "/hr/attendance/production" },
         { label: "Production Payroll", to: "/hr/production-payroll" },
@@ -118,8 +161,8 @@ export function GroupsSection({ draft, patch, readOnly, validation }: SectionPro
               </p>
               <p>
                 They follow the owner's handwritten table exactly as it reads, but the handwriting could be read two
-                ways. Ask the owner, and change the time if it should be different. The note goes away from a row once
-                its time or its shifts are changed.
+                ways. Ask the owner: if the row is right, press "Yes, it is right" on it (its name then says it was
+                checked); if not, change its time or its shifts. Either way, save the rules afterwards.
               </p>
               <ul className="list-disc space-y-0.5 pl-4">
                 {unverified.map(({ group, row, hint }) => (
@@ -148,14 +191,21 @@ export function GroupsSection({ draft, patch, readOnly, validation }: SectionPro
               const e = validation.groups[gi]?.errors ?? {};
               const name = g.label.trim() || `Group ${gi + 1}`;
               const KindIcon = KIND_ICON[g.kind];
+              const s = groupSummary(g, draft.breaks, gi);
+              const lastPoint = s.points.length > 0 ? s.points[s.points.length - 1].at : null;
+              const setEnd = s.endSource === "set" ? s.end : null;
               return (
                 <section
                   key={g.key}
+                  id={groupCardId(g.key)}
                   data-testid="group-card"
                   data-kind={g.kind}
                   data-enabled={g.enabled ? "true" : "false"}
                   aria-label={name}
-                  className={cn("space-y-4 rounded-xl border border-slate-200 p-3 sm:p-4", !g.enabled && "bg-slate-50")}
+                  className={cn(
+                    "scroll-mt-24 space-y-4 rounded-xl border border-slate-200 p-3 sm:p-4",
+                    !g.enabled && "bg-slate-50",
+                  )}
                 >
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                     <span className="settings-tile h-8 w-8 shrink-0 rounded-lg">
@@ -201,90 +251,121 @@ export function GroupsSection({ draft, patch, readOnly, validation }: SectionPro
                     </Button>
                   </div>
                   {e.label && <Problem>{e.label}</Problem>}
+                  <p className="text-[13px] leading-snug text-slate-600" data-testid="group-headline">
+                    <span className="font-semibold text-slate-800">{name}</span> · {DAYS_WORDS[g.appliesOn]}
+                    {s.range ? ` · ${s.range}` : ""}
+                    {g.enabled ? "" : " · switched off"}
+                  </p>
 
-                  <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <GroupField label="Used on" hint="The days of the week this group can be the answer for.">
-                      <select
-                        aria-label={`${name}: used on`}
-                        className="h-9 w-full rounded-md border bg-white px-2 text-sm disabled:opacity-50"
-                        value={g.appliesOn}
-                        disabled={readOnly}
-                        onChange={(ev) => patchGroup(g.key, { appliesOn: ev.target.value as GroupRow["appliesOn"] })}
-                      >
-                        {APPLIES_ON.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    </GroupField>
-                    <GroupField
-                      label="Start time"
-                      hint="When workers of this group should arrive. The grace comes after it."
-                    >
-                      <Input
-                        type="time"
-                        aria-label={`${name}: start time`}
-                        value={g.startTime}
-                        disabled={readOnly}
-                        aria-invalid={e.start ? true : undefined}
-                        className={cn("h-9", e.start && "border-red-400")}
-                        onChange={(ev) => patchGroup(g.key, { startTime: ev.target.value })}
-                      />
-                    </GroupField>
-                    <GroupField
-                      label="First punch from"
-                      hint="A day belongs to this group when its first punch is between these two times."
-                    >
-                      <Input
-                        type="time"
-                        aria-label={`${name}: first punch from`}
-                        value={g.firstPunchFrom}
-                        disabled={readOnly}
-                        aria-invalid={e.window ? true : undefined}
-                        className={cn("h-9", e.window && "border-red-400")}
-                        onChange={(ev) => patchGroup(g.key, { firstPunchFrom: ev.target.value })}
-                      />
-                    </GroupField>
-                    <GroupField label="First punch to">
-                      <Input
-                        type="time"
-                        aria-label={`${name}: first punch to`}
-                        value={g.firstPunchTo}
-                        disabled={readOnly}
-                        aria-invalid={e.window ? true : undefined}
-                        className={cn("h-9", e.window && "border-red-400")}
-                        onChange={(ev) => patchGroup(g.key, { firstPunchTo: ev.target.value })}
-                      />
-                    </GroupField>
-                    <GroupField
-                      label="Standard departure"
-                      hint="Only used to flag leaving early. It does not change the shifts earned. Empty = none."
-                      className="sm:col-span-2"
-                    >
-                      <div className="flex flex-wrap items-center gap-3">
-                        <Input
-                          type="time"
-                          aria-label={`${name}: standard departure`}
-                          value={g.mainOutTime}
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <Part title="Shift time" testId="group-shift-time">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                        <TimeBox
+                          word="From"
+                          ariaLabel={`${name}: start time`}
+                          value={g.startTime}
+                          onChange={(v) => patchGroup(g.key, { startTime: v })}
                           disabled={readOnly}
-                          aria-invalid={e.mainOut ? true : undefined}
-                          className={cn("h-9 w-32", e.mainOut && "border-red-400")}
-                          onChange={(ev) => patchGroup(g.key, { mainOutTime: ev.target.value })}
+                          invalid={!!e.start}
                         />
-                        <label className="flex items-center gap-1.5 text-xs text-gray-600">
-                          <input
-                            type="checkbox"
-                            className="h-3.5 w-3.5"
-                            checked={g.mainOutNextDay}
-                            disabled={readOnly || g.mainOutTime === ""}
-                            aria-label={`${name}: standard departure is the next day`}
-                            onChange={(ev) => patchGroup(g.key, { mainOutNextDay: ev.target.checked })}
-                          />
-                          Next day
-                        </label>
+                        <TimeBox
+                          word="To"
+                          id={groupEndId(g.key)}
+                          ariaLabel={`${name}: standard departure`}
+                          value={g.mainOutTime}
+                          onChange={(v) => patchGroup(g.key, { mainOutTime: v })}
+                          disabled={readOnly}
+                          invalid={!!e.mainOut}
+                        />
+                        <span className="flex items-center gap-2">
+                          <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5"
+                              checked={g.mainOutNextDay}
+                              disabled={readOnly || g.mainOutTime === ""}
+                              aria-label={`${name}: standard departure is the next day`}
+                              onChange={(ev) => patchGroup(g.key, { mainOutNextDay: ev.target.checked })}
+                            />
+                            Next day
+                          </label>
+                          {g.mainOutTime !== "" && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 gap-1 px-1.5 text-[11px] text-slate-500"
+                              aria-label={`${name}: clear the end time`}
+                              title="No end time: leaving early is then never flagged"
+                              disabled={readOnly}
+                              onClick={() => patchGroup(g.key, { mainOutTime: "", mainOutNextDay: false })}
+                            >
+                              <X size={12} /> Clear
+                            </Button>
+                          )}
+                        </span>
                       </div>
-                    </GroupField>
+                      <p
+                        className={cn(
+                          "text-[13px] font-medium leading-snug",
+                          setEnd === null ? "text-amber-800" : "text-slate-800",
+                        )}
+                        data-testid="group-shift-time-text"
+                      >
+                        {shiftTimeText(g, lastPoint, s.unpaid)}
+                      </p>
+                      <p className="text-[11px] leading-snug text-gray-500">
+                        The grace comes after the start. The end is the standard departure: leaving before it (less the
+                        grace) is flagged Left early. For an end after midnight tick Next day. Neither time changes the
+                        shifts earned: the ladder below does.
+                      </p>
+                    </Part>
+
+                    <Part title="First punch window" testId="group-window">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                        <TimeBox
+                          word="From"
+                          ariaLabel={`${name}: first punch from`}
+                          value={g.firstPunchFrom}
+                          onChange={(v) => patchGroup(g.key, { firstPunchFrom: v })}
+                          disabled={readOnly}
+                          invalid={!!(e.window || e.overlap)}
+                        />
+                        <TimeBox
+                          word="To"
+                          ariaLabel={`${name}: first punch to`}
+                          value={g.firstPunchTo}
+                          onChange={(v) => patchGroup(g.key, { firstPunchTo: v })}
+                          disabled={readOnly}
+                          invalid={!!(e.window || e.overlap)}
+                        />
+                      </div>
+                      {!e.window && !e.overlap && (
+                        <p className="text-[13px] leading-snug text-slate-800" data-testid="group-window-note">
+                          A day whose first punch is between {clock12(g.firstPunchFrom)} and {clock12(g.firstPunchTo)}{" "}
+                          on {APPLIES_WORDS[g.appliesOn]} uses this group{g.enabled ? "" : " (once it is switched on)"}.
+                        </p>
+                      )}
+                      <p className="text-[11px] leading-snug text-gray-500">
+                        Only the first punch of the day decides the group; the window may start hours before the shift.
+                      </p>
+                      <label className="flex flex-wrap items-center gap-2 pt-1 text-xs font-semibold text-slate-700">
+                        Used on
+                        <select
+                          aria-label={`${name}: used on`}
+                          className="h-9 min-w-[11rem] rounded-md border bg-white px-2 text-sm font-normal disabled:opacity-50"
+                          value={g.appliesOn}
+                          disabled={readOnly}
+                          onChange={(ev) => patchGroup(g.key, { appliesOn: ev.target.value as GroupRow["appliesOn"] })}
+                        >
+                          {APPLIES_ON.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </Part>
                   </div>
                   {(e.start || e.window || e.mainOut || e.overlap) && (
                     <div className="space-y-1">
@@ -294,10 +375,10 @@ export function GroupsSection({ draft, patch, readOnly, validation }: SectionPro
                       {e.overlap && <Problem testId="group-overlap-error">{e.overlap}</Problem>}
                     </div>
                   )}
-                  {!e.window && !e.overlap && (
-                    <p className="text-xs leading-snug text-gray-600" data-testid="group-window-note">
-                      A day whose first punch is between {clock12(g.firstPunchFrom)} and {clock12(g.firstPunchTo)} on{" "}
-                      {APPLIES_WORDS[g.appliesOn]} uses this group{g.enabled ? "" : " (once it is switched on)"}.
+                  {!g.enabled && g.rules.length > 0 && (
+                    <p className="text-[11px] leading-snug text-slate-500" data-testid="group-off-note">
+                      This group is switched off, so its ladder is not checked for order yet: that happens when it is
+                      switched on.
                     </p>
                   )}
 
@@ -308,6 +389,7 @@ export function GroupsSection({ draft, patch, readOnly, validation }: SectionPro
                     readOnly={readOnly}
                     errors={e}
                     rowErrors={validation.groups[gi]?.rules ?? []}
+                    endAt={setEnd}
                   />
                 </section>
               );
@@ -328,7 +410,7 @@ export function GroupsSection({ draft, patch, readOnly, validation }: SectionPro
             <Plus size={13} /> Add a group
           </Button>
           <span className="text-xs text-gray-500">
-            A new group starts switched off: set its window and ladder, then switch it on.
+            A new group starts switched off: set its times and ladder, then switch it on.
           </span>
         </div>
       </SettingBlock>

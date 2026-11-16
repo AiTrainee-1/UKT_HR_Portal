@@ -5,14 +5,21 @@ Every active production employee is paid on exactly one cycle -Weekly, BiWeekly 
 production_cycles.py- and the Production Payroll page of a cycle only ever generates payroll for the people assigned
 to it. Until HR assigns an employee here they are in no cycle's payroll at all.
 
-    GET  /api/employees/production          the production employees, with the cycle each is on, plus the tab counts
+    GET  /api/employees/production          the production employees, with the cycle each is on, their latest move and
+                                            the tab counts
     POST /api/employees/production/assign   put employees on a cycle (or take them off it)
     GET  /api/employees/production/cycle-change-preview
                                             what a move would mean for each employee's pay, shown before the move
+    GET  /api/employees/production/<id>/transfers
+                                            every move of one worker, newest first
 
-Production employees only: a staff employee cannot be assigned. Every endpoint honours the caller's branch scope.
+A move is never casual (owner 2026-11-16, production_transfers.py): a worker who already has payroll can change cycle only
+when the request says it was confirmed and gives a short reason (409 with the facts of what was already paid otherwise),
+and every move writes a ProductionCycleTransfer. Production employees only: a staff employee cannot be assigned. Every
+endpoint honours the caller's branch scope.
 """
 
+from django.db import transaction
 from django.db.models import Count, Q, TextField, Value
 from django.db.models.functions import Concat
 from django.utils import timezone
@@ -21,21 +28,21 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from .audit_utils import log_action
-from .auth import require_hr
+from .auth import get_hr_display_name, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .models import Employee, HRUser, Payroll
-from .production_coverage import (
-    MONTH_NAMES,
-    PayrollRef,
-    PeriodPlan,
-    fmt_range,
-    fmt_ranges,
-    plan_period,
-    ranges_json,
-    spans_for_employees,
-)
+from .production_coverage import spans_for_employees
 from .production_cycles import CYCLE_LABELS, CYCLES, normalize_cycle
-from .production_period import InvalidPeriodConfig, next_cycle_period
+from .production_period_workflow import move_json
+from .production_transfers import (
+    REASON_MAX,
+    clean_reason,
+    facts_for,
+    latest_moves,
+    move_counts,
+    record_moves,
+    transfers_json,
+)
 from .user_settings import settings_for
 from .view_common import _error
 
@@ -67,7 +74,8 @@ def production_employees(request: Request) -> Response:
     """GET /api/employees/production?cycle=all|unassigned|weekly|biweekly|monthly&status=active|inactive|all
     &search=&departmentId=&branchId=
     The production employees (active ones unless `status` says otherwise). `counts` ignores `cycle`, so the tabs
-    always show every cycle's total for the same search, department and status."""
+    always show every cycle's total for the same search, department and status. Each row carries the worker's latest
+    move between cycles (`lastMove`) and how many moves they have (`moveCount`)."""
     params = request.query_params
     qs = _production(request).select_related("department", "designation", "branch")
 
@@ -104,17 +112,18 @@ def production_employees(request: Request) -> Response:
         qs = qs.filter(production_pay_cycle=cycle)
 
     employees = list(qs.order_by("first_name", "last_name", "employee_code"))
+    ids = [e.id for e in employees]
 
     # the latest period-based payslip of each person: what the "last payroll" column shows
     latest = {
         row["employee_id"]: row
-        for row in Payroll.objects.filter(
-            employee_id__in=[e.id for e in employees], salary_mode="shift", period_start__isnull=False
-        )
+        for row in Payroll.objects.filter(employee_id__in=ids, salary_mode="shift", period_start__isnull=False)
         .order_by("employee_id", "-period_end", "-id")
         .distinct("employee_id")
-        .values("employee_id", "period_start", "period_end", "status", "pay_cycle")
+        .values("employee_id", "period_start", "period_end", "status", "pay_cycle", "payment_status")
     }
+    moves = latest_moves(ids)
+    moved = move_counts(ids)
 
     rows = []
     for emp in employees:
@@ -138,21 +147,46 @@ def production_employees(request: Request) -> Response:
                     "periodEnd": last["period_end"].isoformat(),
                     "status": last["status"],
                     "payCycle": last["pay_cycle"],
+                    "paymentStatus": last["payment_status"] or Payroll.PAYMENT_NOT_PAID,
                 }
                 if last
                 else None,
+                # the worker's latest move between cycles (assigning from Unassigned and taking off a cycle included)
+                "lastMove": move_json(moves.get(emp.id)),
+                "moveCount": moved.get(emp.id, 0),
             }
         )
     return Response({"counts": counts, "employees": rows})
+
+
+def _target_of(raw) -> tuple[str | None, str | None]:
+    """(cycle or None for 'off the cycle', None) or (None, why the value cannot be read)."""
+    if raw in (None, "", UNASSIGNED, "none"):
+        return None, None
+    cycle = normalize_cycle(raw)
+    if cycle is None:
+        return None, "cycle must be weekly, biweekly, monthly or null (to take employees off their cycle)"
+    return cycle, None
+
+
+CONFIRM_NEEDED = (
+    "Some of these workers have already received salary on their current pay cycle. Moving them is allowed only on "
+    "purpose: confirm the move and give a short reason. The salary already paid for that time will not be paid again."
+)
 
 
 @api_view(["POST"])
 @require_hr
 def assign_production_pay_cycle(request: Request) -> Response:
     """POST /api/employees/production/assign
-    Body: { employeeIds: [1, 2, 3], cycle: "weekly" | "biweekly" | "monthly" | null }
+    Body: { employeeIds: [1, 2, 3], cycle: "weekly" | "biweekly" | "monthly" | null, confirm?: true, reason?: "..." }
     A null / empty cycle takes the employees off their cycle. Payroll already generated keeps the cycle it was
-    generated on; from now on only the new cycle's page generates payroll for these employees."""
+    generated on; from now on only the new cycle's page generates payroll for these employees.
+
+    A worker who already has payroll changes cycle only with `confirm: true` and a `reason` (owner 2026-11-16): without
+    them nothing is changed and the answer is a 409 whose `employees` carry the facts of what each was already paid (the
+    same as the preview). Every worker who really changes cycle gets a ProductionCycleTransfer (who, when, why, what the
+    old cycle had paid them, from which day the new one pays)."""
     data = request.data
     ids = data.get("employeeIds")
     if not isinstance(ids, list) or not ids:
@@ -161,12 +195,13 @@ def assign_production_pay_cycle(request: Request) -> Response:
         ids = [int(i) for i in ids]
     except (TypeError, ValueError):
         return _error("employeeIds must be whole numbers")
-    raw = data.get("cycle")
-    cycle = None
-    if raw not in (None, "", UNASSIGNED, "none"):
-        cycle = normalize_cycle(raw)
-        if cycle is None:
-            return _error("cycle must be weekly, biweekly, monthly or null (to take employees off their cycle)")
+    cycle, problem = _target_of(data.get("cycle"))
+    if problem:
+        return _error(problem)
+    confirmed = data.get("confirm") is True
+    reason = clean_reason(data.get("reason"))
+    if len(str(data.get("reason") or "").strip()) > REASON_MAX:
+        return _error(f"Keep the reason under {REASON_MAX} characters.")
 
     found = {e.id: e for e in _production(request).filter(id__in=ids)}
     skipped = [
@@ -177,9 +212,24 @@ def assign_production_pay_cycle(request: Request) -> Response:
     changing = [e for e in found.values() if e.production_pay_cycle != cycle]
     unchanged = len(found) - len(changing)
 
-    # unpaid payroll an employee already has on another cycle stays on that cycle's page: tell the caller
+    facts = facts_for(changing, cycle, settings_for(request), get_branch_scope(request)) if changing else {}
+    needing = [f for f in facts.values() if f.needs_confirmation]
+    if needing and not (confirmed and reason):
+        missing = "a reason" if confirmed else "a confirmation and a reason"
+        return Response(
+            {
+                "error": f"{CONFIRM_NEEDED} (missing: {missing})",
+                "code": "confirm_cycle_change",
+                "needsReason": True,
+                "employees": [f.json() for f in needing],
+            },
+            status=409,
+        )
+
     carrying = 0
+    moves = []
     if changing:
+        # unpaid payroll an employee already has on another cycle stays on that cycle's page: tell the caller
         carrying = (
             Payroll.objects.filter(
                 employee_id__in=[e.id for e in changing],
@@ -193,17 +243,25 @@ def assign_production_pay_cycle(request: Request) -> Response:
             .distinct()
             .count()
         )
-        Employee.objects.filter(id__in=[e.id for e in changing]).update(
-            production_pay_cycle=cycle, updated_at=timezone.now()
-        )
+        actor = get_hr_display_name(request)
+        with transaction.atomic():
+            Employee.objects.filter(id__in=[e.id for e in changing]).update(
+                production_pay_cycle=cycle, updated_at=timezone.now()
+            )
+            moves = record_moves([facts[e.id] for e in changing], actor, reason)
         target = f"the {CYCLE_LABELS[cycle]} pay cycle" if cycle else "no pay cycle"
         sample = ", ".join(e.employee_code for e in changing[:5])
         more = f" and {len(changing) - 5} more" if len(changing) > 5 else ""
+        paid_before = f"; {len(needing)} already had payroll" if needing else ""
         log_action(
             request,
             "update",
             "employees",
-            description=f"Assigned {len(changing)} production employee(s) to {target} ({sample}{more})",
+            description=(
+                f"Assigned {len(changing)} production employee(s) to {target} ({sample}{more}){paid_before}"
+                + (f". Reason: {reason}" if reason else "")
+            ),
+            new_values={"cycle": cycle, "employeeIds": [e.id for e in changing], "reason": reason or None},
         )
 
     return Response(
@@ -212,6 +270,7 @@ def assign_production_pay_cycle(request: Request) -> Response:
             "unchanged": unchanged,
             "skipped": skipped,
             "pendingOnOtherCycle": carrying,
+            "moves": [move_json(m) for m in moves],
             "counts": _counts(_production(request).filter(status="active")),
         }
     )
@@ -234,89 +293,6 @@ def _can_assign(request: Request) -> bool:
     )
 
 
-def _previous_label(emp: Employee, last: PayrollRef) -> str:
-    """'This employee was previously assigned to Weekly Payroll' and its variants."""
-    if emp.production_pay_cycle:
-        return f"This employee was previously assigned to {CYCLE_LABELS[emp.production_pay_cycle]} Payroll"
-    if last.staff:
-        return "This employee was previously paid on Staff Payroll"
-    return f"This employee was previously paid on {last.label} Payroll"
-
-
-def _row_period_text(row: PayrollRef) -> str:
-    if row.staff:
-        return f"{MONTH_NAMES[row.period_start.month - 1]} {row.period_start.year}"
-    return fmt_range(row.period_start, row.period_end)
-
-
-def _plural_days(start, end) -> tuple[int, dict]:
-    days = (end - start).days + 1
-    one = days == 1
-    return days, {
-        "was": "was" if one else "were",
-        "falls": "falls" if one else "fall",
-        "it": "it is" if one else "they are",
-        "day": "day" if one else "days",
-    }
-
-
-def _change_message(
-    emp: Employee,
-    last: PayrollRef,
-    cycle: str | None,
-    nxt: tuple | None,
-    plan: PeriodPlan | None,
-    config_problem: str | None,
-) -> str:
-    """The owner's warning (2026-11-06), with the real cycles and dates."""
-    parts = [
-        f"{_previous_label(emp, last)}, and payroll has already been generated for the previous period "
-        f"({_row_period_text(last)})."
-    ]
-    if cycle is None:
-        parts.append(
-            "If you take this employee off their pay cycle, no payroll will include them until they are assigned "
-            "again; then the system will calculate salary only for the remaining unpaid days."
-        )
-    else:
-        label = CYCLE_LABELS[cycle]
-        if plan is None:
-            parts.append(
-                f"If you change the payroll category to {label}, the system will calculate salary only for the "
-                "remaining unpaid days."
-            )
-        elif plan.refused:
-            parts.append(
-                f"If you change the payroll category to {label}, every day of the next {label} period "
-                f"({fmt_range(*nxt)}) is already paid, so nothing is calculated for it; the system will calculate "
-                "salary only for the remaining unpaid days after it."
-            )
-        else:
-            parts.append(
-                f"If you change the payroll category to {label}, the system will calculate salary only for the "
-                f"remaining unpaid days ({fmt_ranges(plan.pay_ranges)})."
-            )
-    parts.append("Previously generated salary will not be calculated or paid again.")
-    if plan is not None and cycle is not None:
-        label = CYCLE_LABELS[cycle]
-        for c in plan.catch_up:
-            _days, w = _plural_days(c.start, c.end)
-            parts.append(
-                f"{fmt_range(c.start, c.end)} {w['was']} not paid on {c.row.label} and {w['falls']} before the first "
-                f"{label} period ({fmt_range(*nxt)}), so {w['it']} added to that first {label} payroll as catch-up "
-                f"{w['day']}."
-            )
-        if plan.legacy_gap is not None:
-            g = plan.legacy_gap
-            parts.append(
-                f"{fmt_range(g.start, g.end)} were not paid by any payroll; the payroll before them was generated "
-                "before pay cycles existed, so they are not added automatically."
-            )
-    if config_problem:
-        parts.append(f"Note: {config_problem}")
-    return " ".join(parts)
-
-
 def _period_json(nxt) -> dict | None:
     return {"start": nxt[0].isoformat(), "end": nxt[1].isoformat()} if nxt is not None else None
 
@@ -326,14 +302,16 @@ def _period_json(nxt) -> dict | None:
 def production_cycle_change_preview(request: Request) -> Response:
     """GET /api/employees/production/cycle-change-preview?ids=1,2&cycle=monthly|unassigned
     What moving these employees to `cycle` (unassigned / none = off their cycle) would mean for their pay, for the
-    confirmation shown BEFORE the move. Writes nothing. Per employee:
+    confirmation shown BEFORE the move. Writes nothing. Per employee (production_transfers.MoveFacts.json):
 
-        warn          true only when the employee really changes cycle AND has payroll history (no needless warnings)
-        lastPayroll   their latest payroll row (production period or staff month), or null
-        nextPeriod    the target cycle's next due period (null when off a cycle or the cycle is not set up yet)
-        payRanges / alreadyPaid / catchUp   which days of that period would be paid, which are already paid and by
-                      which payroll, and the catch-up days added because of the move (production_coverage.py)
-        message       the owner's sentence with the real cycles and dates (null when warn is false)
+        warn / needsConfirmation  true only when the employee really changes cycle AND already has payroll: the move then
+                                  needs confirm + reason (no needless warnings)
+        paidThrough, oldCycle     up to which day they were paid, and how many pay periods / how much the old cycle paid
+        paysFrom, firstPeriod     from which day, and in which period, the new cycle pays
+        payRanges / alreadyPaid / catchUp   which days of that period would be paid, which are already paid and by which
+                                  payroll, and the catch-up days added because of the move (production_coverage.py)
+        message                   the owner's warning with the real cycles, dates and amounts (null when warn is false)
+        lastPayroll               their latest payroll row (production period or staff month), or null
 
     Same permission as the assign endpoint (Employees at edit level); branch-scoped."""
     if not _can_assign(request):
@@ -347,22 +325,15 @@ def production_cycle_change_preview(request: Request) -> Response:
         return _error("ids must list at least one employee")
     if len(ids) > 2000:
         return _error("Preview at most 2000 employees at a time")
-    raw = params.get("cycle")
-    cycle = None
-    if raw not in (None, "", UNASSIGNED, "none"):
-        cycle = normalize_cycle(raw)
-        if cycle is None:
-            return _error("cycle must be weekly, biweekly, monthly or unassigned")
-
-    nxt, config_problem = None, None
-    if cycle is not None:
-        try:
-            nxt = next_cycle_period(settings_for(request), cycle, branch_id=get_branch_scope(request))
-        except InvalidPeriodConfig as exc:
-            config_problem = str(exc)
+    cycle, problem = _target_of(params.get("cycle"))
+    if problem:
+        return _error("cycle must be weekly, biweekly, monthly or unassigned")
 
     found = {e.id: e for e in _production(request).filter(id__in=ids)}
     spans = spans_for_employees(list(found))
+    facts = facts_for(list(found.values()), cycle, settings_for(request), get_branch_scope(request), spans)
+    nxt = next(iter(facts.values())).first_period if facts else None
+    config_problem = next(iter(facts.values())).config_problem if facts else None
     rows, skipped = [], []
     for emp_id in dict.fromkeys(ids):
         emp = found.get(emp_id)
@@ -371,18 +342,11 @@ def production_cycle_change_preview(request: Request) -> Response:
             continue
         own = spans[emp.id]
         last = max(own, key=lambda s: (s.end, s.row.period_end, s.row.payroll_id)).row if own else None
-        plan = plan_period(own, nxt[0], nxt[1], cycle) if nxt is not None else None
-        changes = emp.production_pay_cycle != cycle
-        warn = changes and last is not None
+        f = facts[emp.id]
         rows.append(
             {
-                "employeeId": emp.id,
-                "employeeCode": emp.employee_code,
-                "name": _name(emp),
-                "fromCycle": emp.production_pay_cycle,
-                "toCycle": cycle,
-                "changes": changes,
-                "warn": warn,
+                **f.json(),
+                "warn": f.needs_confirmation,
                 "lastPayroll": {
                     "payrollId": last.payroll_id,
                     "cycle": last.cycle,
@@ -394,13 +358,7 @@ def production_cycle_change_preview(request: Request) -> Response:
                 }
                 if last is not None
                 else None,
-                "nextPeriod": _period_json(nxt),
-                "payRanges": ranges_json(plan.pay_ranges) if plan is not None else [],
-                "alreadyPaid": [p.json() for p in plan.already_paid] if plan is not None else [],
-                "catchUp": [c.json() for c in plan.catch_up] if plan is not None else [],
-                "legacyGap": plan.legacy_gap.json() if plan is not None and plan.legacy_gap is not None else None,
-                "refused": bool(plan is not None and plan.refused),
-                "message": _change_message(emp, last, cycle, nxt, plan, config_problem) if warn else None,
+                "nextPeriod": _period_json(f.first_period),
             }
         )
     return Response(
@@ -410,7 +368,29 @@ def production_cycle_change_preview(request: Request) -> Response:
             "nextPeriod": _period_json(nxt),
             "configError": config_problem,
             "warnCount": sum(1 for r in rows if r["warn"]),
+            # the move needs `confirm: true` and a reason (some of these workers already have payroll)
+            "needsReason": any(r["warn"] for r in rows),
+            "reasonMax": REASON_MAX,
             "employees": rows,
             "skipped": skipped,
+        }
+    )
+
+
+@api_view(["GET"])
+@require_hr
+def production_employee_transfers(request: Request, pk: int) -> Response:
+    """GET /api/employees/production/<id>/transfers: every move of one production worker between pay cycles, newest
+    first (who, when, why, what the old cycle had paid, from which day the new one pays). Branch-scoped."""
+    emp = _production(request).filter(pk=pk).first()
+    if emp is None:
+        return _error("Not found", 404)
+    return Response(
+        {
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "name": _name(emp),
+            "payCycle": emp.production_pay_cycle,
+            "moves": transfers_json(emp.id),
         }
     )

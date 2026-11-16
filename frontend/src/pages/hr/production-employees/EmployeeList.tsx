@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Chip } from "../account-management/parts";
 import { useMediaQuery } from "./hooks";
 import { listSelection, type Selection } from "./logic";
-import { AssignMenu, CycleChip, LastPayrollCell, RateCell } from "./parts";
+import { AssignMenu, CycleChip, HistoryButton, LastPayrollCell, MoveChip, RateCell } from "./parts";
 
 type Props = {
   /** The rows of the current page. */
@@ -15,6 +15,10 @@ type Props = {
   onToggle: (row: ProductionEmployeeRow) => void;
   onToggleAll: () => void;
   onAssign: (row: ProductionEmployeeRow, cycle: PayCycle | null) => void;
+  /** Opens a worker's history of moves between cycles. */
+  onHistory: (row: ProductionEmployeeRow) => void;
+  /** Show the Unit (branch) column: the company has more than one unit. */
+  showBranch?: boolean;
   /** An assignment is in flight: the menus wait for it. */
   busy: boolean;
   /** The list shown is the previous one while a new filter loads. */
@@ -65,19 +69,31 @@ function RowCheckbox({
 
 function NameCell({ row }: { row: ProductionEmployeeRow }) {
   return (
-    <div className="min-w-0">
+    <div className="min-w-0 space-y-0.5">
       <p className="flex flex-wrap items-center gap-1.5 font-semibold text-gray-900">
         <span className="truncate">{row.name}</span>
         {row.status !== "active" && <Chip className="border-gray-200 bg-gray-50 text-gray-500">Inactive</Chip>}
       </p>
       <p className="font-mono text-xs text-muted-foreground">{row.employeeCode}</p>
+      <MoveChip row={row} />
     </div>
   );
 }
 
 const dash = <span className="text-gray-400">—</span>;
 
-function EmployeeTable({ rows, allRows, selection, onToggle, onToggleAll, onAssign, busy, stale }: Props) {
+function EmployeeTable({
+  rows,
+  allRows,
+  selection,
+  onToggle,
+  onToggleAll,
+  onAssign,
+  onHistory,
+  showBranch,
+  busy,
+  stale,
+}: Props) {
   return (
     <div
       className={cn("overflow-x-auto rounded-2xl border bg-white transition-opacity", stale && "opacity-60")}
@@ -90,6 +106,7 @@ function EmployeeTable({ rows, allRows, selection, onToggle, onToggleAll, onAssi
               <HeaderCheckbox allRows={allRows} selection={selection} onToggleAll={onToggleAll} />
             </th>
             <th className="px-3 py-2.5">Employee</th>
+            {showBranch && <th className="px-3 py-2.5">Unit</th>}
             <th className="px-3 py-2.5">Department</th>
             <th className="px-3 py-2.5">Designation</th>
             <th className="px-3 py-2.5">Salary per shift</th>
@@ -112,6 +129,11 @@ function EmployeeTable({ rows, allRows, selection, onToggle, onToggleAll, onAssi
               <td className="px-3 py-2.5 align-middle">
                 <NameCell row={row} />
               </td>
+              {showBranch && (
+                <td className="px-3 py-2.5 align-middle text-gray-700" data-testid={`pe-branch-${row.employeeCode}`}>
+                  {row.branchName ?? dash}
+                </td>
+              )}
               <td className="px-3 py-2.5 align-middle text-gray-700">{row.departmentName ?? dash}</td>
               <td className="px-3 py-2.5 align-middle text-gray-700">{row.designationTitle ?? dash}</td>
               <td className="px-3 py-2.5 align-middle">
@@ -124,7 +146,10 @@ function EmployeeTable({ rows, allRows, selection, onToggle, onToggleAll, onAssi
                 <LastPayrollCell payroll={row.lastPayroll} currentCycle={row.payCycle} />
               </td>
               <td className="px-3 py-2.5 text-right align-middle">
-                <AssignMenu row={row} disabled={busy} onAssign={onAssign} />
+                <div className="inline-flex items-center gap-1">
+                  <HistoryButton row={row} onOpen={onHistory} />
+                  <AssignMenu row={row} disabled={busy} onAssign={onAssign} />
+                </div>
               </td>
             </tr>
           ))}
@@ -134,7 +159,18 @@ function EmployeeTable({ rows, allRows, selection, onToggle, onToggleAll, onAssi
   );
 }
 
-function EmployeeCards({ rows, allRows, selection, onToggle, onToggleAll, onAssign, busy, stale }: Props) {
+function EmployeeCards({
+  rows,
+  allRows,
+  selection,
+  onToggle,
+  onToggleAll,
+  onAssign,
+  onHistory,
+  showBranch,
+  busy,
+  stale,
+}: Props) {
   return (
     <div className={cn("space-y-2 transition-opacity", stale && "opacity-60")} data-testid="pe-cards">
       <div className="flex items-center gap-2 px-1 text-xs font-semibold text-gray-500">
@@ -160,6 +196,9 @@ function EmployeeCards({ rows, allRows, selection, onToggle, onToggleAll, onAssi
               <p className="text-xs text-gray-600">
                 {row.departmentName ?? "No department"}
                 {row.designationTitle && <> · {row.designationTitle}</>}
+                {showBranch && row.branchName && (
+                  <span data-testid={`pe-branch-${row.employeeCode}`}> · {row.branchName}</span>
+                )}
               </p>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <CycleChip cycle={row.payCycle} />
@@ -170,6 +209,7 @@ function EmployeeCards({ rows, allRows, selection, onToggle, onToggleAll, onAssi
                 <span className="text-gray-500">Last payroll:</span>
                 <LastPayrollCell payroll={row.lastPayroll} currentCycle={row.payCycle} />
               </div>
+              <HistoryButton row={row} onOpen={onHistory} />
             </div>
           </div>
         </div>

@@ -50,7 +50,14 @@ vi.mock("../co-emp/TdsPanel", () => ({
 }));
 vi.mock("@/lib/api-client", async (original) => ({
   ...(await original<typeof import("@/lib/api-client")>()),
-  useListDepartments: () => ({ data: [{ id: 1, name: "Stitching" }] }),
+  // Staff and production have departments of their own: a Staff and a Production CUTTING (lib/departments.ts)
+  useListDepartments: () => ({
+    data: [
+      { id: 1, name: "Stitching", category: "staff" },
+      { id: 2, name: "CUTTING", category: "staff" },
+      { id: 3, name: "CUTTING", category: "production" },
+    ],
+  }),
   useDeleteEmployee: () => ({ mutate: vi.fn() }),
   useUpdateEmployeeStatus: () => ({ mutate: vi.fn() }),
 }));
@@ -318,6 +325,33 @@ describe("the per-tab permission keys", () => {
     expect(q("tab-view-only")).not.toBeNull();
     click(headerTab(1));
     expect(q("tab-view-only")).toBeNull();
+  });
+
+  it("offers only the open tab's departments, and drops one of the other kind when the tab changes", () => {
+    mount("/hr/employees");
+    const options = () => [...document.body.querySelectorAll('[role="option"]')].map((o) => text(o));
+    const open = () =>
+      act(() =>
+        must("select-department").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+      );
+    open();
+    expect(options()).toEqual(["All Staff Departments", "CUTTING", "Stitching"]);
+    const cutting = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (o) => text(o) === "CUTTING",
+    );
+    click(cutting!);
+    expect(h.paginated).toHaveBeenLastCalledWith(
+      expect.objectContaining({ departmentId: 2, employmentType: "staff" }),
+      expect.anything(),
+    );
+
+    click(headerTab(1));
+    expect(h.paginated).toHaveBeenLastCalledWith(
+      expect.objectContaining({ departmentId: undefined, employmentType: "production" }),
+      expect.anything(),
+    );
+    open();
+    expect(options()).toEqual(["All Production Departments", "CUTTING"]);
   });
 
   it("hides or locks the row and header buttons by their own keys", () => {

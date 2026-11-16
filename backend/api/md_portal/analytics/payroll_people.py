@@ -418,7 +418,7 @@ def _state_words(st: dict) -> dict:
                 f", {P._plural(took, 'day')} after Payroll Done." if took is not None else "."
             )
         else:
-            detail = "Every slip is cleared (paid)."
+            detail = "Every slip is paid."
     elif state == "generated" and st.get("staffState") == "generated":
         detail = (
             f"Still open: HR can change it. {st.get('clearedSlips', 0)} of {st['slips']} verified (Cleared); "
@@ -472,15 +472,21 @@ def _person_state(
             "detail": "Verified by HR (Cleared), not paid yet." if cleared else "Not verified (Cleared) or paid yet.",
         }
     if prod_rows:
-        paid = sum(1 for p in prod_rows if (p["status"] or "").strip().lower() == Payroll.STATUS_PAID)
+        # a production pay period is paid by its own Mark as Paid (payment status, 2026-11-16); Cleared is verification
+        paid = sum(1 for p in prod_rows if p["payment_status"] == Payroll.PAYMENT_PAID)
         n = len(prod_rows)
         if paid >= n:
-            return {"state": "paid", "label": "Paid", "detail": f"All {P._plural(n, 'pay period')} cleared (paid)."}
+            return {"state": "paid", "label": "Paid", "detail": f"All {P._plural(n, 'pay period')} paid."}
         if paid:
-            return {"state": "part_paid", "label": "Part paid", "detail": f"{paid} of {n} pay periods cleared (paid)."}
+            return {"state": "part_paid", "label": "Part paid", "detail": f"{paid} of {n} pay periods paid."}
         if not ended:
             return {"state": "in_progress", "label": "In progress", "detail": None}
-        return {"state": "generated", "label": "Generated, not paid", "detail": "Not cleared (paid) yet."}
+        cleared = sum(1 for p in prod_rows if (p["status"] or "").strip().lower() == Payroll.STATUS_PAID)
+        return {
+            "state": "generated",
+            "label": "Generated, not paid",
+            "detail": "Verified by HR (Cleared), not paid yet." if cleared >= n else "Not paid yet.",
+        }
     return {"state": "no_data", "label": "No payroll row", "detail": None}
 
 
@@ -513,12 +519,12 @@ def _payroll_rows(qs: QuerySet) -> tuple[dict[tuple, dict], dict[tuple, dict]]:
 
 
 def _payment_status(staff_row: dict | None, prod_rows: list[dict]) -> str | None:
-    """The employee apps' rule: staff by the payment status, production paid once every period is Cleared."""
+    """Paid or not: staff by the payment status, production once every pay period's payroll has payment status Paid."""
     if staff_row is not None:
         return staff_row["payment_status"] or Payroll.PAYMENT_NOT_PAID
     if prod_rows:
-        cleared = all((p["status"] or "").strip().lower() == Payroll.STATUS_PAID for p in prod_rows)
-        return Payroll.PAYMENT_PAID if cleared else Payroll.PAYMENT_NOT_PAID
+        paid = all(p["payment_status"] == Payroll.PAYMENT_PAID for p in prod_rows)
+        return Payroll.PAYMENT_PAID if paid else Payroll.PAYMENT_NOT_PAID
     return None
 
 

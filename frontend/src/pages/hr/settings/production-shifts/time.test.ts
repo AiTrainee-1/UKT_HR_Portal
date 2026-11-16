@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   absMinutes,
+  atText,
   boxTime,
   clock12,
+  clockPadded,
   nextSunday,
   parsePunches,
   pointText,
+  rangeText,
+  spanText,
   toHHMM,
   toMinutes,
   weekdayOf,
@@ -135,5 +139,31 @@ describe("dates", () => {
     expect(nextSunday("2026-10-18")).toBe("2026-10-18");
     expect(nextSunday("2026-10-19")).toBe("2026-10-25");
     expect(nextSunday("bad")).toBe("bad");
+  });
+});
+
+describe("time ranges for the summary and the From / To boxes", () => {
+  it("writes a clock time with two-digit hours, as the time boxes show it", () => {
+    expect(clockPadded("08:30")).toBe("08:30 AM");
+    expect(clockPadded("13:30")).toBe("01:30 PM");
+    expect(clockPadded("00:05")).toBe("12:05 AM");
+    expect(clockPadded("12:00")).toBe("12:00 PM");
+    expect(clockPadded("soon")).toBe("soon");
+  });
+
+  it("marks a time after midnight as the next day, in a point and in a range", () => {
+    expect(atText(1200)).toBe("08:00 PM");
+    expect(atText(1440)).toBe("12:00 AM next day");
+    expect(atText(1770)).toBe("05:30 AM next day");
+    expect(rangeText(510, 1200)).toBe("From 08:30 AM to 08:00 PM");
+    expect(rangeText(1260, 1770)).toBe("From 09:00 PM to 05:30 AM next day");
+  });
+
+  it("writes a length of time in hours and minutes", () => {
+    expect(spanText(690)).toBe("11 h 30 min");
+    expect(spanText(45)).toBe("45 min");
+    expect(spanText(60)).toBe("1 h");
+    expect(spanText(0)).toBe("0 min");
+    expect(spanText(-5)).toBe("0 min");
   });
 });

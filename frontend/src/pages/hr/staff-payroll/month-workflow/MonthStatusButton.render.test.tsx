@@ -198,3 +198,53 @@ describe("Paid", () => {
     expect(q("month-step-paid")!.dataset.done).toBe("true");
   });
 });
+
+describe("Unlock (owner 2026-11-16)", () => {
+  const finalized = (over: Partial<PayrollMonthStatus> = {}) =>
+    monthStatus({
+      state: "finalized",
+      locked: true,
+      finalizedAt: "2026-11-10T07:48:00Z",
+      finalizedBy: "Admin",
+      can: { finalize: false, markPaid: true, hold: false, addToPayroll: false, releaseAndPay: true, unlock: true },
+      ...over,
+    });
+
+  it("a finalized month nothing of which is paid unlocks with a reason", async () => {
+    mount(finalized());
+    click(q("month-status-button"));
+    click(q("unlock-open"));
+    const box = q("unlock-reason") as HTMLTextAreaElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "Late punches corrected");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    click(q("unlock-yes"));
+    await settle();
+    await settle();
+    expect(posts).toEqual([
+      { url: "/api/payroll/month-unlock", body: { month: 10, year: 2026, reason: "Late punches corrected" } },
+    ]);
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "October 2026 payroll is unlocked" }));
+  });
+
+  it("a month with anything paid says it is locked for good", () => {
+    mount(
+      finalized({
+        can: { finalize: false, markPaid: true, hold: false, addToPayroll: false, releaseAndPay: true, unlock: false },
+        unlockBlocked: "Paid: locked for good. Once salaries of a month are paid its payroll can never be changed.",
+      }),
+    );
+    click(q("month-status-button"));
+    expect(text(q("unlock-blocked"))).toContain("Paid: locked for good");
+    expect(q("unlock-open")).toBeNull();
+  });
+
+  it("a login without the right sees no Unlock", () => {
+    mount(
+      finalized({ can: { finalize: false, markPaid: false, hold: false, addToPayroll: false, releaseAndPay: false } }),
+    );
+    click(q("month-status-button"));
+    expect(q("unlock-open")).toBeNull();
+  });
+});

@@ -5,6 +5,7 @@ import { ApiError, customFetch } from "@/lib/api-client/custom-fetch";
 import {
   getPayrollDetailsQueryKey,
   payrollApiBase,
+  useUpdatePayrollOf,
   useUpdatePayrollRecord,
   type PayrollDetails,
   type PayrollKind,
@@ -50,9 +51,16 @@ export function useLiveCalendar(kind: PayrollKind, id: number | null, enabled = 
 export const isPayrollQuery = (queryKey: readonly unknown[]): boolean =>
   typeof queryKey[0] === "string" && queryKey[0].startsWith("/api/payroll");
 
-/** "Mark as paid": the existing payroll update (PATCH /api/payroll/<id>), then every payroll query is refreshed. */
-export function useMarkPaid() {
-  const { mutateAsync } = useUpdatePayrollRecord();
+/** "Mark as paid": the existing payroll update (PATCH /api/payroll/<id>; a production payroll on its own route,
+ *  /api/payroll/production/<id>, under the Production Payroll rights), then every payroll query is refreshed. */
+export function useMarkPaid(kind: PayrollKind = "staff") {
+  const { mutateAsync: updateStaff } = useUpdatePayrollRecord();
+  const { mutateAsync: updateOf } = useUpdatePayrollOf();
+  const mutateAsync = useCallback(
+    (args: { id: number; data: { status: string } }) =>
+      kind === "production" ? updateOf({ kind, ...args }) : updateStaff(args),
+    [kind, updateOf, updateStaff],
+  );
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);

@@ -101,7 +101,9 @@ export type HubStats = {
 
 export type HubOptions = {
   branches: { id: number; name: string }[];
-  departments: { id: number; name: string; branchId: number | null }[];
+  /** `category`: Staff or Production (staff and production have departments of their own); a server that does not
+   *  send it leaves every department Staff for the filter. */
+  departments: { id: number; name: string; branchId: number | null; category?: "staff" | "production" | null }[];
 };
 
 export type HubResponse = {

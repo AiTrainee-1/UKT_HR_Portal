@@ -129,8 +129,8 @@ export const periodsOf = (cycle: PayCycle, roster: number): ProductionPeriods =>
   days: DAYS[cycle],
   roster,
   periods: [
-    { ...WEEK, periodEnded: true, isNext: true, generated: 1, paid: 0 },
-    { ...PREVIOUS_WEEK, periodEnded: true, isNext: false, generated: 0, paid: 0 },
+    { ...WEEK, periodEnded: true, isNext: true, generated: 1, paid: 0, state: "generated", parked: 0 },
+    { ...PREVIOUS_WEEK, periodEnded: true, isNext: false, generated: 0, paid: 0, state: "not_generated", parked: 0 },
   ],
 });
 

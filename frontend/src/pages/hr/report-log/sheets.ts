@@ -64,9 +64,10 @@ export const LEAVE_COLUMNS: SheetColumn[] = [
   },
 ];
 
-/** The Daily Leave Report: these rows (already the absent ones the user picked), in unit blocks. */
-export const leaveSpec = (date: string, rows: ReportLogDailyRow[]): SheetSpec => ({
-  title: leaveTitle(date),
+/** The Daily Leave Report: these rows (already the absent ones the user picked), in unit blocks. `listWord` names whose
+ *  list it is in the title (STAFF, or PRODUCTION on the Production Report Log). */
+export const leaveSpec = (date: string, rows: ReportLogDailyRow[], listWord = "STAFF"): SheetSpec => ({
+  title: leaveTitle(date, listWord),
   titleFill: TITLE_FILL,
   columns: LEAVE_COLUMNS,
   blocks: groupByUnit(rows),

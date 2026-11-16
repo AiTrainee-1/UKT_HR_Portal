@@ -1,6 +1,7 @@
 // Departments / Designations: the rules behind the two pages, kept apart from the screens so they can be tested on their
 // own (search, filters, sorting, the Branch -> Department -> Designation tree, the staff / production split).
 
+import { inCategory, orgCategoryOf, type OrgCategory } from "@/lib/departments";
 import type { Tone } from "@/lib/statusTones";
 import type { BranchRef, DepartmentRow, DesignationRow, DesignationsTree, Headcount, Person, Unassigned } from "./api";
 
@@ -33,6 +34,59 @@ export function splitPercent(staff: number, production: number): { staff: number
   if (total <= 0) return { staff: 0, production: 0 };
   const s = Math.round((staff / total) * 100);
   return { staff: s, production: 100 - s };
+}
+
+// ─── The page switch: Staff departments / Production departments ───────────────
+
+/** The address of both pages: ?category=production (Staff, the default, keeps a clean URL). Module-level on purpose
+ *  (useUrlParams needs a stable defaults object). */
+export const ORG_URL_DEFAULTS: { category: string } = { category: "staff" };
+
+/** The kind the switch is on, from the address (anything unknown is Staff). */
+export const parseOrgCategory = (raw: string | null | undefined): OrgCategory =>
+  raw === "production" ? "production" : "staff";
+
+/** How many rows of each kind, for the counts on the switch. */
+export function countByCategory(rows: readonly { category?: string | null }[]): Record<OrgCategory, number> {
+  const out: Record<OrgCategory, number> = { staff: 0, production: 0 };
+  for (const r of rows) out[orgCategoryOf(r)] += 1;
+  return out;
+}
+
+/** The designations tree with only one kind's departments and designations (branches stay: an empty one still shows). */
+export function treeOfCategory(tree: DesignationsTree, category: OrgCategory): DesignationsTree {
+  return {
+    ...tree,
+    designations: inCategory(tree.designations, category),
+    departments: inCategory(tree.departments, category),
+  };
+}
+
+/** Active employees of this kind with no department / designation (the "unassigned" figure of the stat cards). */
+export const unassignedOf = (u: Unassigned | undefined, category: OrgCategory | null | undefined): number =>
+  !u ? 0 : category === "production" ? u.production : category === "staff" ? u.staff : u.active;
+
+/**
+ * Whether a department may switch between Staff and Production, and why not. Only an empty one may (the server also
+ * refuses while somebody elsewhere holds one of its designations; its other designations switch with it).
+ */
+export function departmentCategoryLock(d: DepartmentRow | null): string | null {
+  if (!d) return null;
+  const people = d.active + d.inactive;
+  if (people > 0) {
+    return `${plural(people, "employee")} ${people === 1 ? "is" : "are"} in this department. Only an empty department can switch between Staff and Production: move them to another department first.`;
+  }
+  return null;
+}
+
+/** Whether a designation may switch between Staff and Production (only while nobody holds it), and why not. */
+export function designationCategoryLock(d: DesignationRow | null): string | null {
+  if (!d) return null;
+  const people = d.active + d.inactive;
+  if (people > 0) {
+    return `${plural(people, "employee")} ${people === 1 ? "holds" : "hold"} this designation. A designation can only switch between Staff and Production while nobody holds it.`;
+  }
+  return null;
 }
 
 // ─── Departments ────────────────────────────────────────────────────────────────
@@ -87,6 +141,8 @@ export function sortDepartments(rows: DepartmentRow[], sort: DeptSort): Departme
 export type DeptSummary = {
   departments: number;
   branches: number;
+  /** Designations filed under these departments. */
+  designations: number;
   /** Active employees in a department. */
   active: number;
   staff: number;
@@ -98,16 +154,22 @@ export type DeptSummary = {
   unassigned: number;
 };
 
-export function summarizeDepartments(rows: DepartmentRow[], unassigned: Unassigned | undefined): DeptSummary {
+/** The stat cards of the Departments page. With `category`, "unassigned" counts only that kind's employees. */
+export function summarizeDepartments(
+  rows: DepartmentRow[],
+  unassigned: Unassigned | undefined,
+  category?: OrgCategory | null,
+): DeptSummary {
   return {
     departments: rows.length,
     branches: new Set(rows.map((d) => d.branchId ?? "none")).size,
+    designations: rows.reduce((n, d) => n + d.designationCount, 0),
     active: rows.reduce((n, d) => n + d.active, 0),
     staff: rows.reduce((n, d) => n + d.activeStaff, 0),
     production: rows.reduce((n, d) => n + d.activeProduction, 0),
     inactive: rows.reduce((n, d) => n + d.inactive, 0),
     empty: rows.filter((d) => d.active === 0).length,
-    unassigned: unassigned?.active ?? 0,
+    unassigned: unassignedOf(unassigned, category),
   };
 }
 
@@ -226,6 +288,8 @@ export type DesigSummary = {
   departments: number;
   /** Active employees who hold a designation. */
   active: number;
+  /** Not active employees who hold one. */
+  inactive: number;
   staff: number;
   production: number;
   /** Designations nobody active holds. */
@@ -234,16 +298,18 @@ export type DesigSummary = {
   unassigned: number;
 };
 
-export function summarizeDesignations(tree: DesignationsTree): DesigSummary {
+/** The stat cards of the Designations page. With `category`, "unassigned" counts only that kind's employees. */
+export function summarizeDesignations(tree: DesignationsTree, category?: OrgCategory | null): DesigSummary {
   const rows = tree.designations;
   return {
     designations: rows.length,
     departments: new Set(rows.map((d) => d.departmentId).filter((id) => id != null)).size,
     active: rows.reduce((n, d) => n + d.active, 0),
+    inactive: rows.reduce((n, d) => n + d.inactive, 0),
     staff: rows.reduce((n, d) => n + d.activeStaff, 0),
     production: rows.reduce((n, d) => n + d.activeProduction, 0),
     empty: rows.filter((d) => d.active === 0).length,
-    unassigned: tree.unassigned.active,
+    unassigned: unassignedOf(tree.unassigned, category),
   };
 }
 
@@ -445,6 +511,7 @@ export function departmentSheet(rows: DepartmentRow[]): (string | number)[][] {
   return [
     [
       "Department",
+      "Type",
       "Branch",
       "Description",
       "Active staff",
@@ -455,6 +522,7 @@ export function departmentSheet(rows: DepartmentRow[]): (string | number)[][] {
     ],
     ...rows.map((d) => [
       d.name,
+      typeLabel(orgCategoryOf(d)),
       d.branchName ?? "",
       d.description ?? "",
       d.activeStaff,
@@ -468,11 +536,22 @@ export function departmentSheet(rows: DepartmentRow[]): (string | number)[][] {
 
 export function designationSheet(rows: DesignationRow[]): (string | number)[][] {
   return [
-    ["Branch", "Department", "Designation", "Level", "Active staff", "Active production", "Active total", "Inactive"],
+    [
+      "Branch",
+      "Department",
+      "Designation",
+      "Type",
+      "Level",
+      "Active staff",
+      "Active production",
+      "Active total",
+      "Inactive",
+    ],
     ...rows.map((d) => [
       d.branchName ?? "",
       d.departmentName ?? "Unassigned",
       d.title,
+      typeLabel(orgCategoryOf(d)),
       levelInfo(d.level).label,
       d.activeStaff,
       d.activeProduction,

@@ -17,28 +17,36 @@ import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { useListDepartments } from "@/lib/api-client";
+import { useListBranches, useListDepartments } from "@/lib/api-client";
 import {
   PAY_CYCLES,
   PAY_CYCLE_INFO,
   isPayCycle,
   useAssignProductionCycle,
+  useCycleChangePreview,
   useProductionCycles,
   useProductionEmployees,
+  type CycleChangePreviewEmployee,
   type PayCycle,
   type ProductionEmployeeRow,
 } from "@/lib/api-client/custom-hooks";
+import type { OrgDepartment } from "@/lib/departments";
 import { ChangeWarnings } from "./production-employees/ChangeWarnings";
 import { EmployeeList } from "./production-employees/EmployeeList";
 import { useDebounced } from "./production-employees/hooks";
+import { MoveHistoryDialog } from "./production-employees/MoveHistory";
 import {
+  ALL_BRANCHES,
   ALL_DEPARTMENTS,
   NO_FILTERS,
   NO_SELECTION,
   PAGE_SIZE,
   TABS,
+  assignBody,
   assignmentToast,
+  branchOptions,
   chooseDefaultTab,
   confirmWording,
   deselectRows,
@@ -50,10 +58,14 @@ import {
   isTab,
   listSelection,
   matchesTab,
+  moveConflict,
   nameMap,
   needsConfirmation,
   paginate,
   planAssignment,
+  productionDepartmentOptions,
+  reasonLimit,
+  reasonRequired,
   requestFilters,
   selectRows,
   selectedRows,
@@ -100,12 +112,21 @@ export default function ProductionEmployees() {
   const [page, setPage] = useState(1);
   const [selection, setSelection] = useState<Selection>(NO_SELECTION);
   const [confirm, setConfirm] = useState<Plan | null>(null);
+  // the reason typed for a move of workers who already have payroll, and the facts the server sent when it refused a move
+  // for want of one (the confirmation then opens again with them)
+  const [reason, setReason] = useState("");
+  const [conflict, setConflict] = useState<CycleChangePreviewEmployee[] | null>(null);
+  const [historyRow, setHistoryRow] = useState<ProductionEmployeeRow | null>(null);
 
   const shownTab: Tab = tab ?? "all";
   const list = useProductionEmployees(requestFilters(shownTab, filters, search));
   const departments = useListDepartments();
+  const branches = useListBranches();
   const cycles = useProductionCycles();
   const assign = useAssignProductionCycle();
+  // what the move would mean for the pay of anyone already paid (asked while the confirmation is open)
+  const preview = useCycleChangePreview(confirm?.ids ?? [], confirm?.target ?? null, confirm !== null);
+  const needReason = confirm !== null && reasonRequired(preview.data, conflict);
 
   useEffect(() => {
     if (tab === null && list.data) setTab(chooseDefaultTab(list.data.counts));
@@ -122,10 +143,13 @@ export default function ProductionEmployees() {
   const listState = listSelection(selection, rows);
   const hidden = hiddenSelected(selection, rows);
   const active = filtersActive(filters);
+  // production departments only (Staff ones never hold a production worker), of the chosen unit when one is picked
   const departmentOptions = useMemo(
-    () => [...(departments.data ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
-    [departments.data],
+    () => productionDepartmentOptions(departments.data as OrgDepartment[] | undefined, filters.branch),
+    [departments.data, filters.branch],
   );
+  const unitOptions = useMemo(() => branchOptions(branches.data), [branches.data]);
+  const manyUnits = unitOptions.length > 1;
   const isConfigured = (cycle: PayCycle) => cycles.data?.cycles.find((c) => c.cycle === cycle)?.configured !== false;
 
   const selectTab = (next: Tab) => {
@@ -140,12 +164,27 @@ export default function ProductionEmployees() {
     setFilters(NO_FILTERS);
     setPage(1);
   };
+  /** A unit is picked: a department of another unit is not offered any more, so it is dropped from the filter. */
+  const pickUnit = (branch: string) => {
+    const offered = productionDepartmentOptions(departments.data as OrgDepartment[] | undefined, branch);
+    patch({
+      branch,
+      department: offered.some((o) => o.value === filters.department) ? filters.department : ALL_DEPARTMENTS,
+    });
+  };
+  const closeConfirm = () => {
+    setConfirm(null);
+    setConflict(null);
+    setReason("");
+  };
   const toggleAll = () => setSelection((s) => (listState === "all" ? deselectRows(s, rows) : selectRows(s, rows)));
 
-  const run = async (plan: Plan) => {
+  const run = async (plan: Plan, why: string | null = null) => {
     setConfirm(null);
     try {
-      const result = await assign.mutateAsync({ employeeIds: plan.ids, cycle: plan.target });
+      const result = await assign.mutateAsync(assignBody(plan, why));
+      setConflict(null);
+      setReason("");
       const wording = assignmentToast(result, plan.target, nameMap(plan.rows));
       toast({
         title: wording.title,
@@ -155,6 +194,14 @@ export default function ProductionEmployees() {
       // the people just handled leave the selection; anyone else ticked stays ticked
       setSelection((s) => deselectRows(s, plan.rows));
     } catch (e) {
+      // someone in the move already has payroll and no reason came with it: ask for it, with the server's facts
+      const facts = moveConflict(e);
+      if (facts) {
+        setConflict(facts);
+        setReason("");
+        setConfirm(plan);
+        return;
+      }
       toast({
         title: plan.target
           ? `Could not assign to ${PAY_CYCLE_INFO[plan.target].label}`
@@ -170,6 +217,8 @@ export default function ProductionEmployees() {
   const start = (targets: ProductionEmployeeRow[], cycle: PayCycle | null) => {
     const plan = planAssignment(targets, cycle);
     if (plan.ids.length === 0) return;
+    setConflict(null);
+    setReason("");
     if (needsConfirmation(plan)) setConfirm(plan);
     else void run(plan);
   };
@@ -262,6 +311,21 @@ export default function ProductionEmployees() {
               )}
             </div>
             <div className="grid grid-cols-2 gap-2 lg:flex">
+              {manyUnits && (
+                <Select value={filters.branch} onValueChange={pickUnit}>
+                  <SelectTrigger className="h-10 lg:w-44" aria-label="Filter by unit" data-testid="pe-branch-filter">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_BRANCHES}>All units</SelectItem>
+                    {unitOptions.map((b) => (
+                      <SelectItem key={b.value} value={b.value}>
+                        {b.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               <Select value={filters.department} onValueChange={(v) => patch({ department: v })}>
                 <SelectTrigger
                   className="h-10 lg:w-52"
@@ -271,10 +335,10 @@ export default function ProductionEmployees() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={ALL_DEPARTMENTS}>All departments</SelectItem>
+                  <SelectItem value={ALL_DEPARTMENTS}>All production departments</SelectItem>
                   {departmentOptions.map((d) => (
-                    <SelectItem key={d.id} value={String(d.id)}>
-                      {d.name}
+                    <SelectItem key={d.id} value={d.value}>
+                      {d.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -393,6 +457,8 @@ export default function ProductionEmployees() {
               onToggle={(row) => setSelection((s) => toggleRow(s, row))}
               onToggleAll={toggleAll}
               onAssign={(row, cycle) => start([row], cycle)}
+              onHistory={setHistoryRow}
+              showBranch={manyUnits}
               busy={assign.isPending}
               stale={list.isPlaceholderData}
             />
@@ -409,23 +475,49 @@ export default function ProductionEmployees() {
         <HowItWorks />
       </div>
 
-      <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
+      <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && closeConfirm()}>
         <AlertDialogContent className="max-h-[90vh] overflow-y-auto" data-testid="pe-confirm-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>{wording?.title}</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm text-muted-foreground">
+                {conflict && (
+                  <p className="font-semibold text-amber-900" data-testid="pe-conflict-note">
+                    The move was not made: some of these workers have already received salary on their pay cycle, so a
+                    short reason is needed first.
+                  </p>
+                )}
                 {wording?.lines.map((line) => (
                   <p key={line}>{line}</p>
                 ))}
-                {confirm && <ChangeWarnings ids={confirm.ids} target={confirm.target} open={confirm !== null} />}
+                {confirm && <ChangeWarnings preview={preview} target={confirm.target} conflict={conflict} />}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {needReason && (
+            <div className="space-y-1.5">
+              <label htmlFor="pe-reason" className="text-sm font-semibold text-gray-800">
+                Reason for the move <span className="text-red-600">*</span>
+              </label>
+              <Textarea
+                id="pe-reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                maxLength={reasonLimit(preview.data)}
+                rows={2}
+                placeholder="For example: moved to the fortnightly stitching line"
+                data-testid="pe-reason"
+              />
+              <p className="text-[11px] text-gray-500">
+                Needed because salary was already paid. It is kept with the move and shown in the worker&apos;s history.
+              </p>
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel data-testid="pe-confirm-cancel">Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => confirm && void run(confirm)}
+              onClick={() => confirm && void run(confirm, needReason ? reason : null)}
+              disabled={needReason && !reason.trim()}
               className={confirm?.target === null ? "bg-red-600 text-white hover:bg-red-700" : undefined}
               data-testid="pe-confirm"
             >
@@ -434,6 +526,8 @@ export default function ProductionEmployees() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <MoveHistoryDialog row={historyRow} onClose={() => setHistoryRow(null)} />
     </HrLayout>
   );
 }

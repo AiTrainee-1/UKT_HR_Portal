@@ -50,10 +50,13 @@ export function PayrollGenerationProvider({ children }: { children: ReactNode })
   const [isGenerating, setIsGenerating] = useState(false);
   const [showPipeline, setShowPipeline] = useState(false);
   const [lastResult, setLastResult] = useState<GeneratePayrollResult | null>(null);
+  // which run the pipeline follows: a production run is polled on its own route (Production Payroll rights)
+  const [progressKind, setProgressKind] = useState<"staff" | "production">("staff");
 
-  const { data: progress } = useGeneratePayrollProgress(showPipeline);
+  const { data: progress } = useGeneratePayrollProgress(showPipeline, progressKind);
 
   const triggerGenerate = useCallback(async (params: GeneratePayrollParams) => {
+    setProgressKind("staff");
     setIsGenerating(true);
     setShowPipeline(true);
     try {
@@ -92,6 +95,7 @@ export function PayrollGenerationProvider({ children }: { children: ReactNode })
   }, [toast, queryClient]);
 
   const triggerGenerateProduction = useCallback(async (params: GenerateProductionArgs) => {
+    setProgressKind("production");
     setIsGenerating(true);
     setShowPipeline(true);
     try {
@@ -105,13 +109,17 @@ export function PayrollGenerationProvider({ children }: { children: ReactNode })
 
       const skippedCount = result.skippedDetails?.length ?? 0;
       const already = result.alreadyGenerated ?? 0;
+      // workers who joined during the period or moved here from another cycle wait in New Joiners (2026-11-16)
+      const parked = result.parked ?? 0;
+      const waiting = (parked > 0 ? ` ${parked} wait in New Joiners until you add them to the payroll.` : "")
+        + ((result.replaced ?? 0) > 0 ? ` ${result.replaced} draft payslip(s) of other periods were replaced.` : "");
       toast({
         title: `Production payroll generated -${result.generated} record(s) computed`,
-        description: skippedCount > 0
+        description: (skippedCount > 0
           ? `${skippedCount} employee(s) skipped${already ? `, ${already} already had payroll` : ""}. Use Skipped Employees to see why.`
           : already > 0
             ? `${already} employee(s) already had payroll for ${result.periodStart} – ${result.periodEnd} and were left as they are.`
-            : `${result.periodStart} – ${result.periodEnd} is ready.`,
+            : `${result.periodStart} – ${result.periodEnd} is ready.`) + waiting,
         variant: skippedCount > 0 ? "destructive" : "default",
       });
       queryClient.invalidateQueries({

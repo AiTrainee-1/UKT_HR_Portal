@@ -4,7 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { PayrollRunItem } from "@/lib/api-client/custom-hooks";
 import { inr, plural } from "@/components/payroll/kit/format";
 import { SEVERITY_META } from "@/components/payroll/kit/issue-meta";
-import { BusyIcon, Chip, PayStatusChip } from "@/components/payroll/kit/parts";
+import { BusyIcon, Chip, PayStatusChip, PaymentChip } from "@/components/payroll/kit/parts";
 import { anyTds, hasTds, percentText, sumTds, tdsAmount, tdsRate } from "@/components/payroll/kit/statutory";
 import { cn } from "@/lib/utils";
 import { summarizeRuns } from "../dashboard/dashboard-logic";
@@ -34,6 +34,8 @@ type TableProps = {
   /** Leave out to show no "Mark as Cleared" (a finalized staff month is locked). */
   onMarkPaid?: (run: PayrollRunItem) => void;
   markingId?: number | null;
+  /** A "Payment" column (Paid / Not paid, the period's Mark as Paid): production pages only. */
+  showPayment?: boolean;
 };
 
 const ACCENT_LINK = { indigo: "text-indigo-700", amber: "text-amber-700" } as const;
@@ -90,6 +92,7 @@ export function PayrollRecordTable({
   onOpenIssues,
   onMarkPaid,
   markingId,
+  showPayment = false,
 }: TableProps) {
   const totals = summarizeRuns(allRows);
   const production = rows.some(isProductionRun);
@@ -113,6 +116,7 @@ export function PayrollRecordTable({
             <th className="px-3 py-2.5 text-right">Deductions</th>
             <th className="px-3 py-2.5 text-right">Net</th>
             <th className="px-3 py-2.5">Status</th>
+            {showPayment && <th className="px-3 py-2.5">Payment</th>}
             <th className="px-3 py-2.5">Issues</th>
             <th className="px-3 py-2.5 text-right">Actions</th>
           </tr>
@@ -187,6 +191,11 @@ export function PayrollRecordTable({
                 <td className="px-3 py-2.5 align-middle">
                   <PayStatusChip status={run.status} />
                 </td>
+                {showPayment && (
+                  <td className="px-3 py-2.5 align-middle" data-testid={`payroll-record-payment-${run.id}`}>
+                    <PaymentChip status={run.paymentStatus} />
+                  </td>
+                )}
                 <td className="px-3 py-2.5 align-middle">
                   <IssuesCell
                     run={run}
@@ -241,7 +250,7 @@ export function PayrollRecordTable({
             )}
             <td className="px-3 py-2.5 text-right tabular-nums text-red-600">{inr(totals.deductions)}</td>
             <td className="px-3 py-2.5 text-right tabular-nums text-green-700">{inr(totals.net)}</td>
-            <td className="px-3 py-2.5" colSpan={3} />
+            <td className="px-3 py-2.5" colSpan={showPayment ? 4 : 3} />
           </tr>
         </tfoot>
       </table>

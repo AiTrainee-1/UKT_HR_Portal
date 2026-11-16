@@ -92,6 +92,8 @@ export function EmployeesTab({
   const chosen = useMemo(() => readyIds.filter((id) => selected.has(id)), [readyIds, selected]);
   const allChosen = readyIds.length > 0 && chosen.length === readyIds.length;
   const ended = status.data?.periodEnded ?? false;
+  // a period finalized with Payroll Done is locked for good: nothing is generated in it any more
+  const locked = !!status.data?.locked;
   const serverCounts = status.data?.counts;
   const periodLabel = formatPeriod(period);
 
@@ -105,6 +107,12 @@ export function EmployeesTab({
   const againCleared = again?.payroll?.status === "paid";
   const againCoverage = coverageText(again?.coverage);
 
+  // Workers whose days of this period are in draft payslips of other periods (owner 2026-11-16): their row says the
+  // drafts are replaced, so generating them here replaces those drafts.
+  const withDrafts = useMemo(
+    () => new Set(employees.filter((e) => (e.drafts?.length ?? 0) > 0).map((e) => e.employeeId)),
+    [employees],
+  );
   // Asks for exactly these employees of this cycle and period (a run never touches anybody else).
   const run = useCallback(
     (ids: number[], regenerate = false) => {
@@ -116,10 +124,11 @@ export function EmployeesTab({
         periodEnd: period.periodEnd,
         employeeIds: ids,
         regenerate,
+        ...(ids.some((id) => withDrafts.has(id)) ? { replaceDrafts: true } : {}),
       });
       setSelected(new Set());
     },
-    [cycle, period, onPeriodChange, triggerGenerateProduction],
+    [cycle, period, onPeriodChange, triggerGenerateProduction, withDrafts],
   );
   const generateOne = useCallback((e: PeriodEmployee) => run([e.employeeId]), [run]);
 
@@ -219,7 +228,7 @@ export function EmployeesTab({
               <Button
                 size="sm"
                 className="h-8 gap-1.5 bg-amber-600 hover:bg-amber-700"
-                disabled={isGenerating || !ended}
+                disabled={isGenerating || !ended || locked}
                 onClick={() => run(chosen)}
                 data-testid="pcp-generate-selected"
               >
@@ -273,7 +282,7 @@ export function EmployeesTab({
             <Checkbox
               aria-label="Select every employee that can be generated"
               checked={allChosen}
-              disabled={readyIds.length === 0 || !ended}
+              disabled={readyIds.length === 0 || !ended || locked}
               onCheckedChange={(v) => setSelected(v ? new Set(readyIds) : new Set())}
               data-testid="pcp-roster-select-all"
             />
@@ -291,6 +300,7 @@ export function EmployeesTab({
                   employee={e}
                   selected={selected.has(e.employeeId)}
                   ended={ended}
+                  locked={locked}
                   busy={isGenerating}
                   issues={payrollId !== undefined ? issueSummaries.get(payrollId) : undefined}
                   issuesState={issuesState}
@@ -326,6 +336,13 @@ export function EmployeesTab({
                 {againCoverage && (
                   <p className="font-medium text-sky-800" data-testid="pcp-regenerate-coverage">
                     Days already paid on another payslip are not paid again: {againCoverage}.
+                  </p>
+                )}
+                {(again?.drafts?.length ?? 0) > 0 && (
+                  <p className="font-medium text-violet-800" data-testid="pcp-regenerate-drafts">
+                    It replaces the draft payslip{again!.drafts!.length === 1 ? "" : "s"} for{" "}
+                    {again!.drafts!.map((d) => `${d.periodLabel} (${d.label})`).join(", ")}: those days are paid once,
+                    here.
                   </p>
                 )}
               </div>

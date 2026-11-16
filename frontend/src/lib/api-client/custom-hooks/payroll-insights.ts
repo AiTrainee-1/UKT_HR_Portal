@@ -2,10 +2,11 @@
 // full details page, the issues payroll detected, the rules in force, and the Salary Statement. Backend:
 // api/payroll_insights.py (+ _views), api/payroll_statement_views.py. Everything here is READ-ONLY: it explains what the
 // payroll engine already decided from the stored breakdowns and never recomputes or writes a payroll.
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
 import type { DayCompensationMarker } from "./attendance";
+import type { PayrollBreakdownResponse, PayrollRunItem } from "./payroll";
 import type { AlreadyPaidPart, CatchUpPart, DayRange, PayCycle } from "./production-cycles";
 
 // ── Which payroll ─────────────────────────────────────────────────────────────
@@ -495,4 +496,36 @@ export const useSalaryStatement = (
       customFetch<SalaryStatement>(`${payrollApiBase(scope!.kind)}/salary-statement?${scopeQuery(scope!, filters)}`),
     enabled: !!scope,
     ...options,
+  });
+
+// ── One payroll's stored breakdown and its changes, by kind (2026-11-16) ─────────
+
+/** The breakdown of one payroll from its own kind's route: a production row is read and changed under
+ *  /api/payroll/production (Production Payroll rights), a staff row under /api/payroll. */
+export const getPayrollBreakdownOfQueryKey = (kind: PayrollKind, id: number) =>
+  [payrollApiBase(kind), id, "breakdown"] as const;
+
+export const usePayrollBreakdownOf = (kind: PayrollKind, id: number | null) =>
+  useQuery<PayrollBreakdownResponse>({
+    queryKey: getPayrollBreakdownOfQueryKey(kind, id ?? 0),
+    queryFn: () => customFetch<PayrollBreakdownResponse>(`${payrollApiBase(kind)}/${id}/breakdown`),
+    enabled: !!id,
+  });
+
+/** PATCH a payroll on its own kind's route (Mark as Cleared, bonus, deductions, notes). */
+export const useUpdatePayrollOf = () =>
+  useMutation({
+    mutationFn: ({
+      kind,
+      id,
+      data,
+    }: {
+      kind: PayrollKind;
+      id: number;
+      data: Partial<{ status: string; bonus: number; deductions: number; notes: string }>;
+    }) =>
+      customFetch<PayrollRunItem>(`${payrollApiBase(kind)}/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
   });

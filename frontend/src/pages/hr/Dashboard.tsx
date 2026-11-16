@@ -26,6 +26,7 @@ import {
 import { useBiometricSync } from "@/contexts/BiometricSyncContext";
 import { hrCanAct } from "@/lib/approval-workflow";
 import { Gate, useLevel } from "@/lib/tab-access";
+import { departmentOptions, optionText, type OrgDepartment } from "@/lib/departments";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, PieChart, Pie, Cell, Legend,
@@ -275,8 +276,19 @@ export default function HrDashboard() {
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 5);
 
-  const deptData = (depts as any[] ?? [])
-    .map((d: any) => ({ name: d.name as string, count: (d.employeeCount ?? 0) as number }))
+  // Staff and production departments are separate (lib/departments.ts): a name both kinds use (CUTTING) reads
+  // "CUTTING (Staff)" / "CUTTING (Production)" so the two bars can be told apart.
+  const deptRows = (depts ?? []) as OrgDepartment[];
+  const deptCounts = new Map(deptRows.map((d) => [d.id, d.employeeCount ?? 0]));
+  const deptOpts = departmentOptions(deptRows);
+  const labelUses = new Map<string, number>();
+  deptOpts.forEach((o) => labelUses.set(o.label.toLowerCase(), (labelUses.get(o.label.toLowerCase()) ?? 0) + 1));
+  const deptData = deptOpts
+    .map((o) => ({
+      key: o.value,
+      name: optionText(o, (labelUses.get(o.label.toLowerCase()) ?? 0) > 1),
+      count: deptCounts.get(o.id) ?? 0,
+    }))
     .filter(d => d.count > 0)
     .sort((a, b) => b.count - a.count)
     .slice(0, 8);
@@ -644,7 +656,7 @@ export default function HrDashboard() {
               <div className="space-y-0.5">
                 {deptData.map((d, i) => (
                   <HBar
-                    key={d.name} label={d.name} value={d.count} max={maxDept}
+                    key={d.key} label={d.name} value={d.count} max={maxDept}
                     color={DEPT_COLORS[i % DEPT_COLORS.length]}
                     onClick={() => navigate("/hr/employees")}
                   />

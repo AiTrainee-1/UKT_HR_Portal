@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
-import { Building2, MapPin, SearchX } from "lucide-react";
+import { createContext, useContext, type ReactNode } from "react";
+import { Briefcase, Building2, Factory, MapPin, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ORG_CATEGORIES, ORG_CATEGORY_LABEL, type OrgCategory } from "@/lib/departments";
 import { TONE } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { Chip } from "../account-management/parts";
@@ -48,6 +49,85 @@ export function BranchChip({ name }: { name?: string | null }) {
   );
 }
 
+/**
+ * The kind (Staff / Production) the page's switch is on. Inside it a SplitBar shows that kind alone: a department of
+ * one kind only ever holds that kind, so a two-colour split would say nothing. People of the other kind (left over from
+ * before the two were separated) still show, as the split it then is.
+ */
+export const OrgCategoryContext = createContext<OrgCategory | null>(null);
+
+/** The heading of a list's head-count bar column: "Staff employees" on a Staff page, "Staff / production" elsewhere. */
+export function useSplitHeading(): string {
+  const kind = useContext(OrgCategoryContext);
+  return kind ? `Active ${kind}` : "Staff / production";
+}
+
+/** The Staff | Production switch at the top of the Departments and Designations pages. */
+export function CategorySwitch({
+  value,
+  onChange,
+  counts,
+  noun,
+}: {
+  value: OrgCategory;
+  onChange: (c: OrgCategory) => void;
+  /** How many departments / designations of each kind (left out while loading). */
+  counts?: Record<OrgCategory, number>;
+  /** "departments" / "designations", for the counts' screen-reader text. */
+  noun: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Staff or production"
+      className="grid w-full grid-cols-2 gap-1 rounded-2xl border bg-white p-1 shadow-sm sm:inline-grid sm:w-auto"
+      data-testid="org-category-switch"
+      data-value={value}
+    >
+      {ORG_CATEGORIES.map((c) => {
+        const on = value === c;
+        const Icon = c === "production" ? Factory : Briefcase;
+        return (
+          <button
+            key={c}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(c)}
+            data-testid={`org-category-${c}`}
+            className={cn(
+              "flex min-w-0 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors sm:min-w-[11rem]",
+              on
+                ? c === "production"
+                  ? "bg-amber-500 text-white shadow-sm"
+                  : "bg-blue-600 text-white shadow-sm"
+                : "text-gray-600 hover:bg-gray-50",
+            )}
+          >
+            <Icon size={15} className="shrink-0" />
+            <span className="truncate">{c === "production" ? "Production" : "Staff"}</span>
+            {counts && (
+              <span
+                className={cn(
+                  "rounded-full px-1.5 text-[11px] font-semibold",
+                  on
+                    ? c === "production"
+                      ? "bg-white text-amber-700"
+                      : "bg-white text-blue-700"
+                    : "bg-gray-100 text-gray-500",
+                )}
+                aria-label={`${counts[c]} ${ORG_CATEGORY_LABEL[c].toLowerCase()} ${noun}`}
+              >
+                {counts[c]}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** A department or designation's active staff and production as one bar, with a legend that reads on its own. */
 export function SplitBar({
   staff,
@@ -60,6 +140,29 @@ export function SplitBar({
   legend?: boolean;
   className?: string;
 }) {
+  const kind = useContext(OrgCategoryContext);
+  // Inside a Staff / Production page: that kind alone, unless people of the other kind are there too.
+  if (kind && (kind === "production" ? staff : production) === 0) {
+    const n = kind === "production" ? production : staff;
+    const dot = kind === "production" ? PRODUCTION_DOT : STAFF_DOT;
+    return (
+      <div
+        className={cn("min-w-[8rem]", className)}
+        data-testid="split-bar"
+        data-staff={staff}
+        data-production={production}
+      >
+        <div className="flex h-2 overflow-hidden rounded-full bg-gray-100" role="img" aria-label={`${n} ${kind}`}>
+          {n > 0 && <span className={cn(dot, "w-full")} />}
+        </div>
+        {legend && (
+          <p className="mt-1 flex items-center gap-1 text-[11px] text-gray-500">
+            <span className={cn("h-1.5 w-1.5 rounded-full", dot)} /> {n} {kind} active
+          </p>
+        )}
+      </div>
+    );
+  }
   const pct = splitPercent(staff, production);
   const empty = staff + production === 0;
   return (

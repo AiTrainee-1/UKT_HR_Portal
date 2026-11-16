@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { EmployeeRules, PayrollKind, PayrollRunItem } from "@/lib/api-client/custom-hooks";
 import { inr } from "@/components/payroll/kit/format";
 import { SEVERITY_META } from "@/components/payroll/kit/issue-meta";
-import { Avatar, BusyIcon, Chip, IssueChip, PayStatusChip } from "@/components/payroll/kit/parts";
+import { Avatar, BusyIcon, Chip, IssueChip, PayStatusChip, PaymentChip } from "@/components/payroll/kit/parts";
 import { hasTds, tdsAmount, tdsLabel } from "@/components/payroll/kit/statutory";
 import { cn } from "@/lib/utils";
 import type { PayrollIssueSummary } from "../filters/filter-logic";
@@ -40,6 +40,8 @@ export type PayrollRecordCardProps = {
   onMarkPaid?: (run: PayrollRunItem) => void;
   /** This row's "Mark as Cleared" is running: the button spins and waits. */
   marking?: boolean;
+  /** Show Paid / Not paid (the period's Mark as Paid) beside the status: production pages only. */
+  showPayment?: boolean;
   testId?: string;
 };
 
@@ -107,6 +109,7 @@ function PayrollRecordCardImpl({
   onOpenIssues,
   onMarkPaid,
   marking = false,
+  showPayment = false,
   testId,
 }: PayrollRecordCardProps) {
   const name = displayName(run);
@@ -138,6 +141,11 @@ function PayrollRecordCardImpl({
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <p className="truncate text-sm font-bold text-gray-900">{name}</p>
                 <PayStatusChip status={run.status} />
+                {showPayment && (
+                  <span data-testid={`payroll-record-payment-${run.id}`}>
+                    <PaymentChip status={run.paymentStatus} />
+                  </span>
+                )}
                 {cycle && (
                   <Chip tone="caution" icon={Repeat}>
                     {cycle}

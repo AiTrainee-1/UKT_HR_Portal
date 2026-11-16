@@ -224,9 +224,13 @@ export default function ShiftFormDialog({
                       : f.endTime,
                 }));
               }}
+              // production shifts come from Settings, with special shifts made on the Production filter (owner
+              // 2026-11-16): a new template is staff only; an old production one keeps its option while edited
               options={[
                 { value: "staff", label: "Staff", sub: "Paid monthly, lunch break", icon: <Users size={14} /> },
-                { value: "production", label: "Production", sub: "Paid per shift", icon: <Factory size={14} /> },
+                ...(editing?.shiftType === "production"
+                  ? [{ value: "production" as ShiftType, label: "Production", sub: "Paid per shift", icon: <Factory size={14} /> }]
+                  : []),
               ]}
             />
           </Field>
