@@ -7,6 +7,7 @@ import type {
   RecipientModeOption,
 } from "@/lib/api-client/custom-hooks";
 import {
+  ALERT_TIMING_KEYS,
   CATEGORY_STATE_LABEL,
   RECIPIENT_MODES,
   RECIPIENT_MODE_LABEL,
@@ -15,6 +16,10 @@ import {
   STATUS_LABEL,
   TEMPLATE_BODY_MAX,
   TEMPLATE_TITLE_MAX,
+  alertTimingChanges,
+  alertTimingDraft,
+  alertTimingProblem,
+  alertTimingRange,
   asCategory,
   asDate,
   asEmployeeShow,
@@ -74,6 +79,7 @@ import {
   titleCount,
   wordingBody,
   wordingProblem,
+  wrapsBuiltIn,
   type PickerFilters,
 } from "./logic";
 
@@ -640,7 +646,6 @@ const template = (over: Partial<PushTemplate> = {}): PushTemplate => ({
   groupLabel: "Documents",
   category: "payroll",
   categoryLabel: "Payroll & salary",
-  origin: "whatsapp",
   enabled: true,
   variables: [],
   title: "",
@@ -745,5 +750,60 @@ describe("the wording of each kind", () => {
     expect(phoneCanExpand("Salary Slip", "Dear Asha,\nYour salary slip is attached.")).toBe(true);
     expect(phoneCanExpand("Salary Slip", "x".repeat(81))).toBe(true);
     expect(phoneCanExpand("x".repeat(41), "short")).toBe(true);
+  });
+});
+
+describe("wrapping the built-in text", () => {
+  const vars = (...names: string[]) => names.map((name) => ({ name, help: name, sample: "" }));
+  it("is offered to a kind whose placeholders include {{message}}", () => {
+    expect(wrapsBuiltIn({ variables: vars("employee_name", "headline", "message") })).toEqual({
+      message: true,
+      headline: true,
+    });
+    expect(wrapsBuiltIn({ variables: vars("message") })).toEqual({ message: true, headline: false });
+    expect(wrapsBuiltIn({ variables: vars("employee_name", "month_year") })).toEqual({
+      message: false,
+      headline: false,
+    });
+    expect(wrapsBuiltIn({ variables: [] }).message).toBe(false);
+  });
+});
+
+// ── the phone attendance alerts' timing ───────────────────────────────────────
+
+describe("the attendance alert timing", () => {
+  const saved = { absentExtraMinutes: 0, reminderLeadMinutes: 15, missingAfterMinutes: 20 };
+  const reminder = { min: 1, max: 60 };
+
+  it("lists the three timings and shows the saved ones as text", () => {
+    expect(ALERT_TIMING_KEYS).toEqual(["absentExtraMinutes", "reminderLeadMinutes", "missingAfterMinutes"]);
+    expect(alertTimingDraft(saved)).toEqual({
+      absentExtraMinutes: "0",
+      reminderLeadMinutes: "15",
+      missingAfterMinutes: "20",
+    });
+    expect(alertTimingRange(reminder)).toBe("1 to 60 minutes");
+  });
+
+  it("checks a typed timing as the server does", () => {
+    expect(alertTimingProblem("15", reminder)).toBeNull();
+    expect(alertTimingProblem(" 60 ", reminder)).toBeNull();
+    expect(alertTimingProblem("1", reminder)).toBeNull();
+    expect(alertTimingProblem("0", reminder)).toBe("Between 1 and 60 minutes.");
+    expect(alertTimingProblem("61", reminder)).toBe("Between 1 and 60 minutes.");
+    expect(alertTimingProblem("", reminder)).toBe("Enter a number of minutes.");
+    expect(alertTimingProblem("2.5", reminder)).toBe("Whole minutes only.");
+    expect(alertTimingProblem("-1", reminder)).toBe("Whole minutes only.");
+    expect(alertTimingProblem("0", { min: 0, max: 240 })).toBeNull();
+  });
+
+  it("sends only the timings that changed, as numbers", () => {
+    expect(alertTimingChanges(saved, alertTimingDraft(saved))).toEqual({});
+    expect(
+      alertTimingChanges(saved, { absentExtraMinutes: "10", reminderLeadMinutes: "15", missingAfterMinutes: "020" }),
+    ).toEqual({ absentExtraMinutes: 10 });
+    expect(
+      alertTimingChanges(saved, { absentExtraMinutes: "", reminderLeadMinutes: "30", missingAfterMinutes: "x" }),
+    ).toEqual({ reminderLeadMinutes: 30 });
   });
 });

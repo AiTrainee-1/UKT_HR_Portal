@@ -29,7 +29,8 @@ from .settlement_views import (
 )
 from .approval_workflow_views import approval_summary, approval_workflow_detail, approval_workflows
 from .login_sessions_views import login_sessions, revoke_login_session
-from .push_recipients_views import push_recipients_employees, push_recipients_settings
+from .whatsapp_test_views import whatsapp_connection, whatsapp_test_message
+from .push_recipients_views import phone_alert_settings, push_recipients_employees, push_recipients_settings
 from .push_templates_views import push_template_preview, push_template_update, push_templates_list
 from .mobile_messages_views import (
     mobile_messages_controls, mobile_messages_devices, mobile_messages_log, mobile_messages_overview,
@@ -677,6 +678,9 @@ urlpatterns = [
     # the send queue (whatsapp_dispatcher.py)
     path("whatsapp-control/queue", whatsapp_queue),
     path("whatsapp-control/queue/clear", whatsapp_queue_clear),
+    # Send a test / Connection check (whatsapp_test_views.py)
+    path("whatsapp-control/test-message", whatsapp_test_message),
+    path("whatsapp-control/connection", whatsapp_connection),
     path("whatsapp-control/templates", whatsapp_control_templates),
     path("whatsapp-control/templates/<str:document_type>/preview", whatsapp_control_template_preview),
     path("whatsapp-control/templates/<str:document_type>", whatsapp_control_template_update),
@@ -895,6 +899,7 @@ urlpatterns = [
     # Phone Notify Control -> Settings: who receives phone notifications (push_recipients_views.py)
     path("mobile-app/messages/recipients", push_recipients_settings),
     path("mobile-app/messages/recipients/employees", push_recipients_employees),
+    path("mobile-app/messages/alert-settings", phone_alert_settings),
     # Phone Notify Control -> Message Text: HR's wording of each kind (push_templates_views.py)
     path("mobile-app/messages/templates", push_templates_list),
     path("mobile-app/messages/templates/<str:key>", push_template_update),

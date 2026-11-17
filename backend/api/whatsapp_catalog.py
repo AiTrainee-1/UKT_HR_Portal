@@ -52,6 +52,7 @@ MODULES = {
     "otp": "OTP & Login",
     "attendance": "Attendance",
     "approvals": "Approvals",
+    "hod": "Department Heads",
     "geo": "Geo Attendance",
     "visitors": "Visitors",
     "outpass": "Outpass & Gate",
@@ -64,6 +65,7 @@ MODULE_SWITCHES = {
     "documents": "document_notifications_enabled",
     "attendance": "attendance_alerts_enabled",
     "approvals": "approval_notifications_enabled",
+    "hod": "hod_notifications_enabled",
     "visitors": "visitor_notification_enabled",
     "outpass": "outpass_notifications_enabled",
 }
@@ -99,6 +101,7 @@ _KIND_OF_MODULE = {
     "otp": KIND_CODE,
     "attendance": KIND_AUTOMATIC,
     "approvals": KIND_REQUESTED,
+    "hod": KIND_AUTOMATIC,
     "geo": KIND_REQUESTED,
     "visitors": KIND_AUTOMATIC,
     "outpass": KIND_AUTOMATIC,
@@ -508,10 +511,49 @@ _add(
 # The reminder to a Department Head about the requests waiting for their approval (HR Requests page -> Notify,
 # hod_reminders.py). Its wording is written on the Notify tab (the same text goes by WhatsApp, email and phone
 # notification), so the message here is just that text; wording saved here can wrap it.
+# ── Department Heads (2026-11-17): what a head is told about the requests that wait for THEM ──────────────────────
+
+# A request reached a Department Head's step (submitted, or passed on to them): whatsapp_hod.request_waiting, called
+# wherever the HRMS tells a head a request waits (approval_workflow.notify_hod_of_request, the On-Duty / Missing Punch /
+# resignation submissions). One message per request and head.
+_add(
+    key="hod_request_waiting",
+    label="New request waiting for approval",
+    module="hod",
+    kind=KIND_REQUESTED,  # tied to one request: never held by the per-employee daily cap of automatic messages
+    switch="hod_request_waiting_enabled",
+    description=(
+        "Tells a Department Head that a request (leave, permission, CL, missing punch, outpass, On-Duty, resignation "
+        "and the others) has reached their step and waits for their decision."
+    ),
+    body=(
+        "*Approval Needed*\n\n"
+        "Dear {{hod_name}},\n"
+        "{{employee_name}} ({{employee_code}}) has a *{{request_type}}* request waiting for your approval.\n\n"
+        "Date: {{date}}\n"
+        "Time: {{time}}\n"
+        "Request: {{details}}\n"
+        "Reason: {{reason}}\n"
+        "Submitted: {{requested_on}}\n\n"
+        "Please review it in the UK Textiles app (Approvals).\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("hod_name", "The Department Head's name", "Suresh Kumar"),
+        V("employee_name", "Who raised the request", "Asha Kumar"),
+        V("employee_code", "Their employee code", "30012"),
+        V("request_type", "The kind of request", "Leave"),
+        V("date", "The date(s) of the request", "26 Sep 2026 to 27 Sep 2026"),
+        V("time", "The time, when the request has one", "10:30 AM"),
+        V("details", "What is asked", "Sick Leave - 2 days"),
+        V("reason", "The employee's reason", "Fever"),
+        V("requested_on", "When it was submitted", "24 Sep 2026"),
+    ),
+)
 _add(
     key="hod_pending_reminder",
     label="HoD Pending Approvals Reminder",
-    module="approvals",
+    module="hod",
     kind=KIND_AUTOMATIC,
     description=(
         "Reminds a Department Head of the requests waiting for their approval, at the times HR set on Requests -> "

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { MessageCircle, Power, PowerOff, Workflow } from "lucide-react";
+import { Power, PowerOff, Workflow } from "lucide-react";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -70,14 +70,6 @@ function ControlRow({
         <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold">
           {row.label}
           <StatusBadge tone="neutral">{audienceLabel(row.audience)}</StatusBadge>
-          {row.origin === "whatsapp" && (
-            <span title="The same message also goes by WhatsApp (WhatsApp Control has its own switch)">
-              <StatusBadge tone="success">
-                <MessageCircle size={10} className="mr-1" />
-                Also by WhatsApp
-              </StatusBadge>
-            </span>
-          )}
         </p>
         {row.description && <p className="mt-0.5 text-xs text-muted-foreground">{row.description}</p>}
         {row.sentFrom && (
@@ -179,7 +171,7 @@ function GroupPanel({
 
 /**
  * Controls: the master switch on top (it asks first, both ways), then every kind of notification grouped as on the server,
- * each with its switch, where it is sent from, who receives it, whether WhatsApp carries it too, and its last 30 days. A group
+ * each with its switch, where it is sent from, who receives it, and its last 30 days. A group
  * can be turned all on or all off. The switches stop only the push to the phone: the in-app record is always saved. The
  * category chips (?category=) narrow the groups to one category of the Overview's dashboard.
  */
@@ -270,7 +262,7 @@ export default function ControlsTab() {
         >
           {askMaster
             ? "Phones start getting notifications again, for every kind switched on below. Kinds switched off stay off."
-            : "No notification will be pushed to any phone: attendance alerts, approvals, documents, visitors, everything. They are still saved in the app, and WhatsApp is not affected."}
+            : "No notification will be pushed to any phone: attendance alerts, approvals, documents, visitors, everything. They are still saved in the app."}
         </InlineConfirm>
       )}
 

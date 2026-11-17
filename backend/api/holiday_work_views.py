@@ -356,7 +356,9 @@ def _raise_claims(request: Request) -> Response:
                 requested_by=hr_name,
                 approval_trail=[],
             )
-            approval.notify_new_request(WORKFLOW, emp, f"holiday-work compensation claim for {date_text(work_date)}")
+            approval.notify_new_request(
+                WORKFLOW, emp, f"holiday-work compensation claim for {date_text(work_date)}", obj=claim
+            )
             log_action(
                 request,
                 "create",

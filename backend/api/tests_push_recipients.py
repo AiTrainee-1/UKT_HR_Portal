@@ -10,7 +10,7 @@ from datetime import date
 from types import SimpleNamespace
 from unittest import mock
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 
 from . import approval_workflow as approval
 from . import chat_push, push_delivery, push_messages, push_recipients
@@ -26,7 +26,7 @@ from .models import (
     PushToken,
 )
 from .tests_push_delivery import EXPO, ok
-from .tests_whatsapp_alerts import WED, AlertBase
+from .tests_whatsapp_alerts import WED, AlertBase, at
 
 BASE = "/api/mobile-app/messages"
 
@@ -84,10 +84,8 @@ class RuleTests(World):
 class SendersLeaveOthersOutTests(World):
     def test_a_whatsapp_message_is_not_announced_to_an_outsider(self):
         set_mode("staff")
-        self.assertIsNone(push_messages.announce(self.prod, "leave_approved", "*Leave Approved*\nOk", dedupe_key="x1"))
-        self.assertIsNotNone(
-            push_messages.announce(self.staff, "leave_approved", "*Leave Approved*\nOk", dedupe_key="x2")
-        )
+        self.assertIsNone(push_messages.announce(self.prod, "approval_approved", params={}, dedupe_key="x1"))
+        self.assertIsNotNone(push_messages.announce(self.staff, "approval_approved", params={}, dedupe_key="x2"))
         self.assertEqual(self.codes(), {"PRS1"})
 
     def test_a_stage_notice_is_not_made_for_an_outsider(self):
@@ -150,7 +148,7 @@ class SafetyNetTests(World):
 
 
 class AlertsTests(AlertBase):
-    """The attendance alert job only looks at the recipients when WhatsApp carries none of the alerts."""
+    """The phone attendance alert job (phone_alerts.py) only looks at the recipients."""
 
     def setUp(self):
         super().setUp()
@@ -165,25 +163,28 @@ class AlertsTests(AlertBase):
     def absent(self):
         return Notification.objects.filter(employee=self.emp, source="absent_alert")
 
-    @override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN="")
+    def phone(self, h, m=0):
+        from . import phone_alerts
+
+        return phone_alerts.run_phone_alerts(now=at(WED, h, m))
+
     def test_production_only_skips_the_staff_entirely(self):
         from . import whatsapp_alerts
 
         set_mode("production")
-        with mock.patch("api.whatsapp_alerts.evaluate", wraps=whatsapp_alerts.evaluate) as ev:
-            self.run_at(WED, 10, 0)
+        with mock.patch("api.phone_alerts.evaluate", wraps=whatsapp_alerts.evaluate) as ev:
+            self.phone(10, 0)
         ev.assert_not_called()  # nobody was even looked at
         self.assertFalse(self.absent().exists())
 
-    @override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN="")
     def test_a_selected_employee_gets_the_alert_and_the_others_are_not_looked_at(self):
         other = self.make_employee("A2", "Ravi", "Kumar")
         set_mode("selected")
         PushRecipient.objects.create(employee=self.emp)
         from . import whatsapp_alerts
 
-        with mock.patch("api.whatsapp_alerts.evaluate", wraps=whatsapp_alerts.evaluate) as ev:
-            self.run_at(WED, 10, 0)
+        with mock.patch("api.phone_alerts.evaluate", wraps=whatsapp_alerts.evaluate) as ev:
+            self.phone(10, 0)
         self.assertEqual({c.args[0].pk for c in ev.call_args_list}, {self.emp.pk})
         self.assertEqual(self.absent().count(), 1)
         self.assertFalse(Notification.objects.filter(employee=other).exists())
@@ -191,6 +192,7 @@ class AlertsTests(AlertBase):
     def test_whatsapp_still_reaches_everybody_while_the_phone_follows_the_setting(self):
         set_mode("production")  # the staff member is not a phone recipient
         self.assertEqual(self.run_at(WED, 10, 0).get("absent_alert"), 1)  # WhatsApp is its own channel
+        self.phone(10, 0)
         self.assertFalse(self.absent().exists())
 
 

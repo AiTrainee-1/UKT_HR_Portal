@@ -144,6 +144,12 @@ class WhatsAppSettings(models.Model):
     visitor_notification_enabled = models.BooleanField(default=True, db_column="visitor_notification_enabled")
     approval_notifications_enabled = models.BooleanField(default=True, db_column="approval_notifications_enabled")
     outpass_notifications_enabled = models.BooleanField(default=True, db_column="outpass_notifications_enabled")
+    # Department Head notifications (2026-11-17): the section's master switch, and the new "a request is waiting for your
+    # approval" message, which starts OFF (HR switches it on: every head gets one message per request).
+    hod_notifications_enabled = models.BooleanField(default=True, db_default=True, db_column="hod_notifications_enabled")
+    hod_request_waiting_enabled = models.BooleanField(
+        default=False, db_default=False, db_column="hod_request_waiting_enabled"
+    )
     # Master switch for the four attendance alerts and the punch reminders. The individual
     # attendance switches below stay OFF until HR turns them on.
     attendance_alerts_enabled = models.BooleanField(default=True, db_column="attendance_alerts_enabled")

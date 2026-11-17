@@ -1,5 +1,5 @@
 // whatsapp: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, customFetch } from "../custom-fetch";
 import { PayrollBreakdownResponse, PayrollRunItem } from "./payroll";
 
@@ -575,3 +575,317 @@ export const useWhatsAppTemplatePreview = () =>
         { method: "POST", body: JSON.stringify({ messageBody }) },
       ),
   });
+
+// ── Connection check and Send a test (Configuration and Send a test tabs, 2026-11-17) ──────────────────────────────
+//
+//   GET  /api/whatsapp-control/connection    every reason WhatsApp may not be sending, in one answer (sends nothing, but
+//                                             asks WAClient live, so it can take a few seconds: never polled)
+//   GET  /api/whatsapp-control/test-message?search=   who may receive a test and the message types that can be tried
+//   POST /api/whatsapp-control/test-message  {documentType, employeeId, text?, dryRun?}: with dryRun the preview only;
+//                                             without it the message is SENT AT ONCE (not queued) and WAClient's answer
+//                                             comes back
+
+/** WAClient's own word for the linked number. */
+export type WhatsAppProviderState =
+  | "connected"
+  | "disconnected"
+  | "logged_out"
+  | "pending"
+  | "linking"
+  | "connecting"
+  | "unknown"
+  | (string & {});
+
+/** WAClient's live answer about the linked number: its state, or why it could not be asked. */
+export type WhatsAppProviderStatus =
+  | {
+      ok: true;
+      state: WhatsAppProviderState;
+      socketLoaded: boolean | null;
+      reloginRequired: boolean | null;
+      httpStatus: number | null;
+      raw: unknown;
+    }
+  | { ok: false; error: string; httpStatus: number | null; raw: unknown };
+
+export type WhatsAppConnection = {
+  /** True when the server found no problem at all (documents included). */
+  ok: boolean;
+  /** Plain sentences, most important first. */
+  problems: string[];
+  credentials: boolean;
+  /** The linked WAClient instance, masked ("…C042"). */
+  instance: string | null;
+  apiHost: string | null;
+  machine: {
+    developmentMachine: boolean;
+    sendingAllowed: boolean;
+    blockReason: string | null;
+    /** The employee codes this machine may message; null when it may message anyone. */
+    limitedTo: string[] | null;
+  };
+  /** null when the keys are missing (WAClient was not asked). */
+  provider: WhatsAppProviderStatus | null;
+  queue: {
+    engineEnabled: boolean;
+    paused: boolean;
+    pausedReason: string | null;
+    inQuietHours: boolean;
+    queued: number;
+    sentToday: number;
+    failedToday: number;
+  };
+  documents: { publicBase: string; problem: string | null };
+  lastFailure: { at: string | null; error: string; documentType: string } | null;
+  checkedAt: string | null;
+};
+
+const strOrNull = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
+const boolOrNull = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const codeList = (v: unknown): string[] | null => {
+  if (!Array.isArray(v)) return null;
+  const out = v.map((c) => (typeof c === "number" ? String(c) : c)).filter((c): c is string => typeof c === "string");
+  return out.length ? out : null;
+};
+
+function readProvider(raw: unknown): WhatsAppProviderStatus | null {
+  if (!isRecord(raw)) return null;
+  if (raw.ok === true) {
+    return {
+      ok: true,
+      state: strOrNull(raw.state) ?? "unknown",
+      socketLoaded: boolOrNull(raw.socketLoaded),
+      reloginRequired: boolOrNull(raw.reloginRequired),
+      httpStatus: numOrNull(raw.httpStatus),
+      raw: raw.raw ?? null,
+    };
+  }
+  return {
+    ok: false,
+    error: strOrNull(raw.error) ?? "WAClient did not answer.",
+    httpStatus: numOrNull(raw.httpStatus),
+    raw: raw.raw ?? null,
+  };
+}
+
+/** Reads the connection check with a safe value for anything missing (an older or newer server never breaks the tab). */
+export function readWhatsAppConnection(raw: unknown): WhatsAppConnection {
+  const r = isRecord(raw) ? raw : {};
+  const m = isRecord(r.machine) ? r.machine : {};
+  const q = isRecord(r.queue) ? r.queue : {};
+  const d = isRecord(r.documents) ? r.documents : {};
+  const last = isRecord(r.lastFailure) ? r.lastFailure : null;
+  const problems = Array.isArray(r.problems)
+    ? r.problems.filter((p): p is string => typeof p === "string" && p.trim() !== "")
+    : [];
+  return {
+    ok: r.ok === true && problems.length === 0,
+    problems,
+    credentials: r.credentials === true,
+    instance: strOrNull(r.instance),
+    apiHost: strOrNull(r.apiHost),
+    machine: {
+      developmentMachine: m.developmentMachine === true,
+      sendingAllowed: m.sendingAllowed !== false,
+      blockReason: strOrNull(m.blockReason),
+      limitedTo: codeList(m.limitedTo),
+    },
+    provider: readProvider(r.provider),
+    queue: {
+      engineEnabled: q.engineEnabled !== false,
+      paused: q.paused === true,
+      pausedReason: strOrNull(q.pausedReason),
+      inQuietHours: q.inQuietHours === true,
+      queued: num(q.queued),
+      sentToday: num(q.sentToday),
+      failedToday: num(q.failedToday),
+    },
+    documents: { publicBase: typeof d.publicBase === "string" ? d.publicBase : "", problem: strOrNull(d.problem) },
+    lastFailure: last
+      ? {
+          at: strOrNull(last.at),
+          error: typeof last.error === "string" ? last.error : "",
+          documentType: typeof last.documentType === "string" ? last.documentType : "",
+        }
+      : null,
+    checkedAt: strOrNull(r.checkedAt),
+  };
+}
+
+export const WHATSAPP_CONNECTION_KEY = "/api/whatsapp-control/connection";
+
+/** The connection check. It asks WAClient live, so it is read when the tab opens and on "Check again", never polled. */
+export const useWhatsAppConnection = (enabled = true) =>
+  useQuery<WhatsAppConnection>({
+    queryKey: [WHATSAPP_CONNECTION_KEY],
+    queryFn: async () => readWhatsAppConnection(await customFetch<unknown>(WHATSAPP_CONNECTION_KEY)),
+    enabled,
+    staleTime: 0,
+    refetchInterval: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+export type WhatsAppTestRecipient = {
+  id: number;
+  code: string;
+  name: string;
+  /** Masked: "••••9103". */
+  phone: string | null;
+  hasPhone: boolean;
+  /** Why this machine may not message them (no phone, not an allowed employee), or null. */
+  blockedReason: string | null;
+};
+
+export type WhatsAppTestType = {
+  documentType: WhatsAppDocumentType;
+  label: string;
+  module: string;
+  moduleLabel: string;
+  kind: string;
+  variables: { name: string; sample: string }[];
+};
+
+export type WhatsAppTestOptions = {
+  /** Why nothing can be sent from this machine at all, or null. */
+  blockReason: string | null;
+  /** The employee codes this machine may message (then `recipients` is exactly them); null for no limit. */
+  limitedTo: string[] | null;
+  recipients: WhatsAppTestRecipient[];
+  types: WhatsAppTestType[];
+};
+
+function readRecipient(raw: unknown): WhatsAppTestRecipient | null {
+  if (!isRecord(raw) || typeof raw.id !== "number") return null;
+  return {
+    id: raw.id,
+    code: typeof raw.code === "string" ? raw.code : String(raw.code ?? ""),
+    name: strOrNull(raw.name) ?? `Employee #${raw.id}`,
+    phone: strOrNull(raw.phone),
+    hasPhone: raw.hasPhone !== false && strOrNull(raw.phone) !== null,
+    blockedReason: strOrNull(raw.blockedReason),
+  };
+}
+
+export function readWhatsAppTestOptions(raw: unknown): WhatsAppTestOptions {
+  const r = isRecord(raw) ? raw : {};
+  const types = (Array.isArray(r.types) ? r.types : [])
+    .filter(isRecord)
+    .filter((t) => typeof t.documentType === "string" && t.documentType !== "")
+    .map((t) => {
+      const key = t.documentType as string;
+      const module = typeof t.module === "string" && t.module ? t.module : "other";
+      return {
+        documentType: key,
+        label: strOrNull(t.label) ?? key,
+        module,
+        moduleLabel: strOrNull(t.moduleLabel) ?? module,
+        kind: typeof t.kind === "string" ? t.kind : "",
+        variables: (Array.isArray(t.variables) ? t.variables : [])
+          .filter(isRecord)
+          .map((v) => ({ name: String(v.name ?? ""), sample: String(v.sample ?? "") }))
+          .filter((v) => v.name !== ""),
+      };
+    });
+  return {
+    blockReason: strOrNull(r.blockReason),
+    limitedTo: codeList(r.limitedTo),
+    recipients: (Array.isArray(r.recipients) ? r.recipients : [])
+      .map(readRecipient)
+      .filter((x): x is WhatsAppTestRecipient => x !== null),
+    types,
+  };
+}
+
+export const WHATSAPP_TEST_KEY = "/api/whatsapp-control/test-message";
+
+/** Who may receive a test (on a limited machine exactly the allowed employees, else up to 20 matching `search`) and the
+ *  message types that can be tried. */
+export const useWhatsAppTestOptions = (search: string, enabled = true) => {
+  const term = search.trim();
+  return useQuery<WhatsAppTestOptions>({
+    queryKey: [WHATSAPP_TEST_KEY, term],
+    queryFn: async () =>
+      readWhatsAppTestOptions(
+        await customFetch<unknown>(term ? `${WHATSAPP_TEST_KEY}?${query({ search: term })}` : WHATSAPP_TEST_KEY),
+      ),
+    enabled,
+    placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
+  });
+};
+
+/** preview: a dry run (nothing sent). sent: WAClient accepted it. failed: WAClient refused it. blocked: this machine's
+ *  rules held it back (nothing reached WAClient). */
+export type WhatsAppTestStatus = "preview" | "sent" | "failed" | "blocked";
+
+export type WhatsAppTestResult = {
+  status: WhatsAppTestStatus;
+  documentType: string;
+  /** Masked number. */
+  to: string | null;
+  employee: WhatsAppTestRecipient | null;
+  text: string;
+  /** On a preview: why sending it would be held back, or null. */
+  blockReason: string | null;
+  /** The Messages log row of a real send. */
+  logId: number | null;
+  providerMessageId: string | null;
+  error: string | null;
+  httpStatus: number | null;
+  /** WAClient's own answer (credentials removed by the server). */
+  providerResponse: unknown;
+};
+
+export type WhatsAppTestInput = {
+  documentType: string;
+  employeeId: number;
+  /** HR's edited wording; left out to send the message's own wording. */
+  text?: string;
+  /** true: only the preview, nothing is sent. Left out: SENT AT ONCE. */
+  dryRun?: true;
+};
+
+const TEST_STATUSES: readonly WhatsAppTestStatus[] = ["preview", "sent", "failed", "blocked"];
+
+/** Reads a test's answer; one that is none of the four (a newer server) shows as failed, with a sentence saying so. */
+export function readWhatsAppTestResult(raw: unknown): WhatsAppTestResult {
+  const r = isRecord(raw) ? raw : {};
+  const known = TEST_STATUSES.includes(r.status as WhatsAppTestStatus);
+  const status = known ? (r.status as WhatsAppTestStatus) : "failed";
+  return {
+    status,
+    documentType: typeof r.documentType === "string" ? r.documentType : "",
+    to: strOrNull(r.to),
+    employee: readRecipient(r.employee),
+    text: typeof r.text === "string" ? r.text : "",
+    blockReason: strOrNull(r.blockReason),
+    logId: numOrNull(r.logId),
+    providerMessageId: strOrNull(r.providerMessageId),
+    error: strOrNull(r.error) ?? (known ? null : "The server's answer was not understood."),
+    httpStatus: numOrNull(r.httpStatus),
+    providerResponse: r.providerResponse ?? null,
+  };
+}
+
+/** Previews (`dryRun: true`) or sends a test. A real send changes the Messages log, the overview and the queue. */
+export const useWhatsAppTestMessage = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: WhatsAppTestInput) =>
+      readWhatsAppTestResult(
+        await customFetch<unknown>(WHATSAPP_TEST_KEY, { method: "POST", body: JSON.stringify(input) }),
+      ),
+    onSuccess: (_result, input) => {
+      if (input.dryRun) return;
+      for (const key of [
+        "/api/whatsapp-control/messages",
+        "/api/whatsapp-control/overview",
+        WHATSAPP_QUEUE_KEY,
+        "/api/whatsapp-control/templates",
+      ])
+        void queryClient.invalidateQueries({ queryKey: [key] });
+    },
+  });
+};

@@ -11,7 +11,7 @@ from unittest import mock
 from django.test import TestCase
 
 from . import approval_workflow as approval
-from . import chat_push, push_templates, whatsapp_service
+from . import chat_push, push_messages, push_templates
 from .jwt_utils import sign_token
 from .models import ChatChannel, ChatMessage, Employee, HRUser, Notification, PushTemplate, PushToken
 from .tests_push_delivery import EXPO, ok
@@ -46,13 +46,14 @@ class ListTests(World):
         self.assertEqual(res.status_code, 200, res.content)
         rows = {r["key"]: r for r in res.json()}
         self.assertEqual(list(rows), push_templates.keys())
-        for absent in ("otp_login", "hr_notice", "attendance_report"):
+        for absent in ("otp_login", "hr_notice", "attendance_report", "visitor_contact"):
             self.assertNotIn(absent, rows)
         late = rows["late_alert"]
-        self.assertEqual((late["origin"], late["customised"], late["title"]), ("whatsapp", False, ""))
-        self.assertIn("{{employee_name}}", late["defaultBody"])
+        self.assertNotIn("origin", late)
+        self.assertEqual((late["customised"], late["title"], late["defaultTitle"]), (False, "", "Marked late today"))
+        self.assertIn("{{first_punch}}", late["defaultBody"])
         self.assertIn("first_punch", [v["name"] for v in late["variables"]])
-        self.assertIn("Asha Kumar", late["preview"]["body"])
+        self.assertIn("9:25 AM", late["preview"]["body"])
         waiting = rows["approval_waiting"]
         self.assertEqual(waiting["defaultBody"], "{{message}}")
         self.assertEqual({"headline", "message", "request"} - {v["name"] for v in waiting["variables"]}, set())
@@ -84,21 +85,36 @@ class SaveTests(World):
 
 
 class SendersUseTheWordingTests(World):
-    def test_a_whatsapp_kind_takes_the_phone_wording_with_its_own_variables(self):
+    def test_an_event_takes_the_saved_wording_with_its_details(self):
         self.save("late_alert", "Late today ({{late_by}})", "{{employee_name}}, you punched at {{first_punch}}.")
-        whatsapp_service.announce_only(
+        push_messages.announce(
             self.emp,
             "late_alert",
-            {"employee_name": "Asha Kumar", "first_punch": "9:25 AM", "late_by": "15 minutes"},
+            params={"employee_name": "Asha Kumar", "first_punch": "9:25 AM", "late_by": "15 minutes"},
             dedupe_key="late:t1",
         )
         n = Notification.objects.get(source="late_alert")
         self.assertEqual((n.title, n.message), ("Late today (15 minutes)", "Asha Kumar, you punched at 9:25 AM."))
         self.assertEqual(self.expo.call_args.kwargs["json"][0]["title"], "Late today (15 minutes)")
 
-    def test_without_wording_a_whatsapp_kind_shows_the_whatsapp_text(self):
-        whatsapp_service.announce_only(self.emp, "late_alert", {"employee_name": "Asha Kumar"}, dedupe_key="late:t2")
-        self.assertIn("Dear Asha Kumar", Notification.objects.get(source="late_alert").message)
+    def test_without_saved_wording_the_phones_built_in_wording_is_used_never_whatsapps(self):
+        from .models import WhatsAppMessageTemplate
+
+        WhatsAppMessageTemplate.objects.create(document_type="late_alert", message_body="*WA*\nDear {{employee_name}}")
+        push_messages.announce(
+            self.emp,
+            "late_alert",
+            params={"first_punch": "9:25 AM", "late_by": "15 minutes", "shift_start": "9:00 AM"},
+            dedupe_key="late:t2",
+        )
+        n = Notification.objects.get(source="late_alert")
+        self.assertEqual(
+            (n.title, n.message),
+            (
+                "Marked late today",
+                "Your first punch was at 9:25 AM, 15 minutes after the allowed time (shift start 9:00 AM).",
+            ),
+        )
 
     def test_salary_paid(self):
         from . import payroll_month_workflow as pmw

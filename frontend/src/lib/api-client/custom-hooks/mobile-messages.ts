@@ -3,9 +3,11 @@
 // The switches only control the phone push; the in-app record is always saved.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
-import type { Paged } from "./whatsapp";
 
 const BASE = "/api/mobile-app/messages";
+
+/** One page of a list (this module's own: it shares nothing with the other control pages). */
+type Paged<T> = { items: T[]; total: number; page: number; pageSize: number };
 
 /**
  * "sent" = Expo took it, the push service has not confirmed yet; "delivered" = Google/Apple accepted it for the phone;
@@ -157,9 +159,6 @@ export type PushCategory = {
 /** Who receives a kind of notification. */
 export type PushAudience = "employee" | "approver" | "hr";
 
-/** "whatsapp": the same message also goes by WhatsApp; "app": a phone / in-app notification only. */
-export type PushOrigin = "whatsapp" | "app";
-
 /** The last 30 days of one kind (a workflow row: the messages of that workflow). */
 export type PushKindStats = {
   total: number;
@@ -181,7 +180,6 @@ export type MobileMessageControl = {
   /** Where in the HRMS it is sent from, one line. */
   sentFrom?: string;
   audience?: PushAudience;
-  origin?: PushOrigin;
   stats?: PushKindStats;
   /** The category it belongs to (PushCategory.key) and its name (2026-11-17; older servers leave them out). */
   category?: string;
@@ -470,9 +468,8 @@ export type PushTemplateVariable = { name: string; help: string; sample: string 
 
 /**
  * One kind of automatic notification and its wording. `title` / `body` are HR's own ("" = the built-in one); the built-in
- * wording has the same {{placeholders}}. A kind that also goes by WhatsApp (`origin: "whatsapp"`) shows WhatsApp's wording
- * on the phone until a phone version is saved; an app-only kind can use {{headline}} and {{message}} (its built-in title and
- * sentence). The counts are all-time, for that kind.
+ * wording has the same {{placeholders}}. A kind whose placeholders include {{headline}} and {{message}} can use them for its
+ * built-in title and sentence. The counts are all-time, for that kind.
  */
 export type PushTemplate = {
   key: string;
@@ -482,7 +479,6 @@ export type PushTemplate = {
   groupLabel: string;
   category: string;
   categoryLabel: string;
-  origin: PushOrigin;
   /** The kind's switch on the Controls tab. */
   enabled: boolean;
   variables: PushTemplateVariable[];
@@ -543,3 +539,37 @@ export const usePreviewPushTemplate = () =>
         body: JSON.stringify({ title: data.title, body: data.body }),
       }),
   });
+
+// ── the phone attendance alerts' timing (the Settings tab) ────────────────────
+
+/** The three timings of Phone Notify Control's own attendance alerts, in minutes. */
+export type AlertTimingKey = "absentExtraMinutes" | "reminderLeadMinutes" | "missingAfterMinutes";
+
+/** What the server accepts for one timing, and what it is called. */
+export type AlertTimingLimit = { min: number; max: number; label: string };
+
+export type PhoneAlertSettings = Record<AlertTimingKey, number> & {
+  limits: Record<AlertTimingKey, AlertTimingLimit>;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+const ALERT_SETTINGS_KEY = [BASE, "alert-settings"] as const;
+
+/** The phone attendance alerts' timing (they apply to the phone alerts only). */
+export const usePhoneAlertSettings = (enabled = true) =>
+  useQuery<PhoneAlertSettings>({
+    queryKey: ALERT_SETTINGS_KEY,
+    queryFn: () => customFetch<PhoneAlertSettings>(`${BASE}/alert-settings`),
+    enabled,
+  });
+
+/** Save any of the three timings; the server refuses one out of its range. */
+export const useSavePhoneAlertSettings = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<Record<AlertTimingKey, number>>) =>
+      customFetch<PhoneAlertSettings>(`${BASE}/alert-settings`, { method: "PUT", body: JSON.stringify(data) }),
+    onSuccess: (data) => queryClient.setQueryData(ALERT_SETTINGS_KEY, data),
+  });
+};

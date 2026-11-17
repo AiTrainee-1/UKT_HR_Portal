@@ -118,6 +118,61 @@ def push_recipients_settings(request: Request) -> Response:
     return Response(_summary(request, s))
 
 
+# ── the phone attendance alerts' own timing (phone_alerts.py) ──────────────────────────────────────────────────────
+TIMING = [
+    ("absentExtraMinutes", "alert_absent_extra_minutes", "Extra wait before the Absent alert", (0, 240)),
+    (
+        "reminderLeadMinutes",
+        "alert_reminder_lead_minutes",
+        "Punch reminder: this long before the punch is due",
+        (1, 60),
+    ),
+    (
+        "missingAfterMinutes",
+        "alert_missing_after_minutes",
+        "Missing Punch alert: this long after the punch was due",
+        (0, 240),
+    ),
+]
+
+
+def _timing(s: MobileMessageSettings) -> dict:
+    return {
+        **{key: getattr(s, field) for key, field, _label, _range in TIMING},
+        "limits": {key: {"min": lo, "max": hi, "label": label} for key, _f, label, (lo, hi) in TIMING},
+        "updatedBy": s.updated_by or None,
+        "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
+    }
+
+
+@api_view(["GET", "PUT"])
+@require_hr
+def phone_alert_settings(request: Request) -> Response:
+    """GET/PUT the phone attendance alerts' timing: {absentExtraMinutes, reminderLeadMinutes, missingAfterMinutes}. Phone
+    Notify Control's own; WhatsApp Control's alert timing is separate."""
+    s = MobileMessageSettings.get()
+    if request.method == "GET":
+        return Response(_timing(s))
+    data = request.data if isinstance(request.data, dict) else {}
+    changed = []
+    for key, field, label, (lo, hi) in TIMING:
+        if key not in data:
+            continue
+        value = data[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+            return _error(f"{label}: a whole number of minutes from {lo} to {hi}")
+        if getattr(s, field) != value:
+            changed.append(f"{label} {getattr(s, field)} -> {value} min")
+            setattr(s, field, value)
+    if not changed:
+        return Response(_timing(s))
+    s.updated_by = get_hr_display_name(request)
+    s.updated_at = timezone.now()
+    s.save()
+    log_action(request, "update", AUDIT_MODULE, record_id=s.pk, description="Phone alert timing: " + "; ".join(changed))
+    return Response(_timing(s))
+
+
 def _filtered(request: Request, f: dict):
     """The active employees (in scope) matching the list filters: search, type, branch, department, selected."""
     qs = _active(request)

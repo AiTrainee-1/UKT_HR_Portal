@@ -5,7 +5,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/utils";
 import { STATUS_HELP, statusLabel, statusTone } from "./logic";
 
-// The small pieces every tab of Phone Notify Control is made of, in the look of the SMS / WhatsApp / Gmail Control pages:
+// The small pieces every tab of Phone Notify Control is made of, in the look of the portal's other control pages:
 // the portal's colour tokens for surfaces and text, plain palette colours for the tinted notices (no opacity utilities, so the
 // Clean theme draws them as they are).
 

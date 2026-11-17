@@ -98,11 +98,13 @@ class EverySenderHasAKindTests(World):
         ):
             self.assertIn(key, rows, key)
         waiting = rows["approval_waiting"]
-        self.assertEqual((waiting["audience"], waiting["origin"], waiting["group"]), ("approver", "app", "approvals"))
+        self.assertEqual((waiting["audience"], waiting["group"]), ("approver", "approvals"))
+        self.assertNotIn("origin", waiting)  # Phone Notify Control's own list: no WhatsApp origin (2026-11-17)
+        keys = {r["key"] for r in body["controls"]}
+        self.assertFalse({"attendance_report", "visitor_contact"} & keys)  # WhatsApp-only messages are not phone kinds
         self.assertTrue(waiting["sentFrom"])
         self.assertEqual((waiting["stats"]["total"], waiting["stats"]["sent"]), (1, 1))
         self.assertEqual(rows["approval:leave"]["stats"]["total"], 1)
-        self.assertEqual(rows["late_alert"]["origin"], "whatsapp")
 
 
 class SwitchesAndMuteTests(World):

@@ -46,8 +46,8 @@ function onTabKeys(event: KeyboardEvent<HTMLDivElement>) {
 }
 
 /**
- * Phone Notify Control: every phone (push) notification the HRMS sends, in the shape of the WhatsApp, SMS and Gmail Control
- * pages. A notification is always saved in the employee's app; unless a switch stops it, it is also pushed to the employee's
+ * Phone Notify Control: every phone (push) notification the HRMS sends, a module of its own (it shares no wording, switch
+ * or timing with the other control pages). A notification is always saved in the employee's app; unless a switch stops it, it is also pushed to the employee's
  * registered phones through the Expo push service and Google's Firebase. Until 2026-11-17 this was the Mobile Messages tab of
  * Mobile App Login.
  *

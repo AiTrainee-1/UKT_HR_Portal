@@ -869,23 +869,27 @@ def resync_pending(key: str) -> int:
     return changed
 
 
-def notify_hod_of_request(key: str, emp, what: str) -> None:
+def notify_hod_of_request(key: str, emp, what: str, obj=None) -> None:
     """Tell the employee's ONE Department Head (if they may act on this kind of request) that a request has reached
     their step. Used when a decision passes a request to the Department Head, and at submission when the pipeline
     starts with the Department Head alone.
 
     A request that only a Department Head can decide (`WorkflowDef.hod_only`, e.g. a holiday-work claim) is never announced
     to the head it is about: they cannot decide it, so the notification would send them to an empty approvals list. The
-    other kinds keep telling whoever the employee's Department Head is, exactly as before."""
+    other kinds keep telling whoever the employee's Department Head is, exactly as before.
+
+    Two independent channels: the head's phone notification (Phone Notify Control) and, when WhatsApp Control has it on,
+    a WhatsApp message (whatsapp_hod.py; `obj`, the request, gives it the details)."""
     defn = definition(key)
     if not defn.hod_flag:
         return
     from .hod_scope import managers_to_notify
 
-    from . import push_recipients, push_templates
+    from . import push_recipients, push_templates, whatsapp_hod
 
     notification = apps.get_model("api", "Notification")
     for m in managers_to_notify(emp, defn.hod_flag, exclude_self=defn.hod_only):
+        whatsapp_hod.request_waiting(m.employee, key, emp, what, obj)  # WhatsApp Control's own message
         if not push_recipients.allows(m.employee):
             continue  # not a phone notification recipient (Phone Notify Control -> Settings)
         title, message = push_templates.apply(  # HR's wording (Phone Notify Control -> Message Text), else this one
@@ -905,13 +909,13 @@ def notify_hod_of_request(key: str, emp, what: str) -> None:
         )
 
 
-def notify_new_request(key: str, emp, what: str, cfg: Config | None = None) -> None:
+def notify_new_request(key: str, emp, what: str, cfg: Config | None = None, obj=None) -> None:
     """At submission: when the Department Head alone is the first step, they have to be told (they act on a list, not
     an inbox). A first step shared with HR ('HOD or HR') is left as it always was: HR's queue and the HOD's approvals
     screen show it."""
     cfg = cfg or get_config(key)
     if cfg.steps[0].roles == (HOD,):
-        notify_hod_of_request(key, emp, what)
+        notify_hod_of_request(key, emp, what, obj)
 
 
 def phrase(roles: tuple[str, ...]) -> str:

@@ -63,6 +63,13 @@ GROUPS = [
         "The employee is told as soon as their request is approved or rejected, with the approver and reason. "
         "Switch off one workflow without touching the others.",
     ),
+    (
+        "hod",
+        "Department Head notifications",
+        "What a Department Head is told on WhatsApp about the requests waiting for their approval: a message when a "
+        "request reaches them, and the scheduled reminder of everything still pending (its times and text are set on "
+        "Requests -> Notify).",
+    ),
     ("geo", "Geo Attendance", "Approval and rejection messages for On-Duty requests and their punches."),
     ("visitors", "Visitors", "Tells an employee who is at reception to meet them, with a tap-to-call contact card."),
     ("outpass", "Outpass & gate", "Confirms to the employee each time the gate records them going out or coming back."),
@@ -151,6 +158,20 @@ FEATURES = [
         "Approval notifications (all)",
         "approvals",
         "Master switch: Approved / Rejected messages for every workflow below.",
+    ),
+    (
+        "hodNotificationsEnabled",
+        "hod_notifications_enabled",
+        "Department Head notifications (all)",
+        "hod",
+        "Master switch for the messages to Department Heads below. Each one still has to be on too.",
+    ),
+    (
+        "hodRequestWaitingEnabled",
+        "hod_request_waiting_enabled",
+        "New request waiting for approval",
+        "hod",
+        "Message the employee's Department Head as soon as a request reaches their step, with who asked, what and when.",
     ),
     (
         "geoApprovalEnabled",

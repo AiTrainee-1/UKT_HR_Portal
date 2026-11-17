@@ -1,9 +1,12 @@
 // The pure parts of Phone Notify Control: the words for a push result, the grouping of the switches, the numbers of the
 // overview, the chart bars and the filters that live in the address. No React here, so every rule is tested on its own.
 import type {
+  AlertTimingKey,
+  AlertTimingLimit,
   MobileMessageControl,
   MobileMessageRow,
   MobileMessagesOverview,
+  PhoneAlertSettings,
   PushAudience,
   PushCategory,
   PushConfig,
@@ -694,6 +697,51 @@ export function changeDoneText(kind: BulkKind, changed: number): string {
     : "Nobody was taken off: none of them was on the list";
 }
 
+// ── the phone attendance alerts' timing (the Settings tab) ────────────────────
+
+/** The three timings, in the order the page shows them. */
+export const ALERT_TIMING_KEYS: readonly AlertTimingKey[] = [
+  "absentExtraMinutes",
+  "reminderLeadMinutes",
+  "missingAfterMinutes",
+];
+
+/** The fields as typed (text, so a field can be empty while it is being changed). */
+export type AlertTimingDraft = Record<AlertTimingKey, string>;
+
+export const alertTimingDraft = (s: Pick<PhoneAlertSettings, AlertTimingKey>): AlertTimingDraft => ({
+  absentExtraMinutes: String(s.absentExtraMinutes),
+  reminderLeadMinutes: String(s.reminderLeadMinutes),
+  missingAfterMinutes: String(s.missingAfterMinutes),
+});
+
+/** Why a typed timing cannot be saved (null when it can): empty, not whole minutes, or outside the server's range. */
+export function alertTimingProblem(value: string, limit: Pick<AlertTimingLimit, "min" | "max">): string | null {
+  const v = value.trim();
+  if (v === "") return "Enter a number of minutes.";
+  if (!/^\d+$/.test(v)) return "Whole minutes only.";
+  const n = Number(v);
+  if (n < limit.min || n > limit.max) return `Between ${limit.min} and ${limit.max} minutes.`;
+  return null;
+}
+
+/** "0 to 240 minutes". */
+export const alertTimingRange = (limit: Pick<AlertTimingLimit, "min" | "max">): string =>
+  `${limit.min} to ${limit.max} minutes`;
+
+/** What Save sends: only the timings that changed, as numbers (an empty object when nothing changed). */
+export function alertTimingChanges(
+  saved: Pick<PhoneAlertSettings, AlertTimingKey>,
+  draft: AlertTimingDraft,
+): Partial<Record<AlertTimingKey, number>> {
+  const out: Partial<Record<AlertTimingKey, number>> = {};
+  for (const k of ALERT_TIMING_KEYS) {
+    const v = draft[k].trim();
+    if (/^\d+$/.test(v) && Number(v) !== saved[k]) out[k] = Number(v);
+  }
+  return out;
+}
+
 // ── the wording of each kind (the Message Text tab) ───────────────────────────
 
 /** The longest title and message the server takes. */
@@ -803,6 +851,15 @@ export function groupTemplates(
   };
   // Array.prototype.sort is stable: categories the order does not know keep the order they came in
   return [...byKey.values()].sort((a, b) => rank(a.key) - rank(b.key));
+}
+
+/**
+ * Can a kind wrap its built-in text? Its placeholders include {{message}} (the built-in sentence), and usually {{headline}}
+ * (the built-in title).
+ */
+export function wrapsBuiltIn(t: Pick<PushTemplate, "variables">): { message: boolean; headline: boolean } {
+  const names = new Set(t.variables.map((v) => v.name));
+  return { message: names.has("message"), headline: names.has("headline") };
 }
 
 /** Should the phone card offer to expand (more than it shows in about two lines, like Android's collapsed card)? */

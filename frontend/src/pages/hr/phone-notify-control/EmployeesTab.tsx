@@ -185,7 +185,7 @@ function EmployeeCard({ e }: { e: MobileDeviceRow }) {
           {ask.muted ? (
             <>
               Mute <b>{e.name}</b>? No phone notification will reach them, whatever its kind. Their in-app Notifications
-              list still fills, and WhatsApp is not affected.
+              list still fills.
             </>
           ) : (
             <>

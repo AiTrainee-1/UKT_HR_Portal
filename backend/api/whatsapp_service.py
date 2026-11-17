@@ -85,9 +85,14 @@ class WhatsAppServiceError(Exception):
     not be reached, timed out, answered 5xx or 429); everything else (a refused number, a disconnected instance, a bad
     token) is final."""
 
-    def __init__(self, message: str = "", temporary: bool = False):
+    def __init__(
+        self, message: str = "", temporary: bool = False, http_status: int | None = None, provider_response=None
+    ):
         super().__init__(message)
         self.temporary = temporary
+        # what WAClient answered, for the test message and the log (credentials never included)
+        self.http_status = http_status
+        self.provider_response = provider_response
 
 
 def has_credentials() -> bool:
@@ -103,6 +108,52 @@ def sending_allowed() -> bool:
     return not dj_settings.DEBUG and "runserver" not in sys.argv
 
 
+def development_machine() -> bool:
+    """DEBUG on, or running under runserver: a developer's machine, never the real server."""
+    return bool(dj_settings.DEBUG) or "runserver" in sys.argv
+
+
+def provider_is_local() -> bool:
+    """Is WACLIENT_API_URL on this machine (the e2e stack's fake WAClient)? Such a provider reaches nobody, so a development
+    machine needs no recipient limit for it."""
+    host = (urlparse(dj_settings.WACLIENT_API_URL or "").hostname or "").lower()
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
+def recipient_codes() -> list[str]:
+    """The employee codes this machine may message (WHATSAPP_ONLY_TO_EMPLOYEES), [] for no limit."""
+    return list(getattr(dj_settings, "WHATSAPP_ONLY_TO_EMPLOYEES", None) or [])
+
+
+def allowed_numbers() -> set[str] | None:
+    """The phone numbers (normalised) this machine may message, or None when there is no limit. On a development machine
+    there is always a limit (an empty set when no employee is named: nothing may be sent)."""
+    codes = recipient_codes()
+    if not codes and (not development_machine() or provider_is_local()):
+        return None
+    from .models import Employee
+
+    phones = Employee.objects.filter(employee_code__in=codes).values_list("phone", flat=True)
+    return {n for n in (normalize_phone(p) for p in phones) if n}
+
+
+DEV_SAFETY = "Not sent (development safety)"
+
+
+def recipient_block_reason(to: str | None) -> str | None:
+    """Why this recipient (a number or a group id) may not be messaged from this machine, or None. The words never start
+    like a provider failure, so a refusal here never pauses the send queue (whatsapp_dispatcher's circuit breaker)."""
+    allowed = allowed_numbers()
+    if allowed is None:
+        return None
+    codes = ", ".join(recipient_codes()) or "none set"
+    if is_group_id(to or ""):
+        return f"{DEV_SAFETY}: this machine may only message employee {codes} (WHATSAPP_ONLY_TO_EMPLOYEES), not groups."
+    if (to or "") not in allowed:
+        return f"{DEV_SAFETY}: this machine may only message employee {codes} (WHATSAPP_ONLY_TO_EMPLOYEES)."
+    return None
+
+
 def sending_block_reason() -> str | None:
     """Why nothing can be sent from here, or None when it can."""
     if not has_credentials():
@@ -112,7 +163,13 @@ def sending_block_reason() -> str | None:
     if not sending_allowed():
         return (
             "WhatsApp sending is switched off on this machine because it is a development setup (DEBUG on or "
-            "runserver), so it can't message employees from the live number. Set WHATSAPP_ALLOW_SENDING=true to override."
+            "runserver), so it can't message employees from the live number. Set WHATSAPP_ALLOW_SENDING=true and "
+            "WHATSAPP_ONLY_TO_EMPLOYEES=<your employee code> to send test messages to yourself only."
+        )
+    if development_machine() and not recipient_codes() and not provider_is_local():
+        return (
+            "This development machine may send WhatsApp only to the employees named in WHATSAPP_ONLY_TO_EMPLOYEES "
+            "(for example WHATSAPP_ONLY_TO_EMPLOYEES=30020), and none is named, so nothing is sent."
         )
     return None
 
@@ -311,6 +368,10 @@ def _post_send(payload: dict, url: str | None = None) -> dict:
     blocked = sending_block_reason()
     if blocked:
         raise WhatsAppServiceError(blocked)
+    # the last line of defence: whatever path this message took, a limited machine never reaches anybody else
+    refused = recipient_block_reason(str(payload.get("number") or payload.get("chat_id") or ""))
+    if refused:
+        raise WhatsAppServiceError(refused)
     body = {
         **payload,
         "instance_id": dj_settings.WACLIENT_INSTANCE_ID,
@@ -334,8 +395,78 @@ def _post_send(payload: dict, url: str | None = None) -> dict:
         detail = data.get("message") or data.get("error") or resp.text[:200] or f"HTTP {resp.status_code}"
         # The provider's own trouble (5xx) or "slow down" (429) may pass; a refusal of THIS message will not.
         temporary = resp.status_code >= 500 or resp.status_code == 429
-        raise WhatsAppServiceError(f"Send failed: {detail}", temporary=temporary)
+        raise WhatsAppServiceError(
+            f"Send failed: {detail}",
+            temporary=temporary,
+            http_status=resp.status_code,
+            provider_response=_without_credentials(data) or resp.text[:500],
+        )
     return data
+
+
+def _masked(value) -> str:
+    text = str(value or "")
+    return f"…{text[-4:]}" if len(text) > 4 else "***"
+
+
+def _without_credentials(data):
+    """WAClient's answer, safe to show and keep: anything that looks like a credential is masked."""
+    if isinstance(data, dict):
+        return {
+            k: (
+                _masked(v)
+                if any(w in str(k).lower() for w in ("token", "secret", "password", "instance"))
+                else _without_credentials(v)
+            )
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [_without_credentials(v) for v in data[:20]]
+    return data
+
+
+def instance_status() -> dict:
+    """WAClient's own view of the linked number (GET /instance_status, live socket check): {"ok": True, "state":
+    "connected" | "disconnected" | "logged_out" | ..., "socketLoaded", "reloginRequired", "raw"} or {"ok": False, "error",
+    "httpStatus", "raw"}. Sends nothing. Needs the credentials only (allowed on any machine)."""
+    if not has_credentials():
+        return {"ok": False, "error": "The WAClient keys are missing on this server.", "httpStatus": None, "raw": None}
+    base = dj_settings.WACLIENT_API_URL
+    url = (base[: -len("/send")] if base.endswith("/send") else base.rstrip("/")) + "/instance_status"
+    try:
+        resp = requests.get(
+            url,
+            params={
+                "instance_id": dj_settings.WACLIENT_INSTANCE_ID,
+                "access_token": dj_settings.WACLIENT_ACCESS_TOKEN,
+                "live": 1,
+            },
+            timeout=(5, 15),
+        )
+    except requests.RequestException as exc:
+        return {"ok": False, "error": f"Could not reach WAClient: {exc}", "httpStatus": None, "raw": None}
+    try:
+        data = resp.json() if resp.content else {}
+    except ValueError:
+        data = {}
+    raw = _without_credentials(data) if isinstance(data, dict) and data else resp.text[:500]
+    if resp.status_code >= 400 or not isinstance(data, dict) or str(data.get("status", "")).lower() != "success":
+        detail = (data.get("message") or data.get("error")) if isinstance(data, dict) else None
+        return {
+            "ok": False,
+            "error": str(detail or resp.text[:200] or f"HTTP {resp.status_code}"),
+            "httpStatus": resp.status_code,
+            "raw": raw,
+        }
+    info = data.get("data") if isinstance(data.get("data"), dict) else {}
+    return {
+        "ok": True,
+        "state": str(info.get("connection_state") or "unknown"),
+        "socketLoaded": info.get("socket_loaded"),
+        "reloginRequired": info.get("relogin_required"),
+        "httpStatus": resp.status_code,
+        "raw": raw,
+    }
 
 
 def _provider_message_id(result: dict) -> str:
@@ -619,13 +750,8 @@ def send_document(
     `request` is needed to build the public media URL WAClient fetches the document from -see
     _backend_public_base_url.
     """
-    # the caption of the document is also a phone notification and an in-app record (push_messages.py)
-    push_messages.announce(
-        employee,
-        document_type,
-        render_message(_template_body(document_type), body_params, _order_for(document_type)),
-        params=body_params,
-    )
+    # the event, told on the phone by Phone Notify Control with its own settings and wording (push_messages.py)
+    push_messages.announce(employee, document_type, params=body_params)
     phone, caption, stopped = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
     if stopped is not None:
         return stopped
@@ -677,12 +803,7 @@ def queue_document(
     and goes behind everything time-critical (catalog.PRIORITY_BULK). Same return contract as send_document."""
     if build not in DOCUMENT_BUILDERS:
         raise ValueError(f"Unknown document builder: {build}")
-    push_messages.announce(
-        employee,
-        document_type,
-        render_message(_template_body(document_type), body_params, _order_for(document_type)),
-        params=body_params,
-    )
+    push_messages.announce(employee, document_type, params=body_params)  # Phone Notify Control's own notification
     marker = {"batch": batch_id} if batch_id else {}
     phone, caption, stopped = _precheck(
         employee,
@@ -864,20 +985,6 @@ def queue_to_recipient(
     return log
 
 
-def announce_only(employee, document_type: str, params, *, related_module: str = "", dedupe_key: str = ""):
-    """The phone notification + in-app record a message would make (push_messages.py), WITHOUT the WhatsApp message: for a
-    sender whose WhatsApp side is off or held back while the phone side is on (the attendance alerts). Same text, same
-    exactly-once key as send_notification, so a WhatsApp send of the same message later never notifies twice."""
-    return push_messages.announce(
-        employee,
-        document_type,
-        render_message(_template_body(document_type), params, _order_for(document_type)),
-        related_module=related_module,
-        dedupe_key=dedupe_key,
-        params=params,
-    )
-
-
 def send_notification(
     employee,
     document_type: str,
@@ -919,24 +1026,19 @@ def send_notification(
     `asynchronous` is accepted for older callers and ignored: whether a message waits in the queue is decided by its kind
     (whatsapp_catalog), never by the caller. Nothing in here raises into the calling workflow.
 
-    `announce=False` skips the phone notification + in-app record this message would otherwise also make
-    (push_messages.py): for a caller that makes its own, with its own on/off switch (the Department Head
-    reminders, hod_reminders.py, whose push must still go when WhatsApp is off and never twice).
+    The same HRMS event is also handed to Phone Notify Control (push_messages.announce), which decides about the phone
+    with its OWN settings and wording; nothing WhatsApp Control has set reaches it, and it never changes this message.
+    `announce=False` leaves the phone out: for a caller whose phone notification is made elsewhere (the attendance alerts,
+    phone_alerts.py; the Department Head reminders, hod_reminders.py).
     """
     from .models import WhatsAppMessageLog, WhatsAppSettings
 
     try:
-        # The same message is also a phone notification and an in-app record (push_messages.py). That is the employee's
-        # own channel, so it does not wait for WhatsApp to be configured or switched on, and a one-time code never goes
-        # through it.
+        # The event, to Phone Notify Control (push_messages.py): its own channel and settings, decided before (and whatever)
+        # WhatsApp decides below. A one-time code never goes there.
         if announce:
             push_messages.announce(
-                employee,
-                document_type,
-                render_message(_template_body(document_type), params, _order_for(document_type)),
-                related_module=related_module,
-                dedupe_key=dedupe_key,
-                params=params,
+                employee, document_type, related_module=related_module, dedupe_key=dedupe_key, params=params
             )
         settings_row = WhatsAppSettings.get()
         if switch_off_reason(document_type, related_module, settings_row) or not is_configured():

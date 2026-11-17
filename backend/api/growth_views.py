@@ -387,7 +387,7 @@ def attendance_day_override(request: Request) -> Response:
         approval_trail=[],
     )
     approval.notify_new_request(
-        "attendance_correction", emp, f"attendance change for {d} ({resolved.get('typeLabel') or 'edit'})"
+        "attendance_correction", emp, f"attendance change for {d} ({resolved.get('typeLabel') or 'edit'})", obj=req
     )
     log_action(
         request, "create", "attendance", record_id=req.id,

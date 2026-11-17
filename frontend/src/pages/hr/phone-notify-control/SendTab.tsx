@@ -16,7 +16,7 @@ const MESSAGE_MAX = 500;
 
 /**
  * Send a message: one message to one employee, saved in their app and pushed to their phones. For trying a phone, or a short
- * note that is not one of the system's messages. It is not sent on WhatsApp.
+ * note that is not one of the system's messages.
  */
 export default function SendTab() {
   const { toast } = useToast();
@@ -161,8 +161,8 @@ export default function SendTab() {
             </Button>
           </div>
           <p className="text-[11px] text-muted-foreground">
-            It is saved in the employee&apos;s Notifications page and pushed to their phones. It is not sent on
-            WhatsApp. Use it to try a phone, or for a short note that is not one of the system&apos;s messages.
+            It is saved in the employee&apos;s Notifications page and pushed to their phones. Use it to try a phone, or
+            for a short note that is not one of the system&apos;s messages.
           </p>
         </div>
       </Panel>

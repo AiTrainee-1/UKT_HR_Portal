@@ -507,3 +507,8 @@ api/push_recipients_views.py
 api/push_templates.py
 api/push_templates_views.py
 api/tests_push_templates.py
+api/phone_alerts.py
+api/whatsapp_test_views.py
+api/tests_whatsapp_test_send.py
+api/whatsapp_hod.py
+api/tests_whatsapp_hod.py

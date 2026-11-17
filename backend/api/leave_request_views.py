@@ -77,7 +77,7 @@ def resolve_leave(
         _deduct_leave_balance(record)
     approval.stage_notice(record.employee_id, "leave", approval.notice_for(what, outcome), outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
-        approval.notify_hod_of_request(WORKFLOW, record.employee, "leave request")
+        approval.notify_hod_of_request(WORKFLOW, record.employee, "leave request", record)
     if outcome.final or outcome.rejected:
         whatsapp_approvals.notify_decision(
             WORKFLOW, record, decision, approver=actor, role=approval.LEGACY_ROLE[role], comment=record.hr_comment
@@ -232,7 +232,7 @@ def _leave_requests_create(request: Request) -> Response:
         reason_category=reason_category,
         approval_trail=[],
     )
-    approval.notify_new_request(WORKFLOW, record.employee, "leave request")
+    approval.notify_new_request(WORKFLOW, record.employee, "leave request", obj=record)
     return Response(_leave_with_name(record), status=201)
 
 

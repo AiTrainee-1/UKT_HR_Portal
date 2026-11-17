@@ -34,7 +34,7 @@ from .models import (
     PushToken,
     WhatsAppMessageLog,
 )
-from .tests_whatsapp_alerts import WED, AlertBase, _switches
+from .tests_whatsapp_alerts import WED, AlertBase, _switches, at
 
 EXPO = "api.signals.requests.post"
 
@@ -78,7 +78,7 @@ class AutomaticNotificationSurvivesPushErrors(World):
         ):
             ok(post)
             n = push_messages.announce(
-                self.emp, "leave_approved", "*Leave Approved*\nYour leave is approved.", dedupe_key="pd-1"
+                self.emp, "approval_approved", params={"request_type": "Leave"}, dedupe_key="pd-1"
             )
         self.assertIsNotNone(n)
         self.assertTrue(Notification.objects.filter(pk=n.pk).exists())
@@ -362,8 +362,9 @@ class ChatPushTests(TestCase):
         self.assertEqual(self.notes().count(), 3)
 
 
-class PhoneAlertsWithoutWhatsAppTests(AlertBase):
-    """The attendance alerts reach the phone on Phone Notify Control's switches alone."""
+class PhoneAlertJobTests(AlertBase):
+    """The phone attendance alerts are Phone Notify Control's own job (phone_alerts.py): its switches, its timing, never
+    WhatsApp Control's, and the WhatsApp job makes no phone notification (the modules are independent, 2026-11-17)."""
 
     def setUp(self):
         super().setUp()
@@ -377,6 +378,11 @@ class PhoneAlertsWithoutWhatsAppTests(AlertBase):
 
         self.post.side_effect = route
 
+    def phone(self, h, m=0):
+        from . import phone_alerts
+
+        return phone_alerts.run_phone_alerts(now=at(WED, h, m))
+
     def whatsapp_calls(self):
         return [
             c for c in self.post.call_args_list if "exp.host" not in (c.args[0] if c.args else c.kwargs.get("url", ""))
@@ -386,44 +392,54 @@ class PhoneAlertsWithoutWhatsAppTests(AlertBase):
         return Notification.objects.filter(employee=self.emp, source="absent_alert")
 
     @override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN="")
-    def test_whatsapp_not_configured_the_phone_still_gets_the_alert_once(self):
-        self.assertEqual(self.run_at(WED, 10, 0), {})  # nothing on WhatsApp
+    def test_the_phone_gets_the_alert_once_with_whatsapp_not_configured(self):
+        self.assertEqual(self.phone(10, 0).get("absent_alert"), 1)
         self.assertFalse(WhatsAppMessageLog.objects.exists())
         n = self.absent_notes().get()
-        self.assertEqual(n.push_status, "sent")
-        self.assertIn("We have not received your attendance punch today.", n.message)
-        self.run_at(WED, 10, 1)
+        self.assertEqual((n.push_status, n.title), ("sent", "No punch yet today"))
+        self.assertIn("If you are at work, please punch in.", n.message)
+        self.phone(10, 1)
         self.assertEqual(self.absent_notes().count(), 1)
 
-    def test_whatsapp_alert_switches_off_the_phone_still_gets_it(self):
+    def test_whatsapp_alert_switches_do_not_touch_the_phone(self):
         _switches(
             absent_alert_enabled=False,
             late_alert_enabled=False,
             four_punch_alert_enabled=False,
             missing_punch_alert_enabled=False,
+            attendance_alerts_enabled=False,
         )
-        self.assertEqual(self.run_at(WED, 10, 0), {})
-        self.assertEqual(self.absent_notes().count(), 1)
+        self.assertEqual(self.run_at(WED, 10, 0), {})  # WhatsApp: nothing
+        self.assertEqual(self.phone(10, 0).get("absent_alert"), 1)  # the phone: its own switches
         self.assertEqual(self.whatsapp_calls(), [])
 
-    def test_the_phone_switch_decides_when_whatsapp_is_off(self):
-        _switches(attendance_alerts_enabled=False)
+    def test_the_phone_switch_off_stops_the_phone_only(self):
         MobileMessageSettings.objects.update_or_create(pk=1, defaults={"disabled_types": ["absent_alert"]})
-        self.run_at(WED, 10, 0)
+        self.assertNotIn("absent_alert", self.phone(10, 0))
         self.assertFalse(self.absent_notes().exists())
+        self.assertEqual(self.run_at(WED, 10, 0).get("absent_alert"), 1)  # WhatsApp unaffected
 
-    def test_with_both_on_one_whatsapp_message_and_one_notification(self):
+    def test_the_whatsapp_job_makes_no_phone_notification(self):
         self.assertEqual(self.run_at(WED, 10, 0).get("absent_alert"), 1)
-        self.run_at(WED, 10, 1)
         self.assertEqual(WhatsAppMessageLog.objects.filter(document_type="absent_alert").count(), 1)
+        self.assertFalse(Notification.objects.exists())
+        self.phone(10, 1)
         self.assertEqual(self.absent_notes().count(), 1)
-        self.assertEqual(self.absent_notes().get().push_status, "sent")
 
-    def test_a_failing_provider_pauses_whatsapp_not_the_phone(self):
+    def test_each_module_has_its_own_timing(self):
+        # WhatsApp reminds 5 minutes before a punch (AlertBase), the phone 15 minutes before (its own default)
+        self.assertNotIn("four_punch_alert", self.run_at(WED, 8, 46))
+        self.assertEqual(self.phone(8, 46).get("four_punch_alert"), 1)
+
+    def test_the_phone_timing_is_set_on_phone_notify_control(self):
+        MobileMessageSettings.objects.update_or_create(pk=1, defaults={"alert_reminder_lead_minutes": 3})
+        self.assertNotIn("four_punch_alert", self.phone(8, 50))  # check-in at 9:00 is 10 minutes away, 3 asked
+        self.assertEqual(self.phone(8, 57).get("four_punch_alert"), 1)
+
+    def test_a_failing_whatsapp_provider_does_not_matter_to_the_phone(self):
         with mock.patch("api.whatsapp_alerts.provider_is_failing", return_value=True):
             self.assertEqual(self.run_at(WED, 10, 0), {})
-        self.assertFalse(WhatsAppMessageLog.objects.exists())
-        self.assertEqual(self.absent_notes().count(), 1)
+            self.assertEqual(self.phone(10, 0).get("absent_alert"), 1)
 
 
 class CategoryTests(TestCase):

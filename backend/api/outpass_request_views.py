@@ -150,7 +150,7 @@ def resolve_outpass_request(
     what = f"Outpass request for {req.destination}"
     approval.stage_notice(req.employee, "outpass", approval.notice_for(what, outcome), outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
-        approval.notify_hod_of_request(WORKFLOW, req.employee, "Outpass request")
+        approval.notify_hod_of_request(WORKFLOW, req.employee, "Outpass request", req)
     if outcome.final or outcome.rejected:
         whatsapp_approvals.notify_decision(
             "outpass", req, decision, approver=reviewer_name, role=approver_role, comment=comment
@@ -232,7 +232,7 @@ def outpass_requests(request: Request) -> Response:
         employee=emp, destination=destination, reason=reason,
         pass_type=pass_type, expected_return_at=expected_return_at, approval_trail=[],
     )
-    approval.notify_new_request(WORKFLOW, emp, "Outpass request")
+    approval.notify_new_request(WORKFLOW, emp, "Outpass request", obj=req)
     return Response(_outpass_request_json(req), status=201)
 
 

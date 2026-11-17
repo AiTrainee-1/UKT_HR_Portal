@@ -79,7 +79,7 @@ const overview = (over: Record<string, unknown> = {}) => ({
   week: { ...COUNTS, total: 30, sent: 24, delivered: 20, failed: 2 },
   month: { ...COUNTS, total: 120, sent: 100, delivered: 90 },
   readRate: 61.5,
-  byKind: [{ label: "Late Attendance Alert", count: 12 }],
+  byKind: [{ label: "Late alert", count: 12 }],
   byDay: Array.from({ length: 14 }, (_, i) => ({
     date: `2026-11-${String(4 + i).padStart(2, "0")}`,
     total: i,
@@ -123,7 +123,6 @@ const control = (
   enabled: true,
   sentFrom: `Sent from ${label}`,
   audience: "employee",
-  origin: "whatsapp",
   stats: STATS,
   ...over,
 });
@@ -131,23 +130,21 @@ const CONTROLS = () => [
   // the server's order is not the page's order: Approvals by workflow comes last, Attendance first
   control("approval:leave", "Leave", "approval_workflows", "Approvals by workflow", {
     kind: "workflow",
-    origin: "app",
     stats: { ...STATS, total: 0 },
     category: "leave",
     categoryLabel: "Leave",
   }),
-  control("late_alert", "Late Attendance Alert", "attendance", "Attendance", {
+  control("late_alert", "Late alert", "attendance", "Attendance", {
     category: "attendance",
     categoryLabel: "Attendance alerts",
   }),
-  control("absent_alert", "Absent Alert", "attendance", "Attendance", {
+  control("absent_alert", "Absent alert", "attendance", "Attendance", {
     enabled: false,
     category: "attendance",
     categoryLabel: "Attendance alerts",
   }),
   control("approval_waiting", "Waiting for your approval", "approvals", "Approvals", {
     audience: "approver",
-    origin: "app",
     category: "approvers",
     categoryLabel: "Approvers & management",
   }),
@@ -161,7 +158,7 @@ const row = (id: number, over: Record<string, unknown> = {}) => ({
   title: "Late Attendance",
   message: "Hi Asha, your attendance has been marked as Late today.",
   type: "attendance",
-  kind: "Late Attendance Alert",
+  kind: "Late alert",
   source: "late_alert",
   pushStatus: "delivered",
   pushStatusLabel: "Delivered to the phone",
@@ -280,17 +277,21 @@ const MODE_LABEL: Record<string, string> = {
 type Match = { search?: string; type?: string; branch?: number; department?: number };
 
 // the wording of each kind (Message Text), in the server's (Controls) order: Payroll, Attendance, then Chat
+const ALERT_LIMITS = {
+  absentExtraMinutes: { min: 0, max: 240, label: "Extra wait before the Absent alert" },
+  reminderLeadMinutes: { min: 1, max: 60, label: "Punch reminder: this long before the punch is due" },
+  missingAfterMinutes: { min: 0, max: 240, label: "Missing Punch alert: this long after the punch was due" },
+};
 type Variable = { name: string; help: string; sample: string };
 const variable = (name: string, help: string, sample: string): Variable => ({ name, help, sample });
 const template = (over: Record<string, unknown>) => ({
   key: "salary_slip",
-  label: "Salary Slip",
+  label: "Salary slip",
   description: "The salary slip PDF, sent with a short caption.",
   group: "documents",
   groupLabel: "Documents",
   category: "payroll",
   categoryLabel: "Payroll & salary",
-  origin: "whatsapp",
   enabled: true,
   variables: [
     variable("employee_name", "Employee name", "Asha Kumar"),
@@ -300,7 +301,7 @@ const template = (over: Record<string, unknown>) => ({
   body: "",
   defaultTitle: "Salary Slip",
   defaultBody: "Dear {{employee_name}},\nYour salary slip for {{month_year}} is attached.",
-  defaultNote: "Same as the WhatsApp message: the bold first line is the title.",
+  defaultNote: "The phone's built-in wording.",
   customised: false,
   preview: { title: "Salary Slip", body: "Dear Asha Kumar,\nYour salary slip for August 2026 is attached." },
   updatedBy: null as string | null,
@@ -317,7 +318,6 @@ const TEMPLATES = () => [
     key: "salary_paid",
     label: "Salary paid",
     description: "Sent when HR marks the month's payroll as Paid.",
-    origin: "app",
     variables: [
       variable("employee_name", "The employee's name", "Asha Kumar"),
       variable("month", "The month paid", "October 2026"),
@@ -339,7 +339,7 @@ const TEMPLATES = () => [
   }),
   template({
     key: "late_alert",
-    label: "Late Attendance Alert",
+    label: "Late alert",
     description: "Sent when an employee is marked late.",
     category: "attendance",
     categoryLabel: "Attendance alerts",
@@ -355,7 +355,6 @@ const TEMPLATES = () => [
     description: "A new message in a chat.",
     category: "chat",
     categoryLabel: "Internal chat",
-    origin: "app",
     variables: [
       variable("headline", "The built-in title", "New message"),
       variable("message", "The built-in sentence", "Hi"),
@@ -424,6 +423,7 @@ type World = {
   picked: Set<number>;
   people: ReturnType<typeof PEOPLE>;
   templates: Template[];
+  alert: { absentExtraMinutes: number; reminderLeadMinutes: number; missingAfterMinutes: number };
 };
 
 let world: World;
@@ -450,6 +450,7 @@ function install() {
     picked: new Set([7]),
     people: PEOPLE(),
     templates: TEMPLATES(),
+    alert: { absentExtraMinutes: 0, reminderLeadMinutes: 15, missingAfterMinutes: 20 },
   };
   h.fetch.mockReset();
   h.fetch.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
@@ -591,6 +592,24 @@ function install() {
       if (body.removeMatching) for (const e of matching(body.removeMatching as Match)) world.picked.delete(e.id);
       if (body.clear) world.picked.clear();
       return { ...recipientsBody(), changed: Math.abs(world.picked.size - before) };
+    }
+    // the timing of the phone attendance alerts (Settings)
+    const alertBody = () => ({
+      ...world.alert,
+      limits: ALERT_LIMITS,
+      updatedBy: "Test HR",
+      updatedAt: "2026-11-16T10:00:00Z",
+    });
+    if (method === "GET" && path === `${API}/alert-settings`) return alertBody();
+    if (method === "PUT" && path === `${API}/alert-settings`) {
+      for (const [k, v] of Object.entries(body)) {
+        const limit = ALERT_LIMITS[k as keyof typeof ALERT_LIMITS];
+        if (!limit || typeof v !== "number" || v < limit.min || v > limit.max) {
+          throw Object.assign(new Error("Bad Request"), { data: { error: `${k} must be between its limits.` } });
+        }
+      }
+      Object.assign(world.alert, body);
+      return alertBody();
     }
     // the wording of each kind (Message Text)
     if (method === "GET" && path === `${API}/templates`) return world.templates;
@@ -798,7 +817,7 @@ describe("the overview", () => {
     }
     expect(text(must("pn-read-rate"))).toContain("61.5%");
     expect(text(must("pn-counts"))).toContain("3 pushed");
-    expect(text(must("pn-by-kind"))).toContain("Late Attendance Alert");
+    expect(text(must("pn-by-kind"))).toContain("Late alert");
     expect(q("pn-bar-2026-11-17")).not.toBeNull();
     expect(q("pn-master-off")).toBeNull();
     expect(q("pn-health-banner")).toBeNull();
@@ -1122,12 +1141,11 @@ describe("the controls", () => {
       .filter((id) => /^pn-group-[a-z_]+$/.test(id ?? ""));
     expect(groups).toEqual(["pn-group-attendance", "pn-group-approvals", "pn-group-approval_workflows"]);
     const late = text(must("pn-control-late_alert"));
-    for (const needle of ["To the employee", "Also by WhatsApp", "Sent from: Sent from Late Attendance Alert"]) {
+    for (const needle of ["To the employee", "Sent from: Sent from Late alert"]) {
       expect(late, needle).toContain(needle);
     }
     expect(text(must("pn-stats-late_alert"))).toContain("9 saved · 7 pushed · 6 delivered · 1 failed · 1 no phone");
     expect(text(must("pn-control-approval_waiting"))).toContain("To the approver");
-    expect(text(must("pn-control-approval_waiting"))).not.toContain("Also by WhatsApp");
     expect(text(must("pn-group-approval_workflows"))).toContain("both its own kind above and its workflow");
     expect(text(must("pn-controls"))).toContain("only stop the push to the phone");
   });
@@ -1623,8 +1641,6 @@ describe("message text: the list", () => {
     expect(text(must("pn-template-state-late_alert"))).toContain("Switched off on Controls");
     expect(text(must("pn-template-counts-salary_paid"))).toContain("264 sent · 2 pushed · 1 failed");
     expect(text(must("pn-template-counts-salary_slip"))).toContain("Last sent: never");
-    expect(text(must("pn-template-salary_slip"))).toContain("Also by WhatsApp");
-    expect(text(must("pn-template-salary_paid"))).not.toContain("Also by WhatsApp");
     expect(text(must("pn-templates-not-listed"))).toContain("Not listed, on purpose");
     expect(text(must("pn-template-edit-salary_slip"))).toBe("Edit");
   });
@@ -1654,10 +1670,9 @@ describe("message text: the editor", () => {
     expect(must("pn-template-default-body").textContent).toBe(
       "Dear {{employee_name}},\nYour salary slip for {{month_year}} is attached.",
     );
-    expect(text(must("pn-template-default"))).toContain("Same as the WhatsApp message");
-    expect(text(must("pn-template-origin"))).toContain(
-      "Until a phone version is saved here, the phone shows WhatsApp's wording",
-    );
+    expect(text(must("pn-template-default"))).toContain("The phone's built-in wording.");
+    // no {{message}} among its placeholders: nothing to say about wrapping the built-in text
+    expect(q("pn-template-wrap")).toBeNull();
     expect(field("pn-template-title").value).toBe("");
     expect(field("pn-template-title").placeholder).toBe("Blank: Salary Slip");
     expect(field("pn-template-body").value).toBe("");
@@ -1678,10 +1693,10 @@ describe("message text: the editor", () => {
     expect(q("pn-template-reset")).toBeNull();
   });
 
-  it("explains {{headline}} and {{message}} on an app-only kind", async () => {
+  it("explains {{headline}} and {{message}} on a kind that has them", async () => {
     await open(MT, "pn-template-salary_paid");
     await click(must("pn-template-edit-salary_paid"));
-    expect(text(must("pn-template-origin"))).toContain(
+    expect(text(must("pn-template-wrap"))).toContain(
       "{{headline}} is the built-in title and {{message}} the built-in sentence",
     );
     expect(field("pn-template-title").value).toBe("Paid: {{month}}");
@@ -1759,7 +1774,7 @@ describe("message text: the editor", () => {
       body: { title: "Payslip ready", body: "Dear {{employee_name}}, it is in the app." },
     });
     await waitFor(() => !q("pn-template-editor"), "the editor closed");
-    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Salary Slip: phone wording saved" }));
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Salary slip: phone wording saved" }));
     await waitFor(() => text(must("pn-template-state-salary_slip")).includes("Custom"), "the row Custom");
   });
 
@@ -1814,7 +1829,7 @@ describe("message text: the editor", () => {
     await click(must("pn-template-edit-salary_slip"));
     await setValue(field("pn-template-title"), "Payslip");
     await click(must("pn-template-cancel"));
-    expect(text(must("pn-confirm-discard"))).toContain("Your changes to Salary Slip are not saved.");
+    expect(text(must("pn-confirm-discard"))).toContain("Your changes to Salary slip are not saved.");
     await click(button("Keep editing"));
     expect(q("pn-confirm-discard")).toBeNull();
     expect(field("pn-template-title").value).toBe("Payslip");
@@ -1865,5 +1880,141 @@ describe("the Send tab's preview", () => {
     expect(q("pn-send-preview-expand")).not.toBeNull();
     // nothing is sent while typing
     expect(changes()).toEqual([]);
+  });
+});
+
+// ── the timing of the phone attendance alerts (Settings) ──────────────────────
+
+const timing = (k: string) => must(`pn-alert-${k}`) as HTMLInputElement;
+const timingSave = () => must("pn-alert-timing-save") as HTMLButtonElement;
+const alertPuts = () => changes().filter((c) => c.path === `${API}/alert-settings`);
+
+describe("the settings: attendance alert timing (phone)", () => {
+  it("shows the three timings with their names and ranges, and that they are for the phone alerts only", async () => {
+    await open(`${BASE}/settings`, "pn-alert-timing");
+    const panel = text(must("pn-alert-timing"));
+    expect(panel).toContain("Attendance alert timing (phone)");
+    expect(panel).toContain("These apply to the phone attendance alerts only.");
+    expect(timing("absentExtraMinutes").value).toBe("0");
+    expect(timing("reminderLeadMinutes").value).toBe("15");
+    expect(timing("missingAfterMinutes").value).toBe("20");
+    expect(text(must("pn-alert-field-reminderLeadMinutes"))).toContain(
+      "Punch reminder: this long before the punch is due",
+    );
+    expect(text(must("pn-alert-absentExtraMinutes-hint"))).toBe("0 to 240 minutes");
+    expect(text(must("pn-alert-reminderLeadMinutes-hint"))).toBe("1 to 60 minutes");
+    expect(text(must("pn-alert-timing-updated"))).toContain("Last changed by Test HR");
+    expect(timingSave().disabled).toBe(true);
+    // between who receives and the selected list
+    const order = [...document.body.querySelectorAll('[data-testid="pn-settings"] > *')].map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    expect(order.indexOf("pn-alert-timing")).toBeGreaterThan(order.indexOf("pn-recipient-modes"));
+  });
+
+  it("checks the range as it is typed, and Save stays off until it is right", async () => {
+    await open(`${BASE}/settings`, "pn-alert-timing");
+    await setValue(timing("reminderLeadMinutes"), "0");
+    expect(text(must("pn-alert-reminderLeadMinutes-hint"))).toBe("Between 1 and 60 minutes.");
+    expect(timing("reminderLeadMinutes").getAttribute("aria-invalid")).toBe("true");
+    expect(timingSave().disabled).toBe(true);
+    await setValue(timing("reminderLeadMinutes"), "61");
+    expect(text(must("pn-alert-reminderLeadMinutes-hint"))).toBe("Between 1 and 60 minutes.");
+    await setValue(timing("reminderLeadMinutes"), "");
+    expect(text(must("pn-alert-reminderLeadMinutes-hint"))).toBe("Enter a number of minutes.");
+    expect(timingSave().disabled).toBe(true);
+    await setValue(timing("missingAfterMinutes"), "241");
+    expect(text(must("pn-alert-missingAfterMinutes-hint"))).toBe("Between 0 and 240 minutes.");
+    await click(must("pn-alert-timing-undo"));
+    expect(timing("reminderLeadMinutes").value).toBe("15");
+    expect(timing("missingAfterMinutes").value).toBe("20");
+    expect(text(must("pn-alert-reminderLeadMinutes-hint"))).toBe("1 to 60 minutes");
+    expect(alertPuts()).toEqual([]);
+  });
+
+  it("saves only the timings that changed", async () => {
+    await open(`${BASE}/settings`, "pn-alert-timing");
+    await setValue(timing("absentExtraMinutes"), "10");
+    await setValue(timing("missingAfterMinutes"), "20");
+    expect(timingSave().disabled).toBe(false);
+    await click(timingSave());
+    await waitFor(() => alertPuts().length === 1, "the save");
+    expect(alertPuts()[0]).toEqual({ method: "PUT", path: `${API}/alert-settings`, body: { absentExtraMinutes: 10 } });
+    await waitFor(() => timingSave().disabled, "saved");
+    expect(timing("absentExtraMinutes").value).toBe("10");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Attendance alert timing saved" }));
+  });
+
+  it("shows the server's refusal in the section, and clears it when the timing is changed", async () => {
+    await open(`${BASE}/settings`, "pn-alert-timing");
+    world.failNext[`PUT ${API}/alert-settings`] = Object.assign(new Error("Bad Request"), {
+      data: { error: "The punch reminder must be between 1 and 60 minutes." },
+    });
+    await setValue(timing("reminderLeadMinutes"), "30");
+    await click(timingSave());
+    await waitFor(() => !!q("pn-alert-timing-server-error"), "the refusal");
+    expect(text(must("pn-alert-timing-server-error"))).toBe("The punch reminder must be between 1 and 60 minutes.");
+    expect(timing("reminderLeadMinutes").value).toBe("30");
+    await setValue(timing("reminderLeadMinutes"), "25");
+    expect(q("pn-alert-timing-server-error")).toBeNull();
+  });
+
+  it("shows the timing but changes nothing on a View-only tab", async () => {
+    as({ phone_notify_control: "edit", "phone_notify_control.settings": "view" });
+    await open(`${BASE}/settings`, "pn-alert-timing");
+    expect(q("pn-settings-locked")).not.toBeNull();
+    for (const k of ["absentExtraMinutes", "reminderLeadMinutes", "missingAfterMinutes"]) {
+      expect(timing(k).disabled, k).toBe(true);
+    }
+    expect(timingSave().disabled).toBe(true);
+    await click(timingSave());
+    expect(alertPuts()).toEqual([]);
+  });
+});
+
+// ── a module of its own ───────────────────────────────────────────────────────
+
+describe("Phone Notify Control stands on its own", () => {
+  /** Every word on screen, and every hover text, label and placeholder. */
+  const everything = () =>
+    [
+      document.body.textContent ?? "",
+      ...[...document.body.querySelectorAll("[title], [aria-label], [placeholder]")].flatMap((el) => [
+        el.getAttribute("title") ?? "",
+        el.getAttribute("aria-label") ?? "",
+        el.getAttribute("placeholder") ?? "",
+      ]),
+    ].join(" ");
+
+  const TABS: [string, string][] = [
+    ["overview", "pn-categories"],
+    ["messages", "pn-row-2"],
+    ["employees", "pn-employee-7"],
+    ["controls", "pn-group-attendance"],
+    ["send", "pn-pick-E7"],
+    ["configuration", "pn-config"],
+    ["message-text", "pn-template-salary_slip"],
+    ["settings", "pn-recipient-7"],
+  ];
+
+  it.each(TABS)("never mentions WhatsApp on the %s tab", async (path, ready) => {
+    await open(`${BASE}/${path}`, ready);
+    await settle(50);
+    expect(everything()).not.toMatch(/whatsapp/i);
+  });
+
+  it("never mentions WhatsApp in the Message Text editor, nor in the switches' questions", async () => {
+    await open(`${BASE}/message-text`, "pn-template-salary_slip");
+    await click(must("pn-template-edit-salary_slip"));
+    expect(everything()).not.toMatch(/whatsapp/i);
+    await click(must("pn-template-cancel"));
+    await click(must("pn-template-edit-salary_paid"));
+    expect(everything()).not.toMatch(/whatsapp/i);
+    await click(must("pn-template-cancel"));
+    await click(tab("Controls"));
+    await waitFor(() => !!q("pn-master-switch"), "the switches");
+    await click(must("pn-master-switch"));
+    expect(q("pn-confirm-master")).not.toBeNull();
+    expect(everything()).not.toMatch(/whatsapp/i);
   });
 });

@@ -1,18 +1,19 @@
-"""Every WhatsApp message the HRMS sends is also a phone notification and an in-app record.
+"""The phone notification of an HRMS event (a request approved, a gate exit, a document sent ...).
 
-    HRMS module -> whatsapp_service.send_notification / send_document -> push_messages.announce -> Notification row
-                                                                       -> (signals.py) Expo push to the employee's phones
+    HRMS event -> the event's details -> push_messages.announce -> Notification row -> (signals.py) push to the phones
+               -> (separately) WhatsApp Control's own message, when WhatsApp Control has it on
 
-`announce` takes the very text the WhatsApp message carries (HR's saved wording, else the default, with the same variables) and
-saves it as a Notification: the row IS the notification page of the mobile app, and creating it is what sends the push
-(signals.send_push_on_notification). So the phone shows what WhatsApp shows, and nothing has to be told twice.
+The same event may also be told on WhatsApp; the two channels are independent (owner 2026-11-17). `announce` uses Phone
+Notify Control's settings only: its recipients (push_recipients.py), its wording (push_templates.render_event: HR's phone
+wording, else the phone's built-in wording, filled with the event's details) and, at push time, its switches. WhatsApp
+Control's wording, switches and configuration never change it, and a kind that exists only on WhatsApp makes no phone
+notification. The row IS the notification page of the mobile app, and creating it is what sends the push.
 
     * One-time codes (login, password reset, activation) are NEVER announced: they are secrets, and a lock-screen
       notification or a stored history row would leak them.
-    * It does not depend on WhatsApp being configured, connected or switched on for that message on the WhatsApp Control page:
-      those switches are about the WhatsApp channel. (The attendance alert job still only runs while WhatsApp alerts are on:
-      that job is what decides an alert is due.)
-    * It is exactly-once per employee when the caller gives the same `dedupe_key` the WhatsApp message uses.
+    * The attendance alerts are not announced here: Phone Notify Control has its own alert job (phone_alerts.py).
+    * It is exactly-once per employee and `dedupe_key` (stored as "wa:<key>", the prefix kept from before the split so
+      older rows still count).
     * It never raises: a notification that cannot be saved must not stop the approval, the gate scan or the document it is about.
 
 A decision that only passes a request on to the next approver has no WhatsApp message; its short in-app notice is still made
@@ -81,11 +82,15 @@ def split_message(text: str, fallback_title: str) -> tuple[str, str]:
     return title, body or title
 
 
-def announce(employee, document_type: str, text: str, *, related_module: str = "", dedupe_key: str = "", params=None):
-    """Save the notification for a WhatsApp message (which sends the push). Returns the Notification, or None when it was not
-    made: a one-time code, no text, not an employee, or already announced under this `dedupe_key`."""
+def announce(
+    employee, document_type: str, text: str = "", *, related_module: str = "", dedupe_key: str = "", params=None
+):
+    """Save the phone notification of an HRMS event (which sends the push). `params` are the event's details. Returns the
+    Notification, or None when it was not made: a one-time code, a kind with no phone notification, not an employee, not a
+    phone notification recipient, or already announced under this `dedupe_key`. `text` is ignored (kept for older
+    callers)."""
     try:
-        if document_type in EXCLUDED_TYPES or not (text or "").strip():
+        if document_type in EXCLUDED_TYPES:
             return None
         from .models import Employee, Notification
 
@@ -95,12 +100,13 @@ def announce(employee, document_type: str, text: str, *, related_module: str = "
 
         if not push_recipients.allows(employee):
             return None  # not a phone notification recipient (Phone Notify Control -> Settings)
-        t = catalog.get(document_type)
-        title, body = split_message(text, t.label if t else "UKTextiles")
-        # HR's phone wording for this message (Phone Notify Control -> Message Text), filled with the WhatsApp variables
+        # Phone Notify Control's wording (Message Text), else the phone's built-in wording, with the event's details
         from . import push_templates
 
-        title, body = push_templates.apply_whatsapp(document_type, params, title, body)
+        made = push_templates.render_event(document_type, params or {})
+        if made is None:
+            return None  # this kind has no phone notification
+        title, body = made
         try:
             with transaction.atomic():
                 return Notification.objects.create(

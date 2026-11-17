@@ -350,7 +350,7 @@ def resolve_casual_leave(
         _write_attendance_for_cl(cl, reviewer)
     approval.stage_notice(cl.employee, "casual_leave", approval.notice_for(what, outcome), outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
-        approval.notify_hod_of_request(WORKFLOW, cl.employee, "Casual Leave request")
+        approval.notify_hod_of_request(WORKFLOW, cl.employee, "Casual Leave request", cl)
     if outcome.final or outcome.rejected:
         whatsapp_approvals.notify_decision(
             "casual_leave", cl, decision, approver=reviewer, role=approval.LEGACY_ROLE[role], comment=comment
@@ -445,7 +445,7 @@ def casual_leaves(request: Request) -> Response:
         reason=data.get("reason"),
         approval_trail=[],
     )
-    approval.notify_new_request(WORKFLOW, emp, "Casual Leave request")
+    approval.notify_new_request(WORKFLOW, emp, "Casual Leave request", obj=cl)
     return Response(_cl_dict(cl), status=201)
 
 

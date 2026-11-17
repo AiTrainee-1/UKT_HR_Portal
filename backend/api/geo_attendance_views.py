@@ -673,9 +673,19 @@ def _notify_hod_approvers(session: OnDutySession) -> None:
     HRUser accounts aren't push-token-registered, only employees are)."""
     emp = session.employee
     # The employee's ONE HOD (hod_scope.py), if allowed to act on on-duty requests.
-    from . import push_recipients
+    from . import push_recipients, whatsapp_hod
 
     for m in managers_to_notify(emp, "can_approve_on_duty"):
+        whatsapp_hod.request_waiting(  # WhatsApp Control's own message
+            m.employee,
+            "on_duty",
+            emp,
+            "On-Duty request",
+            session,
+            request_type="On-Duty",
+            details=f"At {session.destination[:80]}",
+            date=timezone.localdate().strftime("%d %b %Y"),
+        )
         if not push_recipients.allows(m.employee):
             continue  # not a phone notification recipient (Phone Notify Control -> Settings)
         from . import push_templates

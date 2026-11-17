@@ -771,7 +771,8 @@ class SendTests(_World):
         self.assertEqual(Notification.objects.count(), 2)
 
     def test_push_alone_while_whatsapp_is_off(self):
-        WhatsAppSettings.objects.update_or_create(pk=1, defaults={"approval_notifications_enabled": False})
+        # the reminder's own section on WhatsApp Control (Department Head notifications, 2026-11-17)
+        WhatsAppSettings.objects.update_or_create(pk=1, defaults={"hod_notifications_enabled": False})
         run = self.send({"channels": {"whatsapp": True, "email": False, "push": True}})
         rem.process_run(run["id"])
         suresh = self.deliveries(run["id"])["Suresh Test"]

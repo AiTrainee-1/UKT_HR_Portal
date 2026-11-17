@@ -278,6 +278,9 @@ def _is_expired(row, now: datetime) -> bool:
 def _skip_reason(row, s, now: datetime, *, limits: bool) -> str | None:
     """Why this queued row must not be sent after all, or None. `limits` adds the per-employee cap and the duplicate
     check (the dispatcher's own rules; inline delivery under tests leaves them out)."""
+    refused = svc.recipient_block_reason(row.phone_number)  # a development machine limited to its own employees
+    if refused:
+        return refused
     off = svc.switch_off_reason(row.document_type, row.related_module, s)
     if off:
         return f"Switched off before it was sent: {off}"

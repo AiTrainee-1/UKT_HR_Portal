@@ -170,11 +170,13 @@ class LogOverviewDevicesSendTests(TestCase):
         PushToken.objects.create(employee=self.asha, token="ExponentPushToken[a]")
         with mock.patch(EXPO) as post:
             _ok(post)
-            push_messages.announce(self.asha, "late_alert", "⏰ *Late Attendance*\n\nHi Asha.", dedupe_key="l1")
+            push_messages.announce(
+                self.asha, "late_alert", params={"first_punch": "9:25 AM", "late_by": "15 minutes"}, dedupe_key="l1"
+            )
             push_messages.announce(
                 self.ravi,
                 "approval_rejected",
-                "❌ *Request Rejected*\n\nSorry.",
+                params={"request_type": "Leave", "comment": "Sorry, peak season"},
                 related_module="leave",
                 dedupe_key="r1",
             )
@@ -192,9 +194,9 @@ class LogOverviewDevicesSendTests(TestCase):
         rows = self.log()
         self.assertEqual(len(rows), 3)
         by_name = {(r["employeeName"], r["kind"]): r for r in rows}
-        late = by_name[("Asha Kumar", "Late Attendance Alert")]
-        self.assertEqual((late["title"], late["pushStatus"], late["isRead"]), ("⏰ Late Attendance", "sent", False))
-        rejected = by_name[("Ravi Kumar", "Approval - Rejected: Leave")]
+        late = by_name[("Asha Kumar", "Late alert")]
+        self.assertEqual((late["title"], late["pushStatus"], late["isRead"]), ("Marked late today", "sent", False))
+        rejected = by_name[("Ravi Kumar", "Request rejected: Leave")]
         self.assertEqual(rejected["pushStatus"], "no_device")
         older = by_name[("Asha Kumar", "In-app notice")]
         self.assertEqual(
@@ -228,7 +230,7 @@ class LogOverviewDevicesSendTests(TestCase):
         self.assertEqual(body["byDay"][-1]["total"], 3)
         self.assertEqual(
             {k["label"] for k in body["byKind"]},
-            {"Late Attendance Alert", "Approval - Rejected: Leave", "In-app notice"},
+            {"Late alert", "Request rejected: Leave", "In-app notice"},
         )
         self.assertTrue(body["pushEnabled"])
 

@@ -1,21 +1,21 @@
 """The wording of phone notifications (Phone Notify Control -> Message Text, owner 2026-11-17).
 
 HR can write a title and a body for every kind of phone notification, with placeholders such as {{employee_name}} or
-{{date}}, the way WhatsApp Control -> Message Text works for WhatsApp. A kind with no wording saved (or blank) keeps its
-built-in wording, so nothing changes until HR writes something.
+{{date}}. A kind with no wording saved (or blank) keeps the phone's own built-in wording. The wording is Phone Notify
+Control's alone: WhatsApp Control's message text never changes a phone notification, and nothing here changes WhatsApp.
 
-    * A kind that is also a WhatsApp message (whatsapp_catalog) shows on the phone what WhatsApp sends (HR's WhatsApp
-      wording, else the default; push_messages.split_message makes its bold first line the title). A phone wording saved
-      here replaces it on the phone only, with the same placeholders as the WhatsApp message.
-    * A kind the HRMS makes itself (approvals waiting, request progress, chat, salary paid, overtime ...) has its own
-      placeholders (APP_SPECS), always including {{headline}} and {{message}}: the built-in title and sentence, so HR can
-      wrap them ("Action needed: {{message}}") instead of rewriting every case.
-    * Not here: what HR types itself (Send a message, the notifications API) and Attendance Notify's report (its content
-      is the report), and the one-time codes (never notifications).
+    * An HRMS event (EVENT_WORDING: a request approved, an attendance alert, a document sent ...) has a short built-in
+      wording written for a phone, and the event's own details as placeholders.
+    * A notification the HRMS makes for the phone alone (approvals waiting, request progress, chat, salary paid,
+      overtime ...) has its own placeholders (APP_SPECS), always including {{headline}} and {{message}}: the built-in title
+      and sentence, so HR can wrap them ("Action needed: {{message}}") instead of rewriting every case.
+    * Not here: what HR types itself (Send a message, the notifications API), and the one-time codes (never
+      notifications).
 
-`apply(key, params, title, message)` is what every sender calls: it returns HR's wording filled with the values, or the
-built-in title and message when HR wrote none. Placeholder rules are WhatsApp's (whatsapp_service.render_message): a line
-whose placeholders are all empty is dropped. Saved wording is cached for a few seconds (every alert of a run reads it).
+`apply(key, params, title, message)` is what the phone-only senders call: HR's wording filled with the values, or the
+built-in title and message when HR wrote none. `render_event(key, params)` makes an event's title and message (HR's
+wording, else the built-in one). Placeholders follow one rule: a line whose placeholders are all empty is dropped (so an
+optional "Note: {{comment}}" disappears). Saved wording is cached for a few seconds (every alert of a run reads it).
 """
 
 from __future__ import annotations
@@ -208,8 +208,89 @@ APP_SPECS: dict[str, Spec] = {
         Var("reason", "HR's reason, when given", "Deepavali"),
     ),
 }
-# Not wording HR can template: written by HR at send time, or a report's own content.
-NOT_TEMPLATABLE = frozenset({"manual", "hr_notice", "attendance_report"})
+# Not wording HR can template: written by HR at send time.
+NOT_TEMPLATABLE = frozenset({"manual", "hr_notice"})
+
+# The phone's built-in wording of each HRMS event (mobile_messages.EVENT_TYPES): short, for a lock screen. The placeholders
+# are the event's details (the names the event hands over, see EVENT_VARIABLES).
+EVENT_WORDING: dict[str, tuple[str, str]] = {
+    "salary_slip": ("Salary slip for {{month_year}}", "Your salary slip for {{month_year}} has been sent to you."),
+    "id_card": ("Your ID card", "Your employee ID card has been sent to you."),
+    "offer_letter": ("Offer letter", "Your offer letter for the position of {{designation}} has been sent to you."),
+    "experience_letter": ("Experience letter", "Your experience letter has been sent to you."),
+    "resignation_letter": (
+        "Resignation letter",
+        "Your resignation letter has been sent to you.\nLast working day: {{last_working_day}}",
+    ),
+    "other": ("New document", "Your {{document_category}} has been sent to you."),
+    "absent_alert": (
+        "No punch yet today",
+        "We have not received your punch for {{date}} (shift start {{shift_start}}, punch allowed until {{cutoff_time}}). "
+        "If you are at work, please punch in. If you are absent, please inform HR.",
+    ),
+    "late_alert": (
+        "Marked late today",
+        "Your first punch was at {{first_punch}}, {{late_by}} after the allowed time (shift start {{shift_start}}).",
+    ),
+    "four_punch_alert": (
+        "Punch reminder: {{punch_name}}",
+        "Your {{punch_name}} is due at {{expected_time}}, in {{minutes_left}}. Please remember to punch.",
+    ),
+    "on_duty_punch_reminder": (
+        "Geo Punch reminder: {{punch_name}}",
+        "You are on duty at {{destination}}. Your Geo Punch for {{punch_name}} is due at {{expected_time}}, in "
+        "{{minutes_left}}. Please complete it in the app.",
+    ),
+    "missing_punch_alert": (
+        "Missing punch: {{punch_name}}",
+        "Your {{punch_name}} (due at {{expected_time}} on {{date}}) is not recorded. Please punch now, or contact HR if you "
+        "already did.",
+    ),
+    "approval_approved": (
+        "{{request_type}} approved",
+        "Your {{request_type}} request has been approved.\nRequest: {{details}}\nDate: {{date}}\nApproved by: {{approver}}"
+        "\nNote: {{comment}}",
+    ),
+    "approval_rejected": (
+        "{{request_type}} rejected",
+        "Your {{request_type}} request has been rejected.\nRequest: {{details}}\nDate: {{date}}\nRejected by: {{approver}}"
+        "\nReason: {{comment}}",
+    ),
+    "geo_approval": (
+        "On-Duty request approved",
+        "Your On-Duty request for {{destination}} has been approved. You can now punch from the app.\nNote: {{comment}}",
+    ),
+    "geo_rejection": (
+        "On-Duty request rejected",
+        "Your On-Duty request for {{destination}} has been rejected.\nReason: {{comment}}\n{{punches_note}}",
+    ),
+    "geo_punch_approval": ("Geo punch approved", "Your Geo {{punch_name}} at {{time}} on {{date}} has been approved."),
+    "geo_punch_rejection": (
+        "Geo punch rejected",
+        "Your Geo {{punch_name}} at {{time}} on {{date}} was rejected and does not count. You can punch again from the "
+        "app.\nReason: {{comment}}",
+    ),
+    "visitor_notification": (
+        "Visitor at reception",
+        "{{visitor_name}} ({{company}}) is waiting for you at reception.\nPurpose: {{purpose}}",
+    ),
+    "outpass_gate_out": (
+        "Gate exit recorded",
+        "Your gate exit at {{gate_out_time}} has been recorded ({{pass_type}}, to {{destination}}).\n{{next_step}}",
+    ),
+    "outpass_gate_in": (
+        "Welcome back",
+        "Your return at {{gate_in_time}} has been recorded. Time out: {{duration}}.",
+    ),
+}
+
+
+def _event_variables(key: str) -> tuple[Var, ...]:
+    """The details an event hands over (the names, help and samples the HRMS defines for the event)."""
+    from . import whatsapp_catalog as events
+
+    t = events.get(key)
+    return tuple(Var(v.name, v.help, v.sample) for v in t.variables) if t else ()
 
 
 def spec(key: str) -> Spec | None:
@@ -218,20 +299,10 @@ def spec(key: str) -> Spec | None:
         return None
     if key in APP_SPECS:
         return APP_SPECS[key]
-    from . import push_messages, whatsapp_service
-    from . import whatsapp_catalog as catalog
-
-    t = catalog.get(key)
-    if t is None or key in push_messages.EXCLUDED_TYPES or not t.has_wording:
-        return None
-    title, body = push_messages.split_message(whatsapp_service._template_body(key), t.label)
-    return Spec(
-        title,
-        body,
-        tuple(Var(v.name, v.help, v.sample) for v in t.variables),
-        "Same as the WhatsApp message (its wording on WhatsApp Control -> Message Text): the bold first line is the "
-        "title. A wording saved here changes the phone notification only.",
-    )
+    if key in EVENT_WORDING:
+        title, body = EVENT_WORDING[key]
+        return Spec(title, body, _event_variables(key), "The phone's built-in wording.")
+    return None
 
 
 def keys() -> list[str]:
@@ -305,13 +376,30 @@ def apply(key: str, params, title: str, message: str) -> tuple[str, str]:
         return title, message
 
 
-def apply_whatsapp(key: str, params, title: str, body: str) -> tuple[str, str]:
-    """apply() for a WhatsApp message: `params` are its WhatsApp variables (by name or by position)."""
-    if key not in saved() or params is None:
-        return title, body
-    from . import whatsapp_service
+def event_values(key: str, params) -> dict:
+    """The details of an event as {name: text} (`params` by name, or by position in the event's own order)."""
+    names = [v.name for v in _event_variables(key)]
+    values: dict = {}
+    if isinstance(params, dict):
+        values.update({str(k): "" if v is None else str(v) for k, v in params.items()})
+    elif isinstance(params, (list, tuple)):
+        values.update({name: "" if v is None else str(v) for name, v in zip(names, params)})
+    for i, name in enumerate(names, start=1):
+        values.setdefault(str(i), values.get(name, ""))
+    return values
 
-    return apply(key, lambda: whatsapp_service._values(params, whatsapp_service._order_for(key)), title, body)
+
+def render_event(key: str, params) -> tuple[str, str] | None:
+    """(title, message) of an HRMS event's phone notification: HR's wording where written, else the built-in one, filled
+    with the event's details. None for a kind with no phone wording."""
+    s = spec(key)
+    if s is None or key not in EVENT_WORDING:
+        return None
+    custom = saved().get(key, ("", ""))
+    values = event_values(key, params)
+    title = render_title(custom[0] or s.default_title, values) or APP_TITLE
+    body = render_body(custom[1] or s.default_body, values) or title
+    return title, body
 
 
 # ── checking and previewing HR's wording ─────────────────────────────────────

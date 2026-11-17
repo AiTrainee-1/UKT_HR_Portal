@@ -371,6 +371,16 @@ WHATSAPP_SEND_DELAY_SECONDS = float(os.environ.get("WHATSAPP_SEND_DELAY_SECONDS"
 # not message employees, and once did. Set WHATSAPP_ALLOW_SENDING=true or false to force it either way.
 _allow_sending = os.environ.get("WHATSAPP_ALLOW_SENDING", "").strip().lower()
 WHATSAPP_ALLOW_SENDING = (_allow_sending in ("1", "true", "yes")) if _allow_sending else None
+# The only employees (by employee code, comma separated) this machine may send WhatsApp to (2026-11-17). REQUIRED on a
+# development machine that is allowed to send (WHATSAPP_ALLOW_SENDING=true while DEBUG is on or under runserver): with no
+# list, such a machine sends nothing. Every send (notifications, documents, codes, test messages, Attendance Notify
+# numbers and groups) is checked against these employees' phone numbers at the moment it would reach WAClient. Optional on
+# a real server (blank = everybody).
+WHATSAPP_ONLY_TO_EMPLOYEES = [
+    c.strip() for c in os.environ.get("WHATSAPP_ONLY_TO_EMPLOYEES", "").split(",") if c.strip()
+]
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    WHATSAPP_ONLY_TO_EMPLOYEES = []  # tests set it themselves (a developer's .env names their own employee)
 # The same rule for email (api/email_service.py): the Gmail account in Settings -> SMTP is often the live
 # one, so a development machine (DEBUG on, or `runserver`) doesn't send unless EMAIL_ALLOW_SENDING=true.
 # `manage.py test` never sends either; a test that needs the send path overrides this setting and mocks smtplib.

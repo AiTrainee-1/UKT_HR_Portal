@@ -589,6 +589,6 @@ def _apply(request: Request, emp: Employee) -> Response:
         repayment_start_year=start_year,
         outstanding=amount,
     )
-    approval.notify_new_request(WORKFLOW, emp, f"{TYPE_LABEL[advance_type]} application")
+    approval.notify_new_request(WORKFLOW, emp, f"{TYPE_LABEL[advance_type]} application", obj=adv)
     adv = _own_rows(emp).get(pk=adv.pk)
     return Response(my_advance_json(adv, today), status=201)

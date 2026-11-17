@@ -34,10 +34,9 @@ Control page (plus one for attendance as a whole):
                       was expected: "Expected Punch 9:00 AM, Current Status: Punch Not Recorded".
                       One message per missing punch, never repeated.
 
-Phone notifications (2026-11-17): every alert is also a phone push + in-app record (push_messages.py). The PHONE side
-runs on Phone Notify Control's switches alone: when WhatsApp is not configured, switched off, its alert switches are off,
-the provider is failing or the send limits hold a message back, the phone still gets the alert (whatsapp_service.announce_only,
-same text and the same exactly-once key). An alert counts as done for the day once every channel that is on for it has it.
+This job is WhatsApp's alone (WhatsApp Control's switches, timing, limits and provider). Phone notifications for the
+same situations are Phone Notify Control's own job (phone_alerts.py, its own switches and timing), which reuses `load_day` and
+`evaluate` below as the shared attendance rules; neither job changes the other.
 
 Nobody is messaged on Sundays, holidays, a Saturday-off, on approved leave (full or half day), when HR
 has already set their day by hand, on a Compensation Day, or on their own paid birthday leave (no
@@ -773,124 +772,34 @@ def provider_is_failing() -> bool:
     return whatsapp_dispatcher.provider_is_failing()
 
 
-# Which WhatsApp switch (WhatsApp Control) governs each alert type.
-FAMILY_SWITCH = {
-    "absent_alert": "absent_alert_enabled",
-    "late_alert": "late_alert_enabled",
-    "four_punch_alert": "four_punch_alert_enabled",
-    "on_duty_punch_reminder": "four_punch_alert_enabled",
-    "missing_punch_alert": "missing_punch_alert_enabled",
-}
-TAG_TYPE = (  # dedupe tag prefix -> alert type
-    ("absent", "absent_alert"),
-    ("late", "late_alert"),
-    ("four", "four_punch_alert"),
-    ("duty", "on_duty_punch_reminder"),
-    ("missing", "missing_punch_alert"),
-)
-
-
-def type_of_key(key: str) -> str | None:
-    """The alert type of a dedupe key ("four2:2026-11-17:15" -> four_punch_alert)."""
-    for prefix, doc_type in TAG_TYPE:
-        if key.startswith(prefix):
-            return doc_type
-    return None
-
-
-class Channels:
-    """Which channel carries which alert type right now: WhatsApp (its configuration, master, alert switches, the provider)
-    and the phone (Phone Notify Control's master + per-kind switch). Also stands in for the WhatsApp switches inside
-    evaluate(): an alert family counts as on when EITHER channel carries it; every timing setting is WhatsApp's."""
-
-    FAMILIES = frozenset(FAMILY_SWITCH.values())
-
-    def __init__(self, switches, wa_on: bool, phone_types: set[str]):
-        self._switches = switches
-        self.wa_on = wa_on
-        self.phone_types = set(phone_types)
-        self.wa_types = {
-            t
-            for t, attr in FAMILY_SWITCH.items()
-            if wa_on and getattr(switches, attr) and whatsapp_service.switch_off_reason(t) is None
-        }
-
-    def whatsapp(self, doc_type: str | None) -> bool:
-        return doc_type in self.wa_types
-
-    def phone(self, doc_type: str | None) -> bool:
-        return doc_type in self.phone_types
-
-    def any(self) -> bool:
-        return bool(self.wa_types or self.phone_types)
-
-    def __getattr__(self, name):
-        if name in Channels.FAMILIES:
-            return any(self.whatsapp(t) or self.phone(t) for t, attr in FAMILY_SWITCH.items() if attr == name)
-        return getattr(self._switches, name)
-
-
-def phone_alert_types() -> set[str]:
-    """The alert types Phone Notify Control pushes to phones (master switch + each kind's switch)."""
-    from . import mobile_messages
-
-    master, off = mobile_messages.switches()
-    return {t for t in ALERT_TYPES if t not in off} if master else set()
-
-
-def _announced_today(iso: str) -> set[str]:
-    """The alert keys already made into phone notifications today (push_messages stores them as "wa:<key>")."""
-    from .models import Notification
-
-    return {
-        key[3:]
-        for key in Notification.objects.filter(
-            source__in=ALERT_TYPES, dedupe_key__startswith="wa:", dedupe_key__contains=f":{iso}:"
-        ).values_list("dedupe_key", flat=True)
-    }
-
-
 def run_attendance_alerts(now: datetime | None = None) -> dict:
-    """Evaluate today's attendance and queue whichever alerts are due: on WhatsApp where it carries them, and as a phone
-    notification wherever Phone Notify Control has them on, whatever WhatsApp's state. Returns the WhatsApp messages
-    queued, {alert_type: number} (empty when none was due; under tests, where a queued row is delivered at once, that is
-    the number sent or attempted). The phone-only alerts are logged, not returned."""
+    """Evaluate today's attendance and queue whichever alerts are due.
+    Returns {alert_type: number_queued} (empty when nothing was due; under tests, where a queued row is delivered at
+    once, that is the number sent or attempted)."""
     sent: Counter = Counter()
-    phoned: Counter = Counter()  # alerts that went to the phone alone
     switches = WhatsAppSettings.get()
-    wa_on = bool(
-        switches.attendance_alerts_enabled
-        and whatsapp_service.is_configured()
-        and whatsapp_service.engine_enabled(switches)
-    )
-    phone_types = phone_alert_types()
-    if not Channels(switches, wa_on, phone_types).any():
+    if not switches.attendance_alerts_enabled:
+        return dict(sent)
+    if not (
+        switches.absent_alert_enabled
+        or switches.late_alert_enabled
+        or switches.four_punch_alert_enabled
+        or switches.missing_punch_alert_enabled
+    ):
+        return dict(sent)
+    if not whatsapp_service.is_configured() or not whatsapp_service.engine_enabled(switches):
         return dict(sent)
 
     now = now or ist_now()
     if non_working_reason(now.date()):
         return dict(sent)
-    if wa_on and provider_is_failing():
+    if provider_is_failing():
         logger.warning(
             "WhatsApp attendance alerts paused: several messages failed at the provider lately (a disconnected or "
-            "restricted number?). Fix that and they resume by themselves; the phone notifications go on meanwhile."
+            "restricted number?). Fix that and they resume by themselves."
         )
-        wa_on = False
-    channels = Channels(switches, wa_on, phone_types)
-    if not channels.any():
         return dict(sent)
-    day = load_day(now, channels)
-    wa_done = set(day.already)
-    phone_done = _announced_today(day.iso) if phone_types else set()
-
-    def done(key: str) -> bool:
-        doc_type = type_of_key(key)
-        return (not channels.whatsapp(doc_type) or key in wa_done) and (
-            not channels.phone(doc_type) or key in phone_done
-        )
-
-    # evaluate() skips what is done: an alert is done once every channel that is on for its type has it
-    day.already = {key for key in wa_done | phone_done if done(key)}
+    day = load_day(now, switches)
 
     per_run = dj_settings.WHATSAPP_ALERTS_MAX_PER_RUN
     per_hour = dj_settings.WHATSAPP_ALERTS_MAX_PER_HOUR
@@ -900,55 +809,33 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
 
     # every minute: without the photo column (base64, up to MBs per person), which the alerts never read
     staff = Employee.objects.filter(status="active", employment_type=Employee.EMPLOYMENT_TYPE_STAFF).defer("photo_url")
-    # Phone Notify Control -> Settings: who may get the phone side at all. When WhatsApp carries none of the alerts, the
-    # others are not even looked at (a "production only" or a short "selected" list makes this job almost free).
-    from . import push_recipients
-
-    recipients = None  # None: everybody
-    if phone_types:
-        current = push_recipients.mode()
-        if current != push_recipients.ALL:
-            if channels.wa_types:
-                recipients = set(push_recipients.narrow(staff, current=current).values_list("id", flat=True))
-            else:
-                staff = push_recipients.narrow(staff, current=current)
-    wa_this_run = 0
     for emp in staff:
         for item in evaluate(emp, day):
             key = f"{item.tag}:{day.iso}:{emp.id}"
             if key in day.already:
                 continue
-            day.already.add(key)
-            on_whatsapp = channels.whatsapp(item.doc_type) and key not in wa_done
-            on_phone = (
-                channels.phone(item.doc_type) and key not in phone_done and (recipients is None or emp.id in recipients)
-            )
-            if on_whatsapp and (
-                (per_run and wa_this_run >= per_run)
-                or (per_hour and hour_sent + wa_this_run >= per_hour)
-                or (per_day and day_sent + wa_this_run >= per_day)
+            this_run = sum(sent.values())
+            if (
+                (per_run and this_run >= per_run)
+                or (per_hour and hour_sent + this_run >= per_hour)
+                or (per_day and day_sent + this_run >= per_day)
             ):
-                # the WhatsApp message is looked at again next minute while it is still fresh; the phone goes now
-                held += 1
-                on_whatsapp = False
-            if on_whatsapp:
-                # Queued, not sent: the dispatcher paces every message the number sends. The alert expires the moment
-                # it stops being useful, so a held-up queue can never release a backlog of stale alerts. The same call
-                # makes the phone notification (same key, so never twice).
-                until = (
-                    datetime.combine(day.today, time_type(0, 0), tzinfo=FACTORY_TZ) + timedelta(seconds=item.until_s)
-                    if item.until_s is not None
-                    else None
-                )
-                log = whatsapp_service.send_notification(
-                    emp, item.doc_type, item.params, dedupe_key=key, expires_at=until
-                )
-                if log is not None and log.status != WhatsAppMessageLog.STATUS_SKIPPED:
-                    sent[item.doc_type] += 1
-                    wa_this_run += 1
-            elif on_phone:
-                if whatsapp_service.announce_only(emp, item.doc_type, item.params, dedupe_key=key) is not None:
-                    phoned[item.doc_type] += 1
+                held += 1  # not marked as sent: it is looked at again next minute while it is still fresh
+                continue
+            day.already.add(key)
+            # Queued, not sent: the dispatcher paces every message the number sends. The alert expires the moment it
+            # stops being useful, so a held-up queue can never release a backlog of stale alerts.
+            until = (
+                datetime.combine(day.today, time_type(0, 0), tzinfo=FACTORY_TZ) + timedelta(seconds=item.until_s)
+                if item.until_s is not None
+                else None
+            )
+            # WhatsApp only: the phone notification of an alert is phone_alerts.py's, with Phone Notify Control's settings
+            log = whatsapp_service.send_notification(
+                emp, item.doc_type, item.params, dedupe_key=key, expires_at=until, announce=False
+            )
+            if log is not None and log.status != WhatsAppMessageLog.STATUS_SKIPPED:
+                sent[item.doc_type] += 1
 
     if held:
         logger.warning(
@@ -961,6 +848,4 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
         )
     if sent:
         logger.warning("WhatsApp attendance alerts queued: %s", dict(sent))
-    if phoned:
-        logger.warning("Attendance alerts sent to phones only (WhatsApp off or held back): %s", dict(phoned))
     return dict(sent)

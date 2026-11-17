@@ -1488,9 +1488,10 @@ PHONE_NOTIFY_CONTROL = N(
         "phone_notify_control.settings",
         "Settings",
         "tab",
-        "Who receives phone notifications: everybody, staff only, production only or selected employees.",
+        "Who receives phone notifications (everybody, staff only, production only or selected employees) and the "
+        "timing of the phone attendance alerts.",
         routes=["/hr/phone-notify-control/settings"],
-        api=["mobile-app/messages/recipients"],
+        api=["mobile-app/messages/recipients", "mobile-app/messages/alert-settings"],
     ),
     routes=["/hr/phone-notify-control"],
     api=["mobile-app/messages"],
@@ -1527,7 +1528,20 @@ WHATSAPP_CONTROL = N(
         "The text of each message.",
         api=["whatsapp-control/templates"],
     ),
-    N("whatsapp_control.config", "Configuration", "tab", "The WhatsApp account set-up."),
+    N(
+        "whatsapp_control.test",
+        "Send a test",
+        "tab",
+        "Send one message of any type to an employee at once and see WAClient's answer.",
+        api=["whatsapp-control/test-message"],
+    ),
+    N(
+        "whatsapp_control.config",
+        "Configuration",
+        "tab",
+        "The WhatsApp account set-up and the connection check.",
+        api=["whatsapp-control/connection"],
+    ),
 )
 
 

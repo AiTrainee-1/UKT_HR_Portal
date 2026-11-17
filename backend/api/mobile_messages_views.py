@@ -70,12 +70,12 @@ def _name(e: Employee) -> str:
 def _source_label(source: str, related_module: str) -> str:
     if source == mobile_messages.MANUAL:
         return "Message from HR"
-    t = catalog.get(source)
-    if t is None:
-        return mobile_messages.extra_label(source) or "In-app notice"
-    if t.module == "approvals" and related_module in catalog.APPROVAL_MODULES:
-        return f"{t.label}: {catalog.APPROVAL_MODULES[related_module]}"
-    return t.label
+    label = mobile_messages.kind_label(source)
+    if label is None:
+        return "In-app notice"
+    if source in ("approval_approved", "approval_rejected") and related_module in catalog.APPROVAL_MODULES:
+        return f"{label}: {catalog.APPROVAL_MODULES[related_module]}"
+    return label
 
 
 def _notifications(request: Request):

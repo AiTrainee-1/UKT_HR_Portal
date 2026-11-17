@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent } from "react";
-import { Briefcase, Eraser, Factory, ListChecks, Search, Smartphone, UserMinus, UserPlus, Users } from "lucide-react";
+import {
+  Briefcase,
+  Clock,
+  Eraser,
+  Factory,
+  ListChecks,
+  Search,
+  Smartphone,
+  UserMinus,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import DataPagination from "@/components/ui/DataPagination";
 import { Button } from "@/components/ui/button";
@@ -14,9 +25,12 @@ import {
   getListBranchesQueryKey,
   useChangeRecipients,
   useListBranches,
+  usePhoneAlertSettings,
   useRecipientEmployees,
   useRecipients,
+  useSavePhoneAlertSettings,
   useSetRecipientMode,
+  type AlertTimingKey,
   type PushRecipients,
   type RecipientEmployee,
   type RecipientMode,
@@ -26,7 +40,12 @@ import { categoryForEmploymentType, departmentOptions, keepIfOffered, useOrgDepa
 import { OrgNativeOptions } from "@/lib/org-select";
 import { cn } from "@/lib/utils";
 import {
+  ALERT_TIMING_KEYS,
   RECIPIENT_PAGE_SIZE,
+  alertTimingChanges,
+  alertTimingDraft,
+  alertTimingProblem,
+  alertTimingRange,
   asId,
   asPage,
   asPickerShow,
@@ -43,6 +62,7 @@ import {
   modeLabel,
   recipientParams,
   recipientsLine,
+  type AlertTimingDraft,
   type BulkKind,
   type PickerFilters,
 } from "./logic";
@@ -613,11 +633,147 @@ function PickerPanel({ r, locked }: { r: PushRecipients; locked: string | null }
   );
 }
 
+// ── the phone attendance alerts' timing ───────────────────────────────────────
+
+/**
+ * Attendance alert timing (phone): the three timings of Phone Notify Control's own attendance alerts, each with its range.
+ * Typed values are checked here as the server checks them; Save sends only the ones that changed and shows a refusal in
+ * the section. Locked with the rest of the tab for a View-only login.
+ */
+function AlertTimingPanel({ locked }: { locked: string | null }) {
+  const { toast } = useToast();
+  const { data, isLoading, isError, refetch } = usePhoneAlertSettings();
+  const save = useSavePhoneAlertSettings();
+  const [draft, setDraft] = useState<AlertTimingDraft | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const readOnly = locked !== null;
+
+  if (isLoading) return <Skeleton className="h-44 rounded-2xl" />;
+  if (isError || !data) {
+    return <LoadError what="The alert timing" onRetry={() => void refetch()} testId="pn-alert-timing-error" />;
+  }
+
+  const shown = draft ?? alertTimingDraft(data);
+  const problems = Object.fromEntries(
+    ALERT_TIMING_KEYS.map((k) => [k, alertTimingProblem(shown[k], data.limits[k])]),
+  ) as Record<AlertTimingKey, string | null>;
+  const invalid = ALERT_TIMING_KEYS.some((k) => problems[k] !== null);
+  const changes = alertTimingChanges(data, shown);
+  const changed = Object.keys(changes).length > 0;
+
+  const change = (k: AlertTimingKey, value: string) => {
+    setServerError(null);
+    setDraft({ ...shown, [k]: value });
+  };
+  const doSave = () =>
+    save.mutate(changes, {
+      onSuccess: () => {
+        setDraft(null);
+        setServerError(null);
+        toast({
+          title: "Attendance alert timing saved",
+          description: "The phone alerts use it from their next check.",
+        });
+      },
+      onError: (e) => setServerError(errorText(e, "Try again.")),
+    });
+
+  return (
+    <Panel
+      title="Attendance alert timing (phone)"
+      icon={Clock}
+      testId="pn-alert-timing"
+      description="These apply to the phone attendance alerts only."
+    >
+      <div className="grid gap-4 sm:grid-cols-3">
+        {ALERT_TIMING_KEYS.map((k) => {
+          const limit = data.limits[k];
+          const problem = problems[k];
+          const id = `pn-alert-${k}`;
+          return (
+            <div key={k} className="min-w-0 space-y-1" data-testid={`pn-alert-field-${k}`}>
+              <label htmlFor={id} className="block text-xs font-semibold leading-snug">
+                {limit.label}
+              </label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id={id}
+                  type="number"
+                  inputMode="numeric"
+                  min={limit.min}
+                  max={limit.max}
+                  step={1}
+                  value={shown[k]}
+                  onChange={(e) => change(k, e.target.value)}
+                  disabled={readOnly}
+                  aria-invalid={problem !== null}
+                  aria-describedby={`${id}-hint`}
+                  className={cn("h-9 w-24 text-sm tabular-nums", problem && "border-red-500")}
+                  data-testid={id}
+                />
+                <span className="text-xs text-muted-foreground">minutes</span>
+              </div>
+              <p
+                id={`${id}-hint`}
+                className={cn(
+                  "text-[11px]",
+                  problem ? "font-semibold text-red-700 dark:text-red-400" : "text-muted-foreground",
+                )}
+                data-testid={`${id}-hint`}
+              >
+                {problem ?? alertTimingRange(limit)}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+
+      {serverError && (
+        <Notice tone="bad" role="alert" testId="pn-alert-timing-server-error" className="mt-3">
+          {serverError}
+        </Notice>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+        <span className="text-[11px] text-muted-foreground" data-testid="pn-alert-timing-updated">
+          {data.updatedBy ? `Last changed by ${data.updatedBy} on ${formatWhen(data.updatedAt)}` : ""}
+        </span>
+        <div className="ml-auto flex gap-2">
+          {draft && (changed || invalid) && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setDraft(null);
+                setServerError(null);
+              }}
+              data-view-safe
+              data-testid="pn-alert-timing-undo"
+            >
+              Put back the saved timing
+            </Button>
+          )}
+          <Button
+            size="sm"
+            onClick={doSave}
+            disabled={readOnly || save.isPending || !changed || invalid}
+            title={locked ?? (invalid ? "Fix the timing first" : changed ? undefined : "Nothing has changed yet")}
+            data-testid="pn-alert-timing-save"
+          >
+            {save.isPending ? "Saving…" : "Save the timing"}
+          </Button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 /**
  * Settings: who receives phone notifications at all. Every active employee, staff only, production only, or the employees
  * on the selected list (the picker below, which is kept whatever the choice). A change of choice says what it does and asks
  * in the page first; the server refuses Selected employees while the list is empty, so the page says that before asking.
- * Ticking an employee adds them to the list at once; the bulk changes ask first, with their count.
+ * Ticking an employee adds them to the list at once; the bulk changes ask first, with their count. Between the two, the
+ * timing of the phone attendance alerts (Phone Notify Control's own; no other module reads it).
  */
 export default function SettingsTab() {
   const locked = useLockedWhy();
@@ -643,6 +799,7 @@ export default function SettingsTab() {
         </Notice>
       )}
       <ModePanel r={data} locked={locked} />
+      <AlertTimingPanel locked={locked} />
       <PickerPanel r={data} locked={locked} />
     </div>
   );

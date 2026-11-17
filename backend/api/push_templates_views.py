@@ -54,7 +54,6 @@ def _row(control: dict, t: PushTemplate | None, usage: dict, off: set[str]) -> d
         "groupLabel": control["groupLabel"],
         "category": control["category"],
         "categoryLabel": control["categoryLabel"],
-        "origin": control["origin"],
         "enabled": key not in off,
         "variables": [{"name": v.name, "help": v.help, "sample": v.sample} for v in s.variables],
         "title": title,

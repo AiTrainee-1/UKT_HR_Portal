@@ -491,7 +491,7 @@ def resolve_permission(p, role: str, decision: str, actor: str, comment: str | N
     what = f"permission request for {p.date.isoformat()}"
     approval.stage_notice(p.employee, "permission", approval.notice_for(what, outcome), outcome)
     if outcome.kind == "advanced" and approval.HOD in outcome.waiting and role != approval.HOD:
-        approval.notify_hod_of_request(PERMISSION_WORKFLOW, p.employee, "permission request")
+        approval.notify_hod_of_request(PERMISSION_WORKFLOW, p.employee, "permission request", p)
     if outcome.final or outcome.rejected:
         whatsapp_approvals.notify_decision(
             PERMISSION_WORKFLOW, p, decision, approver=actor, role=approval.LEGACY_ROLE[role], comment=p.hr_comment
@@ -685,7 +685,7 @@ def employee_permissions(request: Request) -> Response:
     )
 
     if p.status == "pending":
-        approval.notify_new_request(PERMISSION_WORKFLOW, emp, "permission request")
+        approval.notify_new_request(PERMISSION_WORKFLOW, emp, "permission request", obj=p)
 
     month_used_after = EmployeePermission.objects.filter(
         employee=emp,

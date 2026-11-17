@@ -244,6 +244,12 @@ class MobileMessageSettings(models.Model):
     RECIPIENTS_SELECTED = "selected"
     RECIPIENT_MODES = (RECIPIENTS_ALL, RECIPIENTS_STAFF, RECIPIENTS_PRODUCTION, RECIPIENTS_SELECTED)
     recipient_mode = models.CharField(max_length=12, default=RECIPIENTS_ALL, db_default=RECIPIENTS_ALL)
+    # The phone attendance alerts' own timing (Phone Notify Control -> Settings, phone_alerts.py), independent of WhatsApp
+    # Control's: extra wait before the Absent alert, how long before a punch the reminder goes, how long after a missed
+    # punch the Missing Punch alert goes (minutes).
+    alert_absent_extra_minutes = models.IntegerField(default=0, db_default=0)
+    alert_reminder_lead_minutes = models.IntegerField(default=15, db_default=15)
+    alert_missing_after_minutes = models.IntegerField(default=20, db_default=20)
     updated_by = models.TextField(blank=True, default="", db_default="")
     updated_at = models.DateTimeField(null=True, blank=True)
 

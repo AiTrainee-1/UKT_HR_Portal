@@ -384,7 +384,7 @@ function CategoryCard({
           onCancel={() => setAsking(false)}
         >
           Turn off all {plural(counts.total, "switch", "switches")} in <b>{cat.label}</b>? {who.join(" and ")} stop
-          getting these on their phones. They are still saved in the app, and WhatsApp is not affected.
+          getting these on their phones. They are still saved in the app.
         </InlineConfirm>
       )}
     </article>

@@ -1,5 +1,6 @@
-"""Every WhatsApp message is also a phone notification and an in-app record (push_messages.py): the text, the title, the type, the
-one-time-code exclusion, exactly-once, the Expo payload, and that a final decision is announced once (not twice)."""
+"""The phone notification of an HRMS event (push_messages.py): Phone Notify Control's own wording filled with the event's
+details, the type, the one-time-code exclusion, exactly-once, the Expo payload, that a final decision is announced once (not
+twice), and that WhatsApp Control's wording and switches never change it (the two modules are independent, 2026-11-17)."""
 
 from datetime import date
 from unittest import mock
@@ -53,13 +54,27 @@ class AnnounceTests(TestCase):
     def setUp(self):
         self.emp = _employee()
 
-    def test_a_message_becomes_a_notification_with_its_title_type_and_text(self):
+    def test_an_event_becomes_a_notification_in_the_phones_own_wording(self):
         n = push_messages.announce(
-            self.emp, "approval_approved", "✅ *Request Approved*\n\nHello.\n\nUK Textiles HRMS", related_module="leave"
+            self.emp,
+            "approval_approved",
+            params={
+                "request_type": "Leave",
+                "details": "Casual - 1 day",
+                "date": "12 Oct 2026",
+                "approver": "Meena (HR)",
+            },
+            related_module="leave",
         )
         self.assertEqual(
             (n.employee_id, n.type, n.title, n.message, n.is_read),
-            (self.emp.id, "leave", "✅ Request Approved", "Hello.", False),
+            (
+                self.emp.id,
+                "leave",
+                "Leave approved",
+                "Your Leave request has been approved.\nRequest: Casual - 1 day\nDate: 12 Oct 2026\nApproved by: Meena (HR)",
+                False,
+            ),
         )
 
     def test_the_type_is_what_the_mobile_list_groups_by(self):
@@ -90,9 +105,11 @@ class AnnounceTests(TestCase):
         self.assertEqual(Notification.objects.filter(employee=self.emp).count(), 1)
         self.assertEqual(Notification.objects.filter(employee=other).count(), 1)
 
-    def test_something_that_is_not_an_employee_or_has_no_text_is_skipped_without_raising(self):
-        self.assertIsNone(push_messages.announce(object(), "late_alert", "*x*\n\nbody"))
-        self.assertIsNone(push_messages.announce(self.emp, "late_alert", "   "))
+    def test_not_an_employee_or_a_kind_with_no_phone_notification_is_skipped_without_raising(self):
+        self.assertIsNone(push_messages.announce(object(), "late_alert", params={}))
+        # WhatsApp-only messages have no phone notification
+        self.assertIsNone(push_messages.announce(self.emp, "attendance_report", params={"message": "x"}))
+        self.assertIsNone(push_messages.announce(self.emp, "visitor_contact", params={}))
         self.assertEqual(Notification.objects.count(), 0)
 
 
@@ -103,14 +120,20 @@ class PushPayloadTests(TestCase):
         with mock.patch(EXPO) as post:
             post.return_value = mock.Mock(ok=True, json=lambda: {"data": [{"status": "ok"}]})
             n = push_messages.announce(
-                emp, "approval_rejected", "❌ *Request Rejected*\n\nSorry.\n\nUK Textiles HRMS", related_module="leave"
+                emp, "approval_rejected", params={"request_type": "Leave", "comment": "Sorry"}, related_module="leave"
             )
         messages = post.call_args.kwargs["json"]
         self.assertEqual(len(messages), 1)
         sent = messages[0]
         self.assertEqual(
             (sent["to"], sent["title"], sent["body"], sent["sound"], sent["priority"]),
-            ("ExponentPushToken[abc]", "❌ Request Rejected", "Sorry.", "default", "high"),
+            (
+                "ExponentPushToken[abc]",
+                "Leave rejected",
+                "Your Leave request has been rejected.\nReason: Sorry",
+                "default",
+                "high",
+            ),
         )
         # + where the app's View button leads (notification_targets.py), kept to kind / id / category
         self.assertEqual(
@@ -129,8 +152,9 @@ class PushPayloadTests(TestCase):
         self.assertEqual(post.call_args.kwargs["json"][0]["title"], "UKTextiles")
 
 
-class WhatsAppMessagesAreAnnouncedTests(TestCase):
-    """The hook in whatsapp_service: every message type except the codes, with WhatsApp not configured at all."""
+class EventsReachThePhoneTests(TestCase):
+    """An HRMS event handed to WhatsApp Control is handed to Phone Notify Control too, which decides alone: here WhatsApp
+    is not configured at all."""
 
     def setUp(self):
         self.emp = _employee()
@@ -151,9 +175,22 @@ class WhatsAppMessagesAreAnnouncedTests(TestCase):
             dedupe_key="late_alert:2026-10-05:1",
         )
         n = Notification.objects.get(employee=self.emp)
-        self.assertEqual((n.type, n.title), ("attendance", "Late Attendance"))
+        self.assertEqual((n.type, n.title), ("attendance", "Marked late today"))
         self.assertIn("9:25 AM", n.message)
         self.assertNotIn("*", n.message)
+
+    def test_whatsapp_controls_wording_never_reaches_the_phone_and_the_phones_never_reaches_whatsapp(self):
+        from .models import PushTemplate, WhatsAppMessageTemplate
+
+        WhatsAppMessageTemplate.objects.create(
+            document_type="late_alert", message_body="*WA ONLY*\nWA text {{late_by}}"
+        )
+        PushTemplate.objects.create(key="late_alert", title="PHONE ONLY", body="Phone text {{late_by}}")
+        whatsapp_service.send_notification(self.emp, "late_alert", {"late_by": "15 minutes"}, dedupe_key="late:x")
+        n = Notification.objects.get(employee=self.emp)
+        self.assertEqual((n.title, n.message), ("PHONE ONLY", "Phone text 15 minutes"))
+        text, _ = whatsapp_service._message_for("late_alert", {"late_by": "15 minutes"})
+        self.assertEqual(text, "*WA ONLY*\nWA text 15 minutes")
 
     def test_it_also_goes_out_when_hr_switched_the_whatsapp_message_off(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"outpass_notifications_enabled": False})
@@ -177,7 +214,7 @@ class WhatsAppMessagesAreAnnouncedTests(TestCase):
             None, self.emp, "salary_slip", b"%PDF", "slip.pdf", ["Asha Kumar", "October 2026"]
         )
         n = Notification.objects.get(employee=self.emp)
-        self.assertEqual((n.type, n.title), ("salary_slip", "Salary Slip"))
+        self.assertEqual((n.type, n.title), ("salary_slip", "Salary slip for October 2026"))
         self.assertIn("October 2026", n.message)
 
     def test_the_geo_and_gate_and_visitor_messages_are_announced(self):
@@ -185,9 +222,7 @@ class WhatsAppMessagesAreAnnouncedTests(TestCase):
         whatsapp_notifications.notify_geo_session_approved(session, "Meena")
         whatsapp_notifications.notify_geo_session_rejected(session, "Meena")
         types = list(Notification.objects.filter(employee=self.emp).order_by("id").values_list("type", "title"))
-        self.assertEqual([t for t, _ in types], ["on_duty", "on_duty"])
-        self.assertIn("Approved", types[0][1])
-        self.assertIn("Rejected", types[1][1])
+        self.assertEqual(types, [("on_duty", "On-Duty request approved"), ("on_duty", "On-Duty request rejected")])
 
 
 class DecisionsAreAnnouncedOnceTests(TestCase):
@@ -202,12 +237,13 @@ class DecisionsAreAnnouncedOnceTests(TestCase):
             reason="Family function",
         )
 
-    def test_a_final_decision_is_the_whatsapp_text_as_one_notification(self):
+    def test_a_final_decision_is_one_notification(self):
         whatsapp_approvals.notify_decision(
             "leave", self.leave, "approved", approver="Meena", role="hr", comment="Enjoy"
         )
         n = Notification.objects.get(employee=self.emp)
-        self.assertEqual((n.type, n.title), ("leave", "Request Approved"))
+        self.assertEqual(n.type, "leave")
+        self.assertTrue(n.title.endswith(" approved"), n.title)
         for needle in ("Leave", "12 Oct 2026", "Meena (HR)", "Enjoy"):
             self.assertIn(needle, n.message)
         # deciding it again does not announce it again
@@ -219,7 +255,7 @@ class DecisionsAreAnnouncedOnceTests(TestCase):
             "leave", self.leave, "rejected", approver="Meena", role="hr", comment="Peak season"
         )
         n = Notification.objects.get(employee=self.emp)
-        self.assertEqual(n.title, "Request Rejected")
+        self.assertTrue(n.title.endswith(" rejected"), n.title)
         self.assertIn("Peak season", n.message)
 
     def test_a_stage_notice_is_made_only_for_a_decision_that_passes_the_request_on(self):

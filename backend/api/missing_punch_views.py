@@ -75,9 +75,10 @@ def _notify_hod_approvers(req: MissingPunchRequest) -> None:
     needed there -HRUser accounts aren't push-token-registered)."""
     emp = req.employee
     # The employee's ONE HOD (hod_scope.py), if allowed to act on missing-punch requests.
-    from . import push_recipients
+    from . import push_recipients, whatsapp_hod
 
     for m in managers_to_notify(emp, "can_approve_missing_punch"):
+        whatsapp_hod.request_waiting(m.employee, "missing_punch", emp, "Missing Punch request", req)  # WhatsApp's own
         if not push_recipients.allows(m.employee):
             continue  # not a phone notification recipient (Phone Notify Control -> Settings)
         from . import push_templates

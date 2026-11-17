@@ -534,8 +534,9 @@ class SalarySlipTests(Base):
         return SalarySlip.objects.create(employee=self.emp, month=month, year=year, slip_number=number, **kw)
 
     def announce(self, month_year: str):
-        text = f"💰 *Salary Slip*\n\nHello Asha,\n\nYour salary slip for *{month_year}* is attached.\n\nRegards,\nUK Textiles HRMS"
-        return push_messages.announce(self.emp, "salary_slip", text)
+        return push_messages.announce(
+            self.emp, "salary_slip", params={"employee_name": "Asha", "month_year": month_year}
+        )
 
     def test_the_slip_of_the_month_the_message_names(self):
         aug = self.slip(8, 2026, "S-AUG")

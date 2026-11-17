@@ -1,16 +1,16 @@
-"""Phone notifications: which of the messages the HRMS sends get pushed to employees' phones (HR portal -> Phone Notify
-Control, 2026-11-17; before that the Mobile Messages tab of Mobile App Login).
+"""Phone notifications: every kind of phone (push) notification the HRMS sends, and HR's switches over them (HR portal ->
+Phone Notify Control, 2026-11-17).
 
-Every WhatsApp message is also an in-app notification and a phone push (push_messages.py, signals.py), and the HRMS makes a few
-notifications of its own that never go by WhatsApp (EXTRA_TYPES: approval progress, "waiting for your approval", On-Duty
-sessions ending, request updates, HR notices, approval reminders, salary paid). This module is HR's control over the PUSH
-half: a master switch, a switch per kind of message, and a mute per employee (PushOptOut), kept in MobileMessageSettings. The
-in-app record is always saved (switching a message off here never loses it from the Notifications page); only the push to the
-phone stops, and the row says so (`push_status = "off"`).
+Phone Notify Control is its own module, independent of WhatsApp Control (owner 2026-11-17): its own list of kinds (EVENT_TYPES
+and EXTRA_TYPES below, in its own words), its own switches (a master switch, one per kind, one per approval workflow, a mute per
+employee), its own recipients (push_recipients.py), its own wording (push_templates.py) and its own attendance alert job
+(phone_alerts.py). Nothing set on WhatsApp Control changes a phone notification, and nothing set here changes a WhatsApp
+message. Where the same HRMS event (a request approved, a gate exit) is told on both channels, each channel decides with its
+own settings.
 
-The WhatsApp kinds and their groups come from whatsapp_catalog.py, so a new WhatsApp message appears here with no change in
-this file. The approval workflows each have a switch as well ("approval:leave"): a notification about a workflow (its
-approval / rejection, its progress, "waiting for your approval") is pushed only while BOTH its kind and its workflow are on.
+A switched-off kind keeps its in-app record (the Notifications page) and only the push stops; the row says so
+(`push_status = "off"`). A notification about an approval workflow (approved / rejected, passed on, "waiting for your
+approval") is pushed only while BOTH its kind and its workflow are on.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 from typing import NamedTuple
 
-from . import push_messages
 from . import whatsapp_catalog as catalog
 
 logger = logging.getLogger(__name__)
@@ -27,8 +26,8 @@ MANUAL = "manual"  # a message HR typed on the Mobile Messages page
 APPROVAL_PREFIX = "approval:"
 
 
-# Phone notifications the HRMS sends that are NOT WhatsApp messages, so they are not in whatsapp_catalog.py. Each gets its own
-# switch next to the WhatsApp kinds of its group. `audience`: who receives it (employee | approver).
+# One kind of phone notification. `group`: where Phone Notify Control lists it (GROUPS); `audience`: who receives it
+# (employee | approver).
 class Extra(NamedTuple):
     label: str
     description: str
@@ -145,24 +144,127 @@ EXTRA_TYPES.update(
         ),
     }
 )
-# Groups of their own for kinds that are not WhatsApp messages at all (listed after the WhatsApp groups).
-EXTRA_GROUPS = {"compensation": "Compensation & overtime", "chat": "Internal chat"}
+# The HRMS events that are told to the phone (and, separately, may also be told on WhatsApp by WhatsApp Control): one kind
+# each, described here for the phone. Their keys are the events' keys, which is all the two modules share.
+_DOC = "Documents pages: when HR sends the document to the employee"
+_ALERTS = "Automatic attendance alerts (checked every minute, Phone Notify Control -> Settings for the timing)"
+EVENT_TYPES: dict[str, Extra] = {
+    "salary_slip": Extra(
+        "Salary slip", "Tells the employee their salary slip for a month was sent to them.", "documents", _DOC
+    ),
+    "id_card": Extra("ID card", "Tells the employee their ID card was sent to them.", "documents", _DOC),
+    "offer_letter": Extra("Offer letter", "Tells the employee their offer letter was sent to them.", "documents", _DOC),
+    "experience_letter": Extra(
+        "Experience letter", "Tells the employee their experience letter was sent to them.", "documents", _DOC
+    ),
+    "resignation_letter": Extra(
+        "Resignation letter",
+        "Tells the employee their resignation letter was sent to them, with the last working day.",
+        "documents",
+        _DOC,
+    ),
+    "other": Extra("Other document", "Tells the employee another document was sent to them.", "documents", _DOC),
+    "absent_alert": Extra(
+        "Absent alert",
+        "No punch yet after the shift started and the allowed time has passed: asks the employee to punch in, or to tell HR "
+        "they are absent.",
+        "attendance",
+        _ALERTS,
+    ),
+    "late_alert": Extra(
+        "Late alert",
+        "The first punch of the day came after the shift's allowed time: says by how much.",
+        "attendance",
+        _ALERTS,
+    ),
+    "four_punch_alert": Extra(
+        "Punch reminder",
+        "A short reminder before each of the day's punches (check-in, lunch-out, lunch-in, check-out) that is still missing.",
+        "attendance",
+        _ALERTS,
+    ),
+    "on_duty_punch_reminder": Extra(
+        "On-Duty punch reminder",
+        "The same reminder for an employee working On-Duty: their Geo Punch is due.",
+        "attendance",
+        _ALERTS,
+    ),
+    "missing_punch_alert": Extra(
+        "Missing punch alert",
+        "A punch is still missing some time after it was due: asks the employee to punch now.",
+        "attendance",
+        _ALERTS,
+    ),
+    "approval_approved": Extra(
+        "Request approved",
+        "The employee's request (leave, permission, CL, missing punch, outpass and the others) was finally approved.",
+        "approvals",
+        "Approvals: the final approval",
+    ),
+    "approval_rejected": Extra(
+        "Request rejected",
+        "The employee's request was rejected, with the reason given.",
+        "approvals",
+        "Approvals: a rejection",
+    ),
+    "hod_pending_reminder": Extra(
+        "Pending approvals reminder",
+        "HR's scheduled reminder to a Department Head of the requests waiting for them.",
+        "approvals",
+        "HR Requests -> Notify (scheduled reminders)",
+        "approver",
+    ),
+    "geo_approval": Extra(
+        "On-Duty request approved",
+        "The employee's On-Duty (Geo Attendance) request was approved: they can punch from the app.",
+        "geo",
+        "Geo Attendance approvals",
+    ),
+    "geo_rejection": Extra(
+        "On-Duty request rejected", "The employee's On-Duty request was rejected.", "geo", "Geo Attendance approvals"
+    ),
+    "geo_punch_approval": Extra(
+        "Geo punch approved", "One of the employee's Geo punches was approved.", "geo", "Geo Attendance approvals"
+    ),
+    "geo_punch_rejection": Extra(
+        "Geo punch rejected",
+        "One of the employee's Geo punches was rejected and does not count; they can punch again.",
+        "geo",
+        "Geo Attendance approvals",
+    ),
+    "visitor_notification": Extra(
+        "Visitor at reception",
+        "A visitor is waiting at reception to meet the employee.",
+        "visitors",
+        "Reception (Visitors)",
+    ),
+    "outpass_gate_out": Extra(
+        "Gate exit", "The employee's gate exit on an outpass was recorded.", "outpass", "Gate (Outpass)"
+    ),
+    "outpass_gate_in": Extra(
+        "Gate return", "The employee's return through the gate was recorded.", "outpass", "Gate (Outpass)"
+    ),
+}
+# Phone Notify Control's own groups, in the order its pages list them.
+GROUPS = {
+    "documents": "Documents",
+    "attendance": "Attendance alerts",
+    "approvals": "Approvals",
+    "geo": "On-Duty & Geo",
+    "visitors": "Visitors",
+    "outpass": "Gate outpass",
+    "compensation": "Compensation & overtime",
+    "chat": "Internal chat",
+    "other": "Other",
+}
 
-# Where each WhatsApp group's messages come from, for the "Sent from" line (a kind can say better in SENT_FROM).
-SENT_FROM_GROUP = {
-    "documents": "Documents pages (salary slips, ID cards, letters)",
-    "attendance": "Automatic attendance alerts (checked every minute)",
-    "approvals": "Approvals: when a request is approved or rejected",
-    "geo": "Geo Attendance approvals",
-    "visitors": "Reception (Outpass / Visitors)",
-    "outpass": "Gate (Outpass)",
-    "other": "Other HRMS pages",
-}
-SENT_FROM = {
-    "hod_pending_reminder": "HR Requests -> Notify (scheduled reminders)",
-    "attendance_report": "Attendance -> Attendance Notify",
-}
-APPROVER_KINDS = {"hod_pending_reminder"}
+
+def kind_label(source: str) -> str | None:
+    """The phone label of a kind, or None."""
+    k = EVENT_TYPES.get(source) or EXTRA_TYPES.get(source)
+    return k.label if k else None
+
+
 # A workflow named differently where the notification is made than on its switch.
 WORKFLOW_ALIASES = {
     "compensation": "holiday_work",
@@ -181,9 +283,8 @@ def workflow_module(key: str) -> str:
 
 
 def extra_label(source: str) -> str | None:
-    """The label of a non-WhatsApp kind (EXTRA_TYPES), or None."""
-    extra = EXTRA_TYPES.get(source)
-    return extra.label if extra else None
+    """The label of a kind (kept for older callers): kind_label."""
+    return kind_label(source)
 
 
 def approval_key(module: str) -> str:
@@ -260,7 +361,7 @@ SOURCE_CATEGORY = {
     "hr_notice": "employee",
     MANUAL: "employee",
 }
-GROUP_CATEGORY = {  # the WhatsApp group (or EXTRA_GROUPS key) of a kind not named above
+GROUP_CATEGORY = {  # the group of a kind not named above
     "documents": "employee",
     "attendance": "attendance",
     "approvals": "decisions",
@@ -280,11 +381,8 @@ def category_of_key(key: str) -> str:
         return WORKFLOW_CATEGORY.get(key[len(APPROVAL_PREFIX) :], "decisions")
     if key in SOURCE_CATEGORY:
         return SOURCE_CATEGORY[key]
-    extra = EXTRA_TYPES.get(key)
-    if extra:
-        return GROUP_CATEGORY.get(extra.group, "employee")
-    t = catalog.get(key)
-    return GROUP_CATEGORY.get(t.module, "employee") if t else "employee"
+    kind = EVENT_TYPES.get(key) or EXTRA_TYPES.get(key)
+    return GROUP_CATEGORY.get(kind.group, "employee") if kind else "employee"
 
 
 def category_of_notification(source: str, related_module: str = "") -> str:
@@ -300,41 +398,24 @@ def category_of_notification(source: str, related_module: str = "") -> str:
 
 def controls() -> list[dict]:
     """Every switch, in the order the page lists them: [{key, label, description, group, groupLabel, kind, sentFrom,
-    audience, origin}]. Never includes a one-time code: those are not notifications at all."""
+    audience}]. Never includes a one-time code: those are not notifications at all."""
     rows: list[dict] = []
-    for module, label in {**catalog.MODULES, **EXTRA_GROUPS}.items():
-        for key in catalog.types_in(module) if module in catalog.MODULES else ():
-            if key in push_messages.EXCLUDED_TYPES:
+    for group, label in GROUPS.items():
+        for key, k in [*EVENT_TYPES.items(), *EXTRA_TYPES.items()]:
+            if k.group != group:
                 continue
-            t = catalog.TYPES[key]
             rows.append(
                 {
                     "key": key,
-                    "label": t.label,
-                    "description": t.description,
-                    "group": module,
+                    "label": k.label,
+                    "description": k.description,
+                    "group": group,
                     "groupLabel": label,
                     "kind": "message",
-                    "sentFrom": SENT_FROM.get(key) or SENT_FROM_GROUP.get(module, ""),
-                    "audience": "approver" if key in APPROVER_KINDS else "employee",
-                    "origin": "whatsapp",
+                    "sentFrom": k.sent_from,
+                    "audience": k.audience,
                 }
             )
-        for key, extra in EXTRA_TYPES.items():
-            if extra.group == module:
-                rows.append(
-                    {
-                        "key": key,
-                        "label": extra.label,
-                        "description": extra.description,
-                        "group": module,
-                        "groupLabel": label,
-                        "kind": "message",
-                        "sentFrom": extra.sent_from,
-                        "audience": extra.audience,
-                        "origin": "app",
-                    }
-                )
     for module, label in catalog.APPROVAL_MODULES.items():
         rows.append(
             {
@@ -349,7 +430,6 @@ def controls() -> list[dict]:
                 "kind": "workflow",
                 "sentFrom": "Approvals",
                 "audience": "employee",
-                "origin": "app",
             }
         )
     return rows

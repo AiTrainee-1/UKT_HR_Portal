@@ -98,9 +98,10 @@ def _notify_dept_heads(resignation: ResignationRequest) -> None:
     # Only the employee's ONE HOD (hod_scope.py), and only if allowed to act on resignations.
     from .hod_scope import managers_to_notify
 
-    from . import push_recipients
+    from . import push_recipients, whatsapp_hod
 
     for mgr in managers_to_notify(emp, "can_approve_resignations"):
+        whatsapp_hod.request_waiting(mgr.employee, "resignation", emp, "resignation request", resignation)  # WhatsApp
         if not push_recipients.allows(mgr.employee_id):
             continue  # not a phone notification recipient (Phone Notify Control -> Settings)
         from . import push_templates

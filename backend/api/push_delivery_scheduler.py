@@ -1,5 +1,6 @@
 """
-Phone push sweep -one interval job, every minute (push_delivery.py).
+Phone Notify Control's minute jobs: the push sweep (push_delivery.py) and the phone attendance alerts (phone_alerts.py, its
+own job, independent of WhatsApp's).
 
 Pushes every notification still waiting for its push (the in-memory queue was lost to a restart, or its thread died), marks a
 push stuck in "sending" as failed so HR can push it again, and reads Expo's delivery receipts so Phone Notify Control shows
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _scheduler = None
 _JOB_ID = "phone_push_sweep"
+_ALERTS_JOB_ID = "phone_attendance_alerts"
 _INTERVAL_MINUTES = 1
 
 
@@ -53,6 +55,16 @@ def _run() -> None:
         logger.error("Phone push receipt check failed: %s", e)
 
 
+@fresh_db_connection
+def _run_alerts() -> None:
+    from . import phone_alerts
+
+    try:
+        phone_alerts.run_phone_alerts()
+    except Exception as e:
+        logger.error("Phone attendance alert job failed: %s", e)
+
+
 def start_scheduler_if_needed() -> None:
     if not is_available():
         return
@@ -62,6 +74,16 @@ def start_scheduler_if_needed() -> None:
         "interval",
         minutes=_INTERVAL_MINUTES,
         id=_JOB_ID,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+    )
+    scheduler.add_job(
+        _run_alerts,
+        "interval",
+        minutes=_INTERVAL_MINUTES,
+        id=_ALERTS_JOB_ID,
         replace_existing=True,
         max_instances=1,
         coalesce=True,

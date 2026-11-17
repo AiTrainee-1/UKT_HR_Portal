@@ -2188,11 +2188,18 @@
               "enforce": "server"
             },
             {
+              "key": "whatsapp_control.test",
+              "label": "Send a test",
+              "type": "tab",
+              "help": "Send one message of any type to an employee at once and see WAClient's answer.",
+              "enforce": "server"
+            },
+            {
               "key": "whatsapp_control.config",
               "label": "Configuration",
               "type": "tab",
-              "help": "The WhatsApp account set-up.",
-              "enforce": "screen"
+              "help": "The WhatsApp account set-up and the connection check.",
+              "enforce": "server"
             }
           ]
         },
@@ -2400,7 +2407,7 @@
               "key": "phone_notify_control.settings",
               "label": "Settings",
               "type": "tab",
-              "help": "Who receives phone notifications: everybody, staff only, production only or selected employees.",
+              "help": "Who receives phone notifications (everybody, staff only, production only or selected employees) and the timing of the phone attendance alerts.",
               "routes": ["/hr/phone-notify-control/settings"],
               "enforce": "server"
             }

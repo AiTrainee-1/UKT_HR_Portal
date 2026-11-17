@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, FileText, MessageCircle, Pencil, Search } from "lucide-react";
+import { Eye, FileText, Pencil, Search } from "lucide-react";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -31,6 +31,7 @@ import {
   titleCount,
   wordingBody,
   wordingProblem,
+  wrapsBuiltIn,
   type CountTone,
 } from "./logic";
 import { PhoneNotificationCard } from "./PhonePreview";
@@ -74,6 +75,7 @@ function TemplateEditor({ t, locked, onClose }: { t: PushTemplate; locked: strin
   const used = useRef<Record<Field, boolean>>({ title: false, body: false });
 
   const readOnly = locked !== null;
+  const wrap = wrapsBuiltIn(t);
   const dirty = isWordingDirty(t, title, body);
   const problem = wordingProblem(title, body);
   const tCount = titleCount(title);
@@ -192,20 +194,18 @@ function TemplateEditor({ t, locked, onClose }: { t: PushTemplate; locked: strin
 
         <div className="grid min-w-0 gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,20rem)]">
           <div className="min-w-0 space-y-4">
-            <Notice tone="neutral" testId="pn-template-origin">
-              {t.origin === "whatsapp" ? (
-                <>
-                  This message also goes by WhatsApp. Until a phone version is saved here, the phone shows
-                  WhatsApp&apos;s wording; a version saved here changes the phone notification only. The placeholders
-                  are WhatsApp&apos;s for this message.
-                </>
-              ) : (
-                <>
-                  <code>{"{{headline}}"}</code> is the built-in title and <code>{"{{message}}"}</code> the built-in
-                  sentence: use them to wrap the built-in text, for example <i>Action needed: {"{{message}}"}</i>.
-                </>
-              )}
-            </Notice>
+            {wrap.message && (
+              <Notice tone="neutral" testId="pn-template-wrap">
+                {wrap.headline && (
+                  <>
+                    <code>{"{{headline}}"}</code> is the built-in title and{" "}
+                  </>
+                )}
+                <code>{"{{message}}"}</code> {wrap.headline ? "the" : "is the"} built-in sentence: use{" "}
+                {wrap.headline ? "them" : "it"} to wrap the built-in text, for example{" "}
+                <i>Action needed: {"{{message}}"}</i>.
+              </Notice>
+            )}
 
             <div className="space-y-1">
               <label htmlFor="pn-template-title" className="text-xs font-semibold">
@@ -436,17 +436,7 @@ function TemplateRow({ t, locked, onOpen }: { t: PushTemplate; locked: string | 
       data-custom={t.customised ? "true" : "false"}
     >
       <div className="min-w-0 flex-1 basis-64">
-        <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold">
-          {t.label}
-          {t.origin === "whatsapp" && (
-            <span title="The same message also goes by WhatsApp (WhatsApp Control has its own wording)">
-              <StatusBadge tone="success">
-                <MessageCircle size={10} className="mr-1" />
-                Also by WhatsApp
-              </StatusBadge>
-            </span>
-          )}
-        </p>
+        <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold">{t.label}</p>
         {t.description && (
           <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground" title={t.description}>
             {t.description}
@@ -496,8 +486,7 @@ function TemplateRow({ t, locked, onOpen }: { t: PushTemplate; locked: string | 
 }
 
 /**
- * Message Text: the title and wording of every kind of automatic phone notification, by category, in the shape of WhatsApp
- * Control's Message Text. Each kind says whether it is switched on (Controls), whether its wording is the built-in one or
+ * Message Text: the title and wording of every kind of automatic phone notification, by category. Each kind says whether it is switched on (Controls), whether its wording is the built-in one or
  * HR's, and how many were sent; Edit opens the editor with a live phone preview. HR's own messages (Send a message), notices
  * from the notifications API and Attendance Notify reports are not here: their words are written when they are sent.
  */
@@ -523,8 +512,7 @@ export default function MessageTextTab() {
       <Notice tone="info">
         The title and wording of every kind of automatic phone notification. Placeholders such as{" "}
         <code>{"{{employee_name}}"}</code> or <code>{"{{date}}"}</code> are filled in when it is sent, and a line whose
-        placeholders are all empty is left out. A kind that also goes by WhatsApp shows WhatsApp&apos;s wording on the
-        phone until a phone version is saved here. Changes apply to the next notification.
+        placeholders are all empty is left out. Changes apply to the next notification.
       </Notice>
       <p className="text-xs text-muted-foreground" data-testid="pn-templates-not-listed">
         Not listed, on purpose: the messages HR writes on the Send a message tab, notices from the notifications API,
