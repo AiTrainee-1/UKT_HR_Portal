@@ -87,6 +87,7 @@ export const CATEGORY_LABEL: Record<string, string> = {
   otp: "OTP & Login",
   attendance: "Attendance",
   approvals: "Approvals",
+  hod: "Department Heads",
   geo: "Geo Attendance",
   visitors: "Visitors",
   outpass: "Outpass & Gate",
@@ -98,6 +99,7 @@ export const CATEGORY_HELP: Record<string, string> = {
   otp: "Login, activation and password-reset codes",
   attendance: "Absent, late, punch reminders and missing-punch messages",
   approvals: "Leave, permission, outpass, missing punch and other approvals",
+  hod: "New requests waiting for a Department Head, and the scheduled reminder",
   geo: "Geo Attendance and punch approvals and rejections",
   visitors: "Visitor arrivals with a tap-to-call card",
   outpass: "Gate OUT and IN confirmations",
@@ -109,6 +111,7 @@ export const CATEGORIES: WhatsAppCategory[] = [
   "otp",
   "attendance",
   "approvals",
+  "hod",
   "geo",
   "visitors",
   "outpass",
@@ -134,6 +137,20 @@ export function useDebounced<T>(value: T, ms = 350): T {
     return () => clearTimeout(t);
   }, [value, ms]);
   return debounced;
+}
+
+/** Shows text the way WhatsApp does: *bold* and _italic_ instead of the raw marks. */
+export function WhatsAppText({ text }: { text: string }) {
+  const parts = text.split(/(\*[^*\n]+\*|_[^_\n]+_)/g);
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (part.length > 2 && part.startsWith("*") && part.endsWith("*")) return <b key={i}>{part.slice(1, -1)}</b>;
+        if (part.length > 2 && part.startsWith("_") && part.endsWith("_")) return <i key={i}>{part.slice(1, -1)}</i>;
+        return part;
+      })}
+    </>
+  );
 }
 
 export function StatusPill({ status }: { status: WhatsAppMessageStatus | string }) {

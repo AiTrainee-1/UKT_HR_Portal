@@ -145,10 +145,10 @@ export default function QueueCard() {
     });
 
   return (
-    <Card className="border-0 shadow-sm" data-testid="wa-queue-card">
+    <Card className="border-0 text-gray-900 shadow-sm" data-testid="wa-queue-card">
       <CardHeader className="pb-2 flex-row items-start justify-between space-y-0 gap-3">
         <div className="min-w-0">
-          <CardTitle className="text-sm font-bold">Today's queue</CardTitle>
+          <CardTitle className="text-sm font-bold text-gray-900">Today's queue</CardTitle>
           <p className="text-xs text-gray-500 mt-0.5">
             Every message except a login code waits its turn here and goes out within the sending limits. Refreshes
             every 30 seconds.

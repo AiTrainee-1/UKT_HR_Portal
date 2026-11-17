@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useState, type ReactNode } from "react";
+import { useLocation, useSearch } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
@@ -10,6 +10,7 @@ import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems }
 import {
   BarChart3,
   FileText,
+  FlaskConical,
   ListChecks,
   MessageCircle,
   RefreshCw,
@@ -21,33 +22,42 @@ import type { WhatsAppCategory } from "@/lib/api-client/custom-hooks";
 import ConfigTab from "./whatsapp-control/ConfigTab";
 import ControlsTab from "./whatsapp-control/ControlsTab";
 import EmployeesTab from "./whatsapp-control/EmployeesTab";
+import { tabFromSearch, tabHref } from "./whatsapp-control/logic";
 import MessagesTab, { type MessageFilterPreset } from "./whatsapp-control/MessagesTab";
 import OverviewTab from "./whatsapp-control/OverviewTab";
 import TemplatesTab from "./whatsapp-control/TemplatesTab";
+import TestTab from "./whatsapp-control/TestTab";
+import { WA_PATH, WA_TABS, waTabModule, type WaTab } from "./whatsapp-control/tabs";
 
-const TABS = [
-  { value: "overview", label: "Overview", icon: <BarChart3 size={13} /> },
-  { value: "messages", label: "Messages", icon: <ListChecks size={13} /> },
-  { value: "employees", label: "Employees", icon: <Users size={13} /> },
-  { value: "controls", label: "Feature Controls", icon: <SlidersHorizontal size={13} /> },
-  { value: "templates", label: "Message Text", icon: <FileText size={13} /> },
-  { value: "config", label: "Configuration", icon: <Settings2 size={13} /> },
-];
+const ICON: Record<WaTab, ReactNode> = {
+  overview: <BarChart3 size={13} />,
+  messages: <ListChecks size={13} />,
+  employees: <Users size={13} />,
+  controls: <SlidersHorizontal size={13} />,
+  templates: <FileText size={13} />,
+  test: <FlaskConical size={13} />,
+  config: <Settings2 size={13} />,
+};
+
+const TABS = WA_TABS.map((t) => ({ ...t, icon: ICON[t.value] }));
 
 // Each tab has its own permission key (Account Management); with no setting of its own it follows the page.
-const tabModule = (tab: string) => `whatsapp_control.${tab}`;
+const tabModule = waTabModule;
 
 export default function WhatsAppControl() {
   const { user } = useAuth();
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
+  const search = useSearch();
   const level = useLevel();
-  const [askedTab, setTab] = useState("overview");
+  // The open tab is in the address (?tab=controls), so a link from another page (Requests -> Notify) opens it.
+  const askedTab = tabFromSearch(search);
+  const setTab = (next: string) => navigate(tabHref(WA_PATH, next));
   // Only the tabs this role may see are offered, and the one shown is always one of them (only it is mounted, so a
   // hidden tab asks the server for nothing). A tab the role may only VIEW on a page it may edit gets the note and lock.
   const visibleTabs = visibleItems(TABS, (t) => tabModule(t.value), level);
-  const visibleValues = visibleTabs.map((t) => t.value);
+  const visibleValues: string[] = visibleTabs.map((t) => t.value);
   const tab = pickVisible(askedTab, visibleValues);
-  const canOpen = (t: string) => visibleValues.includes(t);
+  const canOpen = (t: WaTab) => visibleValues.includes(t);
   const tabViewOnly =
     visibleTabs.length > 0 &&
     !isRouteViewOnly(user, location, moduleForPath(location)) &&
@@ -105,12 +115,19 @@ export default function WhatsAppControl() {
             onOpenCategory={canOpen("messages") ? showCategory : undefined}
             onOpenFailures={canOpen("messages") ? () => openMessages({ status: "failed" }) : undefined}
             onOpenConfig={canOpen("config") ? () => setTab("config") : undefined}
+            onOpenControls={canOpen("controls") ? () => setTab("controls") : undefined}
+            canReadTypes={canOpen("templates")}
           />
         )}
         {tab === "messages" && canOpen("messages") && <MessagesTab preset={preset} />}
         {tab === "employees" && canOpen("employees") && <EmployeesTab />}
         {tab === "controls" && canOpen("controls") && <ControlsTab />}
         {tab === "templates" && canOpen("templates") && <TemplatesTab />}
+        {tab === "test" && canOpen("test") && (
+          <TestTab
+            viewOnly={isRouteViewOnly(user, location, moduleForPath(location)) || level(tabModule("test")) === "view"}
+          />
+        )}
         {tab === "config" && canOpen("config") && <ConfigTab />}
       </div>
     </HrLayout>

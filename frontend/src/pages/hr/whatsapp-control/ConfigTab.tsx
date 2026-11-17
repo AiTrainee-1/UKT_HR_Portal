@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { AlertTriangle, CheckCircle2, Copy, Info } from "lucide-react";
 import { useWhatsAppControlSettings } from "@/lib/api-client/custom-hooks";
+import ConnectionPanel from "./ConnectionPanel";
 import { Row } from "./shared";
 
 // A link WAClient's servers can't reach (this machine, a LAN address) means every
@@ -61,12 +62,14 @@ export default function ConfigTab() {
 
   return (
     <div className="space-y-4">
-      <Card className="border-0 shadow-sm">
+      <ConnectionPanel />
+
+      <Card className="border-0 text-gray-900 shadow-sm">
         <CardHeader className="pb-1">
-          <CardTitle className="text-sm font-bold">Setup checklist</CardTitle>
+          <CardTitle className="text-sm font-bold text-gray-900">Setup checklist</CardTitle>
         </CardHeader>
         <CardContent>
-          <ul className="divide-y">
+          <ul className="divide-y divide-gray-100" data-testid="wa-setup-checklist">
             <Check
               ok={c.configured}
               label="WAClient credentials are set on the server"
@@ -98,9 +101,9 @@ export default function ConfigTab() {
         </CardContent>
       </Card>
 
-      <Card className="border-0 shadow-sm">
+      <Card className="border-0 text-gray-900 shadow-sm">
         <CardHeader className="pb-1">
-          <CardTitle className="text-sm font-bold">Delivery status webhook</CardTitle>
+          <CardTitle className="text-sm font-bold text-gray-900">Delivery status webhook</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs text-gray-500">
@@ -109,7 +112,7 @@ export default function ConfigTab() {
           </p>
           <div className="flex items-center gap-2">
             <code
-              className="flex-1 min-w-0 truncate rounded-lg border bg-slate-50 px-3 py-2 text-xs"
+              className="flex-1 min-w-0 truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-gray-800"
               data-testid="webhook-url"
             >
               {c.webhookUrl}
@@ -121,11 +124,11 @@ export default function ConfigTab() {
         </CardContent>
       </Card>
 
-      <Card className="border-0 shadow-sm">
+      <Card className="border-0 text-gray-900 shadow-sm">
         <CardHeader className="pb-1">
-          <CardTitle className="text-sm font-bold">Configuration</CardTitle>
+          <CardTitle className="text-sm font-bold text-gray-900">Configuration</CardTitle>
         </CardHeader>
-        <CardContent className="divide-y">
+        <CardContent className="divide-y divide-gray-100">
           <Row label="Provider">{c.provider}</Row>
           <Row label="Status">
             {c.configured ? (

@@ -13,7 +13,7 @@ import {
   whatsAppErrorMessage,
   type WhatsAppFeature,
 } from "@/lib/api-client/custom-hooks";
-import { featureSections } from "./logic";
+import { featureSections, sectionMaster } from "./logic";
 import SendingLimits from "./SendingLimits";
 import { ConfirmDialog } from "./shared";
 
@@ -21,19 +21,31 @@ function FeatureRow({
   feature,
   disabled,
   onToggle,
+  held = false,
 }: {
   feature: WhatsAppFeature;
   disabled: boolean;
   onToggle: (enabled: boolean) => void;
+  /** Its own switch is ON but the section's master switch is OFF, so it is not sent. */
+  held?: boolean;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 py-3">
+    <div className="flex items-start justify-between gap-4 py-3" data-held={held ? "true" : undefined}>
       <div className="min-w-0">
         <p className="text-sm font-semibold text-gray-800">WhatsApp – {feature.label}</p>
         <p className="text-xs text-gray-500 mt-0.5">{feature.description}</p>
+        {held && (
+          <p className="mt-1 text-[11px] font-semibold text-amber-700" data-testid={`held-${feature.key}`}>
+            Not sent: the section switch above is OFF.
+          </p>
+        )}
       </div>
       <div className="flex items-center gap-2 shrink-0 pt-0.5">
-        <span className={`text-xs font-bold w-8 text-right ${feature.enabled ? "text-emerald-600" : "text-gray-400"}`}>
+        <span
+          className={`text-xs font-bold w-8 text-right ${
+            !feature.enabled ? "text-gray-400" : held ? "text-amber-600" : "text-emerald-600"
+          }`}
+        >
           {feature.enabled ? "ON" : "OFF"}
         </span>
         <Switch
@@ -195,54 +207,85 @@ export default function ControlsTab() {
         </div>
       )}
 
-      {sections.map(({ group, general, perType }) => (
-        <Card
-          key={group.key}
-          className={`border-0 shadow-sm transition-opacity ${engineOn ? "" : "opacity-60"}`}
-          data-testid={`wa-feature-group-${group.key}`}
-          data-inactive={engineOn ? undefined : "true"}
-        >
-          <CardHeader className="pb-1">
-            <CardTitle className="text-sm font-bold">{group.title}</CardTitle>
-            {group.blurb && <p className="text-xs text-gray-500">{group.blurb}</p>}
-          </CardHeader>
-          <CardContent className="divide-y">
-            {general.map((feature) => (
-              <FeatureRow
-                key={feature.key}
-                feature={feature}
-                disabled={update.isPending}
-                onToggle={(enabled) => toggle(feature, enabled)}
-              />
-            ))}
-            {perType.length > 0 && (
-              <div>
-                {general.length > 0 && (
-                  <p className="pt-3 text-[10px] font-bold uppercase tracking-wide text-gray-400">Each message type</p>
+      {sections.map(({ group, general, perType }) => {
+        // the section's master switch OFF holds back everything else in it, whatever their own switches say
+        const master = sectionMaster(group.key, general);
+        const held = engineOn && master !== null && !master.enabled;
+        return (
+          <Card
+            key={group.key}
+            className={`border-0 text-gray-900 shadow-sm transition-opacity ${engineOn ? "" : "opacity-60"}`}
+            data-testid={`wa-feature-group-${group.key}`}
+            data-inactive={engineOn ? undefined : "true"}
+            data-held={held ? "true" : undefined}
+          >
+            <CardHeader className="pb-1">
+              <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-bold text-gray-900">
+                {group.title}
+                {master && engineOn && (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                      master.enabled ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
+                    }`}
+                    data-testid={`wa-section-state-${group.key}`}
+                  >
+                    {master.enabled ? "Section ON" : "Section OFF"}
+                  </span>
                 )}
-                <div className="divide-y">
-                  {perType.map((feature) => (
-                    <FeatureRow
-                      key={feature.key}
-                      feature={feature}
-                      disabled={update.isPending}
-                      onToggle={(enabled) => toggle(feature, enabled)}
-                    />
-                  ))}
+              </CardTitle>
+              {group.blurb && <p className="text-xs text-gray-500">{group.blurb}</p>}
+              {held && (
+                <p
+                  className="mt-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900"
+                  data-testid={`wa-section-held-${group.key}`}
+                >
+                  &ldquo;{master.label}&rdquo; is OFF, so nothing in this section is sent, whatever the switches below
+                  say.
+                </p>
+              )}
+            </CardHeader>
+            <CardContent className="divide-y divide-gray-100">
+              {general.map((feature) => (
+                <FeatureRow
+                  key={feature.key}
+                  feature={feature}
+                  disabled={update.isPending}
+                  onToggle={(enabled) => toggle(feature, enabled)}
+                  held={held && feature !== master && feature.enabled}
+                />
+              ))}
+              {perType.length > 0 && (
+                <div>
+                  {general.length > 0 && (
+                    <p className="pt-3 text-[10px] font-bold uppercase tracking-wide text-gray-400">
+                      Each message type
+                    </p>
+                  )}
+                  <div className="divide-y divide-gray-100">
+                    {perType.map((feature) => (
+                      <FeatureRow
+                        key={feature.key}
+                        feature={feature}
+                        disabled={update.isPending}
+                        onToggle={(enabled) => toggle(feature, enabled)}
+                        held={held && feature.enabled}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      ))}
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
 
       {((data.queueLimits?.length ?? 0) > 0 || data.quietHours) && (
         <SendingLimits limits={data.queueLimits ?? []} quietHours={data.quietHours} />
       )}
 
-      <Card className="border-0 shadow-sm">
+      <Card className="border-0 text-gray-900 shadow-sm">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-bold">Timing</CardTitle>
+          <CardTitle className="text-sm font-bold text-gray-900">Timing</CardTitle>
           <p className="text-xs text-gray-500">The shift's own grace period always applies first; these add to it.</p>
         </CardHeader>
         <CardContent className="space-y-3">

@@ -15,21 +15,7 @@ import {
   useWhatsAppTemplatePreview,
   type WhatsAppControlTemplate,
 } from "@/lib/api-client/custom-hooks";
-import { fmtDateTime, useDebounced } from "./shared";
-
-/** Shows text the way WhatsApp does: *bold* and _italic_ instead of the raw marks. */
-function WhatsAppText({ text }: { text: string }) {
-  const parts = text.split(/(\*[^*\n]+\*|_[^_\n]+_)/g);
-  return (
-    <>
-      {parts.map((part, i) => {
-        if (part.length > 2 && part.startsWith("*") && part.endsWith("*")) return <b key={i}>{part.slice(1, -1)}</b>;
-        if (part.length > 2 && part.startsWith("_") && part.endsWith("_")) return <i key={i}>{part.slice(1, -1)}</i>;
-        return part;
-      })}
-    </>
-  );
-}
+import { WhatsAppText, fmtDateTime, useDebounced } from "./shared";
 
 function TemplateStatus({ t }: { t: WhatsAppControlTemplate }) {
   if (!t.isEnabled) return <StatusBadge tone="neutral">Disabled</StatusBadge>;

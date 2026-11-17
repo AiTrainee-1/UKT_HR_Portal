@@ -10,6 +10,7 @@ import {
   type WhatsAppCounts,
   type WhatsAppMessage,
 } from "@/lib/api-client/custom-hooks";
+import { HodStatusCard, SwitchedOffBanner } from "./OverviewNotices";
 import QueueCard from "./QueueCard";
 import { CATEGORY_HELP, MessageDetailDialog, StatCard, StatusPill, fmtDateTime } from "./shared";
 
@@ -88,11 +89,16 @@ export default function OverviewTab({
   onOpenCategory,
   onOpenFailures,
   onOpenConfig,
+  onOpenControls,
+  canReadTypes = true,
 }: {
   /** The shortcuts into another tab; the page leaves one out when that tab is hidden for the role. */
   onOpenCategory?: (category: WhatsAppCategory) => void;
   onOpenFailures?: () => void;
   onOpenConfig?: () => void;
+  onOpenControls?: () => void;
+  /** The Message Text tab (its per-type list says which messages can go) is open to the role. */
+  canReadTypes?: boolean;
 }) {
   const [days, setDays] = useState(30);
   const { data, isLoading } = useWhatsAppOverview(days);
@@ -145,6 +151,9 @@ export default function OverviewTab({
           </span>
         </div>
       )}
+
+      <SwitchedOffBanner canReadTypes={canReadTypes} onOpenControls={onOpenControls} />
+      <HodStatusCard onOpenControls={onOpenControls} />
 
       <QueueCard />
 
@@ -202,9 +211,9 @@ export default function OverviewTab({
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Card className="border-0 shadow-sm">
+        <Card className="border-0 text-gray-900 shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold">Activity</CardTitle>
+            <CardTitle className="text-sm font-bold text-gray-900">Activity</CardTitle>
           </CardHeader>
           <CardContent>
             {data.daily.length === 0 ? (
@@ -244,9 +253,9 @@ export default function OverviewTab({
           </CardContent>
         </Card>
 
-        <Card className="border-0 shadow-sm">
+        <Card className="border-0 text-gray-900 shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold">By message type</CardTitle>
+            <CardTitle className="text-sm font-bold text-gray-900">By message type</CardTitle>
           </CardHeader>
           <CardContent>
             {data.byType.length === 0 ? (
@@ -279,9 +288,9 @@ export default function OverviewTab({
         </Card>
       </div>
 
-      <Card className="border-0 shadow-sm">
+      <Card className="border-0 text-gray-900 shadow-sm">
         <CardHeader className="pb-2 flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-sm font-bold">Recent failures</CardTitle>
+          <CardTitle className="text-sm font-bold text-gray-900">Recent failures</CardTitle>
           {data.recentFailures.length > 0 && onOpenFailures && (
             <Button variant="ghost" size="sm" className="text-xs h-7" onClick={onOpenFailures}>
               View all failures

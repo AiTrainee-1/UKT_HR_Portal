@@ -539,10 +539,11 @@ export type WhatsAppControlTemplate = {
   lastSentAt: string | null;
 };
 
-export const useWhatsAppControlTemplates = () =>
+export const useWhatsAppControlTemplates = (enabled = true) =>
   useQuery<WhatsAppControlTemplate[]>({
     queryKey: ["/api/whatsapp-control/templates"],
     queryFn: () => customFetch<WhatsAppControlTemplate[]>("/api/whatsapp-control/templates"),
+    enabled,
   });
 
 export const useUpdateWhatsAppControlTemplate = () => {
@@ -587,14 +588,7 @@ export const useWhatsAppTemplatePreview = () =>
 
 /** WAClient's own word for the linked number. */
 export type WhatsAppProviderState =
-  | "connected"
-  | "disconnected"
-  | "logged_out"
-  | "pending"
-  | "linking"
-  | "connecting"
-  | "unknown"
-  | (string & {});
+  "connected" | "disconnected" | "logged_out" | "pending" | "linking" | "connecting" | "unknown" | (string & {});
 
 /** WAClient's live answer about the linked number: its state, or why it could not be asked. */
 export type WhatsAppProviderStatus =
