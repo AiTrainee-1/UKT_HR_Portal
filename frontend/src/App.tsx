@@ -85,6 +85,7 @@ const Documents = lazy(() => import("@/pages/hr/recruitment/Documents"));
 const Attendance = lazy(() => import("@/pages/hr/Attendance"));
 const AttendanceReportLog = lazy(() => import("@/pages/hr/AttendanceReportLog"));
 const ProductionReportLog = lazy(() => import("@/pages/hr/ProductionReportLog"));
+const AttendanceNotify = lazy(() => import("@/pages/hr/AttendanceNotify"));
 const OutpassVisitors = lazy(() => import("@/pages/hr/OutpassVisitors"));
 const Departments = lazy(() => import("@/pages/hr/Departments"));
 const Designations = lazy(() => import("@/pages/hr/Designations"));
@@ -110,6 +111,7 @@ const MobileAppLogin = lazy(() => import("@/pages/hr/MobileAppLogin"));
 const WhatsAppControl = lazy(() => import("@/pages/hr/WhatsAppControl"));
 const GmailControl = lazy(() => import("@/pages/hr/GmailControl"));
 const SmsControl = lazy(() => import("@/pages/hr/SmsControl"));
+const PhoneNotifyControl = lazy(() => import("@/pages/hr/PhoneNotifyControl"));
 const Settings = lazy(() => import("@/pages/hr/Settings"));
 const Promotion = lazy(() => import("@/pages/hr/Promotion"));
 const Increment = lazy(() => import("@/pages/hr/Increment"));
@@ -343,6 +345,9 @@ function Router() {
         <Route path="/hr/attendance/production-report-log">
           {() => <ProtectedRoute component={ProductionReportLog} allowedRoles={["hr"]} />}
         </Route>
+        <Route path="/hr/attendance/attendance-notify">
+          {() => <ProtectedRoute component={AttendanceNotify} allowedRoles={["hr"]} />}
+        </Route>
         <Route path="/hr/outpass-visitors/outpass/*?">
           {() => <ProtectedRoute component={OutpassVisitors} allowedRoles={["hr"]} />}
         </Route>
@@ -507,6 +512,11 @@ function Router() {
         {/* SMS Control: one page with its tabs in the path (/hr/sms-control/settings/limits); the whole prefix is gated by the
           one `sms_control` module, and the component redirects the bare and unknown paths to Overview. */}
         <Route path="/hr/sms-control/*?">{() => <ProtectedRoute component={SmsControl} allowedRoles={["hr"]} />}</Route>
+        {/* Phone Notify Control: tabs in the path like SMS Control (/hr/phone-notify-control/messages); each tab is gated by
+          its own `phone_notify_control.<tab>` key, and the component sends the bare and unknown paths to the first tab. */}
+        <Route path="/hr/phone-notify-control/*?">
+          {() => <ProtectedRoute component={PhoneNotifyControl} allowedRoles={["hr"]} />}
+        </Route>
         <Route path="/hr/settings">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/settings/:tab">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/salary-slip">{() => <Redirect to="/hr/payroll" />}</Route>

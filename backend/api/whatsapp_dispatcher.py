@@ -301,6 +301,10 @@ def _skip_reason(row, s, now: datetime, *, limits: bool) -> str | None:
             message_text=row.message_text,
             sent_at__gte=now - DUPLICATE_WINDOW,
         ).exclude(pk=row.pk)
+        if (
+            row.employee_id is None
+        ):  # a number or a group (Attendance Notify): the same text to ANOTHER one is no repeat
+            same = same.filter(phone_number=row.phone_number)
         if row.kind == catalog.KIND_DOCUMENT:
             same = same.filter(document_ref_id=row.document_ref_id)  # the same caption on a different file is no repeat
         if same.exists():

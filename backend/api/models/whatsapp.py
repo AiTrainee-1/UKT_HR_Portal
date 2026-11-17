@@ -55,10 +55,14 @@ class WhatsAppMessageLog(models.Model):
     KIND_AUTOMATIC = "automatic"  # the system decided it (alerts, reminders, gate, visitors): capped per employee
     KIND_DOCUMENT = "document"  # a file HR sends
 
+    # Null for a message to someone who is not an employee (Attendance Notify sends reports to numbers HR types in and
+    # to WhatsApp groups, 2026-11-17): `recipient_label` then says who it went to. Everything else (the queue, its
+    # pacing and caps, the history) is the same for both.
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, db_column="employee_id",
-        related_name="whatsapp_messages",
+        related_name="whatsapp_messages", null=True, blank=True,
     )
+    recipient_label = models.TextField(blank=True, default="", db_default="", db_column="recipient_label")
     document_type = models.TextField(db_column="document_type")
     # Which HRMS workflow raised it when one message type serves several (the shared Approved /
     # Rejected wording: "leave", "permission", ...). Empty for types that belong to one module.

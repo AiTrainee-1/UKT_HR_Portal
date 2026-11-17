@@ -431,6 +431,32 @@ _add(
 
 # ── Approvals: one Approved and one Rejected wording for every workflow ────────
 
+# Attendance Notify (owner 2026-11-17, /hr/attendance/attendance-notify): the attendance reports HR schedules (Absent, CL,
+# On Leave, Permission, Compensation counts and the employee list, and a PDF with photos). They go to numbers HR typed
+# in and to WhatsApp groups, not to an employee, through the same paced queue as everything else. Module "other": no
+# module switch, so the attendance alerts' switch does not stop them; their own switch does.
+_add(
+    key="attendance_report",
+    label="Attendance Report (Attendance Notify)",
+    module="other",
+    kind=KIND_DOCUMENT,
+    # the text is built by Attendance Notify (counts and the employee list), not from a wording saved here
+    has_wording=False,
+    description=(
+        "The attendance reports scheduled on Attendance -> Attendance Notify (summary counts, the employee list and a "
+        "PDF with photos), sent to the numbers and groups chosen there."
+    ),
+    body="{{message}}",
+    variables=(
+        V(
+            "message",
+            "The report as built by Attendance Notify",
+            "*Attendance report - 17 Nov 2026*\nStaff\n\nAbsent: 4\nCL: 2\nOn Leave: 1\nPermission: 3\nCompensation: 0",
+        ),
+    ),
+)
+
+
 _APPROVAL_VARS = (
     V("employee_name", "Employee name", "Asha Kumar"),
     V("request_type", "Which kind of request (Leave, Permission, ...)", "Leave"),

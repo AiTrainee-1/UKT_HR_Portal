@@ -214,7 +214,14 @@ def _esc(text: str) -> str:
     return _BOLD.sub(r"<strong>\1</strong>", html_lib.escape(text, quote=True))
 
 
-def _html(paragraphs: list, rows: list[tuple[str, str]], spec: catalog.EmailType, heading: str, company: str) -> str:
+def _html(
+    paragraphs: list,
+    rows: list[tuple[str, str]],
+    spec: catalog.EmailType,
+    heading: str,
+    company: str,
+    extra_html: str = "",
+) -> str:
     accent = spec.accent
 
     def table() -> str:
@@ -235,11 +242,15 @@ def _html(paragraphs: list, rows: list[tuple[str, str]], spec: catalog.EmailType
         if p is _DETAILS_MARK:
             if rows:
                 parts.append(table())
+            if extra_html:  # a report built by the caller (Attendance Notify), already escaped
+                parts.append(extra_html)
             placed = True
         else:
             parts.append(f'<p style="margin:0 0 14px;line-height:1.5">{"<br>".join(_esc(line) for line in p)}</p>')
     if rows and not placed:
         parts.append(table())
+    if extra_html and not placed:
+        parts.append(extra_html)
 
     name = html_lib.escape(company)
     return (
@@ -254,10 +265,20 @@ def _html(paragraphs: list, rows: list[tuple[str, str]], spec: catalog.EmailType
     )
 
 
-def render_email(email_type: str, params, *, subject: str | None = None, body: str | None = None, company: str = ""):
+def render_email(
+    email_type: str,
+    params,
+    *,
+    subject: str | None = None,
+    body: str | None = None,
+    company: str = "",
+    extra_html: str = "",
+    extra_text: str = "",
+):
     """(subject, plain_text, html) for `email_type` with `params` filled in. `subject` / `body` override the
     wording (the Message Text preview renders text HR has not saved yet); otherwise HR's saved wording,
-    else the catalog default."""
+    else the catalog default. `extra_html` / `extra_text`: a block the caller built (Attendance Notify's report),
+    placed where {{details}} is."""
     spec = catalog.get(email_type)
     if spec is None:
         raise ValueError(f"Unknown email type: {email_type}")
@@ -270,10 +291,13 @@ def render_email(email_type: str, params, *, subject: str | None = None, body: s
     paragraphs = _paragraphs(body_tpl, values)
     rows = _detail_rows(spec, values)
     heading = render_subject(spec.heading, values) if spec.heading else spec.label
+    text = _plain(paragraphs, rows)
+    if extra_text:
+        text = f"{text}\n\n{extra_text.strip()}".strip()
     return (
         render_subject(subject_tpl, values),
-        _plain(paragraphs, rows),
-        _html(paragraphs, rows, spec, heading, values["company_name"]),
+        text,
+        _html(paragraphs, rows, spec, heading, values["company_name"], extra_html),
     )
 
 
@@ -287,35 +311,46 @@ def _saved_wording(email_type: str) -> tuple[str, str]:
 # ── delivery ───────────────────────────────────────────────────────────────────
 
 
-def _build_message(*, subject, text, html, from_addr, from_name, to_email, attachments) -> EmailMessage:
+def _build_message(
+    *, subject, text, html, from_addr, from_name, to_email, attachments, cc=(), inline_images=()
+) -> EmailMessage:
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = formataddr((from_name or "", from_addr))
     msg["To"] = to_email
+    if cc:
+        msg["Cc"] = ", ".join(cc)
     msg.set_content(text)
     msg.add_alternative(html, subtype="html")
+    if inline_images:
+        # pictures the HTML shows as <img src="cid:…"> (Gmail blocks data: images): related parts of the HTML part
+        html_part = msg.get_payload()[-1]
+        for cid, content, mime_type in inline_images:
+            maintype, _, subtype = (mime_type or "image/jpeg").partition("/")
+            html_part.add_related(content, maintype=maintype, subtype=subtype or "jpeg", cid=f"<{cid}>")
     for filename, content, mime_type in attachments:
         maintype, _, subtype = (mime_type or "application/octet-stream").partition("/")
         msg.add_attachment(content, maintype=maintype, subtype=subtype or "octet-stream", filename=filename)
     return msg
 
 
-def _deliver(ps, msg: EmailMessage, to_email: str) -> None:
+def _deliver(ps, msg: EmailMessage, to_email) -> None:
     """One SMTP conversation. Port 465 is implicit SSL; anything else is STARTTLS (never a plain
-    login), the same as the senders this replaced."""
+    login), the same as the senders this replaced. `to_email`: one address, or every To / CC / BCC address."""
     from_addr = ps.smtp_from_email or ps.smtp_username
     context = ssl.create_default_context()
     port = ps.smtp_port
+    to_addrs = [to_email] if isinstance(to_email, str) else list(to_email)
     if port == 465:
         with smtplib.SMTP_SSL(ps.smtp_host, port, context=context, timeout=SMTP_TIMEOUT) as server:
             server.login(ps.smtp_username, ps.smtp_password)
-            server.send_message(msg, from_addr=from_addr, to_addrs=[to_email])
+            server.send_message(msg, from_addr=from_addr, to_addrs=to_addrs)
     else:
         with smtplib.SMTP(ps.smtp_host, port, timeout=SMTP_TIMEOUT) as server:
             server.ehlo()
             server.starttls(context=context)
             server.login(ps.smtp_username, ps.smtp_password)
-            server.send_message(msg, from_addr=from_addr, to_addrs=[to_email])
+            server.send_message(msg, from_addr=from_addr, to_addrs=to_addrs)
 
 
 def _failure_text(exc: Exception, ps, to_email: str) -> str:
@@ -382,6 +417,13 @@ def send_email(
     ref_id: int | None = None,
     sent_by_id: int | None = None,
     automatic: bool = False,
+    cc=None,
+    bcc=None,
+    report_html: str = "",
+    report_text: str = "",
+    inline_images=None,
+    subject: str | None = None,
+    extra_to=None,
 ):
     """
     THE entry point for every email. Returns the EmailMessageLog row -status "sent", "failed" or
@@ -398,6 +440,11 @@ def send_email(
     it isn't going to be attempted (no address, switched off, SMTP not set up, over the limit) it
     returns None and leaves no row, because nobody asked for it and the history would only fill
     with rows that mean nothing. A real attempt that fails is always logged.
+
+    Attendance Notify (2026-11-17): `extra_to`, `cc` and `bcc` are lists of more addresses; `report_html` /
+    `report_text` are its report, placed where {{details}} is (else after the wording); `inline_images` are
+    (cid, bytes, mime) pictures the report shows as <img src="cid:…">; `subject` overrides the subject wording. One
+    message reaches them all (one log row).
     """
     spec = catalog.get(email_type)
     if spec is None:
@@ -419,11 +466,15 @@ def send_email(
             return None
         return _log(email_type, status=status, error=reason, http_status=http_status, **common)
 
+    to_list = ([to_email] if to_email else []) + [a.strip() for a in (extra_to or []) if a and a.strip()]
+    cc_list = [a.strip() for a in (cc or []) if a and a.strip()]
+    bcc_list = [a.strip() for a in (bcc or []) if a and a.strip()]
     try:
-        if not to_email:
+        if not to_list:
             return refuse(EMAIL_FAILED, "No email address on file for this recipient.")
-        if not _ADDRESS.fullmatch(to_email):
-            return refuse(EMAIL_FAILED, f"'{to_email}' is not a valid email address.")
+        for address in to_list + cc_list + bcc_list:
+            if not _ADDRESS.fullmatch(address):
+                return refuse(EMAIL_FAILED, f"'{address}' is not a valid email address.")
         off = switch_off_reason(email_type)
         if off:
             return refuse(EMAIL_BLOCKED, off)
@@ -434,7 +485,9 @@ def send_email(
         if limit:
             return refuse(EMAIL_BLOCKED, limit)
 
-        subject, text, html = render_email(email_type, params, company=company)
+        subject, text, html = render_email(
+            email_type, params, company=company, extra_html=report_html, extra_text=report_text, subject=subject
+        )
         files = list(attachments() if callable(attachments) else attachments or [])
     except Exception as exc:
         logger.exception("Email %s could not be prepared", email_type)
@@ -449,10 +502,12 @@ def send_email(
             html=html,
             from_addr=ps.smtp_from_email or ps.smtp_username,
             from_name=ps.smtp_from_name,
-            to_email=to_email,
+            to_email=", ".join(to_list),
             attachments=files,
+            cc=cc_list,
+            inline_images=list(inline_images or []),
         )
-        _deliver(ps, msg, to_email)
+        _deliver(ps, msg, to_list + cc_list + bcc_list if (cc_list or bcc_list or len(to_list) > 1) else to_email)
     except Exception as exc:
         if not isinstance(exc, (smtplib.SMTPException, OSError)):
             logger.exception("Unexpected error sending %s email", email_type)

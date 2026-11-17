@@ -264,6 +264,24 @@ def media_url_for_base(base: str, token: str) -> str:
     return f"{(dj_settings.BACKEND_PUBLIC_URL or base or '').rstrip('/')}/api/whatsapp/media/{token}"
 
 
+def public_base_problem(base: str) -> str | None:
+    """Why WAClient could not download a file from `base` (a private or local address), or None."""
+    host = (urlparse(base or "").hostname or "").lower()
+    private = host in ("", "localhost") or host.endswith((".local", ".internal", ".lan"))
+    if not private:
+        try:
+            ip = ipaddress.ip_address(host)
+            private = ip.is_private or ip.is_loopback or ip.is_link_local
+        except ValueError:
+            pass
+    if private:
+        return (
+            f"WAClient can't download the PDF from '{base or 'this server'}' because it isn't reachable from the "
+            "internet. Set BACKEND_PUBLIC_URL to the server's public address."
+        )
+    return None
+
+
 def _require_public_base_url(request) -> None:
     """WAClient downloads each document itself, from its own servers, so the
     link must be reachable from the internet. On a developer machine the link
@@ -327,14 +345,28 @@ def _provider_message_id(result: dict) -> str:
     return str(key.get("id") or "")
 
 
+GROUP_SUFFIX = "@g.us"
+
+
+def is_group_id(value) -> bool:
+    """A WhatsApp group's id (its JID, "120363…@g.us"), as WAClient's get_groups lists them."""
+    return isinstance(value, str) and value.endswith(GROUP_SUFFIX) and value[: -len(GROUP_SUFFIX)].isdigit()
+
+
+def _to(to_phone: str) -> dict:
+    """WAClient's recipient field: `number` (digits) for a phone, `chat_id` for a group's JID ("120363…@g.us"; the
+    same /send endpoint, documented under WAClient's WhatsApp Web API -> Send Text)."""
+    return {"chat_id": to_phone} if is_group_id(to_phone) else {"number": to_phone}
+
+
 def send_document_message(to_phone: str, media_url: str, filename: str, caption: str, mime_type: str) -> dict:
     """A document (PDF) or image (PNG ID card) fetched by WAClient from
     media_url, with `caption` as the message text."""
     if mime_type.startswith("image/"):
-        payload = {"number": to_phone, "type": "image", "media_url": media_url, "message": caption}
+        payload = {**_to(to_phone), "type": "image", "media_url": media_url, "message": caption}
     else:
         payload = {
-            "number": to_phone,
+            **_to(to_phone),
             "type": "document",
             "media_url": media_url,
             "filename": filename,
@@ -345,7 +377,49 @@ def send_document_message(to_phone: str, media_url: str, filename: str, caption:
 
 def send_text_message(to_phone: str, text: str) -> dict:
     """A plain text message (WAClient's "text" type)."""
-    return _post_send({"number": to_phone, "type": "text", "message": text})
+    return _post_send({**_to(to_phone), "type": "text", "message": text})
+
+
+def fetch_groups() -> list[dict]:
+    """The WhatsApp groups the linked number is in: [{"id": "120363…@g.us", "name": "…", "size": 12}] (WAClient
+    GET /get_groups). Raises WhatsAppServiceError when WhatsApp is not set up or WAClient refuses. Reading the list
+    sends nothing."""
+    if not has_credentials():
+        raise WhatsAppServiceError("WhatsApp is not set up on this server (the WAClient keys are missing).")
+    base = dj_settings.WACLIENT_API_URL
+    url = (base[: -len("/send")] if base.endswith("/send") else base.rstrip("/")) + "/get_groups"
+    try:
+        resp = requests.get(
+            url,
+            params={"instance_id": dj_settings.WACLIENT_INSTANCE_ID, "access_token": dj_settings.WACLIENT_ACCESS_TOKEN},
+            timeout=(5, 20),
+        )
+    except requests.RequestException as exc:
+        raise WhatsAppServiceError(f"Could not reach WAClient: {exc}", temporary=True)
+    try:
+        data = resp.json() if resp.content else {}
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if resp.status_code >= 400 or str(data.get("status", "")).lower() != "success":
+        detail = data.get("message") or data.get("error") or resp.text[:200] or f"HTTP {resp.status_code}"
+        raise WhatsAppServiceError(f"WAClient did not list the groups: {detail}")
+    found = data.get("data")
+    if isinstance(found, dict):
+        found = found.get("groups") or found.get("data") or list(found.values())
+    if not isinstance(found, list):
+        found = data.get("groups") if isinstance(data.get("groups"), list) else []
+    groups = []
+    for g in found:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or g.get("jid") or g.get("chat_id") or "").strip()
+        if not is_group_id(gid):
+            continue
+        size = g.get("size") or g.get("participants_count") or len(g.get("participants") or []) or None
+        groups.append({"id": gid, "name": str(g.get("name") or g.get("subject") or gid), "size": size})
+    return sorted(groups, key=lambda g: g["name"].lower())
 
 
 def send_contact_message(to_phone: str, first_name: str, last_name: str, contact_phone: str) -> dict:
@@ -699,6 +773,88 @@ def _send_code_now(log, phone: str, text: str):
         log.provider_message_id = _provider_message_id(result)
         log.sent_at = timezone.now()
     log.save(update_fields=["status", "error_message", "provider_message_id", "sent_at", "attempts", "updated_at"])
+    return log
+
+
+def queue_to_recipient(
+    to: str,
+    text: str,
+    *,
+    recipient_label: str,
+    dedupe_key: str,
+    document_type: str = "attendance_report",
+    document_ref_id: int | None = None,
+    document: tuple[bytes, str, str] | None = None,
+    base_url: str = "",
+):
+    """A message to a phone number or a WhatsApp group that is not an employee's (Attendance Notify's reports), queued
+    like every other message so the pacing, the caps, quiet hours and the switches keep the number safe. `document` =
+    (bytes, filename, mime type) sends the file with `text` as its caption; WAClient downloads it from `base_url`.
+
+    Returns the WhatsAppMessageLog row (status queued, or failed / skipped with the reason); `dedupe_key` makes it
+    exactly-once: the same key again returns the first row and queues nothing."""
+    from django.db import IntegrityError, transaction
+
+    from . import whatsapp_dispatcher
+    from .models import WhatsAppMessageLog, WhatsAppSettings
+
+    existing = WhatsAppMessageLog.objects.filter(dedupe_key=dedupe_key).first() if dedupe_key else None
+    if existing is not None:
+        return existing
+    spec = catalog.get(document_type)
+    # A text part is a plain message, the PDF a document (the queue sends a "document" row as a file); both at the
+    # type's priority, so a report's parts leave in the order they were queued.
+    common = dict(
+        employee=None,
+        recipient_label=recipient_label[:200],
+        document_type=document_type,
+        document_ref_id=document_ref_id,
+        phone_number=to,
+        message_text=text,
+        dedupe_key=dedupe_key,
+        kind=catalog.KIND_DOCUMENT if document is not None else catalog.KIND_REQUESTED,
+        priority=spec.priority if spec else 3,
+    )
+
+    def stop(reason: str, status: str = WhatsAppMessageLog.STATUS_FAILED):
+        try:
+            with transaction.atomic():
+                return WhatsAppMessageLog.objects.create(status=status, error_message=reason, **common)
+        except IntegrityError:
+            return WhatsAppMessageLog.objects.filter(dedupe_key=dedupe_key).first()
+
+    blocked = sending_block_reason()
+    if blocked:
+        return stop(blocked)
+    if not to:
+        return stop("No WhatsApp number or group.")
+    off = switch_off_reason(document_type)
+    if off:
+        return stop(off)
+    if not _inline_delivery() and whatsapp_dispatcher.in_quiet_hours():
+        return stop(REASON_QUIET, WhatsAppMessageLog.STATUS_SKIPPED)
+    payload: dict = {}
+    if document is not None:
+        problem = public_base_problem(base_url)
+        if problem:
+            return stop(problem)
+        content, filename, mime_type = document
+        token = _store_media(content, filename, mime_type)
+        payload = {"media_url": media_url_for_base(base_url, token), "filename": filename, "mime_type": mime_type}
+    now = timezone.now()
+    try:
+        with transaction.atomic():
+            log = WhatsAppMessageLog.objects.create(
+                status=WhatsAppMessageLog.STATUS_QUEUED,
+                send_after=now,
+                expires_at=whatsapp_dispatcher.expiry_for(document_type, WhatsAppSettings.get(), now),
+                payload=payload,
+                **common,
+            )
+    except IntegrityError:  # another worker queued this key a moment ago
+        return WhatsAppMessageLog.objects.filter(dedupe_key=dedupe_key).first()
+    if _inline_delivery():
+        return whatsapp_dispatcher.deliver_now(log)
     return log
 
 

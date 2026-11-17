@@ -437,6 +437,51 @@
               ]
             },
             {
+              "key": "attendance.attendance_notify",
+              "label": "Attendance Notify",
+              "type": "page",
+              "help": "Attendance reports (Absent, CL, On Leave, Permission, Compensation) sent on a schedule through WhatsApp, Gmail and the internal chat.",
+              "routes": ["/hr/attendance/attendance-notify"],
+              "enforce": "server",
+              "children": [
+                {
+                  "key": "attendance.attendance_notify.whatsapp",
+                  "label": "WhatsApp",
+                  "type": "tab",
+                  "help": "Reports sent to WhatsApp numbers and groups.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "attendance.attendance_notify.gmail",
+                  "label": "Gmail",
+                  "type": "tab",
+                  "help": "Reports emailed from the company Gmail account.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "attendance.attendance_notify.chat",
+                  "label": "Internal Chat",
+                  "type": "tab",
+                  "help": "Reports posted in the internal chat channels.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "attendance.attendance_notify.automations",
+                  "label": "Automation Management",
+                  "type": "tab",
+                  "help": "Every automation in one list: edit, delete, switch on or off, run now.",
+                  "enforce": "screen"
+                },
+                {
+                  "key": "attendance.attendance_notify.history",
+                  "label": "Execution History",
+                  "type": "tab",
+                  "help": "Every run and what each recipient got.",
+                  "enforce": "screen"
+                }
+              ]
+            },
+            {
               "key": "attendance.punch_view",
               "label": "Punch View",
               "type": "page",
@@ -2092,50 +2137,6 @@
               ]
             },
             {
-              "key": "mobile_app_login.messages",
-              "label": "Mobile Messages",
-              "type": "tab",
-              "help": "Messages pushed to employees' phones.",
-              "enforce": "server",
-              "children": [
-                {
-                  "key": "mobile_app_login.messages.overview",
-                  "label": "Overview",
-                  "type": "subtab",
-                  "help": "Messages sent and read.",
-                  "enforce": "server"
-                },
-                {
-                  "key": "mobile_app_login.messages.controls",
-                  "label": "Controls",
-                  "type": "subtab",
-                  "help": "Which messages are pushed.",
-                  "enforce": "screen"
-                },
-                {
-                  "key": "mobile_app_login.messages.log",
-                  "label": "Messages",
-                  "type": "subtab",
-                  "help": "Every message sent.",
-                  "enforce": "server"
-                },
-                {
-                  "key": "mobile_app_login.messages.devices",
-                  "label": "Phones",
-                  "type": "subtab",
-                  "help": "Phones that receive messages.",
-                  "enforce": "screen"
-                },
-                {
-                  "key": "mobile_app_login.messages.send",
-                  "label": "Send a message",
-                  "type": "subtab",
-                  "help": "Send a message to employees' phones.",
-                  "enforce": "server"
-                }
-              ]
-            },
-            {
               "key": "mobile_app_login.version",
               "label": "New Version",
               "type": "tab",
@@ -2327,6 +2328,65 @@
                   "enforce": "server"
                 }
               ]
+            }
+          ]
+        },
+        {
+          "key": "phone_notify_control",
+          "label": "Phone Notify Control",
+          "type": "page",
+          "help": "Every phone (push) notification the HRMS sends: switches, mutes, history and health.",
+          "routes": ["/hr/phone-notify-control"],
+          "inherits": "mobile_app_login",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "phone_notify_control.overview",
+              "label": "Overview",
+              "type": "tab",
+              "help": "What was pushed and delivered, phones registered.",
+              "routes": ["/hr/phone-notify-control/overview"],
+              "enforce": "server"
+            },
+            {
+              "key": "phone_notify_control.messages",
+              "label": "Messages",
+              "type": "tab",
+              "help": "Every notification and what happened to its push; push one again.",
+              "routes": ["/hr/phone-notify-control/messages"],
+              "enforce": "server"
+            },
+            {
+              "key": "phone_notify_control.employees",
+              "label": "Employees",
+              "type": "tab",
+              "help": "Who has a phone registered; mute an employee; remove a phone.",
+              "routes": ["/hr/phone-notify-control/employees"],
+              "enforce": "server"
+            },
+            {
+              "key": "phone_notify_control.controls",
+              "label": "Controls",
+              "type": "tab",
+              "help": "The master switch and a switch for every kind of notification.",
+              "routes": ["/hr/phone-notify-control/controls"],
+              "enforce": "server"
+            },
+            {
+              "key": "phone_notify_control.send",
+              "label": "Send a message",
+              "type": "tab",
+              "help": "Send a message to one employee's phone.",
+              "routes": ["/hr/phone-notify-control/send"],
+              "enforce": "server"
+            },
+            {
+              "key": "phone_notify_control.configuration",
+              "label": "Configuration",
+              "type": "tab",
+              "help": "How delivery works (Expo, Firebase) and its health.",
+              "routes": ["/hr/phone-notify-control/configuration"],
+              "enforce": "server"
             }
           ]
         },

@@ -9,19 +9,46 @@ import {
   useChatChannels, useChatMessages, useSendChatMessage,
   type ChatMessageItem,
 } from "@/lib/api-client/custom-hooks";
+import ReportCard from "./attendance-notify/ReportCard";
+
+/** The channel the address names (?channel=), e.g. a link from Attendance Notify's history. */
+function channelFromAddress(): number | null {
+  try {
+    const v = Number(new URLSearchParams(window.location.search).get("channel"));
+    return Number.isInteger(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Company-wide chat for the HR Portal. Same backend the Employee App chat
- * uses; HR only sees the company channel (department channels stay private
- * to their employees). Messages poll every few seconds -no WebSockets.
+ * uses; HR only sees company channels (department channels stay private
+ * to their employees). An admin not limited to one branch can switch between
+ * every branch's company channel (2026-11-17: where each branch's employees
+ * talk, and where Attendance Notify posts their reports). Messages poll every
+ * few seconds -no WebSockets.
  */
 export default function Chat() {
   const { toast } = useToast();
   const { data: channels } = useChatChannels();
+  const companies = useMemo(() => (channels ?? []).filter(c => c.type === "company"), [channels]);
+  const [chosenId, setChosenId] = useState<number | null>(channelFromAddress);
   const companyChannel = useMemo(
-    () => (channels ?? []).find(c => c.type === "company") ?? null,
-    [channels],
+    () => companies.find(c => c.id === chosenId) ?? companies[0] ?? null,
+    [companies, chosenId],
   );
+  const choose = (id: number) => {
+    setChosenId(id);
+    try {
+      const url = new URL(window.location.href);
+      if (companies[0]?.id === id) url.searchParams.delete("channel");
+      else url.searchParams.set("channel", String(id));
+      window.history.replaceState(window.history.state, "", url);
+    } catch {
+      /* the address just is not updated */
+    }
+  };
 
   const { data: messages, isLoading } = useChatMessages(companyChannel?.id ?? null);
   const sendMessage = useSendChatMessage();
@@ -70,11 +97,36 @@ export default function Chat() {
         <Card className="border-0 shadow-sm flex-1 flex flex-col min-h-0">
           <CardHeader className="pb-3 border-b shrink-0">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <MessageCircle size={15} className="text-blue-500" /> Company Channel
+              <MessageCircle size={15} className="text-blue-500" /> {companyChannel?.name || "Company Channel"}
               <span className="ml-auto text-[10px] font-semibold text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
                 LIVE · refreshes automatically
               </span>
             </CardTitle>
+            {companies.length > 1 && (
+              <div className="mt-2 flex flex-wrap gap-1.5" role="tablist" aria-label="Channel" data-testid="chat-channels">
+                {companies.map(c => {
+                  const on = c.id === companyChannel?.id;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      onClick={() => choose(c.id)}
+                      className={
+                        on
+                          ? "rounded-full bg-blue-600 px-3 py-1 text-xs font-semibold text-white"
+                          : "rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 hover:border-blue-300"
+                      }
+                      data-view-safe
+                      data-testid={`chat-channel-${c.id}`}
+                    >
+                      {c.name || `Channel ${c.id}`}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </CardHeader>
           <CardContent className="p-0 flex-1 flex flex-col min-h-0">
             {/* Messages */}
@@ -87,15 +139,15 @@ export default function Chat() {
               )}
               {(messages ?? []).map(m => (
                 <div key={m.id} className={`flex ${m.isHr ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 shadow-sm ${
-                    m.isHr ? "bg-blue-600 text-white" : "bg-white border"
+                  <div className={`${m.report ? "max-w-[90%]" : "max-w-[75%]"} rounded-2xl px-3.5 py-2 shadow-sm ${
+                    m.isHr && !m.report ? "bg-blue-600 text-white" : "bg-white border"
                   }`}>
                     <div className="flex items-center gap-2">
-                      <span className={`text-[11px] font-bold ${m.isHr ? "text-blue-100" : "text-blue-700"}`}>
+                      <span className={`text-[11px] font-bold ${m.isHr && !m.report ? "text-blue-100" : "text-blue-700"}`}>
                         {m.senderName}
                       </span>
                       {m.createdAt && (
-                        <span className={`text-[10px] ${m.isHr ? "text-blue-200" : "text-gray-400"}`}>
+                        <span className={`text-[10px] ${m.isHr && !m.report ? "text-blue-200" : "text-gray-400"}`}>
                           {new Date(m.createdAt).toLocaleString("en-IN", {
                             day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
                           })}
@@ -104,18 +156,23 @@ export default function Chat() {
                     </div>
                     {m.replyTo && (
                       <div className={`mt-1 mb-1 px-2 py-1 rounded-lg border-l-2 text-[11px] ${
-                        m.isHr ? "bg-blue-500/60 border-blue-200 text-blue-50" : "bg-gray-50 border-blue-300 text-gray-500"
+                        m.isHr && !m.report ? "bg-blue-500/60 border-blue-200 text-blue-50" : "bg-gray-50 border-blue-300 text-gray-500"
                       }`}>
                         <span className="font-semibold">{m.replyTo.senderName}: </span>
                         <span className="line-clamp-2">{m.replyTo.text}</span>
                       </div>
                     )}
-                    <p className="text-sm whitespace-pre-wrap break-words mt-0.5">{m.text}</p>
+                    {m.report ? (
+                      // an Attendance Notify report: drawn as a card (the plain text stays for the mobile app)
+                      <ReportCard report={m.report} className="mt-1.5 min-w-[16rem] sm:min-w-[22rem]" />
+                    ) : (
+                      <p className="text-sm whitespace-pre-wrap break-words mt-0.5">{m.text}</p>
+                    )}
                     {m.reactions.length > 0 && (
                       <div className="flex gap-1 mt-1 flex-wrap">
                         {m.reactions.map(r => (
                           <span key={r.emoji} className={`text-[11px] px-1.5 py-0.5 rounded-full ${
-                            m.isHr ? "bg-blue-500/60" : "bg-gray-100"
+                            m.isHr && !m.report ? "bg-blue-500/60" : "bg-gray-100"
                           }`}>
                             {r.emoji} {r.count}
                           </span>

@@ -36,11 +36,20 @@ def _hr_label(request: Request) -> str:
 
 
 def _channel_json(c: ChatChannel) -> dict:
+    branch = c.branch.name if c.branch_id and c.branch else None
+    if c.channel_type == ChatChannel.CHANNEL_DEPARTMENT:
+        name = c.department.name if c.department_id and c.department else "Department"
+    else:
+        name = f"Company – {branch}" if branch else "Company (no branch)"
     return {
         "id": c.id,
         "type": c.channel_type,
         "departmentId": c.department_id,
         "departmentName": c.department.name if c.department_id and c.department else None,
+        # additive (2026-11-17): the HR chat page names the channels it can switch between
+        "name": name,
+        "branchId": c.branch_id,
+        "branchName": branch,
     }
 
 
@@ -74,7 +83,19 @@ def _message_json(m: ChatMessage, viewer_id: int | None) -> dict:
         "replyTo": reply,
         "reactions": list(reactions_by_emoji.values()),
         "createdAt": m.created_at.isoformat() if m.created_at else None,
+        # Attendance Notify's report card (2026-11-17): null for a typed message. The photos are signed links made now.
+        "report": _report_json(m.payload),
     }
+
+
+def _report_json(payload) -> dict | None:
+    if not isinstance(payload, dict) or payload.get("kind") != "attendance_report":
+        return None
+    from .employee_photo import photo_links
+
+    rows = payload.get("rows") or []
+    links = photo_links([r.get("employeeId") for r in rows]) if payload.get("includePhotos") else {}
+    return {**payload, "rows": [{**r, "photoUrl": links.get(r.get("employeeId"))} for r in rows]}
 
 
 def _check_department_access(channel: ChatChannel, emp: Employee) -> bool:
@@ -96,10 +117,19 @@ def chat_channels(request: Request) -> Response:
         if is_hr(request):
             # An HR user's company channel is their branch's. An unscoped
             # admin gets the original unbranched channel, which is where
-            # every pre-branch message still lives.
-            return Response([
-                _channel_json(ChatChannel.get_company_channel(get_branch_scope(request)))
-            ])
+            # every pre-branch message still lives -first, so a client that
+            # takes the first company channel opens it as before- and then
+            # (2026-11-17) every branch's company channel, which is where the
+            # employees of that branch talk and where Attendance Notify posts
+            # its reports for them.
+            branch_id = get_branch_scope(request)
+            channels = [ChatChannel.get_company_channel(branch_id)]
+            if branch_id is None:
+                from .models import Branch
+
+                for b in Branch.objects.filter(is_active=True).order_by("name"):
+                    channels.append(ChatChannel.get_company_channel(b.pk))
+            return Response([_channel_json(c) for c in channels])
         return Response({"error": "Employee access required"}, status=403)
 
     # For an employee the branch comes from their own record, not the
@@ -118,7 +148,7 @@ def chat_messages(request: Request, pk: int) -> Response:
     if not emp and not hr_user:
         return Response({"error": "Employee access required"}, status=403)
 
-    channel = ChatChannel.objects.select_related("department").filter(pk=pk).first()
+    channel = ChatChannel.objects.select_related("department", "branch").filter(pk=pk).first()
     if not channel:
         return Response({"error": "Channel not found"}, status=404)
 
@@ -128,7 +158,9 @@ def chat_messages(request: Request, pk: int) -> Response:
     # branch None) is limited to unbranched channels, which is what they see
     # in the list too.
     viewer_branch = emp.branch_id if emp else get_branch_scope(request)
-    if channel.branch_id != viewer_branch:
+    # an unscoped HR admin may open every branch's company channel (they are listed for them, see chat_channels)
+    admin_company = hr_user and viewer_branch is None and channel.channel_type == ChatChannel.CHANNEL_COMPANY
+    if channel.branch_id != viewer_branch and not admin_company:
         return Response({"error": "Channel not found"}, status=404)
     if hr_user:
         # HR Portal users participate in the company-wide channel only —

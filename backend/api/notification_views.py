@@ -65,6 +65,7 @@ def _notifications_create(request: Request) -> Response:
         employee_id=data.get("employeeId"),
         type=data.get("type", "general"),
         message=data.get("message"),
+        source="hr_notice",  # its own switch on Phone Notify Control
     )
     return Response(_notif_with_name(record), status=201)
 

@@ -80,6 +80,8 @@ def _notify_hod_approvers(req: MissingPunchRequest) -> None:
             employee=m.employee,
             type="missing_punch",
             message=f"{emp.first_name} {emp.last_name} submitted a Missing Punch request for {req.date.isoformat()}.",
+            source="approval_waiting",
+            related_module="missing_punch",
         )
 
 

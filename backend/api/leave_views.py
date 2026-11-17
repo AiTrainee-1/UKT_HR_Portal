@@ -301,6 +301,8 @@ def _employee_request_create(request: Request) -> Response:
         employee=emp,
         type="employee_request",
         message=f"New {label} submitted by {emp.first_name} {emp.last_name}: '{data['subject']}'",
+        source="request_update",
+        related_module="request",
     )
 
     return Response(_req_json(er), status=201)
@@ -341,6 +343,8 @@ def employee_request_action(request: Request, pk: int) -> Response:
                 employee=er.employee,
                 type="employee_request",
                 message=f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
+                source="request_update",
+                related_module="request",
             )
         if er.status in ("approved", "rejected"):
             hr_access.log_decision(request, hr_access.kind_for("request", er), er, er.status, f"request '{er.subject}'")

@@ -174,6 +174,7 @@ describe("Geo Attendance is a module of its own", () => {
       "Attendance Search",
       "Report Log",
       "Production Report Log",
+      "Attendance Notify",
       "Missing Punch",
     ]);
   });

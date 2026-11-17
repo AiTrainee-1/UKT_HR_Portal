@@ -272,6 +272,28 @@ _add(
         COMPANY,
     ),
 )
+# Attendance Notify (owner 2026-11-17, /hr/attendance/attendance-notify): the attendance reports HR schedules. The
+# report itself (summary counts and the employee list, in HTML with photos or as plain text) follows the wording.
+_add(
+    key="attendance_report",
+    label="Attendance Report (Attendance Notify)",
+    module="other",
+    description=(
+        "The attendance reports scheduled on Attendance -> Attendance Notify: Absent, CL, On Leave, Permission and "
+        "Compensation counts and the employee list, optionally with a PDF."
+    ),
+    subject="{{report_name}} – {{date}} | {{company_name}}",
+    heading="Attendance report – {{date}}",
+    attachment="Attendance report (PDF), when chosen",
+    # the report itself (counts and the employee list) follows the wording
+    body="Dear Team,\n\nThe attendance report **{{report_name}}** for **{{date}}** ({{employee_type}}).",
+    variables=(
+        V("report_name", "The automation's name", "Morning absentees"),
+        V("date", "The day (or days) the report is about", "17 Nov 2026"),
+        V("employee_type", "Staff, Production or all employees", "Staff"),
+        COMPANY,
+    ),
+)
 _add(
     key="test_email",
     label="Test Email",

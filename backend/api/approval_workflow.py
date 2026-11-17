@@ -888,6 +888,9 @@ def notify_hod_of_request(key: str, emp, what: str) -> None:
             employee=m.employee,
             type=key,
             message=f"{emp.first_name} {emp.last_name}'s {what} is waiting for your approval.",
+            # its own switch on Phone Notify Control (mobile_messages.EXTRA_TYPES), and the workflow's
+            source="approval_waiting",
+            related_module=_push_module(key),
         )
 
 
@@ -913,7 +916,20 @@ def stage_notice(employee, ntype: str, message: str, outcome: Outcome):
         return None
     from .models import Notification
 
-    return Notification.objects.create(employee_id=getattr(employee, "pk", employee), type=ntype, message=message)
+    return Notification.objects.create(
+        employee_id=getattr(employee, "pk", employee),
+        type=ntype,
+        message=message,
+        source="approval_progress",  # its own switch on Phone Notify Control, and the workflow's
+        related_module=_push_module(ntype),
+    )
+
+
+def _push_module(key: str) -> str:
+    """The workflow switch (Phone Notify Control -> Approvals by workflow) a notification about `key` follows."""
+    from .mobile_messages import workflow_module
+
+    return workflow_module(key)
 
 
 def notice_for(what: str, outcome: Outcome, final_tail: str = "") -> str:

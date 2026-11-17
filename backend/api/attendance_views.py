@@ -1887,51 +1887,21 @@ def _production_late_timing(rec, ruleset, d, employee_id) -> dict:
     return out
 
 
-def _attendance_report_log_daily(
-    request: Request, date_param: str, department_param, search_param, settings,
-    employment_type: str = Employee.EMPLOYMENT_TYPE_STAFF,
-) -> Response:
+def report_log_day_records(employees, d, settings, employment_type: str) -> tuple[dict, dict]:
     """
-    Report Log -> Daily Leave / Late Report: one row per active employee of `employment_type` (staff on the Report Log,
-    production on the Production Report Log) for a single date, for HR to filter (Late/Permission, On Leave, Informed)
-    and export. Mirrors attendance_company_summary's bulk-prefetch pattern
-    (attendance_views.py) so a ~230-employee roster stays a handful of
-    queries instead of one compute_day_record's worth of queries per
-    employee, but keeps each employee's own row instead of collapsing to
-    counts. Production days are judged by the production shift rules (config, segments, night look-back), exactly
-    like attendance_company_summary does. View-only aside from compute_day_record's own normal persistence
-    side effect (same as every other page that reads attendance).
+    The day engine's verdict for every employee in `employees` (all of `employment_type`) on day `d`:
+    ({employee_id: AttendanceDayRecord}, context). The Report Log's bulk prefetch (punches, shift assignments,
+    manual attendance, approved permissions, compensation and, for production, the shift rules) is read once for
+    the whole roster, so a ~230-employee day stays a handful of queries. `context` carries what the Report Log's
+    late columns also need (prod_rules_today, assignments_by_emp). Attendance Notify (attendance_notify_report.py)
+    reads its Absent / On Leave / Permission / Compensation from here, so the two can never disagree.
     """
     from .attendance_final import (
         compensation_prefetch_for_day, compute_day_record, production_prefetch_for, production_prefetch_for_day,
     )
     from .models import AttendanceDayRecord, EmployeeShiftAssignment
-    from .shift_engine import _get_shift_for_date
 
-    try:
-        d = date_type.fromisoformat(date_param)
-    except ValueError:
-        return Response({"error": "Invalid date"}, status=400)
-
-    emps_qs = (
-        scope_to_branch(Employee.objects, request)
-        .filter(status="active", employment_type=employment_type)
-        .select_related("department", "designation", "branch")
-        # Grouped by department for the Daily Leave and Late reports (unrelated modes on this
-        # same endpoint keep their own first_name-only ordering); employees
-        # with no department set sort last rather than first.
-        .order_by(F("department__name").asc(nulls_last=True), "first_name")
-    )
-    if department_param:
-        emps_qs = emps_qs.filter(department_id=department_param)
-    if search_param:
-        q = search_param.strip()
-        emps_qs = emps_qs.filter(
-            Q(employee_code__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
-        )
-    employees = list(emps_qs)
     emp_ids = [e.id for e in employees]
-
     is_production = employment_type == Employee.EMPLOYMENT_TYPE_PRODUCTION
     prod_config = ProductionShiftConfig.get() if is_production else None
     prod_segments = list(ProductionShiftSegment.objects.filter(is_active=True)) if is_production else None
@@ -1976,7 +1946,7 @@ def _attendance_report_log_daily(
 
     comp_prefetch = compensation_prefetch_for_day(settings, d, emp_ids)
 
-    rows = []
+    records: dict = {}
     for emp in employees:
         emp_logs_by_date = logs_by_emp_date.get(emp.id, {})
         prefetch = {
@@ -1999,6 +1969,57 @@ def _attendance_report_log_daily(
             prod_segments=prod_segments,
             prefetch=prefetch,
         )
+        records[emp.id] = rec
+    return records, {"prod_rules_today": prod_rules_today, "assignments_by_emp": assignments_by_emp}
+
+
+def _attendance_report_log_daily(
+    request: Request, date_param: str, department_param, search_param, settings,
+    employment_type: str = Employee.EMPLOYMENT_TYPE_STAFF,
+) -> Response:
+    """
+    Report Log -> Daily Leave / Late Report: one row per active employee of `employment_type` (staff on the Report Log,
+    production on the Production Report Log) for a single date, for HR to filter (Late/Permission, On Leave, Informed)
+    and export. Mirrors attendance_company_summary's bulk-prefetch pattern
+    (attendance_views.py) so a ~230-employee roster stays a handful of
+    queries instead of one compute_day_record's worth of queries per
+    employee, but keeps each employee's own row instead of collapsing to
+    counts. Production days are judged by the production shift rules (config, segments, night look-back), exactly
+    like attendance_company_summary does. View-only aside from compute_day_record's own normal persistence
+    side effect (same as every other page that reads attendance).
+    """
+    from .shift_engine import _get_shift_for_date
+
+    try:
+        d = date_type.fromisoformat(date_param)
+    except ValueError:
+        return Response({"error": "Invalid date"}, status=400)
+
+    emps_qs = (
+        scope_to_branch(Employee.objects, request)
+        .filter(status="active", employment_type=employment_type)
+        .select_related("department", "designation", "branch")
+        # Grouped by department for the Daily Leave and Late reports (unrelated modes on this
+        # same endpoint keep their own first_name-only ordering); employees
+        # with no department set sort last rather than first.
+        .order_by(F("department__name").asc(nulls_last=True), "first_name")
+    )
+    if department_param:
+        emps_qs = emps_qs.filter(department_id=department_param)
+    if search_param:
+        q = search_param.strip()
+        emps_qs = emps_qs.filter(
+            Q(employee_code__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
+        )
+    employees = list(emps_qs)
+
+    records, day_ctx = report_log_day_records(employees, d, settings, employment_type)
+    prod_rules_today = day_ctx["prod_rules_today"]
+    assignments_by_emp = day_ctx["assignments_by_emp"]
+
+    rows = []
+    for emp in employees:
+        rec = records[emp.id]
         rows.append({
             "employeeId": emp.id,
             "employeeCode": emp.employee_code,

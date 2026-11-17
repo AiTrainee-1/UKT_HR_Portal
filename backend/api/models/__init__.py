@@ -113,6 +113,7 @@ from .accounts import (
     MobileMessageSettings,
     ApprovalReminder,
     Notification,
+    PushOptOut,
     PushToken,
 )
 from .recruitment import (
@@ -192,4 +193,11 @@ from .hod_reminders import (
     HodReminderDelivery,
     HodReminderRun,
     HodReminderSettings,
+)
+from .attendance_notify import (
+    AttendanceNotifyAutomation,
+    AttendanceNotifyDelivery,
+    AttendanceNotifyRecipientList,
+    AttendanceNotifyRun,
+    AttendanceNotifySettings,
 )

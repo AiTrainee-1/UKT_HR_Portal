@@ -135,7 +135,7 @@ class ControlsEndpointTests(TestCase):
         off = {row["key"] for row in body["controls"] if not row["enabled"]}
         self.assertEqual(off, {"late_alert", "approval:leave"})
         self.assertEqual(body["updatedBy"], "mm_admin")
-        self.assertEqual(AuditLog.objects.filter(module="mobile_app_login", action="update").count(), 1)
+        self.assertEqual(AuditLog.objects.filter(module="phone_notify_control", action="update").count(), 1)
         # switching one back on
         r = self.client.put(
             f"{BASE}/controls", {"types": {"late_alert": True}}, content_type="application/json", **_hr()
@@ -253,7 +253,7 @@ class LogOverviewDevicesSendTests(TestCase):
         self.assertEqual((body["title"], body["kind"], body["pushStatus"]), ("Test", "Message from HR", "sent"))
         sent = post.call_args.kwargs["json"][0]
         self.assertEqual((sent["title"], sent["body"]), ("Test", "Does this reach your phone?"))
-        self.assertEqual(AuditLog.objects.filter(module="mobile_app_login", action="create").count(), 1)
+        self.assertEqual(AuditLog.objects.filter(module="phone_notify_control", action="create").count(), 1)
 
     def test_a_bad_send_is_refused(self):
         for body, status in (

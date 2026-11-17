@@ -40,14 +40,21 @@ def _record(instance: Notification, status: str, error: str = "", tickets: str =
 def send_push_on_notification(sender, instance: Notification, created: bool, **kwargs) -> None:
     if not created:
         return
+    push_notification(instance)
 
-    # HR can switch the push off (all of it, or one kind of message) on Mobile App Login -> Mobile Messages; the in-app record stays.
+
+def push_notification(instance: Notification) -> None:
+    """Push one saved notification to its employee's phones and record what happened on the row. Called once when the
+    notification is made, and again by Phone Notify Control's "Push again"."""
+    # HR can switch the push off (all of it, one kind of message, one workflow) or mute an employee on Phone Notify Control;
+    # the in-app record stays.
     try:
-        if not mobile_messages.push_allowed(instance.source, instance.related_module):
-            _record(instance, "off")
+        off = mobile_messages.off_reason(instance.source, instance.related_module, instance.employee_id)
+        if off:
+            _record(instance, "off", off)
             return
     except Exception:
-        logger.warning("Could not read the Mobile Messages switches; pushing as usual", exc_info=True)
+        logger.warning("Could not read the phone notification switches; pushing as usual", exc_info=True)
 
     tokens = list(instance.employee.push_tokens.values_list("token", flat=True))
     if not tokens:

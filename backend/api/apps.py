@@ -92,6 +92,7 @@ class ApiConfig(AppConfig):
             return
 
         from . import (
+            attendance_notify_scheduler,
             auto_sync,
             backup_scheduler,
             geo_tracking_scheduler,
@@ -164,6 +165,12 @@ class ApiConfig(AppConfig):
             hod_reminder_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("Department Head reminder scheduler bootstrap skipped: %s", e)
+
+        try:
+            # Attendance Notify: the scheduled attendance reports (WhatsApp, Gmail, internal chat), every minute
+            attendance_notify_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Attendance Notify scheduler bootstrap skipped: %s", e)
 
         try:
             md_auto_attendance_scheduler.start_scheduler_if_needed()

@@ -1,6 +1,8 @@
-"""Mobile Messages (HR portal -> Mobile App Login -> Mobile Messages): the control panel for what reaches employees' phones.
+"""Phone Notify Control (HR portal -> /hr/phone-notify-control, 2026-11-17; before that Mobile App Login -> Mobile Messages):
+the control panel for what reaches employees' phones.
 
-All endpoints are HR-only, branch scoped, and sit under the `mobile_app_login` permission module (URL "mobile-app/messages").
+All endpoints are HR-only and branch scoped. They keep the URL prefix "mobile-app/messages" (permission key
+`phone_notify_control`, which a role with nothing set on it takes from Mobile App Login, the page that held them before).
 
     GET  /api/mobile-app/messages/overview    devices, what was sent today / 7 / 30 days, by kind and by day, the switches' state
     GET  /api/mobile-app/messages/controls    the master switch and a switch per kind of message
@@ -8,6 +10,10 @@ All endpoints are HR-only, branch scoped, and sit under the `mobile_app_login` p
     GET  /api/mobile-app/messages/log         every notification sent: filters, pagination, what happened to the push
     GET  /api/mobile-app/messages/devices     which employees have a phone registered for notifications
     POST /api/mobile-app/messages/send        {employeeId, title, message} one message from HR to one employee
+    POST /api/mobile-app/messages/log/<id>/push-again        push a failed / not-pushed notification again
+    PUT  /api/mobile-app/messages/devices/<employee>/mute    {muted} mute / unmute one employee's phone notifications
+    DELETE /api/mobile-app/messages/devices/phones/<id>      forget one registered phone
+    GET  /api/mobile-app/messages/config      how delivery works and its health (failures by reason)
 
 What a message is, and how it becomes a push, is in push_messages.py (the same text WhatsApp carries) and signals.py (the push
 itself). The switches only control the PHONE push (mobile_messages.py): the in-app record is always saved.
@@ -17,7 +23,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Exists, Max, OuterRef, Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework.decorators import api_view
@@ -30,7 +36,7 @@ from .audit_utils import log_action
 from .auth import get_hr_display_name, require_hr
 from .branch_scope import scope_to_branch
 from .clock import FACTORY_TZ
-from .models import Employee, MobileMessageSettings, Notification, PushToken
+from .models import Employee, MobileMessageSettings, Notification, PushOptOut, PushToken
 from .view_common import error_response as _error
 from .view_common import paginate
 
@@ -45,6 +51,15 @@ STATUS_LABEL = {
 }
 MAX_TITLE = 60
 MAX_MESSAGE = 500
+AUDIT_MODULE = "phone_notify_control"
+AGAIN_STATUSES = ("failed", "no_device", "off")
+REASON_LABELS = {
+    "InvalidCredentials": "Firebase key missing or wrong",
+    "DeviceNotRegistered": "App uninstalled / notifications reset",
+    "MessageTooBig": "Message too large",
+    "MessageRateExceeded": "Too many pushes to one phone",
+    "MismatchSenderId": "Firebase project mismatch",
+}
 
 
 def _name(e: Employee) -> str:
@@ -137,6 +152,8 @@ def mobile_messages_overview(request: Request) -> Response:
         {
             "pushEnabled": settings.push_enabled,
             "switchedOff": len([k for k in (settings.disabled_types or []) if k in mobile_messages.valid_keys()]),
+            "kinds": len(mobile_messages.valid_keys()),
+            "muted": PushOptOut.objects.filter(employee_id__in=emp_ids).count(),
             "devices": {
                 "employees": len(emp_ids),
                 "withDevice": with_device,
@@ -154,10 +171,52 @@ def mobile_messages_overview(request: Request) -> Response:
     )
 
 
-def _controls_body() -> dict:
+def _stats(request=None) -> tuple[dict, dict]:
+    """The last 30 days' notifications by kind and by workflow: ({source: counts}, {workflow: counts})."""
+    qs = _notifications(request) if request is not None else Notification.objects.all()
+    rows = (
+        qs.filter(created_at__gte=_day_start(29))
+        .values("source", "related_module", "push_status")
+        .annotate(n=Count("id"))
+    )
+    by_source: dict = {}
+    by_module: dict = {}
+
+    def add(table: dict, key: str, status: str, n: int) -> None:
+        c = table.setdefault(key, {"total": 0, "sent": 0, "delivered": 0, "failed": 0, "off": 0, "noDevice": 0})
+        c["total"] += n
+        if status in ("sent", "delivered"):
+            c["sent"] += n
+        if status == "delivered":
+            c["delivered"] += n
+        elif status == "failed":
+            c["failed"] += n
+        elif status == "off":
+            c["off"] += n
+        elif status == "no_device":
+            c["noDevice"] += n
+
+    for r in rows:
+        add(by_source, r["source"] or "", r["push_status"] or "", r["n"])
+        if r["related_module"]:
+            add(by_module, r["related_module"], r["push_status"] or "", r["n"])
+    return by_source, by_module
+
+
+EMPTY_STATS = {"total": 0, "sent": 0, "delivered": 0, "failed": 0, "off": 0, "noDevice": 0}
+
+
+def _controls_body(request=None) -> dict:
     settings = MobileMessageSettings.get()
     off = set(settings.disabled_types or [])
-    rows = [{**row, "enabled": row["key"] not in off} for row in mobile_messages.controls()]
+    by_source, by_module = _stats(request)
+    rows = []
+    for row in mobile_messages.controls():
+        if row["kind"] == "workflow":
+            stats = by_module.get(row["key"][len(mobile_messages.APPROVAL_PREFIX) :], EMPTY_STATS)
+        else:
+            stats = by_source.get(row["key"], EMPTY_STATS)
+        rows.append({**row, "enabled": row["key"] not in off, "stats": dict(stats)})
     return {
         "pushEnabled": settings.push_enabled,
         "controls": rows,
@@ -170,7 +229,7 @@ def _controls_body() -> dict:
 @require_hr
 def mobile_messages_controls(request: Request) -> Response:
     if request.method == "GET":
-        return Response(_controls_body())
+        return Response(_controls_body(request))
 
     data = request.data
     settings = MobileMessageSettings.get()
@@ -208,11 +267,11 @@ def mobile_messages_controls(request: Request) -> Response:
         log_action(
             request,
             "update",
-            "mobile_app_login",
+            AUDIT_MODULE,
             record_id=settings.pk,
-            description="Mobile Messages: " + ", ".join(changed),
+            description="Phone notifications: " + ", ".join(changed),
         )
-    return Response(_controls_body())
+    return Response(_controls_body(request))
 
 
 def _log_row(n: Notification) -> dict:
@@ -233,6 +292,9 @@ def _log_row(n: Notification) -> dict:
         "isRead": n.is_read,
         "createdAt": n.created_at.isoformat(),
         "pushedAt": n.pushed_at.isoformat() if n.pushed_at else None,
+        # only when there is a phone to push to now (the log's query says so; a single row asks)
+        "canPushAgain": (n.push_status or "") in AGAIN_STATUSES
+        and (n.has_phone if hasattr(n, "has_phone") else PushToken.objects.filter(employee_id=n.employee_id).exists()),
     }
 
 
@@ -243,7 +305,11 @@ def mobile_messages_log(request: Request) -> Response:
     "older"), read (read | unread), dateFrom / dateTo (YYYY-MM-DD, Indian time). Without `page` it is a capped array."""
     push_receipts.check_pending()
     q = request.query_params
-    qs = _notifications(request).order_by("-created_at", "-id")
+    qs = (
+        _notifications(request)
+        .annotate(has_phone=Exists(PushToken.objects.filter(employee_id=OuterRef("employee_id"))))
+        .order_by("-created_at", "-id")
+    )
     if status := q.get("status"):
         if status not in PUSH_STATUSES:
             return _error(f"status must be one of: {', '.join(PUSH_STATUSES)}")
@@ -294,6 +360,8 @@ def mobile_messages_devices(request: Request) -> Response:
         qs = qs.filter(devices__gt=0)
     elif has == "without":
         qs = qs.filter(devices=0)
+    if q.get("muted") in ("1", "true"):
+        qs = qs.filter(push_opt_out__isnull=False)
     if search := (q.get("search") or "").strip():
         qs = qs.filter(
             Q(first_name__icontains=search)
@@ -302,18 +370,36 @@ def mobile_messages_devices(request: Request) -> Response:
             | Q(phone__icontains=search)
         )
 
-    def row(e: Employee) -> dict:
-        return {
-            "id": e.id,
-            "name": _name(e),
-            "employeeCode": e.employee_code,
-            "employmentType": e.employment_type,
-            "phone": (e.phone or "").strip() or None,
-            "devices": e.devices,
-            "lastRegisteredAt": e.registered.isoformat() if e.registered else None,
-        }
+    qs = qs.defer("photo_url").select_related("push_opt_out")
+    return paginate(request, qs, _device_row)
 
-    return paginate(request, qs, row)
+
+def _device_row(e: Employee) -> dict:
+    mute = getattr(e, "push_opt_out", None)
+    devices = getattr(e, "devices", None)
+    registered = getattr(e, "registered", None)
+    phones = [
+        {
+            "id": t.id,
+            "platform": t.platform,
+            "registeredAt": t.created_at.isoformat() if t.created_at else None,
+            "updatedAt": t.updated_at.isoformat() if t.updated_at else None,
+        }
+        for t in e.push_tokens.all().order_by("-updated_at")
+    ]
+    return {
+        "id": e.id,
+        "name": _name(e),
+        "employeeCode": e.employee_code,
+        "employmentType": e.employment_type,
+        "phone": (e.phone or "").strip() or None,
+        "devices": devices if devices is not None else len(phones),
+        "lastRegisteredAt": (registered.isoformat() if registered else (phones[0]["updatedAt"] if phones else None)),
+        "muted": mute is not None,
+        "mutedBy": (mute.muted_by or None) if mute is not None else None,
+        "mutedAt": mute.created_at.isoformat() if mute is not None and mute.created_at else None,
+        "phones": phones,
+    }
 
 
 @api_view(["POST"])
@@ -342,8 +428,161 @@ def mobile_messages_send(request: Request) -> Response:
     log_action(
         request,
         "create",
-        "mobile_app_login",
+        AUDIT_MODULE,
         record_id=n.pk,
         description=f"Sent a message to {_name(emp)} ({emp.employee_code}): {title}",
     )
     return Response(_log_row(n), status=201)
+
+
+@api_view(["POST"])
+@require_hr
+def mobile_messages_push_again(request: Request, pk: int) -> Response:
+    """Push one notification to its employee's phones again (it failed, found no phone, or was switched off then)."""
+    from .signals import push_notification
+
+    n = _notifications(request).filter(pk=pk).first()
+    if n is None:
+        return _error("Notification not found", 404)
+    if (n.push_status or "") not in AGAIN_STATUSES:
+        return _error("Only a notification that failed, found no phone or was switched off can be pushed again.")
+    off = mobile_messages.off_reason(n.source, n.related_module, n.employee_id)
+    if off:
+        return _error(off)
+    if not PushToken.objects.filter(employee_id=n.employee_id).exists():
+        return _error("This employee has no phone registered for notifications: they need to open the app once.")
+    push_notification(n)
+    n.refresh_from_db()
+    log_action(
+        request,
+        "update",
+        AUDIT_MODULE,
+        record_id=n.pk,
+        description=f"Pushed again to {_name(n.employee)} ({n.employee.employee_code}): {n.title or n.message[:60]}",
+    )
+    return Response(_log_row(n))
+
+
+@api_view(["PUT"])
+@require_hr
+def mobile_messages_mute(request: Request, employee_id: int) -> Response:
+    """Mute (or unmute) every phone notification of one employee. Their in-app Notifications list still fills."""
+    emp = _employees(request).filter(pk=employee_id).first()
+    if emp is None:
+        return _error("Choose an active employee", 404)
+    muted = request.data.get("muted")
+    if not isinstance(muted, bool):
+        return _error("muted must be true or false")
+    if muted:
+        PushOptOut.objects.get_or_create(employee=emp, defaults={"muted_by": get_hr_display_name(request)})
+    else:
+        PushOptOut.objects.filter(employee=emp).delete()
+    log_action(
+        request,
+        "update",
+        AUDIT_MODULE,
+        record_id=emp.pk,
+        description=f"Phone notifications {'muted' if muted else 'unmuted'} for {_name(emp)} ({emp.employee_code})",
+    )
+    emp = (
+        _employees(request)
+        .annotate(devices=Count("push_tokens"), registered=Max("push_tokens__updated_at"))
+        .select_related("push_opt_out")
+        .defer("photo_url")
+        .get(pk=emp.pk)
+    )
+    return Response(_device_row(emp))
+
+
+@api_view(["DELETE"])
+@require_hr
+def mobile_messages_remove_phone(request: Request, token_id: int) -> Response:
+    """Forget one registered phone (it registers again the next time the app is opened on it)."""
+    token = PushToken.objects.select_related("employee").filter(pk=token_id).first()
+    if token is None or not _employees(request).filter(pk=token.employee_id).exists():
+        return _error("Phone not found", 404)
+    emp = token.employee
+    token.delete()
+    log_action(
+        request,
+        "delete",
+        AUDIT_MODULE,
+        record_id=token_id,
+        description=f"Removed a registered phone of {_name(emp)} ({emp.employee_code})",
+    )
+    return Response(status=204)
+
+
+@api_view(["GET"])
+@require_hr
+def mobile_messages_config(request: Request) -> Response:
+    """How a phone notification travels, and how well it has been doing (the last 30 days; failures by reason)."""
+    from .signals import EXPO_PUSH_URL
+
+    push_receipts.check_pending()
+    notes = _notifications(request)
+    since = _day_start(29)
+    month = notes.filter(created_at__gte=since)
+    counts = dict(month.values_list("push_status").annotate(n=Count("id")))
+    sent = counts.get("sent", 0) + counts.get("delivered", 0)
+    delivered = counts.get("delivered", 0)
+    failed = counts.get("failed", 0)
+    reasons: dict = {}
+    for error, n in month.filter(push_status="failed").values_list("push_error").annotate(n=Count("id")):
+        code = (error or "").split(":", 1)[0].strip()
+        if code not in push_receipts.HINTS:
+            code = "Other"
+        row = reasons.setdefault(
+            code,
+            {
+                "reason": code,
+                "label": REASON_LABELS.get(code, "Other failures"),
+                "count": 0,
+                "advice": push_receipts.HINTS.get(code, (error or "")[:200]),
+            },
+        )
+        row["count"] += n
+    last_sent = notes.filter(push_status__in=("sent", "delivered")).aggregate(m=Max("pushed_at"))["m"]
+    last_delivered = notes.filter(push_status="delivered").aggregate(m=Max("pushed_at"))["m"]
+    settings = MobileMessageSettings.get()
+    emp_ids = list(_employees(request).values_list("id", flat=True))
+    tokens = PushToken.objects.filter(employee_id__in=emp_ids)
+    with_phone = tokens.values("employee_id").distinct().count()
+    last_registered = tokens.aggregate(m=Max("updated_at"))["m"]
+    if "InvalidCredentials" in reasons or "MismatchSenderId" in reasons:
+        state, note = "problem", "Google refused pushes: the app's Firebase key is missing or wrong (see the reasons)."
+    elif not settings.push_enabled:
+        state, note = "warning", "Phone notifications are switched off for everyone (Controls)."
+    elif sent == 0 and failed == 0:
+        state, note = "unknown", "Nothing was pushed in the last 30 days, so there is nothing to judge yet."
+    elif failed and failed >= sent:
+        state, note = "warning", "More pushes failed than went through in the last 30 days (see the reasons)."
+    else:
+        state, note = "ok", "Pushes are reaching phones."
+    return Response(
+        {
+            "service": {
+                "provider": "Expo push service",
+                "transport": "Firebase Cloud Messaging (Android)",
+                "url": EXPO_PUSH_URL,
+                "androidChannel": "default",
+                "appPackage": "net.uktex.employee",
+            },
+            "health": {
+                "state": state,
+                "note": note,
+                "lastSentAt": last_sent.isoformat() if last_sent else None,
+                "lastDeliveredAt": last_delivered.isoformat() if last_delivered else None,
+                "sent30": sent,
+                "delivered30": delivered,
+                "failed30": failed,
+                "failureReasons": sorted(reasons.values(), key=lambda r: -r["count"]),
+            },
+            "phones": {
+                "employeesWithPhone": with_phone,
+                "tokens": tokens.count(),
+                "lastRegisteredAt": last_registered.isoformat() if last_registered else None,
+            },
+            "pushEnabled": settings.push_enabled,
+        }
+    )

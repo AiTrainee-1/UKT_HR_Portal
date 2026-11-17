@@ -287,6 +287,21 @@ class PushToken(models.Model):
         db_table = "push_tokens"
 
 
+class PushOptOut(models.Model):
+    """An employee whose phone notifications HR muted (Phone Notify Control -> Employees, 2026-11-17): nothing is pushed
+    to their phones, whatever the switches say; their in-app Notifications list still fills (signals.py records the
+    notification as push "off" with the reason). One row per muted employee; unmuting deletes it."""
+
+    employee = models.OneToOneField(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="push_opt_out"
+    )
+    muted_by = models.TextField(blank=True, default="", db_column="muted_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "push_opt_outs"
+
+
 # ──────────────────────────────────────────────
 #  HR Portal login security (brute-force lockout + audit trail)
 # ──────────────────────────────────────────────

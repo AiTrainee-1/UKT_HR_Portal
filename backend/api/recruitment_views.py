@@ -103,6 +103,8 @@ def _notify_dept_heads(resignation: ResignationRequest) -> None:
             employee_id=mgr.employee_id,
             type="resignation",
             message=f"{emp.first_name} {emp.last_name} has submitted a resignation request. Please review it.",
+            source="approval_waiting",
+            related_module="resignation",
         )
 
 

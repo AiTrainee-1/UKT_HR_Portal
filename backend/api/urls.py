@@ -31,7 +31,8 @@ from .approval_workflow_views import approval_summary, approval_workflow_detail,
 from .login_sessions_views import login_sessions, revoke_login_session
 from .mobile_messages_views import (
     mobile_messages_controls, mobile_messages_devices, mobile_messages_log, mobile_messages_overview,
-    mobile_messages_send,
+    mobile_messages_send, mobile_messages_push_again, mobile_messages_mute, mobile_messages_remove_phone,
+    mobile_messages_config,
 )
 from .mobile_app_version_views import (
     mobile_app_latest_version, mobile_app_version_detail, mobile_app_versions,
@@ -884,6 +885,11 @@ urlpatterns = [
     path("mobile-app/messages/log", mobile_messages_log),
     path("mobile-app/messages/devices", mobile_messages_devices),
     path("mobile-app/messages/send", mobile_messages_send),
+    # Phone Notify Control (2026-11-17): the page that now holds these, with what it added
+    path("mobile-app/messages/log/<int:pk>/push-again", mobile_messages_push_again),
+    path("mobile-app/messages/devices/<int:employee_id>/mute", mobile_messages_mute),
+    path("mobile-app/messages/devices/phones/<int:token_id>", mobile_messages_remove_phone),
+    path("mobile-app/messages/config", mobile_messages_config),
     path("mobile-app/versions", mobile_app_versions),
     path("mobile-app/versions/<int:pk>", mobile_app_version_detail),
     path("mobile-app/latest-version", mobile_app_latest_version),
@@ -920,4 +926,5 @@ urlpatterns = [
     path("", include("api.urls_mobile_approvals")),
     # ── HR Requests page: HoD's (pending with each Department Head) and Notify (reminders) ──
     path("", include("api.urls_hod_reminders")),
+    path("", include("api.urls_attendance_notify")),
 ]

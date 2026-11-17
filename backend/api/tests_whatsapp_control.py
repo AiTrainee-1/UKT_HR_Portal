@@ -384,7 +384,8 @@ class CentralControlTests(ControlBase):
         body = self.get("settings").json()
         self.assertEqual(
             [g["key"] for g in body["groups"]],
-            ["signin", "documents", "attendance", "approvals", "geo", "visitors", "outpass"],
+            # "other" = Attendance Notify's reports (2026-11-17)
+            ["signin", "documents", "attendance", "approvals", "geo", "visitors", "outpass", "other"],
         )
         features = self.features()
         for key in (

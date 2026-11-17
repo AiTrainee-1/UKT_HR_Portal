@@ -66,6 +66,11 @@ GROUPS = [
     ("geo", "Geo Attendance", "Approval and rejection messages for On-Duty requests and their punches."),
     ("visitors", "Visitors", "Tells an employee who is at reception to meet them, with a tap-to-call contact card."),
     ("outpass", "Outpass & gate", "Confirms to the employee each time the gate records them going out or coming back."),
+    (
+        "other",
+        "Attendance reports",
+        "The reports scheduled on Attendance -> Attendance Notify, sent to the numbers and groups chosen there.",
+    ),
 ]
 
 # Editable feature switches (WhatsAppSettings booleans): json key, model field, label, group, description.
@@ -243,14 +248,14 @@ def _status_counts(qs) -> dict:
 
 
 def _message_json(m: WhatsAppMessageLog) -> dict:
-    emp = m.employee
+    emp = m.employee  # None for a number or a group that is not an employee (Attendance Notify)
     module = CATEGORY_OF.get(m.document_type, "other")
     related = RELATED_LABELS.get(m.related_module, "")
     return {
         "id": m.id,
         "employeeId": m.employee_id,
-        "employeeCode": emp.employee_code,
-        "employeeName": f"{emp.first_name} {emp.last_name}".strip(),
+        "employeeCode": emp.employee_code if emp else "",
+        "employeeName": f"{emp.first_name} {emp.last_name}".strip() if emp else (m.recipient_label or m.phone_number),
         "phone": m.phone_number,
         "documentType": m.document_type,
         "typeLabel": TYPE_LABELS.get(m.document_type, m.document_type),

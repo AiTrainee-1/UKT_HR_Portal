@@ -653,6 +653,7 @@ def resolve_on_duty_punch_hr(
             Notification.objects.create(
                 employee=v.employee, type="on_duty",
                 message="Your On-Duty session was automatically completed after your 4th punch was approved.",
+                source="on_duty_auto_end",
             )
 
 
@@ -668,6 +669,7 @@ def _notify_hod_approvers(session: OnDutySession) -> None:
             employee=m.employee,
             type="on_duty",
             message=f"{emp.first_name} {emp.last_name} submitted an On-Duty request -{session.destination[:80]}",
+            source="approval_waiting",
         )
 
 
@@ -1028,6 +1030,7 @@ def on_duty_punch_request(request: Request) -> Response:
             Notification.objects.create(
                 employee=emp, type="on_duty",
                 message="Your On-Duty session ended automatically -all 4 punches for the day are in.",
+                source="on_duty_auto_end",
             )
 
     return Response({

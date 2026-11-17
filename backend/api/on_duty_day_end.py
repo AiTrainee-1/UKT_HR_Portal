@@ -57,6 +57,7 @@ def end_stale_on_duty_sessions(for_date: date | None = None) -> dict:
                     f"Your On-Duty session for {session.destination} was closed automatically "
                     "at the end of the day."
                 ),
+                source="on_duty_auto_end",
             )
 
     # Sessions opened on an EARLIER day and never closed -only reachable if

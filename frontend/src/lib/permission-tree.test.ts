@@ -57,6 +57,9 @@ const OLD_ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/activity-logs": "activity_logs",
   "/hr/login-devices": "login_devices",
   "/hr/mobile-app-login": "mobile_app_login",
+  // Phone Notify Control (2026-11-17) was the Mobile Messages tab of Mobile App Login: its key inherits mobile_app_login,
+  // so whoever could open that page before opens (and is locked on) this one the same way
+  "/hr/phone-notify-control": "mobile_app_login",
   "/hr/whatsapp-control": "whatsapp_control",
   "/hr/gmail-control": "gmail_control",
   "/hr/sms-control": "sms_control",

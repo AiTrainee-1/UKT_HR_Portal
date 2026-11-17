@@ -487,3 +487,11 @@ api/tests_production_period_workflow.py
 api/production_drafts.py
 api/device_control_extras.py
 api/tests_device_control_extras.py
+api/attendance_notify.py
+api/attendance_notify_report.py
+api/attendance_notify_views.py
+api/attendance_notify_scheduler.py
+api/urls_attendance_notify.py
+api/tests_attendance_notify.py
+api/models/attendance_notify.py
+api/tests_phone_notify_control.py

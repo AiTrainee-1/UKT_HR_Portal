@@ -27,6 +27,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/attendance/search",
   "/hr/attendance/report-log",
   "/hr/attendance/production-report-log",
+  // Attendance Notify puts the Refresh button in its title row
+  "/hr/attendance/attendance-notify",
   "/hr/promotion",
   "/hr/increment",
   "/hr/bonus",
@@ -55,6 +57,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/gmail-control",
   // SMS Control (tabs and nested tabs in the path): its title row has the Refresh button
   /^\/hr\/sms-control(\/|$)/,
+  // Phone Notify Control (tabs in the path, like SMS Control): its title row has the Refresh button
+  /^\/hr\/phone-notify-control(\/|$)/,
   "/hr/recruitment/dashboard",
   "/hr/recruitment/new-joinees",
   "/hr/recruitment/resignations",

@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import NewVersionTab from "./mobile-app/NewVersionTab";
-import MobileMessagesTab from "./mobile-app/MobileMessagesTab";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +12,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
+import { canViewRoute, isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
 import { Gate, pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import {
@@ -240,18 +239,16 @@ const ACCESS_TABS = [
   { value: "signed_in", label: "Signed in" },
 ] as const;
 
-type PageView = "logins" | "messages" | "version";
+type PageView = "logins" | "version";
 
 const PAGE_TABS: { value: PageView; label: string; icon: React.ReactNode }[] = [
   { value: "logins", label: "Login Status", icon: <Smartphone size={12} /> },
-  { value: "messages", label: "Mobile Messages", icon: <BellRing size={12} /> },
   { value: "version", label: "New Version", icon: <Rocket size={12} /> },
 ];
 
 // Each tab has its own permission key (Account Management -> Mobile App Login); with no setting of its own it follows the page.
 const PAGE_TAB_MODULE: Record<PageView, string> = {
   logins: "mobile_app_login.logins",
-  messages: "mobile_app_login.messages",
   version: "mobile_app_login.version",
 };
 
@@ -298,6 +295,30 @@ function LoginsExportButton({ filters }: { filters: LoginFilters }) {
       <FileSpreadsheet size={13} />
       {exporting ? "Exporting…" : `Export to Excel${rows.length ? ` (${rows.length})` : ""}`}
     </Button>
+  );
+}
+
+/**
+ * The phone notifications used to be a tab of this page (Mobile Messages); since 2026-11-17 they are a page of their own. One
+ * line says where, with a link for a role that may open it.
+ */
+function PhoneNotifyLine() {
+  const { user } = useAuth();
+  const path = "/hr/phone-notify-control";
+  const canOpen = canViewRoute(user, path, moduleForPath(path));
+  return (
+    <p className="flex items-center gap-1.5 text-[11px] text-slate-500" data-testid="phone-notify-moved">
+      <BellRing size={12} className="shrink-0" />
+      Phone notifications (what is pushed to employees&apos; phones) are managed on{" "}
+      {canOpen ? (
+        <Link href={path} className="font-semibold text-indigo-600 hover:underline">
+          Phone Notify Control
+        </Link>
+      ) : (
+        <b>Phone Notify Control</b>
+      )}
+      .
+    </p>
   );
 }
 
@@ -365,6 +386,8 @@ function LoginStatusTab({
           color="bg-blue-50 text-blue-800"
         />
       </div>
+
+      <PhoneNotifyLine />
 
       <div className="flex gap-2 items-start rounded-lg bg-slate-50 border text-slate-600 p-2.5 text-[11px] leading-relaxed">
         <Info size={13} className="mt-0.5 shrink-0" />
@@ -555,8 +578,6 @@ export default function MobileAppLogin() {
 
             {view === "version" ? (
               <NewVersionTab />
-            ) : view === "messages" ? (
-              <MobileMessagesTab />
             ) : (
               <LoginStatusTab
                 filters={filters}

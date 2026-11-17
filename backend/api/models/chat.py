@@ -102,6 +102,9 @@ class ChatMessage(models.Model):
         "self", on_delete=models.SET_NULL, null=True, blank=True,
         db_column="reply_to_id", related_name="replies",
     )
+    # A structured attachment the HR chat page draws as a card (Attendance Notify's report: counts and the employees,
+    # 2026-11-17); `text` always carries the plain version, which is all the mobile app shows. Null for a typed message.
+    payload = models.JSONField(null=True, blank=True, db_column="payload")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
     class Meta:

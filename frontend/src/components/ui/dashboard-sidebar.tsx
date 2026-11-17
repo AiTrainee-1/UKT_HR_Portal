@@ -20,7 +20,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText, MapPinned, ClipboardList, Briefcase,
+  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText, MapPinned, ClipboardList, Briefcase, BellRing,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -79,6 +79,7 @@ export const navGroups: NavGroupData[] = [
           { path: '/hr/attendance/search', label: 'Attendance Search' },
           { path: '/hr/attendance/report-log', label: 'Report Log' },
           { path: '/hr/attendance/production-report-log', label: 'Production Report Log' },
+          { path: '/hr/attendance/attendance-notify', label: 'Attendance Notify' },
           { path: '/hr/missing-punch', label: 'Missing Punch' },
         ],
       },
@@ -190,6 +191,7 @@ export const navGroups: NavGroupData[] = [
       { path: '/hr/whatsapp-control', label: 'WhatsApp Control', icon: MessageCircle },
       { path: '/hr/sms-control', label: 'SMS Control', icon: MessageSquareText },
       { path: '/hr/gmail-control', label: 'Gmail Control', icon: Mail },
+      { path: '/hr/phone-notify-control', label: 'Phone Notify Control', icon: BellRing },
       {
         path: '/hr/Biometric-Connectors',
         label: 'Biometric Connectors',
