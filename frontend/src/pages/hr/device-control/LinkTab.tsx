@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Link2, Loader2, Search, Unlink2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, History, Home, Link2, Loader2, Search, Unlink2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,10 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { TonePill } from "../device-status/parts";
+import LinkHistory from "./LinkHistory";
+import LinkSummary from "./LinkSummary";
 import { ConnectionChip, PersonAvatar } from "./parts";
+import { SubTabBar, useView } from "./SubTabs";
 
 const useDebounced = <T,>(value: T, ms = 300): T => {
   const [v, setV] = useState(value);
@@ -160,13 +163,7 @@ function EmployeeLinks({ row, devices }: { row: DeviceLinkRow; devices: DeviceCo
  * (and a device added later too); unlink a device from an employee and the punches carrying that employee's code from that
  * device are ignored. For two people who share an Employee Code on devices in different units.
  */
-export default function LinkTab({
-  overview,
-  loading,
-}: {
-  overview: DeviceControlOverview | undefined;
-  loading: boolean;
-}) {
+function LinkManager({ overview, loading }: { overview: DeviceControlOverview | undefined; loading: boolean }) {
   const [query, setQuery] = useState("");
   const search = useDebounced(query.trim());
   const links = useDeviceLinks(search);
@@ -262,3 +259,41 @@ export default function LinkTab({
     </div>
   );
 }
+
+/**
+ * Link / Unlink (owner 2026-11-17: two sub-tabs). Home: the summary (who is on which device, on and linked to several)
+ * and, below it, linking and unlinking devices for an employee as before. Modified: every link and unlink made, with
+ * filters, and who has a device unlinked now.
+ */
+export default function LinkTab({
+  overview,
+  loading,
+}: {
+  overview: DeviceControlOverview | undefined;
+  loading: boolean;
+}) {
+  const [view, setView] = useView(LINK_VIEWS);
+  return (
+    <div className="space-y-4">
+      <SubTabBar
+        items={[
+          { value: "home", label: "Home", icon: <Home size={14} /> },
+          { value: "modified", label: "Modified", icon: <History size={14} /> },
+        ]}
+        value={view}
+        onChange={setView}
+        testId="link-views"
+      />
+      {view === "home" ? (
+        <>
+          <LinkSummary />
+          <LinkManager overview={overview} loading={loading} />
+        </>
+      ) : (
+        <LinkHistory devices={overview?.devices ?? []} />
+      )}
+    </div>
+  );
+}
+
+const LINK_VIEWS = ["home", "modified"] as const;

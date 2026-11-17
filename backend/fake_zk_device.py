@@ -48,6 +48,7 @@ CMD_AUTH = 1102
 CMD_DATA = 1501
 CMD_FREE_DATA = 1502
 CMD_READ_BUFFER = 1503
+CMD_READ_CHUNK = 1504  # pyzk's _CMD_READ_BUFFER: one block of a prepared buffer
 CMD_ACK_OK = 2000
 CMD_ACK_ERROR = 2001
 CMD_ACK_UNAUTH = 2005
@@ -152,6 +153,10 @@ class FakeDevice:
         self.ignore_privilege = False  # accept a user write but keep the role at 0: firmware that normalises it
         self.truncate_reads = False  # send half of a big download, then close: a terminal that reboots mid-transfer
         self.report_zero_users = False  # say there are no users while the other counters say there are
+        # answer a big download the way a real terminal does: "prepared, N bytes", then 64 KB blocks on request (pyzk's
+        # read_with_buffer + __read_chunk), instead of all of it in one answer
+        self.chunk_reads = False
+        self._prepared = b""
         self._writes_done = 0
         self.refuse_connections_after: int | None = None
 
@@ -277,7 +282,14 @@ class FakeDevice:
                     body += b"".join(self._bad_punch_record() for _ in range(self.invalid_punch_dates))
                 else:
                     return CMD_ACK_ERROR, b""
-                return CMD_DATA, struct.pack("<I", len(body)) + body
+                buffer = struct.pack("<I", len(body)) + body
+                if self.chunk_reads:
+                    self._prepared = buffer
+                    return CMD_ACK_OK, b"\x00" + struct.pack("<I", len(buffer)) + b"\x00" * 4
+                return CMD_DATA, buffer
+            if command == CMD_READ_CHUNK:
+                start, size = struct.unpack("<ii", data[:8])
+                return CMD_DATA, self._prepared[start : start + size]
             if command in (CMD_USER_WRQ, CMD_DELETE_USER):
                 if self.drop_after_writes is not None and self._writes_done >= self.drop_after_writes:
                     return DROP

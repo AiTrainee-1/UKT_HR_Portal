@@ -10,9 +10,14 @@ Device Control endpoints (Attendance → Device Control): the overview, Data Fet
   POST /api/attendance/device-control/employees/<id>/photo     keep a captured photo as the employee's profile photo
   GET  /api/attendance/device-control/links                    employees and the devices unlinked from them (search by code or name)
   POST /api/attendance/device-control/employees/<id>/links     link / unlink devices for one employee
-  POST /api/attendance/device-control/fetch/start              preview or run a manual fetch of punches
+  POST /api/attendance/device-control/fetch/start              preview or run a manual fetch of punches; "scope" limits
+                                                               it to staff, production or one employee (2026-11-17)
   GET  /api/attendance/device-control/fetch/runs               the history, newest first
-  GET  /api/attendance/device-control/fetch/runs/<id>          one run (the page polls this while it runs)
+  GET  /api/attendance/device-control/fetch/runs/<id>          one run, with its progress (the page polls this)
+  GET  /api/attendance/device-control/fetch/employees          active employees to fetch one of
+  GET  /api/attendance/device-control/links/summary            Link / Unlink -> Home: who is on which device, linked
+  GET  /api/attendance/device-control/links/history            Link / Unlink -> Modified: every link / unlink change
+  GET  /api/attendance/device-control/users/history            Data Push: every add / change / delete as it finished
 
 Devices behind a Site Connector (connector_admin_views.py) cannot be answered inside the request, so a read, add,
 change or delete that includes one returns 202 {"operation": {...}} and the page polls
@@ -49,6 +54,7 @@ from .device_directory import (
 )
 from .branch_scope import get_branch_scope
 from .device_directory import SyncRunning
+from .device_control_extras import fetch_employee_search, link_history, link_summary, user_history
 from .device_fetch import FetchConflict, list_runs, serialize_run, start_run
 from .models import BiometricDevice, BiometricFetchRun
 
@@ -158,9 +164,9 @@ def device_control_people(request: Request) -> Response:
     f = PeopleFilter(
         search=(q.get("search") or "").strip()[:80],
         device_ids=tuple(device_ids),
-        device_mode=q.get("deviceMode") if q.get("deviceMode") in ("any", "all", "none") else "any",
+        device_mode=q.get("deviceMode") if q.get("deviceMode") in ("any", "all", "none", "missing") else "any",
         link=q.get("link")
-        if q.get("link") in ("linked", "device_only", "hrms_only", "inactive_on_device", "restricted")
+        if q.get("link") in ("linked", "device_only", "hrms_only", "inactive_on_device", "restricted", "active")
         else "all",
         count=q.get("count") if q.get("count") in ("single", "multiple") else "any",
         role=q.get("role") if q.get("role") in ("admin", "user") else "any",
@@ -181,13 +187,22 @@ def device_control_people(request: Request) -> Response:
     )
 
 
+CONTEXTS = ("add", "edit", "copy", "transfer", "make_same", "delete")
+
+
+def _context(request: Request) -> str:
+    """Why the page made the change, for the history (anything else is kept as "")."""
+    raw = str(request.data.get("context") or "")
+    return raw if raw in CONTEXTS else ""
+
+
 def _change(request: Request, mode: str) -> Response:
     ids = _int_list(request.data.get("deviceIds"))
     users = request.data.get("users")
     if ids is None or not isinstance(users, list):
         return _bad("deviceIds and users must be lists")
     try:
-        return _answer(apply_users(request, ids, users, mode))
+        return _answer(apply_users(request, ids, users, mode, context=_context(request)))
     except SyncRunning as exc:
         return _bad(str(exc), 409)
     except ValueError as exc:
@@ -214,7 +229,11 @@ def device_control_delete_users(request: Request) -> Response:
     if not isinstance(user_ids, list) or ids is None:
         return _bad("userIds and deviceIds must be lists")
     try:
-        return _answer(delete_users(request, user_ids, ids or None, _flag(request.data.get("markInactive"))))
+        return _answer(
+            delete_users(
+                request, user_ids, ids or None, _flag(request.data.get("markInactive")), context=_context(request)
+            )
+        )
     except SyncRunning as exc:
         return _bad(str(exc), 409)
     except ValueError as exc:
@@ -266,7 +285,13 @@ def device_control_fetch_start(request: Request) -> Response:
         return _bad("deviceIds must be a list and range an object")
     try:
         run = start_run(
-            request, ids, str(rng.get("preset") or ""), rng.get("from"), rng.get("to"), _flag(request.data.get("apply"))
+            request,
+            ids,
+            str(rng.get("preset") or ""),
+            rng.get("from"),
+            rng.get("to"),
+            _flag(request.data.get("apply")),
+            scope=request.data.get("scope"),
         )
     except ValueError as exc:
         return _bad(str(exc))
@@ -288,3 +313,47 @@ def device_control_fetch_run(request: Request, pk: int) -> Response:
     if run is None:
         return _bad("Run not found", 404)
     return Response(serialize_run(run, mask_names=_mask(request)))
+
+
+@api_view(["GET"])
+@require_hr
+def device_control_fetch_employees(request: Request) -> Response:
+    q = request.query_params
+    return Response(fetch_employee_search(request, (q.get("search") or "").strip()[:80], q.get("employmentType") or ""))
+
+
+@api_view(["GET"])
+@require_hr
+def device_control_links_summary(request: Request) -> Response:
+    return Response(link_summary(request, request.query_params.get("employmentType") or ""))
+
+
+@api_view(["GET"])
+@require_hr
+def device_control_links_history(request: Request) -> Response:
+    q = request.query_params
+    return Response(
+        link_history(
+            request,
+            search=(q.get("search") or "").strip()[:80],
+            action=q.get("action") or "",
+            employment_type=q.get("employmentType") or "",
+            device_id=_int_or_none(q.get("device")),
+            page=_int_or_none(q.get("page")) or 1,
+        )
+    )
+
+
+@api_view(["GET"])
+@require_hr
+def device_control_users_history(request: Request) -> Response:
+    q = request.query_params
+    return Response(
+        user_history(
+            request,
+            kind=q.get("kind") or "",
+            search=(q.get("search") or "").strip()[:80],
+            page=_int_or_none(q.get("page")) or 1,
+            contexts=[c for c in (q.get("context") or "").split(",") if c in CONTEXTS],
+        )
+    )

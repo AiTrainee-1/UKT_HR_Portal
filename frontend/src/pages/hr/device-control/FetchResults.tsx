@@ -2,16 +2,70 @@ import { useLocation } from "wouter";
 import { AlertTriangle, ArrowRight, CheckCircle2, Info, Loader2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { FetchDeviceResult, FetchRun } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { StatCard } from "../account-management/parts";
 import { TONE_CLASSES } from "../device-status/logic";
 import { TonePill } from "../device-status/parts";
-import { RESULT_STATUS_LABEL, RESULT_STATUS_TONE, describeRun, fetchProgress, formatDuration, pushLink } from "./logic";
+import {
+  RESULT_STATUS_LABEL,
+  RESULT_STATUS_TONE,
+  describeRun,
+  deviceFraction,
+  deviceProgressText,
+  fetchProgress,
+  formatDuration,
+  pushLink,
+} from "./logic";
 
 const n = (v: number | undefined | null) => (v == null ? "–" : v.toLocaleString("en-IN"));
+
+/** The progress bar of a fetch (owner 2026-11-17): fills as the records arrive, striped and moving while it runs. */
+export function FetchBar({
+  percent,
+  running,
+  failed = false,
+  size = "lg",
+  testId,
+}: {
+  percent: number;
+  running: boolean;
+  failed?: boolean;
+  size?: "lg" | "sm";
+  testId?: string;
+}) {
+  return (
+    <div
+      className={cn("relative overflow-hidden rounded-full bg-slate-100", size === "lg" ? "h-3" : "h-1.5")}
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      data-testid={testId}
+    >
+      <div
+        className={cn(
+          "h-full rounded-full transition-[width] duration-700 ease-out",
+          failed ? "bg-red-500" : percent >= 100 ? "bg-emerald-500" : "bg-[#006496]",
+          running && "dc-fetch-stripes",
+        )}
+        style={{ width: `${Math.max(running ? 3 : 0, Math.min(100, percent))}%` }}
+      />
+    </div>
+  );
+}
+
+const STRIPES_CSS = `
+.dc-fetch-stripes {
+  background-image: linear-gradient(45deg, rgba(255,255,255,.28) 25%, transparent 25%, transparent 50%,
+    rgba(255,255,255,.28) 50%, rgba(255,255,255,.28) 75%, transparent 75%, transparent);
+  background-size: 18px 18px;
+  animation: dc-fetch-move 0.9s linear infinite;
+}
+@keyframes dc-fetch-move { from { background-position: 0 0 } to { background-position: 18px 0 } }
+@media (prefers-reduced-motion: reduce) { .dc-fetch-stripes { animation: none } }
+`;
 
 function DeviceRow({ r, update }: { r: FetchDeviceResult; update: boolean }) {
   const busy = r.status === "reading" || r.status === "processing";
@@ -31,8 +85,17 @@ function DeviceRow({ r, update }: { r: FetchDeviceResult; update: boolean }) {
           {r.error}
         </TableCell>
       ) : busy && r.inRange == null ? (
-        <TableCell colSpan={5} className="text-xs text-slate-500">
-          {r.phase || "Working…"}
+        <TableCell colSpan={5} className="text-xs text-slate-500" data-testid={`fetch-device-${r.deviceId}-progress`}>
+          {r.stage ? (
+            <div className="flex min-w-[16rem] items-center gap-3">
+              <div className="flex-1">
+                <FetchBar percent={Math.round(deviceFraction(r) * 100)} running size="sm" />
+              </div>
+              <span className="whitespace-nowrap tabular-nums">{deviceProgressText(r)}</span>
+            </div>
+          ) : (
+            r.phase || "Working…"
+          )}
         </TableCell>
       ) : (
         <>
@@ -60,8 +123,10 @@ export default function FetchResults({ run }: { run: FetchRun }) {
   const s = run.summary;
   const running = run.status === "running";
 
+  const remaining = Math.max(0, (progress.recordsTotal ?? 0) - (progress.recordsRead ?? 0));
   return (
     <div className="space-y-4" data-testid="fetch-run" data-status={run.status} data-mode={run.mode}>
+      <style>{STRIPES_CSS}</style>
       <Card className="rounded-2xl">
         <CardContent className="space-y-3 p-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
@@ -71,6 +136,14 @@ export default function FetchResults({ run }: { run: FetchRun }) {
                 {run.status === "done" && <CheckCircle2 size={15} className="text-emerald-600" />}
                 {run.status === "failed" && <XCircle size={15} className="text-red-600" />}
                 {update ? "Fetch and update" : "Preview"} · {run.rangeLabel}
+                {run.scopeLabel && run.scopeLabel !== "Everyone" && (
+                  <span
+                    className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800"
+                    data-testid="fetch-run-scope"
+                  >
+                    {run.scopeLabel}
+                  </span>
+                )}
               </p>
               <p className="mt-0.5 text-xs text-slate-500" data-testid="fetch-run-line">
                 {running ? progress.label : describeRun(run)}
@@ -81,7 +154,62 @@ export default function FetchResults({ run }: { run: FetchRun }) {
               {run.startedBy ? ` · ${run.startedBy}` : ""}
             </span>
           </div>
-          <Progress value={progress.percent} className="h-1.5" aria-label="Progress" />
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <FetchBar
+                percent={progress.percent}
+                running={running}
+                failed={run.status === "failed"}
+                testId="fetch-run-bar"
+              />
+            </div>
+            <span
+              className="w-11 text-right text-sm font-black tabular-nums text-slate-800"
+              data-testid="fetch-run-percent"
+            >
+              {progress.percent}%
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4" data-testid="fetch-run-counters">
+            <div className="rounded-lg bg-slate-50 px-2.5 py-1.5">
+              <p className="text-slate-500">Records read</p>
+              <p className="font-bold tabular-nums text-slate-900">
+                {n(progress.recordsRead)}
+                {progress.recordsTotal ? (
+                  <span className="font-normal text-slate-500"> of {n(progress.recordsTotal)}</span>
+                ) : null}
+              </p>
+            </div>
+            <div className="rounded-lg bg-slate-50 px-2.5 py-1.5">
+              <p className="text-slate-500">{running ? "Still to read" : "Read in all"}</p>
+              <p className="font-bold tabular-nums text-slate-900">
+                {running ? n(remaining) : n(progress.recordsRead)}
+              </p>
+            </div>
+            <div className="rounded-lg bg-slate-50 px-2.5 py-1.5">
+              <p className="text-slate-500">Devices finished</p>
+              <p className="font-bold tabular-nums text-slate-900">
+                {progress.done} of {progress.total}
+                {progress.failed ? <span className="font-normal text-red-600"> · {progress.failed} failed</span> : null}
+              </p>
+            </div>
+            <div className="rounded-lg bg-slate-50 px-2.5 py-1.5">
+              <p className="text-slate-500">Status</p>
+              <p
+                className={cn(
+                  "font-bold",
+                  run.status === "failed"
+                    ? "text-red-600"
+                    : run.status === "done"
+                      ? "text-emerald-700"
+                      : "text-[#006496]",
+                )}
+                data-testid="fetch-run-status"
+              >
+                {running ? progress.label : run.status === "done" ? "Completed" : "Failed"}
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -134,6 +262,17 @@ export default function FetchResults({ run }: { run: FetchRun }) {
           <Info size={14} className="mt-0.5 shrink-0" />
           {n(s.restricted)} punch{s.restricted === 1 ? " was" : "es were"} ignored: the employee they carry the code of
           has this device unlinked (Link / Unlink tab).
+        </p>
+      )}
+
+      {s && (s.outOfScope ?? 0) > 0 && (
+        <p
+          className="flex items-start gap-2 rounded-xl bg-slate-50 px-4 py-2.5 text-xs text-slate-700"
+          data-testid="fetch-out-of-scope"
+        >
+          <Info size={14} className="mt-0.5 shrink-0" />
+          {n(s.outOfScope)} punch{s.outOfScope === 1 ? " belongs" : "es belong"} to people outside this fetch (
+          {run.scopeLabel}): counted only, nothing was taken from them.
         </p>
       )}
 

@@ -20,6 +20,7 @@ import {
   usePushDeviceUsers,
   useSaveEmployeePhoto,
   useUpdateDeviceUsers,
+  type ChangeContext,
   type DeviceControlDevice,
   type PersonRow,
 } from "@/lib/api-client/custom-hooks";
@@ -52,6 +53,10 @@ type Props = {
   person?: PersonRow | null;
   /** The device whose chip was clicked: its details fill the form and it is the only one ticked to start with. */
   deviceId?: number | null;
+  /** The devices ticked to start with (Data Push -> Add Users' chosen devices); ignored when deviceId is given. */
+  deviceIds?: number[];
+  /** Why, for the history of user changes ("add" / "edit"; the older screens send nothing). */
+  context?: ChangeContext;
   onOutcome: (outcome: ChangeOutcome) => void;
 };
 
@@ -65,7 +70,17 @@ const useDebounced = <T,>(value: T, ms = 250): T => {
 };
 
 /** Add a user to devices, or change one: everything the terminal asks for, a photo, and which devices to do it on. */
-export default function UserDialog({ mode, open, onClose, devices, person, deviceId, onOutcome }: Props) {
+export default function UserDialog({
+  mode,
+  open,
+  onClose,
+  devices,
+  person,
+  deviceId,
+  deviceIds,
+  context = "",
+  onOutcome,
+}: Props) {
   const { toast } = useToast();
   const { user } = useAuth();
   // the photo lives on the employee's profile, so saving one is an employee edit
@@ -121,10 +136,11 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
       touched.current = false;
     }
     const ready = devices.filter(eligible).map((d) => d.id);
+    const asked = (deviceIds ?? []).filter((id) => ready.includes(id));
     setSelected((prev) =>
       touched.current
         ? new Set([...prev].filter((id) => ready.includes(id)))
-        : new Set(deviceId != null && ready.includes(deviceId) ? [deviceId] : ready),
+        : new Set(deviceId != null && ready.includes(deviceId) ? [deviceId] : asked.length ? asked : ready),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subject?.userId, readyKey, deviceId]);
@@ -156,11 +172,15 @@ export default function UserDialog({ mode, open, onClose, devices, person, devic
     const extra: string[] = [];
     try {
       let result;
-      const deviceIds = [...selected];
+      const targets = [...selected];
       if (!editing) {
-        result = await push.mutateAsync({ deviceIds, users: [newUserInput(form, picked?.employee?.id ?? null)] });
-      } else if (effectiveDiff && deviceIds.length > 0) {
-        result = await update.mutateAsync({ deviceIds, users: [effectiveDiff] });
+        result = await push.mutateAsync({
+          deviceIds: targets,
+          users: [newUserInput(form, picked?.employee?.id ?? null)],
+          context,
+        });
+      } else if (effectiveDiff && targets.length > 0) {
+        result = await update.mutateAsync({ deviceIds: targets, users: [effectiveDiff], context });
       }
       if (photo && employee && canEditEmployees) {
         try {

@@ -17,6 +17,10 @@ import {
   activeFilterCount,
   byteLength,
   capacityLevel,
+  cellState,
+  changeLabel,
+  changePeople,
+  changeResultText,
   changedFields,
   connectionAdvice,
   copyInput,
@@ -39,8 +43,13 @@ import {
   isUnreachable,
   isUsable,
   localDate,
+  makeSamePlan,
+  missingFrom,
+  movedSafely,
+  nameDiffersFromHrms,
   newUserInput,
   pinWidthFor,
+  presenceVariants,
   rangeProblem,
   roleLabel,
   shortDeviceName,
@@ -51,6 +60,7 @@ import {
   trimToBytes,
   validateConnectorSettings,
   validateForm,
+  viaText,
 } from "./logic";
 
 const device = (over: Partial<DeviceControlDevice> = {}): DeviceControlDevice => ({
@@ -579,7 +589,24 @@ describe("Data Fetch", () => {
   });
 
   it("shows how far a run has got", () => {
-    expect(fetchProgress(run())).toEqual({ done: 1, total: 2, percent: 50, label: "Reading the devices" });
+    // a run from before the record counts (no stage): by devices finished
+    expect(fetchProgress(run())).toEqual({
+      done: 1,
+      total: 2,
+      percent: 50,
+      label: "Reading the devices",
+      recordsRead: 0,
+      recordsTotal: 0,
+      failed: 0,
+    });
+    // a live run: by the records each device has sent so far
+    const live = run({
+      results: [
+        { deviceId: 1, deviceName: "HO", status: "done", stage: "done", recordsRead: 100, recordsTotal: 100 },
+        { deviceId: 2, deviceName: "HO-1", status: "reading", stage: "reading", recordsRead: 50, recordsTotal: 100 },
+      ],
+    });
+    expect(fetchProgress(live)).toMatchObject({ percent: 73, recordsRead: 150, recordsTotal: 200 });
     const writing = run({
       results: [
         { deviceId: 1, deviceName: "HO", status: "processing" },
@@ -1011,5 +1038,111 @@ describe("site connectors", () => {
     expect(validateConnectorSettings({ ...ok, minutes: "ab" })).toMatch(/every 0/);
     expect(validateConnectorSettings({ ...ok, days: "0" })).toMatch(/1 to 31/);
     expect(validateConnectorSettings({ ...ok, days: "32" })).toMatch(/1 to 31/);
+  });
+});
+
+describe("Data Push sub-tabs", () => {
+  const push = (over: Partial<PushResult> = {}): PushResult => ({
+    mode: "create",
+    rejected: [],
+    results: [],
+    summary: { added: 0, updated: 0, failed: 0 },
+    ...over,
+  });
+  const entry = (deviceId: number, over: Partial<PushResult["results"][number]> = {}) => ({
+    deviceId,
+    deviceName: `D${deviceId}`,
+    ok: true,
+    added: [] as string[],
+    updated: [] as string[],
+    deleted: [] as string[],
+    skipped: [] as { userId: string; reason: string }[],
+    failed: [] as { userId: string; error: string }[],
+    ...over,
+  });
+
+  it("names the connection a device is reached by", () => {
+    expect(viaText({ via: null })).toBe("Direct");
+    expect(viaText({ via: { id: 1, name: "Unit 2 PC", online: true } })).toBe("Site Connector · Unit 2 PC");
+  });
+
+  it("lists the devices someone is missing from", () => {
+    expect(missingFrom(person(), [1, 2, 3])).toEqual([3]);
+    expect(missingFrom(person({ presence: [] }), [1, 2])).toEqual([1, 2]);
+  });
+
+  it("only takes a moved person off the old device once every new device has them", () => {
+    const r = push({
+      rejected: [{ userId: "9", error: "bad" }],
+      results: [
+        entry(5, { added: ["1", "2"], skipped: [{ userId: "3", reason: "Already on this device." }] }),
+        entry(6, { added: ["1", "3"], failed: [{ userId: "2", error: "full" }] }),
+      ],
+    });
+    expect(movedSafely(r, ["1", "2", "3", "9"], [5, 6])).toEqual(["1", "3"]);
+    // a device that could not be reached keeps everyone where they are
+    expect(movedSafely(push({ results: [entry(5, { ok: false, error: "down" })] }), ["1"], [5])).toEqual([]);
+    expect(movedSafely(push({ results: [entry(5, { added: ["1"] })] }), ["1"], [5, 6])).toEqual([]);
+    expect(movedSafely(push(), ["1"], [])).toEqual([]);
+  });
+
+  it("finds what differs between the devices, the most common record first", () => {
+    const p = person({
+      presence: [
+        { ...person().presence[0], deviceId: 1, name: "Asha K", privilege: 0, card: 0 },
+        { ...person().presence[0], deviceId: 2, name: "Asha K", privilege: 0, card: 0 },
+        { ...person().presence[0], deviceId: 3, name: "ASHA", privilege: 0, card: 0 },
+      ],
+    });
+    const vs = presenceVariants(p);
+    expect(vs.map((v) => [v.name, v.deviceIds])).toEqual([
+      ["Asha K", [1, 2]],
+      ["ASHA", [3]],
+    ]);
+    expect([cellState(p, 1), cellState(p, 3), cellState(p, 4)]).toEqual(["same", "differs", "missing"]);
+    // a tie: no device is "right", both are marked
+    expect([cellState(person(), 1), cellState(person(), 2)]).toEqual(["differs", "differs"]);
+    expect(cellState(person({ presence: [person().presence[0]] }), 1)).toBe("same");
+  });
+
+  it("plans Make the same from one device's record, or from the HRMS name", () => {
+    const p = person();
+    const [first] = presenceVariants(p);
+    expect(makeSamePlan(p, first)).toEqual({
+      input: { userId: "1001", name: first.name, privilege: first.privilege, card: first.card },
+      deviceIds: p.presence.filter((x) => !first.deviceIds.includes(x.deviceId)).map((x) => x.deviceId),
+    });
+    // "Asha K" / "ASHA K" are not the HRMS name "Asha Kumar": both devices get it
+    expect(makeSamePlan(p, "hrms")).toEqual({ input: { userId: "1001", employeeId: 7 }, deviceIds: [1, 2] });
+    expect(nameDiffersFromHrms(p, "asha  kumar")).toBe(false);
+    expect(makeSamePlan(person({ employee: null }), "hrms")).toBeNull();
+    const one = person({ presence: [person().presence[0]] });
+    expect(makeSamePlan(one, presenceVariants(one)[0])).toBeNull();
+  });
+
+  it("says in plain words what a change in the history was", () => {
+    expect(changeLabel({ kind: "create", context: "add" })).toBe("Added");
+    expect(changeLabel({ kind: "delete", context: "transfer" })).toMatch(/taken off the old device/);
+    expect(changeLabel({ kind: "create", context: "transfer" })).toMatch(/put on the new device/);
+    expect(changeLabel({ kind: "update", context: "" })).toBe("Changed");
+    expect(changeLabel({ kind: "delete", context: "" })).toBe("Deleted");
+    const line = { deviceName: "D", ok: true, added: 2, updated: 0, deleted: 0, absent: 1, skipped: 1, failed: 0 };
+    expect(changeResultText(line)).toBe("2 added · 1 not on it · 1 left alone");
+    expect(changeResultText({ ...line, ok: false, error: "Timed out" })).toBe("Timed out");
+    expect(changeResultText({ ...line, added: 0, absent: 0, skipped: 0 })).toBe("Nothing to do");
+    expect(changePeople({ userIds: ["1", "2", "3", "4", "5"], userNames: { "1": "Sara" } })).toBe(
+      "Sara (1), 2, 3 and 2 more",
+    );
+  });
+
+  it("reads and describes the missing-from device filter", () => {
+    expect(filtersFromSearch("?devices=1,2&deviceMode=missing").deviceMode).toBe("missing");
+    const devices = [
+      { id: 1, name: "HO" },
+      { id: 2, name: "Unit 2" },
+    ];
+    expect(describeDeviceFilter({ ...NO_FILTERS, devices: [1, 2], deviceMode: "missing" }, devices)).toBe(
+      "Missing from one of HO, Unit 2",
+    );
   });
 });

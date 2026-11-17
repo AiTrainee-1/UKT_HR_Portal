@@ -25,6 +25,7 @@ const MODE_LABEL: Record<DeviceMode, string> = {
   any: "Is on any of these",
   all: "Is on all of these",
   none: "Is NOT on any of these",
+  missing: "Is missing from at least one",
 };
 
 /** Everything the Data Push list can be narrowed by. The same filters work for "who is on this device", "who is on

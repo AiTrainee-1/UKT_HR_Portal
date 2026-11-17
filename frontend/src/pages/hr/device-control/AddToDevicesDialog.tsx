@@ -11,7 +11,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { usePushDeviceUsers, type DeviceControlDevice, type PersonRow } from "@/lib/api-client/custom-hooks";
+import {
+  usePushDeviceUsers,
+  type ChangeContext,
+  type DeviceControlDevice,
+  type PersonRow,
+} from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { ConnectionChip } from "./parts";
 import type { ChangeOutcome } from "./ResultDialog";
@@ -23,6 +28,7 @@ export default function AddToDevicesDialog({
   people,
   devices,
   deviceId,
+  context = "",
   onClose,
   onOutcome,
 }: {
@@ -30,6 +36,8 @@ export default function AddToDevicesDialog({
   devices: DeviceControlDevice[];
   /** The device whose chip was clicked: the only one ticked to start with. */
   deviceId?: number | null;
+  /** Why, for the history of user changes (Data Push -> Edit Users copies). */
+  context?: ChangeContext;
   onClose: () => void;
   onOutcome: (outcome: ChangeOutcome) => void;
 }) {
@@ -50,7 +58,7 @@ export default function AddToDevicesDialog({
   const go = async () => {
     setBusy(true);
     try {
-      const result = await push.mutateAsync({ deviceIds: [...chosen], users: people.map(copyInput) });
+      const result = await push.mutateAsync({ deviceIds: [...chosen], users: people.map(copyInput), context });
       onClose();
       onOutcome({ kind: "push", result });
     } catch (e) {

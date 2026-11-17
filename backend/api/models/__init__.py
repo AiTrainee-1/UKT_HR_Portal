@@ -62,6 +62,8 @@ from .attendance import (
     BiometricDeviceOperation,
     BiometricDeviceUser,
     BiometricFetchRun,
+    BiometricUserChange,
+    EmployeeDeviceLinkChange,
     BiometricProbe,
     BiometricSiteConnector,
     BiometricUnknownPusher,

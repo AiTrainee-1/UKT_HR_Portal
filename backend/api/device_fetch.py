@@ -25,7 +25,7 @@ import logging
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
@@ -47,6 +47,7 @@ STALE_RUN_MINUTES = 5  # a run beats its heart every HEARTBEAT_SECONDS; five qui
 HEARTBEAT_SECONDS = 30
 ADVISORY_LOCK_KEY = 71400271  # one fetch is started at a time, across web workers
 READ_PARALLELISM = 3
+PROGRESS_SECONDS = 1.0  # how often a run publishes how far its reads have got
 UNMATCHED_SHOWN = 50
 SAMPLES_SHOWN = 10
 
@@ -62,6 +63,81 @@ RANGE_LABELS = {
 
 class FetchConflict(Exception):
     """Another run, or the Attendance page's own sync, is using the devices."""
+
+
+SCOPE_TYPES = ("staff", "production")
+MAX_SCOPE_EMPLOYEES = 50
+
+
+def clean_scope(request, raw) -> dict | None:
+    """Whose punches a run takes (owner 2026-11-17): None = everyone, as before; {"employmentType": "staff" |
+    "production"}; or {"employeeIds": [..]} (one employee from the page; a few at most). Employees are active ones the
+    caller may see (branch scope), since only an active employee's punches are recorded. ValueError says what is wrong."""
+    from .branch_scope import scope_to_branch
+
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("The scope must be an object.")
+    kind = raw.get("employmentType") or ""
+    ids = raw.get("employeeIds") or []
+    if kind and kind not in SCOPE_TYPES:
+        raise ValueError("employmentType must be staff or production.")
+    if not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        raise ValueError("employeeIds must be a list of employee ids.")
+    if len(ids) > MAX_SCOPE_EMPLOYEES:
+        raise ValueError(f"Choose at most {MAX_SCOPE_EMPLOYEES} employees.")
+    scope: dict = {}
+    if ids:
+        found = list(
+            scope_to_branch(Employee.objects, request)
+            .filter(pk__in=ids)
+            .only("id", "employee_code", "first_name", "last_name", "employment_type", "status")
+        )
+        if len(found) != len(set(ids)):
+            raise ValueError("That employee could not be found (or is in another branch).")
+        inactive = [e for e in found if e.status != "active"]
+        if inactive:
+            raise ValueError(
+                f"{employee_name(inactive[0])} is not active: punches are only recorded for active employees."
+            )
+        scope["employeeIds"] = sorted({e.pk for e in found})
+        scope["employees"] = [
+            {
+                "id": e.pk,
+                "code": str(e.employee_code).strip(),
+                "name": employee_name(e),
+                "employmentType": e.employment_type,
+            }
+            for e in sorted(found, key=lambda x: str(x.employee_code))
+        ]
+    if kind:
+        scope["employmentType"] = kind
+    return scope or None
+
+
+def scope_codes(scope: dict | None, by_code: dict) -> set | None:
+    """The Employee Codes a scope takes from `by_code` (active employees by code), or None for everyone."""
+    if not scope:
+        return None
+    ids = set(scope.get("employeeIds") or [])
+    kind = scope.get("employmentType") or ""
+    return {
+        code
+        for code, e in by_code.items()
+        if (not ids or e.pk in ids) and (not kind or getattr(e, "employment_type", "") == kind)
+    }
+
+
+def scope_label(scope: dict | None) -> str:
+    """ "Everyone", "Staff only", "Production only", "PC-7 Kavi Worker"."""
+    if not scope:
+        return "Everyone"
+    people = scope.get("employees") or []
+    if people:
+        first = f"{people[0]['code']} {people[0]['name']}".strip()
+        return first if len(people) == 1 else f"{first} and {len(people) - 1} more"
+    return {"staff": "Staff only", "production": "Production only"}.get(scope.get("employmentType") or "", "Everyone")
 
 
 def resolve_range(preset: str, date_from=None, date_to=None, today: date | None = None):
@@ -105,11 +181,15 @@ def _expire_stale() -> None:
     )
 
 
-def start_run(request, device_ids, preset: str, date_from=None, date_to=None, apply: bool = False) -> BiometricFetchRun:
-    """Create a run and start it on a background thread. FetchConflict if the devices are already in use."""
+def start_run(
+    request, device_ids, preset: str, date_from=None, date_to=None, apply: bool = False, scope=None
+) -> BiometricFetchRun:
+    """Create a run and start it on a background thread. FetchConflict if the devices are already in use. `scope` (see
+    clean_scope) limits whose punches it takes."""
     from . import sync_progress
 
     start, end, label = resolve_range(preset, date_from, date_to)
+    scope = clean_scope(request, scope)
     devices = list(
         BiometricDevice.objects.select_related("connector")
         .filter(pk__in=device_ids or [], is_active=True)
@@ -137,8 +217,19 @@ def start_run(request, device_ids, preset: str, date_from=None, date_to=None, ap
             date_from=start,
             date_to=end,
             device_ids=[d.pk for d in devices],
+            scope=scope,
             results=[
-                {"deviceId": d.pk, "deviceName": d.name, "status": "reading", "phase": "Connecting to the device"}
+                {
+                    "deviceId": d.pk,
+                    "deviceName": d.name,
+                    "status": "reading",
+                    "phase": "Connecting to the device",
+                    # progress (owner 2026-11-17): what the device last said it holds, until the read says better
+                    "stage": "connecting",
+                    "recordsTotal": (d.capacity or {}).get("records"),
+                    "recordsRead": 0,
+                    "via": "connector" if device_remote.is_remote(d) else "direct",
+                }
                 for d in devices
             ],
         )
@@ -149,7 +240,7 @@ def start_run(request, device_ids, preset: str, date_from=None, date_to=None, ap
         record_id=run.pk,
         description=(
             f"Started a manual biometric {'fetch that updates punches' if apply else 'fetch preview'} "
-            f"({label}) of {', '.join(d.name for d in devices)}"
+            f"({label}, {scope_label(scope)}) of {', '.join(d.name for d in devices)}"
         ),
     )
 
@@ -186,12 +277,20 @@ def _background(run_id: int) -> None:
         connection.close()
 
 
-def _read_punches(host: str, port: int | None, password: int, since, until) -> dict:
-    """Worker thread: read one device's log. Plain data in and out; no database."""
+def _read_punches(host: str, port: int | None, password: int, since, until, progress: dict | None = None) -> dict:
+    """Worker thread: read one device's log. Plain data in and out; no database. `progress` (a plain dict the run's own
+    thread reads) gets {"read", "total"} as the log arrives."""
     started = time.perf_counter()
+
+    def report(read: int, total: int) -> None:
+        if progress is not None:
+            progress.update(read=read, total=total)
+
     try:
         with open_session(host, port, password, deadline=LOG_READ_DEADLINE_SECONDS) as session:
-            punches, invalid, total = session.read_attendance(since, until)
+            if progress is not None:
+                progress.update(stage="reading")
+            punches, invalid, total = session.read_attendance(since, until, on_progress=report)
         return {
             "ok": True,
             "punches": punches,
@@ -215,11 +314,18 @@ def _save_results(run_id: int, results: list[dict]) -> None:
     BiometricFetchRun.objects.filter(pk=run_id).update(results=results, updated_at=timezone.now())
 
 
-def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict, by_code: dict, writer=None) -> dict:
+def _process_device(
+    run: BiometricFetchRun, device: BiometricDevice, data: dict, by_code: dict, writer=None, in_scope: set | None = None
+) -> dict:
     """What one device's punches mean for the HRMS, and (for an update) write the new ones with `writer` (by default the path
-    Sync Biometric uses)."""
+    Sync Biometric uses). `in_scope` (Employee Codes) limits whose punches are taken; the others are only counted."""
     punches = data["punches"]
     source_tag = f"biometric:{device.name}"
+    out_of_scope = 0
+    if in_scope is not None:
+        kept = [p for p in punches if p.user_id.strip() in in_scope]
+        out_of_scope = len(punches) - len(kept)
+        punches = kept
     in_range = len(punches)
 
     matched = []
@@ -276,6 +382,7 @@ def _process_device(run: BiometricFetchRun, device: BiometricDevice, data: dict,
         "unmatchedPunches": sum(r["punches"] for r in unmatched.values()),
         "unmatchedIds": len(unmatched),
         "restricted": restricted,
+        "outOfScope": out_of_scope,
         "unmatched": sorted(unmatched.values(), key=lambda r: -r["punches"])[:UNMATCHED_SHOWN],
         "invalidRecords": data["invalid"],
         "samples": [
@@ -309,6 +416,7 @@ def execute_run(run_id: int) -> None:
     order = [d for d in run.device_ids if d in devices]
     results = {r["deviceId"]: r for r in run.results}
     by_code = _active_employee_lookup()
+    in_scope = scope_codes(run.scope, by_code)
     updating = run.mode == BiometricFetchRun.MODE_UPDATE
 
     def publish() -> None:
@@ -328,7 +436,7 @@ def execute_run(run_id: int) -> None:
         elif device_remote.is_remote(device):
             reason = device_remote.offline_reason(device.connector)
             if reason:
-                results[device_id].update(status="failed", code="connector_offline", error=reason)
+                results[device_id].update(status="failed", code="connector_offline", error=reason, stage="failed")
             else:
                 job = device_remote.submit_job(
                     device,
@@ -339,7 +447,9 @@ def execute_run(run_id: int) -> None:
                     },
                 )
                 waiting.append((device, job))
-                results[device_id].update(phase=f"Waiting for the site connector “{device.connector.name}”")
+                results[device_id].update(
+                    phase=f"Waiting for the site connector “{device.connector.name}”", stage="waiting"
+                )
         else:
             readable.append((device, pw))
     publish()
@@ -348,7 +458,7 @@ def execute_run(run_id: int) -> None:
         """What one device's punches mean for the HRMS (and, for an update, write them)."""
         entry = results[device.pk]
         if not data["ok"]:
-            entry.update(status="failed", code=data["code"], error=data["error"])
+            entry.update(status="failed", code=data["code"], error=data["error"], stage="failed")
             if updating:
                 BiometricDevice.objects.filter(pk=device.pk).update(
                     last_sync_error=data["error"][:1000], last_sync_error_at=timezone.now()
@@ -357,13 +467,18 @@ def execute_run(run_id: int) -> None:
             return
         entry.update(
             status="processing",
+            stage="writing" if updating else "checking",
+            recordsRead=data["total"],
+            recordsTotal=data["total"],
             phase=f"Checking {len(data['punches']):,} punches"
             if not updating
             else f"Writing punches to the HRMS ({len(data['punches']):,} in range)",
         )
         publish()
         try:
-            entry.update(_process_device(run, device, data, by_code), status="done", phase="")
+            entry.update(
+                _process_device(run, device, data, by_code, in_scope=in_scope), status="done", phase="", stage="done"
+            )
             if updating:
                 now = timezone.now()
                 BiometricDevice.objects.filter(pk=device.pk).update(
@@ -371,16 +486,40 @@ def execute_run(run_id: int) -> None:
                 )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Manual fetch %s: device %s failed while processing", run.pk, device.name)
-            entry.update(status="failed", code="error", error=f"Could not process this device's punches: {exc}")
+            entry.update(
+                status="failed", code="error", error=f"Could not process this device's punches: {exc}", stage="failed"
+            )
         publish()
 
     if readable:
+        # each worker reports how far its device's log has arrived in a plain dict; this thread (the only one that
+        # talks to the database) publishes those numbers about once a second while it waits
+        live: dict[int, dict] = {d.pk: {} for d, _pw in readable}
         with ThreadPoolExecutor(max_workers=max(1, min(READ_PARALLELISM, len(readable)))) as pool:
             futures = {
-                pool.submit(_read_punches, d.host, d.port, pw, run.date_from, run.date_to): d for d, pw in readable
+                pool.submit(_read_punches, d.host, d.port, pw, run.date_from, run.date_to, live[d.pk]): d
+                for d, pw in readable
             }
-            for future in as_completed(futures):
-                handle(futures[future], future.result())
+            pending = set(futures)
+            while pending:
+                done_now, pending = wait(pending, timeout=PROGRESS_SECONDS, return_when=FIRST_COMPLETED)
+                changed = False
+                for f in pending:
+                    p = live[futures[f].pk]
+                    entry = results[futures[f].pk]
+                    if p.get("stage") == "reading" and entry.get("stage") == "connecting":
+                        entry.update(stage="reading", phase="Reading the device's attendance log")
+                        changed = True
+                    if p.get("total") and (entry.get("recordsRead"), entry.get("recordsTotal")) != (
+                        p.get("read"),
+                        p.get("total"),
+                    ):
+                        entry.update(recordsRead=p["read"], recordsTotal=p["total"])
+                        changed = True
+                if changed and not done_now:
+                    publish()
+                for f in done_now:
+                    handle(futures[f], f.result())
 
     # the connector devices read meanwhile: take each as it reports
     by_job = {job.pk: device for device, job in waiting}
@@ -399,6 +538,7 @@ def execute_run(run_id: int) -> None:
         "created": sum(r["created"] for r in done),
         "unmatchedPunches": sum(r["unmatchedPunches"] for r in done),
         "restricted": sum(r.get("restricted", 0) for r in done),
+        "outOfScope": sum(r.get("outOfScope", 0) for r in done),
         "unmatched": _merge_unmatched(done),
         "suspiciousDays": [d for r in done for d in r["suspiciousDays"]],
     }
@@ -567,6 +707,8 @@ def serialize_run(run: BiometricFetchRun, mask_names: bool = False) -> dict:
         "dateFrom": str(run.date_from) if run.date_from else None,
         "dateTo": str(run.date_to) if run.date_to else None,
         "deviceIds": run.device_ids,
+        "scope": _scope_out(run.scope, mask_names),
+        "scopeLabel": "" if mask_names and (run.scope or {}).get("employees") else scope_label(run.scope),
         "results": results,
         "summary": summary,
         "error": run.error,
@@ -574,6 +716,14 @@ def serialize_run(run: BiometricFetchRun, mask_names: bool = False) -> dict:
         "finishedAt": run.finished_at.isoformat() if run.finished_at else None,
         "elapsedSeconds": round((end - run.created_at).total_seconds(), 1),
     }
+
+
+def _scope_out(scope: dict | None, mask_names: bool) -> dict | None:
+    if not scope:
+        return None
+    if mask_names and scope.get("employees"):
+        return {**scope, "employees": [{**e, "name": ""} for e in scope["employees"]]}
+    return scope
 
 
 def list_runs(limit: int = 15, mask_names: bool = False) -> list[dict]:

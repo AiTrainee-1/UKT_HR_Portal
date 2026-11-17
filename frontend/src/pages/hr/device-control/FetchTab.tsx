@@ -22,6 +22,7 @@ import {
   useStartFetch,
   type DeviceControlDevice,
   type DeviceControlOverview,
+  type FetchEmployee,
   type FetchPreset,
   type FetchRange,
   type FetchRun,
@@ -30,10 +31,12 @@ import { cn } from "@/lib/utils";
 import { TonePill } from "../device-status/parts";
 import { relativeTime } from "../device-status/logic";
 import FetchResults from "./FetchResults";
+import FetchScopePicker, { scopeFor, scopeText, type ScopeChoice } from "./FetchScope";
 import { CloudNotice, ConnectionChip } from "./parts";
 import { FETCH_PRESETS, describeRun, isUsable, localDate, rangeProblem } from "./logic";
 
-/** Data Fetch: pull punches off the devices by hand. Preview changes nothing; Fetch and update writes what is new. */
+/** Data Fetch: pull punches off the devices by hand. Preview changes nothing; Fetch and update writes what is new.
+ *  Whose punches (owner 2026-11-17): everyone, staff, production or one employee; a live progress bar follows the run. */
 export default function FetchTab({
   overview,
   loading,
@@ -51,6 +54,8 @@ export default function FetchTab({
   const [range, setRange] = useState<FetchRange>({ preset: "today" });
   const [runId, setRunId] = useState<number | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [scopeChoice, setScopeChoice] = useState<ScopeChoice>("all");
+  const [pickedEmployee, setPickedEmployee] = useState<FetchEmployee | null>(null);
   const run = useFetchRun(runId);
 
   // The devices ticked to start with: the one named in the address (from a device card), or every one that answers.
@@ -72,11 +77,18 @@ export default function FetchTab({
   const chosen = selected ?? new Set<number>();
   const problem = rangeProblem(range);
   const running = run.data?.status === "running" || start.isPending;
-  const blocked = chosen.size === 0 || !!problem || running;
+  const needsEmployee = scopeChoice === "one" && !pickedEmployee;
+  const blocked = chosen.size === 0 || !!problem || running || needsEmployee;
+  const whose = scopeText(scopeChoice, pickedEmployee);
 
   const go = async (apply: boolean) => {
     try {
-      const started = await start.mutateAsync({ deviceIds: [...chosen], range, apply });
+      const started = await start.mutateAsync({
+        deviceIds: [...chosen],
+        range,
+        apply,
+        scope: scopeFor(scopeChoice, pickedEmployee),
+      });
       setRunId(started.id);
     } catch (e) {
       toast({
@@ -173,8 +185,18 @@ export default function FetchTab({
             </div>
           </section>
 
+          <FetchScopePicker
+            choice={scopeChoice}
+            onChoice={(c) => {
+              setScopeChoice(c);
+              if (c !== "one") setPickedEmployee(null);
+            }}
+            picked={pickedEmployee}
+            onPick={setPickedEmployee}
+          />
+
           <section className="space-y-2 border-t pt-4">
-            <h3 className="text-sm font-bold text-slate-800">2. Which dates</h3>
+            <h3 className="text-sm font-bold text-slate-800">3. Which dates</h3>
             <div className="flex flex-wrap gap-1.5" data-testid="fetch-presets">
               {FETCH_PRESETS.map((p) => (
                 <button
@@ -260,6 +282,11 @@ export default function FetchTab({
               <ShieldCheck size={13} className="text-emerald-600" />
               Existing punches are never changed or deleted. Preview changes nothing at all.
             </p>
+            {needsEmployee && (
+              <p className="w-full text-xs font-semibold text-amber-700" data-testid="fetch-needs-employee">
+                Choose the employee to fetch.
+              </p>
+            )}
           </section>
         </CardContent>
       </Card>
@@ -315,7 +342,7 @@ export default function FetchTab({
         <AlertDialogContent data-testid="fetch-confirm">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Fetch from {chosen.size} device{chosen.size === 1 ? "" : "s"} and update the HRMS?
+              Fetch {whose}&apos;s punches from {chosen.size} device{chosen.size === 1 ? "" : "s"} and update the HRMS?
             </AlertDialogTitle>
             <AlertDialogDescription>
               Every punch on the devices for the chosen dates that the HRMS does not have yet is added, exactly as the

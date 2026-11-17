@@ -485,3 +485,5 @@ api/production_period_workflow_views.py
 api/production_transfers.py
 api/tests_production_period_workflow.py
 api/production_drafts.py
+api/device_control_extras.py
+api/tests_device_control_extras.py

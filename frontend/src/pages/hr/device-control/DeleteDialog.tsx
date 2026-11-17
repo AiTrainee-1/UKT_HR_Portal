@@ -13,7 +13,12 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { permissionLevel, useAuth } from "@/contexts/AuthContext";
-import { useDeleteDeviceUsers, type DeviceControlDevice, type PersonRow } from "@/lib/api-client/custom-hooks";
+import {
+  useDeleteDeviceUsers,
+  type ChangeContext,
+  type DeviceControlDevice,
+  type PersonRow,
+} from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { ConnectionChip } from "./parts";
 import type { ChangeOutcome } from "./ResultDialog";
@@ -25,11 +30,17 @@ const SHOWN = 6;
 export default function DeleteDialog({
   people,
   devices,
+  deviceIds,
+  context = "",
   onClose,
   onOutcome,
 }: {
   people: PersonRow[];
   devices: DeviceControlDevice[];
+  /** The devices ticked to start with (Data Push -> Delete Users); every device that holds them when not given. */
+  deviceIds?: number[];
+  /** Why, for the history of user changes. */
+  context?: ChangeContext;
   onClose: () => void;
   onOutcome: (outcome: ChangeOutcome) => void;
 }) {
@@ -44,7 +55,11 @@ export default function DeleteDialog({
     for (const p of people) for (const x of p.presence) counts.set(x.deviceId, (counts.get(x.deviceId) ?? 0) + 1);
     return devices.filter((d) => counts.has(d.id)).map((d) => ({ device: d, count: counts.get(d.id) ?? 0 }));
   }, [people, devices]);
-  const [chosen, setChosen] = useState<Set<number>>(() => new Set(holding.map((h) => h.device.id)));
+  const [chosen, setChosen] = useState<Set<number>>(() => {
+    const all = holding.map((h) => h.device.id);
+    const asked = deviceIds?.filter((id) => all.includes(id)) ?? [];
+    return new Set(asked.length ? asked : all);
+  });
   const allChosen = chosen.size === holding.length;
   // Someone is made Inactive only where a device really removed them, so the preview leaves out devices that are down.
   const reachable = useMemo(() => devices.filter((d) => !isUnreachable(d)).map((d) => d.id), [devices]);
@@ -68,6 +83,7 @@ export default function DeleteDialog({
         userIds: people.map((p) => p.userId),
         deviceIds: allChosen ? undefined : [...chosen],
         markInactive: markInactive && canEditEmployees,
+        context,
       });
       onClose();
       onOutcome({ kind: "delete", result });

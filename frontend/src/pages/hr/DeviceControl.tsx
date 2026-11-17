@@ -16,7 +16,7 @@ import ConnectorsTab from "./device-control/ConnectorsTab";
 import FetchTab from "./device-control/FetchTab";
 import LinkTab from "./device-control/LinkTab";
 import OverviewTab from "./device-control/OverviewTab";
-import PushTab from "./device-control/PushTab";
+import PushArea from "./device-control/PushArea";
 import { pathForTab, tabFromPath, type DeviceControlTab } from "./device-control/logic";
 
 const TABS: { value: DeviceControlTab; label: string; icon: ReactNode }[] = [
@@ -194,7 +194,7 @@ export default function DeviceControl() {
         ) : (
           <>
             {tab === "fetch" && <FetchTab overview={data} loading={overview.isLoading} />}
-            {tab === "push" && <PushTab overview={data} loading={overview.isLoading} />}
+            {tab === "push" && <PushArea overview={data} loading={overview.isLoading} />}
             {tab === "link-unlink" && <LinkTab overview={data} loading={overview.isLoading} />}
           </>
         )}

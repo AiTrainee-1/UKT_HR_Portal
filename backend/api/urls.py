@@ -253,7 +253,7 @@ from .punch_views import (
 )
 from .device_status_views import biometric_status, biometric_status_check, biometric_status_history
 from .device_control_views import (
-    device_control_delete_users, device_control_employee_photo, device_control_employee_links, device_control_links,
+    device_control_delete_users, device_control_employee_photo, device_control_employee_links, device_control_links, device_control_links_summary, device_control_links_history, device_control_users_history, device_control_fetch_employees,
     device_control_fetch_run,
     device_control_fetch_runs, device_control_fetch_start, device_control_overview, device_control_people,
     device_control_push_users, device_control_refresh_users, device_control_update_users,
@@ -487,6 +487,10 @@ urlpatterns = [
     path("attendance/device-control/employees/<int:pk>/photo", device_control_employee_photo),
     path("attendance/device-control/employees/<int:pk>/links", device_control_employee_links),
     path("attendance/device-control/links", device_control_links),
+    path("attendance/device-control/links/summary", device_control_links_summary),
+    path("attendance/device-control/links/history", device_control_links_history),
+    path("attendance/device-control/users/history", device_control_users_history),
+    path("attendance/device-control/fetch/employees", device_control_fetch_employees),
     path("attendance/device-control/fetch/start", device_control_fetch_start),
     path("attendance/device-control/fetch/runs", device_control_fetch_runs),
     path("attendance/device-control/fetch/runs/<int:pk>", device_control_fetch_run),

@@ -29,7 +29,7 @@ vi.mock("./FetchTab", async () => {
   const { createElement } = await import("react");
   return { default: () => createElement("button", { "data-testid": "stub-fetch" }, "Delete this") };
 });
-vi.mock("./PushTab", async () => {
+vi.mock("./PushArea", async () => {
   const { createElement } = await import("react");
   return { default: () => createElement("button", { "data-testid": "stub-push" }, "Delete this") };
 });

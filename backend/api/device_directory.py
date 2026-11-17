@@ -300,12 +300,28 @@ def _finish(kind: str, request, params: dict, devices: list[BiometricDevice], re
     if kind == "apply":
         if "userIds" in params:
             _only_planned(results, {d.pk: params["userIds"] for d in devices}, ("added", "updated"))
-        return finish_apply(request, params["mode"], devices, results, params.get("rejected", []))
+        return finish_apply(
+            request,
+            params["mode"],
+            devices,
+            results,
+            params.get("rejected", []),
+            context=params.get("context", ""),
+            user_names=params.get("userNames"),
+        )
     if kind == "delete":
         if "plan" in params:
             _only_planned(results, {int(k): v for k, v in params["plan"].items()}, ("deleted", "absent"))
         return finish_delete(request, params, devices, results)
     raise ValueError(f"unknown operation kind {kind}")
+
+
+def _history(fn, *args, **kwargs) -> None:
+    """Write a history row (device_control_extras); a failure there is logged, never a failed change."""
+    try:
+        fn(*args, **kwargs)
+    except Exception:  # noqa: BLE001
+        logger.exception("Device Control: could not write the history row")
 
 
 def finish_operation(op, results: dict[int, dict]) -> dict:
@@ -580,8 +596,9 @@ def serialize_person(p: Person) -> dict:
 class PeopleFilter:
     search: str = ""
     device_ids: tuple[int, ...] = ()
-    device_mode: str = "any"  # any | all | none
-    link: str = "all"  # all | linked | device_only | hrms_only | inactive_on_device
+    device_mode: str = "any"  # any | all | none | missing
+    # all | linked | device_only | hrms_only | inactive_on_device | active (an active employee, on a device or not)
+    link: str = "all"
     count: str = "any"  # any | single | multiple
     role: str = "any"  # any | user | admin
     employment_type: str = ""
@@ -598,9 +615,14 @@ def _matches(p: Person, f: PeopleFilter) -> bool:
             return False
         if f.device_mode == "none" and wanted & on:
             return False
+        if f.device_mode == "missing" and wanted <= on:  # not on at least one of them (Data Push -> Add Users)
+            return False
         if f.device_mode == "any" and not wanted & on:
             return False
-    if f.link != "all" and p.link != f.link:
+    if f.link == "active":
+        if p.link not in ("linked", "hrms_only"):
+            return False
+    elif f.link != "all" and p.link != f.link:
         return False
     if f.count == "single" and len(on) != 1:
         return False
@@ -935,10 +957,11 @@ def _device_entry(d: BiometricDevice, r: dict) -> dict:
     return entry
 
 
-def apply_users(request, device_ids, raw_users: list[dict], mode: str) -> dict:
+def apply_users(request, device_ids, raw_users: list[dict], mode: str, context: str = "") -> dict:
     """Add (mode "create") or change (mode "update") users on the named devices.
 
-    The name of a user sent with an employeeId and no name is taken from that employee, cut to what the device holds."""
+    The name of a user sent with an employeeId and no name is taken from that employee, cut to what the device holds.
+    `context` says why, for the history ("add", "edit", "copy", "transfer", "make_same")."""
     if mode not in ("create", "update"):
         raise ValueError("mode must be create or update")
     _refuse_during_sync()
@@ -1002,7 +1025,13 @@ def apply_users(request, device_ids, raw_users: list[dict], mode: str) -> dict:
         direct_fn=lambda d, pw: _apply_on_device(d.host, d.port, pw, specs, mode),
         job_kind="apply_users",
         payload=lambda d: {"mode": mode, "specs": [_spec_payload(s) for s in specs]},
-        params={"mode": mode, "rejected": rejected, "userIds": [s.user_id for s in specs]},
+        params={
+            "mode": mode,
+            "rejected": rejected,
+            "userIds": [s.user_id for s in specs],
+            "context": context,
+            "userNames": {s.user_id: s.name or "" for s in specs},
+        },
     )
 
 
@@ -1019,9 +1048,15 @@ def _spec_payload(spec: UserSpec) -> dict:
 
 
 def finish_apply(
-    request, mode: str, devices: list[BiometricDevice], results: dict[int, dict], rejected: list[dict]
+    request,
+    mode: str,
+    devices: list[BiometricDevice],
+    results: dict[int, dict],
+    rejected: list[dict],
+    context: str = "",
+    user_names: dict | None = None,
 ) -> dict:
-    """The answer to an add or change, and what it leaves behind: the snapshots, the audit entries."""
+    """The answer to an add or change, and what it leaves behind: the snapshots, the audit entries, the history row."""
     for d in devices:
         r = results[d.pk]
         if r["ok"] and r.get("users") is not None:
@@ -1051,6 +1086,19 @@ def finish_apply(
             "attendance",
             description=f"Changed {len(ids)} user(s) on biometric device(s) {names}: {', '.join(ids[:20])}",
         )
+    from .device_control_extras import record_user_change
+
+    _history(
+        record_user_change,
+        request,
+        mode,
+        devices,
+        entries,
+        rejected,
+        context=context,
+        user_ids=list((user_names or {}).keys()),
+        user_names=user_names,
+    )
     return {
         "mode": mode,
         "rejected": rejected,
@@ -1146,7 +1194,7 @@ def can_edit_module(request, module: str) -> bool:
     return resolve_permission(effective_permissions(hr), module) == "edit"
 
 
-def delete_users(request, user_ids: list[str], device_ids=None, mark_inactive: bool = False) -> dict:
+def delete_users(request, user_ids: list[str], device_ids=None, mark_inactive: bool = False, context: str = "") -> dict:
     """Delete users from devices and, when asked, make their employees Inactive.
 
     device_ids None = every device the snapshot says each user is on. The employee is made Inactive only when at least
@@ -1200,8 +1248,24 @@ def delete_users(request, user_ids: list[str], device_ids=None, mark_inactive: b
             "rejected": rejected,
             "onSnapshot": sorted([device_id, user_id] for device_id, user_id in on_snapshot),
             "plan": {str(pk): ids for pk, ids in plan.items()},
+            "context": context,
+            # who they were, for the history (the devices forget them)
+            "userNames": _known_names(user_ids),
         },
     )
+
+
+def _known_names(user_ids: list[str]) -> dict[str, str]:
+    """{userId: name} from the employees, else from what a device last showed for them."""
+    names: dict[str, str] = {}
+    for code, first, last in Employee.objects.filter(employee_code__in=user_ids).values_list(
+        "employee_code", "first_name", "last_name"
+    ):
+        names[str(code).strip()] = f"{first or ''} {last or ''}".strip()
+    for user_id, name in BiometricDeviceUser.objects.filter(user_id__in=user_ids).values_list("user_id", "name"):
+        if name and not names.get(user_id):
+            names[user_id] = name
+    return names
 
 
 def finish_delete(request, params: dict, devices: list[BiometricDevice], results: dict[int, dict]) -> dict:
@@ -1242,6 +1306,19 @@ def finish_delete(request, params: dict, devices: list[BiometricDevice], results
             "attendance",
             description=f"Deleted {len(ids)} user(s) from biometric device(s) {names}: {', '.join(ids[:20])}",
         )
+    from .device_control_extras import record_user_change
+
+    _history(
+        record_user_change,
+        request,
+        "delete",
+        devices,
+        entries,
+        rejected,
+        context=params.get("context", ""),
+        user_ids=params.get("userIds"),
+        user_names=params.get("userNames"),
+    )
     return {
         "results": entries,
         "inactive": inactive,
@@ -1418,6 +1495,9 @@ def set_employee_device_links(request, employee_id: int, unlinked_ids: list[int]
     before = sorted(emp.unlinked_devices.values_list("pk", flat=True))
     emp.unlinked_devices.set(wanted)
     if before != wanted:
+        from .device_control_extras import record_link_changes
+
+        _history(record_link_changes, request, emp, before, wanted, names)
         log_action(
             request,
             "update",

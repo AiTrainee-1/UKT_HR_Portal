@@ -822,6 +822,10 @@ class BiometricFetchRun(models.Model):
     results = models.JSONField(default=list)
     summary = models.JSONField(null=True, blank=True)
     error = models.TextField(blank=True, default="")
+    # Whose punches the run takes (owner 2026-11-17): {} or null = everyone (as before); {"employmentType": "staff" |
+    # "production"} = only that kind of employee; {"employeeIds": [..], "employees": [{id, code, name}]} = only them. A
+    # punch outside the scope is counted as `outOfScope`, never written and never reported as an unknown ID.
+    scope = models.JSONField(null=True, blank=True, default=None)
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
     finished_at = models.DateTimeField(null=True, blank=True, db_column="finished_at")
@@ -896,6 +900,61 @@ class BiometricDeviceOperation(models.Model):
     class Meta:
         db_table = "biometric_device_operations"
         ordering = ["-created_at"]
+
+
+class BiometricUserChange(models.Model):
+    """One add / change / delete of users on biometric devices, as it finished (Device Control -> Data Push, owner
+    2026-11-17: "maintain operation logs and synchronization history"). Written where both roads finish (a direct change
+    at once, a Site Connector one when its last job reports), so the history holds both. `results` are the per-device
+    entries the answer had (added / updated / deleted / failed user IDs, or the device's error)."""
+
+    KIND_CREATE = "create"
+    KIND_UPDATE = "update"
+    KIND_DELETE = "delete"
+
+    kind = models.TextField()  # create | update | delete
+    # why it was done, as the page said: "add" | "edit" | "copy" | "transfer" | "make_same" | "delete" | "" (the old screens)
+    context = models.TextField(blank=True, default="")
+    user_ids = models.JSONField(default=list, blank=True, db_column="user_ids")
+    # {userId: name} as they were sent / known, for the history list (masked for branch-limited readers when shown)
+    user_names = models.JSONField(default=dict, blank=True, db_column="user_names")
+    device_ids = models.JSONField(default=list, blank=True, db_column="device_ids")
+    device_names = models.JSONField(default=list, blank=True, db_column="device_names")
+    results = models.JSONField(default=list, blank=True)
+    rejected = models.JSONField(default=list, blank=True)
+    status = models.TextField(default="done")  # done | partial | failed
+    via_connector = models.BooleanField(default=False, db_column="via_connector")
+    requested_by = models.TextField(blank=True, default="", db_column="requested_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "biometric_user_changes"
+        ordering = ["-created_at"]
+
+
+class EmployeeDeviceLinkChange(models.Model):
+    """One device linked to or unlinked from an employee (Device Control -> Link / Unlink -> Modified, owner 2026-11-17).
+    Written by set_employee_device_links for every device whose state it changes. A device deleted later keeps its name
+    here."""
+
+    ACTION_LINK = "link"
+    ACTION_UNLINK = "unlink"
+
+    employee = models.ForeignKey(
+        "Employee", on_delete=models.CASCADE, db_column="employee_id", related_name="device_link_changes"
+    )
+    device = models.ForeignKey(
+        BiometricDevice, null=True, blank=True, on_delete=models.SET_NULL, db_column="device_id", related_name="+"
+    )
+    device_name = models.TextField(blank=True, default="", db_column="device_name")
+    action = models.TextField()  # link | unlink
+    changed_by = models.TextField(blank=True, default="", db_column="changed_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "employee_device_link_changes"
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["employee", "created_at"], name="emp_dev_link_chg_emp")]
 
 
 class BiometricConnectorJob(models.Model):

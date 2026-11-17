@@ -6,6 +6,7 @@ import type {
   DeviceMode,
   FetchPreset,
   FetchRange,
+  FetchDeviceResult,
   FetchRun,
   ConnectorState,
   ConnectorSync,
@@ -13,6 +14,7 @@ import type {
   PersonLink,
   PersonRow,
   PushResult,
+  UserChange,
   UserInput,
 } from "@/lib/api-client/custom-hooks";
 import { relativeTime, type Tone } from "../device-status/logic";
@@ -363,7 +365,7 @@ export function filtersFromSearch(search: string): PushFilters {
     .filter((n) => Number.isInteger(n) && n > 0);
   f.devices = [...new Set(devices)];
   const mode = q.get("deviceMode");
-  if (mode === "all" || mode === "none") f.deviceMode = mode;
+  if (mode === "all" || mode === "none" || mode === "missing") f.deviceMode = mode;
   const link = q.get("link") as PersonLink | null;
   if (link && LINKS.includes(link)) f.link = link;
   const count = q.get("count");
@@ -401,6 +403,8 @@ export function describeDeviceFilter(f: PushFilters, devices: { id: number; name
   if (f.devices.length === 0) return "";
   const names = f.devices.map((id) => devices.find((d) => d.id === id)?.name ?? `#${id}`).join(", ");
   if (f.deviceMode === "none") return `Not on ${names}`;
+  if (f.deviceMode === "missing" && f.devices.length > 1) return `Missing from one of ${names}`;
+  if (f.deviceMode === "missing") return `Not on ${names}`;
   if (f.deviceMode === "all" && f.devices.length > 1) return `On all of ${names}`;
   return f.devices.length > 1 ? `On any of ${names}` : `On ${names}`;
 }
@@ -496,17 +500,61 @@ export function rangeProblem(range: FetchRange): string {
   return "";
 }
 
-export type FetchProgress = { done: number; total: number; percent: number; label: string };
+export type FetchProgress = {
+  done: number;
+  total: number;
+  percent: number;
+  label: string;
+  /** Records received from the devices so far, of all they hold (0 for a run from before the counts). */
+  recordsRead?: number;
+  recordsTotal?: number;
+  failed?: number;
+};
+
+/** How far one device has got, 0..1 (owner 2026-11-17): connecting a little, reading by the records received, the
+ *  HRMS check / write near the end. */
+export function deviceFraction(r: FetchDeviceResult): number {
+  if (r.status === "done" || r.status === "failed" || r.stage === "done" || r.stage === "failed") return 1;
+  if (r.stage === "checking" || r.stage === "writing" || r.status === "processing") return 0.9;
+  if (r.stage === "reading") {
+    const total = r.recordsTotal ?? 0;
+    return 0.05 + 0.8 * (total > 0 ? Math.min(1, (r.recordsRead ?? 0) / total) : 0);
+  }
+  return r.stage === "connecting" || r.stage === "waiting" ? 0.02 : 0;
+}
 
 export function fetchProgress(run: FetchRun): FetchProgress {
   const total = run.results.length;
   const done = run.results.filter((r) => r.status === "done" || r.status === "failed").length;
-  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  const recordsRead = run.results.reduce((n, r) => n + (r.recordsRead ?? 0), 0);
+  const recordsTotal = run.results.reduce((n, r) => n + (r.recordsTotal ?? 0), 0);
+  const counts = { recordsRead, recordsTotal, failed: run.results.filter((r) => r.status === "failed").length };
   if (run.status !== "running") {
-    return { done, total, percent: 100, label: run.status === "done" ? "Finished" : "Failed" };
+    return { done, total, percent: 100, label: run.status === "done" ? "Finished" : "Failed", ...counts };
   }
+  // a run from before the progress counts (no stage): by devices finished, as it always was
+  const live = run.results.some((r) => r.stage);
+  const percent =
+    total === 0
+      ? 0
+      : live
+        ? Math.min(99, Math.round((run.results.reduce((n, r) => n + deviceFraction(r), 0) / total) * 100))
+        : Math.round((done / total) * 100);
   const writing = run.results.some((r) => r.status === "processing");
-  return { done, total, percent, label: writing ? "Writing to the HRMS" : "Reading the devices" };
+  return { done, total, percent, label: writing ? "Writing to the HRMS" : "Reading the devices", ...counts };
+}
+
+/** "Reading 45,120 of 96,641 records", "Connecting", "Waiting for the site connector": one device's progress line. */
+export function deviceProgressText(r: FetchDeviceResult): string {
+  const nf = (v: number) => v.toLocaleString("en-IN");
+  if (r.stage === "reading" && r.recordsTotal)
+    return `Reading ${nf(r.recordsRead ?? 0)} of ${nf(r.recordsTotal)} records`;
+  if (r.stage === "reading") return "Reading the attendance log";
+  if (r.stage === "checking") return `Checking ${nf(r.recordsTotal ?? 0)} records against the HRMS`;
+  if (r.stage === "writing") return "Writing the new punches to the HRMS";
+  if (r.stage === "waiting") return r.phase || "Waiting for the site connector";
+  if (r.stage === "connecting") return "Connecting to the device";
+  return r.phase || "Working…";
 }
 
 export const RESULT_STATUS_LABEL: Record<string, string> = {
@@ -573,6 +621,126 @@ export const pinWidthFor = (devices: DeviceControlDevice[]): number =>
 export function localDate(at: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+}
+
+// ── Data Push sub-tabs (owner 2026-11-17) ──────────────────────────────────────────────────────────────────────────
+
+export type PushView = "overview" | "add" | "edit" | "delete" | "users";
+export const PUSH_VIEWS: readonly PushView[] = ["overview", "add", "edit", "delete", "users"];
+
+/** "Direct" or "Site Connector · Unit 2 PC": how this server reaches the device (Settings -> Devices -> Connect via). */
+export const viaText = (d: Pick<DeviceControlDevice, "via">): string =>
+  d.via ? `Site Connector · ${d.via.name}` : "Direct";
+
+/** The devices (of those asked about) a person is not on yet. */
+export const missingFrom = (p: PersonRow, deviceIds: number[]): number[] =>
+  deviceIds.filter((id) => !p.presence.some((x) => x.deviceId === id));
+
+/** What a change in the history was for, in a few words. */
+export function changeLabel(c: Pick<UserChange, "kind" | "context">): string {
+  switch (c.context) {
+    case "add":
+      return "Added";
+    case "edit":
+      return "Edited";
+    case "copy":
+      return "Copied to more devices";
+    case "transfer":
+      return c.kind === "delete" ? "Moved: taken off the old device" : "Moved: put on the new device";
+    case "make_same":
+      return "Made the same on every device";
+    case "delete":
+      return "Deleted";
+    default:
+      return c.kind === "create" ? "Added" : c.kind === "update" ? "Changed" : "Deleted";
+  }
+}
+
+/** One device's line in the history: "2 added · 1 left alone", or why it failed. */
+export function changeResultText(r: UserChange["results"][number]): string {
+  if (!r.ok) return r.error || "The device could not be reached.";
+  const parts: string[] = [];
+  if (r.added) parts.push(`${r.added} added`);
+  if (r.updated) parts.push(`${r.updated} changed`);
+  if (r.deleted) parts.push(`${r.deleted} deleted`);
+  if (r.absent) parts.push(`${r.absent} not on it`);
+  if (r.skipped) parts.push(`${r.skipped} left alone`);
+  if (r.failed) parts.push(`${r.failed} failed`);
+  return parts.join(" · ") || "Nothing to do";
+}
+
+/** Who a change was for: "Sara Staff (2001), 3001 and 4 more". A branch-limited login gets the IDs only. */
+export function changePeople(c: Pick<UserChange, "userIds" | "userNames">, shown = 3): string {
+  const label = (id: string) => (c.userNames[id] ? `${c.userNames[id]} (${id})` : id);
+  const head = c.userIds.slice(0, shown).map(label).join(", ");
+  return c.userIds.length > shown ? `${head} and ${c.userIds.length - shown} more` : head;
+}
+
+/** Who a Move may take off the old device: only those now on every new one (added there, or already on it). Anyone
+ *  the push did not reach everywhere stays where they are, so a move can never leave a person on no device. */
+export function movedSafely(result: PushResult, userIds: string[], targetIds: number[]): string[] {
+  const rejected = new Set(result.rejected.map((r) => r.userId));
+  return userIds.filter(
+    (id) =>
+      !rejected.has(id) &&
+      targetIds.length > 0 &&
+      targetIds.every((t) => {
+        const e = result.results.find((r) => r.deviceId === t);
+        return !!e && e.ok && (e.added.includes(id) || e.skipped.some((s) => s.userId === id));
+      }),
+  );
+}
+
+/** One of the records the devices hold for a person (name, role and card), and the devices that hold it. */
+export type PresenceVariant = { key: string; name: string; privilege: number; card: number; deviceIds: number[] };
+
+/** The different records the devices hold for one person, the most common first. */
+export function presenceVariants(p: PersonRow): PresenceVariant[] {
+  const byKey = new Map<string, PresenceVariant>();
+  for (const x of p.presence) {
+    const key = JSON.stringify([x.name, x.privilege, x.card || 0]);
+    const v = byKey.get(key);
+    if (v) v.deviceIds.push(x.deviceId);
+    else byKey.set(key, { key, name: x.name, privilege: x.privilege, card: x.card || 0, deviceIds: [x.deviceId] });
+  }
+  return [...byKey.values()].sort((a, b) => b.deviceIds.length - a.deviceIds.length || a.deviceIds[0] - b.deviceIds[0]);
+}
+
+export type CellState = "missing" | "same" | "differs";
+
+/** Users in Device: a person's cell under one device. "differs" = this device holds something else than most of the
+ *  others (on a tie, every device differs: there is no "right" one to point at). */
+export function cellState(p: PersonRow, deviceId: number): CellState {
+  if (!p.presence.some((x) => x.deviceId === deviceId)) return "missing";
+  const variants = presenceVariants(p);
+  if (variants.length < 2) return "same";
+  const tie = variants[0].deviceIds.length === variants[1].deviceIds.length;
+  return !tie && variants[0].deviceIds.includes(deviceId) ? "same" : "differs";
+}
+
+const plainName = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** Whether the name a device holds is not the employee's HRMS name (as the device would hold it). */
+export const nameDiffersFromHrms = (p: PersonRow, deviceName: string): boolean =>
+  !!p.employee && plainName(deviceName) !== plainName(deviceNameFor(p.employee.name));
+
+/** "Make the same": what is sent, and to which devices. From a record one device holds (its name, role and card go to
+ *  every device holding something else), or from the HRMS (the server writes the employee's name; role and card stay). */
+export function makeSamePlan(
+  p: PersonRow,
+  source: PresenceVariant | "hrms",
+): { input: UserInput; deviceIds: number[] } | null {
+  if (source === "hrms") {
+    if (!p.employee) return null;
+    const ids = p.presence.filter((x) => nameDiffersFromHrms(p, x.name)).map((x) => x.deviceId);
+    return ids.length ? { input: { userId: p.userId, employeeId: p.employee.id }, deviceIds: ids } : null;
+  }
+  const ids = p.presence.filter((x) => !source.deviceIds.includes(x.deviceId)).map((x) => x.deviceId);
+  if (!ids.length) return null;
+  return {
+    input: { userId: p.userId, name: source.name, privilege: source.privilege, card: source.card },
+    deviceIds: ids,
+  };
 }
 
 // ── where things are ────────────────────────────────────────────────────────────────────────────────────────────────

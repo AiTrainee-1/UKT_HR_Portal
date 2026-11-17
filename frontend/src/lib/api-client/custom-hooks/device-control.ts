@@ -114,7 +114,7 @@ export const useRecheckDevices = () => {
 // ── people ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type PersonLink = "linked" | "device_only" | "hrms_only" | "inactive_on_device" | "restricted";
-export type DeviceMode = "any" | "all" | "none";
+export type DeviceMode = "any" | "all" | "none" | "missing";
 
 export type PersonPresence = {
   deviceId: number;
@@ -179,7 +179,8 @@ export type PeopleParams = {
   search?: string;
   devices?: number[];
   deviceMode?: DeviceMode;
-  link?: "all" | PersonLink;
+  /** "active" = an active employee, on a device or not (Data Push -> Add Users). */
+  link?: "all" | PersonLink | "active";
   count?: "any" | "single" | "multiple";
   role?: "any" | "admin" | "user";
   employmentType?: "" | "staff" | "production";
@@ -399,6 +400,8 @@ const useRefreshAfterChange = () => {
   return () => {
     queryClient.invalidateQueries({ queryKey: DEVICE_CONTROL_PEOPLE_KEY });
     queryClient.invalidateQueries({ queryKey: DEVICE_CONTROL_OVERVIEW_KEY });
+    queryClient.invalidateQueries({ queryKey: [`${BASE}/users/history`] });
+    queryClient.invalidateQueries({ queryKey: [`${BASE}/links/summary`] });
     // an Inactive employee leaves the Employees list's active count and the Skipped-punches picture
     queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
   };
@@ -424,48 +427,36 @@ export const useRefreshDeviceUsers = () => {
   return { ...mutation, waiting };
 };
 
+/** Why the page made a change, kept in the history of user changes ("" = the older screens). */
+export type ChangeContext = "add" | "edit" | "copy" | "transfer" | "make_same" | "delete" | "";
+
 export const usePushDeviceUsers = () => {
   const after = useRefreshAfterChange();
   const { waiting, onUpdate, clear } = useWaiting();
-  const mutation = useMutation<PushResult, Error, { deviceIds: number[]; users: UserInput[] }>({
-    mutationFn: async (body) =>
-      followOperation(
-        await customFetch<PushResult | Started>(`${BASE}/users/push`, { method: "POST", body: JSON.stringify(body) }),
-        { onUpdate },
-      ),
-    onSettled: () => {
-      clear();
-      after();
+  const mutation = useMutation<PushResult, Error, { deviceIds: number[]; users: UserInput[]; context?: ChangeContext }>(
+    {
+      mutationFn: async (body) =>
+        followOperation(
+          await customFetch<PushResult | Started>(`${BASE}/users/push`, { method: "POST", body: JSON.stringify(body) }),
+          { onUpdate },
+        ),
+      onSettled: () => {
+        clear();
+        after();
+      },
     },
-  });
+  );
   return { ...mutation, waiting };
 };
 
 export const useUpdateDeviceUsers = () => {
   const after = useRefreshAfterChange();
   const { waiting, onUpdate, clear } = useWaiting();
-  const mutation = useMutation<PushResult, Error, { deviceIds: number[]; users: UserInput[] }>({
-    mutationFn: async (body) =>
-      followOperation(
-        await customFetch<PushResult | Started>(`${BASE}/users/update`, { method: "POST", body: JSON.stringify(body) }),
-        { onUpdate },
-      ),
-    onSettled: () => {
-      clear();
-      after();
-    },
-  });
-  return { ...mutation, waiting };
-};
-
-export const useDeleteDeviceUsers = () => {
-  const after = useRefreshAfterChange();
-  const { waiting, onUpdate, clear } = useWaiting();
-  const mutation = useMutation<DeleteResult, Error, { userIds: string[]; deviceIds?: number[]; markInactive: boolean }>(
+  const mutation = useMutation<PushResult, Error, { deviceIds: number[]; users: UserInput[]; context?: ChangeContext }>(
     {
       mutationFn: async (body) =>
         followOperation(
-          await customFetch<DeleteResult | Started>(`${BASE}/users/delete`, {
+          await customFetch<PushResult | Started>(`${BASE}/users/update`, {
             method: "POST",
             body: JSON.stringify(body),
           }),
@@ -477,6 +468,30 @@ export const useDeleteDeviceUsers = () => {
       },
     },
   );
+  return { ...mutation, waiting };
+};
+
+export const useDeleteDeviceUsers = () => {
+  const after = useRefreshAfterChange();
+  const { waiting, onUpdate, clear } = useWaiting();
+  const mutation = useMutation<
+    DeleteResult,
+    Error,
+    { userIds: string[]; deviceIds?: number[]; markInactive: boolean; context?: ChangeContext }
+  >({
+    mutationFn: async (body) =>
+      followOperation(
+        await customFetch<DeleteResult | Started>(`${BASE}/users/delete`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+        { onUpdate },
+      ),
+    onSettled: () => {
+      clear();
+      after();
+    },
+  });
   return { ...mutation, waiting };
 };
 
@@ -533,11 +548,142 @@ export const useSetEmployeeDeviceLinks = () => {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: DEVICE_LINKS_KEY });
+      // Link / Unlink -> Home counts and Modified history
+      queryClient.invalidateQueries({ queryKey: [`${BASE}/links/summary`] });
+      queryClient.invalidateQueries({ queryKey: [`${BASE}/links/history`] });
     },
   });
 };
 
 // ── Data Fetch ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// ── Link / Unlink -> Home and Modified, Data Push -> history (owner 2026-11-17) ──────────────────────────────────
+
+export type LinkSummaryDevice = {
+  deviceId: number;
+  deviceName: string;
+  isActive: boolean;
+  via: "direct" | "connector";
+  usersOnDevice: number;
+  employees: number;
+  staff: number;
+  production: number;
+  alsoOnOtherDevices: number;
+  unlinkedHere: number;
+  inactiveEmployees: number;
+  notInHrms: number;
+  otherType: number;
+  usersReadAt: string | null;
+};
+
+export type LinkSummary = {
+  employmentType: EmploymentType | "";
+  summary: {
+    employees: number;
+    onAnyDevice: number;
+    onNoDevice: number;
+    onMultipleDevices: number;
+    linkedToMultipleDevices: number;
+    withUnlinkedDevices: number;
+    devices: number;
+  };
+  devices: LinkSummaryDevice[];
+};
+
+export const useLinkSummary = (employmentType: EmploymentType | "") =>
+  useQuery<LinkSummary>({
+    queryKey: [`${BASE}/links/summary`, employmentType],
+    queryFn: () =>
+      customFetch<LinkSummary>(`${BASE}/links/summary${employmentType ? `?employmentType=${employmentType}` : ""}`),
+  });
+
+export type HistoryEmployee = {
+  id: number;
+  code: string;
+  name: string;
+  employmentType: string;
+  department: string | null;
+};
+
+export type LinkHistory = {
+  total: number;
+  page: number;
+  pageSize: number;
+  rows: {
+    id: number;
+    employee: HistoryEmployee;
+    deviceId: number | null;
+    deviceName: string;
+    action: "link" | "unlink";
+    changedBy: string;
+    at: string;
+  }[];
+  current: { employee: HistoryEmployee; unlinkedDevices: string[] }[];
+};
+
+export type LinkHistoryParams = {
+  search?: string;
+  action?: "link" | "unlink" | "";
+  employmentType?: EmploymentType | "";
+  device?: number | null;
+  page?: number;
+};
+
+export const useLinkHistory = (params: LinkHistoryParams) =>
+  useQuery<LinkHistory>({
+    queryKey: [`${BASE}/links/history`, params],
+    queryFn: () => {
+      const q = new URLSearchParams();
+      if (params.search) q.set("search", params.search);
+      if (params.action) q.set("action", params.action);
+      if (params.employmentType) q.set("employmentType", params.employmentType);
+      if (params.device) q.set("device", String(params.device));
+      if (params.page && params.page > 1) q.set("page", String(params.page));
+      return customFetch<LinkHistory>(`${BASE}/links/history?${q}`);
+    },
+    placeholderData: (prev) => prev,
+  });
+
+export type UserChangeKind = "create" | "update" | "delete";
+
+export type UserChange = {
+  id: number;
+  kind: UserChangeKind;
+  context: ChangeContext;
+  status: "done" | "partial" | "failed";
+  userIds: string[];
+  userNames: Record<string, string>;
+  deviceNames: string[];
+  results: {
+    deviceName: string;
+    ok: boolean;
+    error?: string;
+    added: number;
+    updated: number;
+    deleted: number;
+    absent: number;
+    skipped: number;
+    failed: number;
+  }[];
+  rejected: number;
+  viaConnector: boolean;
+  requestedBy: string;
+  at: string;
+};
+
+export const useUserHistory = (kind: UserChangeKind | "", search = "", page = 1, contexts: ChangeContext[] = []) =>
+  useQuery<{ total: number; page: number; pageSize: number; rows: UserChange[] }>({
+    queryKey: [`${BASE}/users/history`, kind, search, page, contexts.join()],
+    queryFn: () => {
+      const q = new URLSearchParams();
+      if (kind) q.set("kind", kind);
+      if (contexts.length) q.set("context", contexts.join(","));
+      if (search) q.set("search", search);
+      if (page > 1) q.set("page", String(page));
+      return customFetch(`${BASE}/users/history?${q}`);
+    },
+    placeholderData: (prev) => prev,
+  });
 
 export type FetchPreset = "today" | "yesterday" | "last7" | "this_month" | "last_month" | "all" | "custom";
 export type FetchRange = { preset: FetchPreset; from?: string; to?: string };
@@ -546,11 +692,21 @@ export type FetchUnmatched = { userId: string; punches: number; lastDate: string
 export type FetchSample = { code: string; name: string; date: string; time: string; type: "IN" | "OUT" };
 export type SuspiciousDay = { employeeId: number; employeeName: string; date: string; punches: number };
 
+/** Where one device's read has got (owner 2026-11-17: an animated progress bar of the fetch). */
+export type FetchStage = "connecting" | "waiting" | "reading" | "checking" | "writing" | "done" | "failed";
+
 export type FetchDeviceResult = {
   deviceId: number;
   deviceName: string;
   status: "reading" | "processing" | "done" | "failed";
   phase?: string;
+  stage?: FetchStage;
+  /** Records of the device's attendance log received so far, of all it holds (counted as the log arrives). */
+  recordsRead?: number;
+  recordsTotal?: number | null;
+  via?: "direct" | "connector";
+  /** Punches of people outside the run's scope: only counted. */
+  outOfScope?: number;
   code?: string;
   error?: string;
   onDevice?: number;
@@ -591,6 +747,7 @@ export type FetchRun = {
     created: number;
     unmatchedPunches: number;
     restricted?: number;
+    outOfScope?: number;
     unmatched: FetchUnmatched[];
     suspiciousDays: SuspiciousDay[];
   } | null;
@@ -598,11 +755,48 @@ export type FetchRun = {
   createdAt: string;
   finishedAt: string | null;
   elapsedSeconds: number;
+  /** Whose punches it takes: null = everyone. */
+  scope?: FetchScope | null;
+  scopeLabel?: string;
 };
+
+export type EmploymentType = "staff" | "production";
+
+/** Whose punches a fetch takes (owner 2026-11-17): a kind of employee, or chosen employees. */
+export type FetchScope = {
+  employmentType?: EmploymentType;
+  employeeIds?: number[];
+  employees?: { id: number; code: string; name: string; employmentType: string }[];
+};
+
+export type FetchEmployee = {
+  id: number;
+  code: string;
+  name: string;
+  employmentType: EmploymentType;
+  department: string | null;
+  onDevices: string[];
+};
+
+/** Active employees to fetch one of (search by code or name). */
+export const useFetchEmployees = (search: string, employmentType: EmploymentType | "", enabled = true) =>
+  useQuery<{ items: FetchEmployee[] }>({
+    queryKey: [`${BASE}/fetch/employees`, search, employmentType],
+    queryFn: () =>
+      customFetch<{ items: FetchEmployee[] }>(
+        `${BASE}/fetch/employees?${new URLSearchParams({ search, ...(employmentType ? { employmentType } : {}) })}`,
+      ),
+    enabled,
+    staleTime: 30_000,
+  });
 
 export const useStartFetch = () => {
   const queryClient = useQueryClient();
-  return useMutation<FetchRun, Error, { deviceIds: number[]; range: FetchRange; apply: boolean }>({
+  return useMutation<
+    FetchRun,
+    Error,
+    { deviceIds: number[]; range: FetchRange; apply: boolean; scope?: FetchScope | null }
+  >({
     mutationFn: (body) => customFetch<FetchRun>(`${BASE}/fetch/start`, { method: "POST", body: JSON.stringify(body) }),
     onSuccess: (run) => {
       queryClient.setQueryData([...DEVICE_CONTROL_RUNS_KEY, run.id], run);

@@ -378,10 +378,16 @@ class Session:
         body = data[4 : 4 + total]
         return [parse_record(body[i : i + record_size]) for i in range(0, len(body) - record_size + 1, record_size)]
 
-    def read_attendance(self, since: date | None = None, until: date | None = None) -> tuple[list[Punch], int, int]:
+    def read_attendance(
+        self, since: date | None = None, until: date | None = None, on_progress=None
+    ) -> tuple[list[Punch], int, int]:
         """The punches on the device between two dates (inclusive; None = no limit), how many records had a date that
         cannot exist (skipped), and how many valid records the device holds in all. A punch outside the range is
-        counted but never turned into an object, so a year of history does not cost a year of memory."""
+        counted but never turned into an object, so a year of history does not cost a year of memory.
+
+        `on_progress(records_read, records_total)` (optional) is called as the log arrives, once per block the library
+        reads (64 KB, about 1,600 records): see _counting_reads. It only counts what is received; nothing sent to the
+        device changes."""
         from zk import const
 
         c = self.conn
@@ -393,7 +399,10 @@ class Session:
         for u in self.read_users():
             by_uid[u.uid] = u.user_id
             by_pin[u.user_id] = u.uid
-        data, size = c.read_with_buffer(const.CMD_ATTLOG_RRQ)
+        if on_progress is not None:
+            on_progress(0, c.records)
+        with _counting_reads(c, c.records, on_progress):
+            data, size = c.read_with_buffer(const.CMD_ATTLOG_RRQ)
         if size < 4:
             return [], 0, 0
         total = struct.unpack("<I", data[:4])[0]
@@ -459,6 +468,44 @@ class Session:
             self.conn.refresh_data()
         except _device_errors() as exc:
             raise _classify(exc, self.host, self.port) from exc
+
+
+class _counting_reads:
+    """While the attendance log is read, count the blocks as they arrive (owner 2026-11-17: a progress bar that shows how
+    much has been fetched). pyzk's read_with_buffer reads a large buffer by calling its private ``__read_chunk`` once per
+    64 KB block; this wraps that one method on this connection only, for this one read, and calls
+    ``on_progress(records_read, records_total)`` after each block. The first block starts with the log's size in bytes,
+    so bytes become records. The bytes asked for and returned are untouched. A log small enough to come in the first
+    answer has no blocks: the caller then sees the read finish at once."""
+
+    def __init__(self, conn, records: int, on_progress):
+        self.conn, self.records, self.on_progress = conn, records, on_progress
+        self.total_bytes = None
+
+    def __enter__(self):
+        if self.on_progress is None or not hasattr(self.conn, "_ZK__read_chunk"):
+            return self
+        original = self.conn._ZK__read_chunk
+
+        def counting(start, size):
+            chunk = original(start, size)
+            if self.total_bytes is None and start == 0 and len(chunk) >= 4:
+                self.total_bytes = struct.unpack("<I", chunk[:4])[0] + 4
+            done = start + len(chunk)
+            if self.total_bytes and self.records:
+                read = min(self.records, round(self.records * min(done, self.total_bytes) / self.total_bytes))
+                try:
+                    self.on_progress(read, self.records)
+                except Exception:  # noqa: BLE001 -a progress report must never break a read
+                    pass
+            return chunk
+
+        self.conn._ZK__read_chunk = counting
+        return self
+
+    def __exit__(self, *exc):
+        self.conn.__dict__.pop("_ZK__read_chunk", None)  # back to the class's own method
+        return False
 
 
 def _drop_connection(session: "Session") -> None:
