@@ -15,6 +15,7 @@ import {
   Send,
   Smartphone,
   SmartphoneNfc,
+  Users,
   XCircle,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,6 +31,7 @@ import {
   type MobileMessageRow,
   type PushCategory,
   type PushCounts,
+  type RecipientsLine,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import {
@@ -52,6 +54,7 @@ import {
   monthSegments,
   overviewTiles,
   plural,
+  recipientsLine,
   type CategoryState,
   type SegmentId,
   type TileId,
@@ -214,7 +217,7 @@ const SEGMENT_COLOR: Record<SegmentId, string> = {
 /** One number of a category's 30 days: the number on top, its name under it. */
 function MonthStat({ label, value, tone }: { label: string; value: number; tone?: "good" | "bad" | "warn" }) {
   return (
-    <div className="flex min-w-0 flex-col-reverse items-center rounded-lg bg-muted px-1 py-1.5 text-center">
+    <div className="flex min-w-0 flex-col-reverse items-center justify-end rounded-lg bg-muted px-1 py-1.5 text-center">
       <dt className="text-[10px] leading-tight text-muted-foreground">{label}</dt>
       <dd
         className={cn(
@@ -246,22 +249,23 @@ function MonthBlock({ cat }: { cat: PushCategory }) {
           </>
         )}
       </p>
-      {m.total > 0 && (
-        <div
-          role="img"
-          aria-label={segments.map((s) => `${s.label}: ${s.value}`).join(", ")}
-          className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-muted"
-        >
-          {segments.map((s) => (
-            <div
-              key={s.id}
-              title={`${s.label}: ${formatNumber(s.value)}`}
-              className={cn("h-full", SEGMENT_COLOR[s.id])}
-              style={{ width: `${s.pct}%` }}
-            />
-          ))}
-        </div>
-      )}
+      {/* an empty track when nothing was sent, so every card's numbers sit at the same height */}
+      <div
+        role="img"
+        aria-label={
+          segments.length ? segments.map((s) => `${s.label}: ${s.value}`).join(", ") : "Nothing in the last 30 days"
+        }
+        className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-muted"
+      >
+        {segments.map((s) => (
+          <div
+            key={s.id}
+            title={`${s.label}: ${formatNumber(s.value)}`}
+            className={cn("h-full", SEGMENT_COLOR[s.id])}
+            style={{ width: `${s.pct}%` }}
+          />
+        ))}
+      </div>
       <dl className="mt-2 grid grid-cols-5 gap-1">
         <MonthStat label="Pushed" value={m.sent} />
         <MonthStat label="Delivered" value={m.delivered} tone="good" />
@@ -367,18 +371,20 @@ function CategoryCard({
         )}
       </div>
 
-      {asking && (
+      {/* only while every switch is still on (a change made elsewhere closes it) */}
+      {asking && state === "on" && (
         <InlineConfirm
           testId={`pn-confirm-category-${cat.key}`}
           confirmLabel="Turn all off"
           destructive
+          stacked
+          className="mt-3"
           pending={busy}
           onConfirm={() => onSet(false, () => setAsking(false))}
           onCancel={() => setAsking(false)}
         >
-          Turn off all {plural(counts.total, "switch", "switches")} in <b>{cat.label}</b>?{" "}
-          {who.join(" and ")} stop getting these on their phones. They are still saved in the app, and WhatsApp is not
-          affected.
+          Turn off all {plural(counts.total, "switch", "switches")} in <b>{cat.label}</b>? {who.join(" and ")} stop
+          getting these on their phones. They are still saved in the app, and WhatsApp is not affected.
         </InlineConfirm>
       )}
     </article>
@@ -413,8 +419,8 @@ function CategoriesPanel({
       actions={
         <div className="flex flex-wrap items-center gap-3 text-xs">
           <span className="text-muted-foreground" data-testid="pn-categories-summary">
-            <b className="text-foreground">{fullyOn}</b> of {plural(categories.length, "category", "categories")}{" "}
-            fully on
+            <b className="text-foreground">{fullyOn}</b> of {plural(categories.length, "category", "categories")} fully
+            on
           </span>
           {canManage && (
             <Link
@@ -524,13 +530,51 @@ function NeedsAttention({
                     </p>
                   )}
                 </div>
-                {canPushAgain(r) && <PushAgainButton row={r} locked={locked} />}
+                {canPushAgain(r) ? (
+                  <PushAgainButton row={r} locked={locked} />
+                ) : (
+                  <span className="text-[11px] text-muted-foreground" data-testid={`pn-failed-nophone-${r.id}`}>
+                    No phone registered now
+                  </span>
+                )}
               </li>
             );
           })}
         </ul>
       )}
     </Panel>
+  );
+}
+
+/** Who gets phone notifications at all (the Settings tab), with a way there when the role may open it. */
+function RecipientsLineStrip({ r, canOpenSettings }: { r: RecipientsLine; canOpenSettings: boolean }) {
+  const line = recipientsLine(r);
+  const nobody = r.receiving === 0;
+  return (
+    <div
+      data-testid="pn-recipients-line"
+      data-mode={r.mode}
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-3 py-2 text-[13px]",
+        nobody
+          ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
+          : "bg-card text-card-foreground",
+      )}
+    >
+      <Users size={15} className={cn("shrink-0", nobody ? "text-amber-600" : "text-violet-600")} />
+      <span className="min-w-0 flex-1">
+        Phone notifications go to: <b>{line.label}</b> — {line.reach}
+      </span>
+      {canOpenSettings && (
+        <Link
+          href={pnPath("settings")}
+          data-testid="pn-recipients-settings"
+          className="inline-flex items-center gap-1 text-xs font-semibold text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
+        >
+          Change who receives them <ArrowRight size={11} />
+        </Link>
+      )}
+    </div>
   );
 }
 
@@ -646,6 +690,8 @@ export default function OverviewTab({
           service): follow <b>docs/PUSH_NOTIFICATIONS.md</b> in the mobile app folder, install the new app and sign in.
         </Notice>
       )}
+
+      {o.recipients && <RecipientsLineStrip r={o.recipients} canOpenSettings={canOpen("settings")} />}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="pn-tiles">
         {tiles.map((t) => (

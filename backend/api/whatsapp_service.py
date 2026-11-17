@@ -621,7 +621,10 @@ def send_document(
     """
     # the caption of the document is also a phone notification and an in-app record (push_messages.py)
     push_messages.announce(
-        employee, document_type, render_message(_template_body(document_type), body_params, _order_for(document_type))
+        employee,
+        document_type,
+        render_message(_template_body(document_type), body_params, _order_for(document_type)),
+        params=body_params,
     )
     phone, caption, stopped = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
     if stopped is not None:
@@ -675,7 +678,10 @@ def queue_document(
     if build not in DOCUMENT_BUILDERS:
         raise ValueError(f"Unknown document builder: {build}")
     push_messages.announce(
-        employee, document_type, render_message(_template_body(document_type), body_params, _order_for(document_type))
+        employee,
+        document_type,
+        render_message(_template_body(document_type), body_params, _order_for(document_type)),
+        params=body_params,
     )
     marker = {"batch": batch_id} if batch_id else {}
     phone, caption, stopped = _precheck(
@@ -868,6 +874,7 @@ def announce_only(employee, document_type: str, params, *, related_module: str =
         render_message(_template_body(document_type), params, _order_for(document_type)),
         related_module=related_module,
         dedupe_key=dedupe_key,
+        params=params,
     )
 
 
@@ -929,6 +936,7 @@ def send_notification(
                 render_message(_template_body(document_type), params, _order_for(document_type)),
                 related_module=related_module,
                 dedupe_key=dedupe_key,
+                params=params,
             )
         settings_row = WhatsAppSettings.get()
         if switch_off_reason(document_type, related_module, settings_row) or not is_configured():

@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useMobileDevices, useSendMobileMessage, type MobileDeviceRow } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { errorText, plural } from "./logic";
+import { PhoneNotificationCard } from "./PhonePreview";
 import { Panel, useLockedWhy } from "./ui";
 
 const TITLE_MAX = 60;
@@ -132,10 +133,23 @@ export default function SendTab() {
             aria-label="Message"
             data-testid="pn-message"
           />
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[11px] text-muted-foreground">
-              {message.length} / {MESSAGE_MAX}
-            </span>
+          <p className="-mt-1.5 text-right text-[11px] text-muted-foreground">
+            {message.length} / {MESSAGE_MAX}
+          </p>
+          {/* how it will show, before it is sent */}
+          <div className="space-y-1.5" data-testid="pn-send-preview-block">
+            <p className="text-xs font-semibold">
+              Preview <span className="font-normal text-muted-foreground">(how it shows on the phone)</span>
+            </p>
+            <PhoneNotificationCard
+              title={title.trim() || "Title"}
+              body={message.trim() || "The message"}
+              dim={{ title: !title.trim(), body: !message.trim() }}
+              testId="pn-send-preview"
+              className="max-w-sm"
+            />
+          </div>
+          <div className="flex justify-end">
             <Button
               className="gap-1.5"
               disabled={!ready || send.isPending || locked !== null}

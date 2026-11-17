@@ -297,13 +297,30 @@ def _employee_request_create(request: Request) -> Response:
     )
 
     label = dict(EmployeeRequest.REQUEST_TYPES).get(data["requestType"], data["requestType"])
-    Notification.objects.create(
-        employee=emp,
-        type="employee_request",
-        message=f"New {label} submitted by {emp.first_name} {emp.last_name}: '{data['subject']}'",
-        source="request_update",
-        related_module="request",
-    )
+    from . import push_recipients
+
+    if push_recipients.allows(emp):
+        from . import push_templates
+
+        title, message = push_templates.apply(
+            "request_update",
+            {
+                "employee_name": f"{emp.first_name} {emp.last_name}",
+                "request_type": label,
+                "subject": data["subject"],
+                "status": "submitted",
+            },
+            "",
+            f"New {label} submitted by {emp.first_name} {emp.last_name}: '{data['subject']}'",
+        )
+        Notification.objects.create(
+            employee=emp,
+            type="employee_request",
+            title=title,
+            message=message,
+            source="request_update",
+            related_module="request",
+        )
 
     return Response(_req_json(er), status=201)
 
@@ -337,12 +354,28 @@ def employee_request_action(request: Request, pk: int) -> Response:
     er.handled_at = datetime.utcnow()
     er.save()
     if er.status != prev_status:
-        if er.status not in ("approved", "rejected"):
+        from . import push_recipients
+
+        if er.status not in ("approved", "rejected") and push_recipients.allows(er.employee):
             # a final decision is announced by notify_decision below with the full WhatsApp wording
+            from . import push_templates
+
+            title, message = push_templates.apply(
+                "request_update",
+                {
+                    "employee_name": f"{er.employee.first_name} {er.employee.last_name}",
+                    "request_type": dict(EmployeeRequest.REQUEST_TYPES).get(er.request_type, er.request_type),
+                    "subject": er.subject,
+                    "status": er.status.replace("_", " "),
+                },
+                "",
+                f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
+            )
             Notification.objects.create(
                 employee=er.employee,
                 type="employee_request",
-                message=f"Your request '{er.subject}' is now {er.status.replace('_', ' ')}.",
+                title=title,
+                message=message,
                 source="request_update",
                 related_module="request",
             )

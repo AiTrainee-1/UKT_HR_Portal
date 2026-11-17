@@ -406,18 +406,29 @@ def dedupe_key(run, delivery) -> str:
 
 def _send_push(run, d, emp, state: _RoundState) -> tuple[str, str]:
     """The in-app notification, which IS the phone push (signals.py; the Mobile Messages switches apply there)."""
+    from . import push_delivery, push_recipients, push_templates
     from .models import HodReminderDelivery as D, Notification
 
+    if not push_recipients.allows(emp):
+        return D.STATUS_SKIPPED, push_recipients.NOT_RECIPIENT
     key = dedupe_key(run, d)
+    title, message = push_templates.apply(  # HR's phone wording (Phone Notify Control -> Message Text)
+        SOURCE,
+        lambda: {"employee_name": d.name, "total": d.pending, "date": day_text(run.run_date)},
+        PUSH_TITLE,
+        d.text,
+    )
     try:
         with transaction.atomic():
             note = Notification.objects.create(
-                employee=emp, type=SOURCE, title=PUSH_TITLE, message=d.text, source=SOURCE, dedupe_key=key
+                employee=emp, type=SOURCE, title=title, message=message, source=SOURCE, dedupe_key=key
             )
     except IntegrityError:
         note = Notification.objects.filter(employee=emp, dedupe_key=key).first()
         if note is None:
             return D.STATUS_FAILED, "The notification could not be saved."
+    # the run reports what happened to the push, so it is pushed here and now (push_delivery's queue then skips it)
+    push_delivery.push([note.pk])
     note.refresh_from_db(fields=["push_status", "push_error"])
     if note.push_status in ("sent", "delivered"):
         return D.STATUS_SENT, ""

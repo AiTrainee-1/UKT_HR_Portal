@@ -276,8 +276,9 @@ export default function ControlsTab() {
 
       <Notice tone="info">
         A notification is always saved in the employee&apos;s app (their Notifications page). These switches only stop
-        the <b>push to the phone</b>, so nothing is lost. A muted employee (Employees tab) gets no push at all. Login,
-        password-reset and activation codes are never sent this way. Changes apply at once.
+        the <b>push to the phone</b>, so nothing is lost. A muted employee (Employees tab) gets no push at all. Who gets
+        notifications in the first place is set on the Settings tab. Login, password-reset and activation codes are
+        never sent this way. Changes apply at once.
       </Notice>
 
       {!on && (
@@ -306,8 +307,8 @@ export default function ControlsTab() {
           />
           {picked && (
             <p className="text-xs text-muted-foreground" data-testid="pn-category-showing">
-              Showing the {plural(picked.total, "switch", "switches")} of <b className="text-foreground">{picked.label}</b>{" "}
-              ({picked.on} on).{" "}
+              Showing the {plural(picked.total, "switch", "switches")} of{" "}
+              <b className="text-foreground">{picked.label}</b> ({picked.on} on).{" "}
               <button
                 type="button"
                 className="font-semibold text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"

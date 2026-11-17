@@ -501,20 +501,40 @@ def remind_approver(request: Request, module: str, pk: int) -> Response:
             employee=emp, module=module, request_id=obj.id, sent_to=_sent_to(target)
         )
 
+    from . import push_delivery, push_recipients, push_templates
+
     push = ""
-    if target["role"] == approval.HOD:
+    if target["role"] == approval.HOD and not push_recipients.allows(target["manager"].employee):
         manager = target["manager"]
-        # Made after the lock is released: creating it is what pushes it to the head's phones (signals.py), a network call.
+        push = "off"  # not a phone notification recipient (Phone Notify Control -> Settings); the reminder row stands
+        name = _person(manager.employee)
+        message = f"Reminder sent to {name} (Department Head). They will see it on their Approvals page."
+    elif target["role"] == approval.HOD:
+        manager = target["manager"]
+        # Made after the lock is released, and pushed here and now (a network call): the answer says what happened.
+        title, message = push_templates.apply(  # HR's wording (Phone Notify Control -> Message Text)
+            REMINDER_SOURCE,
+            {
+                "employee_name": _person(emp),
+                "employee_code": emp.employee_code,
+                "request": item["title"],
+                "details": item["summary"],
+                "submitted_on": _local(obj.created_at) if obj.created_at else "",
+            },
+            REMINDER_TITLE,
+            _reminder_message(emp, item, obj.created_at),
+        )
         note = Notification.objects.create(
             employee=manager.employee,
             # Its own type, so a tap on the head's phone opens Approvals (mobile notificationRoute) and not the head's
             # own leave/permission screens.
             type=REMINDER_SOURCE,
-            title=REMINDER_TITLE,
-            message=_reminder_message(emp, item, obj.created_at),
+            title=title,
+            message=message,
             source=REMINDER_SOURCE,
             dedupe_key=f"reminder:{reminder.id}",
         )
+        push_delivery.push([note.pk])
         note.refresh_from_db(fields=["push_status"])
         push = note.push_status
         name = _person(manager.employee)

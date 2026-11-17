@@ -235,6 +235,15 @@ class MobileMessageSettings(models.Model):
 
     push_enabled = models.BooleanField(default=True, db_default=True)
     disabled_types = models.JSONField(default=list, blank=True)
+    # WHO receives phone notifications at all (Phone Notify Control -> Settings, 2026-11-17; push_recipients.py): every
+    # active employee, staff only, production only, or the employees on the PushRecipient list. Every automatic sender
+    # leaves the others out before it makes anything.
+    RECIPIENTS_ALL = "all"
+    RECIPIENTS_STAFF = "staff"
+    RECIPIENTS_PRODUCTION = "production"
+    RECIPIENTS_SELECTED = "selected"
+    RECIPIENT_MODES = (RECIPIENTS_ALL, RECIPIENTS_STAFF, RECIPIENTS_PRODUCTION, RECIPIENTS_SELECTED)
+    recipient_mode = models.CharField(max_length=12, default=RECIPIENTS_ALL, db_default=RECIPIENTS_ALL)
     updated_by = models.TextField(blank=True, default="", db_default="")
     updated_at = models.DateTimeField(null=True, blank=True)
 
@@ -300,6 +309,36 @@ class PushOptOut(models.Model):
 
     class Meta:
         db_table = "push_opt_outs"
+
+
+class PushRecipient(models.Model):
+    """An employee on the "Selected employees" list of Phone Notify Control -> Settings (2026-11-17): while the recipient
+    mode is "selected", only these employees get phone notifications from the automatic senders (push_recipients.py).
+    The list is kept whatever the mode, so switching back to "selected" finds it as it was."""
+
+    employee = models.OneToOneField(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="push_recipient"
+    )
+    added_by = models.TextField(blank=True, default="", db_column="added_by")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "push_recipients"
+
+
+class PushTemplate(models.Model):
+    """HR's wording of one kind of phone notification (Phone Notify Control -> Message Text, 2026-11-17;
+    push_templates.py): a title and a body with {{placeholders}}. A blank part keeps the built-in wording; no row at all
+    means the kind is not customised."""
+
+    key = models.CharField(max_length=60, unique=True)
+    title = models.TextField(blank=True, default="")
+    body = models.TextField(blank=True, default="")
+    updated_by = models.TextField(blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "push_templates"
 
 
 # ──────────────────────────────────────────────

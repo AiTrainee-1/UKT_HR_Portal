@@ -24,7 +24,7 @@ import threading
 
 from django.db import close_old_connections, connections, transaction
 
-from . import mobile_messages, push_delivery
+from . import mobile_messages, push_delivery, push_recipients, push_templates
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,13 @@ def announce(message_id: int) -> list[int]:
     if not master:
         return []
     kind = kind_of(msg)
-    people = set(readers(msg.channel).filter(push_tokens__isnull=False).values_list("id", flat=True).distinct())
+    # the readers with a phone who are phone notification recipients (Phone Notify Control -> Settings), in one query
+    people = set(
+        push_recipients.narrow(readers(msg.channel))
+        .filter(push_tokens__isnull=False)
+        .values_list("id", flat=True)
+        .distinct()
+    )
     people.discard(msg.sender_id)
     people -= mobile_messages.muted_employee_ids(people)
     if not people:
@@ -119,6 +125,10 @@ def announce(message_id: int) -> list[int]:
         if this_kind in off:
             continue
         title, body = content(msg, this_kind)
+        # HR's wording (Phone Notify Control -> Message Text); the report's headline / counts are its built-in title / message
+        title, body = push_templates.apply(
+            this_kind, {"sender_name": _sender_name(msg), "channel": _where(msg)}, title, body
+        )
         rows.append(
             Notification(
                 employee_id=emp_id,

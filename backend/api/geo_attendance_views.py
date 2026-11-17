@@ -650,11 +650,20 @@ def resolve_on_duty_punch_hr(
             session.completion_reason = OnDutySession.COMPLETION_AUTO_4TH_PUNCH
             session.save()
             _end_track_safely(session, OnDutySession.COMPLETION_AUTO_4TH_PUNCH)
-            Notification.objects.create(
-                employee=v.employee, type="on_duty",
-                message="Your On-Duty session was automatically completed after your 4th punch was approved.",
-                source="on_duty_auto_end",
-            )
+            from . import push_recipients
+
+            if push_recipients.allows(v.employee):
+                from . import push_templates
+
+                title, message = push_templates.apply(
+                    "on_duty_auto_end",
+                    {"employee_name": f"{v.employee.first_name} {v.employee.last_name}", "destination": session.destination},
+                    "",
+                    "Your On-Duty session was automatically completed after your 4th punch was approved.",
+                )
+                Notification.objects.create(
+                    employee=v.employee, type="on_duty", title=title, message=message, source="on_duty_auto_end",
+                )
 
 
 def _notify_hod_approvers(session: OnDutySession) -> None:
@@ -664,12 +673,26 @@ def _notify_hod_approvers(session: OnDutySession) -> None:
     HRUser accounts aren't push-token-registered, only employees are)."""
     emp = session.employee
     # The employee's ONE HOD (hod_scope.py), if allowed to act on on-duty requests.
+    from . import push_recipients
+
     for m in managers_to_notify(emp, "can_approve_on_duty"):
+        if not push_recipients.allows(m.employee):
+            continue  # not a phone notification recipient (Phone Notify Control -> Settings)
+        from . import push_templates
+
+        title, message = push_templates.apply(
+            "approval_waiting",
+            {
+                "employee_name": f"{emp.first_name} {emp.last_name}",
+                "employee_code": emp.employee_code,
+                "request": "On-Duty request",
+                "details": session.destination[:80],
+            },
+            "",
+            f"{emp.first_name} {emp.last_name} submitted an On-Duty request -{session.destination[:80]}",
+        )
         Notification.objects.create(
-            employee=m.employee,
-            type="on_duty",
-            message=f"{emp.first_name} {emp.last_name} submitted an On-Duty request -{session.destination[:80]}",
-            source="approval_waiting",
+            employee=m.employee, type="on_duty", title=title, message=message, source="approval_waiting",
         )
 
 
@@ -1026,11 +1049,19 @@ def on_duty_punch_request(request: Request) -> Response:
     session_ended = False
     if len(available) == 1:
         session_ended = _end_on_duty_session(session, OnDutySession.COMPLETION_AUTO_4TH_PUNCH)
-        if session_ended:
+        from . import push_recipients
+
+        if session_ended and push_recipients.allows(emp):
+            from . import push_templates
+
+            title, message = push_templates.apply(
+                "on_duty_auto_end",
+                {"employee_name": f"{emp.first_name} {emp.last_name}", "destination": session.destination},
+                "",
+                "Your On-Duty session ended automatically -all 4 punches for the day are in.",
+            )
             Notification.objects.create(
-                employee=emp, type="on_duty",
-                message="Your On-Duty session ended automatically -all 4 punches for the day are in.",
-                source="on_duty_auto_end",
+                employee=emp, type="on_duty", title=title, message=message, source="on_duty_auto_end",
             )
 
     return Response({

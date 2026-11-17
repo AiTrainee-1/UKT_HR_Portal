@@ -36,7 +36,7 @@ from .audit_utils import log_action
 from .auth import get_hr_display_name, require_hr
 from .branch_scope import scope_to_branch
 from .clock import FACTORY_TZ
-from .models import Employee, MobileMessageSettings, Notification, PushOptOut, PushToken
+from .models import Employee, MobileMessageSettings, Notification, PushOptOut, PushRecipient, PushToken
 from .view_common import error_response as _error
 from .view_common import paginate
 
@@ -100,8 +100,11 @@ def _day_start(days_back: int = 0) -> datetime:
 @require_hr
 def mobile_messages_overview(request: Request) -> Response:
     push_receipts.check_pending()  # read Expo's receipts for what was sent a minute or more ago
+    from . import push_recipients
+
     notes = _notifications(request)
-    employees = _employees(request)
+    # the phone figures count the people who receive phone notifications (Phone Notify Control -> Settings), not everybody
+    employees = push_recipients.narrow(_employees(request))
     settings = MobileMessageSettings.get()
 
     emp_ids = list(employees.values_list("id", flat=True))
@@ -161,6 +164,8 @@ def mobile_messages_overview(request: Request) -> Response:
             # additive (2026-11-17): the dashboard's categories and the week's latest failed pushes
             "categories": _categories(month, settings),
             "failedRecent": failed_recent,
+            # additive (2026-11-17): who receives phone notifications (Phone Notify Control -> Settings)
+            "recipients": _recipients_line(request),
             "pushEnabled": settings.push_enabled,
             "switchedOff": len([k for k in (settings.disabled_types or []) if k in mobile_messages.valid_keys()]),
             "kinds": len(mobile_messages.valid_keys()),
@@ -226,6 +231,15 @@ def _categories(month_qs, settings) -> list[dict]:
             }
         )
     return out
+
+
+def _recipients_line(request) -> dict | None:
+    from .push_recipients_views import overview_summary
+
+    try:
+        return overview_summary(request)
+    except Exception:  # the column before migration 0157: the page still opens
+        return None
 
 
 def _stats(request=None) -> tuple[dict, dict]:
@@ -429,7 +443,21 @@ def mobile_messages_devices(request: Request) -> Response:
         )
 
     qs = qs.defer("photo_url").select_related("push_opt_out")
-    return paginate(request, qs, _device_row)
+    # additive (2026-11-17): is this employee a phone notification recipient (Phone Notify Control -> Settings)?
+    from . import push_recipients
+
+    current = push_recipients.mode()
+    if current == push_recipients.SELECTED:
+        qs = qs.annotate(is_selected=Exists(PushRecipient.objects.filter(employee_id=OuterRef("pk"))))
+
+    def row(e: Employee) -> dict:
+        if current == push_recipients.SELECTED:
+            receives = bool(getattr(e, "is_selected", False))
+        else:
+            receives = current == push_recipients.ALL or e.employment_type == current
+        return {**_device_row(e), "isRecipient": receives}
+
+    return paginate(request, qs, row)
 
 
 def _device_row(e: Employee) -> dict:

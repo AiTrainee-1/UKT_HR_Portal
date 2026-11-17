@@ -440,9 +440,19 @@ def kind_enabled(source: str) -> bool:
 def off_reason(source: str, related_module: str = "", employee_id: int | None = None) -> str | None:
     """Why this notification must not be pushed (one plain sentence), or None when it may: the master switch, the kind,
     the workflow, and (when `employee_id` is given) the employee's mute."""
+    from . import push_recipients
+
     master, off = switches()
     muted = bool(employee_id) and employee_id in muted_employee_ids([employee_id])
-    return _block(master, off, source, related_module, muted)
+    reason = _block(master, off, source, related_module, muted)
+    if (
+        not reason
+        and employee_id
+        and (source or "") not in push_recipients.EXEMPT_SOURCES
+        and not push_recipients.allows(employee_id)
+    ):
+        reason = push_recipients.NOT_RECIPIENT
+    return reason
 
 
 def push_blocks(rows) -> dict[int, str]:
@@ -451,11 +461,16 @@ def push_blocks(rows) -> dict[int, str]:
     rows = list(rows)
     if not rows:
         return {}
+    from . import push_recipients
+
     master, off = switches()
     muted = muted_employee_ids({n.employee_id for n in rows})
+    outside = push_recipients.blocked(rows) if master else set()
     out = {}
     for n in rows:
         reason = _block(master, off, n.source, n.related_module, n.employee_id in muted)
+        if not reason and n.pk in outside:
+            reason = push_recipients.NOT_RECIPIENT
         if reason:
             out[n.pk] = reason
     return out

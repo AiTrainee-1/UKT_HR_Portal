@@ -75,11 +75,29 @@ def _notify_hod_approvers(req: MissingPunchRequest) -> None:
     needed there -HRUser accounts aren't push-token-registered)."""
     emp = req.employee
     # The employee's ONE HOD (hod_scope.py), if allowed to act on missing-punch requests.
+    from . import push_recipients
+
     for m in managers_to_notify(emp, "can_approve_missing_punch"):
+        if not push_recipients.allows(m.employee):
+            continue  # not a phone notification recipient (Phone Notify Control -> Settings)
+        from . import push_templates
+
+        title, message = push_templates.apply(
+            "approval_waiting",
+            {
+                "employee_name": f"{emp.first_name} {emp.last_name}",
+                "employee_code": emp.employee_code,
+                "request": "Missing Punch request",
+                "details": req.date.strftime("%d %b %Y"),
+            },
+            "",
+            f"{emp.first_name} {emp.last_name} submitted a Missing Punch request for {req.date.isoformat()}.",
+        )
         Notification.objects.create(
             employee=m.employee,
             type="missing_punch",
-            message=f"{emp.first_name} {emp.last_name} submitted a Missing Punch request for {req.date.isoformat()}.",
+            title=title,
+            message=message,
             source="approval_waiting",
             related_module="missing_punch",
         )

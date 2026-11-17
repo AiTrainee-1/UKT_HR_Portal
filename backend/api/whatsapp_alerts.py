@@ -900,6 +900,18 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
 
     # every minute: without the photo column (base64, up to MBs per person), which the alerts never read
     staff = Employee.objects.filter(status="active", employment_type=Employee.EMPLOYMENT_TYPE_STAFF).defer("photo_url")
+    # Phone Notify Control -> Settings: who may get the phone side at all. When WhatsApp carries none of the alerts, the
+    # others are not even looked at (a "production only" or a short "selected" list makes this job almost free).
+    from . import push_recipients
+
+    recipients = None  # None: everybody
+    if phone_types:
+        current = push_recipients.mode()
+        if current != push_recipients.ALL:
+            if channels.wa_types:
+                recipients = set(push_recipients.narrow(staff, current=current).values_list("id", flat=True))
+            else:
+                staff = push_recipients.narrow(staff, current=current)
     wa_this_run = 0
     for emp in staff:
         for item in evaluate(emp, day):
@@ -908,7 +920,9 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
                 continue
             day.already.add(key)
             on_whatsapp = channels.whatsapp(item.doc_type) and key not in wa_done
-            on_phone = channels.phone(item.doc_type) and key not in phone_done
+            on_phone = (
+                channels.phone(item.doc_type) and key not in phone_done and (recipients is None or emp.id in recipients)
+            )
             if on_whatsapp and (
                 (per_run and wa_this_run >= per_run)
                 or (per_hour and hour_sent + wa_this_run >= per_hour)

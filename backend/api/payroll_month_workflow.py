@@ -477,16 +477,28 @@ def notify_salary_paid(payroll_ids) -> int:
     most once per employee and month (the dedupe key), so a retry never notifies twice. Returns how many were made."""
     from .models import Notification
 
+    from . import push_recipients, push_templates
+
     made = 0
     rows = Payroll.objects.select_related("employee").filter(id__in=list(payroll_ids)).order_by("id")
+    rows = push_recipients.narrow(rows, "employee__")  # Phone Notify Control -> Settings: the others are not processed
     for p in rows:
         try:
+            title, message = push_templates.apply(  # HR's wording (Phone Notify Control -> Message Text)
+                SALARY_PAID_SOURCE,
+                {
+                    "employee_name": f"{p.employee.first_name} {p.employee.last_name}",
+                    "month": month_label(p.month, p.year),
+                },
+                SALARY_PAID_TITLE,
+                salary_paid_text(p.month, p.year),
+            )
             with transaction.atomic():
                 Notification.objects.create(
                     employee=p.employee,
                     type="salary_slip",
-                    title=SALARY_PAID_TITLE,
-                    message=salary_paid_text(p.month, p.year),
+                    title=title,
+                    message=message,
                     source=SALARY_PAID_SOURCE,
                     related_module="payroll",
                     dedupe_key=dedupe_key(p.employee_id, p.month, p.year),

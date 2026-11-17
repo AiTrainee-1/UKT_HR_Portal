@@ -98,11 +98,28 @@ def _notify_dept_heads(resignation: ResignationRequest) -> None:
     # Only the employee's ONE HOD (hod_scope.py), and only if allowed to act on resignations.
     from .hod_scope import managers_to_notify
 
+    from . import push_recipients
+
     for mgr in managers_to_notify(emp, "can_approve_resignations"):
+        if not push_recipients.allows(mgr.employee_id):
+            continue  # not a phone notification recipient (Phone Notify Control -> Settings)
+        from . import push_templates
+
+        title, message = push_templates.apply(
+            "approval_waiting",
+            {
+                "employee_name": f"{emp.first_name} {emp.last_name}",
+                "employee_code": emp.employee_code,
+                "request": "resignation request",
+            },
+            "",
+            f"{emp.first_name} {emp.last_name} has submitted a resignation request. Please review it.",
+        )
         Notification.objects.create(
             employee_id=mgr.employee_id,
             type="resignation",
-            message=f"{emp.first_name} {emp.last_name} has submitted a resignation request. Please review it.",
+            title=title,
+            message=message,
             source="approval_waiting",
             related_module="resignation",
         )

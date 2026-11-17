@@ -2387,6 +2387,22 @@
               "help": "How delivery works (Expo, Firebase) and its health.",
               "routes": ["/hr/phone-notify-control/configuration"],
               "enforce": "server"
+            },
+            {
+              "key": "phone_notify_control.templates",
+              "label": "Message Text",
+              "type": "tab",
+              "help": "The title and wording of every kind of phone notification, with placeholders and a preview.",
+              "routes": ["/hr/phone-notify-control/message-text"],
+              "enforce": "server"
+            },
+            {
+              "key": "phone_notify_control.settings",
+              "label": "Settings",
+              "type": "tab",
+              "help": "Who receives phone notifications: everybody, staff only, production only or selected employees.",
+              "routes": ["/hr/phone-notify-control/settings"],
+              "enforce": "server"
             }
           ]
         },

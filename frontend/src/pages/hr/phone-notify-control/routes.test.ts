@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { PN_BASE, PN_TABS, cleanPnPath, pnPath, pnTabModule, pnTabPath, readPnPath, resolvePnPath } from "./routes";
+import {
+  PN_BASE,
+  PN_TABS,
+  cleanPnPath,
+  pnPath,
+  pnTabModule,
+  pnTabPath,
+  pnTabSegment,
+  readPnPath,
+  resolvePnPath,
+} from "./routes";
 
 describe("the addresses of Phone Notify Control", () => {
-  it("has six tabs, in this order", () => {
+  it("has eight tabs, in this order (the tree's)", () => {
     expect(PN_TABS.map((t) => t.value)).toEqual([
       "overview",
       "messages",
@@ -10,6 +20,8 @@ describe("the addresses of Phone Notify Control", () => {
       "controls",
       "send",
       "configuration",
+      "templates",
+      "settings",
     ]);
     expect(PN_TABS.map((t) => t.label)).toEqual([
       "Overview",
@@ -18,6 +30,8 @@ describe("the addresses of Phone Notify Control", () => {
       "Controls",
       "Send a message",
       "Configuration",
+      "Message Text",
+      "Settings",
     ]);
   });
 
@@ -25,6 +39,12 @@ describe("the addresses of Phone Notify Control", () => {
     expect(pnTabPath()).toBe(PN_BASE);
     expect(pnTabPath("overview")).toBe("/hr/phone-notify-control/overview");
     expect(pnTabPath("configuration")).toBe("/hr/phone-notify-control/configuration");
+    expect(pnTabPath("settings")).toBe("/hr/phone-notify-control/settings");
+    // Message Text: its key is `templates`, its address `/message-text` (the tree's route for that key)
+    expect(pnTabPath("templates")).toBe("/hr/phone-notify-control/message-text");
+    expect(pnTabSegment("templates")).toBe("message-text");
+    expect(pnTabSegment("messages")).toBe("messages");
+    expect(pnPath("templates", "custom=1")).toBe("/hr/phone-notify-control/message-text?custom=1");
     expect(pnPath("messages", "status=failed")).toBe("/hr/phone-notify-control/messages?status=failed");
     expect(pnPath("messages", "?status=failed")).toBe("/hr/phone-notify-control/messages?status=failed");
     expect(pnPath("employees")).toBe("/hr/phone-notify-control/employees");
@@ -36,6 +56,11 @@ describe("the addresses of Phone Notify Control", () => {
     expect(readPnPath("/hr/phone-notify-control/messages")).toBe("messages");
     expect(readPnPath("/hr/phone-notify-control/send/extra")).toBe("send");
     expect(readPnPath("/HR/Phone-Notify-Control/Controls?x=1#top")).toBe("controls");
+    expect(readPnPath("/hr/phone-notify-control/settings?list=on")).toBe("settings");
+    expect(readPnPath("/hr/phone-notify-control/message-text")).toBe("templates");
+    expect(readPnPath("/hr/phone-notify-control/Message-Text?q=late")).toBe("templates");
+    // only a tab's own address counts: the key is not an address
+    expect(readPnPath("/hr/phone-notify-control/templates")).toBeNull();
     expect(readPnPath("/hr/phone-notify-control/nope")).toBeNull();
     expect(readPnPath("/hr/phone-notify-control-archive/messages")).toBeNull();
     expect(readPnPath("/hr/sms-control/messages")).toBeNull();
@@ -49,6 +74,8 @@ describe("the addresses of Phone Notify Control", () => {
       "phone_notify_control.controls",
       "phone_notify_control.send",
       "phone_notify_control.configuration",
+      "phone_notify_control.templates",
+      "phone_notify_control.settings",
     ]);
   });
 });
@@ -65,6 +92,11 @@ describe("resolvePnPath", () => {
     ["/hr/phone-notify-control/controls", "/hr/phone-notify-control/controls"],
     ["/hr/phone-notify-control/send/x/y", "/hr/phone-notify-control/send"],
     ["/hr/phone-notify-control/configuration", "/hr/phone-notify-control/configuration"],
+    ["/hr/phone-notify-control/message-text", "/hr/phone-notify-control/message-text"],
+    ["/hr/phone-notify-control/message-text/x", "/hr/phone-notify-control/message-text"],
+    ["/hr/phone-notify-control/templates", "/hr/phone-notify-control/overview"],
+    ["/hr/phone-notify-control/settings", "/hr/phone-notify-control/settings"],
+    ["/hr/phone-notify-control/settings/extra", "/hr/phone-notify-control/settings"],
     ["/HR/PHONE-NOTIFY-CONTROL/Messages", "/hr/phone-notify-control/messages"],
   ];
   it.each(cases)("%s is %s", (from, to) => {

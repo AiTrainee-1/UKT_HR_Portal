@@ -114,6 +114,8 @@ from .accounts import (
     ApprovalReminder,
     Notification,
     PushOptOut,
+    PushRecipient,
+    PushTemplate,
     PushToken,
 )
 from .recruitment import (

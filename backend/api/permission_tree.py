@@ -1476,6 +1476,22 @@ PHONE_NOTIFY_CONTROL = N(
         routes=["/hr/phone-notify-control/configuration"],
         api=["mobile-app/messages/config"],
     ),
+    N(
+        "phone_notify_control.templates",
+        "Message Text",
+        "tab",
+        "The title and wording of every kind of phone notification, with placeholders and a preview.",
+        routes=["/hr/phone-notify-control/message-text"],
+        api=["mobile-app/messages/templates"],
+    ),
+    N(
+        "phone_notify_control.settings",
+        "Settings",
+        "tab",
+        "Who receives phone notifications: everybody, staff only, production only or selected employees.",
+        routes=["/hr/phone-notify-control/settings"],
+        api=["mobile-app/messages/recipients"],
+    ),
     routes=["/hr/phone-notify-control"],
     api=["mobile-app/messages"],
     # these were the Mobile Messages tab of Mobile App Login until 2026-11-17: a role with nothing set here keeps the level

@@ -10,8 +10,10 @@ import ControlsTab from "./phone-notify-control/ControlsTab";
 import EmployeesTab from "./phone-notify-control/EmployeesTab";
 import { VIEW_ONLY_TEXT } from "./phone-notify-control/logic";
 import MessagesTab from "./phone-notify-control/MessagesTab";
+import MessageTextTab from "./phone-notify-control/MessageTextTab";
 import OverviewTab from "./phone-notify-control/OverviewTab";
 import SendTab from "./phone-notify-control/SendTab";
+import SettingsTab from "./phone-notify-control/SettingsTab";
 import { LockContext } from "./phone-notify-control/ui";
 import {
   PN_TABS,
@@ -50,7 +52,7 @@ function onTabKeys(event: KeyboardEvent<HTMLDivElement>) {
  * Mobile App Login.
  *
  * One page with its tabs in the path (/hr/phone-notify-control/overview, /messages, /employees, /controls, /send,
- * /configuration): the bare page, or an unknown tab, is replaced by the first tab the role may open, and only the tab on screen
+ * /configuration, /message-text, /settings): the bare page, or an unknown tab, is replaced by the first tab the role may open, and only the tab on screen
  * is rendered, so a tab that is not open asks the server for nothing. Each tab has its own permission key
  * (`phone_notify_control.send`, following the page while unset) and its own route in the tree: the route guard (App.tsx)
  * turns away the address of a hidden one, HrLayout locks a View-only one, this page offers only the ones the role may open,
@@ -122,6 +124,8 @@ export default function PhoneNotifyControl() {
                 {current === "controls" && <ControlsTab />}
                 {current === "send" && <SendTab />}
                 {current === "configuration" && <ConfigTab />}
+                {current === "templates" && <MessageTextTab />}
+                {current === "settings" && <SettingsTab />}
               </div>
             </LockContext.Provider>
           </>

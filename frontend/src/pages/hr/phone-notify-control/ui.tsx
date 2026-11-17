@@ -217,6 +217,8 @@ export function FilterChips({
             )}
           >
             {it.label}
+            {/* a space for a screen reader ("Leave 2"); the flex row draws none */}
+            {it.count !== undefined && " "}
             {it.count !== undefined && (
               <span
                 className={cn(
@@ -261,7 +263,7 @@ export function OnOff({ on, className }: { on: boolean; className?: string }) {
 
 /**
  * "Are you sure?" drawn in the page where the action was pressed (not a browser box, not a dialog): the consequence in words,
- * the action's own button, and Cancel.
+ * the action's own button, and Cancel. `stacked` puts the buttons under the words (inside a narrow card).
  */
 export function InlineConfirm({
   children,
@@ -270,7 +272,10 @@ export function InlineConfirm({
   onCancel,
   pending = false,
   destructive = false,
+  stacked = false,
+  cancelLabel = "Cancel",
   testId,
+  className,
 }: {
   children: ReactNode;
   confirmLabel: string;
@@ -278,7 +283,11 @@ export function InlineConfirm({
   onCancel: () => void;
   pending?: boolean;
   destructive?: boolean;
+  stacked?: boolean;
+  /** The words of the button that answers no ("Keep editing" when the question is whether to throw edits away). */
+  cancelLabel?: string;
   testId?: string;
+  className?: string;
 }) {
   return (
     <div
@@ -287,12 +296,20 @@ export function InlineConfirm({
       className={cn(
         "flex flex-wrap items-center gap-3 rounded-xl border p-3 text-[13px] leading-relaxed",
         destructive ? TINT.bad : TINT.warn,
+        className,
       )}
     >
-      <div className="min-w-0 flex-1">{children}</div>
-      <div className="flex shrink-0 gap-2">
-        <Button size="sm" variant="outline" onClick={onCancel} disabled={pending} data-view-safe>
-          Cancel
+      <div className={cn("min-w-0 flex-1", stacked && "basis-full")}>{children}</div>
+      <div className={cn("flex shrink-0 gap-2", stacked && "ml-auto")}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onCancel}
+          disabled={pending}
+          data-view-safe
+          data-testid={testId ? `${testId}-no` : undefined}
+        >
+          {cancelLabel}
         </Button>
         <Button
           size="sm"

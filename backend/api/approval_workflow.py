@@ -882,12 +882,23 @@ def notify_hod_of_request(key: str, emp, what: str) -> None:
         return
     from .hod_scope import managers_to_notify
 
+    from . import push_recipients, push_templates
+
     notification = apps.get_model("api", "Notification")
     for m in managers_to_notify(emp, defn.hod_flag, exclude_self=defn.hod_only):
+        if not push_recipients.allows(m.employee):
+            continue  # not a phone notification recipient (Phone Notify Control -> Settings)
+        title, message = push_templates.apply(  # HR's wording (Phone Notify Control -> Message Text), else this one
+            "approval_waiting",
+            {"employee_name": f"{emp.first_name} {emp.last_name}", "employee_code": emp.employee_code, "request": what},
+            "",
+            f"{emp.first_name} {emp.last_name}'s {what} is waiting for your approval.",
+        )
         notification.objects.create(
             employee=m.employee,
             type=key,
-            message=f"{emp.first_name} {emp.last_name}'s {what} is waiting for your approval.",
+            title=title,
+            message=message,
             # its own switch on Phone Notify Control (mobile_messages.EXTRA_TYPES), and the workflow's
             source="approval_waiting",
             related_module=_push_module(key),
@@ -914,11 +925,28 @@ def stage_notice(employee, ntype: str, message: str, outcome: Outcome):
     notification and an in-app record: push_messages.py), so it makes none here and the employee never gets it twice."""
     if outcome.final or outcome.rejected:
         return None
+    from . import push_recipients
     from .models import Notification
 
+    if not push_recipients.allows(employee):
+        return None  # not a phone notification recipient (Phone Notify Control -> Settings)
+    from . import push_templates
+
+    def values() -> dict:
+        from .models import Employee
+
+        emp = employee if hasattr(employee, "first_name") else Employee.objects.filter(pk=employee).first()
+        return {
+            "employee_name": f"{emp.first_name} {emp.last_name}".strip() if emp else "",
+            "request": ntype.replace("_", " "),
+            "next_approver": phrase(outcome.waiting) if outcome.waiting else "",
+        }
+
+    title, message = push_templates.apply("approval_progress", values, "", message)
     return Notification.objects.create(
         employee_id=getattr(employee, "pk", employee),
         type=ntype,
+        title=title,
         message=message,
         source="approval_progress",  # its own switch on Phone Notify Control, and the workflow's
         related_module=_push_module(ntype),

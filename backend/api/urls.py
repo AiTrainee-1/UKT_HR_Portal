@@ -29,6 +29,8 @@ from .settlement_views import (
 )
 from .approval_workflow_views import approval_summary, approval_workflow_detail, approval_workflows
 from .login_sessions_views import login_sessions, revoke_login_session
+from .push_recipients_views import push_recipients_employees, push_recipients_settings
+from .push_templates_views import push_template_preview, push_template_update, push_templates_list
 from .mobile_messages_views import (
     mobile_messages_controls, mobile_messages_devices, mobile_messages_log, mobile_messages_overview,
     mobile_messages_send, mobile_messages_push_again, mobile_messages_mute, mobile_messages_remove_phone,
@@ -890,6 +892,13 @@ urlpatterns = [
     path("mobile-app/messages/devices/<int:employee_id>/mute", mobile_messages_mute),
     path("mobile-app/messages/devices/phones/<int:token_id>", mobile_messages_remove_phone),
     path("mobile-app/messages/config", mobile_messages_config),
+    # Phone Notify Control -> Settings: who receives phone notifications (push_recipients_views.py)
+    path("mobile-app/messages/recipients", push_recipients_settings),
+    path("mobile-app/messages/recipients/employees", push_recipients_employees),
+    # Phone Notify Control -> Message Text: HR's wording of each kind (push_templates_views.py)
+    path("mobile-app/messages/templates", push_templates_list),
+    path("mobile-app/messages/templates/<str:key>", push_template_update),
+    path("mobile-app/messages/templates/<str:key>/preview", push_template_preview),
     path("mobile-app/versions", mobile_app_versions),
     path("mobile-app/versions/<int:pk>", mobile_app_version_detail),
     path("mobile-app/latest-version", mobile_app_latest_version),

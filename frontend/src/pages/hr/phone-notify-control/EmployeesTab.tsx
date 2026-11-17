@@ -118,6 +118,15 @@ function EmployeeCard({ e }: { e: MobileDeviceRow }) {
           <p className="flex flex-wrap items-center gap-2 text-sm font-bold">
             {e.name} <span className="font-mono text-[11px] font-normal text-muted-foreground">({e.employeeCode})</span>
             {muted && <StatusBadge tone="caution">Muted</StatusBadge>}
+            {e.isRecipient === false && (
+              <span
+                className="inline-flex"
+                title="Gets no phone notifications: left out on the Settings tab (who receives phone notifications)"
+                data-testid={`pn-not-recipient-${e.id}`}
+              >
+                <StatusBadge tone="neutral">Not a recipient</StatusBadge>
+              </span>
+            )}
           </p>
           <p className="text-xs text-muted-foreground">
             {e.employmentType === "production" ? "Production" : "Staff"}

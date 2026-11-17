@@ -13,6 +13,8 @@ const everyPath = [
   `${PN_BASE}/`,
   ...PN_TABS.map((t) => pnTabPath(t.value)),
   pnPath("messages", "status=failed&page=2"),
+  pnPath("settings", "list=on&type=staff"),
+  pnPath("templates", "custom=1"),
   `${PN_BASE}/nope`,
 ];
 
@@ -72,6 +74,9 @@ describe("who may open Phone Notify Control", () => {
     const user = hr({ phone_notify_control: "edit", "phone_notify_control.send": "hidden" });
     expect(canViewRoute(user, pnTabPath("send"), moduleForPath(pnTabPath("send")))).toBe(false);
     expect(canViewRoute(user, pnTabPath("messages"), moduleForPath(pnTabPath("messages")))).toBe(true);
+    const noSettings = hr({ phone_notify_control: "edit", "phone_notify_control.settings": "hidden" });
+    expect(canViewRoute(noSettings, pnTabPath("settings"), moduleForPath(pnTabPath("settings")))).toBe(false);
+    expect(canViewRoute(noSettings, pnTabPath("overview"), moduleForPath(pnTabPath("overview")))).toBe(true);
     const onlyOne = hr({ "phone_notify_control.messages": "view" });
     expect(canViewRoute(onlyOne, PN_BASE, moduleForPath(PN_BASE))).toBe(true);
     expect(canViewRoute(onlyOne, pnTabPath("messages"), moduleForPath(pnTabPath("messages")))).toBe(true);
@@ -88,6 +93,18 @@ describe("who may open Phone Notify Control", () => {
     const user = hr({ phone_notify_control: "edit", "phone_notify_control.controls": "view" });
     expect(isRouteViewOnly(user, pnTabPath("controls"), moduleForPath(pnTabPath("controls")))).toBe(true);
     expect(isRouteViewOnly(user, pnTabPath("messages"), moduleForPath(pnTabPath("messages")))).toBe(false);
+    // Message Text (key `templates`, address `/message-text`) has its own edit right too
+    const wordingView = hr({ phone_notify_control: "edit", "phone_notify_control.templates": "view" });
+    expect(moduleForPath(pnTabPath("templates"))).toBe("phone_notify_control.templates");
+    expect(isRouteViewOnly(wordingView, pnTabPath("templates"), moduleForPath(pnTabPath("templates")))).toBe(true);
+    expect(canEdit(wordingView, pnTabModule("templates"))).toBe(false);
+    const noWording = hr({ phone_notify_control: "edit", "phone_notify_control.templates": "hidden" });
+    expect(canViewRoute(noWording, pnTabPath("templates"), moduleForPath(pnTabPath("templates")))).toBe(false);
+    // the Settings tab (who receives phone notifications) has its own edit right
+    const settingsView = hr({ phone_notify_control: "edit", "phone_notify_control.settings": "view" });
+    expect(isRouteViewOnly(settingsView, pnTabPath("settings"), moduleForPath(pnTabPath("settings")))).toBe(true);
+    expect(canEdit(settingsView, pnTabModule("settings"))).toBe(false);
+    expect(canEdit(settingsView, pnTabModule("controls"))).toBe(true);
   });
 
   it("lets an administrator open and change everything", () => {

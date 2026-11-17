@@ -68,10 +68,26 @@ def overtime_text(rec, decision: str) -> tuple[str, str]:
 
 def overtime_decided(rec, decision: str) -> None:
     """Tell the employee how their overtime record was decided. Never raises."""
+    from . import push_recipients, push_templates
     from .models import Notification
 
+    if not push_recipients.allows(rec.employee_id):
+        return  # not a phone notification recipient (Phone Notify Control -> Settings)
     try:
         title, body = overtime_text(rec, decision)
+        title, body = push_templates.apply(  # HR's wording (Phone Notify Control -> Message Text)
+            SOURCE_OT,
+            lambda: {
+                "employee_name": f"{rec.employee.first_name} {rec.employee.last_name}",
+                "date": _day(rec.date),
+                "decision": {"pay": "payment", "relaxation": "time off"}.get(decision, "not compensated"),
+                "amount": _shifts(rec.shifts),
+                "granted_on": _day(rec.claim_date),
+                "month": rec.date.strftime("%B %Y"),
+            },
+            title,
+            body,
+        )
         with transaction.atomic():
             Notification.objects.create(
                 employee_id=rec.employee_id,
@@ -112,8 +128,10 @@ def covered_staff(ann) -> list[int]:
     else everybody (the engine's reading of an empty list)."""
     from .models import Employee
 
+    from . import push_recipients
+
     named = list(ann.employees.values_list("id", flat=True))
-    qs = Employee.objects.filter(status="active", employment_type="staff")
+    qs = push_recipients.narrow(Employee.objects.filter(status="active", employment_type="staff"))
     if named:
         qs = qs.filter(id__in=named)
     elif ann.department_id:
@@ -125,14 +143,27 @@ def covered_staff(ann) -> list[int]:
 
 def announcement_made(ann, employee_ids=None) -> int:
     """One notification per covered staff member (bulk, then pushed after the commit). Returns how many. Never raises."""
-    from . import push_delivery
+    from . import push_delivery, push_recipients, push_templates
     from .models import Notification
 
     try:
-        ids = list(employee_ids) if employee_ids is not None else covered_staff(ann)
+        ids = sorted(push_recipients.keep(employee_ids)) if employee_ids is not None else covered_staff(ann)
         if not ids:
             return 0
         title, body = announcement_text(ann)
+        title, body = push_templates.apply(  # HR's wording (Phone Notify Control -> Message Text)
+            SOURCE_ANNOUNCEMENT,
+            {
+                "date": _day(ann.date),
+                "kind": {"late_in": "Late arrival allowed", "early_out": "Early leaving allowed"}.get(
+                    ann.kind, "Compensation Day"
+                ),
+                "time": _time(ann.allowed_time or ann.leave_until_time),
+                "reason": (ann.reason or "").strip(),
+            },
+            title,
+            body,
+        )
         key = f"compday:{ann.pk}"
         with transaction.atomic():
             Notification.objects.bulk_create(

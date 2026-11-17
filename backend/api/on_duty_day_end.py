@@ -47,17 +47,25 @@ def end_stale_on_duty_sessions(for_date: date | None = None) -> dict:
         created_at__date=d,
     )
 
+    from . import push_recipients, push_templates
+
     ended = 0
     for session in open_sessions:
         if _end_on_duty_session(session, OnDutySession.COMPLETION_AUTO_DAY_END):
             ended += 1
+            if not push_recipients.allows(session.employee):
+                continue  # not a phone notification recipient (Phone Notify Control -> Settings)
+            title, message = push_templates.apply(
+                "on_duty_auto_end",
+                {
+                    "employee_name": f"{session.employee.first_name} {session.employee.last_name}",
+                    "destination": session.destination,
+                },
+                "",
+                f"Your On-Duty session for {session.destination} was closed automatically at the end of the day.",
+            )
             Notification.objects.create(
-                employee=session.employee, type="on_duty",
-                message=(
-                    f"Your On-Duty session for {session.destination} was closed automatically "
-                    "at the end of the day."
-                ),
-                source="on_duty_auto_end",
+                employee=session.employee, type="on_duty", title=title, message=message, source="on_duty_auto_end",
             )
 
     # Sessions opened on an EARLIER day and never closed -only reachable if

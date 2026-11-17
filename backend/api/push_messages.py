@@ -81,7 +81,7 @@ def split_message(text: str, fallback_title: str) -> tuple[str, str]:
     return title, body or title
 
 
-def announce(employee, document_type: str, text: str, *, related_module: str = "", dedupe_key: str = ""):
+def announce(employee, document_type: str, text: str, *, related_module: str = "", dedupe_key: str = "", params=None):
     """Save the notification for a WhatsApp message (which sends the push). Returns the Notification, or None when it was not
     made: a one-time code, no text, not an employee, or already announced under this `dedupe_key`."""
     try:
@@ -91,8 +91,16 @@ def announce(employee, document_type: str, text: str, *, related_module: str = "
 
         if not isinstance(employee, Employee):
             return None
+        from . import push_recipients
+
+        if not push_recipients.allows(employee):
+            return None  # not a phone notification recipient (Phone Notify Control -> Settings)
         t = catalog.get(document_type)
         title, body = split_message(text, t.label if t else "UKTextiles")
+        # HR's phone wording for this message (Phone Notify Control -> Message Text), filled with the WhatsApp variables
+        from . import push_templates
+
+        title, body = push_templates.apply_whatsapp(document_type, params, title, body)
         try:
             with transaction.atomic():
                 return Notification.objects.create(

@@ -51,7 +51,90 @@ export type MobileMessagesOverview = {
   categories?: PushCategory[];
   /** Up to 5 pushes that failed in the last 7 days, newest first (2026-11-17; older servers leave it out). */
   failedRecent?: MobileMessageRow[];
+  /** Who receives phone notifications at all (the Settings tab; 2026-11-17, older servers leave it out). */
+  recipients?: RecipientsLine;
 };
+
+// ── who receives phone notifications (the Settings tab) ───────────────────────
+
+/**
+ * Who the automatic senders push to at all: every active employee, staff only, production only, or only the employees on
+ * the selected list. Anyone left out gets no push and no notification record (their requests, payslips and chat still
+ * work). A message HR sends from the Send tab still goes to whoever HR picks.
+ */
+export type RecipientMode = "all" | "staff" | "production" | "selected";
+
+/** One of the four choices, with how many active employees it reaches in the viewer's branches, and how many have a phone. */
+export type RecipientModeOption = {
+  key: RecipientMode;
+  label: string;
+  description: string;
+  employees: number;
+  withPhone: number;
+};
+
+export type PushRecipients = {
+  mode: RecipientMode;
+  /** The current mode's name (the server sends it too; the page also reads it from `modes`). */
+  modeLabel?: string;
+  /** The four choices, in display order. */
+  modes: RecipientModeOption[];
+  /** Employees on the selected list. */
+  selected: number;
+  selectedWithPhone: number;
+  /** Active employees who receive under the current mode. */
+  receiving: number;
+  receivingWithPhone: number;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+/** A change to the selected list answers with the settings and how many employees it really changed. */
+export type RecipientChangeResult = PushRecipients & { changed: number };
+
+/** The current mode as the Overview shows it. */
+export type RecipientsLine = {
+  mode: RecipientMode;
+  modeLabel: string;
+  receiving: number;
+  receivingWithPhone: number;
+};
+
+/** An active employee in the selected-list picker. */
+export type RecipientEmployee = {
+  id: number;
+  name: string;
+  code: string;
+  employmentType: "staff" | "production";
+  department: string | null;
+  branch: string | null;
+  hasPhone: boolean;
+  /** On the selected list. */
+  selected: boolean;
+};
+
+/** What "every employee matching" means for the bulk changes: the same filters as the list (empty ones left out). */
+export type RecipientMatch = {
+  search?: string;
+  type?: "staff" | "production";
+  branch?: number;
+  department?: number;
+};
+
+export type RecipientEmployeeParams = RecipientMatch & {
+  /** "1": only the ones on the list; "0": only the ones not on it. */
+  selected?: "1" | "0";
+  page: number;
+  pageSize: number;
+};
+
+/** Exactly one change to the selected list. */
+export type RecipientChange =
+  | { add: number[] }
+  | { remove: number[] }
+  | { addMatching: RecipientMatch }
+  | { removeMatching: RecipientMatch }
+  | { clear: true };
 
 /**
  * A category of notification (Leave, Attendance alerts, Internal chat ...): the switches in it (the same keys as the
@@ -166,6 +249,8 @@ export type MobileDeviceRow = {
   mutedBy?: string | null;
   mutedAt?: string | null;
   phones?: MobilePhone[];
+  /** False: left out by the Settings tab (who receives phone notifications). Older servers leave it out. */
+  isRecipient?: boolean;
 };
 
 export type MobileDeviceParams = {
@@ -303,4 +388,158 @@ export const useMobileMessagesConfig = (enabled = true) =>
     queryFn: () => customFetch<PushConfig>(`${BASE}/config`),
     refetchInterval: 60_000,
     enabled,
+  });
+
+// ── who receives phone notifications (the Settings tab) ───────────────────────
+
+const RECIPIENTS_KEY = [BASE, "recipients"] as const;
+const RECIPIENT_EMPLOYEES_KEY = [BASE, "recipients", "employees"] as const;
+
+/** After a change: the Overview's line and the Employees tab's "Not a recipient" follow it. */
+function afterRecipientChange(queryClient: ReturnType<typeof useQueryClient>, data: PushRecipients) {
+  const { changed: _changed, ...settings } = data as RecipientChangeResult;
+  queryClient.setQueryData(RECIPIENTS_KEY, settings);
+  queryClient.invalidateQueries({ queryKey: [BASE, "overview"] });
+  queryClient.invalidateQueries({ queryKey: [BASE, "devices"] });
+}
+
+/** The mode and its four choices with their counts. */
+export const useRecipients = (enabled = true) =>
+  useQuery<PushRecipients>({
+    queryKey: RECIPIENTS_KEY,
+    queryFn: () => customFetch<PushRecipients>(`${BASE}/recipients`),
+    enabled,
+  });
+
+/** Choose who receives phone notifications. The server refuses "selected" while the selected list is empty. */
+export const useSetRecipientMode = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: RecipientMode) =>
+      customFetch<PushRecipients>(`${BASE}/recipients`, { method: "PUT", body: JSON.stringify({ mode }) }),
+    onSuccess: (data) => afterRecipientChange(queryClient, data),
+  });
+};
+
+/** One page of the active employees, each saying whether it is on the selected list. */
+export const useRecipientEmployees = (params: RecipientEmployeeParams) =>
+  useQuery<Paged<RecipientEmployee>>({
+    queryKey: [...RECIPIENT_EMPLOYEES_KEY, params],
+    queryFn: () => customFetch<Paged<RecipientEmployee>>(`${BASE}/recipients/employees?${query(params)}`),
+    placeholderData: keepPreviousData,
+  });
+
+type EmployeePages = [readonly unknown[], Paged<RecipientEmployee> | undefined][];
+
+/**
+ * Change the selected list. Adding or removing named employees ticks their rows at once (put back if the server refuses);
+ * every change asks the list again afterwards, and the settings, the Overview and the Employees tab follow.
+ */
+export const useChangeRecipients = () => {
+  const queryClient = useQueryClient();
+  return useMutation<RecipientChangeResult, Error, RecipientChange, { before: EmployeePages }>({
+    mutationFn: (change) =>
+      customFetch<RecipientChangeResult>(`${BASE}/recipients/employees`, {
+        method: "POST",
+        body: JSON.stringify(change),
+      }),
+    onMutate: async (change) => {
+      const ids = "add" in change ? change.add : "remove" in change ? change.remove : null;
+      if (!ids) return { before: [] };
+      await queryClient.cancelQueries({ queryKey: RECIPIENT_EMPLOYEES_KEY });
+      const before = queryClient.getQueriesData<Paged<RecipientEmployee>>({ queryKey: RECIPIENT_EMPLOYEES_KEY });
+      const on = "add" in change;
+      const picked = new Set(ids);
+      queryClient.setQueriesData<Paged<RecipientEmployee>>({ queryKey: RECIPIENT_EMPLOYEES_KEY }, (page) =>
+        page ? { ...page, items: page.items.map((e) => (picked.has(e.id) ? { ...e, selected: on } : e)) } : page,
+      );
+      return { before };
+    },
+    onError: (_error, _change, context) => {
+      for (const [key, page] of context?.before ?? []) queryClient.setQueryData(key, page);
+    },
+    onSuccess: (data) => afterRecipientChange(queryClient, data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: RECIPIENT_EMPLOYEES_KEY }),
+  });
+};
+
+// ── the wording of each kind of notification (the Message Text tab) ───────────
+
+/** A placeholder a wording may use: `{{name}}`, what it stands for, and the value the preview fills in. */
+export type PushTemplateVariable = { name: string; help: string; sample: string };
+
+/**
+ * One kind of automatic notification and its wording. `title` / `body` are HR's own ("" = the built-in one); the built-in
+ * wording has the same {{placeholders}}. A kind that also goes by WhatsApp (`origin: "whatsapp"`) shows WhatsApp's wording
+ * on the phone until a phone version is saved; an app-only kind can use {{headline}} and {{message}} (its built-in title and
+ * sentence). The counts are all-time, for that kind.
+ */
+export type PushTemplate = {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+  groupLabel: string;
+  category: string;
+  categoryLabel: string;
+  origin: PushOrigin;
+  /** The kind's switch on the Controls tab. */
+  enabled: boolean;
+  variables: PushTemplateVariable[];
+  title: string;
+  body: string;
+  defaultTitle: string;
+  defaultBody: string;
+  /** One sentence on what the built-in wording is. */
+  defaultNote: string;
+  customised: boolean;
+  /** What is sent now, filled with the sample values. */
+  preview: { title: string; body: string };
+  updatedBy: string | null;
+  updatedAt: string | null;
+  total: number;
+  sent: number;
+  failed: number;
+  lastSentAt: string | null;
+};
+
+/** A wording filled with the sample values; `error` says what is wrong with it (an unknown placeholder, too long ...). */
+export type PushTemplatePreview = { title: string; body: string; error: string | null };
+
+const TEMPLATES_KEY = [BASE, "templates"] as const;
+
+/** Every kind of automatic notification with its wording, in the Controls order. */
+export const usePushTemplates = (enabled = true) =>
+  useQuery<PushTemplate[]>({
+    queryKey: TEMPLATES_KEY,
+    queryFn: () => customFetch<PushTemplate[]>(`${BASE}/templates`),
+    enabled,
+  });
+
+/** Save a kind's title and message. Both blank: back to the built-in wording; one blank: that part stays built in. */
+export const useSavePushTemplate = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { key: string; title: string; body: string }) =>
+      customFetch<PushTemplate>(`${BASE}/templates/${encodeURIComponent(data.key)}`, {
+        method: "PUT",
+        body: JSON.stringify({ title: data.title, body: data.body }),
+      }),
+    onSuccess: (row) => {
+      queryClient.setQueryData<PushTemplate[]>(TEMPLATES_KEY, (rows) =>
+        rows?.map((r) => (r.key === row.key ? row : r)),
+      );
+      queryClient.invalidateQueries({ queryKey: TEMPLATES_KEY });
+    },
+  });
+};
+
+/** A wording as it would read, filled with the sample values (blank parts: the built-in wording). Nothing is saved. */
+export const usePreviewPushTemplate = () =>
+  useMutation({
+    mutationFn: (data: { key: string; title: string; body: string }) =>
+      customFetch<PushTemplatePreview>(`${BASE}/templates/${encodeURIComponent(data.key)}/preview`, {
+        method: "POST",
+        body: JSON.stringify({ title: data.title, body: data.body }),
+      }),
   });
