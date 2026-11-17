@@ -47,10 +47,25 @@ const URL_DEFAULTS: MessageUrl = { status: "", kind: "", read: "", q: "", from: 
 
 const SELECT = "h-8 rounded-md border border-input bg-card px-2 text-xs text-foreground";
 
-/** "Push again", with what it does in its title. Locked for a role that may only look. */
-function PushAgainButton({ row, onPushed }: { row: MobileMessageRow; onPushed?: (r: MobileMessageRow) => void }) {
+/** A push that went out again (or is going out right now). */
+const PUSHED: readonly string[] = ["sent", "delivered", "sending"];
+
+/**
+ * "Push again", with what it does in its title. Locked for a role that may only look: the tab's own lock, or `locked` when
+ * it is used on another tab (the Overview's failed pushes, locked by the Messages tab's right).
+ */
+export function PushAgainButton({
+  row,
+  onPushed,
+  locked,
+}: {
+  row: MobileMessageRow;
+  onPushed?: (r: MobileMessageRow) => void;
+  locked?: string | null;
+}) {
   const { toast } = useToast();
-  const lockedWhy = useLockedWhy();
+  const tabLock = useLockedWhy();
+  const lockedWhy = locked === undefined ? tabLock : locked;
   const again = usePushMobileMessageAgain();
   const busy = again.isPending;
   return (
@@ -65,7 +80,7 @@ function PushAgainButton({ row, onPushed }: { row: MobileMessageRow; onPushed?: 
         again.mutate(row.id, {
           onSuccess: (r) => {
             toast({
-              title: r.pushStatus === "sent" || r.pushStatus === "delivered" ? "Pushed again" : "Not pushed",
+              title: PUSHED.includes(r.pushStatus) ? "Pushed again" : "Not pushed",
               description: `${r.employeeName}: ${r.pushStatusLabel || statusLabel(r.pushStatus)}.`,
             });
             onPushed?.(r);
@@ -101,7 +116,7 @@ function MessageDetail({ row, onClose }: { row: MobileMessageRow; onClose: () =>
       <DialogContent className="max-w-lg" data-testid="pn-message-detail" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
-            {current.kind} <PushStatusChip status={current.pushStatus} />
+            {current.kind} <PushStatusChip status={current.pushStatus} label={current.pushStatusLabel} />
           </DialogTitle>
         </DialogHeader>
         <div className="divide-y">
@@ -347,7 +362,7 @@ export default function MessagesTab() {
                       {m.pushError && <p className="mt-0.5 text-[11px] text-red-700">Reason: {m.pushError}</p>}
                     </td>
                     <td className="px-3 py-2">
-                      <PushStatusChip status={m.pushStatus} />
+                      <PushStatusChip status={m.pushStatus} label={m.pushStatusLabel} />
                     </td>
                     <td
                       className={cn(

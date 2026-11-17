@@ -55,6 +55,8 @@ function onTabKeys(event: KeyboardEvent<HTMLDivElement>) {
  * (`phone_notify_control.send`, following the page while unset) and its own route in the tree: the route guard (App.tsx)
  * turns away the address of a hidden one, HrLayout locks a View-only one, this page offers only the ones the role may open,
  * and its own switches and buttons are disabled on a View-only tab too (some of their words are not ones the lock knows).
+ * The Overview's category switches and its Push again also need the Controls / Messages tab's right (`canEdit`), the key the
+ * server checks for them.
  */
 export default function PhoneNotifyControl() {
   const [location, navigate] = useLocation();
@@ -64,6 +66,7 @@ export default function PhoneNotifyControl() {
   const visibleTabs = visibleItems(PN_TABS, (t) => pnTabModule(t.value), level);
   const visible = visibleTabs.map((t) => t.value);
   const canOpen = (tab: PnTabKey) => visible.includes(tab);
+  const canEdit = (tab: PnTabKey) => level(pnTabModule(tab)) === "edit";
 
   const here = cleanPnPath(location);
   const target = resolvePnPath(here, visible);
@@ -113,7 +116,7 @@ export default function PhoneNotifyControl() {
                 aria-label={PN_TABS.find((t) => t.value === current)?.label}
                 data-testid={`pn-panel-${current}`}
               >
-                {current === "overview" && <OverviewTab canOpen={canOpen} />}
+                {current === "overview" && <OverviewTab canOpen={canOpen} canEdit={canEdit} />}
                 {current === "messages" && <MessagesTab />}
                 {current === "employees" && <EmployeesTab />}
                 {current === "controls" && <ControlsTab />}

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { MessageCircle, Send, X, CornerUpLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
-  useChatChannels, useChatMessages, useSendChatMessage,
+  canPostToAllBranches, useChatChannels, useChatMessages, useSendChatMessage,
   type ChatMessageItem,
 } from "@/lib/api-client/custom-hooks";
 import ReportCard from "./attendance-notify/ReportCard";
@@ -27,7 +27,9 @@ function channelFromAddress(): number | null {
  * to their employees). An admin not limited to one branch can switch between
  * every branch's company channel (2026-11-17: where each branch's employees
  * talk, and where Attendance Notify posts their reports). Messages poll every
- * few seconds -no WebSockets.
+ * few seconds -no WebSockets. That admin can also tick "Send to all branches"
+ * to post one message in every branch's company chat at once, so every
+ * employee reads it in their own chat and gets one phone notification.
  */
 export default function Chat() {
   const { toast } = useToast();
@@ -40,6 +42,7 @@ export default function Chat() {
   );
   const choose = (id: number) => {
     setChosenId(id);
+    setAlsoPosted(null);
     try {
       const url = new URL(window.location.href);
       if (companies[0]?.id === id) url.searchParams.delete("channel");
@@ -55,6 +58,10 @@ export default function Chat() {
 
   const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState<ChatMessageItem | null>(null);
+  // "Send to all branches": only for an admin who sees every branch's company chat (the server checks it too)
+  const canAllBranches = canPostToAllBranches(channels, companyChannel);
+  const [allBranches, setAllBranches] = useState(false);
+  const [alsoPosted, setAlsoPosted] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const lastCountRef = useRef(0);
 
@@ -70,16 +77,28 @@ export default function Chat() {
   const handleSend = async () => {
     const trimmed = text.trim();
     if (!trimmed || !companyChannel) return;
+    const toAll = canAllBranches && allBranches;
+    setAlsoPosted(null);
     try {
-      await sendMessage.mutateAsync({
+      const sent = await sendMessage.mutateAsync({
         channelId: companyChannel.id,
         text: trimmed,
         replyToId: replyTo?.id,
+        ...(toAll ? { allBranches: true } : {}),
       });
       setText("");
       setReplyTo(null);
-    } catch {
-      toast({ title: "Could not send the message", variant: "destructive" });
+      if (toAll) {
+        setAllBranches(false);
+        setAlsoPosted(typeof sent?.alsoPostedIn === "number" ? sent.alsoPostedIn : 0);
+      }
+    } catch (e) {
+      const why = (e as { data?: { error?: unknown } } | null)?.data?.error;
+      toast({
+        title: "Could not send the message",
+        description: typeof why === "string" && why ? why : undefined,
+        variant: "destructive",
+      });
     }
   };
 
@@ -228,6 +247,31 @@ export default function Chat() {
                   <Send size={13} /> {sendMessage.isPending ? "Sending…" : "Send"}
                 </Button>
               </div>
+              {canAllBranches && (
+                <div className="flex flex-wrap items-start gap-x-3 gap-y-1" data-testid="chat-all-branches">
+                  <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-blue-600"
+                      checked={allBranches}
+                      onChange={e => setAllBranches(e.target.checked)}
+                      disabled={sendMessage.isPending}
+                      data-testid="chat-all-branches-box"
+                    />
+                    <span>
+                      <span className="font-semibold">Send to all branches</span>
+                      <span className="block text-[11px] text-muted-foreground">
+                        Posts this message in every branch's company chat, so every employee gets it on their phone.
+                      </span>
+                    </span>
+                  </label>
+                  {alsoPosted !== null && (
+                    <p className="text-[11px] font-semibold text-green-700 dark:text-green-400" role="status" data-testid="chat-also-posted">
+                      Also posted in {alsoPosted} other company {alsoPosted === 1 ? "chat" : "chats"}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

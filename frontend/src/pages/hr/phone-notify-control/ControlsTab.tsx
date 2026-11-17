@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { MessageCircle, Power, PowerOff, Workflow } from "lucide-react";
+import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -12,15 +13,23 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import {
+  asCategory,
   audienceLabel,
+  controlCategories,
   errorText,
   formatNumber,
   formatWhen,
   groupChange,
   groupControls,
+  inCategory,
+  plural,
   type ControlGroup,
 } from "./logic";
-import { InlineConfirm, LoadError, Notice, OnOff, Panel, useLockedWhy } from "./ui";
+import { FilterChips, InlineConfirm, LoadError, Notice, OnOff, Panel, useLockedWhy } from "./ui";
+
+// The category filter lives in the address (?category=chat), so the Overview's "Manage" on a category opens it narrowed.
+type ControlsUrl = { category: string };
+const URL_DEFAULTS: ControlsUrl = { category: "" };
 
 /** The 30-day line under a switch (a workflow row: the messages of that workflow). */
 function StatsLine({ row }: { row: MobileMessageControl }) {
@@ -171,7 +180,8 @@ function GroupPanel({
 /**
  * Controls: the master switch on top (it asks first, both ways), then every kind of notification grouped as on the server,
  * each with its switch, where it is sent from, who receives it, whether WhatsApp carries it too, and its last 30 days. A group
- * can be turned all on or all off. The switches stop only the push to the phone: the in-app record is always saved.
+ * can be turned all on or all off. The switches stop only the push to the phone: the in-app record is always saved. The
+ * category chips (?category=) narrow the groups to one category of the Overview's dashboard.
  */
 export default function ControlsTab() {
   const { toast } = useToast();
@@ -179,7 +189,11 @@ export default function ControlsTab() {
   const { data, isLoading, isError, refetch } = useMobileMessageControls();
   const update = useUpdateMobileMessageControls();
   const [askMaster, setAskMaster] = useState<boolean | null>(null);
-  const groups = useMemo(() => groupControls(data?.controls ?? []), [data]);
+  const [url, setUrl] = useUrlParams(URL_DEFAULTS);
+  const categories = useMemo(() => controlCategories(data?.controls ?? []), [data]);
+  const category = asCategory(url.category, categories);
+  const groups = useMemo(() => groupControls(inCategory(data?.controls ?? [], category)), [data, category]);
+  const picked = categories.find((c) => c.key === category);
 
   if (isLoading) return <Skeleton className="h-96 rounded-2xl" />;
   if (isError || !data)
@@ -271,6 +285,40 @@ export default function ControlsTab() {
           The master switch is <b>OFF</b>, so none of the switches below push anything until it is turned back on. You
           can still set them now.
         </Notice>
+      )}
+
+      {categories.length > 0 && (
+        <div className="space-y-2" data-testid="pn-category-filter-row">
+          <FilterChips
+            label="Category"
+            testId="pn-category-filter"
+            value={category}
+            onChange={(v) => setUrl({ category: v })}
+            items={[
+              { value: "", label: "All", count: data.controls.length },
+              ...categories.map((c) => ({
+                value: c.key,
+                label: c.label,
+                count: c.on === c.total ? c.total : `${c.on}/${c.total}`,
+                title: `${c.label}: ${c.on} of ${plural(c.total, "switch", "switches")} on`,
+              })),
+            ]}
+          />
+          {picked && (
+            <p className="text-xs text-muted-foreground" data-testid="pn-category-showing">
+              Showing the {plural(picked.total, "switch", "switches")} of <b className="text-foreground">{picked.label}</b>{" "}
+              ({picked.on} on).{" "}
+              <button
+                type="button"
+                className="font-semibold text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
+                onClick={() => setUrl({ category: "" })}
+                data-view-safe
+              >
+                Show every category
+              </button>
+            </p>
+          )}
+        </div>
       )}
 
       {groups.map((g) => (

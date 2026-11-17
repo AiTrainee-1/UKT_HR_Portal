@@ -11,6 +11,12 @@ department's conversation private from another.
 
 No WebSockets -the mobile app polls GET .../messages every ~4s, which is
 plenty responsive at this company's scale and needs no extra infrastructure.
+
+Every message also reaches the phones of the people who can read the channel
+(chat_push.py, 2026-11-17). An unscoped HR admin can tick "Send to all
+branches": the message is then posted in every company channel (each branch's
+and the unbranched one), so every employee reads it in their own channel and
+gets one phone notification.
 """
 
 from rest_framework.decorators import api_view
@@ -180,15 +186,42 @@ def chat_messages(request: Request, pk: int) -> Response:
             reply_to = ChatMessage.objects.filter(pk=reply_to_id, channel=channel).first()
             if not reply_to:
                 return Response({"error": "reply_to_id is not a message in this channel"}, status=400)
+        all_branches = request.data.get("allBranches") is True
+        if all_branches and not (
+            hr_user and viewer_branch is None and channel.channel_type == ChatChannel.CHANNEL_COMPANY
+        ):
+            return Response(
+                {"error": "Only an HR account that sees every branch can send a message to all branches."}, status=400
+            )
+        from . import chat_push
+
+        label = _hr_label(request) if hr_user else ""
         msg = ChatMessage.objects.create(
             channel=channel,
             sender=emp,
-            sender_label=_hr_label(request) if hr_user else "",
+            sender_label=label,
             text=text,
             reply_to=reply_to,
         )
+        chat_push.message_posted(msg.pk)  # the readers' phones, after the commit
+        also = 0
+        if all_branches:
+            from .models import Branch
+
+            others = [ChatChannel.get_company_channel(None)] + [
+                ChatChannel.get_company_channel(b.pk) for b in Branch.objects.filter(is_active=True).order_by("name")
+            ]
+            for other in others:
+                if other.pk == channel.pk:
+                    continue
+                copy = ChatMessage.objects.create(channel=other, sender=None, sender_label=label, text=text)
+                chat_push.message_posted(copy.pk)
+                also += 1
         msg = ChatMessage.objects.select_related("sender", "reply_to__sender").prefetch_related("reactions").get(pk=msg.pk)
-        return Response(_message_json(msg, emp.id if emp else None), status=201)
+        body = _message_json(msg, emp.id if emp else None)
+        if all_branches:
+            body["alsoPostedIn"] = also  # additive: how many other company channels got the same message
+        return Response(body, status=201)
 
     try:
         limit = min(int(request.query_params.get("limit", 50)), 200)

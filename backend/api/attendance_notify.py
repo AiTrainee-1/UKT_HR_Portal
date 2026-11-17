@@ -749,6 +749,9 @@ def _send_chat(prep: _Prepared, d) -> tuple[str, str]:
     )
     d.chat_message_id = msg.pk
     d.save(update_fields=["chat_message_id", "updated_at"])
+    from . import chat_push
+
+    chat_push.message_posted(msg.pk)  # the channel's readers get its headline on their phones (Phone Notify Control)
     return D.STATUS_SENT, ""
 
 

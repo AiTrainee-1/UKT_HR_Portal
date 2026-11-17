@@ -393,6 +393,9 @@ def _announce(request: Request) -> Response:
         description=f"Announced {label} window for {day.isoformat()} at {_hhmm(at)} ({len(covered)} staff)",
         new_values={"date": day.isoformat(), "kind": kind, "time": _hhmm(at), "reason": reason},
     )
+    from . import compensation_notices
+
+    compensation_notices.announcement_made(ann, covered)  # every covered staff member's phone
     ann = (
         CompensationDayAnnouncement.objects.select_related("branch", "department")
         .prefetch_related("employees")

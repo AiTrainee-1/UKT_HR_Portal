@@ -454,6 +454,9 @@ def _assign_one(
             "claimDate": str(claim_date) if claim_date else None,
         },
     )
+    from . import compensation_notices
+
+    compensation_notices.overtime_decided(rec, mode)  # the employee's phone (Phone Notify Control: Compensation & overtime)
     return {"ok": True, "record": rec}
 
 
@@ -607,6 +610,9 @@ def overtime_announce(request: Request) -> Response:
                 "shifts": float(rec.shifts) if rec.shifts is not None else None, "otType": rec.ot_type,
             },
         )
+        from . import compensation_notices
+
+        compensation_notices.overtime_decided(rec, comp_type)
     return Response({"announced": len(announced), "results": [_ot_dict(r) for r in announced]})
 
 
@@ -650,6 +656,9 @@ def overtime_reject(request: Request) -> Response:
                 description=f"Rejected overtime of {rec.employee.employee_code} on {ot_date}",
                 new_values={"employeeId": emp_id, "date": str(ot_date)},
             )
+            from . import compensation_notices
+
+            compensation_notices.overtime_decided(rec, "rejected")
     return Response({"rejected": count})
 
 
@@ -1039,6 +1048,9 @@ def compensation_leave_days(request: Request) -> Response:
         request, "create", "compensation", record_id=ann.id,
         description=f"Announced Compensation Day for {ann.date}",
     )
+    from . import compensation_notices
+
+    compensation_notices.announcement_made(ann)  # every covered staff member's phone
     return Response(_leave_day_dict(ann), status=201)
 
 

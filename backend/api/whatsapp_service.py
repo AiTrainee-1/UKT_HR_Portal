@@ -858,6 +858,19 @@ def queue_to_recipient(
     return log
 
 
+def announce_only(employee, document_type: str, params, *, related_module: str = "", dedupe_key: str = ""):
+    """The phone notification + in-app record a message would make (push_messages.py), WITHOUT the WhatsApp message: for a
+    sender whose WhatsApp side is off or held back while the phone side is on (the attendance alerts). Same text, same
+    exactly-once key as send_notification, so a WhatsApp send of the same message later never notifies twice."""
+    return push_messages.announce(
+        employee,
+        document_type,
+        render_message(_template_body(document_type), params, _order_for(document_type)),
+        related_module=related_module,
+        dedupe_key=dedupe_key,
+    )
+
+
 def send_notification(
     employee,
     document_type: str,

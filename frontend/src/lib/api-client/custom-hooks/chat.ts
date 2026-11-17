@@ -33,6 +33,23 @@ export type ChatMessageItem = {
   report?: ChatReport | null;
 };
 
+/** The message the server sends back for a post; with "all branches", how many other company chats got it too. */
+export type ChatPostResult = ChatMessageItem & { alsoPostedIn?: number };
+
+/**
+ * May the viewer post this message in every branch's company chat at once (2026-11-17)? Only an HR admin who sees every
+ * branch can: their channel list holds more than one company channel (the unbranched one and each branch's), and the open
+ * channel must be one of them. The server checks it again and refuses anyone else.
+ */
+export function canPostToAllBranches(
+  channels: readonly Pick<ChatChannelItem, "id" | "type">[] | undefined,
+  open: Pick<ChatChannelItem, "id" | "type"> | null | undefined,
+): boolean {
+  if (!open || open.type !== "company") return false;
+  const companies = (channels ?? []).filter((c) => c.type === "company");
+  return companies.length > 1 && companies.some((c) => c.id === open.id);
+}
+
 export const useChatChannels = () =>
   useQuery<ChatChannelItem[]>({
     queryKey: ["/api/chat/channels"],
@@ -54,13 +71,27 @@ export const useChatMessages = (channelId: number | null) =>
 export const useSendChatMessage = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ channelId, text, replyToId }: { channelId: number; text: string; replyToId?: number }) =>
-      customFetch<ChatMessageItem>(`/api/chat/channels/${channelId}/messages`, {
+    mutationFn: ({
+      channelId,
+      text,
+      replyToId,
+      allBranches,
+    }: {
+      channelId: number;
+      text: string;
+      replyToId?: number;
+      /** Also post it in every other company chat (see canPostToAllBranches). Left out of the body unless true. */
+      allBranches?: boolean;
+    }) =>
+      customFetch<ChatPostResult>(`/api/chat/channels/${channelId}/messages`, {
         method: "POST",
-        body: JSON.stringify({ text, reply_to_id: replyToId }),
+        body: JSON.stringify({ text, reply_to_id: replyToId, ...(allBranches ? { allBranches: true } : {}) }),
       }),
     onSuccess: (_data, vars) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/chat/channels", vars.channelId, "messages"] });
+      // posted in every company chat: each of them has a new message
+      queryClient.invalidateQueries({
+        queryKey: vars.allBranches ? ["/api/chat/channels"] : ["/api/chat/channels", vars.channelId, "messages"],
+      });
     },
   });
 };

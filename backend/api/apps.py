@@ -101,6 +101,7 @@ class ApiConfig(AppConfig):
             attendance_refresh_scheduler,
             on_duty_day_end_scheduler,
             overtime_scheduler,
+            push_delivery_scheduler,
             screening_cleanup_scheduler,
             whatsapp_alert_scheduler,
             whatsapp_dispatcher,
@@ -176,3 +177,9 @@ class ApiConfig(AppConfig):
             md_auto_attendance_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("MD auto attendance scheduler bootstrap skipped: %s", e)
+
+        try:
+            # phone pushes still waiting after a restart, stuck pushes, Expo's delivery receipts: every minute
+            push_delivery_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Phone push sweep bootstrap skipped: %s", e)

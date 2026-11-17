@@ -15,10 +15,13 @@ approval / rejection, its progress, "waiting for your approval") is pushed only 
 
 from __future__ import annotations
 
+import logging
 from typing import NamedTuple
 
 from . import push_messages
 from . import whatsapp_catalog as catalog
+
+logger = logging.getLogger(__name__)
 
 MANUAL = "manual"  # a message HR typed on the Mobile Messages page
 APPROVAL_PREFIX = "approval:"
@@ -88,7 +91,62 @@ EXTRA_TYPES: dict[str, Extra] = {
         "other",
         "HRMS notifications API",
     ),
+    # Internal chat (chat_push.py, 2026-11-17): every public message reaches the phones of the people who can read it.
+    "chat_announcement": Extra(
+        "Company chat: message from HR / management",
+        "A message HR, the MD or a Director posts in a company chat channel. Every active employee who reads that channel "
+        "(the branch's employees; with 'Send to all branches', every branch) gets it on their phone.",
+        "chat",
+        "HR Portal: Chat",
+    ),
+    "chat_message": Extra(
+        "Company chat: message from an employee",
+        "A message an employee posts in their branch's company chat. Everyone else in that branch gets it on their phone.",
+        "chat",
+        "Employee app / Employee Web App: Chat",
+    ),
+    "chat_department": Extra(
+        "Department chat message",
+        "A message posted in a department's chat channel. The other employees of that department get it on their phone.",
+        "chat",
+        "Employee app / Employee Web App: Chat (department channel)",
+    ),
+    "chat_reply": Extra(
+        "Reply to your chat message",
+        "Somebody replied to one of your chat messages. Replaces the plain message for the person replied to (switch it off "
+        "and they get the plain message like everyone else).",
+        "chat",
+        "Chat: Reply",
+    ),
+    "chat_report": Extra(
+        "Attendance report posted in chat",
+        "An Attendance Notify report posted in a company chat channel. Every employee who reads that channel gets its "
+        "headline and counts on their phone.",
+        "chat",
+        "Attendance -> Attendance Notify (Internal Chat)",
+    ),
 }
+EXTRA_TYPES.update(
+    {
+        # compensation_notices.py (2026-11-17)
+        "ot_compensation": Extra(
+            "Overtime decided",
+            "Tells a staff member how HR decided their detected overtime (Compensation -> OT): paid, given as time off "
+            "(on a date or into the compensation balance), or not compensated.",
+            "compensation",
+            "Compensation -> OT: Assign / Announce / Reject",
+        ),
+        "compensation_announcement": Extra(
+            "Compensation Day / late-in / early-out announced",
+            "Tells every staff member an announcement covers that a date is a Compensation Day, or that they may arrive "
+            "late / leave early that day without a mark.",
+            "compensation",
+            "Compensation -> Compensation Days / Windows",
+        ),
+    }
+)
+# Groups of their own for kinds that are not WhatsApp messages at all (listed after the WhatsApp groups).
+EXTRA_GROUPS = {"compensation": "Compensation & overtime", "chat": "Internal chat"}
 
 # Where each WhatsApp group's messages come from, for the "Sent from" line (a kind can say better in SENT_FROM).
 SENT_FROM_GROUP = {
@@ -132,12 +190,120 @@ def approval_key(module: str) -> str:
     return f"{APPROVAL_PREFIX}{module}"
 
 
+# ── the dashboard's categories (Phone Notify Control -> Overview, 2026-11-17) ──────────────────────────────────────
+# Every switch belongs to exactly one category, and every notification is counted in exactly one (category_of_notification).
+class Category(NamedTuple):
+    label: str
+    description: str
+
+
+CATEGORIES: dict[str, Category] = {
+    "leave": Category("Leave", "Leave and casual leave requests: approved, rejected, passed on to the next approver."),
+    "permission": Category("Permission", "Permission requests: approved, rejected, passed on to the next approver."),
+    "attendance": Category(
+        "Attendance alerts",
+        "Absent, late, punch reminders and missing punches (checked every minute), missing-punch and attendance "
+        "correction requests, attendance reports.",
+    ),
+    "on_duty": Category("On-Duty & Geo", "Geo attendance and Geo punch decisions, On-Duty sessions ending."),
+    "compensation": Category(
+        "Compensation & overtime",
+        "Overtime decided (paid, time off, not compensated), Compensation Days and late-in / early-out windows, "
+        "holiday-work compensation requests.",
+    ),
+    "payroll": Category("Payroll & salary", "Salary slips, salary paid, salary advance requests."),
+    "chat": Category(
+        "Internal chat",
+        "Company and department chat messages, replies, and the attendance reports posted in chat.",
+    ),
+    "employee": Category(
+        "Employee updates",
+        "ID cards, letters and documents, notices and messages from HR, resignations and other requests.",
+    ),
+    "gate": Category("Gate & visitors", "Outpass gate out / in, outpass requests, visitor notices."),
+    "decisions": Category(
+        "Request decisions (all workflows)",
+        "The approved, rejected and passed-on messages of every request. Each workflow's own switch (Leave, "
+        "Permission ...) can still stop its messages.",
+    ),
+    "approvers": Category(
+        "Approvers & management",
+        "What Department Heads receive, including the MD or a Director who heads a department: requests waiting for "
+        "their approval, employees' reminders, HR's scheduled pending-approval reminders. HR Portal accounts have no "
+        "phone app; they see these in the portal.",
+    ),
+}
+# the approval workflows' switches and notifications
+WORKFLOW_CATEGORY = {
+    "leave": "leave",
+    "casual_leave": "leave",
+    "permission": "permission",
+    "missing_punch": "attendance",
+    "attendance_correction": "attendance",
+    "holiday_work": "compensation",
+    "advance": "payroll",
+    "resignation": "employee",
+    "request": "employee",
+    "outpass": "gate",
+}
+SOURCE_CATEGORY = {
+    "salary_slip": "payroll",
+    "salary_paid": "payroll",
+    "attendance_report": "attendance",
+    "approval_waiting": "approvers",
+    "approval_reminder": "approvers",
+    "hod_pending_reminder": "approvers",
+    "approval_approved": "decisions",
+    "approval_rejected": "decisions",
+    "approval_progress": "decisions",
+    "request_update": "employee",
+    "hr_notice": "employee",
+    MANUAL: "employee",
+}
+GROUP_CATEGORY = {  # the WhatsApp group (or EXTRA_GROUPS key) of a kind not named above
+    "documents": "employee",
+    "attendance": "attendance",
+    "approvals": "decisions",
+    "geo": "on_duty",
+    "visitors": "gate",
+    "outpass": "gate",
+    "other": "employee",
+    "compensation": "compensation",
+    "chat": "chat",
+}
+APPROVER_SOURCES = frozenset({"approval_waiting", "approval_reminder", "hod_pending_reminder"})
+
+
+def category_of_key(key: str) -> str:
+    """The category of one switch (a kind, or "approval:<workflow>")."""
+    if key.startswith(APPROVAL_PREFIX):
+        return WORKFLOW_CATEGORY.get(key[len(APPROVAL_PREFIX) :], "decisions")
+    if key in SOURCE_CATEGORY:
+        return SOURCE_CATEGORY[key]
+    extra = EXTRA_TYPES.get(key)
+    if extra:
+        return GROUP_CATEGORY.get(extra.group, "employee")
+    t = catalog.get(key)
+    return GROUP_CATEGORY.get(t.module, "employee") if t else "employee"
+
+
+def category_of_notification(source: str, related_module: str = "") -> str:
+    """The one category a notification is counted in: an approver's notice is the approvers', anything about a workflow is
+    that workflow's (a leave approval is Leave), the rest by its kind."""
+    if source in APPROVER_SOURCES:
+        return "approvers"
+    module = workflow_module(related_module)
+    if module:
+        return WORKFLOW_CATEGORY.get(module, "decisions")
+    return category_of_key(source or MANUAL)
+
+
 def controls() -> list[dict]:
     """Every switch, in the order the page lists them: [{key, label, description, group, groupLabel, kind, sentFrom,
     audience, origin}]. Never includes a one-time code: those are not notifications at all."""
     rows: list[dict] = []
-    for module, label in catalog.MODULES.items():
-        for key in catalog.types_in(module):
+    for module, label in {**catalog.MODULES, **EXTRA_GROUPS}.items():
+        for key in catalog.types_in(module) if module in catalog.MODULES else ():
             if key in push_messages.EXCLUDED_TYPES:
                 continue
             t = catalog.TYPES[key]
@@ -193,28 +359,103 @@ def valid_keys() -> set[str]:
     return {row["key"] for row in controls()}
 
 
+def categorized_controls() -> list[dict]:
+    """controls() with each row's category ({..., category, categoryLabel})."""
+    rows = []
+    for row in controls():
+        key = category_of_key(row["key"])
+        rows.append({**row, "category": key, "categoryLabel": CATEGORIES[key].label})
+    return rows
+
+
 def push_allowed(source: str, related_module: str = "") -> bool:
     """May this notification be pushed to phones? The master switch first, then the message type, then (for the approval kind)
     its workflow. An older notification with no source (and a message HR typed) is only subject to the master switch."""
     return off_reason(source, related_module) is None
 
 
+MASTER_OFF = "Phone notifications are switched off (Phone Notify Control -> Controls)."
+KIND_OFF = "This kind of notification is switched off for phones (Phone Notify Control -> Controls)."
+WORKFLOW_OFF = "This approval workflow's notifications are switched off for phones (Phone Notify Control -> Controls)."
+MUTED = "Phone notifications are muted for this employee (Phone Notify Control -> Employees)."
+
+
+def switches() -> tuple[bool, set[str]]:
+    """(master switch on?, the keys switched off). Read in its own savepoint and never raises: when the settings cannot be
+    read the push goes as usual, so a broken read can never stop a notification (or the transaction around it)."""
+    from django.db import transaction
+
+    from .models import MobileMessageSettings
+
+    try:
+        with transaction.atomic():
+            s = MobileMessageSettings.get()
+            return bool(s.push_enabled), set(s.disabled_types or [])
+    except Exception:
+        logger.warning("Could not read the phone notification switches; pushing as usual", exc_info=True)
+        return True, set()
+
+
+def muted_employee_ids(employee_ids) -> set[int]:
+    """Which of these employees HR muted (PushOptOut). Same safety as switches(): a missing table (migration 0156 not applied
+    yet) or any other read error means nobody is muted, never a lost notification."""
+    from django.db import transaction
+
+    from .models import PushOptOut
+
+    ids = [i for i in employee_ids if i]
+    if not ids:
+        return set()
+    try:
+        with transaction.atomic():
+            return set(PushOptOut.objects.filter(employee_id__in=ids).values_list("employee_id", flat=True))
+    except Exception:
+        logger.warning(
+            "Could not read the muted employees (is migration 0156 applied?); pushing as usual", exc_info=True
+        )
+        return set()
+
+
+def _block(master: bool, off: set[str], source: str, related_module: str, muted: bool) -> str | None:
+    if not master:
+        return MASTER_OFF
+    if source and source != MANUAL:
+        if source in off:
+            return KIND_OFF
+        module = workflow_module(related_module) or related_module
+        if module and approval_key(module) in off:
+            return WORKFLOW_OFF
+    if muted:
+        return MUTED
+    return None
+
+
+def kind_enabled(source: str) -> bool:
+    """Is this kind pushed to phones at all (master switch and its own switch)? For senders that decide before making
+    anything, such as the chat and the attendance alerts when WhatsApp is not sending."""
+    master, off = switches()
+    return master and source not in off
+
+
 def off_reason(source: str, related_module: str = "", employee_id: int | None = None) -> str | None:
     """Why this notification must not be pushed (one plain sentence), or None when it may: the master switch, the kind,
     the workflow, and (when `employee_id` is given) the employee's mute."""
-    from .models import MobileMessageSettings, PushOptOut
+    master, off = switches()
+    muted = bool(employee_id) and employee_id in muted_employee_ids([employee_id])
+    return _block(master, off, source, related_module, muted)
 
-    s = MobileMessageSettings.get()
-    if not s.push_enabled:
-        return "Phone notifications are switched off (Phone Notify Control -> Controls)."
-    if source and source != MANUAL:
-        off = set(s.disabled_types or [])
-        if source in off:
-            return "This kind of notification is switched off for phones (Phone Notify Control -> Controls)."
-        if related_module and approval_key(related_module) in off:
-            return (
-                "This approval workflow's notifications are switched off for phones (Phone Notify Control -> Controls)."
-            )
-    if employee_id and PushOptOut.objects.filter(employee_id=employee_id).exists():
-        return "Phone notifications are muted for this employee (Phone Notify Control -> Employees)."
-    return None
+
+def push_blocks(rows) -> dict[int, str]:
+    """{notification id: why it must not be pushed} for a batch of notifications, in two reads whatever its size. The rows
+    missing from the answer may be pushed."""
+    rows = list(rows)
+    if not rows:
+        return {}
+    master, off = switches()
+    muted = muted_employee_ids({n.employee_id for n in rows})
+    out = {}
+    for n in rows:
+        reason = _block(master, off, n.source, n.related_module, n.employee_id in muted)
+        if reason:
+            out[n.pk] = reason
+    return out

@@ -7,8 +7,12 @@ import type { Paged } from "./whatsapp";
 
 const BASE = "/api/mobile-app/messages";
 
-/** "sent" = Expo took it, the push service has not confirmed yet; "delivered" = Google/Apple accepted it for the phone. */
-export type PushStatus = "sent" | "delivered" | "no_device" | "failed" | "off";
+/**
+ * "sent" = Expo took it, the push service has not confirmed yet; "delivered" = Google/Apple accepted it for the phone;
+ * "sending" = it is being handed to Expo right now (2026-11-17: pushes go out after the save, from a queue). A row with
+ * no status ("") is waiting for its turn (or was saved before phone notifications existed).
+ */
+export type PushStatus = "sent" | "delivered" | "no_device" | "failed" | "off" | "sending";
 
 /** `sent` counts every push that went out (the delivered ones included); `delivered` is the part the phone confirmed. */
 export type PushCounts = {
@@ -43,6 +47,28 @@ export type MobileMessagesOverview = {
   readRate: number | null;
   byKind: { label: string; count: number }[];
   byDay: { date: string; total: number; sent: number }[];
+  /** Every category of notification, in display order (2026-11-17; older servers leave it out). */
+  categories?: PushCategory[];
+  /** Up to 5 pushes that failed in the last 7 days, newest first (2026-11-17; older servers leave it out). */
+  failedRecent?: MobileMessageRow[];
+};
+
+/**
+ * A category of notification (Leave, Attendance alerts, Internal chat ...): the switches in it (the same keys as the
+ * Controls rows), how many are on, who receives it, and its last 30 days. Every switch, and every notification, is in
+ * exactly one category.
+ */
+export type PushCategory = {
+  key: string;
+  label: string;
+  description: string;
+  keys: string[];
+  /** How many switches it has. */
+  total: number;
+  /** How many of them are on. */
+  on: number;
+  audience: PushAudience[];
+  month: PushKindStats;
 };
 
 /** Who receives a kind of notification. */
@@ -74,6 +100,9 @@ export type MobileMessageControl = {
   audience?: PushAudience;
   origin?: PushOrigin;
   stats?: PushKindStats;
+  /** The category it belongs to (PushCategory.key) and its name (2026-11-17; older servers leave them out). */
+  category?: string;
+  categoryLabel?: string;
 };
 
 export type MobileMessageControls = {
@@ -101,6 +130,8 @@ export type MobileMessageRow = {
   pushedAt: string | null;
   /** It failed, found no phone or was switched off: it can be pushed again. */
   canPushAgain?: boolean;
+  /** The category it is counted in (PushCategory.key; older servers leave it out). */
+  category?: string;
 };
 
 export type MobileMessageFilters = {
@@ -186,10 +217,12 @@ export const useMobileMessagesOverview = () =>
     refetchInterval: 30_000,
   });
 
-export const useMobileMessageControls = () =>
+/** `enabled: false` asks nothing (the Overview reads the switches only while the role may open Controls). */
+export const useMobileMessageControls = (enabled = true) =>
   useQuery<MobileMessageControls>({
     queryKey: [BASE, "controls"],
     queryFn: () => customFetch<MobileMessageControls>(`${BASE}/controls`),
+    enabled,
   });
 
 export const useUpdateMobileMessageControls = () => {

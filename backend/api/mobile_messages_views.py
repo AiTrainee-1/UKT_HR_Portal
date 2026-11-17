@@ -47,7 +47,8 @@ STATUS_LABEL = {
     "no_device": "No phone registered",
     "failed": "Push failed",
     "off": "Switched off for phones",
-    "": "Not pushed (older notice)",
+    "sending": "Sending to the phone",
+    "": "Waiting to be pushed",
 }
 MAX_TITLE = 60
 MAX_MESSAGE = 500
@@ -148,8 +149,18 @@ def mobile_messages_overview(request: Request) -> Response:
         row = grid.get(d, {"total": 0, "sent": 0})
         by_day.append({"date": d.isoformat(), **row})
 
+    failed_recent = [
+        _log_row(n)
+        for n in notes.filter(push_status="failed", created_at__gte=_day_start(6))
+        .annotate(has_phone=Exists(PushToken.objects.filter(employee_id=OuterRef("employee_id"))))
+        .order_by("-created_at", "-id")[:5]
+    ]
+
     return Response(
         {
+            # additive (2026-11-17): the dashboard's categories and the week's latest failed pushes
+            "categories": _categories(month, settings),
+            "failedRecent": failed_recent,
             "pushEnabled": settings.push_enabled,
             "switchedOff": len([k for k in (settings.disabled_types or []) if k in mobile_messages.valid_keys()]),
             "kinds": len(mobile_messages.valid_keys()),
@@ -169,6 +180,52 @@ def mobile_messages_overview(request: Request) -> Response:
             "byDay": by_day,
         }
     )
+
+
+def _empty_counts() -> dict:
+    return {"total": 0, "sent": 0, "delivered": 0, "failed": 0, "off": 0, "noDevice": 0}
+
+
+def _add(c: dict, status: str, n: int) -> None:
+    c["total"] += n
+    if status in ("sent", "delivered"):
+        c["sent"] += n
+    if status == "delivered":
+        c["delivered"] += n
+    elif status == "failed":
+        c["failed"] += n
+    elif status == "off":
+        c["off"] += n
+    elif status == "no_device":
+        c["noDevice"] += n
+
+
+def _categories(month_qs, settings) -> list[dict]:
+    """Every category with its switches (how many on), who receives it and its last 30 days, each notification counted in
+    exactly one category."""
+    off = set(settings.disabled_types or [])
+    rows = mobile_messages.categorized_controls()
+    counts = {key: _empty_counts() for key in mobile_messages.CATEGORIES}
+    for source, related, status, n in month_qs.values_list("source", "related_module", "push_status").annotate(
+        n=Count("id")
+    ):
+        _add(counts[mobile_messages.category_of_notification(source or "", related or "")], status or "", n)
+    out = []
+    for key, cat in mobile_messages.CATEGORIES.items():
+        mine = [r for r in rows if r["category"] == key]
+        out.append(
+            {
+                "key": key,
+                "label": cat.label,
+                "description": cat.description,
+                "keys": [r["key"] for r in mine],
+                "total": len(mine),
+                "on": len([r for r in mine if r["key"] not in off]),
+                "audience": sorted({r["audience"] for r in mine}),
+                "month": counts[key],
+            }
+        )
+    return out
 
 
 def _stats(request=None) -> tuple[dict, dict]:
@@ -211,7 +268,7 @@ def _controls_body(request=None) -> dict:
     off = set(settings.disabled_types or [])
     by_source, by_module = _stats(request)
     rows = []
-    for row in mobile_messages.controls():
+    for row in mobile_messages.categorized_controls():
         if row["kind"] == "workflow":
             stats = by_module.get(row["key"][len(mobile_messages.APPROVAL_PREFIX) :], EMPTY_STATS)
         else:
@@ -286,6 +343,7 @@ def _log_row(n: Notification) -> dict:
         "type": n.type,
         "kind": _source_label(n.source, n.related_module),
         "source": n.source or "",
+        "category": mobile_messages.category_of_notification(n.source or "", n.related_module or ""),
         "pushStatus": n.push_status or "",
         "pushStatusLabel": STATUS_LABEL.get(n.push_status or "", n.push_status),
         "pushError": n.push_error or None,
@@ -421,10 +479,14 @@ def mobile_messages_send(request: Request) -> Response:
         return _error("Write a title and a message")
     if len(title) > MAX_TITLE or len(message) > MAX_MESSAGE:
         return _error(f"The title can be {MAX_TITLE} characters and the message {MAX_MESSAGE}")
+    from . import push_delivery
+
     n = Notification.objects.create(
         employee=emp, type="general", title=title, message=message, source=mobile_messages.MANUAL
     )
-    n.refresh_from_db()  # the push result is written by the signal
+    # HR is waiting for the answer: push it now, in this request (the queued push then finds it done and skips it)
+    push_delivery.push([n.pk])
+    n.refresh_from_db()
     log_action(
         request,
         "create",
@@ -439,7 +501,7 @@ def mobile_messages_send(request: Request) -> Response:
 @require_hr
 def mobile_messages_push_again(request: Request, pk: int) -> Response:
     """Push one notification to its employee's phones again (it failed, found no phone, or was switched off then)."""
-    from .signals import push_notification
+    from . import push_delivery
 
     n = _notifications(request).filter(pk=pk).first()
     if n is None:
@@ -451,7 +513,7 @@ def mobile_messages_push_again(request: Request, pk: int) -> Response:
         return _error(off)
     if not PushToken.objects.filter(employee_id=n.employee_id).exists():
         return _error("This employee has no phone registered for notifications: they need to open the app once.")
-    push_notification(n)
+    push_delivery.push_again(n.pk)
     n.refresh_from_db()
     log_action(
         request,

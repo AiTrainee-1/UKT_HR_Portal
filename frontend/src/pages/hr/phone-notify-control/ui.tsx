@@ -161,16 +161,76 @@ export function StatusCard({
   );
 }
 
-/** What happened to a push, as a coloured chip with the meaning on hover. */
-export function PushStatusChip({ status }: { status: string }) {
+/**
+ * What happened to a push, as a coloured chip with the meaning on hover. A result this page does not know yet shows the
+ * server's own `label`.
+ */
+export function PushStatusChip({ status, label }: { status: string; label?: string }) {
   return (
     <span
-      title={STATUS_HELP[status as keyof typeof STATUS_HELP]}
+      title={STATUS_HELP[status as keyof typeof STATUS_HELP] ?? label}
       data-status={status || "none"}
       className="inline-flex"
     >
-      <StatusBadge tone={statusTone(status)}>{statusLabel(status)}</StatusBadge>
+      <StatusBadge tone={statusTone(status)}>{statusLabel(status, label)}</StatusBadge>
     </span>
+  );
+}
+
+export type ChipItem = { value: string; label: ReactNode; count?: ReactNode; title?: string };
+
+/**
+ * A row of filter chips, one of them picked, that wraps onto more lines on a narrow screen (a long list of names does not
+ * fit one scrolling row on a phone). Each chip says whether it is picked (aria-pressed). It only narrows what is shown, so
+ * View only never locks it.
+ */
+export function FilterChips({
+  items,
+  value,
+  onChange,
+  label,
+  testId,
+}: {
+  items: readonly ChipItem[];
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+  testId?: string;
+}) {
+  return (
+    <div role="group" aria-label={label} data-testid={testId} data-view-safe className="flex flex-wrap gap-1.5">
+      {items.map((it) => {
+        const on = it.value === value;
+        return (
+          <button
+            key={it.value || "all"}
+            type="button"
+            aria-pressed={on}
+            title={it.title}
+            onClick={() => onChange(it.value)}
+            data-testid={testId ? `${testId}-${it.value || "all"}` : undefined}
+            className={cn(
+              "inline-flex min-h-7 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+              on
+                ? "border-indigo-600 bg-indigo-600 text-white"
+                : "border-border bg-card text-muted-foreground hover:border-indigo-300 hover:text-foreground",
+            )}
+          >
+            {it.label}
+            {it.count !== undefined && (
+              <span
+                className={cn(
+                  "rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+                  on ? "bg-indigo-500 text-white" : "bg-muted text-muted-foreground",
+                )}
+              >
+                {it.count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
