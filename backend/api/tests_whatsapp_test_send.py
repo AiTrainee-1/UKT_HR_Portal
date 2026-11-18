@@ -70,6 +70,16 @@ class NobodyNamedTests(World):
             self.assertIsNone(whatsapp_service.sending_block_reason())
             self.assertIsNone(whatsapp_service.recipient_block_reason("919123456780"))
 
+    @override_settings(WHATSAPP_ONLY_TO_EMPLOYEES=["T1"])
+    def test_production_ignores_the_list_even_when_it_is_set_by_mistake(self):
+        with mock.patch(DEV, return_value=False), mock.patch(POST, return_value=ok_answer()) as post:
+            self.assertEqual(whatsapp_service.recipient_codes(), [])
+            self.assertIsNone(whatsapp_service.allowed_numbers())
+            whatsapp_service.send_text_message("919123456780", "to anyone eligible")  # T2's number: sent
+            post.assert_called_once()
+            body = self.client.get("/api/whatsapp-control/test-message", **self.h).json()
+            self.assertIsNone(body["limitedTo"])
+
 
 @override_settings(**LIVE, WHATSAPP_ONLY_TO_EMPLOYEES=["T1"])
 class OnlyTheNamedEmployeeTests(World):

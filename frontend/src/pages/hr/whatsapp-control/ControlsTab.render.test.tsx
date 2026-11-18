@@ -261,3 +261,46 @@ describe("a server older than the sending queue", () => {
     expect(page!.text()).toContain("Timing");
   });
 });
+
+describe("a section switched off as a whole", () => {
+  const withHod = (hodOn: boolean): Settings => {
+    const s = settings();
+    (s.groups as { key: string; title: string; blurb: string }[]).push({
+      key: "hod",
+      title: "Department Head notifications",
+      blurb: "Messages to the heads.",
+    });
+    s.features.push(
+      feature("hodNotificationsEnabled", "hod", "Department Head notifications (all)", hodOn),
+      feature("hodRequestWaitingEnabled", "hod", "New request waiting for approval", true),
+      feature("type:hod_pending_reminder", "hod", "HoD Pending Approvals Reminder", true),
+    );
+    return s;
+  };
+
+  it("shows the Department Head section with its state, and says plainly that the switches below are held back", async () => {
+    await open(settingsServer(withHod(false)));
+    expect(groupOrder()).toContain("hod");
+    const group = el('[data-testid="wa-feature-group-hod"]')!;
+    expect(group.dataset.held).toBe("true");
+    expect(el('[data-testid="wa-section-state-hod"]')!.textContent).toBe("Section OFF");
+    expect(el('[data-testid="wa-section-held-hod"]')!.textContent).toContain(
+      "Department Head notifications (all)” is OFF, so nothing in this section is sent",
+    );
+    // their own switches are ON, but each says it is not sent
+    expect(checked('[data-testid="toggle-type:hod_pending_reminder"]')).toBe("true");
+    expect(el('[data-testid="held-type:hod_pending_reminder"]')!.textContent).toContain("Not sent");
+    expect(el('[data-testid="held-hodRequestWaitingEnabled"]')).not.toBeNull();
+    // the master itself is never "held"
+    expect(el('[data-testid="held-hodNotificationsEnabled"]')).toBeNull();
+  });
+
+  it("says Section ON and holds nothing back while the section switch is ON", async () => {
+    await open(settingsServer(withHod(true)));
+    expect(el('[data-testid="wa-section-state-hod"]')!.textContent).toBe("Section ON");
+    expect(el('[data-testid="wa-section-held-hod"]')).toBeNull();
+    expect(el('[data-testid="held-type:hod_pending_reminder"]')).toBeNull();
+    // the documents section's master is ON in the fixture too
+    expect(el('[data-testid="wa-section-state-documents"]')!.textContent).toBe("Section ON");
+  });
+});

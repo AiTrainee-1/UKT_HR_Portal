@@ -14,6 +14,7 @@ import {
   Smartphone,
   X,
 } from "lucide-react";
+import { Link } from "wouter";
 import { Chip, SectionCard } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +42,8 @@ import {
   scheduleText,
   timeLabel,
   toggleDay,
+  whatsappSwitchFix,
+  type WhatsAppFix,
   type NotifyForm,
 } from "./logic";
 
@@ -295,6 +298,22 @@ export function ScheduleCard({
   );
 }
 
+/** What to switch on, and a link to it, when WhatsApp can't carry the reminder because of a switch on WhatsApp Control. */
+export function WhatsAppFixNote({ fix, testId }: { fix: WhatsAppFix; testId: string }) {
+  return (
+    <p className="mt-1 text-[11px] leading-snug text-amber-900" data-testid={testId}>
+      {fix.text}{" "}
+      <Link
+        href={fix.href}
+        className="font-bold text-blue-700 underline underline-offset-2 hover:no-underline"
+        data-testid={`${testId}-link`}
+      >
+        {fix.label} →
+      </Link>
+    </p>
+  );
+}
+
 /** WhatsApp / Email / Mobile push, each switchable, each with what the server says about it. */
 export function ChannelsCard({
   form,
@@ -343,6 +362,9 @@ export function ChannelsCard({
                     {!s.available && <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden />}
                     {s.note || (s.available ? "Ready" : "Not available")}
                   </p>
+                )}
+                {c === "whatsapp" && s && !s.available && whatsappSwitchFix(s.note) && (
+                  <WhatsAppFixNote fix={whatsappSwitchFix(s.note)!} testId={`${id}-fix`} />
                 )}
                 {c === "email" && <p className="mt-0.5 text-[11px] text-gray-400">Subject: {EMAIL_SUBJECT}</p>}
                 {c === "push" && (

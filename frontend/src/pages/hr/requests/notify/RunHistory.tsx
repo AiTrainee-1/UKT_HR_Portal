@@ -10,14 +10,27 @@ import {
   type HodRun,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
-import { CHANNEL_LABEL, DELIVERY_LABEL, DELIVERY_TONE, RUN_STATUS, countText, istLabel, runTitle } from "./logic";
-import { CHANNEL_ICON } from "./parts";
+import {
+  CHANNEL_LABEL,
+  DELIVERY_LABEL,
+  DELIVERY_TONE,
+  RUN_STATUS,
+  countText,
+  istLabel,
+  runTitle,
+  whatsappSwitchFix,
+} from "./logic";
+import { CHANNEL_ICON, WhatsAppFixNote } from "./parts";
 
 const CHANNELS: HodChannel[] = ["whatsapp", "email", "push"];
 export const RUNS_PAGE_SIZE = 8;
 
+/** A channel's note is shown when it did not go, and for WhatsApp also when it did ("Sent" there means queued). */
+const showsNote = (d: HodDelivery, c: HodChannel) => !!d[c].note && (d[c].status !== "sent" || c === "whatsapp");
+
 /** One HoD of a run: how each channel went, with the reason when it did not. */
 function DeliveryRow({ d }: { d: HodDelivery }) {
+  const fix = d.whatsapp.status === "skipped" ? whatsappSwitchFix(d.whatsapp.note) : null;
   return (
     <li
       className="rounded-xl border border-slate-100 bg-white px-3 py-2.5"
@@ -41,13 +54,14 @@ function DeliveryRow({ d }: { d: HodDelivery }) {
           })}
         </ul>
       </div>
-      {CHANNELS.some((c) => d[c].note && d[c].status !== "sent") && (
-        <p className="mt-1 text-[11px] text-gray-500">
-          {CHANNELS.filter((c) => d[c].note && d[c].status !== "sent")
+      {CHANNELS.some((c) => showsNote(d, c)) && (
+        <p className="mt-1 text-[11px] text-gray-500" data-testid={`notify-delivery-${d.managerId}-notes`}>
+          {CHANNELS.filter((c) => showsNote(d, c))
             .map((c) => `${CHANNEL_LABEL[c]}: ${d[c].note}`)
             .join(" · ")}
         </p>
       )}
+      {fix && <WhatsAppFixNote fix={fix} testId={`notify-delivery-${d.managerId}-whatsapp-fix`} />}
       {d.text && (
         <details className="mt-1.5 text-xs">
           <summary className="cursor-pointer font-semibold text-blue-600">Message sent</summary>

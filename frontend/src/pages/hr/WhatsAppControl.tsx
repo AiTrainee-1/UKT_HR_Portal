@@ -104,7 +104,10 @@ export default function WhatsAppControl() {
             Nothing on this page is open to your role.
           </p>
         ) : (
-          <PillTabs className="flex-wrap h-auto" size="sm" items={visibleTabs} value={tab} onChange={setTab} />
+          // tabs only move around the page: "Send a test" must stay open to a View-only role (the lock reads "send")
+          <div data-view-safe="">
+            <PillTabs className="flex-wrap h-auto" size="sm" items={visibleTabs} value={tab} onChange={setTab} />
+          </div>
         )}
 
         <ViewOnlyTabNote show={tabViewOnly} />

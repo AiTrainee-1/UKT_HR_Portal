@@ -4,7 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../custom-fetch";
 import {
+  readWhatsAppConnection,
   readWhatsAppQueue,
+  readWhatsAppTestOptions,
+  readWhatsAppTestResult,
   useSetWhatsAppOptOut,
   whatsAppErrorMessage,
   type Paged,
@@ -62,6 +65,13 @@ describe("whatsAppErrorMessage", () => {
       "Max per hour must be between 1 and 500.",
     );
     expect(whatsAppErrorMessage(refusal({ detail: "Not allowed." }), "fallback")).toBe("Not allowed.");
+  });
+
+  it("passes over a code for the sentence beside it (the permission middleware's 403)", () => {
+    const denied = refusal({ error: "permission_denied", message: "You do not have access to this section." });
+    expect(whatsAppErrorMessage(denied, "fallback")).toBe("You do not have access to this section.");
+    // a one-word error is still a sentence of its own
+    expect(whatsAppErrorMessage(refusal({ error: "Forbidden", message: "x" }), "fallback")).toBe("Forbidden");
   });
 
   it("falls back when the server said nothing useful", () => {
@@ -145,5 +155,110 @@ describe("useSetWhatsAppOptOut", () => {
     expect(flags()).toEqual([false, true]);
     act(() => root.unmount());
     client.clear();
+  });
+});
+
+// ── The connection check and Send a test: partial answers read safely ───────────────────────────────────────────────
+
+describe("readWhatsAppConnection", () => {
+  it("reads an empty answer as nothing checked, never as all good", () => {
+    const c = readWhatsAppConnection(null);
+    expect(c.ok).toBe(false);
+    expect(c.problems).toEqual([]);
+    expect(c.provider).toBeNull();
+    expect(c.machine).toEqual({ developmentMachine: false, sendingAllowed: true, blockReason: null, limitedTo: null });
+    expect(c.queue.engineEnabled).toBe(true);
+    expect(c.documents).toEqual({ publicBase: "", problem: null });
+    expect(c.lastFailure).toBeNull();
+  });
+
+  it("keeps the server's answer, codes as strings, and either kind of WAClient answer", () => {
+    const c = readWhatsAppConnection({
+      ok: false,
+      problems: ["One", "", 7, "Two"],
+      credentials: true,
+      instance: "…C042",
+      machine: { developmentMachine: true, sendingAllowed: true, blockReason: null, limitedTo: [30020, "30021"] },
+      provider: {
+        ok: true,
+        state: "logged_out",
+        socketLoaded: false,
+        reloginRequired: true,
+        httpStatus: 200,
+        raw: { a: 1 },
+      },
+    });
+    expect(c.problems).toEqual(["One", "Two"]);
+    expect(c.machine.limitedTo).toEqual(["30020", "30021"]);
+    expect(c.provider).toEqual({
+      ok: true,
+      state: "logged_out",
+      socketLoaded: false,
+      reloginRequired: true,
+      httpStatus: 200,
+      raw: { a: 1 },
+    });
+    const failed = readWhatsAppConnection({ provider: { ok: false, httpStatus: 401 } }).provider;
+    expect(failed).toEqual({ ok: false, error: "WAClient did not answer.", httpStatus: 401, raw: null });
+    // ok only when the server says so AND lists nothing
+    expect(readWhatsAppConnection({ ok: true, problems: ["x"] }).ok).toBe(false);
+    expect(readWhatsAppConnection({ ok: true, problems: [] }).ok).toBe(true);
+  });
+});
+
+describe("readWhatsAppTestOptions / readWhatsAppTestResult", () => {
+  it("drops rows it can't use and fills in the rest", () => {
+    const o = readWhatsAppTestOptions({
+      limitedTo: [],
+      recipients: [{ id: 71, code: "30020", name: "SURYA M", phone: "••••9103", hasPhone: true }, { code: "x" }],
+      types: [
+        { documentType: "late_alert", label: "Late Attendance Alert", module: "attendance" },
+        { label: "no key" },
+      ],
+    });
+    expect(o.limitedTo).toBeNull();
+    expect(o.blockReason).toBeNull();
+    expect(o.recipients).toEqual([
+      { id: 71, code: "30020", name: "SURYA M", phone: "••••9103", hasPhone: true, blockedReason: null },
+    ]);
+    expect(o.types).toEqual([
+      {
+        documentType: "late_alert",
+        label: "Late Attendance Alert",
+        module: "attendance",
+        moduleLabel: "attendance",
+        kind: "",
+        variables: [],
+      },
+    ]);
+    // a recipient without a phone has none, whatever the flag says
+    expect(
+      readWhatsAppTestOptions({ recipients: [{ id: 1, hasPhone: true, phone: null }] }).recipients[0].hasPhone,
+    ).toBe(false);
+  });
+
+  it("reads each answer of a test, and an answer it does not know as a failure that says so", () => {
+    expect(
+      readWhatsAppTestResult({
+        status: "sent",
+        text: "Hi",
+        logId: 5,
+        providerMessageId: "3EB0",
+        providerResponse: { ok: 1 },
+      }),
+    ).toMatchObject({ status: "sent", logId: 5, providerMessageId: "3EB0", error: null, providerResponse: { ok: 1 } });
+    expect(readWhatsAppTestResult({ status: "failed", error: "Bad token", httpStatus: 401 })).toMatchObject({
+      status: "failed",
+      error: "Bad token",
+      httpStatus: 401,
+      providerResponse: null,
+    });
+    expect(readWhatsAppTestResult({ status: "blocked", error: "Not sent (development safety)" }).status).toBe(
+      "blocked",
+    );
+    expect(readWhatsAppTestResult({ status: "queued" })).toMatchObject({
+      status: "failed",
+      error: "The server's answer was not understood.",
+    });
   });
 });

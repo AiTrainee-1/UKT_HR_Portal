@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { renderMdPage, type RenderedPage } from "@/pages/md/testing/renderMdPage";
 import ConfigTab from "./ConfigTab";
+import { connection } from "./test-fixtures";
 
 // The Setup tab of WhatsApp Control. No WhatsApp message carries a link to the Employee Web App any more, so this tab
 // must not ask for a portal address (the EMPLOYEE_PORTAL_URL setting is gone) or report link previews (the preview card is
@@ -36,7 +37,7 @@ afterEach(() => {
 const open = async (config: Record<string, unknown>) => {
   page = await renderMdPage(
     () => <ConfigTab />,
-    { "/api/whatsapp-control/settings": settings(config) },
+    { "/api/whatsapp-control/settings": settings(config), "/api/whatsapp-control/connection": connection() },
     { path: "/hr/whatsapp-control" },
   );
   return page;
@@ -67,6 +68,14 @@ describe("WhatsApp Control setup tab", () => {
 
   it("lists exactly three setup checks: credentials, documents and the webhook token", async () => {
     await open(CONFIG);
-    expect(page!.container.querySelectorAll("ul > li")).toHaveLength(3);
+    expect(page!.container.querySelectorAll('[data-testid="wa-setup-checklist"] > li')).toHaveLength(3);
+  });
+
+  it("opens with the connection check above the setup checklist", async () => {
+    await open(CONFIG);
+    const panel = page!.container.querySelector('[data-testid="wa-connection"]')!;
+    const checklist = page!.container.querySelector('[data-testid="wa-setup-checklist"]')!;
+    expect(panel.compareDocumentPosition(checklist) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(page!.requests()).toContain("/api/whatsapp-control/connection");
   });
 });

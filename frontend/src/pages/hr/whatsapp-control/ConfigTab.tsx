@@ -154,7 +154,7 @@ export default function ConfigTab() {
         </CardContent>
       </Card>
 
-      <div className="flex items-start gap-2 rounded-xl border bg-slate-50 p-3 text-xs text-slate-600">
+      <div className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
         <Info size={14} className="mt-0.5 shrink-0" />
         <span>
           Credentials are deliberately not shown or editable here: they live only in the server's environment, so they

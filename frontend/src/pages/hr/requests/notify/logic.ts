@@ -374,3 +374,40 @@ export function runOutcome(run: HodRun): string {
     .map((c) => `${CHANNEL_LABEL[c]}: ${countText(run.counts[c])}`);
   return `${run.hods} HoD${run.hods === 1 ? "" : "s"} reminded. ${parts.join(". ")}`.trim();
 }
+
+// ─── WhatsApp's own switches ───────────────────────────────────────────────────────────────────────────────────────
+
+/** WhatsApp Control, where the reminder's WhatsApp switches live (Department Head notifications, 2026-11-17). */
+export const WHATSAPP_CONTROLS_HREF = "/hr/whatsapp-control?tab=controls";
+export const WHATSAPP_TEXT_HREF = "/hr/whatsapp-control?tab=templates";
+
+export type WhatsAppFix = { text: string; href: string; label: string };
+
+/**
+ * When the server says WhatsApp can't (or didn't) carry the reminder because of a switch on WhatsApp Control (the
+ * channel's note, or a delivery's reason), what to switch on and where. null for any other reason (the WAClient keys, a
+ * development machine, a head without a phone): those are fixed elsewhere.
+ */
+export function whatsappSwitchFix(note: string | null | undefined): WhatsAppFix | null {
+  const n = note ?? "";
+  if (!/WhatsApp Control/i.test(n)) return null;
+  if (/Message Text/i.test(n))
+    return {
+      text: "Turn the reminder's text back on: WhatsApp Control → Message Text → “HoD Pending Approvals Reminder”.",
+      href: WHATSAPP_TEXT_HREF,
+      label: "Open Message Text",
+    };
+  const needs =
+    "the Department Head notifications section switch and “HoD Pending Approvals Reminder”, both under WhatsApp Control → Feature Controls";
+  if (/master switch/i.test(n))
+    return {
+      text: `Turn the WhatsApp engine (master switch) back on. The reminder also needs ${needs}.`,
+      href: WHATSAPP_CONTROLS_HREF,
+      label: "Open Feature Controls",
+    };
+  return {
+    text: `The reminder goes by WhatsApp only with ${needs} switched ON.`,
+    href: WHATSAPP_CONTROLS_HREF,
+    label: "Open Feature Controls",
+  };
+}

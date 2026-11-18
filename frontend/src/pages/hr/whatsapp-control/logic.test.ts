@@ -3,13 +3,24 @@ import type { WhatsAppFeature, WhatsAppQueueLimit } from "@/lib/api-client/custo
 import {
   changedLimits,
   crossesMidnight,
+  employeeCodesText,
   featureSections,
   fmtSendTime,
+  groupTestTypes,
+  hodStatus,
   limitError,
+  providerBadge,
   quietHoursChanged,
   quietHoursError,
+  recipientLabel,
+  sectionMaster,
+  splitProblems,
+  switchedOffSummary,
+  tabFromSearch,
+  tabHref,
   usageLevel,
 } from "./logic";
+import { DEV_TEMPLATES, SURYA, TYPES, settings, template } from "./test-fixtures";
 
 const feature = (key: string, group: string): WhatsAppFeature => ({
   key,
@@ -118,5 +129,140 @@ describe("usageLevel and fmtSendTime", () => {
     expect(today).toMatch(/10:42/);
     expect(today).not.toMatch(/Nov/);
     expect(fmtSendTime(new Date(2026, 10, 7, 7, 0).toISOString(), now)).toMatch(/Nov/);
+  });
+});
+
+describe("the tab in the address", () => {
+  it("reads ?tab= and falls back to the Overview", () => {
+    expect(tabFromSearch("")).toBe("overview");
+    expect(tabFromSearch("?tab=controls")).toBe("controls");
+    expect(tabFromSearch("tab=Test")).toBe("test");
+    expect(tabFromSearch("?tab=")).toBe("overview");
+  });
+
+  it("writes the Overview as the bare address and any other tab as ?tab=", () => {
+    expect(tabHref("/hr/whatsapp-control", "overview")).toBe("/hr/whatsapp-control");
+    expect(tabHref("/hr/whatsapp-control", "test")).toBe("/hr/whatsapp-control?tab=test");
+  });
+});
+
+describe("switchedOffSummary", () => {
+  it("counts the types HR's switches keep back, by module, and the ones that can still go", () => {
+    const s = switchedOffSummary(DEV_TEMPLATES(), true);
+    expect(s.total).toBe(9);
+    expect(s.off.map((t) => t.documentType)).toEqual([
+      "salary_slip",
+      "id_card",
+      "otp_login",
+      "absent_alert",
+      "approval_approved",
+      "geo_approval",
+    ]);
+    expect(s.on.map((t) => t.documentType)).toEqual([
+      "hod_request_waiting",
+      "hod_pending_reminder",
+      "attendance_report",
+    ]);
+    expect(s.offByModule).toEqual([
+      { key: "documents", label: "Documents", count: 2 },
+      { key: "otp", label: "OTP & Login", count: 1 },
+      { key: "attendance", label: "Attendance", count: 1 },
+      { key: "approvals", label: "Approvals", count: 1 },
+      { key: "geo", label: "Geo Attendance", count: 1 },
+    ]);
+    expect(s.level).toBe("most");
+  });
+
+  it("names why: the engine first, then the module, the type's own switch, its Message Text switch", () => {
+    const why = (t: ReturnType<typeof template>, engine = true) => switchedOffSummary([t], engine).off[0]?.off ?? null;
+    const both = template("salary_slip", "documents", "Documents", { featureEnabled: false, moduleEnabled: false });
+    expect(why(both, false)).toBe("engine");
+    expect(why(both)).toBe("module");
+    expect(why(template("otp_login", "otp", "OTP", { featureEnabled: false }))).toBe("own");
+    expect(why(template("id_card", "documents", "Documents", { isEnabled: false }))).toBe("wording");
+    expect(
+      why(template("id_card", "documents", "Documents", { featureEnabled: true, moduleEnabled: true })),
+    ).toBeNull();
+  });
+
+  it("is engine-off whatever the types say, some for a few, none for none", () => {
+    expect(switchedOffSummary([template("a", "x", "X")], false).level).toBe("engine-off");
+    const few = [template("a", "x", "X", { featureEnabled: false }), template("b", "x", "X"), template("c", "x", "X")];
+    expect(switchedOffSummary(few, true).level).toBe("some");
+    expect(switchedOffSummary([template("b", "x", "X")], true).level).toBe("none");
+    expect(switchedOffSummary([], true).level).toBe("none");
+  });
+});
+
+describe("the section master switches", () => {
+  it("finds a section's master when the server sent it", () => {
+    const features = settings().features;
+    expect(sectionMaster("hod", features)?.key).toBe("hodNotificationsEnabled");
+    expect(sectionMaster("approvals", features)?.key).toBe("approvalNotificationsEnabled");
+    expect(sectionMaster("documents", features)).toBeNull();
+    expect(sectionMaster("geo", features)).toBeNull();
+  });
+});
+
+describe("hodStatus", () => {
+  it("is on, partly or off, and marks a switch the section holds back", () => {
+    expect(hodStatus(settings())!.state).toBe("on");
+    expect(hodStatus(settings({ reminderOn: false }))!.state).toBe("partly");
+    const off = hodStatus(settings({ hodOn: false }))!;
+    expect(off.state).toBe("off");
+    expect(off.items.map((i) => [i.feature.key, i.on, i.held])).toEqual([
+      ["hodRequestWaitingEnabled", false, true],
+      ["type:hod_pending_reminder", false, true],
+    ]);
+    expect(hodStatus(settings({ engineEnabled: false }))!.state).toBe("off");
+    expect(hodStatus(settings({ waitingOn: false, reminderOn: false }))!.items.every((i) => !i.held)).toBe(true);
+  });
+
+  it("is null on a server without the section", () => {
+    const old = settings();
+    old.features = old.features.filter((f) => f.group !== "hod");
+    expect(hodStatus(old)).toBeNull();
+  });
+});
+
+describe("the connection check", () => {
+  it("colours WAClient's states", () => {
+    expect(providerBadge("connected")).toEqual({ label: "Connected", tone: "success" });
+    expect(providerBadge("logged_out")).toEqual({ label: "Logged out", tone: "danger" });
+    expect(providerBadge("disconnected").tone).toBe("danger");
+    expect(providerBadge("pending").tone).toBe("warning");
+    expect(providerBadge("linking").tone).toBe("warning");
+    expect(providerBadge("connecting").tone).toBe("warning");
+    expect(providerBadge("qr_shown")).toEqual({ label: "qr shown", tone: "neutral" });
+  });
+
+  it("sets the documents problem apart from the ones that stop every message", () => {
+    const docs = "WAClient can't download the PDF from 'http://localhost:8000'.";
+    expect(splitProblems(["The master switch is OFF.", `Documents cannot be sent from here: ${docs}`], docs)).toEqual({
+      main: ["The master switch is OFF."],
+      documents: docs,
+    });
+    expect(splitProblems(["The master switch is OFF."], null)).toEqual({
+      main: ["The master switch is OFF."],
+      documents: null,
+    });
+  });
+});
+
+describe("Send a test helpers", () => {
+  it("groups the types by module in the server's order", () => {
+    const groups = groupTestTypes([...TYPES, { ...TYPES[0], documentType: "id_card", label: "ID Card" }]);
+    expect(groups.map((g) => [g.label, g.types.map((t) => t.documentType)])).toEqual([
+      ["Documents", ["salary_slip", "id_card"]],
+      ["Department Heads", ["hod_request_waiting"]],
+    ]);
+  });
+
+  it("names the recipient and the allowed employees the way the page says them", () => {
+    expect(recipientLabel(SURYA)).toBe("SURYA M (••••9103)");
+    expect(recipientLabel({ ...SURYA, phone: null })).toBe("SURYA M (30020)");
+    expect(employeeCodesText(["30020"])).toBe("employee 30020");
+    expect(employeeCodesText(["30020", "30021"])).toBe("employees 30020 and 30021");
+    expect(employeeCodesText(["1", "2", "3"])).toBe("employees 1, 2 and 3");
   });
 });

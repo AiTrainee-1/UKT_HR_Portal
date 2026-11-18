@@ -28,6 +28,7 @@ import {
   toggleDay,
   unknownPlaceholders,
   validTime,
+  whatsappSwitchFix,
 } from "./logic";
 
 const refusal = (status: number, body: Record<string, unknown>) =>
@@ -250,5 +251,35 @@ describe("runs", () => {
     expect(runOutcome({ ...RUN_DONE, hods: 0 })).toBe("No HoD had anything pending: nobody was reminded.");
     expect(runOutcome({ ...RUN_DONE, status: "failed", error: "WhatsApp is down" })).toBe("WhatsApp is down");
     expect(runOutcome({ ...RUN_DONE, status: "failed", error: null })).toContain("stopped with an error");
+  });
+});
+
+describe("whatsappSwitchFix", () => {
+  it("points a switch on WhatsApp Control at the Department Head section of Feature Controls", () => {
+    for (const note of [
+      "'HoD Pending Approvals Reminder' is switched off on the WhatsApp Control page.",
+      "Department Heads notifications are switched off on the WhatsApp Control page.",
+    ]) {
+      const fix = whatsappSwitchFix(note)!;
+      expect(fix.href, note).toBe("/hr/whatsapp-control?tab=controls");
+      expect(fix.text).toContain("Department Head notifications section switch");
+      expect(fix.text).toContain("“HoD Pending Approvals Reminder”");
+    }
+  });
+
+  it("names the engine when the master switch is off, and Message Text when the text is switched off there", () => {
+    expect(
+      whatsappSwitchFix("WhatsApp sending is switched off (master switch) on the WhatsApp Control page.")!.text,
+    ).toContain("WhatsApp engine (master switch)");
+    expect(whatsappSwitchFix("This reminder is switched off on the WhatsApp Control page (Message Text).")!.href).toBe(
+      "/hr/whatsapp-control?tab=templates",
+    );
+  });
+
+  it("has nothing to say about a reason that is not a switch", () => {
+    expect(whatsappSwitchFix("WhatsApp is not set up on this server (the WAClient keys are missing).")).toBeNull();
+    expect(whatsappSwitchFix("No phone number")).toBeNull();
+    expect(whatsappSwitchFix("")).toBeNull();
+    expect(whatsappSwitchFix(undefined)).toBeNull();
   });
 });

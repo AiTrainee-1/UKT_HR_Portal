@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -28,6 +28,7 @@ import {
   type WhatsAppTestResult,
   type WhatsAppTestType,
 } from "@/lib/api-client/custom-hooks";
+import { ApiError } from "@/lib/api-client/custom-fetch";
 import { cn } from "@/lib/utils";
 import { TEST_TEXT_MAX, employeeCodesText, groupTestTypes, recipientLabel } from "./logic";
 import { Notice, Panel, RawJson } from "./kit";
@@ -218,6 +219,8 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
   const [problem, setProblem] = useState<string | null>(null);
   const previewer = useWhatsAppTestMessage();
   const sender = useWhatsAppTestMessage();
+  // the type and employee the preview on its way is for: an answer for an earlier choice is dropped
+  const asked = useRef("");
 
   const allowed = useMemo(() => (limitedTo ? (base.data?.recipients ?? []) : []), [limitedTo, base.data]);
   // a limited machine with one allowed employee: they are the only possible recipient
@@ -229,6 +232,7 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
   const type: WhatsAppTestType | undefined = base.data?.types.find((t) => t.documentType === documentType);
 
   const startOver = () => {
+    asked.current = "";
     setPreview(null);
     setEditing(false);
     setDraft("");
@@ -250,15 +254,23 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
     setProblem(null);
     setResult(null);
     setConfirming(false);
+    const key = `${documentType}:${recipient.id}`;
+    asked.current = key;
     previewer.mutate(
       { documentType, employeeId: recipient.id, dryRun: true },
       {
         onSuccess: (r) => {
+          if (asked.current !== key) return;
           setPreview(r);
           setDraft(r.text);
           setEditing(false);
         },
-        onError: (e) => setProblem(`The preview could not be made: ${whatsAppErrorMessage(e, "try again.")}`),
+        onError: (e) =>
+          setProblem(
+            viewOnly && e instanceof ApiError && e.status === 403
+              ? "The server refused the preview: it counts a preview as a change, and your role may only view this tab. Ask for edit access to Send a test to preview here."
+              : `The preview could not be made: ${whatsAppErrorMessage(e, "try again.")}`,
+          ),
       },
     );
   };

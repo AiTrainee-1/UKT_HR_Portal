@@ -203,6 +203,39 @@ describe("channels and the message", () => {
     expect(text(q("notify-channel-email-note"))).toBe("SMTP is not set up in Settings: emails will be skipped");
     expect(q("notify-channel-email-note")?.className).toContain("text-amber-700");
     expect(text(q("notify-channel-whatsapp-note"))).toBe("Sent through the WhatsApp Business number");
+    expect(q("notify-channel-whatsapp-fix")).toBeNull();
+  });
+
+  it("says what to switch on, with a link, when WhatsApp Control's switches keep the reminder off WhatsApp", () => {
+    h.settings = query({
+      ...SETTINGS,
+      channelStatus: {
+        ...SETTINGS.channelStatus,
+        whatsapp: {
+          available: false,
+          note: "'HoD Pending Approvals Reminder' is switched off on the WhatsApp Control page.",
+        },
+      },
+    });
+    mount();
+    expect(q("notify-channel-whatsapp-note")?.className).toContain("text-amber-700");
+    expect(text(q("notify-channel-whatsapp-fix"))).toContain(
+      "Department Head notifications section switch and “HoD Pending Approvals Reminder”",
+    );
+    expect(q("notify-channel-whatsapp-fix-link")?.getAttribute("href")).toBe("/hr/whatsapp-control?tab=controls");
+  });
+
+  it("does not point at the switches when WhatsApp is held back by something else", () => {
+    h.settings = query({
+      ...SETTINGS,
+      channelStatus: {
+        ...SETTINGS.channelStatus,
+        whatsapp: { available: false, note: "WhatsApp sending is off on this machine (a development setup)." },
+      },
+    });
+    mount();
+    expect(text(q("notify-channel-whatsapp-note"))).toContain("development setup");
+    expect(q("notify-channel-whatsapp-fix")).toBeNull();
   });
 
   it("inserts a placeholder at the caret, flags a broken message, and resets to the default", () => {
@@ -324,6 +357,45 @@ describe("the run history", () => {
     expect(q("notify-delivery-1-email")?.getAttribute("data-status")).toBe("skipped");
     expect(text(q("notify-delivery-1"))).toContain("Email: No email address");
     expect(text(q("notify-delivery-1"))).toContain("Mobile push: Token expired");
+  });
+
+  it("shows why a head's WhatsApp was skipped, with the switch to turn on, and that a sent one was queued", () => {
+    h.runById.set(RUN_DONE.id, {
+      ...RUN_DONE,
+      deliveries: [
+        {
+          managerId: 1,
+          name: "Ravi Shankar",
+          pending: 4,
+          byCategory: {},
+          text: "Dear Ravi",
+          whatsapp: {
+            status: "skipped",
+            note: "Department Heads notifications are switched off on the WhatsApp Control page.",
+          },
+          email: { status: "off", note: "" },
+          push: { status: "sent", note: "" },
+        },
+        {
+          managerId: 2,
+          name: "Meena Rani",
+          pending: 1,
+          byCategory: {},
+          text: "Dear Meena",
+          whatsapp: { status: "sent", note: "Queued for WhatsApp: sent within the day's sending limits" },
+          email: { status: "off", note: "" },
+          push: { status: "sent", note: "" },
+        },
+      ],
+    });
+    mount();
+    click(q(`notify-run-${RUN_DONE.id}`)!.querySelector("button[aria-expanded]"));
+    expect(text(q("notify-delivery-1-notes"))).toBe(
+      "WhatsApp: Department Heads notifications are switched off on the WhatsApp Control page.",
+    );
+    expect(q("notify-delivery-1-whatsapp-fix-link")?.getAttribute("href")).toBe("/hr/whatsapp-control?tab=controls");
+    expect(text(q("notify-delivery-2-notes"))).toContain("Queued for WhatsApp");
+    expect(q("notify-delivery-2-whatsapp-fix")).toBeNull();
   });
 
   it("says when nothing has gone out yet", () => {

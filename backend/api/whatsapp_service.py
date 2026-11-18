@@ -121,15 +121,22 @@ def provider_is_local() -> bool:
 
 
 def recipient_codes() -> list[str]:
-    """The employee codes this machine may message (WHATSAPP_ONLY_TO_EMPLOYEES), [] for no limit."""
+    """The employee codes this DEVELOPMENT machine may message (WHATSAPP_ONLY_TO_EMPLOYEES). Always [] on a real server: the
+    restriction is for local testing only and is ignored in production even if the variable is set there by mistake, so
+    production messages every eligible employee exactly as before (owner 2026-11-17)."""
+    if not development_machine():
+        return []
     return list(getattr(dj_settings, "WHATSAPP_ONLY_TO_EMPLOYEES", None) or [])
 
 
 def allowed_numbers() -> set[str] | None:
-    """The phone numbers (normalised) this machine may message, or None when there is no limit. On a development machine
-    there is always a limit (an empty set when no employee is named: nothing may be sent)."""
+    """The phone numbers (normalised) this machine may message, or None when there is no limit. A real server has none.
+    A development machine always has one (an empty set when no employee is named: nothing may be sent), except with a
+    local fake WAClient (the e2e stack)."""
+    if not development_machine():
+        return None
     codes = recipient_codes()
-    if not codes and (not development_machine() or provider_is_local()):
+    if not codes and provider_is_local():
         return None
     from .models import Employee
 

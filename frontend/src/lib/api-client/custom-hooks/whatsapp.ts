@@ -496,14 +496,18 @@ export const useClearWhatsAppQueue = () => {
   });
 };
 
-/** The server's own sentence for a refused request ("Max per hour must be between 1 and 500."), else `fallback`. */
+/** The server's own sentence for a refused request ("Max per hour must be between 1 and 500."), else `fallback`. A code
+ *  in `error` ("permission_denied", from the permission middleware) is passed over for the sentence in `message`. */
 export function whatsAppErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
     const data = err.data;
     if (isRecord(data)) {
       for (const field of ["error", "message", "detail"]) {
         const sentence = data[field];
-        if (typeof sentence === "string" && sentence.trim()) return sentence.trim();
+        if (typeof sentence !== "string" || !sentence.trim()) continue;
+        if (field === "error" && /^[a-z]+(_[a-z]+)+$/.test(sentence.trim()) && typeof data.message === "string")
+          continue;
+        return sentence.trim();
       }
     }
     return fallback;

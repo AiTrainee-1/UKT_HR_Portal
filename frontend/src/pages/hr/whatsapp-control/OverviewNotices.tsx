@@ -164,7 +164,7 @@ export function HodStatusCard({ onOpenControls }: { onOpenControls?: () => void 
               <p className="text-xs font-semibold text-gray-900">{i.feature.label}</p>
               <p className="text-[11px] text-gray-500">
                 {i.on
-                  ? "Sent"
+                  ? "Switched on: it goes out whenever it is due"
                   : i.held
                     ? "Its own switch is ON, but it is held back (see above)"
                     : "Its own switch is OFF"}

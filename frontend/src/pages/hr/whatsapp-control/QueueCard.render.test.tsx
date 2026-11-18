@@ -136,6 +136,9 @@ describe("the Overview tab", () => {
       () => <OverviewTab onOpenCategory={() => {}} onOpenFailures={() => {}} onOpenConfig={() => {}} />,
       {
         ...queueServer().fixtures,
+        // the switched-off banner and the Department Head card read the switches and the message types
+        "/api/whatsapp-control/settings": { engineEnabled: true, groups: [], features: [], timings: [], config: {} },
+        "/api/whatsapp-control/templates": [],
         "/api/whatsapp-control/overview": {
           days: 30,
           config: { configured: true },

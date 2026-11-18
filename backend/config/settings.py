@@ -371,11 +371,11 @@ WHATSAPP_SEND_DELAY_SECONDS = float(os.environ.get("WHATSAPP_SEND_DELAY_SECONDS"
 # not message employees, and once did. Set WHATSAPP_ALLOW_SENDING=true or false to force it either way.
 _allow_sending = os.environ.get("WHATSAPP_ALLOW_SENDING", "").strip().lower()
 WHATSAPP_ALLOW_SENDING = (_allow_sending in ("1", "true", "yes")) if _allow_sending else None
-# The only employees (by employee code, comma separated) this machine may send WhatsApp to (2026-11-17). REQUIRED on a
-# development machine that is allowed to send (WHATSAPP_ALLOW_SENDING=true while DEBUG is on or under runserver): with no
-# list, such a machine sends nothing. Every send (notifications, documents, codes, test messages, Attendance Notify
-# numbers and groups) is checked against these employees' phone numbers at the moment it would reach WAClient. Optional on
-# a real server (blank = everybody).
+# LOCAL DEVELOPMENT ONLY: the only employees (by employee code, comma separated) a development machine may send WhatsApp
+# to (2026-11-17). REQUIRED on a development machine that is allowed to send (WHATSAPP_ALLOW_SENDING=true while DEBUG is
+# on or under runserver): with no list, such a machine sends nothing. Every send (notifications, documents, codes, test
+# messages, Attendance Notify numbers and groups) is checked against these employees' phone numbers at the moment it would
+# reach WAClient. IGNORED on a real server (DEBUG off, not runserver): production always messages every eligible employee.
 WHATSAPP_ONLY_TO_EMPLOYEES = [
     c.strip() for c in os.environ.get("WHATSAPP_ONLY_TO_EMPLOYEES", "").split(",") if c.strip()
 ]
