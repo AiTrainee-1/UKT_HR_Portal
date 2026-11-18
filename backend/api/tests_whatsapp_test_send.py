@@ -25,7 +25,7 @@ LIVE = dict(
 )
 POST = "api.whatsapp_service.requests.post"
 GET = "api.whatsapp_service.requests.get"
-DEV = "api.whatsapp_service.development_machine"
+DEV = "api.whatsapp_service.local_dev_server"  # True = this is `manage.py runserver` on a laptop
 
 
 def ok_answer(msg_id="WAID1"):
@@ -79,6 +79,35 @@ class NobodyNamedTests(World):
             post.assert_called_once()
             body = self.client.get("/api/whatsapp-control/test-message", **self.h).json()
             self.assertIsNone(body["limitedTo"])
+
+
+@override_settings(**LIVE, WHATSAPP_ONLY_TO_EMPLOYEES=["30020", "T1"], DEBUG=True)
+class ProductionIsNeverLimitedTests(TestCase):
+    """Production (gunicorn / Railway): the lock never applies, even with the variable set and DEBUG on (2026-11-18: the
+    variable reached production through Railway and every HoD reminder was skipped)."""
+
+    def setUp(self):
+        super().setUp()
+        Employee.objects.create(employee_code="T1", first_name="S", last_name="M", status="active", phone="9876543210")
+
+    def test_not_runserver_means_no_limit_whatever_the_settings(self):
+        self.assertFalse(whatsapp_service.local_dev_server())  # the test runner, like gunicorn, is not runserver
+        self.assertEqual(whatsapp_service.recipient_codes(), [])
+        self.assertIsNone(whatsapp_service.allowed_numbers())
+        self.assertIsNone(whatsapp_service.recipient_block_reason("918667516410"))
+        with mock.patch(POST, return_value=ok_answer()) as post:
+            whatsapp_service.send_text_message("918667516410", "a Department Head anywhere")
+        post.assert_called_once()
+
+    def test_railway_is_never_the_local_server_even_under_runserver(self):
+        with (
+            mock.patch("api.whatsapp_service.sys.argv", ["manage.py", "runserver"]),
+            mock.patch.dict("os.environ", {"RAILWAY_ENVIRONMENT": "production"}),
+        ):
+            self.assertFalse(whatsapp_service.local_dev_server())
+            self.assertIsNone(whatsapp_service.recipient_block_reason("918667516410"))
+        with mock.patch("api.whatsapp_service.sys.argv", ["manage.py", "runserver"]):
+            self.assertTrue(whatsapp_service.local_dev_server())  # a laptop: the lock applies there
 
 
 @override_settings(**LIVE, WHATSAPP_ONLY_TO_EMPLOYEES=["T1"])

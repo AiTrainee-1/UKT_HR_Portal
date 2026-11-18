@@ -375,7 +375,8 @@ WHATSAPP_ALLOW_SENDING = (_allow_sending in ("1", "true", "yes")) if _allow_send
 # to (2026-11-17). REQUIRED on a development machine that is allowed to send (WHATSAPP_ALLOW_SENDING=true while DEBUG is
 # on or under runserver): with no list, such a machine sends nothing. Every send (notifications, documents, codes, test
 # messages, Attendance Notify numbers and groups) is checked against these employees' phone numbers at the moment it would
-# reach WAClient. IGNORED on a real server (DEBUG off, not runserver): production always messages every eligible employee.
+# reach WAClient. IGNORED everywhere except `manage.py runserver` (whatsapp_service.local_dev_server): production
+# (gunicorn / waitress / Railway) always messages every eligible employee, even if this variable is set there.
 WHATSAPP_ONLY_TO_EMPLOYEES = [
     c.strip() for c in os.environ.get("WHATSAPP_ONLY_TO_EMPLOYEES", "").split(",") if c.strip()
 ]

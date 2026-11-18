@@ -42,6 +42,7 @@ failure (not configured, no phone on file, switched off, or a WAClient API error
 """
 
 import ipaddress
+import os
 import logging
 import re
 import secrets
@@ -120,11 +121,24 @@ def provider_is_local() -> bool:
     return host in ("localhost", "127.0.0.1", "::1")
 
 
+def local_dev_server() -> bool:
+    """Is this Django's own development server (`manage.py runserver`) on a developer's machine? The ONLY place the
+    WHATSAPP_ONLY_TO_EMPLOYEES recipient lock applies (owner 2026-11-18, after the lock reached production through a
+    Railway variable: "the 30020 restriction must apply only to local development").
+
+    Production never runs runserver (gunicorn on Railway, waitress on-premise), and Railway's own RAILWAY_ENVIRONMENT
+    variable rules it out a second time. DEBUG is deliberately NOT a sign: a misconfigured DEBUG=true on the live server
+    must never limit its messages."""
+    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_ENVIRONMENT_NAME"):
+        return False
+    return "runserver" in sys.argv
+
+
 def recipient_codes() -> list[str]:
-    """The employee codes this DEVELOPMENT machine may message (WHATSAPP_ONLY_TO_EMPLOYEES). Always [] on a real server: the
-    restriction is for local testing only and is ignored in production even if the variable is set there by mistake, so
-    production messages every eligible employee exactly as before (owner 2026-11-17)."""
-    if not development_machine():
+    """The employee codes the local development server may message (WHATSAPP_ONLY_TO_EMPLOYEES). Always [] anywhere else:
+    the restriction is for local testing only and is ignored in production even when the variable is set there, so
+    production messages every eligible employee exactly as before."""
+    if not local_dev_server():
         return []
     return list(getattr(dj_settings, "WHATSAPP_ONLY_TO_EMPLOYEES", None) or [])
 
@@ -133,7 +147,7 @@ def allowed_numbers() -> set[str] | None:
     """The phone numbers (normalised) this machine may message, or None when there is no limit. A real server has none.
     A development machine always has one (an empty set when no employee is named: nothing may be sent), except with a
     local fake WAClient (the e2e stack)."""
-    if not development_machine():
+    if not local_dev_server():
         return None
     codes = recipient_codes()
     if not codes and provider_is_local():
@@ -173,7 +187,7 @@ def sending_block_reason() -> str | None:
             "runserver), so it can't message employees from the live number. Set WHATSAPP_ALLOW_SENDING=true and "
             "WHATSAPP_ONLY_TO_EMPLOYEES=<your employee code> to send test messages to yourself only."
         )
-    if development_machine() and not recipient_codes() and not provider_is_local():
+    if local_dev_server() and not recipient_codes() and not provider_is_local():
         return (
             "This development machine may send WhatsApp only to the employees named in WHATSAPP_ONLY_TO_EMPLOYEES "
             "(for example WHATSAPP_ONLY_TO_EMPLOYEES=30020), and none is named, so nothing is sent."
