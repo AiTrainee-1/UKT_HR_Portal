@@ -43,13 +43,19 @@ day as +86400 and removed from the next day) when ALL of these hold:
     new rules do not judge neither consumes nor is closed, and a manual record stays untouched;
   * it is not an EARLY ARRIVAL (owner 2026-11-18: "the shift starts at 8:30, the first morning punch counts from 6:00"):
     when the open day is a day shift (its standard departure is on the same day: Day, Sunday), a punch made within
-    EARLY_ARRIVAL_MIN (2 h 30 min) of the start of the shift it begins - 06:00 for the 08:30 Day and Sunday shifts - is
-    that day's first punch, never the open day's exit, UNLESS the worker clocks in again for that shift (a punch after it
-    up to the shift start + grace, 08:45): then it was the end of the night's overtime (worked through to 06:18, back at
-    08:31) and still closes the open day. A punch before 06:00 closes it as before, and a night shift (standard
-    departure the next morning, 06:30) is still closed up to the close-by time. The guard needs the open day's group, so
-    it is applied while the days are resolved forward (RuleSet.arrival_guard); the walk back to a sync point ignores it
-    (a superset: still correct).
+    `early_arrival_minutes` (default 150, 2 h 30 min) of the start of the shift it begins - 06:00 for the 08:30 Day and
+    Sunday shifts - is that day's first punch, never the open day's exit, UNLESS the worker clocks in again for that shift
+    (a punch after it up to the shift start + `clock_in_again_minutes`, default 15: 08:45): then it was the end of the
+    night's overtime (worked through to 06:18, back at 08:31) and still closes the open day. A punch before 06:00 closes
+    it as before, and a night shift (standard departure the next morning, 06:30) is still closed up to the close-by time
+    while `night_exit_enabled` is on. The guard needs the open day's group, so it is applied while the days are resolved
+    forward (RuleSet.arrival_guard); the walk back to a sync point ignores it (a superset: still correct).
+
+Every number and switch of this section is a SETTING (owner 2026-11-18: "configure the shift timings and overtime rules
+from the Production Shift tab, nothing hardcoded"), stored on ProductionShiftConfig and edited in Settings -> Production
+Shifts -> Night and early morning: the early arrival (on/off, minutes before the start), the clock-in-again exception
+(on/off, minutes after the start), the night-shift exit (on/off), the close-by time (on/off, minutes after the latest
+next-morning leaving time) and the double tap (on/off, minutes). The constants below are only their defaults.
 The chain is followed back from the day asked about to the first SYNC POINT: a day whose first punch cannot have been
 consumed whatever the resolution before it (the previous day has no punches, the gap from the previous day's last raw
 punch exceeds the limit, the punch is later than the close-by time, or one of the two days is not in force / manual).
@@ -60,8 +66,8 @@ cap ('not consumed').
 The callers read the punches of the default window (NIGHT_LOOKBACK_DAYS before the day) with their one punch query and
 extend it with ONE more query only when needs_history() says no sync point lies inside it.
 
-Double taps: a punch less than TAP_GAP_S (300 s) after the previous kept punch of the same calendar day is dropped before
-pairing (the same 5-minute rule the WhatsApp alerts and the Report Center use), because the count of punches decides who
+Double taps: a punch less than RuleSet.tap_gap_s (default TAP_GAP_S, 300 s; 0 = the rule is off) after the previous
+kept punch of the same calendar day is dropped before pairing (the same 5-minute rule the WhatsApp alerts and the Report Center use), because the count of punches decides who
 is in and who is out.
 
 Quarters (owner 2026-11-18: "production shift and payroll calculations must follow only 0.25, 0.50, 0.75 ... 3.00"):
@@ -102,9 +108,13 @@ DEFAULT_SESSION_HOURS = 24
 #: Minutes added to the latest next-day out time of the rules to get the CLOSE-BY time (RuleSet.close_by_s).
 CLOSE_BY_MARGIN_MIN = 90
 
-#: A morning punch this many minutes or less before the start of the shift it begins is an EARLY ARRIVAL: it is that
-#: day's first punch and never closes the day shift before it (06:00 for an 08:30 start). See the module docstring.
+#: DEFAULT of RuleSet.early_arrival_minutes: a morning punch this many minutes or less before the start of the shift it
+#: begins is an EARLY ARRIVAL: that day's first punch, never the exit of the day shift before it (06:00 for 08:30).
 EARLY_ARRIVAL_MIN = 150
+
+#: DEFAULT of RuleSet.clock_in_again_minutes: an early-morning punch followed by another one up to this long after the
+#: shift start (08:45 for 08:30) was the end of the night's overtime, not the arrival.
+CLOCK_IN_AGAIN_MIN = 15
 
 #: A second tap on the device within this many seconds of the previous punch is a double tap and is ignored (the same
 #: 5-minute rule the WhatsApp alerts and the Report Center use): the count of punches decides who is in and who is
@@ -190,23 +200,35 @@ class RuleSet:
     # (employee id, from, to or None, group id). See special_group_for / select_group.
     special: tuple[ShiftGroup, ...] = ()
     special_assignments: tuple[tuple[int, date_type, date_type | None, int], ...] = ()
+    # The next-morning rules (Settings -> Production Shifts -> Night and early morning; see the module docstring)
+    early_arrival_enabled: bool = True
+    early_arrival_minutes: int = EARLY_ARRIVAL_MIN
+    clock_in_again_enabled: bool = True
+    clock_in_again_minutes: int = CLOCK_IN_AGAIN_MIN
+    night_exit_enabled: bool = True
+    close_by_enabled: bool = True
+    close_by_margin_minutes: int = CLOSE_BY_MARGIN_MIN
+    tap_gap_s: int = TAP_GAP_S  # 0 = double taps are not dropped
 
     def __post_init__(self):
         # overlapping or duplicate break windows are one window (their union): a minute is never subtracted twice
         object.__setattr__(self, "breaks", merge_breaks(self.breaks))
 
     @cached_property
-    def close_by_s(self) -> int:
+    def close_by_s(self) -> int | None:
         """The latest clock time (seconds since midnight) at which the NEXT day's first punch may still close the
         night session of the day before: the latest next-day out time among all groups' ladder rows and standard
-        departures, plus CLOSE_BY_MARGIN_MIN minutes (05:30 + 90 min = 07:00 with the default tables). No setting of its
-        own: it follows the rules, so adding a later night row moves it."""
+        departures, plus `close_by_margin_minutes` (default 90: 05:30 + 90 min = 07:00 with the default tables). It
+        follows the rules, so adding a later night row moves it. None when the setting is off: then only the night
+        session hours limit the closing punch."""
+        if not self.close_by_enabled:
+            return None
         latest = 0
         for g in (*self.groups, *self.special):
             for out in [p.out_s for p in g.points] + ([g.main_out_s] if g.main_out_s is not None else []):
                 if out >= DAY_S:
                     latest = max(latest, out - DAY_S)
-        return latest + CLOSE_BY_MARGIN_MIN * 60
+        return latest + self.close_by_margin_minutes * 60
 
     @cached_property
     def _special_index(self) -> dict:
@@ -232,19 +254,24 @@ class RuleSet:
         """The early-arrival test resolve_day applies before a next-morning punch closes an open day (see the module
         docstring): f(open day, its first punch, next day, the next day's punches) -> True when the next day's first
         punch is that day's early arrival and must stay there. Seconds since each day's own midnight, the next day's
-        punches oldest first with double taps already dropped."""
-        grace_s = self.grace_minutes * 60
+        punches oldest first with double taps already dropped. None when the early-arrival rule is switched off."""
+        if not self.early_arrival_enabled:
+            return None
+        before_s = self.early_arrival_minutes * 60
+        again_s = self.clock_in_again_minutes * 60
 
         def is_arrival(open_day: date_type, open_first_s: int, next_day: date_type, next_secs: Sequence[int]) -> bool:
             opened = select_group(self, open_day, open_first_s % DAY_S, employee_id)
-            if opened is None or _overnight(opened):
+            if opened is None or (self.night_exit_enabled and _overnight(opened)):
                 return False  # a night shift ends the next morning: its 06:30 exit still closes it
             first = _minute(next_secs[0] % DAY_S)
             starts = select_group(self, next_day, first, employee_id)
-            if starts is None or first < starts.start_s - EARLY_ARRIVAL_MIN * 60:
+            if starts is None or first < starts.start_s - before_s:
                 return False  # before 06:00: the end of the night's overtime
+            if not self.clock_in_again_enabled:
+                return True
             # 06:00 on: the early arrival, unless the worker clocks in for the shift after it (then it ended the night)
-            return not any(first < _minute(s) <= starts.start_s + grace_s for s in next_secs[1:])
+            return not any(first < _minute(s) <= starts.start_s + again_s for s in next_secs[1:])
 
         return is_arrival
 
@@ -334,19 +361,19 @@ def _shifts_text(v: Decimal) -> str:
     return f"{Decimal(v).quantize(_CENT, rounding=ROUND_HALF_UP):.2f}"
 
 
-def collapse_taps(secs: Sequence[int]) -> list[int]:
-    """Sorted punch seconds with a double tap (within TAP_GAP_S of the previous KEPT punch) dropped."""
+def collapse_taps(secs: Sequence[int], gap_s: int = TAP_GAP_S) -> list[int]:
+    """Sorted punch seconds with a double tap (within `gap_s` of the previous KEPT punch) dropped; `gap_s` 0 keeps all."""
     kept: list[int] = []
     for s in sorted(secs):
-        if not kept or s - kept[-1] >= TAP_GAP_S:
+        if not kept or s - kept[-1] >= gap_s:
             kept.append(s)
     return kept
 
 
-def _collapse_refs(items: Sequence[tuple[int, Any]] | None) -> list[tuple[int, Any]]:
+def _collapse_refs(items: Sequence[tuple[int, Any]] | None, gap_s: int = TAP_GAP_S) -> list[tuple[int, Any]]:
     kept: list[tuple[int, Any]] = []
     for item in sorted(items or (), key=lambda x: x[0]):
-        if not kept or item[0] - kept[-1][0] >= TAP_GAP_S:
+        if not kept or item[0] - kept[-1][0] >= gap_s:
             kept.append(item)
     return kept
 
@@ -416,6 +443,18 @@ def build_ruleset(config, groups, rules, breaks, assignments=()) -> RuleSet:
         special=tuple(special),
         special_assignments=tuple(
             (a.employee_id, _as_date(a.effective_from), _as_date(a.effective_to), a.group_id) for a in assignments
+        ),
+        early_arrival_enabled=bool(_attr(config, "rules_early_arrival_enabled", True)),
+        early_arrival_minutes=max(0, int(_attr(config, "rules_early_arrival_minutes", EARLY_ARRIVAL_MIN))),
+        clock_in_again_enabled=bool(_attr(config, "rules_clock_in_again_enabled", True)),
+        clock_in_again_minutes=max(0, int(_attr(config, "rules_clock_in_again_minutes", CLOCK_IN_AGAIN_MIN))),
+        night_exit_enabled=bool(_attr(config, "rules_night_exit_enabled", True)),
+        close_by_enabled=bool(_attr(config, "rules_close_by_enabled", True)),
+        close_by_margin_minutes=max(0, int(_attr(config, "rules_close_by_margin_minutes", CLOSE_BY_MARGIN_MIN))),
+        tap_gap_s=(
+            max(0, int(_attr(config, "rules_double_tap_minutes", TAP_GAP_S // 60))) * 60
+            if _attr(config, "rules_double_tap_enabled", True)
+            else 0
         ),
     )
 
@@ -551,7 +590,7 @@ def evaluate_day(ruleset: RuleSet, d: date_type, punches: Sequence, employee_id:
     secs = sorted(time_to_s(p) for p in punches)
     if not secs:
         return {"status": "absent", "shifts_earned": _ZERO}
-    kept = collapse_taps(secs)
+    kept = collapse_taps(secs, ruleset.tap_gap_s)
     group = select_group(ruleset, d, kept[0] % DAY_S, employee_id)
     if group is None:
         return None
@@ -623,7 +662,7 @@ def explain_day(ruleset: RuleSet, d: date_type, punches: Sequence, employee_id: 
     result = evaluate_day(ruleset, d, punches, employee_id)
     if result is None or "rule_group" not in result:
         return None
-    kept = collapse_taps(sorted(time_to_s(p) for p in punches))
+    kept = collapse_taps(sorted(time_to_s(p) for p in punches), ruleset.tap_gap_s)
     group = select_group(ruleset, d, kept[0] % DAY_S, employee_id)
     cm = [_minute(s) for s in kept]
     pairs, values, total = _count_pairs(ruleset, group, cm)
@@ -772,6 +811,7 @@ def session_kwargs(ruleset: RuleSet, manual=None, employee_id: int | None = None
         "in_force": ruleset.applies,
         "manual": frozenset(manual or ()),
         "arrival": ruleset.arrival_guard(employee_id),
+        "tap_gap_s": ruleset.tap_gap_s,
     }
 
 
@@ -779,7 +819,8 @@ class _Chain:
     """The night-session chain of one employee over a mapping {date: raw punches}: the per-call cache of the collapsed
     day lists and the two questions the resolver asks (see the module docstring)."""
 
-    def __init__(self, by_date, hours, close_by_s, in_force, manual):
+    def __init__(self, by_date, hours, close_by_s, in_force, manual, tap_gap_s=TAP_GAP_S):
+        self.tap_gap_s = tap_gap_s
         self.by_date = by_date
         self.limit_min = max(0, int(hours)) * 60
         self.close_by_s = close_by_s
@@ -789,7 +830,7 @@ class _Chain:
 
     def raw(self, k: date_type) -> list[tuple[int, Any]]:
         if k not in self._raw:
-            self._raw[k] = _collapse_refs(self.by_date.get(k))
+            self._raw[k] = _collapse_refs(self.by_date.get(k), self.tap_gap_s)
         return self._raw[k]
 
     def possible_without_prev(self, k: date_type) -> bool:
@@ -826,6 +867,7 @@ def resolve_day(
     in_force=None,
     manual=None,
     arrival=None,
+    tap_gap_s: int = TAP_GAP_S,
 ) -> list[tuple[int, Any]]:
     """The punches of shift day `d` once night sessions are resolved: [(seconds since d's midnight, ref)], oldest first.
 
@@ -840,7 +882,7 @@ def resolve_day(
     rules judge; None = all), `manual` (dates of manual override days) and `arrival` (the early-arrival test,
     RuleSet.arrival_guard; None = none) switch on the guards of the closing-punch rule; session_kwargs(ruleset, manual)
     builds all five from a RuleSet."""
-    chain = _Chain(by_date, hours, close_by_s, in_force, manual)
+    chain = _Chain(by_date, hours, close_by_s, in_force, manual, tap_gap_s)
     cap = MAX_CHAIN_DAYS if lookback is None else max(0, int(lookback))
     start, steps = d, 0
     while steps < cap and chain.can_consume(start):
@@ -875,11 +917,12 @@ def needs_history(
     in_force=None,
     manual=None,
     arrival=None,  # noqa: ARG001 - accepted so session_kwargs() fits both; the walk back is a superset without it
+    tap_gap_s: int = TAP_GAP_S,
 ) -> bool:
     """True when resolving `d` from `by_date`, which holds the punches from `floor` on, would have to look at days
     BEFORE `floor`: the walk back has not met a sync point yet and is not capped. The caller then reads the punches of
     d - MAX_CHAIN_DAYS .. floor - 1 with one more query. Same keyword arguments as resolve_day."""
-    chain = _Chain(by_date, hours, close_by_s, in_force, manual)
+    chain = _Chain(by_date, hours, close_by_s, in_force, manual, tap_gap_s)
     cap = MAX_CHAIN_DAYS if lookback is None else max(0, int(lookback))
     day, steps = d, 0
     while steps < cap:

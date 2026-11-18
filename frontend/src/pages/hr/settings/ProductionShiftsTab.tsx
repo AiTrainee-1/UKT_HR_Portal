@@ -44,6 +44,7 @@ import {
   warningsFor,
 } from "./production-shifts/form";
 import { GroupsSection } from "./production-shifts/GroupsSection";
+import { NightMorningSection } from "./production-shifts/NightMorningSection";
 import { TryItSection } from "./production-shifts/TryItSection";
 import { StaffShiftsPage } from "./production-shifts/StaffPage";
 import { SummarySection } from "./production-shifts/SummarySection";
@@ -55,6 +56,7 @@ const CONTENTS = [
   { id: "production-shifts-when", label: "When it applies" },
   { id: "production-shifts-groups", label: "Shift groups" },
   { id: "production-shifts-breaks", label: "Breaks" },
+  { id: "production-shifts-night", label: "Night and morning" },
   { id: "production-shifts-advanced", label: "Advanced" },
   { id: "production-shifts-try", label: "Try a day" },
 ];
@@ -306,6 +308,7 @@ export default function ProductionShiftsTab({ readOnly = false }: { readOnly?: b
       <WhenSection {...sectionProps} legacy={legacyText(data.legacy)} />
       <GroupsSection {...sectionProps} />
       <BreaksSection {...sectionProps} />
+      <NightMorningSection {...sectionProps} />
       <AdvancedSection {...sectionProps} />
       <TryItSection dirty={dirty} today={today} />
 

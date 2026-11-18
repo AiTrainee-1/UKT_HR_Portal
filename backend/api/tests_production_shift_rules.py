@@ -1044,6 +1044,71 @@ class EarlyArrivalTests(SimpleTestCase):
         self.assertEqual(forward[TUE][-1], S("06:20+"))  # Wednesday's 08:30 clock-in makes 06:20 Tuesday's exit
 
 
+class NightMorningSettingsTests(SimpleTestCase):
+    """Owner 2026-11-18: every next-morning rule is a setting of Settings -> Production Shifts (on/off and its minutes),
+    and the engine follows what is saved. Monday a day shift left open; what does Tuesday's morning punch do?"""
+
+    OPEN = ["08:30", "12:45", "13:30", "20:00", "21:00"]
+
+    def _closed(self, tue, **config) -> bool:
+        rs = ruleset(**config)
+        mon = _rs_resolved({MON: self.OPEN, TUE: tue}, MON, rs)
+        return len(mon) == len(self.OPEN) + 1
+
+    def test_the_defaults_are_what_was_built_in(self):
+        rs = ruleset()
+        self.assertEqual(
+            (rs.early_arrival_minutes, rs.clock_in_again_minutes, rs.close_by_margin_minutes, rs.tap_gap_s),
+            (150, 15, 90, 300),
+        )
+        self.assertEqual(rs.close_by_s, S("07:00"))
+
+    def test_early_arrival_switched_off_lets_the_morning_punch_end_the_night(self):
+        self.assertFalse(self._closed(["06:15", "12:45"]))
+        self.assertTrue(self._closed(["06:15", "12:45"], rules_early_arrival_enabled=False))
+        self.assertIsNone(psr.session_kwargs(ruleset(rules_early_arrival_enabled=False))["arrival"])
+
+    def test_early_arrival_minutes_move_the_boundary(self):
+        # 120 minutes before 08:30 is 06:30: a 06:15 punch now ends the night, 06:30 is the arrival
+        self.assertTrue(self._closed(["06:15", "12:45"], rules_early_arrival_minutes=120))
+        self.assertFalse(self._closed(["06:30", "12:45"], rules_early_arrival_minutes=120))
+        # 210 minutes is 05:00: 05:30 is already the arrival
+        self.assertFalse(self._closed(["05:30", "12:45"], rules_early_arrival_minutes=210))
+
+    def test_the_clock_in_again_exception_follows_its_switch_and_minutes(self):
+        self.assertTrue(self._closed(["06:20", "08:40"]))  # within 15 min of 08:30: 06:20 ended the night
+        self.assertFalse(self._closed(["06:20", "08:40"], rules_clock_in_again_minutes=5))
+        self.assertTrue(self._closed(["06:20", "08:35"], rules_clock_in_again_minutes=5))
+        self.assertFalse(self._closed(["06:20", "08:31"], rules_clock_in_again_enabled=False))
+
+    def test_the_night_shift_exit_switch(self):
+        rs_on, rs_off = ruleset(), ruleset(rules_night_exit_enabled=False)
+        spec = {MON: ["21:00"], TUE: ["06:30"]}
+        self.assertEqual(len(_rs_resolved(spec, MON, rs_on)), 2)  # the night shift keeps its 06:30 exit
+        self.assertEqual(len(_rs_resolved(spec, MON, rs_off)), 1)  # off: the early-arrival rule applies to it too
+
+    def test_the_cut_off_follows_its_minutes_and_switch(self):
+        self.assertEqual(ruleset(rules_close_by_margin_minutes=30).close_by_s, S("06:00"))
+        self.assertIsNone(ruleset(rules_close_by_enabled=False).close_by_s)
+        lone = {MON: ["08:30", "12:45", "13:30"], TUE: ["07:30", "12:45"]}
+        no_guard = {"rules_early_arrival_enabled": False}
+        self.assertEqual(len(_rs_resolved(lone, MON, ruleset(**no_guard))), 3)  # 07:30 is after the 07:00 cut-off
+        self.assertEqual(len(_rs_resolved(lone, MON, ruleset(rules_close_by_enabled=False, **no_guard))), 4)
+
+    def test_the_double_tap_follows_its_minutes_and_switch(self):
+        punches = [S("08:30"), S("08:33"), S("12:45"), S("13:30"), S("20:00")]
+        self.assertEqual(psr.evaluate_day(ruleset(), WED, punches)["shifts_earned"], D("1.50"))  # 08:33 is a tap
+        two = ruleset(rules_double_tap_minutes=2)  # a 3-minute gap is no longer a tap: the pairs shift
+        self.assertNotEqual(psr.evaluate_day(two, WED, punches)["shifts_earned"], D("1.50"))
+        off = ruleset(rules_double_tap_enabled=False)
+        self.assertEqual(off.tap_gap_s, 0)
+        self.assertEqual(psr.collapse_taps([1, 2, 3], off.tap_gap_s), [1, 2, 3])
+        # the resolver drops taps by the same setting
+        spec = {MON: ["08:30", "08:33", "12:45"]}
+        self.assertEqual(len(_rs_resolved(spec, MON, ruleset())), 2)
+        self.assertEqual(len(_rs_resolved(spec, MON, off)), 3)
+
+
 class DegeneratePointTests(SimpleTestCase):
     """Two ladder points with the same PAID time (12:45 and 13:30 are either side of the same lunch) cannot be told
     apart by a value that depends on paid time: the later, higher point wins from that paid time on, and the earlier
@@ -1181,7 +1246,23 @@ class SeedTests(TestCase):
                 config.rules_night_session_hours,
             ),
             # 24 hours (it was 12, then 18): 08:30 open + a 05:30 close is 21 h, which must still be one night session
-            (True, 5, Decimal("0.00"), Decimal("0.01"), "nearest", Decimal("1.00"), 24),
+            # the step column is not read any more (quarters always); its default says so since 2026-11-18
+            (True, 5, Decimal("0.00"), Decimal("0.25"), "nearest", Decimal("1.00"), 24),
+        )
+        # the next-morning rules (2026-11-18): on, with what used to be built in
+        self.assertEqual(
+            (
+                config.rules_early_arrival_enabled,
+                config.rules_early_arrival_minutes,
+                config.rules_clock_in_again_enabled,
+                config.rules_clock_in_again_minutes,
+                config.rules_night_exit_enabled,
+                config.rules_close_by_enabled,
+                config.rules_close_by_margin_minutes,
+                config.rules_double_tap_enabled,
+                config.rules_double_tap_minutes,
+            ),
+            (True, 150, True, 15, True, True, 90, True, 5),
         )
 
     def test_the_seed_is_idempotent_and_never_moves_a_chosen_date(self):
@@ -2099,8 +2180,8 @@ class ClosingGuardTests(SimpleTestCase):
             (["06:00"], False),
             (["06:59"], False),
             (["06:59", "08:30"], True),
-            (["06:59", "08:35"], True),  # 08:35 is within the 5 min grace of 08:30
-            (["06:59", "08:36"], False),
+            (["06:59", "08:45"], True),  # clocked in again within 15 minutes of 08:30 (the setting's default)
+            (["06:59", "08:46"], False),
             (["06:59", "12:45"], False),
         ]:
             with self.subTest(tue=tue):

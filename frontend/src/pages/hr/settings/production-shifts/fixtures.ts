@@ -13,6 +13,15 @@ export const SEEDED: ProductionShiftRules = {
   roundingMode: "nearest",
   fullDayValue: 1,
   nightSessionHours: 12,
+  earlyArrivalEnabled: true,
+  earlyArrivalMinutes: 150,
+  clockInAgainEnabled: true,
+  clockInAgainMinutes: 15,
+  nightExitEnabled: true,
+  cutOffEnabled: true,
+  cutOffMinutes: 90,
+  doubleTapEnabled: true,
+  doubleTapMinutes: 5,
   groups: [
     {
       id: 1,

@@ -14,7 +14,7 @@ const block = (id: string) => ({ id, ...productionShiftText(id) });
 const shifts = (n: number) => `${n.toFixed(2)} shift${n === 1 ? "" : "s"}`;
 
 /**
- * Advanced: the four numbers most factories never change. Each has its own explanation and a small example worked out
+ * Advanced: the three numbers most factories never change (the night session length moved to Night and early morning). Each has its own explanation and a small example worked out
  * from the box.
  */
 export function AdvancedSection({ draft, patch, readOnly, validation }: SectionProps) {
@@ -31,7 +31,7 @@ export function AdvancedSection({ draft, patch, readOnly, validation }: SectionP
       id="production-shifts-advanced"
       icon={SlidersHorizontal}
       title={PRODUCTION_SHIFT_SECTIONS.advanced}
-      purpose="Four numbers that most factories never change. They are safe as they are: change one only when HR has a reason."
+      purpose="Three numbers that most factories never change. They are safe as they are: change one only when HR has a reason."
       testId="production-shifts-advanced"
     >
       <SettingBlock
@@ -172,38 +172,6 @@ export function AdvancedSection({ draft, patch, readOnly, validation }: SectionP
             aria-invalid={validation.fullDay ? true : undefined}
             onChange={(e) => patch({ fullDayValue: e.target.value })}
             className={cn("w-28 tabular-nums", validation.fullDay && "border-red-400")}
-          />
-        </Field>
-      </SettingBlock>
-
-      <SettingBlock
-        {...block("night-session")}
-        labelFor="production-night-hours"
-        defaultText="24 hours"
-        affects={[
-          {
-            where: "Production Attendance",
-            what: "a night worker's punch the next morning is counted with the day the shift began, when the day was left open (an odd number of punches), the punch is early enough (about 90 minutes after the latest morning leaving time), it is within this many hours of the last punch, and it is not a day-shift worker's early arrival: from 2 h 30 min before the shift start (6:00 AM for 8:30 AM), a morning punch with no clock-in for the shift after it starts that day instead",
-            to: "/hr/attendance/production",
-          },
-          {
-            where: "HR Reports",
-            what: "Production Daily Punches shows the 5:30 AM punch on the day the night shift began",
-            to: "/hr/reports",
-          },
-        ]}
-      >
-        <Field label="Night session length" htmlFor="production-night-hours" unit="hours" error={validation.nightHours}>
-          <Input
-            id="production-night-hours"
-            type="text"
-            inputMode="numeric"
-            autoComplete="off"
-            value={draft.nightSessionHours}
-            disabled={readOnly}
-            aria-invalid={validation.nightHours ? true : undefined}
-            onChange={(e) => patch({ nightSessionHours: e.target.value })}
-            className={cn("w-28 tabular-nums", validation.nightHours && "border-red-400")}
           />
         </Field>
       </SettingBlock>

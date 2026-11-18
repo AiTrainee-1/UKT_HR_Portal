@@ -35,6 +35,81 @@ function edited(edit: (d: ShiftRulesDraft) => void): ShiftRulesDraft {
   return d;
 }
 
+describe("production shifts form: the night and early morning rules (owner 2026-11-18)", () => {
+  it("reads them, and shows what was built in when an older server does not send them", () => {
+    expect(seeded()).toMatchObject({
+      earlyArrivalEnabled: true,
+      earlyArrivalMinutes: "150",
+      clockInAgainEnabled: true,
+      clockInAgainMinutes: "15",
+      nightExitEnabled: true,
+      cutOffEnabled: true,
+      cutOffMinutes: "90",
+      doubleTapEnabled: true,
+      doubleTapMinutes: "5",
+    });
+    const older = structuredClone(SEEDED) as Partial<typeof SEEDED>;
+    for (const key of [
+      "earlyArrivalEnabled",
+      "earlyArrivalMinutes",
+      "clockInAgainEnabled",
+      "clockInAgainMinutes",
+      "nightExitEnabled",
+      "cutOffEnabled",
+      "cutOffMinutes",
+      "doubleTapEnabled",
+      "doubleTapMinutes",
+    ] as const)
+      delete older[key];
+    expect(sameDraft(draftFrom(older as typeof SEEDED), seeded())).toBe(true);
+  });
+
+  it("checks the minutes the way the server does, even for a rule that is off", () => {
+    expect(validateDraft(edited((d) => (d.earlyArrivalMinutes = "361"))).earlyArrival).toBe("Must be from 0 to 360.");
+    expect(validateDraft(edited((d) => (d.earlyArrivalMinutes = "2.5"))).earlyArrival).toBe("Use a whole number.");
+    expect(validateDraft(edited((d) => (d.clockInAgainMinutes = "181"))).clockInAgain).toBe("Must be from 0 to 180.");
+    expect(validateDraft(edited((d) => (d.cutOffMinutes = ""))).cutOff).toBe("Enter a number.");
+    const tap = validateDraft(
+      edited((d) => {
+        d.doubleTapEnabled = false;
+        d.doubleTapMinutes = "0";
+      }),
+    );
+    expect(tap.doubleTap).toBe("Must be from 1 to 30.");
+    expect(tap.first).toBe("Double tap: Must be from 1 to 30.");
+    expect(validateDraft(edited((d) => (d.earlyArrivalMinutes = "0"))).ok).toBe(true);
+  });
+
+  it("sends every switch and number, and lists a change as one that moves pay", () => {
+    const changed = edited((d) => {
+      d.earlyArrivalEnabled = false;
+      d.clockInAgainMinutes = "20";
+      d.nightExitEnabled = false;
+      d.cutOffMinutes = "60";
+      d.doubleTapEnabled = false;
+    });
+    expect(toInput(changed)).toMatchObject({
+      earlyArrivalEnabled: false,
+      earlyArrivalMinutes: 150,
+      clockInAgainEnabled: true,
+      clockInAgainMinutes: 20,
+      nightExitEnabled: false,
+      cutOffEnabled: true,
+      cutOffMinutes: 60,
+      doubleTapEnabled: false,
+      doubleTapMinutes: 5,
+    });
+    expect(sameDraft(changed, seeded())).toBe(false);
+    expect(draftChanges(changed, seeded()).map((c) => [c.label, c.from, c.to, c.money])).toEqual([
+      ["Early arrival", "on, 150 min before the start", "off", true],
+      ["Clock in again", "on, 15 min after the start", "on, 20 min after the start", true],
+      ["Next-morning cut-off", "on, 90 min after the last morning row", "on, 60 min after the last morning row", true],
+      ["Double tap", "on, 5 min", "off", true],
+      ["Night shifts keep their morning exit", "on", "off", true],
+    ]);
+  });
+});
+
 describe("production shifts form: from the saved rules to the boxes", () => {
   it("shows every box as text, the times as HH:MM, and keeps the ids", () => {
     const d = seeded();

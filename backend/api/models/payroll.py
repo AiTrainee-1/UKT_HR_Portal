@@ -1603,9 +1603,10 @@ class ProductionShiftConfig(models.Model):
     rules_min_credit = models.DecimalField(
         max_digits=4, decimal_places=2, default=Decimal("0.00"), db_default=Decimal("0.00"), db_column="rules_min_credit",
     )
-    # A day's total is rounded to a multiple of this step (0.01, 0.05 or 0.25), 'nearest' or 'down'.
+    # NOT READ since 2026-11-18: production shifts are always counted in quarters (production_shift_rules.QUARTER); a
+    # save of Settings -> Production Shifts stores 0.25 here. rules_rounding_mode below still picks nearest / down.
     rules_rounding_step = models.DecimalField(
-        max_digits=4, decimal_places=2, default=Decimal("0.01"), db_default=Decimal("0.01"), db_column="rules_rounding_step",
+        max_digits=4, decimal_places=2, default=Decimal("0.25"), db_default=Decimal("0.25"), db_column="rules_rounding_step",
     )
     rules_rounding_mode = models.TextField(default="nearest", db_default="nearest", db_column="rules_rounding_mode")
     # A day below this is a Half Shift (status half_shift), at or above it Present.
@@ -1614,8 +1615,35 @@ class ProductionShiftConfig(models.Model):
     )
     # Most hours between an open "in" punch and the next calendar day's first punch for that punch to close the session
     # (default 24, the most allowed: 08:30 open + a 05:30 close is 21 h). The punch must ALSO be at or before the derived close-by time
-    # (latest next-day out time of the rules + 90 minutes), see production_shift_rules.RuleSet.close_by_s.
+    # (latest next-day out time of the rules + rules_close_by_margin_minutes), see production_shift_rules.RuleSet.close_by_s.
     rules_night_session_hours = models.IntegerField(default=24, db_default=24, db_column="rules_night_session_hours")
+
+    # -- Night and early morning (2026-11-18, owner: "configure the shift timings and overtime rules from the Production
+    # Shift tab, nothing hardcoded"). What decides whether the NEXT morning's first punch ends the night before or starts
+    # the new day; see production_shift_rules (module docstring, RuleSet). The defaults are what was built in before.
+    # Early arrival: a punch up to this many minutes before the start of the shift it begins (06:00 for 08:30) is that
+    # day's first punch, never the exit of the DAY shift left open the evening before.
+    rules_early_arrival_enabled = models.BooleanField(
+        default=True, db_default=True, db_column="rules_early_arrival_enabled"
+    )
+    rules_early_arrival_minutes = models.IntegerField(default=150, db_default=150, db_column="rules_early_arrival_minutes")
+    # ... unless the worker clocks in again for that shift by its start + this many minutes (08:45): then the early punch
+    # ended the night's overtime.
+    rules_clock_in_again_enabled = models.BooleanField(
+        default=True, db_default=True, db_column="rules_clock_in_again_enabled"
+    )
+    rules_clock_in_again_minutes = models.IntegerField(default=15, db_default=15, db_column="rules_clock_in_again_minutes")
+    # A NIGHT shift (standard departure the next morning) keeps its morning exit whatever the early-arrival rule says.
+    rules_night_exit_enabled = models.BooleanField(default=True, db_default=True, db_column="rules_night_exit_enabled")
+    # The cut-off: the next morning's first punch closes a night only up to the latest next-morning leaving time of the
+    # tables + this many minutes (05:30 + 90 = 07:00). Off: only the night session hours limit it.
+    rules_close_by_enabled = models.BooleanField(default=True, db_default=True, db_column="rules_close_by_enabled")
+    rules_close_by_margin_minutes = models.IntegerField(
+        default=90, db_default=90, db_column="rules_close_by_margin_minutes"
+    )
+    # Double taps: a second punch within this many minutes of the previous one is ignored. Off: every punch counts.
+    rules_double_tap_enabled = models.BooleanField(default=True, db_default=True, db_column="rules_double_tap_enabled")
+    rules_double_tap_minutes = models.IntegerField(default=5, db_default=5, db_column="rules_double_tap_minutes")
 
     class Meta:
         db_table = "production_shift_config"

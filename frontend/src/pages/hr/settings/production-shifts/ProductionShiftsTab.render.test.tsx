@@ -957,6 +957,59 @@ describe("Settings -> Production Shifts: try a day", () => {
   });
 });
 
+describe("Settings -> Production Shifts: night and early morning (owner 2026-11-18)", () => {
+  it("shows every rule with its switch, its minutes and what it means for the shifts on the tab", async () => {
+    await open();
+    expect(q('[data-testid="production-shifts-night"]')).not.toBeNull();
+    expect(text('[data-testid="early-arrival-example"]')).toContain(
+      "Day shift, starts 8:30 AMFrom 6:00 AM: the day's arrival",
+    );
+    expect(text('[data-testid="clock-in-again-example"]')).toContain(
+      "Day shift: out 6:18 AM, in 8:31 AM6:18 AM ends the night",
+    );
+    expect(text('[data-testid="night-exit-example"]')).toContain("Its morning out-punch ends the night");
+    expect(text('[data-testid="cut-off-example"]')).toContain("Next-morning cut-off7:00 AM");
+    expect(text('[data-testid="double-tap-example"]')).toContain("One punch");
+    // the night session length moved here from Advanced
+    expect(q('[data-testid="production-shifts-night"] #production-night-hours')).not.toBeNull();
+    expect(q('[data-testid="production-shifts-advanced"] #production-night-hours')).toBeNull();
+  });
+
+  it("works the examples out from what is typed, and greys out what a switch turns off", async () => {
+    await open();
+    await page!.type("#production-early-arrival-minutes", "120");
+    expect(text('[data-testid="early-arrival-example"]')).toContain("From 6:30 AM: the day's arrival");
+    await page!.type("#production-cut-off-minutes", "30");
+    expect(text('[data-testid="cut-off-example"]')).toContain("6:00 AM");
+    await page!.click("#production-early-arrival-switch");
+    expect((q("#production-early-arrival-minutes") as HTMLInputElement).disabled).toBe(true);
+    expect((q("#production-clock-in-again-switch") as HTMLButtonElement).disabled).toBe(true);
+    expect((q("#production-night-exit-switch") as HTMLButtonElement).disabled).toBe(true);
+    expect(text('[data-testid="early-arrival-example"]')).toContain("Any morning punch can end the night");
+    await page!.click("#production-double-tap-switch");
+    expect((q("#production-double-tap-minutes") as HTMLInputElement).disabled).toBe(true);
+    expect(text('[data-testid="double-tap-example"]')).toContain("Two punches");
+  });
+
+  it("refuses minutes the server would refuse, then saves every rule", async () => {
+    await open();
+    await page!.type("#production-double-tap-minutes", "40");
+    expect(page!.text()).toContain("Must be from 1 to 30.");
+    expect(saveButton().disabled).toBe(true);
+    await page!.type("#production-double-tap-minutes", "3");
+    await page!.type("#production-clock-in-again-minutes", "20");
+    await page!.click("#production-cut-off-switch");
+    await saveAndConfirm();
+    expect(server.puts[0]).toMatchObject({
+      earlyArrivalEnabled: true,
+      earlyArrivalMinutes: 150,
+      clockInAgainMinutes: 20,
+      cutOffEnabled: false,
+      doubleTapMinutes: 3,
+    });
+  });
+});
+
 describe("Settings -> Production Shifts: view-only, branch login, loading and the search", () => {
   const editable = [
     '[role="switch"]',
@@ -969,6 +1022,10 @@ describe("Settings -> Production Shifts: view-only, branch login, loading and th
     "#production-rounding-mode",
     "#production-full-day",
     "#production-night-hours",
+    "#production-early-arrival-minutes",
+    "#production-clock-in-again-minutes",
+    "#production-cut-off-minutes",
+    "#production-double-tap-minutes",
     '[data-testid="rule-add"]',
     '[data-testid="break-add"]',
     '[data-testid="group-add"]',

@@ -71,6 +71,23 @@ export type ProductionShiftRules = {
   roundingMode: ProductionShiftRoundingMode;
   fullDayValue: number;
   nightSessionHours: number;
+  // Night and early morning (2026-11-18): what decides whether the next morning's first punch ends the night before or
+  // starts the new day. Each rule has a switch and its minutes; absent on an older server (the page then shows the
+  // defaults it was built with: 150 / 15 / 90 / 5, all on).
+  /** A punch up to `earlyArrivalMinutes` before the shift start (06:00 for 08:30) is that day's arrival. */
+  earlyArrivalEnabled?: boolean;
+  earlyArrivalMinutes?: number;
+  /** ... unless the worker clocks in again by the shift start + `clockInAgainMinutes`: then it ended the night. */
+  clockInAgainEnabled?: boolean;
+  clockInAgainMinutes?: number;
+  /** A night shift keeps its next-morning exit whatever the early-arrival rule says. */
+  nightExitEnabled?: boolean;
+  /** The next morning's first punch closes a night only up to the latest next-morning leaving time + `cutOffMinutes`. */
+  cutOffEnabled?: boolean;
+  cutOffMinutes?: number;
+  /** A second punch within `doubleTapMinutes` of the previous one is ignored. */
+  doubleTapEnabled?: boolean;
+  doubleTapMinutes?: number;
   groups: ProductionShiftGroup[];
   breaks: ProductionShiftBreak[];
   updatedAt: string | null;

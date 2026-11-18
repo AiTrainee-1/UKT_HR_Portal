@@ -66,6 +66,16 @@ export type ShiftRulesDraft = {
   roundingMode: ProductionShiftRoundingMode;
   fullDayValue: string;
   nightSessionHours: string;
+  // Night and early morning (see NightMorningSection)
+  earlyArrivalEnabled: boolean;
+  earlyArrivalMinutes: string;
+  clockInAgainEnabled: boolean;
+  clockInAgainMinutes: string;
+  nightExitEnabled: boolean;
+  cutOffEnabled: boolean;
+  cutOffMinutes: string;
+  doubleTapEnabled: boolean;
+  doubleTapMinutes: string;
   groups: GroupRow[];
   breaks: BreakRow[];
 };
@@ -79,6 +89,13 @@ export const SHIFT_VALUE: NumberRule = { min: 0.25, max: 9.75, decimals: 2 };
 export const MIN_CREDIT: NumberRule = { min: 0, max: 9.75, decimals: 2 };
 export const FULL_DAY: NumberRule = { min: 0.25, max: 9.75, decimals: 2 };
 export const NIGHT_HOURS: NumberRule = { min: 1, max: 24, decimals: 0 };
+// The next-morning rules, in whole minutes (the server's ranges)
+export const EARLY_ARRIVAL: NumberRule = { min: 0, max: 360, decimals: 0 };
+export const CLOCK_IN_AGAIN: NumberRule = { min: 0, max: 180, decimals: 0 };
+export const CUT_OFF: NumberRule = { min: 0, max: 360, decimals: 0 };
+export const DOUBLE_TAP: NumberRule = { min: 1, max: 30, decimals: 0 };
+/** What the server was built with, for an older server that does not send them. */
+export const NIGHT_MORNING_DEFAULTS = { earlyArrival: 150, clockInAgain: 15, cutOff: 90, doubleTap: 5 } as const;
 
 /** The one step there is: every production day is saved in quarters of a shift. */
 export const QUARTER = 0.25;
@@ -144,6 +161,15 @@ export function draftFrom(s: ProductionShiftRules): ShiftRulesDraft {
     roundingMode: s.roundingMode === "down" ? "down" : "nearest",
     fullDayValue: numText(s.fullDayValue),
     nightSessionHours: numText(s.nightSessionHours),
+    earlyArrivalEnabled: s.earlyArrivalEnabled !== false,
+    earlyArrivalMinutes: numText(s.earlyArrivalMinutes ?? NIGHT_MORNING_DEFAULTS.earlyArrival),
+    clockInAgainEnabled: s.clockInAgainEnabled !== false,
+    clockInAgainMinutes: numText(s.clockInAgainMinutes ?? NIGHT_MORNING_DEFAULTS.clockInAgain),
+    nightExitEnabled: s.nightExitEnabled !== false,
+    cutOffEnabled: s.cutOffEnabled !== false,
+    cutOffMinutes: numText(s.cutOffMinutes ?? NIGHT_MORNING_DEFAULTS.cutOff),
+    doubleTapEnabled: s.doubleTapEnabled !== false,
+    doubleTapMinutes: numText(s.doubleTapMinutes ?? NIGHT_MORNING_DEFAULTS.doubleTap),
     groups: (s.groups ?? []).map((g) => ({
       key: `g-${g.id}`,
       id: g.id,
@@ -233,6 +259,15 @@ export function sameDraft(a: ShiftRulesDraft, b: ShiftRulesDraft): boolean {
     a.roundingMode === b.roundingMode &&
     sameNumber(a.fullDayValue, b.fullDayValue) &&
     sameNumber(a.nightSessionHours, b.nightSessionHours) &&
+    a.earlyArrivalEnabled === b.earlyArrivalEnabled &&
+    sameNumber(a.earlyArrivalMinutes, b.earlyArrivalMinutes) &&
+    a.clockInAgainEnabled === b.clockInAgainEnabled &&
+    sameNumber(a.clockInAgainMinutes, b.clockInAgainMinutes) &&
+    a.nightExitEnabled === b.nightExitEnabled &&
+    a.cutOffEnabled === b.cutOffEnabled &&
+    sameNumber(a.cutOffMinutes, b.cutOffMinutes) &&
+    a.doubleTapEnabled === b.doubleTapEnabled &&
+    sameNumber(a.doubleTapMinutes, b.doubleTapMinutes) &&
     a.groups.length === b.groups.length &&
     a.groups.every((g, i) => sameGroup(g, b.groups[i])) &&
     a.breaks.length === b.breaks.length &&
@@ -280,6 +315,10 @@ export type Validation = {
   minCredit: string | null;
   fullDay: string | null;
   nightHours: string | null;
+  earlyArrival: string | null;
+  clockInAgain: string | null;
+  cutOff: string | null;
+  doubleTap: string | null;
   /** The rules are on but no group is: every day would fall back to the old calculation. */
   noGroup: string | null;
   groups: { errors: GroupErrors; rules: RuleErrors[] }[];
@@ -356,6 +395,11 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
   let minCreditTooHigh: string | null = null;
   const fullDay = parseQuarter(draft.fullDayValue, FULL_DAY).error;
   const nightHours = parseNumber(draft.nightSessionHours, NIGHT_HOURS).error;
+  // a switch that is off keeps its minutes, so they must still be a number the server takes
+  const earlyArrival = parseNumber(draft.earlyArrivalMinutes, EARLY_ARRIVAL).error;
+  const clockInAgain = parseNumber(draft.clockInAgainMinutes, CLOCK_IN_AGAIN).error;
+  const cutOff = parseNumber(draft.cutOffMinutes, CUT_OFF).error;
+  const doubleTap = parseNumber(draft.doubleTapMinutes, DOUBLE_TAP).error;
 
   const spans = breakSpans(draft.breaks);
   const groups = draft.groups.map((g, gi) => {
@@ -510,6 +554,10 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
     minCredit && `Minimum shifts: ${minCredit}`,
     fullDay && `Full-day value: ${fullDay}`,
     nightHours && `Night session: ${nightHours}`,
+    earlyArrival && `Early arrival: ${earlyArrival}`,
+    clockInAgain && `Clock in again: ${clockInAgain}`,
+    cutOff && `Next-morning cut-off: ${cutOff}`,
+    doubleTap && `Double tap: ${doubleTap}`,
   ].filter((p): p is string => typeof p === "string" && p !== "");
 
   return {
@@ -518,6 +566,10 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
     minCredit,
     fullDay,
     nightHours,
+    earlyArrival,
+    clockInAgain,
+    cutOff,
+    doubleTap,
     noGroup,
     groups,
     breaks,
@@ -673,6 +725,15 @@ export function toInput(draft: ShiftRulesDraft, expectedVersion?: string | null)
     roundingMode: draft.roundingMode,
     fullDayValue: num(draft.fullDayValue),
     nightSessionHours: num(draft.nightSessionHours),
+    earlyArrivalEnabled: draft.earlyArrivalEnabled,
+    earlyArrivalMinutes: num(draft.earlyArrivalMinutes),
+    clockInAgainEnabled: draft.clockInAgainEnabled,
+    clockInAgainMinutes: num(draft.clockInAgainMinutes),
+    nightExitEnabled: draft.nightExitEnabled,
+    cutOffEnabled: draft.cutOffEnabled,
+    cutOffMinutes: num(draft.cutOffMinutes),
+    doubleTapEnabled: draft.doubleTapEnabled,
+    doubleTapMinutes: num(draft.doubleTapMinutes),
     groups: draft.groups.map((g) => ({
       ...(g.id === null ? {} : { id: g.id }),
       label: g.label.trim(),
@@ -850,6 +911,26 @@ export function draftChanges(draft: ShiftRulesDraft, saved: ShiftRulesDraft): Ch
   }
   if (!sameNumber(draft.nightSessionHours, saved.nightSessionHours)) {
     push("night", "Night session", `${saved.nightSessionHours} h`, `${draft.nightSessionHours} h`, false);
+  }
+  // the next-morning rules decide which day a morning punch belongs to, so they move shifts (and pay)
+  const rule = (on: boolean, minutes: string, unit: string) => (on ? `on, ${minutes} ${unit}` : "off");
+  for (const [key, label, onKey, minutesKey, unit] of [
+    ["earlyArrival", "Early arrival", "earlyArrivalEnabled", "earlyArrivalMinutes", "min before the start"],
+    ["clockInAgain", "Clock in again", "clockInAgainEnabled", "clockInAgainMinutes", "min after the start"],
+    ["cutOff", "Next-morning cut-off", "cutOffEnabled", "cutOffMinutes", "min after the last morning row"],
+    ["doubleTap", "Double tap", "doubleTapEnabled", "doubleTapMinutes", "min"],
+  ] as const) {
+    if (draft[onKey] !== saved[onKey] || !sameNumber(draft[minutesKey], saved[minutesKey])) {
+      push(key, label, rule(saved[onKey], saved[minutesKey], unit), rule(draft[onKey], draft[minutesKey], unit));
+    }
+  }
+  if (draft.nightExitEnabled !== saved.nightExitEnabled) {
+    push(
+      "nightExit",
+      "Night shifts keep their morning exit",
+      saved.nightExitEnabled ? "on" : "off",
+      draft.nightExitEnabled ? "on" : "off",
+    );
   }
 
   const savedGroups = new Map(saved.groups.filter((g) => g.id !== null).map((g) => [g.id, g]));

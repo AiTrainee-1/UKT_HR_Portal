@@ -8,6 +8,7 @@ export const PRODUCTION_SHIFT_SECTIONS = {
   when: "When the production rules apply",
   groups: "Shift groups and what each leaving time earns",
   breaks: "Breaks that are never paid",
+  night: "Night and early morning",
   advanced: "Advanced settings",
   tryIt: "Check the rules on a day",
 } as const;
@@ -130,11 +131,51 @@ const BLOCKS: Omit<SettingMeta, "tab">[] = [
   },
   {
     id: "night-session",
-    section: S.advanced,
+    section: S.night,
     title: "Night session length (hours)",
     purpose:
       "A night worker's out-punch comes on the next morning. A day that ends on an in-punch with no out-punch is closed by the first punch of the next calendar day only when that punch is within this many hours of it. After that the day stays open: a forgotten out-punch is never closed by the next day's arrival.",
     keywords: ["night", "session", "hours", "next morning", "cross midnight", "forgotten punch", "advanced"],
+  },
+  {
+    id: "early-arrival",
+    section: S.night,
+    title: "Early arrival starts the new day",
+    purpose:
+      "A day shift left open the evening before (the worker forgot to punch out) would take the next morning's first punch as its out-punch. With this on, a morning punch from this many minutes before the shift start is the new day's arrival instead: 150 minutes is 6:00 AM for an 8:30 AM shift. A punch before that time still ends the night.",
+    keywords: ["early", "arrival", "6:00", "morning", "first punch", "forgot", "out punch", "overtime", "next day"],
+  },
+  {
+    id: "clock-in-again",
+    section: S.night,
+    title: "A clock-in for the shift ends the night",
+    purpose:
+      "A worker on overtime through the night may leave after the early-arrival time and come back for the next shift: out 6:18 AM, in again 8:31 AM. When the worker clocks in again by the shift start plus these minutes, the early punch ended the night, and that overtime stays on the day it began.",
+    keywords: ["clock in", "again", "overtime", "night", "exit", "8:45", "continuous", "same day"],
+  },
+  {
+    id: "night-exit",
+    section: S.night,
+    title: "Night shifts keep their morning exit",
+    purpose:
+      "A night shift ends the next morning, so its out-punch is a morning punch. With this on, the early-arrival rule never touches a night shift's exit. Off: a night worker's morning punch from the early-arrival time starts a new day, unless they clock in again.",
+    keywords: ["night", "shift", "exit", "morning", "out punch", "night worker"],
+  },
+  {
+    id: "cut-off",
+    section: S.night,
+    title: "Next-morning cut-off",
+    purpose:
+      "The latest a morning punch can still end the night before: the latest next-morning leaving time of the shift groups plus these minutes. A punch after it always starts the new day. Off: only the night session length limits it.",
+    keywords: ["cut-off", "close", "next morning", "latest", "90 minutes", "night"],
+  },
+  {
+    id: "double-tap",
+    section: S.night,
+    title: "Double taps on the device",
+    purpose:
+      "A worker who presses the device twice by mistake would turn an arrival into an arrival and an out-punch. With this on, a second punch within these minutes of the previous one is ignored. Off: every press counts.",
+    keywords: ["double", "tap", "twice", "press", "duplicate", "5 minutes", "device"],
   },
   {
     id: "try-it",

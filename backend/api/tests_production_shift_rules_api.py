@@ -200,6 +200,15 @@ class ReadTests(Base):
                 "roundingMode",
                 "fullDayValue",
                 "nightSessionHours",
+                "earlyArrivalEnabled",
+                "earlyArrivalMinutes",
+                "clockInAgainEnabled",
+                "clockInAgainMinutes",
+                "nightExitEnabled",
+                "cutOffEnabled",
+                "cutOffMinutes",
+                "doubleTapEnabled",
+                "doubleTapMinutes",
                 "groups",
                 "breaks",
                 "updatedAt",
@@ -403,6 +412,72 @@ class QuarterStepTests(Base):
         self.assertRefused(lambda d: d.update(minCredit=0.3), "Minimum credit must be in quarters")
         self.assertRefused(lambda d: d.update(fullDayValue=0.9), "Full-day value must be in quarters")
         self.assertSaved(lambda d: self.rule(self.day(d), "17:45").update(shiftValue=1.25))
+
+
+class NightMorningSettingsApiTests(Base):
+    """Owner 2026-11-18: the next-morning rules are edited on this tab (on/off and minutes), saved like every other
+    setting, audited, and the engine follows them at once."""
+
+    def test_the_get_says_what_is_saved(self):
+        b = self.body()
+        self.assertEqual(
+            [b[k] for k in ("earlyArrivalEnabled", "earlyArrivalMinutes", "clockInAgainEnabled", "clockInAgainMinutes",
+                            "nightExitEnabled", "cutOffEnabled", "cutOffMinutes", "doubleTapEnabled", "doubleTapMinutes")],
+            [True, 150, True, 15, True, True, 90, True, 5],
+        )
+
+    def test_every_one_is_saved_and_reaches_the_engine(self):
+        doc = self.assertSaved(
+            lambda d: d.update(
+                earlyArrivalEnabled=False,
+                earlyArrivalMinutes=120,
+                clockInAgainEnabled=False,
+                clockInAgainMinutes=20,
+                nightExitEnabled=False,
+                cutOffEnabled=False,
+                cutOffMinutes=60,
+                doubleTapEnabled=False,
+                doubleTapMinutes=3,
+            )
+        )
+        self.assertEqual(
+            (doc["earlyArrivalMinutes"], doc["clockInAgainMinutes"], doc["cutOffMinutes"], doc["doubleTapMinutes"]),
+            (120, 20, 60, 3),
+        )
+        rs = psr.rules_for_day(ProductionShiftConfig.get(), EFFECTIVE)
+        self.assertEqual(
+            (rs.early_arrival_enabled, rs.early_arrival_minutes, rs.clock_in_again_enabled, rs.clock_in_again_minutes),
+            (False, 120, False, 20),
+        )
+        self.assertEqual((rs.night_exit_enabled, rs.close_by_enabled, rs.close_by_s, rs.tap_gap_s), (False, False, None, 0))
+        self.assertTrue(any("cut-off is off" in w for w in doc["warnings"]), doc["warnings"])
+        entry = AuditLog.objects.filter(module="production_shift_rules").latest("id")
+        self.assertEqual(entry.new_values["earlyArrivalMinutes"], 120)
+
+    def test_every_problem_is_a_plain_sentence(self):
+        for body, message in [
+            ({"earlyArrivalEnabled": "yes"}, "early arrival switch"),
+            ({"clockInAgainEnabled": 1}, "clock-in-again switch"),
+            ({"nightExitEnabled": None}, "night shift exit switch"),
+            ({"cutOffEnabled": "off"}, "cut-off switch"),
+            ({"doubleTapEnabled": "true"}, "double tap switch"),
+            ({"earlyArrivalMinutes": 361}, "Early arrival must be"),
+            ({"earlyArrivalMinutes": -1}, "Early arrival must be"),
+            ({"earlyArrivalMinutes": 2.5}, "Early arrival must be"),
+            ({"clockInAgainMinutes": 181}, "Clock in again must be"),
+            ({"cutOffMinutes": 400}, "cut-off must be"),
+            ({"doubleTapMinutes": 0}, "A double tap must be"),
+            ({"doubleTapMinutes": 31}, "A double tap must be"),
+        ]:
+            with self.subTest(body=body):
+                self.assertRefused(lambda d, body=body: d.update(body), message)
+
+    def test_an_early_arrival_before_a_next_morning_rule_is_advice(self):
+        doc = self.assertSaved(lambda d: d.update(earlyArrivalMinutes=240))  # 04:30, before the 05:30 rule
+        self.assertTrue(
+            any("Day shift: early arrivals count from 04:30, before its next-morning rule 05:30" in w for w in doc["warnings"]),
+            doc["warnings"],
+        )
 
 
 class ScalarTests(Base):

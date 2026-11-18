@@ -136,7 +136,7 @@ def shift_day_punches(
         k = ref[0]
         offset = (k - d).days * 86400
         if k not in cache:
-            cache[k] = tap_blocks(by_ref.get(k, ()))
+            cache[k] = tap_blocks(by_ref.get(k, ()), ruleset.tap_gap_s)
         members = cache[k].get(ref)
         if members:
             out.extend((m_secs + offset, m_ref) for m_secs, m_ref in members)
@@ -146,14 +146,15 @@ def shift_day_punches(
     return out
 
 
-def tap_blocks(secs_refs: Sequence[tuple[int, Any]]) -> dict[Any, list[tuple[int, Any]]]:
+def tap_blocks(secs_refs: Sequence[tuple[int, Any]], gap_s: int = psr.TAP_GAP_S) -> dict[Any, list[tuple[int, Any]]]:
     """{leader ref: [the punch and the double taps that follow it]} for one date's raw punches (oldest first), using the
-    engine's own double-tap gap, so a resolved punch can be traced back to every stored punch it stands for."""
+    engine's own double-tap gap (the RuleSet's setting; 0 = off), so a resolved punch can be traced back to every stored
+    punch it stands for."""
     blocks: dict[Any, list[tuple[int, Any]]] = {}
     leader_secs: int | None = None
     leader_ref: Any = None
     for secs, ref in sorted(secs_refs, key=lambda x: x[0]):
-        if leader_secs is None or secs - leader_secs >= psr.TAP_GAP_S:
+        if leader_secs is None or secs - leader_secs >= gap_s:
             leader_secs, leader_ref = secs, ref
             blocks[leader_ref] = []
         blocks[leader_ref].append((secs, ref))

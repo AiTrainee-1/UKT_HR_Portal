@@ -60,10 +60,18 @@ Rules of the PUT (each a plain-sentence 400 when broken):
     order of the array (a next-day time is after a same-day one), shift values in quarters (0.25 .. 9.75) and never
     going down, and no two on the same PAID time (a rule at the end of a break and one at its start are the same paid
     time: the engine cannot tell them apart);
-  * a break: start before end on the same day; enabled breaks must not overlap.
+  * a break: start before end on the same day; enabled breaks must not overlap;
+  * NIGHT AND EARLY MORNING (owner 2026-11-18: every timing and overtime rule editable here, nothing hardcoded): the
+    switches `earlyArrivalEnabled`, `clockInAgainEnabled`, `nightExitEnabled`, `cutOffEnabled`, `doubleTapEnabled`
+    true/false, and their whole minutes `earlyArrivalMinutes` 0..360 (before the shift start: 150 = 06:00 for 08:30),
+    `clockInAgainMinutes` 0..180 (after the shift start: 15 = 08:45), `cutOffMinutes` 0..360 (after the latest
+    next-morning leaving time of the tables: 90) and `doubleTapMinutes` 1..30. A switch that is off keeps its minutes.
+    See production_shift_rules (RuleSet, the module docstring) for what each one does.
 
 `warnings` (advice; the save has happened): a ladder point inside a break, a weekday no enabled group covers, a full-day
-value no day of a group can reach (these three are also in the GET body: they are mistakes in what is saved), and - only
+value no day of a group can reach, an early-arrival time that falls before a day group's last next-morning leaving
+time (a worker leaving then would be taken as the next day's arrival unless they clock in again), the next-morning
+cut-off switched off (these are also in the GET body: they are about what is saved), and - only
 in the answer of the save that changes the rules - a start date in the past, production payroll already generated for days
 these rules judge ("days from <date> are re-judged: regenerate payroll to apply"), and a group the save touched that has
 no rule after its standard departure (time worked later earns nothing more). Two more of the save: moving the start LATER
@@ -148,6 +156,15 @@ SCALARS = {
     "roundingMode": "rules_rounding_mode",
     "fullDayValue": "rules_full_day_value",
     "nightSessionHours": "rules_night_session_hours",
+    "earlyArrivalEnabled": "rules_early_arrival_enabled",
+    "earlyArrivalMinutes": "rules_early_arrival_minutes",
+    "clockInAgainEnabled": "rules_clock_in_again_enabled",
+    "clockInAgainMinutes": "rules_clock_in_again_minutes",
+    "nightExitEnabled": "rules_night_exit_enabled",
+    "cutOffEnabled": "rules_close_by_enabled",
+    "cutOffMinutes": "rules_close_by_margin_minutes",
+    "doubleTapEnabled": "rules_double_tap_enabled",
+    "doubleTapMinutes": "rules_double_tap_minutes",
 }
 _FIELD_LABELS = {
     "enabled": "master switch",
@@ -158,6 +175,15 @@ _FIELD_LABELS = {
     "roundingMode": "rounding mode",
     "fullDayValue": "full-day value",
     "nightSessionHours": "night session hours",
+    "earlyArrivalEnabled": "early arrival switch",
+    "earlyArrivalMinutes": "early arrival minutes",
+    "clockInAgainEnabled": "clock-in-again switch",
+    "clockInAgainMinutes": "clock-in-again minutes",
+    "nightExitEnabled": "night shift exit switch",
+    "cutOffEnabled": "next-morning cut-off switch",
+    "cutOffMinutes": "next-morning cut-off minutes",
+    "doubleTapEnabled": "double tap switch",
+    "doubleTapMinutes": "double tap minutes",
     "groups": "shift groups and rules",
     "breaks": "breaks",
 }
@@ -256,6 +282,15 @@ def _document(state: _State) -> dict:
         "roundingMode": config.rules_rounding_mode,
         "fullDayValue": Decimal(config.rules_full_day_value).quantize(CENT),
         "nightSessionHours": config.rules_night_session_hours,
+        "earlyArrivalEnabled": bool(config.rules_early_arrival_enabled),
+        "earlyArrivalMinutes": config.rules_early_arrival_minutes,
+        "clockInAgainEnabled": bool(config.rules_clock_in_again_enabled),
+        "clockInAgainMinutes": config.rules_clock_in_again_minutes,
+        "nightExitEnabled": bool(config.rules_night_exit_enabled),
+        "cutOffEnabled": bool(config.rules_close_by_enabled),
+        "cutOffMinutes": config.rules_close_by_margin_minutes,
+        "doubleTapEnabled": bool(config.rules_double_tap_enabled),
+        "doubleTapMinutes": config.rules_double_tap_minutes,
         "groups": [group_doc(g, state.rules_by_group.get(g.id, [])) for g in state.groups],
         "breaks": [
             {
@@ -366,6 +401,28 @@ def _advice(document: dict) -> list[str]:
                 out.append(
                     f"No enabled shift group applies on {name}, so those days are still judged by the old calculation."
                 )
+        if document["earlyArrivalEnabled"]:
+            for g in live:
+                if g["mainOutTime"] is not None and g["mainOutNextDay"]:
+                    continue  # a night shift: its own exit is not touched by the early-arrival rule
+                arrives = _minutes(g["startTime"]) - document["earlyArrivalMinutes"]
+                late_rows = [
+                    _minutes(r["outTime"])
+                    for r in g["rules"]
+                    if r["enabled"] and r["outNextDay"] and _minutes(r["outTime"]) > arrives
+                ]
+                if late_rows and arrives >= 0:
+                    out.append(
+                        f"{g['label']}: early arrivals count from {_clock(arrives)}, before its next-morning rule "
+                        f"{_clock(max(late_rows))}: a worker who leaves after {_clock(arrives)} the next morning is "
+                        "taken as that day's arrival unless they clock in again for the shift."
+                    )
+        if not document["cutOffEnabled"]:
+            out.append(
+                "The next-morning cut-off is off: any punch the next morning within the night session hours can end the "
+                "night before (an ordinary arrival after a forgotten out-punch included), unless the early-arrival rule "
+                "keeps it."
+            )
         full_day = document["fullDayValue"]
         for g in live:
             rules = [r for r in g["rules"] if r["enabled"]]
@@ -558,6 +615,26 @@ def _parse_scalars(data: dict, before: dict, today: date_type) -> dict:
         if full is None or not 0 < full <= MAX_SHIFT_VALUE or not _quarter(full):
             raise SettingsError("Full-day value must be in quarters of a shift: 0.25, 0.50 ... up to 9.75.")
         doc["fullDayValue"] = full
+    for key, what in (
+        ("earlyArrivalEnabled", "The early arrival switch"),
+        ("clockInAgainEnabled", "The clock-in-again switch"),
+        ("nightExitEnabled", "The night shift exit switch"),
+        ("cutOffEnabled", "The next-morning cut-off switch"),
+        ("doubleTapEnabled", "The double tap switch"),
+    ):
+        if key in data:
+            doc[key] = _bool(data[key], f"{what} ('{key}') must be true or false.")
+    for key, low, high, sentence in (
+        ("earlyArrivalMinutes", 0, 360, "Early arrival must be a whole number of minutes before the shift start, 0 to 360."),
+        ("clockInAgainMinutes", 0, 180, "Clock in again must be a whole number of minutes after the shift start, 0 to 180."),
+        ("cutOffMinutes", 0, 360, "The next-morning cut-off must be a whole number of minutes, 0 to 360."),
+        ("doubleTapMinutes", 1, 30, "A double tap must be a whole number of minutes, 1 to 30."),
+    ):
+        if key in data:
+            value = _as_int(data[key])
+            if value is None or not low <= value <= high:
+                raise SettingsError(sentence)
+            doc[key] = value
     # The date is what keeps the new rules away from days already judged: while they are on, one is always set.
     if doc["enabled"] and doc["effectiveFrom"] is None:
         if "effectiveFrom" in data:
