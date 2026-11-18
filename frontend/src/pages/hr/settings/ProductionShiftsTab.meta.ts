@@ -106,38 +106,6 @@ const BLOCKS: Omit<SettingMeta, "tab">[] = [
     keywords: ["break", "tea", "lunch", "dinner", "10:30", "12:45", "1:30", "3:30", "5:45", "8:00 pm", "unpaid"],
   },
   {
-    id: "min-credit",
-    section: S.advanced,
-    title: "Minimum shifts for a worked day",
-    purpose:
-      "A worker with at least one complete in and out pair earns at least this many shifts for the day, even when the ladder gives less. 0 means there is no minimum: a very short day earns only what its minutes are worth.",
-    keywords: ["minimum", "credit", "floor", "least", "short day", "advanced"],
-  },
-  {
-    id: "rounding",
-    section: S.advanced,
-    title: "Rounding of the day's shifts",
-    purpose:
-      "A day's shifts are always saved in quarters of a shift (0.25, 0.50, 0.75, 1.00 ... 3.00), so production attendance and payroll never show figures like 2.72. 'To the nearest quarter' rounds to the closest one (2.72 becomes 2.75); 'Down to the quarter reached' always rounds down (2.72 becomes 2.50), so nobody is paid for a quarter not completed.",
-    keywords: ["rounding", "round", "step", "quarter", "nearest", "down", "0.25", "decimal", "advanced"],
-  },
-  {
-    id: "full-day-value",
-    section: S.advanced,
-    title: "Full-day value (shifts)",
-    purpose:
-      "A day that earns less than this is a Half-shift day on the attendance pages; at or above it the worker is Present. It decides the label only: pay is always the shifts earned times the salary per shift.",
-    keywords: ["full day", "half shift", "present", "status", "label", "advanced"],
-  },
-  {
-    id: "night-session",
-    section: S.night,
-    title: "Night session length (hours)",
-    purpose:
-      "A night worker's out-punch comes on the next morning. A day that ends on an in-punch with no out-punch is closed by the first punch of the next calendar day only when that punch is within this many hours of it. After that the day stays open: a forgotten out-punch is never closed by the next day's arrival.",
-    keywords: ["night", "session", "hours", "next morning", "cross midnight", "forgotten punch", "advanced"],
-  },
-  {
     id: "early-arrival",
     section: S.night,
     title: "Early arrival starts the new day",
@@ -170,12 +138,44 @@ const BLOCKS: Omit<SettingMeta, "tab">[] = [
     keywords: ["cut-off", "close", "next morning", "latest", "90 minutes", "night"],
   },
   {
+    id: "night-session",
+    section: S.night,
+    title: "Night session length (hours)",
+    purpose:
+      "A night worker's out-punch comes on the next morning. A day that ends on an in-punch with no out-punch is closed by the first punch of the next calendar day only when that punch is within this many hours of it. After that the day stays open: a forgotten out-punch is never closed by the next day's arrival.",
+    keywords: ["night", "session", "hours", "next morning", "cross midnight", "forgotten punch", "advanced"],
+  },
+  {
     id: "double-tap",
     section: S.night,
     title: "Double taps on the device",
     purpose:
       "A worker who presses the device twice by mistake would turn an arrival into an arrival and an out-punch. With this on, a second punch within these minutes of the previous one is ignored. Off: every press counts.",
     keywords: ["double", "tap", "twice", "press", "duplicate", "5 minutes", "device"],
+  },
+  {
+    id: "min-credit",
+    section: S.advanced,
+    title: "Minimum shifts for a worked day",
+    purpose:
+      "A worker with at least one complete in and out pair earns at least this many shifts for the day, even when the ladder gives less. 0 means there is no minimum: a very short day earns only what its minutes are worth.",
+    keywords: ["minimum", "credit", "floor", "least", "short day", "advanced"],
+  },
+  {
+    id: "rounding",
+    section: S.advanced,
+    title: "Rounding of the day's shifts",
+    purpose:
+      "A day's shifts are always saved in quarters of a shift (0.25, 0.50, 0.75, 1.00 ... 3.00), so production attendance and payroll never show figures like 2.72. 'To the nearest quarter' rounds to the closest one (2.72 becomes 2.75); 'Down to the quarter reached' always rounds down (2.72 becomes 2.50), so nobody is paid for a quarter not completed.",
+    keywords: ["rounding", "round", "step", "quarter", "nearest", "down", "0.25", "decimal", "advanced"],
+  },
+  {
+    id: "full-day-value",
+    section: S.advanced,
+    title: "Full-day value (shifts)",
+    purpose:
+      "A day that earns less than this is a Half-shift day on the attendance pages; at or above it the worker is Present. It decides the label only: pay is always the shifts earned times the salary per shift.",
+    keywords: ["full day", "half shift", "present", "status", "label", "advanced"],
   },
   {
     id: "try-it",

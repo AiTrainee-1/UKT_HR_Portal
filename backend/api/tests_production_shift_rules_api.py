@@ -421,8 +421,20 @@ class NightMorningSettingsApiTests(Base):
     def test_the_get_says_what_is_saved(self):
         b = self.body()
         self.assertEqual(
-            [b[k] for k in ("earlyArrivalEnabled", "earlyArrivalMinutes", "clockInAgainEnabled", "clockInAgainMinutes",
-                            "nightExitEnabled", "cutOffEnabled", "cutOffMinutes", "doubleTapEnabled", "doubleTapMinutes")],
+            [
+                b[k]
+                for k in (
+                    "earlyArrivalEnabled",
+                    "earlyArrivalMinutes",
+                    "clockInAgainEnabled",
+                    "clockInAgainMinutes",
+                    "nightExitEnabled",
+                    "cutOffEnabled",
+                    "cutOffMinutes",
+                    "doubleTapEnabled",
+                    "doubleTapMinutes",
+                )
+            ],
             [True, 150, True, 15, True, True, 90, True, 5],
         )
 
@@ -449,7 +461,9 @@ class NightMorningSettingsApiTests(Base):
             (rs.early_arrival_enabled, rs.early_arrival_minutes, rs.clock_in_again_enabled, rs.clock_in_again_minutes),
             (False, 120, False, 20),
         )
-        self.assertEqual((rs.night_exit_enabled, rs.close_by_enabled, rs.close_by_s, rs.tap_gap_s), (False, False, None, 0))
+        self.assertEqual(
+            (rs.night_exit_enabled, rs.close_by_enabled, rs.close_by_s, rs.tap_gap_s), (False, False, None, 0)
+        )
         self.assertTrue(any("cut-off is off" in w for w in doc["warnings"]), doc["warnings"])
         entry = AuditLog.objects.filter(module="production_shift_rules").latest("id")
         self.assertEqual(entry.new_values["earlyArrivalMinutes"], 120)
@@ -475,7 +489,10 @@ class NightMorningSettingsApiTests(Base):
     def test_an_early_arrival_before_a_next_morning_rule_is_advice(self):
         doc = self.assertSaved(lambda d: d.update(earlyArrivalMinutes=240))  # 04:30, before the 05:30 rule
         self.assertTrue(
-            any("Day shift: early arrivals count from 04:30, before its next-morning rule 05:30" in w for w in doc["warnings"]),
+            any(
+                "Day shift: early arrivals count from 04:30, before its next-morning rule 05:30" in w
+                for w in doc["warnings"]
+            ),
             doc["warnings"],
         )
 

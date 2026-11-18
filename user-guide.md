@@ -1408,7 +1408,19 @@ Each group is a card with: **In use**, **Used on** (Monday to Saturday, Sunday o
 | **Minimum shifts** | 0 (none) | A worker with at least one complete in-out pair earns at least this much for the day |
 | **Rounding step and how** | quarters, to the nearest | A production day's shifts are always saved in quarters of a shift (0.25, 0.50, 0.75, 1.00 ... 3.00), so attendance and payroll never show figures like 2.72. "To the nearest quarter" turns 2.72 into 2.75; "Down to the quarter reached" turns it into 2.50. The step itself cannot be changed. The result is never more than the group's top row |
 | **Full-day value** | 1.00 | A day below this is a Half Shift day, at or above it Present. It changes the label only; pay is shifts x salary per shift |
-| **Night session length** | 24 hours | How long after an open "in" punch the next morning's punch can still close that night (see below) |
+| **Night session length** | 24 hours | How long after an open "in" punch the next morning's punch can still close that night (see below). Now in **Night and early morning** |
+
+**Night and early morning** (its own section, before Advanced; every rule has a switch and its minutes, and a worked example from your own shifts):
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Early arrival starts the new day** | On, 150 minutes | A day shift left open the evening before (the worker forgot to punch out) does not take the next morning's punch as its out-punch when that punch is from this long before the shift start: 6:00 AM for an 8:30 AM shift. A punch before that still ends the night |
+| **A clock-in for the shift ends the night** | On, 15 minutes | A worker who did overtime through the night and leaves after the early-arrival time (out 6:18 AM) but clocks in again by the shift start plus these minutes (8:45 AM) keeps that overtime on the day it began |
+| **Night shifts keep their morning exit** | On | A night shift's next-morning out-punch always ends its night, whatever the early-arrival rule says |
+| **Next-morning cut-off** | On, 90 minutes | A morning punch later than the latest next-morning leaving time of the shift groups plus these minutes (8:00 AM with a 6:30 AM night-shift end) never ends the night before. Off: only the night session length limits it |
+| **Double taps on the device** | On, 5 minutes | A second press within these minutes of the previous one is ignored. Off: every press counts |
+
+Saving any of them asks first, like the other money settings: days are judged by the new rule the next time they are opened, and payroll changes when it is generated again.
 
 **5. Check the rules on a day (Try a day).** Type the punches in the order they happened (a time not later than the one before it is the next morning), pick a date and read the answer: the group used, the shifts earned, Present or Half Shift, Late, Early and one sentence saying why. Five buttons fill in the owner's own examples (a regular day, works until 10:30 PM, day and full night, night only, Sunday). **Nothing is saved by trying.** It uses the **saved** rules, so save your changes first. The date matters: a date before **Applies from** is answered with the old calculation, and the answer says so.
 
@@ -1431,7 +1443,7 @@ Seven reports look like the company's existing printouts but use the HRMS design
 These reports only read what Attendance and Payroll have already saved; open the days in Attendance (or generate the payroll) first if a report says a day is *not processed*. Names in Tamil print as "?" in the PDF files (the PDF font has no Tamil letters); on screen and in Excel they show correctly.
 
 **Things HR should know**
-- **A night worker's 5:30 AM punch counts with the day the shift began.** Attendance pages, reports and payroll show it on the evening before (marked as next day) and do not count it again on the next date. It closes the night only when the evening's punches have an unmatched "in", the punch is at or before about 7:00 AM (the latest next-day leaving time in the tables plus 90 minutes), it is within **Night session length** of the "in", and neither day was entered by hand. A normal 8:30 AM arrival after a forgotten out-punch is **never** taken as a closing punch.
+- **A night worker's 5:30 AM punch counts with the day the shift began.** Attendance pages, reports and payroll show it on the evening before (marked as next day) and do not count it again on the next date. It closes the night only when the evening's punches have an unmatched "in", the punch is at or before the **Next-morning cut-off** (the latest next-day leaving time in the tables plus 90 minutes), it is within **Night session length** of the "in", neither day was entered by hand, and it is not a day-shift worker's **early arrival** (from 6:00 AM, unless they clock in again by 8:45 AM). A normal 8:30 AM arrival after a forgotten out-punch is **never** taken as a closing punch. All of these are set in **Night and early morning**.
 - **A night day can change when the next morning's punch arrives.** Until the closing punch is received the evening shows only the part that is complete; it is worked out again when the punch comes in.
 - **Payroll generated for a period that ends today can miss that night's closing punch** (it is made tomorrow). Generate the period after the next morning's punches are in, or regenerate it.
 - **Production late deductions use the new rules too.** For days from **Applies from** on, a day is Late when the first punch is after the group's start plus the grace (8:35 AM for Day with the 5-minute grace), and with Strict production attendance (Settings → Production Payroll) leaving before the standard departure minus the grace also counts. Days before the date keep the old check (the production shift assigned in Manage Shifts). The deduction amounts are still set in Settings → Production Payroll.

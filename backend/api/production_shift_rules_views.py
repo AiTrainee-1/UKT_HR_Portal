@@ -625,8 +625,18 @@ def _parse_scalars(data: dict, before: dict, today: date_type) -> dict:
         if key in data:
             doc[key] = _bool(data[key], f"{what} ('{key}') must be true or false.")
     for key, low, high, sentence in (
-        ("earlyArrivalMinutes", 0, 360, "Early arrival must be a whole number of minutes before the shift start, 0 to 360."),
-        ("clockInAgainMinutes", 0, 180, "Clock in again must be a whole number of minutes after the shift start, 0 to 180."),
+        (
+            "earlyArrivalMinutes",
+            0,
+            360,
+            "Early arrival must be a whole number of minutes before the shift start, 0 to 360.",
+        ),
+        (
+            "clockInAgainMinutes",
+            0,
+            180,
+            "Clock in again must be a whole number of minutes after the shift start, 0 to 180.",
+        ),
         ("cutOffMinutes", 0, 360, "The next-morning cut-off must be a whole number of minutes, 0 to 360."),
         ("doubleTapMinutes", 1, 30, "A double tap must be a whole number of minutes, 1 to 30."),
     ):

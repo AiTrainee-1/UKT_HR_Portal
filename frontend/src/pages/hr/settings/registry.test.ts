@@ -96,10 +96,16 @@ describe("the Settings tab registry", () => {
       "rules-grace",
       "shift-groups",
       "breaks",
+      // Night and early morning (owner 2026-11-18: every next-morning rule editable here)
+      "early-arrival",
+      "clock-in-again",
+      "night-exit",
+      "cut-off",
+      "night-session",
+      "double-tap",
       "min-credit",
       "rounding",
       "full-day-value",
-      "night-session",
       "try-it",
     ]);
     const find = (query: string) =>
