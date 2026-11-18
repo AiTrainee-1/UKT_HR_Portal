@@ -54,11 +54,12 @@ class _LogWindow:
         return self._cache[day]
 
 
-def _resolve_shift_day(logs_by_date: dict, d: date_type, ruleset, manual) -> list:
+def _resolve_shift_day(logs_by_date: dict, d: date_type, ruleset, manual, employee_id: int | None = None) -> list:
     """[(seconds since d's midnight, AttendanceLog), ...] of production shift day `d`, night sessions resolved by the
     engine's own resolver with its guards (days the rules do not judge and manual override days neither consume nor
-    are closed). `logs_by_date` must hold the punches back to the first night-session sync point."""
-    return psr.resolve_day(_LogWindow(logs_by_date), d, **psr.session_kwargs(ruleset, manual))
+    are closed; a 06:00-on morning punch is the next day's early arrival). `logs_by_date` must hold the punches back to
+    the first night-session sync point."""
+    return psr.resolve_day(_LogWindow(logs_by_date), d, **psr.session_kwargs(ruleset, manual, employee_id))
 
 
 def _production_shift_days(emp, d_from: date_type, d_to: date_type):
@@ -84,7 +85,7 @@ def _production_shift_days(emp, d_from: date_type, d_to: date_type):
     day = d_from
     while day <= d_to:
         if day not in manual and ruleset.applies(day):
-            out[day] = _resolve_shift_day(logs_by_date, day, ruleset, manual)
+            out[day] = _resolve_shift_day(logs_by_date, day, ruleset, manual, emp.pk)
         day += timedelta(days=1)
     return ruleset, out
 
@@ -108,7 +109,7 @@ def _production_roster_days(employee_ids, d: date_type, prod_config=None):
         mine = production_prefetch_for(pf, eid)
         if d in mine["prod_manual_dates"]:
             continue
-        out[eid] = _resolve_shift_day(mine["prod_logs_by_date"], d, ruleset, mine["prod_manual_dates"])
+        out[eid] = _resolve_shift_day(mine["prod_logs_by_date"], d, ruleset, mine["prod_manual_dates"], eid)
     return ruleset, out
 
 

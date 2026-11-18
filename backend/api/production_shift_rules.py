@@ -40,7 +40,16 @@ day as +86400 and removed from the next day) when ALL of these hold:
   * it is within `night_session_hours` (default 24) of the open "in" punch, in whole minutes (seconds are dropped, so
     09:00:59 after a 21:00:00 punch is exactly 12 h);
   * both days are judged by the new rules (on/after the effective date) and neither is a MANUAL override day: a day the
-    new rules do not judge neither consumes nor is closed, and a manual record stays untouched.
+    new rules do not judge neither consumes nor is closed, and a manual record stays untouched;
+  * it is not an EARLY ARRIVAL (owner 2026-11-18: "the shift starts at 8:30, the first morning punch counts from 6:00"):
+    when the open day is a day shift (its standard departure is on the same day: Day, Sunday), a punch made within
+    EARLY_ARRIVAL_MIN (2 h 30 min) of the start of the shift it begins - 06:00 for the 08:30 Day and Sunday shifts - is
+    that day's first punch, never the open day's exit, UNLESS the worker clocks in again for that shift (a punch after it
+    up to the shift start + grace, 08:45): then it was the end of the night's overtime (worked through to 06:18, back at
+    08:31) and still closes the open day. A punch before 06:00 closes it as before, and a night shift (standard
+    departure the next morning, 06:30) is still closed up to the close-by time. The guard needs the open day's group, so
+    it is applied while the days are resolved forward (RuleSet.arrival_guard); the walk back to a sync point ignores it
+    (a superset: still correct).
 The chain is followed back from the day asked about to the first SYNC POINT: a day whose first punch cannot have been
 consumed whatever the resolution before it (the previous day has no punches, the gap from the previous day's last raw
 punch exceeds the limit, the punch is later than the close-by time, or one of the two days is not in force / manual).
@@ -55,8 +64,11 @@ Double taps: a punch less than TAP_GAP_S (300 s) after the previous kept punch o
 pairing (the same 5-minute rule the WhatsApp alerts and the Report Center use), because the count of punches decides who
 is in and who is out.
 
-Rounding and the cap: the day's total is rounded to the configured step (half up, or down) and THEN limited to the
-group's top ladder value, so a step that does not divide the top value can never pay more than the table.
+Quarters (owner 2026-11-18: "production shift and payroll calculations must follow only 0.25, 0.50, 0.75 ... 3.00"):
+the day's total is rounded to a QUARTER of a shift - to the nearest quarter (half up) or down to the quarter reached,
+the Settings rounding mode - and THEN limited to the group's top ladder value, itself taken down to a quarter. The
+rounding step is no longer a setting (it was 0.01 / 0.05 / 0.25; 0.01 is what produced 2.72, 1.49, 2.01 ...): every
+stored day, payroll total and report built from them is a multiple of 0.25.
 
 Arithmetic is exact (Fraction) and only the final figure becomes a Decimal, rounded half-up to 0.01: no float, and no
 rounding drift between a per-day and a per-month computation.
@@ -90,12 +102,18 @@ DEFAULT_SESSION_HOURS = 24
 #: Minutes added to the latest next-day out time of the rules to get the CLOSE-BY time (RuleSet.close_by_s).
 CLOSE_BY_MARGIN_MIN = 90
 
+#: A morning punch this many minutes or less before the start of the shift it begins is an EARLY ARRIVAL: it is that
+#: day's first punch and never closes the day shift before it (06:00 for an 08:30 start). See the module docstring.
+EARLY_ARRIVAL_MIN = 150
+
 #: A second tap on the device within this many seconds of the previous punch is a double tap and is ignored (the same
 #: 5-minute rule the WhatsApp alerts and the Report Center use): the count of punches decides who is in and who is
 #: out, so a double press must not turn "arrived" into "arrived and left".
 TAP_GAP_S = 300
 
-ROUNDING_STEPS = (Decimal("0.01"), Decimal("0.05"), Decimal("0.25"))
+#: The one step every production shift value is counted in (owner 2026-11-18): 0.25, 0.50, 0.75, 1.00 ...
+QUARTER = Decimal("0.25")
+ROUNDING_STEPS = (QUARTER,)
 ROUNDING_MODES = ("nearest", "down")
 APPLIES_ON_CHOICES = ("mon_sat", "sunday", "all")
 KIND_CHOICES = ("day", "night", "sunday", "custom")
@@ -159,7 +177,9 @@ class RuleSet:
     effective_from: date_type | None = None
     grace_minutes: int = 5
     min_credit: Decimal = Decimal("0.00")
-    rounding_step: Decimal = Decimal("0.01")
+    # QUARTER in every RuleSet the app builds (build_ruleset, the default). Only a test that checks the pro-rata arithmetic
+    # to the cent builds one with a finer step on purpose.
+    rounding_step: Decimal = QUARTER
     rounding_mode: str = "nearest"
     full_day_value: Decimal = Decimal("1.00")
     night_session_hours: int = DEFAULT_SESSION_HOURS
@@ -207,6 +227,26 @@ class RuleSet:
             if start <= d and (end is None or d <= end):
                 return group
         return None
+
+    def arrival_guard(self, employee_id: int | None = None):
+        """The early-arrival test resolve_day applies before a next-morning punch closes an open day (see the module
+        docstring): f(open day, its first punch, next day, the next day's punches) -> True when the next day's first
+        punch is that day's early arrival and must stay there. Seconds since each day's own midnight, the next day's
+        punches oldest first with double taps already dropped."""
+        grace_s = self.grace_minutes * 60
+
+        def is_arrival(open_day: date_type, open_first_s: int, next_day: date_type, next_secs: Sequence[int]) -> bool:
+            opened = select_group(self, open_day, open_first_s % DAY_S, employee_id)
+            if opened is None or _overnight(opened):
+                return False  # a night shift ends the next morning: its 06:30 exit still closes it
+            first = _minute(next_secs[0] % DAY_S)
+            starts = select_group(self, next_day, first, employee_id)
+            if starts is None or first < starts.start_s - EARLY_ARRIVAL_MIN * 60:
+                return False  # before 06:00: the end of the night's overtime
+            # 06:00 on: the early arrival, unless the worker clocks in for the shift after it (then it ended the night)
+            return not any(first < _minute(s) <= starts.start_s + grace_s for s in next_secs[1:])
+
+        return is_arrival
 
     def applies(self, d: date_type) -> bool:
         """True when the new rules judge day `d`: switched on, `d` on/after the effective date, and a usable group.
@@ -361,14 +401,13 @@ def build_ruleset(config, groups, rules, breaks, assignments=()) -> RuleSet:
         for b in sorted(breaks, key=lambda x: (x.order, x.id or 0))
         if b.enabled and time_to_s(b.end_time) > time_to_s(b.start_time)
     )
-    step = _dec(_attr(config, "rules_rounding_step", "0.01"))
     mode = _attr(config, "rules_rounding_mode", "nearest")
     return RuleSet(
         enabled=bool(_attr(config, "rules_enabled", True)),
         effective_from=getattr(config, "rules_effective_from", None),
         grace_minutes=max(0, int(_attr(config, "rules_grace_minutes", 5))),
         min_credit=_dec(_attr(config, "rules_min_credit", "0")),
-        rounding_step=step if step > 0 else _CENT,
+        rounding_step=QUARTER,  # whatever an older config row still holds (0.01 made 2.72 / 1.49 days)
         rounding_mode=mode if mode in ROUNDING_MODES else "nearest",
         full_day_value=_dec(_attr(config, "rules_full_day_value", "1")),
         night_session_hours=max(0, int(_attr(config, "rules_night_session_hours", DEFAULT_SESSION_HOURS))),
@@ -477,7 +516,22 @@ def _circular_distance(a: int, b: int) -> int:
 # ── The day ────────────────────────────────────────────────────────────────
 
 
+def _overnight(group: ShiftGroup) -> bool:
+    """A night shift: its standard departure is on the next morning (Night 21:00 -> 06:30). Without one, its kind says."""
+    if group.main_out_s is not None:
+        return group.main_out_s >= DAY_S
+    return group.kind == "night"
+
+
+def _step_down(v: Decimal, step: Decimal) -> Decimal:
+    """`v` taken down to the step (1.30 -> 1.25 in quarters): the cap of a table whose top value is not on the step."""
+    return (Decimal(int(Decimal(v) / step)) * step).quantize(_CENT)
+
+
 def _round_total(total: Fraction, ruleset: RuleSet) -> Decimal:
+    """The day's exact total on the RuleSet's step - QUARTERS of a shift in the app (owner 2026-11-18): to the nearest
+    quarter (half up: 2.72 -> 2.75, 1.12 -> 1.00, 1.13 -> 1.25) or, in rounding mode "down", the quarter reached
+    (2.72 -> 2.50)."""
     step = Fraction(ruleset.rounding_step)
     units = total / step
     whole = units.numerator // units.denominator  # floor (the total is never negative)
@@ -511,8 +565,8 @@ def evaluate_day(ruleset: RuleSet, d: date_type, punches: Sequence, employee_id:
     if pairs and total < Fraction(ruleset.min_credit):
         total = Fraction(ruleset.min_credit)
         minimum_applied = True
-    # round FIRST, then cap: a step that does not divide the top value (0.25 against 1.30) must not pay above the table
-    shifts = min(_round_total(total, ruleset), top.quantize(_CENT, rounding=ROUND_HALF_UP))
+    # round FIRST, then cap: a top value that is not a quarter (1.30) caps at the quarter below it, never above the table
+    shifts = min(_round_total(total, ruleset), _step_down(top, ruleset.rounding_step))
 
     is_late = cm[0] > group.start_s + grace_s
     early_leave = len(cm) > 1 and group.main_out_s is not None and cm[-1] < group.main_out_s - grace_s
@@ -526,7 +580,7 @@ def evaluate_day(ruleset: RuleSet, d: date_type, punches: Sequence, employee_id:
         "first_punch": s_to_time(kept[0]),
         "last_punch": s_to_time(kept[-1]) if len(kept) > 1 else None,
         "rule_group": group.label,
-        "rule_note": _note(group, ruleset, cm, pairs, shifts, is_late, minimum_applied),
+        "rule_note": _note(group, ruleset, cm, pairs, shifts, is_late, minimum_applied, total),
     }
 
 
@@ -607,8 +661,9 @@ def explain_day(ruleset: RuleSet, d: date_type, punches: Sequence, employee_id: 
     }
 
 
-def _note(group, ruleset, cm, pairs, shifts, is_late, minimum_applied) -> str:
-    """One plain sentence saying why the day came out the way it did."""
+def _note(group, ruleset, cm, pairs, shifts, is_late, minimum_applied, total=None) -> str:
+    """One plain sentence saying why the day came out the way it did. `total` = the exact (unrounded) sum of the pairs."""
+    exact_total = _frac_text(total) if total is not None else _shifts_text(shifts)
     label = group.label
     grace_s = ruleset.grace_minutes * 60
     if not pairs:
@@ -640,20 +695,24 @@ def _note(group, ruleset, cm, pairs, shifts, is_late, minimum_applied) -> str:
                 else f"the start {hhmm(group.start_s)} (0.00)"
             )
             hi_txt = f"{hhmm(higher[0].out_s)} ({_shifts_text(higher[0].value)})" if higher else "the end of the table"
-            body = f"left {hhmm(t_out)}, between {lo_txt} and {hi_txt}: {_shifts_text(shifts)}"
+            body = f"left {hhmm(t_out)}, between {lo_txt} and {hi_txt}: {exact_total}"
         if is_late:
             body += f"; arrived {hhmm(t_in)}, after the {hhmm(group.start_s + grace_s)} cut-off, so the late part is not paid"
         if len(cm) > 2:
             body += f"; the last punch {hhmm(cm[-1])} has no pair and is ignored"
     else:
         spans = " and ".join(f"{hhmm(a)}-{hhmm(b)}" for a, b, _ci, _co in pairs)
-        body = f"worked {spans}, {_shifts_text(shifts)} shifts in total (breaks are not paid, gaps between punches are not paid)"
+        body = f"worked {spans}, {exact_total} shifts in total (breaks are not paid, gaps between punches are not paid)"
         if len(cm) % 2:
             body += f"; the last punch {hhmm(cm[-1])} has no pair and is ignored"
         if is_late:
             body += f"; arrived {hhmm(pairs[0][0])}, after the {hhmm(group.start_s + grace_s)} cut-off"
     if minimum_applied:
         body += f"; raised to the minimum credit {_shifts_text(ruleset.min_credit)}"
+        exact_total = _shifts_text(ruleset.min_credit)
+    if exact_total != _shifts_text(shifts) and not (len(pairs) == 1 and pairs[0][1] > group.points[-1].out_s):
+        how = "down to the quarter reached" if ruleset.rounding_mode == "down" else "to the nearest quarter"
+        body += f"; counted in quarters of a shift: {exact_total} rounded {how}, {_shifts_text(shifts)}"
     return f"{label}: {body}"
 
 
@@ -703,15 +762,16 @@ def judge_day(
 # ── Cross-midnight resolution ──────────────────────────────────────────────
 
 
-def session_kwargs(ruleset: RuleSet, manual=None) -> dict:
+def session_kwargs(ruleset: RuleSet, manual=None, employee_id: int | None = None) -> dict:
     """The keyword arguments of resolve_day / needs_history that make them follow `ruleset` (the session hours, the
-    derived close-by time, the days the rules judge) and the dates of MANUAL override days (they neither consume nor
-    are closed)."""
+    derived close-by time, the days the rules judge, the early-arrival guard) and the dates of MANUAL override days
+    (they neither consume nor are closed). `employee_id` lets the guard see the worker's special shift."""
     return {
         "hours": ruleset.night_session_hours,
         "close_by_s": ruleset.close_by_s,
         "in_force": ruleset.applies,
         "manual": frozenset(manual or ()),
+        "arrival": ruleset.arrival_guard(employee_id),
     }
 
 
@@ -765,6 +825,7 @@ def resolve_day(
     close_by_s: int | None = None,
     in_force=None,
     manual=None,
+    arrival=None,
 ) -> list[tuple[int, Any]]:
     """The punches of shift day `d` once night sessions are resolved: [(seconds since d's midnight, ref)], oldest first.
 
@@ -776,8 +837,9 @@ def resolve_day(
     there, so one day, a range and a month agree.
 
     `close_by_s` (seconds since midnight; None = no clock limit), `in_force` (a date -> bool test of the days the new
-    rules judge; None = all) and `manual` (dates of manual override days) switch on the guards of the closing-punch rule;
-    session_kwargs(ruleset, manual) builds all four from a RuleSet."""
+    rules judge; None = all), `manual` (dates of manual override days) and `arrival` (the early-arrival test,
+    RuleSet.arrival_guard; None = none) switch on the guards of the closing-punch rule; session_kwargs(ruleset, manual)
+    builds all five from a RuleSet."""
     chain = _Chain(by_date, hours, close_by_s, in_force, manual)
     cap = MAX_CHAIN_DAYS if lookback is None else max(0, int(lookback))
     start, steps = d, 0
@@ -792,6 +854,8 @@ def resolve_day(
             own = own[1:]
         nxt_day = day + timedelta(days=1)
         closes = len(own) % 2 == 1 and chain.can_consume(nxt_day)
+        if closes and arrival is not None and arrival(day, own[0][0], nxt_day, [s for s, _r in chain.raw(nxt_day)]):
+            closes = False  # the next morning's punch is that day's early arrival (06:00 on), not this day's exit
         if day == d:
             if closes:
                 nxt_first = chain.raw(nxt_day)[0]
@@ -810,6 +874,7 @@ def needs_history(
     close_by_s: int | None = None,
     in_force=None,
     manual=None,
+    arrival=None,  # noqa: ARG001 - accepted so session_kwargs() fits both; the walk back is a superset without it
 ) -> bool:
     """True when resolving `d` from `by_date`, which holds the punches from `floor` on, would have to look at days
     BEFORE `floor`: the walk back has not met a sync point yet and is not capped. The caller then reads the punches of
@@ -845,7 +910,9 @@ def evaluate_with_session(
     punches are never taken from or given to a neighbour)."""
     if not ruleset.applies(d):
         return None
-    return evaluate_day(ruleset, d, resolve_day_times(by_date, d, **session_kwargs(ruleset, manual)), employee_id)
+    return evaluate_day(
+        ruleset, d, resolve_day_times(by_date, d, **session_kwargs(ruleset, manual, employee_id)), employee_id
+    )
 
 
 # ── Loading from the database ──────────────────────────────────────────────

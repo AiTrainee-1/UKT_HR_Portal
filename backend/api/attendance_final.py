@@ -1178,7 +1178,7 @@ def _production_session_logs(emp, d: date_type, own_logs, ruleset, prefetch) -> 
     manual = prefetch.get("prod_manual_dates")
     if manual is None:
         manual = _production_manual_dates([emp.pk], d - timedelta(days=psr.MAX_CHAIN_DAYS), hi).get(emp.pk, set())
-    kwargs = psr.session_kwargs(ruleset, manual)
+    kwargs = psr.session_kwargs(ruleset, manual, emp.pk)
     by_date = _PunchWindow(window, d, own_logs)
     if psr.needs_history(by_date, d, floor, **kwargs):
         window = {k: list(v) for k, v in window.items()}  # the bulk caller's shared window is not touched
@@ -1285,6 +1285,11 @@ def production_day_result(
     own = sorted(
         (t if not isinstance(t, int) else psr.s_to_time(t)) for t in by_date.get(d, [])
     )
+    if ruleset is not None and own and not psr.resolve_day_times(
+        by_date, d, **psr.session_kwargs(ruleset, manual, employee_id)
+    ):
+        # every punch of the day closed the night before (a 05:01 exit): the day has no work of its own, never "present"
+        own = []
     return _compute_production(None, d, own, None, config, segments)
 
 
@@ -1393,6 +1398,12 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         has_manual = Attendance.objects.filter(
             employee=emp, date=d.isoformat(), present=True
         ).exists()
+    # A presence row next to real punches is the punch ingest's (it writes one for every punch), not HR marking the person
+    # present. It only matters on a production day whose punches ALL belong to the night before (a 05:01 closing punch
+    # resolved into the previous shift day): that day has no work of its own and must not become "present, 1 shift"
+    # (owner 2026-11-18: the night-out punch was paid twice, e.g. Sunday 25 Oct for 1029).
+    if has_manual and punch_times and not day_times:
+        has_manual = False
 
     on_leave = (d in leave_dates) if leave_dates is not None else False
     is_holiday = (d in holiday_dates) if holiday_dates is not None else False

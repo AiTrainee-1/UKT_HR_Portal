@@ -23,6 +23,7 @@ What is pinned here
 Run via: python manage.py test api.tests_production_shift_rules -v 2
 """
 
+import dataclasses
 import importlib
 import json
 import math
@@ -169,9 +170,17 @@ def _default_rows(disabled_rules=(), disabled_groups=(), breaks=True):
     return groups, rules, break_rows
 
 
+def _build(config, groups, rules, breaks, assignments=()) -> psr.RuleSet:
+    """psr.build_ruleset, then the config's rounding step ON PURPOSE. The app always counts production shifts in quarters
+    (owner 2026-11-18: build_ruleset ignores the stored step, see QuarterTests); most tests here check the pro-rata
+    arithmetic to the cent, so they keep the config's step (0.01 unless a test says otherwise)."""
+    rs = psr.build_ruleset(config, groups, rules, breaks, assignments)
+    return dataclasses.replace(rs, rounding_step=Decimal(config.rules_rounding_step))
+
+
 def ruleset(disabled_rules=(), disabled_groups=(), breaks=True, **config) -> psr.RuleSet:
     groups, rules, break_rows = _default_rows(disabled_rules, disabled_groups, breaks)
-    return psr.build_ruleset(_config(**config), groups, rules, break_rows)
+    return _build(_config(**config), groups, rules, break_rows)
 
 
 def day(punches, d=WED, rs=None) -> dict:
@@ -394,7 +403,7 @@ class OwnersTableTests(SimpleTestCase):
                 order=99,
             )
         )
-        rs = psr.build_ruleset(_config(), groups, rules, breaks)
+        rs = _build(_config(), groups, rules, breaks)
         self.assertEqual(shifts(["08:30", "20:00"], rs=rs), D("1.50"))
 
     def test_every_figure_is_an_exact_two_decimal_decimal(self):
@@ -464,7 +473,7 @@ class GroupSelectionTests(SimpleTestCase):
 
     def test_no_group_for_the_weekday(self):
         groups, rules, breaks = _default_rows(disabled_groups={1, 2})
-        rs = psr.build_ruleset(_config(), groups, rules, breaks)
+        rs = _build(_config(), groups, rules, breaks)
         self.assertIsNone(psr.select_group(rs, MON, S("08:30")))
         self.assertIsNone(psr.evaluate_day(rs, MON, [S("08:30"), S("17:00")]))
         self.assertEqual(psr.select_group(rs, SUN, S("08:30")).label, "Sunday shift")
@@ -472,7 +481,7 @@ class GroupSelectionTests(SimpleTestCase):
     def test_order_decides_between_overlapping_windows(self):
         groups, rules, breaks = _default_rows()
         groups[1].first_punch_from = time(4, 0)  # the Night window now overlaps the Day one
-        rs = psr.build_ruleset(_config(), groups, rules, breaks)
+        rs = _build(_config(), groups, rules, breaks)
         self.assertEqual(self.pick("08:30", rs=rs), "Day shift")
 
     def test_judge_day_for_a_stored_record(self):
@@ -731,8 +740,9 @@ def indep_shifts(cfg: dict, punches_s: list) -> Decimal:
     units = total / step
     n = math.floor(units) if cfg["mode"] == "down" else math.floor(units + Fraction(1, 2))
     rounded = n * step
-    if points:  # the cap comes AFTER the rounding
-        rounded = min(rounded, points[-1][1])
+    if points:  # the cap comes AFTER the rounding, and is itself on the step (a 1.40 top is 1.25 in quarters)
+        top = Fraction(points[-1][1])
+        rounded = min(rounded, math.floor(top / step) * step)
     return (Decimal(rounded.numerator) / Decimal(rounded.denominator)).quantize(Decimal("0.01"))
 
 
@@ -865,7 +875,7 @@ def _random_punches(rng: random.Random, cfg: dict) -> list:
 class DifferentialTests(SimpleTestCase):
     def _compare(self, cfg, punches, label):
         groups, rules, breaks = _rows_for(cfg)
-        rs = psr.build_ruleset(
+        rs = _build(
             _config(
                 rules_grace_minutes=cfg["grace"],
                 rules_min_credit=Decimal(cfg["min_credit"]),
@@ -922,6 +932,118 @@ class ParsePunchListTests(SimpleTestCase):
                 psr.parse_punch_list([bad])
 
 
+class QuarterTests(SimpleTestCase):
+    """Owner 2026-11-18: production shifts and payroll follow 0.25, 0.50, 0.75 ... 3.00 only. The 2.72 / 1.49 / 2.01 days
+    came from the Settings rounding step 0.01; the app now counts in quarters whatever a settings row still stores."""
+
+    def _app(self, **config) -> psr.RuleSet:
+        groups, rules, breaks = _default_rows()
+        return psr.build_ruleset(_config(**config), groups, rules, breaks)  # NOT _build: exactly what the app builds
+
+    def test_every_ruleset_the_app_builds_counts_in_quarters(self):
+        for stored in ("0.01", "0.05", "0.25"):
+            self.assertEqual(self._app(rules_rounding_step=D(stored)).rounding_step, D("0.25"), stored)
+        self.assertEqual(psr.RuleSet().rounding_step, D("0.25"))
+        self.assertEqual(psr.ROUNDING_STEPS, (D("0.25"),))
+
+    def test_the_day_is_saved_to_the_nearest_quarter_or_down_to_the_quarter_reached(self):
+        near, down = self._app(), self._app(rules_rounding_mode="down")
+        for punches, exact, nearest, reached in [
+            (["08:32", "12:45", "13:12", "20:01", "21:00", "02:30+"], "2.70", "2.75", "2.50"),  # a night of overtime
+            (["08:30", "17:00"], "0.91", "1.00", "0.75"),
+            (["08:30", "11:30"], "0.34", "0.25", "0.25"),
+            (["08:30", "21:30"], "1.67", "1.75", "1.50"),
+            (["08:30", "20:00"], "1.50", "1.50", "1.50"),  # a ladder point is already a quarter
+        ]:
+            with self.subTest(punches=punches):
+                secs = [S(p) for p in punches]
+                self.assertEqual(psr.explain_day(near, WED, secs)["pairTotal"], exact)
+                self.assertEqual(psr.evaluate_day(near, WED, secs)["shifts_earned"], D(nearest))
+                self.assertEqual(psr.evaluate_day(down, WED, secs)["shifts_earned"], D(reached))
+
+    def test_no_punch_list_can_earn_anything_but_a_quarter(self):
+        rng = random.Random(20261118)
+        rs = self._app()
+        for _ in range(3000):
+            punches = sorted(rng.randrange(4 * 3600, 30 * 3600, 60) for _i in range(rng.randint(1, 8)))
+            shifts = psr.evaluate_day(rs, WED, punches)["shifts_earned"]
+            self.assertEqual((shifts * 4) % 1, 0, punches)
+
+    def test_the_note_says_the_worked_figure_and_the_quarter_it_was_saved_as(self):
+        secs = [S(p) for p in ("08:32", "12:45", "13:12", "20:01", "21:00", "02:30+")]
+        note = psr.evaluate_day(self._app(), WED, secs)["rule_note"]
+        self.assertIn("2.70 shifts in total", note)
+        self.assertIn("counted in quarters of a shift: 2.70 rounded to the nearest quarter, 2.75", note)
+        exact_point = psr.evaluate_day(self._app(), WED, [S("08:30"), S("20:00")])["rule_note"]
+        self.assertNotIn("quarters", exact_point)  # nothing to round
+
+
+class EarlyArrivalTests(SimpleTestCase):
+    """Owner 2026-11-18: "the shift starts at 8:30; the first morning punch counts from 6:00 for those who arrive early",
+    and a night's overtime stays on the day it began. A day shift left open (an odd number of punches) is closed by the
+    next morning's first punch only before 06:00, or from 06:00 when the worker then clocks in for the 08:30 shift."""
+
+    def _resolve(self, spec):
+        rs = ruleset(rules_rounding_step=psr.QUARTER)
+        return rs, {d: _rs_resolved(spec, d, rs) for d in sorted(spec)}
+
+    def test_an_early_arrival_after_a_forgotten_out_punch_starts_its_own_day(self):
+        # Monday's dinner return has no out-punch; Tuesday she is in at 06:15 for the 08:30 shift
+        rs, got = self._resolve(
+            {MON: ["08:30", "12:45", "13:30", "20:00", "21:00"], TUE: ["06:15", "12:45", "13:30", "17:45"]}
+        )
+        self.assertEqual(got[MON], [S(t) for t in ("08:30", "12:45", "13:30", "20:00", "21:00")])
+        self.assertEqual(got[TUE], [S(t) for t in ("06:15", "12:45", "13:30", "17:45")])
+        self.assertEqual(psr.evaluate_day(rs, MON, got[MON])["shifts_earned"], D("1.50"))  # the lone 21:00 is not paid
+        tue = psr.evaluate_day(rs, TUE, got[TUE])
+        self.assertEqual((tue["shifts_earned"], tue["is_late"]), (D("1.00"), False))  # paid from 08:30, never early
+
+    def test_overtime_through_the_night_ends_on_the_day_it_began(self):
+        # 1361 (7-8 Oct): back from dinner 20:13, worked through the night, out 06:18, in again 08:31 for the next shift
+        rs, got = self._resolve(
+            {
+                MON: ["08:29", "12:45", "13:32", "20:00", "20:13"],
+                TUE: ["06:18", "08:31", "12:45", "13:31", "20:00"],
+            }
+        )
+        self.assertEqual(got[MON][-1], S("06:18+"))
+        self.assertEqual(got[TUE][0], S("08:31"))
+        self.assertEqual(psr.evaluate_day(rs, MON, got[MON])["shifts_earned"], D("3.00"))
+
+    def test_a_punch_before_0600_always_ends_the_night(self):
+        rs, got = self._resolve({MON: ["08:34", "12:45", "13:20", "20:01", "21:05"], TUE: ["05:01"]})
+        self.assertEqual(got[MON][-1], S("05:01+"))
+        self.assertEqual(got[TUE], [])
+
+    def test_a_night_shift_is_still_closed_by_its_morning_exit(self):
+        # the Night shift ends the next morning (05:30): a 06:30 exit closes it, the early-arrival rule is for day shifts
+        rs, got = self._resolve({MON: ["21:00"], TUE: ["06:30"]})
+        self.assertEqual(got[MON], [S("21:00"), S("06:30+")])
+        self.assertEqual(got[TUE], [])
+
+    def test_sunday_counts_from_0600_too(self):
+        sat = SUN - timedelta(days=1)
+        rs, got = self._resolve(
+            {sat: ["08:31", "12:52", "13:24", "20:00", "20:15"], SUN: ["06:50", "12:45", "13:32", "17:00"]}
+        )
+        self.assertEqual(got[SUN][0], S("06:50"))  # Sunday's own arrival, not Saturday's overtime
+        rs, got = self._resolve(
+            {sat: ["08:31", "12:52", "13:24", "20:00", "20:15"], SUN: ["06:50", "08:35", "12:45", "17:00"]}
+        )
+        self.assertEqual(got[sat][-1], S("06:50+"))  # clocked in again at 08:35: 06:50 ended Saturday's night
+
+    def test_the_rule_is_the_same_whichever_day_is_asked_first(self):
+        spec = {
+            MON: ["08:30", "12:45", "13:30", "20:00", "21:00"],
+            TUE: ["06:15", "12:45", "13:30", "20:00", "21:00"],
+            WED: ["06:20", "08:30", "12:45", "13:30"],
+        }
+        rs, forward = self._resolve(spec)
+        for d in (WED, TUE, MON):
+            self.assertEqual(_rs_resolved(spec, d, rs), forward[d], d)
+        self.assertEqual(forward[TUE][-1], S("06:20+"))  # Wednesday's 08:30 clock-in makes 06:20 Tuesday's exit
+
+
 class DegeneratePointTests(SimpleTestCase):
     """Two ladder points with the same PAID time (12:45 and 13:30 are either side of the same lunch) cannot be told
     apart by a value that depends on paid time: the later, higher point wins from that paid time on, and the earlier
@@ -941,7 +1063,7 @@ class DegeneratePointTests(SimpleTestCase):
                 order=99,
             )
         )
-        rs = psr.build_ruleset(_config(rules_grace_minutes=0), groups, rules, breaks)
+        rs = _build(_config(rules_grace_minutes=0), groups, rules, breaks)
         self.assertEqual(shifts(["08:30", "12:44"], rs=rs), D("0.50"))  # still the ramp to 12:45's 0.50 (0.4979)
         self.assertEqual(shifts(["08:30", "12:45"], rs=rs), D("0.60"))
         self.assertEqual(shifts(["08:30", "13:30"], rs=rs), D("0.60"))
@@ -1724,10 +1846,14 @@ class ProductionPayrollWithRulesTests(TestCase):
 CHAIN_START = date(2026, 1, 5)  # a Monday: a long chain from here crosses Sundays and a month boundary
 
 
-def _rs_resolved(spec: dict, d: date, rs=None, manual=()) -> list:
-    """The resolved punches of day d with EVERY guard of the rules switched on (hours, close-by, in force, manual)."""
+def _rs_resolved(spec: dict, d: date, rs=None, manual=(), arrival=True) -> list:
+    """The resolved punches of day d with EVERY guard of the rules switched on (hours, close-by, in force, manual, the
+    early arrival). `arrival=False` leaves the early-arrival guard out, to test the edges of the others on their own."""
     rs = rs or ruleset()
-    return [s for s, _ref in psr.resolve_day(_by_date(spec), d, **psr.session_kwargs(rs, manual))]
+    kw = psr.session_kwargs(rs, manual)
+    if not arrival:
+        kw["arrival"] = None
+    return [s for s, _ref in psr.resolve_day(_by_date(spec), d, **kw)]
 
 
 def oracle_resolve(spec: dict, rs, manual=()) -> dict:
@@ -1750,6 +1876,21 @@ def oracle_resolve(spec: dict, rs, manual=()) -> dict:
     close_by = max([o - 86400 for o in outs if o >= 86400] + [0]) + 90 * 60
     limit_min = rs.night_session_hours * 60
 
+    def early_arrival(k, base, nxt):
+        # a day shift left open keeps its hands off a 06:00-on morning punch (2 h 30 min before the start of the shift that
+        # punch begins) unless the worker clocks in for that shift after it (by the start + grace)
+        opened = psr.select_group(rs, k, base[0] % 86400)
+        if opened is None:
+            return False
+        night = opened.main_out_s >= 86400 if opened.main_out_s is not None else opened.kind == "night"
+        if night:
+            return False
+        f = raw[nxt][0] // 60 * 60
+        starts = psr.select_group(rs, nxt, f)
+        if starts is None or f < starts.start_s - 150 * 60:
+            return False
+        return not any(f < x // 60 * 60 <= starts.start_s + rs.grace_minutes * 60 for x in raw[nxt][1:])
+
     def eligible(k):
         prev = k - timedelta(days=1)
         if prev not in raw or not raw[k] or not raw[prev] or k in manual or prev in manual:
@@ -1764,7 +1905,8 @@ def oracle_resolve(spec: dict, rs, manual=()) -> dict:
         new = {days[0]: False}
         for k in days[:-1]:
             base = raw[k][1:] if taken[k] else raw[k]
-            new[k + timedelta(days=1)] = len(base) % 2 == 1 and eligible(k + timedelta(days=1))
+            nxt = k + timedelta(days=1)
+            new[nxt] = len(base) % 2 == 1 and eligible(nxt) and not early_arrival(k, base, nxt)
         if new == taken:
             break
         taken = new
@@ -1878,9 +2020,9 @@ class NightChainHardeningTests(SimpleTestCase):
 class ClosingGuardTests(SimpleTestCase):
     """The next day's first punch closes an odd day only when it is early enough and close enough."""
 
-    def _mon(self, mon, tue, rs=None):
+    def _mon(self, mon, tue, rs=None, arrival=True):
         spec = {MON: mon, TUE: tue}
-        return _rs_resolved(spec, MON, rs), _rs_resolved(spec, TUE, rs)
+        return _rs_resolved(spec, MON, rs, arrival=arrival), _rs_resolved(spec, TUE, rs, arrival=arrival)
 
     def test_the_close_by_time_follows_the_rules(self):
         rs = ruleset()
@@ -1898,7 +2040,7 @@ class ClosingGuardTests(SimpleTestCase):
                 order=99,
             )
         )
-        self.assertEqual(psr.build_ruleset(_config(), groups, rules, breaks).close_by_s, S("09:00"))
+        self.assertEqual(_build(_config(), groups, rules, breaks).close_by_s, S("09:00"))
         self.assertEqual(rs.night_session_hours, 24)
 
     def test_a_normal_morning_arrival_after_a_forgotten_return_punch_is_not_consumed(self):
@@ -1936,6 +2078,7 @@ class ClosingGuardTests(SimpleTestCase):
         self.assertEqual(psr.evaluate_day(ruleset(), MON, mon)["shifts_earned"], D("2.60"))
 
     def test_the_close_by_edge_in_minutes(self):
+        # the close-by time on its own (the early-arrival guard left out: see the test below and EarlyArrivalTests)
         for tue_first, closed in [
             ("06:59", True),
             ("07:00", True),
@@ -1944,9 +2087,26 @@ class ClosingGuardTests(SimpleTestCase):
             ("07:55", False),
         ]:
             with self.subTest(first=tue_first):
-                mon, tue = self._mon(["08:30", "12:45", "13:30"], [tue_first])
+                mon, tue = self._mon(["08:30", "12:45", "13:30"], [tue_first], arrival=False)
                 self.assertEqual(len(mon), 4 if closed else 3)
                 self.assertEqual(tue, [] if closed else [S(tue_first)])
+
+    def test_with_every_guard_a_0600_on_punch_of_a_day_worker_is_the_mornings_arrival(self):
+        # owner 2026-11-18: the 08:30 shift's first punch counts from 06:00. A day shift left open is closed before 06:00,
+        # and from 06:00 only when the worker clocks in for the shift after it (08:30 + grace)
+        for tue, closed in [
+            (["05:59"], True),
+            (["06:00"], False),
+            (["06:59"], False),
+            (["06:59", "08:30"], True),
+            (["06:59", "08:35"], True),  # 08:35 is within the 5 min grace of 08:30
+            (["06:59", "08:36"], False),
+            (["06:59", "12:45"], False),
+        ]:
+            with self.subTest(tue=tue):
+                mon, got = self._mon(["08:30", "12:45", "13:30"], tue)
+                self.assertEqual(len(mon), 4 if closed else 3)
+                self.assertEqual(got, [S(t) for t in (tue[1:] if closed else tue)])
 
     def test_an_even_day_never_gives_its_morning_away(self):
         mon, tue = self._mon(["08:30", "12:45", "13:30", "20:00"], ["03:00", "08:30"])
@@ -1964,7 +2124,7 @@ class ClosingGuardTests(SimpleTestCase):
             ("06:30", False),
         ]:
             with self.subTest(first=tue_first):
-                mon, tue = self._mon(["08:30", "12:45", "20:00"], [tue_first], rs)
+                mon, tue = self._mon(["08:30", "12:45", "20:00"], [tue_first], rs, arrival=False)
                 self.assertEqual(len(mon), 4 if closed else 3)
                 self.assertEqual(tue, [] if closed else [S(tue_first)])
 
@@ -1974,7 +2134,7 @@ class ClosingGuardTests(SimpleTestCase):
         rs = ruleset(rules_night_session_hours=18)
         for tue_first, closed in [("06:59", True), ("07:00:59", True), ("07:01", False)]:
             with self.subTest(first=tue_first):
-                mon, tue = self._mon(["08:30", "12:45", "13:00"], [tue_first], rs)
+                mon, tue = self._mon(["08:30", "12:45", "13:00"], [tue_first], rs, arrival=False)
                 self.assertEqual(len(mon), 4 if closed else 3)
 
     def test_a_lone_morning_punch_is_closed_by_the_next_mornings_0530(self):
@@ -1990,6 +2150,8 @@ class ClosingGuardTests(SimpleTestCase):
         self.assertEqual(mon, [S("08:30"), S("03:30+")])
         self.assertEqual(tue, [])
         self.assertEqual(psr.evaluate_day(ruleset(), MON, mon)["shifts_earned"], D("2.80"))
+        quarters = ruleset(rules_rounding_step=psr.QUARTER)  # what the app saves (owner 2026-11-18)
+        self.assertEqual(psr.evaluate_day(quarters, MON, mon)["shifts_earned"], D("2.75"))
 
     def test_a_normal_arrival_after_a_lone_morning_punch_is_still_not_swallowed(self):
         # the close-by guard (05:30 + 90 min = 07:00) keeps 07:55 / 08:25 out, whatever the hours limit is
@@ -2004,7 +2166,7 @@ class ClosingGuardTests(SimpleTestCase):
         # on the close-by time), 07:01 is 24 h 01 min (and past the close-by time)
         for tue_first, closed in [("06:59", True), ("07:00", True), ("07:00:59", True), ("07:01", False)]:
             with self.subTest(first=tue_first):
-                mon, tue = self._mon(["07:00"], [tue_first])
+                mon, tue = self._mon(["07:00"], [tue_first], arrival=False)
                 self.assertEqual(len(mon), 2 if closed else 1)
                 self.assertEqual(tue, [] if closed else [S(tue_first)])
 
@@ -2023,7 +2185,7 @@ class ClosingGuardTests(SimpleTestCase):
         rs18 = ruleset(rules_night_session_hours=18)
         mon, tue = self._mon(["08:30"], ["05:30"], rs18)  # 21 h > 18 h: the saved limit still refuses it
         self.assertEqual((mon, tue), ([S("08:30")], [S("05:30")]))
-        mon, tue = self._mon(["13:00"], ["06:59"], rs18)  # 17 h 59 min <= 18 h: still closed
+        mon, tue = self._mon(["13:00"], ["06:59"], rs18, arrival=False)  # 17 h 59 min <= 18 h: still closed
         self.assertEqual(len(mon), 2)
 
     def test_the_gap_is_counted_in_whole_minutes_without_the_clock_guard(self):
@@ -2080,13 +2242,13 @@ class HardeningArithmeticTests(SimpleTestCase):
     def test_overlapping_and_duplicate_breaks_are_one_window(self):
         m = _migration()
         groups, rules, breaks = _default_rows()
-        union = psr.build_ruleset(_config(), groups, rules, breaks)
+        union = _build(_config(), groups, rules, breaks)
         dirty = list(breaks) + [
             breaks[1],  # the lunch row twice
             SimpleNamespace(id=50, label="x", start_time=time(13, 0), end_time=time(14, 0), enabled=True, order=50),
             SimpleNamespace(id=51, label="y", start_time=time(12, 50), end_time=time(13, 10), enabled=True, order=51),
         ]
-        clean_union = psr.build_ruleset(
+        clean_union = _build(
             _config(),
             groups,
             rules,
@@ -2097,7 +2259,7 @@ class HardeningArithmeticTests(SimpleTestCase):
                 )
             ],
         )
-        merged = psr.build_ruleset(_config(), groups, rules, dirty)
+        merged = _build(_config(), groups, rules, dirty)
         self.assertEqual(merged.breaks, clean_union.breaks)
         self.assertEqual(len(m.BREAKS), 5)
         self.assertEqual(len(union.breaks), 5)
@@ -2114,20 +2276,21 @@ class HardeningArithmeticTests(SimpleTestCase):
     def test_the_cap_comes_after_the_rounding_and_a_minimum_credit_cannot_exceed_it(self):
         cfg = _owner_cfg(start=510, points=[(1020, "1.40")], breaks=[], step="0.25", mode="nearest")
         groups, rules, breaks = _rows_for(cfg)
-        rs = psr.build_ruleset(_config(rules_rounding_step=D("0.25")), groups, rules, breaks)
-        # 1.40 is 5.6 steps: rounding alone would give 1.50, which is more than the table pays
-        self.assertEqual(psr.evaluate_day(rs, WED, [S("08:30"), S("17:00")])["shifts_earned"], D("1.40"))
+        rs = _build(_config(rules_rounding_step=D("0.25")), groups, rules, breaks)
+        # 1.40 is 5.6 steps: rounding alone would give 1.50, which is more than the table pays; and the cap is a quarter
+        # too (owner 2026-11-18: quarters only), so a table whose top is 1.40 pays at most 1.25
+        self.assertEqual(psr.evaluate_day(rs, WED, [S("08:30"), S("17:00")])["shifts_earned"], D("1.25"))
         self.assertEqual(
             psr.evaluate_day(rs, WED, [S("08:30"), S("12:45")])["shifts_earned"], D("0.75")
         )  # below: rounds as usual
-        rs2 = psr.build_ruleset(_config(rules_min_credit=D("2.00")), groups, rules, breaks)
+        rs2 = _build(_config(rules_min_credit=D("2.00")), groups, rules, breaks)
         self.assertEqual(psr.evaluate_day(rs2, WED, [S("08:30"), S("08:45")])["shifts_earned"], D("1.40"))
 
     def test_the_first_punch_window_is_compared_in_whole_minutes(self):
         for first_to in (time(16, 59, 59), time(16, 59)):  # the seed holds 16:59:59, the Settings page saves 16:59
             groups, rules, breaks = _default_rows()
             groups[0].first_punch_to = first_to
-            rs = psr.build_ruleset(_config(), groups, rules, breaks)
+            rs = _build(_config(), groups, rules, breaks)
             with self.subTest(first_to=first_to):
                 self.assertEqual(psr.select_group(rs, WED, S("16:59:30")).label, "Day shift")
                 self.assertEqual(psr.select_group(rs, WED, S("16:59")).label, "Day shift")
@@ -2315,12 +2478,19 @@ class LoneMorningPunchThroughTheEngineTests(TestCase):
         _punches(self.emp, TUE, "08:30")
         _punches(self.emp, WED, "03:30")
         day, month, rng = self._snaps()
-        self.assertEqual(day[TUE][1], D("2.80"))
+        self.assertEqual(day[TUE][1], D("2.75"))  # 2.80 exactly, saved in quarters (owner 2026-11-18)
         self.assertEqual((month, rng), (day, day))
         self.assertEqual(day[WED][0], "absent")
 
-    def test_a_normal_arrival_after_a_lone_morning_punch_is_not_swallowed_and_0700_is(self):
-        for first, swallowed in [("07:55", False), ("08:25", False), ("07:01", False), ("07:00", True)]:
+    def test_a_normal_arrival_after_a_lone_morning_punch_is_not_swallowed_and_0559_is(self):
+        # 07:00 was swallowed up to 2026-11-18; from 06:00 a morning punch is the day's early arrival (owner 2026-11-18)
+        for first, swallowed in [
+            ("07:55", False),
+            ("08:25", False),
+            ("07:01", False),
+            ("07:00", False),
+            ("05:59", True),
+        ]:
             with self.subTest(first=first):
                 AttendanceLog.objects.filter(employee=self.emp).delete()
                 AttendanceDayRecord.objects.filter(employee=self.emp).delete()
@@ -2532,7 +2702,7 @@ class LoaderOneSnapshotTests(TestCase):
         self.config = _set_rules()
 
     def _orm_ruleset(self, config):
-        return psr.build_ruleset(
+        return psr.build_ruleset(  # what the app builds: quarters, whatever the row stores
             config,
             list(ProductionShiftGroup.objects.order_by("order", "id")),
             list(ProductionShiftRule.objects.order_by("order", "id")),

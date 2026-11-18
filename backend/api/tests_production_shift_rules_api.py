@@ -115,7 +115,7 @@ class Base(TestCase):
             rules_effective_from=EFFECTIVE,
             rules_grace_minutes=5,
             rules_min_credit=Decimal("0.00"),
-            rules_rounding_step=Decimal("0.01"),
+            rules_rounding_step=Decimal("0.25"),  # quarters only since 2026-11-18 (QuarterStepTests: an older 0.01 row)
             rules_rounding_mode="nearest",
             rules_full_day_value=Decimal("1.00"),
             rules_night_session_hours=24,  # the shipped default (the migration seeds 24)
@@ -211,7 +211,7 @@ class ReadTests(Base):
         )
         self.assertEqual(
             (b["enabled"], b["effectiveFrom"], b["graceMinutes"], b["minCredit"], b["roundingStep"]),
-            (True, "2026-10-14", 5, 0.0, 0.01),
+            (True, "2026-10-14", 5, 0.0, 0.25),  # always quarters (owner 2026-11-18), whatever the row holds
         )
         self.assertEqual((b["roundingMode"], b["fullDayValue"], b["nightSessionHours"]), ("nearest", 1.0, 24))
         self.assertEqual(set(b["groups"][0]), {
@@ -346,7 +346,7 @@ class RoundTripTests(Base):
     def test_an_edit_leaves_every_untouched_row_alone(self):
         before = snapshot()
         doc = self.doc()
-        self.rule(self.day(doc), "17:45")["shiftValue"] = 1.1
+        self.rule(self.day(doc), "17:45")["shiftValue"] = 1.25
         self.assertEqual(self.put(doc).status_code, 200)
         after = snapshot()
         changed_rules = [r for r in after[2] if r not in before[2]]
@@ -384,6 +384,27 @@ class RoundTripTests(Base):
 # ═══ the rules of the PUT ══════════════════════════════════════════════════════════════════════════════════════════
 
 
+class QuarterStepTests(Base):
+    """Owner 2026-11-18: production shifts are counted in quarters only. A settings row saved with the old 0.01 step reads
+    0.25, pays in quarters at once, and stores 0.25 the next time the tab is saved."""
+
+    def test_an_older_row_with_the_cent_step_reads_and_pays_in_quarters(self):
+        ProductionShiftConfig.objects.filter(pk=1).update(rules_rounding_step=Decimal("0.01"))
+        self.assertEqual(self.get().json()["roundingStep"], 0.25)
+        ruleset = psr.rules_for_day(ProductionShiftConfig.get(), EFFECTIVE)
+        self.assertEqual(ruleset.rounding_step, Decimal("0.25"))
+        result = psr.evaluate_day(ruleset, EFFECTIVE, [psr.time_to_s("08:30"), psr.time_to_s("21:30")])
+        self.assertEqual(result["shifts_earned"], Decimal("1.75"))  # 1.67 worked
+        self.assertEqual(self.put({"graceMinutes": 6}).status_code, 200)
+        self.assertEqual(ProductionShiftConfig.get().rules_rounding_step, Decimal("0.25"))
+
+    def test_the_ladder_minimum_and_full_day_are_quarters(self):
+        self.assertRefused(lambda d: self.rule(self.day(d), "17:45").update(shiftValue=1.1), "in quarters of a shift")
+        self.assertRefused(lambda d: d.update(minCredit=0.3), "Minimum credit must be in quarters")
+        self.assertRefused(lambda d: d.update(fullDayValue=0.9), "Full-day value must be in quarters")
+        self.assertSaved(lambda d: self.rule(self.day(d), "17:45").update(shiftValue=1.25))
+
+
 class ScalarTests(Base):
     def test_every_setting_is_saved(self):
         doc = self.assertSaved(
@@ -392,7 +413,7 @@ class ScalarTests(Base):
                 effectiveFrom="2026-11-01",
                 graceMinutes=7,
                 minCredit=0.25,
-                roundingStep=0.05,
+                roundingStep=0.25,
                 roundingMode="down",
                 fullDayValue=1.25,
                 nightSessionHours=10,
@@ -400,7 +421,7 @@ class ScalarTests(Base):
         )
         self.assertEqual(
             (doc["effectiveFrom"], doc["graceMinutes"], doc["minCredit"], doc["roundingStep"], doc["roundingMode"]),
-            ("2026-11-01", 7, 0.25, 0.05, "down"),
+            ("2026-11-01", 7, 0.25, 0.25, "down"),
         )
         config = ProductionShiftConfig.objects.get(pk=1)
         self.assertEqual(
@@ -413,7 +434,7 @@ class ScalarTests(Base):
                 config.rules_full_day_value,
                 config.rules_night_session_hours,
             ),
-            (date(2026, 11, 1), 7, Decimal("0.25"), Decimal("0.05"), "down", Decimal("1.25"), 10),
+            (date(2026, 11, 1), 7, Decimal("0.25"), Decimal("0.25"), "down", Decimal("1.25"), 10),
         )
 
     def test_the_legacy_columns_are_never_touched_by_a_save(self):
@@ -432,8 +453,8 @@ class ScalarTests(Base):
             {"nightSessionHours": 24},
             {"minCredit": 0},
             {"minCredit": 1},
-            {"fullDayValue": 0.01},
-            {"fullDayValue": 9.99},
+            {"fullDayValue": 0.25},
+            {"fullDayValue": 9.75},
             {"roundingStep": 0.25},
             {"effectiveFrom": "2000-01-01"},
             {"effectiveFrom": "2100-12-31"},
@@ -467,9 +488,12 @@ class ScalarTests(Base):
             ({"minCredit": 0.125}, "Minimum credit"),
             ({"minCredit": "0.5"}, "Minimum credit"),
             ({"minCredit": False}, "Minimum credit"),
-            ({"roundingStep": 0.1}, "Rounding step"),
-            ({"roundingStep": 0.02}, "Rounding step"),
-            ({"roundingStep": "0.05"}, "Rounding step"),
+            ({"roundingStep": 0.1}, "the rounding step is always 0.25"),
+            ({"roundingStep": 0.02}, "the rounding step is always 0.25"),
+            ({"roundingStep": "0.05"}, "the rounding step is always 0.25"),
+            ({"roundingStep": 0.01}, "the rounding step is always 0.25"),  # owner 2026-11-18: quarters only
+            ({"minCredit": 0.3}, "Minimum credit must be in quarters"),
+            ({"fullDayValue": 1.1}, "Full-day value must be in quarters"),
             ({"roundingMode": "up"}, "Rounding mode"),
             ({"roundingMode": None}, "Rounding mode"),
             ({"fullDayValue": 0}, "Full-day value"),
@@ -677,13 +701,17 @@ class RuleTests(Base):
             (append(outTime=None), "leave-by time must be a time written HH:MM"),
             (append(outTime="24:00"), "leave-by time must be a time written HH:MM"),
             (append(outNextDay="yes"), "'outNextDay' must be true or false"),
-            (append(shiftValue=0), "shift value must be a number more than 0"),
-            (append(shiftValue=-1), "shift value must be a number more than 0"),
-            (append(shiftValue=10), "at most 9.99"),
-            (append(shiftValue=2.255), "at most two decimals"),
-            (append(shiftValue="2.25"), "shift value must be a number"),
-            (append(shiftValue=None), "shift value must be a number"),
-            (append(shiftValue=True), "shift value must be a number"),
+            (append(shiftValue=0), "the shift value must be in quarters of a shift"),
+            (append(shiftValue=-1), "the shift value must be in quarters of a shift"),
+            (append(shiftValue=10), "up to 9.75"),
+            (append(shiftValue=2.255), "the shift value must be in quarters of a shift"),
+            (
+                append(shiftValue=2.72),
+                "the shift value must be in quarters of a shift",
+            ),  # owner 2026-11-18: 0.25, 0.50, 0.75 ... only
+            (append(shiftValue="2.25"), "the shift value must be in quarters of a shift"),
+            (append(shiftValue=None), "the shift value must be in quarters of a shift"),
+            (append(shiftValue=True), "the shift value must be in quarters of a shift"),
             (append(label=5), "the name must be text"),
             (append(label="x" * 101), "at most 100 characters"),
             (append(enabled="yes"), "'enabled' must be true or false"),
@@ -698,7 +726,7 @@ class RuleTests(Base):
 
                 def mutate(d, out=out):
                     rules = self.day(d)["rules"]
-                    rules.insert(0, {"outTime": out, "shiftValue": 0.1})
+                    rules.insert(0, {"outTime": out, "shiftValue": 0.25})
 
                 self.assertRefused(mutate, "is not after the start time 08:30")
 
@@ -711,7 +739,7 @@ class RuleTests(Base):
 
         def twice(d):
             rules = self.day(d)["rules"]
-            rules.insert(4, {"outTime": "17:45", "shiftValue": 1.1})
+            rules.insert(4, {"outTime": "17:45", "shiftValue": 1.25})
 
         self.assertRefused(twice, "two rules leave at 17:45")
 
@@ -753,8 +781,8 @@ class RuleTests(Base):
 
     def test_a_rule_that_is_switched_off_is_not_checked_against_the_ladder(self):
         def mutate(d):  # out of order, below the one before, on a paid time already used: all fine while it is off
-            self.day(d)["rules"].insert(0, {"outTime": "13:00", "shiftValue": 0.1, "enabled": False})
-            self.day(d)["rules"].insert(0, {"outTime": "08:00", "shiftValue": 0.1, "enabled": False})
+            self.day(d)["rules"].insert(0, {"outTime": "13:00", "shiftValue": 0.25, "enabled": False})
+            self.day(d)["rules"].insert(0, {"outTime": "08:00", "shiftValue": 0.25, "enabled": False})
 
         self.assertSaved(mutate)
 
@@ -944,11 +972,11 @@ class ReplaceTests(Base):
 
     def test_the_saved_tables_reach_the_engine(self):
         doc = self.doc()
-        self.rule(self.day(doc), "17:45")["shiftValue"] = 1.2
+        self.rule(self.day(doc), "17:45")["shiftValue"] = 1.25
         self.assertEqual(self.put(doc).status_code, 200)
         ruleset = psr.rules_for_day(ProductionShiftConfig.get(), EFFECTIVE)
         result = psr.evaluate_day(ruleset, EFFECTIVE, [psr.time_to_s("08:30"), psr.time_to_s("17:45")])
-        self.assertEqual(result["shifts_earned"], Decimal("1.20"))
+        self.assertEqual(result["shifts_earned"], Decimal("1.25"))
 
 
 # ═══ concurrency ═══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1296,7 +1324,7 @@ class AuditTests(Base):
 
     def test_a_table_change_keeps_the_old_and_the_new_table(self):
         doc = self.doc()
-        self.rule(self.day(doc), "17:45")["shiftValue"] = 1.1
+        self.rule(self.day(doc), "17:45")["shiftValue"] = 1.25
         self.assertEqual(self.put(doc).status_code, 200)
         entry = self.entries().get()
         self.assertEqual(set(entry.new_values), {"groups"})
@@ -1304,7 +1332,7 @@ class AuditTests(Base):
         new_day = next(g for g in entry.new_values["groups"] if g["label"] == "Day shift")
         old_rule = next(r for r in old_day["rules"] if r["outTime"] == "17:45")
         new_rule = next(r for r in new_day["rules"] if r["outTime"] == "17:45")
-        self.assertEqual((old_rule["shiftValue"], new_rule["shiftValue"]), (1.0, 1.1))
+        self.assertEqual((old_rule["shiftValue"], new_rule["shiftValue"]), (1.0, 1.25))
         self.assertIn("shift groups and rules", entry.record_description)
 
     def test_breaks_are_audited_too(self):
@@ -1469,10 +1497,10 @@ class WarningTests(Base):
         self.assertFalse(any("No enabled shift group applies on Monday" in w for w in answer["warnings"]))
 
     def test_a_full_day_value_no_day_can_reach_is_advice(self):
-        answer = self.assertSaved(lambda d: d.update(fullDayValue=1.2))
+        answer = self.assertSaved(lambda d: d.update(fullDayValue=1.25))
         self.assertTrue(
             any(
-                "full-day value 1.20 is more than the most the Sunday shift can pay (1.00)" in w
+                "full-day value 1.25 is more than the most the Sunday shift can pay (1.00)" in w
                 for w in answer["warnings"]
             ),
             answer["warnings"],
@@ -1526,14 +1554,21 @@ class PreviewTests(Base):
                 self.assertEqual(self.calc(punches)["shifts"], shifts)
 
     def test_the_grace_snaps_a_near_miss_to_the_point(self):
-        self.assertEqual(self.calc(["08:30", "17:42"])["shifts"], 1.0)
-        between = self.calc(["08:30", "17:40"])
-        self.assertLess(between["shifts"], 1.0)
-        self.assertEqual(between["status"], "half_shift")
+        snapped = self.calc(["08:30", "17:42"])
+        self.assertEqual(snapped["shifts"], 1.0)
+        self.assertIn("counted as 17:45 within the 5 min grace", snapped["note"])
+        between = self.calc(["08:30", "17:40"])  # 0.99 worked: no snap, then saved to the nearest quarter
+        self.assertNotIn("within the 5 min grace", between["note"])
+        self.assertIn("0.99 rounded to the nearest quarter, 1.00", between["note"])
+        self.assertEqual(between["shifts"], 1.0)
+        self.assertEqual(self.calc(["08:30", "16:40"])["status"], "half_shift")  # 0.84 -> 0.75
 
     def test_a_late_first_punch_loses_value_and_is_flagged(self):
         a = self.calc(["09:00", "20:00"])
-        self.assertEqual((a["isLate"], a["shifts"]), (True, 1.44))  # 1.50 less the 30 minutes in the first band
+        # 1.50 less the 30 minutes in the first band is 1.44, saved to the nearest quarter (owner 2026-11-18)
+        self.assertEqual((a["isLate"], a["shifts"]), (True, 1.5))
+        self.assertIn("1.44 rounded to the nearest quarter, 1.50", a["note"])
+        self.assertEqual(self.calc(["10:30", "20:00"])["shifts"], 1.25)  # two hours late: a whole quarter lost
         self.assertFalse(self.calc(["08:35", "20:00"])["isLate"])  # inside the 5 minute grace
         self.assertTrue(self.calc(["08:36", "20:00"])["isLate"])
 
@@ -1561,7 +1596,7 @@ class PreviewTests(Base):
             salary_per_shift=Decimal("500.00"),
         )
         thursday, friday = date(2026, 10, 15), date(2026, 10, 16)
-        for closing, expected in [("05:30", Decimal("3.00")), ("03:30", Decimal("2.80"))]:
+        for closing, expected in [("05:30", Decimal("3.00")), ("03:30", Decimal("2.75"))]:  # 2.80, in quarters
             with self.subTest(closing=closing):
                 AttendanceLog.objects.filter(employee=emp).delete()
                 for d, hhmm in [(thursday, "08:30"), (friday, closing)]:
@@ -1616,9 +1651,9 @@ class PreviewTests(Base):
         a = self.calc(["08:30", "17:45"], groups=bogus, graceMinutes=0)
         self.assertEqual(a["shifts"], 1.0)
         doc = self.doc()
-        self.rule(self.day(doc), "17:45")["shiftValue"] = 1.2
+        self.rule(self.day(doc), "17:45")["shiftValue"] = 1.25
         self.put(doc)
-        self.assertEqual(self.calc(["08:30", "17:45"])["shifts"], 1.2)
+        self.assertEqual(self.calc(["08:30", "17:45"])["shifts"], 1.25)
 
     def test_the_date_defaults_to_today(self):
         r = self.preview({"punches": ["08:30", "20:00"]})

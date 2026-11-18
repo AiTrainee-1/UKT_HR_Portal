@@ -1441,6 +1441,14 @@ export type DayPunch = {
   /** The biometric device (or upload) the punch came from, when its tag says. */
   device: string | null;
   recordedAt: string | null;
+  /** The calendar date the punch was made on (2026-11-18 on; absent on an older server). */
+  date?: string;
+  /** A closing punch made the next morning: the night's overtime belongs to the day it began. */
+  nextDay?: boolean;
+  /** False for a punch of this date the day is not counted from (see `note`); absent/true = counted. */
+  counted?: boolean;
+  /** Why a punch is not counted here: it closed the night before, or it was a second press within 5 minutes. */
+  note?: "previous_shift" | "double_tap";
 };
 
 export type AttendanceEditContext = {
@@ -1459,7 +1467,8 @@ export type AttendanceEditContext = {
   hod: { name: string; code: string; canApprove: boolean } | null;
   pipeline: { steps: { roles: string[]; mandatory: boolean; label: string }[]; path: string };
   types: AttendanceEditType[];
-  /** Every punch recorded on that calendar day, in time order. */
+  /** Every punch of the SHIFT day, in time order: a night's next-morning exit is here (nextDay), and a punch of this
+   *  date that closed the night before is listed with counted: false. */
   punches: DayPunch[];
   /** Whether the signed-in role may propose attendance changes (Attendance: Edit). */
   canEdit: boolean;

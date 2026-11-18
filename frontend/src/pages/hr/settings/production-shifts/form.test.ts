@@ -43,7 +43,7 @@ describe("production shifts form: from the saved rules to the boxes", () => {
       effectiveFrom: "2026-10-14",
       graceMinutes: "5",
       minCredit: "0",
-      roundingStep: "0.01",
+      roundingStep: "0.25",
       roundingMode: "nearest",
       fullDayValue: "1",
       nightSessionHours: "12",
@@ -151,7 +151,7 @@ describe("production shifts form: what a save sends", () => {
       effectiveFrom: "2026-10-14",
       graceMinutes: 5,
       minCredit: 0,
-      roundingStep: 0.01,
+      roundingStep: 0.25,
       roundingMode: "nearest",
       fullDayValue: 1,
       nightSessionHours: 12,
@@ -221,8 +221,8 @@ describe("production shifts form: what is wrong before anything is sent", () => 
     expect(validateDraft(edited((d) => (d.graceMinutes = "2.5"))).grace).toBe("Use a whole number.");
     expect(validateDraft(edited((d) => (d.graceMinutes = "0"))).ok).toBe(true);
     expect(validateDraft(edited((d) => (d.minCredit = "-1"))).minCredit).toBe("Must be 0 or more.");
-    expect(validateDraft(edited((d) => (d.minCredit = "10"))).minCredit).toBe("Must be from 0 to 9.99.");
-    expect(validateDraft(edited((d) => (d.fullDayValue = "0"))).fullDay).toBe("Must be from 0.01 to 9.99.");
+    expect(validateDraft(edited((d) => (d.minCredit = "10"))).minCredit).toBe("Must be from 0 to 9.75.");
+    expect(validateDraft(edited((d) => (d.fullDayValue = "0"))).fullDay).toBe("Must be from 0.25 to 9.75.");
     expect(validateDraft(edited((d) => (d.nightSessionHours = "0"))).nightHours).toBe("Must be from 1 to 24.");
     expect(validateDraft(edited((d) => (d.nightSessionHours = "13.5"))).nightHours).toBe("Use a whole number.");
   });
@@ -273,10 +273,17 @@ describe("production shifts form: what is wrong before anything is sent", () => 
     const down = validateDraft(edited((d) => (d.groups[0].rules[4].shiftValue = "0.5")));
     expect(down.groups[0].rules[4].value).toBe("Must be at least row 4's 1.00: leaving later never earns less.");
     expect(validateDraft(edited((d) => (d.groups[0].rules[0].shiftValue = "0"))).groups[0].rules[0].value).toBe(
-      "Must be from 0.01 to 9.99.",
+      "Must be from 0.25 to 9.75.",
     );
     expect(validateDraft(edited((d) => (d.groups[0].rules[7].shiftValue = "10"))).groups[0].rules[7].value).toBe(
-      "Must be from 0.01 to 9.99.",
+      "Must be from 0.25 to 9.75.",
+    );
+    // quarters only (owner 2026-11-18): 2.72 can never be a shift value
+    expect(validateDraft(edited((d) => (d.groups[0].rules[7].shiftValue = "2.72"))).groups[0].rules[7].value).toBe(
+      "Use quarters of a shift: 0.25, 0.50, 0.75, 1.00 ...",
+    );
+    expect(validateDraft(edited((d) => (d.minCredit = "0.3"))).minCredit).toBe(
+      "Use quarters of a shift: 0.25, 0.50, 0.75, 1.00 ...",
     );
     expect(validateDraft(edited((d) => (d.groups[0].rules[0].shiftValue = "0.125"))).groups[0].rules[0].value).toBe(
       "Use at most 2 decimals.",
@@ -312,7 +319,7 @@ describe("production shifts form: what is wrong before anything is sent", () => 
     const messy = edited((d) => {
       d.groups[0].enabled = false;
       d.groups[0].rules[3].outTime = "09:00"; // out of order, and a value below the row before it
-      d.groups[0].rules[4].shiftValue = "0.3";
+      d.groups[0].rules[4].shiftValue = "0.5";
       d.groups[0].rules[0].outTime = "07:00"; // before the start
     });
     const v = validateDraft(messy);
@@ -335,7 +342,7 @@ describe("production shifts form: what is wrong before anything is sent", () => 
       edited((d) => {
         d.groups[0].rules[3].enabled = false;
         d.groups[0].rules[3].outTime = "09:00";
-        d.groups[0].rules[3].shiftValue = "0.1";
+        d.groups[0].rules[3].shiftValue = "0.25";
       }),
     );
     expect(off.ok).toBe(true);
@@ -669,7 +676,7 @@ describe("production shifts form: what a save changes (for the question first)",
       ["Applies from", "14 Oct 2026", "1 Oct 2026", true],
       ["Grace", "5 min", "3 min", true],
       ["Minimum shifts", "0", "0.25", true],
-      ["Rounding", "0.01 (nearest)", "0.25 (down)", true],
+      ["Rounding", "0.25 (nearest)", "0.25 (down)", true],
       ["Full-day value", "1", "0.75", true],
       ["Night session", "12 h", "10 h", false],
     ]);
@@ -817,7 +824,7 @@ describe("production shifts form: what the server refuses, found before the save
     expect(
       validateDraft(
         edited((d) => {
-          d.minCredit = "1.6";
+          d.minCredit = "1.75";
           d.groups[2].enabled = false;
         }),
       ).minCredit,

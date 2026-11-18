@@ -11,7 +11,7 @@ document's `effectiveFrom`.
 
 Body (GET, and the PUT answer):
   {
-    "enabled": true, "effectiveFrom": "2026-10-14", "graceMinutes": 5, "minCredit": 0.0, "roundingStep": 0.01,
+    "enabled": true, "effectiveFrom": "2026-10-14", "graceMinutes": 5, "minCredit": 0.0, "roundingStep": 0.25,
     "roundingMode": "nearest", "fullDayValue": 1.0, "nightSessionHours": 24,
     "groups": [{"id": 1, "label": "Day shift", "kind": "day", "appliesOn": "mon_sat", "startTime": "08:30",
                 "firstPunchFrom": "04:00", "firstPunchTo": "16:59", "mainOutTime": "20:00", "mainOutNextDay": false,
@@ -47,14 +47,17 @@ with "reload the page".
 Rules of the PUT (each a plain-sentence 400 when broken):
   * `enabled` true/false; `effectiveFrom` a real date YYYY-MM-DD (2000..2100) - or null while `enabled` is false; switching
     the rules on with no date named starts them TODAY (IST), so they never reach back into days already judged;
-  * `graceMinutes` 0..30; `nightSessionHours` 1..24; `minCredit` 0..9.99 and not above the most any enabled group can
-    pay; `roundingStep` 0.01 / 0.05 / 0.25; `roundingMode` nearest / down; `fullDayValue` > 0 and <= 9.99;
+  * QUARTERS (owner 2026-11-18): every production shift value is a multiple of 0.25 - the shift values of the rules,
+    `minCredit` and `fullDayValue` - and `roundingStep` is always 0.25 (the GET says 0.25 whatever an older row holds;
+    any other value is refused);
+  * `graceMinutes` 0..30; `nightSessionHours` 1..24; `minCredit` 0..9.75 and not above the most any enabled group can
+    pay; `roundingMode` nearest / down; `fullDayValue` > 0 and <= 9.75;
   * a group: a name, `kind` day / night / sunday / custom, `appliesOn` mon_sat / sunday / all, HH:MM times, the first-punch
     window not ending before it starts, a standard departure after the start time; enabled groups must not take the same
     first punch on the same days (windows may not overlap); an enabled group needs an enabled rule, and the rules cannot
     be switched on with no enabled group;
   * the rules of an enabled group (the enabled rows): leave-by times after the group's start, strictly increasing in the
-    order of the array (a next-day time is after a same-day one), shift values > 0, <= 9.99, at most two decimals and never
+    order of the array (a next-day time is after a same-day one), shift values in quarters (0.25 .. 9.75) and never
     going down, and no two on the same PAID time (a rule at the end of a break and one at its start are the same paid
     time: the engine cannot tell them apart);
   * a break: start before end on the same day; enabled breaks must not overlap.
@@ -249,7 +252,7 @@ def _document(state: _State) -> dict:
         "effectiveFrom": str(config.rules_effective_from) if config.rules_effective_from else None,
         "graceMinutes": config.rules_grace_minutes,
         "minCredit": Decimal(config.rules_min_credit).quantize(CENT),
-        "roundingStep": Decimal(config.rules_rounding_step).quantize(CENT),
+        "roundingStep": psr.QUARTER,  # fixed (owner 2026-11-18): an older row's 0.01 is not used any more
         "roundingMode": config.rules_rounding_mode,
         "fullDayValue": Decimal(config.rules_full_day_value).quantize(CENT),
         "nightSessionHours": config.rules_night_session_hours,
@@ -427,6 +430,11 @@ def _as_int(value):
     return None
 
 
+def _quarter(value: Decimal) -> bool:
+    """True for a multiple of 0.25 (0, 0.25, 0.50 ...): the only production shift values there are (owner 2026-11-18)."""
+    return (value / psr.QUARTER) % 1 == 0
+
+
 def _as_decimal(value):
     """A JSON number with at most two decimals as a Decimal, else None (a string, a bool, 1e999, 0.125 are all None).
     A Decimal is the stored value of a row an item did not restate: it passes the same test."""
@@ -533,13 +541,13 @@ def _parse_scalars(data: dict, before: dict, today: date_type) -> dict:
         doc["nightSessionHours"] = hours
     if "minCredit" in data:
         credit = _as_decimal(data["minCredit"])
-        if credit is None or not 0 <= credit <= MAX_SHIFT_VALUE:
-            raise SettingsError("Minimum credit must be a number between 0 and 9.99, with at most two decimals.")
+        if credit is None or not 0 <= credit <= MAX_SHIFT_VALUE or not _quarter(credit):
+            raise SettingsError("Minimum credit must be in quarters of a shift: 0, 0.25, 0.50 ... up to 9.75.")
         doc["minCredit"] = credit
     if "roundingStep" in data:
         step = _as_decimal(data["roundingStep"])
         if step is None or step not in psr.ROUNDING_STEPS:
-            raise SettingsError("Rounding step must be 0.01, 0.05 or 0.25.")
+            raise SettingsError("Production shifts are counted in quarters: the rounding step is always 0.25.")
         doc["roundingStep"] = step
     if "roundingMode" in data:
         if data["roundingMode"] not in psr.ROUNDING_MODES:
@@ -547,8 +555,8 @@ def _parse_scalars(data: dict, before: dict, today: date_type) -> dict:
         doc["roundingMode"] = data["roundingMode"]
     if "fullDayValue" in data:
         full = _as_decimal(data["fullDayValue"])
-        if full is None or not 0 < full <= MAX_SHIFT_VALUE:
-            raise SettingsError("Full-day value must be more than 0 and at most 9.99, with at most two decimals.")
+        if full is None or not 0 < full <= MAX_SHIFT_VALUE or not _quarter(full):
+            raise SettingsError("Full-day value must be in quarters of a shift: 0.25, 0.50 ... up to 9.75.")
         doc["fullDayValue"] = full
     # The date is what keeps the new rules away from days already judged: while they are on, one is always set.
     if doc["enabled"] and doc["effectiveFrom"] is None:
@@ -584,9 +592,9 @@ def _parse_rules(items, base_rules: list, where: str, seen: set, other_rule_ids:
             _pick(item, base, "outNextDay", False), f"{here}: 'outNextDay' must be true or false."
         )
         value = _as_decimal(_pick(item, base, "shiftValue"))
-        if value is None or not 0 < value <= MAX_SHIFT_VALUE:
+        if value is None or not 0 < value <= MAX_SHIFT_VALUE or not _quarter(value):
             raise SettingsError(
-                f"{here}: the shift value must be a number more than 0 and at most 9.99, with at most two decimals."
+                f"{here}: the shift value must be in quarters of a shift: 0.25, 0.50, 0.75, 1.00 ... up to 9.75."
             )
         rule["shiftValue"] = value
         rule["enabled"] = _bool(_pick(item, base, "enabled", True), f"{here}: 'enabled' must be true or false.")

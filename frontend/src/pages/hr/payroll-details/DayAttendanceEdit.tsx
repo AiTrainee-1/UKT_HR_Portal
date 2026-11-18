@@ -91,11 +91,26 @@ const initials = (name: string): string =>
     .map((p) => p[0]?.toUpperCase())
     .join("");
 
-/** Every punch of the day, in the order they happened, joined by a line that says how long it was between them. */
-function PunchTimeline({ punches }: { punches: DayPunch[] }) {
-  const first = punches[0];
-  const last = punches[punches.length - 1];
-  const worked = punches.length > 1 ? toMinutes(last.time) - toMinutes(first.time) : null;
+/** "23 Oct" for an ISO date, `days` days away from it. */
+const shortDate = (iso: string, days = 0): string => {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+};
+
+/** Minutes since the shift day's midnight: a next-morning exit is 24 h on, so a night's overtime reads as one stretch. */
+const atMinutes = (p: DayPunch): number => toMinutes(p.time) + (p.nextDay ? 1440 : 0);
+
+/** Every punch the day is counted from, in the order they happened, joined by a line that says how long it was between
+ *  them. A night's overtime stays on the day it began: the next-morning exit is the last punch here (marked "next day"),
+ *  and a punch of this date that ended the night before is listed under the timeline as counted on that day. */
+function PunchTimeline({ punches, date }: { punches: DayPunch[]; date: string }) {
+  const counted = punches.filter((p) => p.counted !== false);
+  const elsewhere = punches.filter((p) => p.counted === false);
+  const first = counted[0];
+  const last = counted[counted.length - 1];
+  const worked = counted.length > 1 ? atMinutes(last) - atMinutes(first) : null;
+  const intoNextDay = counted.some((p) => p.nextDay);
   return (
     <section
       className="rounded-xl border border-slate-200 bg-white p-4"
@@ -108,28 +123,32 @@ function PunchTimeline({ punches }: { punches: DayPunch[] }) {
         </span>
         <div>
           <h4 className="text-sm font-bold text-slate-900">Punches on this day</h4>
-          <p className="text-xs text-slate-500">
-            {punches.length === 0
-              ? "Nothing recorded"
-              : `${punches.length} punch${punches.length === 1 ? "" : "es"}${worked !== null ? ` · ${span(worked)} from the first to the last` : ""}`}
+          <p className="text-xs text-slate-500" data-testid="pd-day-punches-summary">
+            {counted.length === 0
+              ? elsewhere.length > 0
+                ? "No punch of its own"
+                : "Nothing recorded"
+              : `${counted.length} punch${counted.length === 1 ? "" : "es"}${worked !== null ? ` · ${span(worked)} from the first to the last` : ""}${intoNextDay ? ` · ends the next morning (${shortDate(date, 1)})` : ""}`}
           </p>
         </div>
       </header>
 
-      {punches.length === 0 ? (
+      {counted.length === 0 ? (
         <p
           className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center text-xs text-slate-500"
           data-testid="pd-day-punches-empty"
         >
-          No punch was recorded for this day.
+          {elsewhere.length > 0
+            ? "No punch of this day's own: what was punched on this date belongs to another day, below."
+            : "No punch was recorded for this day."}
         </p>
       ) : (
         // left to right in time order; a long day scrolls sideways inside the card
         <ol className="-mx-1 mt-4 flex overflow-x-auto px-1 pb-2" aria-label="Punches in order">
-          {punches.map((p, i) => {
+          {counted.map((p, i) => {
             const Src = SOURCE_ICON[p.sourceLabel] ?? CircleDot;
-            const isLast = i === punches.length - 1;
-            const gap = isLast ? 0 : toMinutes(punches[i + 1].time) - toMinutes(p.time);
+            const isLast = i === counted.length - 1;
+            const gap = isLast ? 0 : atMinutes(counted[i + 1]) - atMinutes(p);
             return (
               <li
                 key={p.id}
@@ -164,6 +183,15 @@ function PunchTimeline({ punches }: { punches: DayPunch[] }) {
                     >
                       {p.type === "IN" ? "In" : "Out"}
                     </span>
+                    {p.nextDay && (
+                      <span
+                        className="rounded-md bg-indigo-50 px-1.5 py-0.5 text-[11px] font-bold text-indigo-700"
+                        data-testid="pd-day-punch-next-day"
+                        title="Made the next morning: the night's overtime is counted on the day it began"
+                      >
+                        Next day · {shortDate(date, 1)}
+                      </span>
+                    )}
                   </div>
                   <span
                     className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-700"
@@ -178,6 +206,31 @@ function PunchTimeline({ punches }: { punches: DayPunch[] }) {
             );
           })}
         </ol>
+      )}
+
+      {elsewhere.length > 0 && (
+        <ul className="mt-3 space-y-1.5 border-t border-slate-100 pt-3" aria-label="Punches counted elsewhere">
+          {elsewhere.map((p) => (
+            <li
+              key={p.id}
+              data-testid="pd-day-punch-elsewhere"
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500"
+            >
+              <span className="font-mono font-semibold tabular-nums text-slate-400 line-through decoration-slate-300">
+                {p.time}
+              </span>
+              <span>
+                {p.note === "double_tap"
+                  ? "A second press within 5 minutes: ignored."
+                  : `Ended the night shift of ${shortDate(date, -1)}: counted on that day.`}
+              </span>
+              <span className="text-slate-400">
+                {p.sourceLabel}
+                {p.device ? ` · ${p.device}` : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );
@@ -562,7 +615,7 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
   return (
     <div className="mt-4 space-y-4 border-t border-slate-200 pt-4" data-testid="pd-day-edit">
       <div className="space-y-4">
-        <PunchTimeline punches={data.punches} />
+        <PunchTimeline punches={data.punches} date={data.date} />
         <ApprovalRoute hod={data.hod} employeeName={data.employee.name} />
       </div>
 

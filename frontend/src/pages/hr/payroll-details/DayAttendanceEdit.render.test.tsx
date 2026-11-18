@@ -103,6 +103,43 @@ describe("DayAttendanceEdit", () => {
     expect(el.textContent).toContain("4h 00m later");
   });
 
+  it("keeps a night's overtime on the day it began: the next-morning exit is last, the previous night's is set apart", () => {
+    // owner 2026-11-18: 24 Oct showed 02:30 (the 23 Oct night) and not its own 05:01 exit
+    const punch = (id: number, date: string, time: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      date,
+      time,
+      type: "IN",
+      source: "biometric:adms:SN1",
+      sourceLabel: "Biometric",
+      device: "Gate",
+      recordedAt: "",
+      counted: true,
+      ...extra,
+    });
+    const el = show(HOD, {
+      date: "2026-10-24",
+      punches: [
+        punch(1, "2026-10-24", "02:30:39", { type: "OUT", counted: false, note: "previous_shift" }),
+        punch(2, "2026-10-24", "08:34:06"),
+        punch(3, "2026-10-24", "20:01:26", { type: "OUT" }),
+        punch(4, "2026-10-24", "21:05:04"),
+        punch(5, "2026-10-25", "05:01:00", { type: "OUT", nextDay: true }),
+      ],
+    });
+    const shown = [...el.querySelectorAll('[data-testid="pd-day-punch"] .font-mono')].map((t) => text(t));
+    expect(shown).toEqual(["08:34:06", "20:01:26", "21:05:04", "05:01:00"]);
+    expect(text(q(el, "pd-day-punch-next-day"))).toBe("Next day · 25 Oct");
+    expect(text(q(el, "pd-day-punches-summary"))).toBe(
+      "4 punches · 20h 27m from the first to the last · ends the next morning (25 Oct)",
+    );
+    expect(el.textContent).toContain("7h 56m later"); // 21:05 to 05:01 the next morning, not a negative gap
+    const apart = el.querySelectorAll('[data-testid="pd-day-punch-elsewhere"]');
+    expect(apart).toHaveLength(1);
+    expect(text(apart[0])).toContain("02:30:39");
+    expect(text(apart[0])).toContain("Ended the night shift of 23 Oct: counted on that day.");
+  });
+
   it("says plainly that no Department Head is assigned and blocks sending", () => {
     const el = show(null);
     expect(el.querySelector('[data-testid="pd-day-edit-no-hod"]')?.textContent).toContain(

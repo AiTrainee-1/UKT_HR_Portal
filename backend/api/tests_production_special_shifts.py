@@ -128,7 +128,7 @@ class SpecialCrudTests(SpecialBase):
         self.create(early_shift(rules=[{"outTime": "15:00", "outNextDay": False, "shiftValue": 0.50, "enabled": True}]))
         doc = self.client.get(SETTINGS, **self.headers).json()
         doc = {k: v for k, v in doc.items() if k not in ("updatedAt", "updatedBy", "warnings", "legacy", "version")}
-        doc["minCredit"] = 0.6  # the defaults all pay at least 1.00; the special one only 0.50
+        doc["minCredit"] = 0.75  # the defaults all pay at least 1.00; the special one only 0.50
         r = self.client.put(SETTINGS, doc, content_type="application/json", **self.headers)
         self.assertEqual(r.status_code, 400, r.content)
         self.assertIn("special shift Early special", r.json()["error"])

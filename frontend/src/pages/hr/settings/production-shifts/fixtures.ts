@@ -9,7 +9,7 @@ export const SEEDED: ProductionShiftRules = {
   effectiveFrom: "2026-10-14",
   graceMinutes: 5,
   minCredit: 0,
-  roundingStep: 0.01,
+  roundingStep: 0.25,
   roundingMode: "nearest",
   fullDayValue: 1,
   nightSessionHours: 12,

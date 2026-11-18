@@ -1406,7 +1406,7 @@ Each group is a card with: **In use**, **Used on** (Monday to Saturday, Sunday o
 | Setting | Default | What it does |
 |---|---|---|
 | **Minimum shifts** | 0 (none) | A worker with at least one complete in-out pair earns at least this much for the day |
-| **Rounding step and how** | 0.01, to the nearest | The day's shifts are rounded to 0.01, 0.05 or 0.25, to the nearest step or always down. The result is never more than the group's top row |
+| **Rounding step and how** | quarters, to the nearest | A production day's shifts are always saved in quarters of a shift (0.25, 0.50, 0.75, 1.00 ... 3.00), so attendance and payroll never show figures like 2.72. "To the nearest quarter" turns 2.72 into 2.75; "Down to the quarter reached" turns it into 2.50. The step itself cannot be changed. The result is never more than the group's top row |
 | **Full-day value** | 1.00 | A day below this is a Half Shift day, at or above it Present. It changes the label only; pay is shifts x salary per shift |
 | **Night session length** | 24 hours | How long after an open "in" punch the next morning's punch can still close that night (see below) |
 

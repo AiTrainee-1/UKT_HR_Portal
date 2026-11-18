@@ -213,25 +213,78 @@ def _device_of(raw: str, names_by_serial: dict[str, str]) -> str | None:
     return None
 
 
+def _shift_day_logs(emp: Employee, d, own: list) -> list:
+    """The punches the day is judged on, oldest first (the SHIFT day, owner 2026-11-18: "all overtime hours and timings
+    on the same day's attendance record"): a production day the shift-table rules judge comes from their night-session
+    resolver, a staff day from the cross-midnight reattribution (shift_engine.resolve_day_punch_logs). Either way a
+    closing punch made the next morning is in the list (it keeps its own date) and the previous night's closing punch
+    is not. A day neither touches (a manual production day, a day before the rules) is its own date's punches."""
+    if emp.employment_type == "production":
+        from .attendance_views import _production_shift_days
+
+        _rules, days = _production_shift_days(emp, d, d)
+        if d in days:
+            return [log for _secs, log in days[d]]
+        return own
+    from .shift_engine import resolve_day_punch_logs
+    from .user_settings import settings_for_employee
+
+    resolved = resolve_day_punch_logs(emp, d, own, settings_for_employee(emp))
+    return sorted(resolved, key=lambda log: (log.date, log.punch_time, log.id))
+
+
 def day_punches(emp: Employee, d) -> list[dict]:
-    """Every punch the employee has on this calendar day, in time order, each with where it came from (the source tag, a plain
-    label, and the biometric device when it came from one)."""
+    """Every punch of this SHIFT day, in the order they happened, each with where it came from (the source tag, a plain
+    label, and the biometric device when it came from one) - the punches the day's shifts are counted from, so a night's
+    overtime is shown on the day it began (owner 2026-11-18):
+      * a closing punch made the next morning is listed last, with its own `date` and `nextDay: true`;
+      * a punch of this date that belongs to somewhere else is still listed, `counted: false`, with `note`
+        "previous_shift" (it closed the night before: e.g. 02:30 after the 23 Oct overtime, listed on 24 Oct) or
+        "double_tap" (a second press within 5 minutes, which the production rules ignore).
+    `type` is IN / OUT by position among the counted punches, as Attendance Search and the Report Log label them."""
     from .geo_attendance_views import source_label
 
     names = dict(BiometricDevice.objects.exclude(serial_number="").values_list("serial_number", "name"))
-    out = []
-    for log in AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time", "id"):
-        out.append(
-            {
-                "id": log.pk,
-                "time": log.punch_time.strftime("%H:%M:%S"),
-                "type": log.punch_type,
-                "source": log.source or "",
-                "sourceLabel": "Punch View" if log.source == "manual:punch-view" else source_label(log.source or ""),
-                "device": _device_of(log.source or "", names),
-                "recordedAt": log.created_at.isoformat() if log.created_at else None,
-            }
-        )
+    own = list(AttendanceLog.objects.filter(employee=emp, date=d).order_by("punch_time", "id"))
+    counted = _shift_day_logs(emp, d, own)
+
+    def entry(log, ptype: str) -> dict:
+        item = {
+            "id": log.pk,
+            "date": log.date.isoformat(),
+            "time": log.punch_time.strftime("%H:%M:%S"),
+            "type": ptype,
+            "source": log.source or "",
+            "sourceLabel": "Punch View" if log.source == "manual:punch-view" else source_label(log.source or ""),
+            "device": _device_of(log.source or "", names),
+            "recordedAt": log.created_at.isoformat() if log.created_at else None,
+            "counted": True,
+        }
+        if log.date > d:
+            item["nextDay"] = True
+        return item
+
+    if [log.pk for log in counted] == [log.pk for log in own]:
+        return [entry(log, log.punch_type) for log in own]  # nothing moved: the date's punches as they were saved
+    out = [entry(log, "IN" if i % 2 == 0 else "OUT") for i, log in enumerate(counted)]
+    counted_ids = {log.pk for log in counted}
+    extras = [log for log in own if log.pk not in counted_ids]
+    if extras:
+        counted_times = {log.punch_time for log in counted if log.date == d}
+        first = own[0].punch_time
+        for log in extras:
+            item = entry(log, log.punch_type)
+            item["counted"] = False
+            # production: the date's FIRST punch, when it is not counted, closed the night before; any other was a double
+            # tap. Staff: every early punch the reattribution took belongs to the day before.
+            closed_previous = emp.employment_type != "production" or (
+                log.punch_time == first and first not in counted_times
+            )
+            item["note"] = "previous_shift" if closed_previous else "double_tap"
+            if closed_previous:
+                item["type"] = "OUT"  # it ended the night before, whatever the device called it
+            out.append(item)
+    out.sort(key=lambda p: (p["date"], p["time"]))
     return out
 
 

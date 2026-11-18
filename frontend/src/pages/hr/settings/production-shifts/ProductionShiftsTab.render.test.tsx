@@ -256,7 +256,7 @@ describe("Settings -> Production Shifts: what it shows", () => {
 
     // the advanced numbers
     expect(value("#production-min-credit")).toBe("0");
-    expect(value("#production-rounding-step")).toBe("0.01");
+    expect(text('[data-testid="production-rounding-step"]')).toBe("0.25 (quarters)");
     expect(value("#production-rounding-mode")).toBe("nearest");
     expect(value("#production-full-day")).toBe("1");
     expect(value("#production-night-hours")).toBe("12");
@@ -376,14 +376,14 @@ describe("Settings -> Production Shifts: the explanations and the owner's two un
 describe("Settings -> Production Shifts: editing and saving", () => {
   it("asks first, listing what changes, then sends the whole document with the rows' ids and is clean again", async () => {
     await open();
-    await page!.type(aria("Day shift, row 4: shifts"), "1.1");
+    await page!.type(aria("Day shift, row 4: shifts"), "1.25");
     expect(saveBar().dataset.dirty).toBe("true");
     expect(saveButton().disabled).toBe(false);
 
     await press("Save Production Shift Rules");
     const dialog = q('[data-testid="confirm-production-shifts"]')!;
     expect(dialog.textContent).toContain("Save these production shift rules?");
-    expect(changeLines()).toEqual(["Day shift: row | 5:45 PM = 1.00 shifts | 5:45 PM = 1.10 shifts | pay"]);
+    expect(changeLines()).toEqual(["Day shift: row | 5:45 PM = 1.00 shifts | 5:45 PM = 1.25 shifts | pay"]);
     expect(dialog.textContent).toContain("Days from 14 Oct 2026 on are worked out with these rules");
     expect(dialog.textContent).toContain("Only production employees are affected");
     expect(server.puts).toHaveLength(0); // nothing is sent until the question is answered
@@ -396,7 +396,7 @@ describe("Settings -> Production Shifts: editing and saving", () => {
       effectiveFrom: "2026-10-14",
       graceMinutes: 5,
       minCredit: 0,
-      roundingStep: 0.01,
+      roundingStep: 0.25,
       roundingMode: "nearest",
       fullDayValue: 1,
       nightSessionHours: 12,
@@ -406,7 +406,7 @@ describe("Settings -> Production Shifts: editing and saving", () => {
       [1, "10:30", false, 0.25, true],
       [2, "12:45", false, 0.5, true],
       [3, "15:30", false, 0.75, true],
-      [4, "17:45", false, 1.1, true],
+      [4, "17:45", false, 1.25, true],
       [5, "20:00", false, 1.5, true],
       [6, "22:30", false, 2, true],
       [7, "00:30", true, 2.5, true],
@@ -432,7 +432,7 @@ describe("Settings -> Production Shifts: editing and saving", () => {
     expect(q('[data-testid="confirm-production-shifts"]')).toBeNull();
     expect(saveBar().dataset.dirty).toBe("false");
     expect(saveButton().disabled).toBe(true);
-    expect(value(aria("Day shift, row 4: shifts"))).toBe("1.10"); // as the server now has it
+    expect(value(aria("Day shift, row 4: shifts"))).toBe("1.25"); // as the server now has it
     expect(text('[data-testid="production-shifts-updated"]')).toContain("by Test HR");
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Production shift rules saved" }));
   });
@@ -769,7 +769,7 @@ describe("Settings -> Production Shifts: checks before anything is sent", () => 
     );
     expect(saveButton().disabled).toBe(true);
     await page!.type(aria("Day shift, row 5: shifts"), "10");
-    expect(text('[data-testid="rule-value-error"]')).toBe("Must be from 0.01 to 9.99.");
+    expect(text('[data-testid="rule-value-error"]')).toBe("Must be from 0.25 to 9.75.");
     await page!.type(aria("Day shift, row 5: shifts"), "1.5");
     expect(q('[data-testid="rule-value-error"]')).toBeNull();
     // back to what is saved: nothing to save
@@ -815,13 +815,14 @@ describe("Settings -> Production Shifts: checks before anything is sent", () => 
 
   it("checks the advanced numbers and works their examples from the boxes", async () => {
     await open();
-    expect(text('[data-testid="rounding-example"]')).toContain("Worked out to 1.37Saved as 1.37 shifts");
+    // quarters only (owner 2026-11-18): the step is fixed, the mode decides nearest or down
+    expect(text('[data-testid="rounding-example"]')).toContain("Worked out to 2.72Saved as 2.75 shifts");
     await page!.type("#production-min-credit", "0.25");
     expect(text('[data-testid="min-credit-example"]')).toContain(
       "The ladder gives 0.10 shiftsThe day earns 0.25 shifts",
     );
     await page!.type("#production-min-credit", "10");
-    expect(page!.text()).toContain("Must be from 0 to 9.99.");
+    expect(page!.text()).toContain("Must be from 0 to 9.75.");
     expect(saveButton().disabled).toBe(true);
     await page!.type("#production-min-credit", "0");
 
@@ -836,10 +837,9 @@ describe("Settings -> Production Shifts: checks before anything is sent", () => 
     expect(page!.text()).toContain("Must be from 1 to 24.");
     await page!.type("#production-night-hours", "12");
 
-    await choose("#production-rounding-step", "0.25");
     await choose("#production-rounding-mode", "down");
-    expect(text('[data-testid="rounding-example"]')).toContain("Worked out to 1.37Saved as 1.25 shifts");
-    expect(text('[data-testid="rounding-example"]')).toContain("Worked out to 0.62Saved as 0.50 shifts");
+    expect(text('[data-testid="rounding-example"]')).toContain("Worked out to 2.72Saved as 2.50 shifts");
+    expect(text('[data-testid="rounding-example"]')).toContain("Worked out to 1.12Saved as 1.00 shift");
     await saveAndConfirm();
     expect(server.puts[0]).toMatchObject({ roundingStep: 0.25, roundingMode: "down" });
   });
@@ -930,7 +930,7 @@ describe("Settings -> Production Shifts: try a day", () => {
   it("says the saved rules are used while there are unsaved changes, and that note goes once they are saved", async () => {
     await open();
     expect(q('[data-testid="try-unsaved"]')).toBeNull();
-    await page!.type(aria("Day shift, row 4: shifts"), "1.1");
+    await page!.type(aria("Day shift, row 4: shifts"), "1.25");
     expect(text('[data-testid="try-unsaved"]')).toContain(
       "worked out with the saved rules: save first to try the new ones",
     );
@@ -966,7 +966,6 @@ describe("Settings -> Production Shifts: view-only, branch login, loading and th
     "#production-rules-from",
     "#production-rules-grace",
     "#production-min-credit",
-    "#production-rounding-step",
     "#production-rounding-mode",
     "#production-full-day",
     "#production-night-hours",

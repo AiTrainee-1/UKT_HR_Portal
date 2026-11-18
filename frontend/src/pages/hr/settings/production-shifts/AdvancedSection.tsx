@@ -6,7 +6,7 @@ import { PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "../kit/
 import { PRODUCTION_SHIFT_SECTIONS, productionShiftText } from "../ProductionShiftsTab.meta";
 import { parseNumber } from "../payroll/form";
 import { roundShifts } from "./examples";
-import { FULL_DAY, MIN_CREDIT, ROUNDING_MODES, ROUNDING_STEPS } from "./form";
+import { FULL_DAY, MIN_CREDIT, QUARTER, ROUNDING_MODES } from "./form";
 import type { SectionProps } from "./ui";
 
 const block = (id: string) => ({ id, ...productionShiftText(id) });
@@ -20,8 +20,10 @@ const shifts = (n: number) => `${n.toFixed(2)} shift${n === 1 ? "" : "s"}`;
 export function AdvancedSection({ draft, patch, readOnly, validation }: SectionProps) {
   const minCredit = parseNumber(draft.minCredit, MIN_CREDIT).value;
   const fullDay = parseNumber(draft.fullDayValue, FULL_DAY).value;
-  const step = Number(draft.roundingStep);
-  const roundingExamples = [1.37, 0.62].map((raw) => ({ raw, rounded: roundShifts(raw, step, draft.roundingMode) }));
+  const roundingExamples = [2.72, 1.12].map((raw) => ({
+    raw,
+    rounded: roundShifts(raw, QUARTER, draft.roundingMode),
+  }));
   const SHORT_DAY = 0.1;
 
   return (
@@ -52,7 +54,7 @@ export function AdvancedSection({ draft, patch, readOnly, validation }: SectionP
             >
               <PreviewLine
                 label={`The ladder gives ${shifts(SHORT_DAY)}`}
-                result={`The day earns ${shifts(Math.max(SHORT_DAY, minCredit))}`}
+                result={`The day earns ${shifts(Math.max(roundShifts(SHORT_DAY, QUARTER, draft.roundingMode), minCredit))}`}
                 tone={minCredit > SHORT_DAY ? "info" : "neutral"}
               />
             </PreviewCard>
@@ -76,7 +78,7 @@ export function AdvancedSection({ draft, patch, readOnly, validation }: SectionP
 
       <SettingBlock
         {...block("rounding")}
-        defaultText="0.01, to the nearest step"
+        defaultText="quarters (0.25), to the nearest quarter"
         affects={[
           {
             where: "Production Attendance and Production Payroll",
@@ -102,23 +104,14 @@ export function AdvancedSection({ draft, patch, readOnly, validation }: SectionP
         }
       >
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Step" htmlFor="production-rounding-step">
-            <select
-              id="production-rounding-step"
-              className="h-9 w-full rounded-md border bg-white px-2 text-sm disabled:opacity-50"
-              value={draft.roundingStep}
-              disabled={readOnly}
-              onChange={(e) => patch({ roundingStep: e.target.value })}
+          <Field label="Step">
+            {/* fixed (owner 2026-11-18): production shifts are counted in quarters only */}
+            <p
+              className="flex min-h-9 items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-700"
+              data-testid="production-rounding-step"
             >
-              {!ROUNDING_STEPS.some((s) => Number(s.value) === Number(draft.roundingStep)) && (
-                <option value={draft.roundingStep}>{draft.roundingStep}</option>
-              )}
-              {ROUNDING_STEPS.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
+              0.25 (quarters)
+            </p>
           </Field>
           <Field label="How" htmlFor="production-rounding-mode">
             <select
@@ -190,7 +183,7 @@ export function AdvancedSection({ draft, patch, readOnly, validation }: SectionP
         affects={[
           {
             where: "Production Attendance",
-            what: "a night worker's punch the next morning is counted with the day the shift began, when the day was left open (an odd number of punches), the punch is early enough (about 90 minutes after the latest morning leaving time) and it is within this many hours of the last punch",
+            what: "a night worker's punch the next morning is counted with the day the shift began, when the day was left open (an odd number of punches), the punch is early enough (about 90 minutes after the latest morning leaving time), it is within this many hours of the last punch, and it is not a day-shift worker's early arrival: from 2 h 30 min before the shift start (6:00 AM for 8:30 AM), a morning punch with no clock-in for the shift after it starts that day instead",
             to: "/hr/attendance/production",
           },
           {

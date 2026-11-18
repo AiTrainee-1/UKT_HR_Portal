@@ -29,9 +29,10 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
 from . import tests_md_attendance as _md
-from .attendance_final import _compute_production, compute_day_record, compute_range_records
+from .attendance_final import _compute_production, compute_day_record, compute_range_records, production_day_result
 from .jwt_utils import sign_token
 from .models import (
+    Attendance,
     AttendanceDayRecord,
     AttendanceLog,
     Employee,
@@ -172,9 +173,14 @@ class RosterAgreementTests(Base):
         self.assertEqual(t["DINNER"][WED].shifts_earned, Decimal("3.00"))
         self.assertEqual(t["SUN"][SUN].shifts_earned, Decimal("1.00"))
         self.assertTrue(t["LATE"][TUE].is_late)
-        self.assertLess(t["LATE"][TUE].shifts_earned, Decimal("1.50"))
+        # 1.46 worked (the late 20 minutes are not paid), 0.97 for the early leaver: both saved in QUARTERS (owner
+        # 2026-11-18: production shifts are 0.25, 0.50 ... only), to the nearest one
+        self.assertEqual(t["LATE"][TUE].shifts_earned, Decimal("1.50"))
         self.assertTrue(t["EARLY"][THU].early_leave)
-        self.assertLess(t["EARLY"][THU].shifts_earned, Decimal("1.00"))
+        self.assertEqual(t["EARLY"][THU].shifts_earned, Decimal("1.00"))
+        for days in t.values():
+            for rec in days.values():
+                self.assertEqual((rec.shifts_earned * 4) % 1, 0, rec)  # every stored day is a whole quarter
         self.assertEqual(t["FORGOT"][WED].shifts_earned, Decimal("0.50"))  # the open third punch is ignored
         self.assertEqual(t["FORGOT"][THU].shifts_earned, Decimal("1.50"))  # Thursday's arrival did not close Wednesday
         self.assertEqual((t["NIGHT"][MON].first_punch, t["NIGHT"][MON].last_punch), (_t("21:00"), _t("05:30")))
@@ -401,6 +407,29 @@ class NightSessionGuardTests(Base):
         self.assertEqual(history[(MON + timedelta(days=5)).isoformat()]["punches"], [])
 
 
+class NightPunchPaidOnceTests(Base):
+    """A next-morning closing punch belongs to the night before: the day it was punched on has no work of its own (owner
+    2026-11-18: worker 1029 got Saturday's 05:01 exit paid again as 'Sunday present, 1 shift')."""
+
+    def test_a_day_whose_only_punch_closed_the_night_before_is_absent(self):
+        emp = _worker("NP1")
+        _punches(emp, SAT, *FULL, "21:00")  # day + dinner return
+        _punch(emp, SUN, "05:01")  # Saturday's night ends on Sunday morning
+        Attendance.objects.create(employee=emp, date=SUN.isoformat(), present=True)  # what the punch ingest writes
+        saturday = compute_day_record(emp, SAT)
+        sunday = compute_day_record(emp, SUN)
+        self.assertGreater(saturday.shifts_earned, Decimal("2.5"))  # the night is paid on Saturday ...
+        self.assertEqual((sunday.status, sunday.shifts_earned), ("absent", Decimal("0.00")))  # ... and only there
+        by_date = {SAT: [_t(h) for h in (*FULL, "21:00")], SUN: [_t("05:01")]}
+        self.assertEqual(production_day_result(SUN, by_date, employee_id=emp.pk)["status"], "absent")  # reports agree
+
+    def test_hr_marking_a_day_present_with_no_punches_still_counts(self):
+        emp = _worker("NP2")
+        Attendance.objects.create(employee=emp, date=SUN.isoformat(), present=True)
+        rec = compute_day_record(emp, SUN)
+        self.assertEqual((rec.status, rec.shifts_earned), ("present", Decimal("1.00")))
+
+
 class LegacyDaysStayLegacyTests(Base):
     """A period that spans the effective date: earlier days are exactly the legacy calculation, later days the table."""
 
@@ -435,7 +464,7 @@ class LegacyDaysStayLegacyTests(Base):
         self.assertEqual(forgot[THU.isoformat()]["shiftsEarned"], 1.5)
         early = {row["date"]: row for row in SalarySlip.objects.get(employee=r["EARLY"]).breakdown_details["days"]}
         self.assertEqual(early[THU.isoformat()]["isLate"], False)
-        self.assertLess(early[THU.isoformat()]["shiftsEarned"], 1.0)
+        self.assertEqual(early[THU.isoformat()]["shiftsEarned"], 1.0)  # 0.97 worked, paid in quarters
 
     def test_the_daily_list_before_the_date_keeps_the_raw_calendar_punches(self):
         emp = _worker("LG1")

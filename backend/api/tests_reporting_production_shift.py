@@ -229,7 +229,9 @@ class ShiftDayListingTests(_ProductionWorld):
         self.assertEqual(rows[("D1", "2026-09-22")]["shiftsEarned"], 2.0)  # 22:30 earns 2.00
         late = rows[("L1", "2026-09-21")]
         self.assertEqual((late["late"], late["early"]), ("Late", "Early"))
-        self.assertLess(late["shiftsEarned"], 1.0)
+        # 08:50-17:30 works out to 0.93; production days are saved in quarters (owner 2026-11-18), to the nearest one
+        self.assertEqual(late["shiftsEarned"], 1.0)
+        self.assertIn("rounded to the nearest quarter, 1.00", late["ruleApplied"])
         sun = rows[("S1", "2026-09-27")]
         self.assertEqual((sun["shift"], sun["shiftsEarned"]), ("Sunday shift", 1.0))
 

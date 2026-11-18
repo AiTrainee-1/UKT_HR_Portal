@@ -73,20 +73,30 @@ export type ShiftRulesDraft = {
 /** The longest name the server keeps (production_shift_rules_views.py MAX_LABEL). */
 export const LABEL_MAX = 100;
 export const GRACE: NumberRule = { min: 0, max: 30, decimals: 0 };
-export const SHIFT_VALUE: NumberRule = { min: 0.01, max: 9.99, decimals: 2 };
-export const MIN_CREDIT: NumberRule = { min: 0, max: 9.99, decimals: 2 };
-export const FULL_DAY: NumberRule = { min: 0.01, max: 9.99, decimals: 2 };
+// Production shifts are counted in QUARTERS only (owner 2026-11-18): 0.25, 0.50, 0.75, 1.00 ... The server refuses
+// any other shift value, minimum credit or full-day value, so the boxes say so first (parseQuarter).
+export const SHIFT_VALUE: NumberRule = { min: 0.25, max: 9.75, decimals: 2 };
+export const MIN_CREDIT: NumberRule = { min: 0, max: 9.75, decimals: 2 };
+export const FULL_DAY: NumberRule = { min: 0.25, max: 9.75, decimals: 2 };
 export const NIGHT_HOURS: NumberRule = { min: 1, max: 24, decimals: 0 };
 
-export const ROUNDING_STEPS: { value: string; label: string }[] = [
-  { value: "0.01", label: "0.01 (the exact figure)" },
-  { value: "0.05", label: "0.05" },
-  { value: "0.25", label: "0.25 (quarters)" },
-];
+/** The one step there is: every production day is saved in quarters of a shift. */
+export const QUARTER = 0.25;
+export const ROUNDING_STEPS: { value: string; label: string }[] = [{ value: "0.25", label: "0.25 (quarters)" }];
 export const ROUNDING_MODES: { value: ProductionShiftRoundingMode; label: string }[] = [
-  { value: "nearest", label: "To the nearest step" },
-  { value: "down", label: "Down to the step below" },
+  { value: "nearest", label: "To the nearest quarter" },
+  { value: "down", label: "Down to the quarter reached" },
 ];
+
+/** parseNumber, and the number must be a whole number of quarters (0.25, 0.50, 0.75 ...). */
+export function parseQuarter(text: string, rule: NumberRule): { value: number | null; error: string | null } {
+  const parsed = parseNumber(text, rule);
+  if (parsed.value === null) return parsed;
+  if (!Number.isInteger(Math.round(parsed.value * 100) / 25)) {
+    return { value: null, error: "Use quarters of a shift: 0.25, 0.50, 0.75, 1.00 ..." };
+  }
+  return parsed;
+}
 export const APPLIES_ON: { value: ProductionShiftAppliesOn; label: string }[] = [
   { value: "mon_sat", label: "Monday to Saturday" },
   { value: "sunday", label: "Sunday only" },
@@ -319,7 +329,7 @@ export function paidMinutes(start: number, at: number, spans: [number, number][]
 }
 
 /** The shifts of an earlier row that a later row must not go below. */
-const valueOf = (text: string): number | null => parseNumber(text, SHIFT_VALUE).value;
+const valueOf = (text: string): number | null => parseQuarter(text, SHIFT_VALUE).value;
 
 /**
  * The start date's problem, as the server sees it: a real date between 2000 and 2100, needed while the rules are on; while
@@ -342,9 +352,9 @@ function dateProblem(draft: ShiftRulesDraft): string | null {
 export function validateDraft(draft: ShiftRulesDraft): Validation {
   const effectiveFrom = dateProblem(draft);
   const grace = parseNumber(draft.graceMinutes, GRACE).error;
-  const minCreditBad = parseNumber(draft.minCredit, MIN_CREDIT).error;
+  const minCreditBad = parseQuarter(draft.minCredit, MIN_CREDIT).error;
   let minCreditTooHigh: string | null = null;
-  const fullDay = parseNumber(draft.fullDayValue, FULL_DAY).error;
+  const fullDay = parseQuarter(draft.fullDayValue, FULL_DAY).error;
   const nightHours = parseNumber(draft.nightSessionHours, NIGHT_HOURS).error;
 
   const spans = breakSpans(draft.breaks);
@@ -375,7 +385,7 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
       const at = absMinutes(row.outTime, row.outNextDay);
       if (at === null) e.time = "Enter the leaving time.";
       const value = valueOf(row.shiftValue);
-      const valueError = parseNumber(row.shiftValue, SHIFT_VALUE).error;
+      const valueError = parseQuarter(row.shiftValue, SHIFT_VALUE).error;
       if (valueError) e.value = valueError;
       // a group that is off is not judged by the server beyond this: its ladder is checked once it is switched on
       if (!g.enabled || !row.enabled || at === null) return;
@@ -458,7 +468,7 @@ export function validateDraft(draft: ShiftRulesDraft): Validation {
 
   // the minimum credit may not be more than the most any group in use can pay (the server refuses it)
   if (!minCreditBad) {
-    const credit = parseNumber(draft.minCredit, MIN_CREDIT).value;
+    const credit = parseQuarter(draft.minCredit, MIN_CREDIT).value;
     if (credit !== null && credit > 0) {
       let lowest: { name: string; top: number } | null = null;
       draft.groups.forEach((g, gi) => {
@@ -659,7 +669,7 @@ export function toInput(draft: ShiftRulesDraft, expectedVersion?: string | null)
     effectiveFrom: draft.effectiveFrom.trim() === "" ? null : draft.effectiveFrom,
     graceMinutes: num(draft.graceMinutes),
     minCredit: num(draft.minCredit),
-    roundingStep: num(draft.roundingStep),
+    roundingStep: QUARTER, // always quarters (owner 2026-11-18), whatever an older copy of the page holds
     roundingMode: draft.roundingMode,
     fullDayValue: num(draft.fullDayValue),
     nightSessionHours: num(draft.nightSessionHours),

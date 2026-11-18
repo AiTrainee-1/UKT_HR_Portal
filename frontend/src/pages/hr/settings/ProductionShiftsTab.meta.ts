@@ -117,8 +117,8 @@ const BLOCKS: Omit<SettingMeta, "tab">[] = [
     section: S.advanced,
     title: "Rounding of the day's shifts",
     purpose:
-      "A day's shifts are rounded to this step before they are saved. 0.01 keeps the exact figure to two decimals; 0.05 or 0.25 round to steps. 'To the nearest step' rounds to the closest one, 'Down to the step below' always rounds down, so nobody is paid for time not completed.",
-    keywords: ["rounding", "round", "step", "nearest", "down", "0.05", "0.25", "decimal", "advanced"],
+      "A day's shifts are always saved in quarters of a shift (0.25, 0.50, 0.75, 1.00 ... 3.00), so production attendance and payroll never show figures like 2.72. 'To the nearest quarter' rounds to the closest one (2.72 becomes 2.75); 'Down to the quarter reached' always rounds down (2.72 becomes 2.50), so nobody is paid for a quarter not completed.",
+    keywords: ["rounding", "round", "step", "quarter", "nearest", "down", "0.25", "decimal", "advanced"],
   },
   {
     id: "full-day-value",
