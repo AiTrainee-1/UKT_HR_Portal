@@ -746,7 +746,12 @@ def _daily_compensation_records(ps, d: date_type, employees, logs_by_emp, leave_
     birthday leave, or a relaxation HR assigned / redeemed for that date. The daily list is punch-based, so without this
     such an employee would read Absent. Master switch off = nothing is queried or computed; on, the context is built once
     and only the few affected employees go through the day engine (the same compute_day_record every other screen uses),
-    so the wording and the numbers can never differ from the Report Log or the history dialog."""
+    so the wording and the numbers can never differ from the Report Log or the history dialog.
+
+    Birthdays: before CompensationConfig.claims_from (compensation_engine.birthday_rule "old") a birthday is paid whatever
+    the punches. From it on ("new") only a birthday nobody punched on is paid birthday leave (the day carries the
+    "birthday" marker); a worked birthday is a normal day, so a birthday employee with punches and no relaxation is not
+    computed here and only a day the engine marked "birthday" is kept."""
     if not getattr(ps, "compensation_feature_enabled", False):
         return {}
     from . import compensation_engine as comp
@@ -761,7 +766,10 @@ def _daily_compensation_records(ps, d: date_type, employees, logs_by_emp, leave_
     half_slots = None
     records: dict = {}
     for emp in staff:
-        if not (comp.birthday_applies(emp, d, ctx) or comp.relaxation_entries(emp, d, ctx)):
+        relaxed = bool(comp.relaxation_entries(emp, d, ctx))
+        rule = comp.birthday_rule(emp, d, ctx)
+        new_birthday_leave = rule == comp.BIRTHDAY_RULE_NEW and not logs_by_emp.get(emp.id)
+        if not (relaxed or rule == comp.BIRTHDAY_RULE_OLD or new_birthday_leave):
             continue
         if half_slots is None:
             half_slots = _half_day_leave_slots(d)
@@ -774,7 +782,7 @@ def _daily_compensation_records(ps, d: date_type, employees, logs_by_emp, leave_
             half_day_leave_dates={d: half_slots[emp.id]} if emp.id in half_slots else None,
             prefetch=prefetch,
         )
-        if rec.compensation_kind:
+        if rec.compensation_kind and (relaxed or rule == comp.BIRTHDAY_RULE_OLD or rec.compensation_kind == "birthday"):
             records[emp.id] = rec
     return records
 

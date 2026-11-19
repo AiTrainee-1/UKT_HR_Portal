@@ -208,7 +208,7 @@ from .growth_views import (
 from .compensation_views import (
     compensation_list,
     overtime_list, overtime_announce, overtime_assign, overtime_reject,
-    compensation_balance, balance_redeem,
+    balance_redeem,
     compensation_credits_list, compensation_credit_redeem,
     compensation_leave_days, compensation_leave_day_detail,
     compensation_summary,
@@ -222,6 +222,11 @@ from .compensation_windows_views import compensation_window_detail, compensation
 from .employee_compensation_views import employee_compensation, employee_hod
 from .holiday_work_views import holiday_work_claim_detail, holiday_work_claims, holiday_work_eligible
 from .manager_views import manager_update_holiday_work_status
+# Compensation claims, every kind (2026-11-19): see the "Compensation claims" block of routes below.
+from .compensation_claims_views import (
+    compensation_balance_overview, compensation_claim_detail, compensation_claims, compensation_ledger, compensation_use,
+    employee_compensation_claim_detail, employee_compensation_claims, employee_compensation_use, holiday_work_month,
+)
 from .system_settings_views import (
     biometric_devices, biometric_device_detail, idcard_settings_view,
     production_shift_config_view, production_shift_segments, production_shift_segment_detail,
@@ -688,7 +693,8 @@ urlpatterns = [
     path("compensation/ot/announce", overtime_announce),
     path("compensation/ot/assign", overtime_assign),
     path("compensation/ot/reject", overtime_reject),
-    path("compensation/balance", compensation_balance),
+    # GET compensation/balance moved to compensation_claims_views (the Compensation claims block below); the HR direct
+    # redeem stays here.
     path("compensation/balance/redeem", balance_redeem),
     # Settings -> Compensation (module `settings.compensation`) and its read-only twin for the page (module `compensation`)
     path("compensation/settings", compensation_settings),
@@ -701,6 +707,19 @@ urlpatterns = [
     # ── Compensation overhaul, claims / windows / birthdays / reports (permission module `compensation`) ──
     path("compensation/holiday-work", holiday_work_claims),
     path("compensation/holiday-work/eligible", holiday_work_eligible),
+    # ── Compensation claims, every kind (2026-11-19, compensation_claims_views.py; permission keys under
+    #    compensation.leave.holiday_work: claims / raise / balance / credits). Literal paths before <int:pk>. ──
+    path("compensation/holiday-work/month", holiday_work_month),
+    path("compensation/claims", compensation_claims),
+    path("compensation/claims/<int:pk>", compensation_claim_detail),
+    path("compensation/use", compensation_use),
+    path("compensation/balance", compensation_balance_overview),
+    path("compensation/ledger", compensation_ledger),
+    # employee tokens (the mobile app / Employee Web App; allowlisted as employee/*)
+    path("employee/compensation/claims", employee_compensation_claims),
+    path("employee/compensation/claims/<int:pk>", employee_compensation_claim_detail),
+    path("employee/compensation/use", employee_compensation_use),
+    # ── end of the Compensation claims block ──
     path("compensation/holiday-work/<int:pk>", holiday_work_claim_detail),
     path("compensation/birthdays", compensation_birthdays),
     path("compensation/windows", compensation_windows),

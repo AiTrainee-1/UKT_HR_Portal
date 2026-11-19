@@ -364,11 +364,20 @@ class OutpassGateScan(models.Model):
 
 
 class Visitor(models.Model):
-    """A real person's identity, deduped by phone -visit-specific details
+    """A real person, deduped by phone -visit-specific details
     (why/whom/purpose) live on VisitorVisit below, so a returning visitor
     scanning the gate QR again reuses this row (see
     outpass_visitor_views.py::visitor_gate_repeat) instead of a second
-    person record with the same name/Aadhaar re-entered."""
+    person record.
+
+    Since 19 Nov 2026 the name and Aadhaar a branch sees are per branch: each
+    VisitorVisit keeps the identity given at THAT visit (visitor_name,
+    aadhaar_number; visitor_identity.py), and every screen, file and report
+    reads it from there, so one branch never sees what another branch was
+    told. This row is only the phone anchor: its name / aadhaar_number are
+    what was given when the row was first made and are never changed or
+    shown again (they are read only for a visit written before that change
+    whose own copy is empty)."""
 
     name = models.TextField(db_column="name")
     phone = models.TextField(unique=True, db_column="phone")
@@ -389,6 +398,12 @@ class VisitorVisit(models.Model):
         Branch, on_delete=models.SET_NULL, null=True, blank=True,
         db_column="branch_id", related_name="visitor_visits",
     )
+    # The person as given at THIS visit (19 Nov 2026, migration 0165): typed on the form, or copied from the same
+    # person's latest visit at the same branch, never from another branch's. Every read shows these (see
+    # visitor_identity.py). visitor_name is set on every visit written since; null only on a row an older release
+    # wrote, which then falls back to the Visitor row. aadhaar_number null = none given.
+    visitor_name = models.TextField(null=True, blank=True, db_column="visitor_name")
+    aadhaar_number = models.TextField(null=True, blank=True, db_column="aadhaar_number")
     why_came = models.TextField(null=True, blank=True, db_column="why_came")
     whom_to_meet = models.TextField(db_column="whom_to_meet")
     purpose = models.TextField(db_column="purpose")

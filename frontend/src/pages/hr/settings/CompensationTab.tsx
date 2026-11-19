@@ -18,12 +18,14 @@ import {
   validateDraft,
   type CompensationDraft,
 } from "./compensation/form";
+import { ClaimsSection } from "./compensation/ClaimsSection";
 import { BirthdaySection, HolidayWorkSection, WindowsSection } from "./compensation/LeaveSections";
 import { MasterStrip } from "./compensation/MasterStrip";
 import { Type1Section } from "./compensation/Type1Section";
 import { Type2Section } from "./compensation/Type2Section";
 
 const CONTENTS = [
+  { id: "compensation-claims", label: "How claims work" },
   { id: "compensation-type1", label: "Type 1: next-day allowance" },
   { id: "compensation-type2", label: "Type 2: shifts" },
   { id: "compensation-leave-a", label: "A. Announced late-in / early-out" },
@@ -56,9 +58,10 @@ function stamp(iso: string): string {
 
 /**
  * Settings -> Compensation (staff only): every compensation feature, its rules and its own switch in one place, just like
- * the Late-In and Early-Out switches. Everything is one form with one Save: the five features (OT Detection Type 1 and
- * Type 2, and Compensation Leave A, B and C), their dates, and the editable rule tables. The master switch is only shown
- * here; it has one home on the Payroll tab.
+ * the Late-In and Early-Out switches. It starts with how compensation is claimed (detect, claim, the Department Head
+ * approves, the balance, used on another day) and the read-only date the claims started. Everything else is one form with
+ * one Save: the five features (OT Detection Type 1 and Type 2, and Compensation Leave A, B and C), their dates, the
+ * quarters rule and the editable rule tables. The master switch is only shown here; it has one home on the Payroll tab.
  */
 export default function CompensationTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
@@ -129,7 +132,18 @@ export default function CompensationTab({ readOnly = false }: { readOnly?: boole
     }
     patchDraft(next);
   };
-  const sectionProps = { draft, patch, readOnly, masterOn: data.masterEnabled === true, validation, today };
+  const sectionProps = {
+    draft,
+    patch,
+    readOnly,
+    masterOn: data.masterEnabled === true,
+    validation,
+    today,
+    // read-only, set by the server once (the claim workflow's start); an older server does not report it
+    claimsFrom: data.claims?.from ?? null,
+    // read-only: when the quarters rule was switched (each change applies from the day it was saved)
+    quarterRuleHistory: data.shift.quarterRuleHistory ?? [],
+  };
 
   const save = async () => {
     if (readOnly || !validation.ok || !dirty) return;
@@ -185,6 +199,7 @@ export default function CompensationTab({ readOnly = false }: { readOnly?: boole
         </div>
       )}
 
+      <ClaimsSection {...sectionProps} />
       <Type1Section {...sectionProps} />
       <Type2Section {...sectionProps} />
       <WindowsSection {...sectionProps} />

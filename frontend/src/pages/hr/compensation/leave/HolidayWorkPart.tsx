@@ -1,56 +1,38 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useSearch } from "wouter";
-import { CalendarCheck, ClipboardCheck, Loader2, SearchX, Sun, UserCheck } from "lucide-react";
-import { ApprovalTrail } from "@/components/ApprovalTrail";
-import { EmptyNote, KpiTile, SectionCard, SkeletonKpis, SkeletonRows } from "@/components/payroll/kit/parts";
-import { FilterSelect, LoadError } from "@/components/payroll/panels/issues/panel-kit";
+import { CalendarCheck, CalendarDays, ChevronLeft, ChevronRight, Loader2, SearchX, Sun } from "lucide-react";
+import { EmptyNote, SectionCard, SkeletonRows } from "@/components/payroll/kit/parts";
+import { LoadError } from "@/components/payroll/panels/issues/panel-kit";
 import { errorDetail } from "@/components/payroll/panels/issues/lists";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { NestedTabs } from "@/components/ui/nested-tabs";
 import { useToast } from "@/hooks/use-toast";
-import { customFetch } from "@/lib/api-client/custom-fetch";
 import {
-  useHolidayWorkClaims,
+  useCompensationClaims,
   useHolidayWorkEligible,
+  useHolidayWorkMonth,
   useRaiseHolidayWork,
-  useWithdrawHolidayWork,
-  type CompensationCreditRow,
-  type HolidayWorkClaim,
+  type HolidayWorkEnabled,
+  type HolidayWorkMonthDay,
   type ShiftsValue,
 } from "@/lib/api-client/custom-hooks";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
-import { NestedTabs } from "@/components/ui/nested-tabs";
+import { cn } from "@/lib/utils";
+import { FilterBar, SearchFilter } from "@/pages/hr/outpass-visitors/kit";
 import { LEAVE_NESTED, subPath } from "../routes";
 import { keepOpenNested, useCanOpen } from "../visible";
-import { BalancePart, LegacyCredits } from "./BalancePart";
 import {
-  MONTH_NAMES,
   countOf,
   dateLong,
-  dateShort,
   errorMessage,
-  fmtShifts,
+  matchesText,
+  monthYear,
   monthYearFromUrl,
   parseIso,
   problemsOf,
-  shiftsText,
   todayIst,
-  yearChoices,
-  type CompensationUrl,
 } from "../logic";
 import {
   CELL,
@@ -59,28 +41,17 @@ import {
   Notice,
   PersonCell,
   ShiftsPicker,
-  StatusChip,
   SwitchOffNotice,
   TABLE_HEAD,
-  Pager,
-  usePaged,
   useSingleFlight,
 } from "../ui";
-import {
-  WHOLE_YEAR,
-  CLAIM_REASON_MAX,
-  CLAIM_STATUS_OPTIONS,
-  checkClaim,
-  claimPayload,
-  claimStatusInfo,
-  dayKindText,
-  decisionText,
-  lastSunday,
-  punchSummary,
-  type ClaimSelection,
-} from "./leave-logic";
-
-type SetUrl = (patch: Partial<CompensationUrl>) => void;
+import { BalancePart } from "./BalancePart";
+import { ClaimsPart, claimsParamsOf } from "./ClaimsPart";
+import { CreditsPart } from "./CreditsPart";
+import { OrgFilters } from "./LeaveFilters";
+import { dayCounts, groupWeeks, inMonth, monthOf, previousSunday, stepMonth } from "./claims-logic";
+import { idOf, useLeaveUrl, type LeaveUrl, type SetLeaveUrl } from "./leave-url";
+import { CLAIM_REASON_MAX, checkClaim, claimPayload, punchSummary, type ClaimSelection } from "./leave-logic";
 
 const PAUSED_MASTER = "Paused: the OT / Compensation features are switched off in Settings → Payroll";
 
@@ -94,51 +65,35 @@ function useRaiseDraft() {
 }
 type RaiseDraft = ReturnType<typeof useRaiseDraft>;
 
+/** Why raising is paused, from the switches the server reported. */
+function pausedReasonOf(featuresOff: boolean, enabled: HolidayWorkEnabled | null | undefined): string {
+  if (featuresOff || enabled?.master === false) return PAUSED_MASTER;
+  if (enabled && !enabled.holidayWork)
+    return "Paused: work on Sundays and holidays is switched off in Settings → Compensation";
+  return "Paused: the compensation claims approval is switched off in User Management";
+}
+
 /**
- * Compensation Leave B: work on Sundays and company holidays. ONLY HR raises it; it counts only after the Department Head
- * approves it in Approvals, and then the shifts go to the employee's compensation balance. The page raises (pick a date,
- * tick who worked, choose shifts, give a reason) and follows each claim: waiting for the HOD, approved or rejected.
- * One nested subtab per section: Raise a claim, Claims, Compensation balance, Earlier Alternative-Day credits. The claims
- * query and the half-filled claim live here, so a switch is instant and a form that was being filled is still filled.
+ * Compensation Leave B: the one compensation claim workflow. The system finds what can be claimed (a Sunday or holiday
+ * worked, an OT allowance or shift credit, a birthday worked); the employee claims it in the mobile app or the Employee
+ * Web App, or HR raises it here on their behalf; the employee's Department Head approves it; the shifts go into the
+ * compensation balance; and they are used later as a day off (asked for like a claim, or redeemed by HR). Four nested
+ * subtabs that read the same data, so they always agree: Raise (the month's Sundays and holidays week by week, then who
+ * worked the day you pick), Claims (every kind), Balance (earned / used / waiting / available per employee) and Credits
+ * (every credit and debit, with the earlier Alternative-Day credits).
  */
-export function HolidayWorkPart({
-  featuresOff,
-  url,
-  setUrl,
-  nested,
-}: {
-  featuresOff: boolean;
-  url: CompensationUrl;
-  setUrl: SetUrl;
-  /** The nested subtab: `raise`, `claims`, `balance` or `credits`. */
-  nested: string;
-}) {
+export function HolidayWorkPart({ featuresOff, nested }: { featuresOff: boolean; nested: string }) {
   const today = useMemo(() => todayIst(), []);
-  const { month, year } = monthYearFromUrl(url.hmonth, url.hyear, today);
-  // "All months" lists the claims of every month: a claim for a Sunday of last month is still waiting for its Department
-  // Head, and HR should be able to find it without knowing which month (or year) it was filed under.
-  const wholeYear = url.hmonth === WHOLE_YEAR;
-  const claims = useHolidayWorkClaims({
-    status: url.hstatus === "all" ? undefined : url.hstatus,
-    ...(wholeYear ? { anyMonth: true } : { month, year }),
-  });
+  const [lu, setLu] = useLeaveUrl();
   const canOpen = useCanOpen();
-  // useCompensationCredits' own query (the same cache entry), not loaded while the credits are hidden from the role
-  const credits = useQuery<{ results: CompensationCreditRow[]; count: number }>({
-    queryKey: ["/api/compensation/credits", {}],
-    queryFn: () => customFetch("/api/compensation/credits"),
-    enabled: canOpen(subPath("leave", "holiday-work", "", "credits")),
+  // the claims of the Claims section (its filters are in the address): asked for above the tabs, so the tab counts them and
+  // the notices know the switches whichever section is open
+  const claims = useCompensationClaims(claimsParamsOf(lu, today), {
+    enabled: canOpen(subPath("leave", "holiday-work", "", "claims")) || nested === "claims",
   });
   const draft = useRaiseDraft();
-  const enabled = claims.data?.enabled;
+  const enabled = claims.data?.enabled ?? null;
   const master = enabled?.master ?? !featuresOff;
-  const canRaise = !featuresOff && (enabled?.canRaise ?? false);
-  const pausedReason =
-    featuresOff || enabled?.master === false
-      ? "Paused: the OT / Compensation features are switched off in Settings → Payroll"
-      : enabled && !enabled.holidayWork
-        ? "Paused: work on Sundays and holidays is switched off in Settings → Compensation"
-        : "Paused: the Holiday / Sunday work approval is switched off in User Management";
 
   return (
     <div className="space-y-4" data-testid="holiday-part">
@@ -148,13 +103,14 @@ export function HolidayWorkPart({
           title="Work on Sundays and company holidays is switched off."
           setting="holiday-work-enabled"
         >
-          Raising and withdrawing claims are paused. Every claim, and the balance, stay readable below.
+          Raising and withdrawing Sunday / holiday claims are paused. Every claim, the balances and the credits stay
+          readable below.
         </SwitchOffNotice>
       )}
       {master && enabled && enabled.holidayWork && !enabled.workflow && (
         <Notice accent="amber" testId="holiday-workflow-off">
           <p>
-            <strong>The approval for Sunday / holiday work is switched off.</strong> New claims are refused until it is
+            <strong>The approval for compensation claims is switched off.</strong> New claims are refused until it is
             switched on in{" "}
             <Link href="/hr/user-management?tab=approvals" className="font-semibold underline">
               User Management → Approval Workflow Control
@@ -171,48 +127,44 @@ export function HolidayWorkPart({
         label="Sections of Sunday and holiday work"
         items={keepOpenNested(canOpen, "leave", "holiday-work", [
           { value: "raise", label: LEAVE_NESTED["holiday-work"][0].label },
-          { value: "claims", label: LEAVE_NESTED["holiday-work"][1].label, count: claims.data?.results.length },
+          { value: "claims", label: LEAVE_NESTED["holiday-work"][1].label, count: claims.data?.total },
           { value: "balance", label: LEAVE_NESTED["holiday-work"][2].label },
-          { value: "credits", label: LEAVE_NESTED["holiday-work"][3].label, count: credits.data?.results.length },
+          { value: "credits", label: LEAVE_NESTED["holiday-work"][3].label },
         ])}
       >
         {nested === "raise" && (
           <>
             <Notice accent="blue" testId="holiday-how">
               <p>
-                <strong>How it works:</strong> only HR raises a claim here. The Department Head approves it in{" "}
-                <strong>Approvals</strong>; HR cannot approve it. Once approved, the shifts are added to the
-                employee&apos;s compensation balance (see Compensation balance), and HR redeems them as a day off. A
-                rejected claim credits nothing.
+                <strong>How it works:</strong> employees can now claim a Sunday or holiday they worked themselves, in
+                the mobile app or the Employee Web App, and HR can raise it here on their behalf. Every claim goes to
+                the employee&apos;s Department Head, who approves it in <strong>Approvals</strong>; HR cannot approve
+                it. Once approved, the shifts are added to the employee&apos;s compensation balance (see Balance), to be
+                used later as a day off. A rejected claim credits nothing.
               </p>
             </Notice>
             <RaiseClaim
-              canRaise={canRaise}
-              pausedReason={pausedReason}
+              featuresOff={featuresOff}
+              claimsEnabled={enabled}
               today={today}
-              url={url}
-              setUrl={setUrl}
+              lu={lu}
+              setLu={setLu}
               draft={draft}
             />
           </>
         )}
         {nested === "claims" && (
-          <ClaimList
+          <ClaimsPart
             query={claims}
-            canWithdraw={!featuresOff && !!enabled?.holidayWork}
-            pausedReason={pausedReason}
-            url={url}
-            setUrl={setUrl}
-            month={month}
-            wholeYear={wholeYear}
-            year={year}
+            canWithdraw={!featuresOff && master}
+            pausedReason={PAUSED_MASTER}
             today={today}
             warnings={draft.warnings}
             onDismissWarnings={() => draft.setWarnings([])}
           />
         )}
         {nested === "balance" && <BalancePart paused={featuresOff} pausedReason={PAUSED_MASTER} />}
-        {nested === "credits" && <LegacyCredits />}
+        {nested === "credits" && <CreditsPart today={today} />}
       </NestedTabs>
     </div>
   );
@@ -220,37 +172,67 @@ export function HolidayWorkPart({
 
 // ── Raise ─────────────────────────────────────────────────────────────────────
 
+/** The month the strip shows: the one chosen with its arrows, else the month of the chosen day, else of the previous Sunday. */
+function stripMonthOf(lu: LeaveUrl, today: string): { month: number; year: number } {
+  if (lu.rmonth) return monthYearFromUrl(lu.rmonth, lu.ryear, today);
+  return monthOf(lu.hdate) ?? monthOf(previousSunday(today)) ?? monthYearFromUrl("", "", today);
+}
+
 function RaiseClaim({
-  canRaise,
-  pausedReason,
+  featuresOff,
+  claimsEnabled,
   today,
-  url,
-  setUrl,
+  lu,
+  setLu,
   draft,
 }: {
-  canRaise: boolean;
-  pausedReason: string;
+  featuresOff: boolean;
+  claimsEnabled: HolidayWorkEnabled | null;
   today: string;
-  url: CompensationUrl;
-  setUrl: SetUrl;
+  lu: LeaveUrl;
+  setLu: SetLeaveUrl;
   draft: RaiseDraft;
 }) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const search = useSearch();
   const raise = useRaiseHolidayWork();
-  const date = url.hdate;
+  const { month, year } = stripMonthOf(lu, today);
+  const monthQuery = useHolidayWorkMonth({
+    month,
+    year,
+    departmentId: idOf(lu.rdept),
+    branchId: idOf(lu.rbranch),
+  });
+  // the day: the one picked, else (in its month) the previous Sunday, which the server confirms as its defaultDate
+  const prevSunday = previousSunday(today);
+  const serverDefault = monthQuery.data?.defaultDate ?? null;
+  const fallback = inMonth(prevSunday, month, year) ? prevSunday : "";
+  const date = lu.hdate || (serverDefault && inMonth(serverDefault, month, year) ? serverDefault : fallback);
   const eligible = useHolidayWorkEligible(date);
+  const enabled = eligible.data?.enabled ?? claimsEnabled ?? monthQuery.data?.enabled ?? null;
+  const canRaise = !featuresOff && (enabled?.canRaise ?? false);
+  const pausedReason = pausedReasonOf(featuresOff, enabled);
+
   const { selection, setSelection, reason, setReason, bulk, setBulk, setWarnings } = draft;
   const [error, setError] = useState<string | null>(null);
   const [problems, setProblems] = useState<Record<number, string>>({});
   const [touched, setTouched] = useState(false);
 
   const data = eligible.data;
-  const people = data?.employees ?? [];
+  const deptId = idOf(lu.rdept);
+  const branchId = idOf(lu.rbranch);
+  const everyone = data?.employees ?? [];
+  const people = everyone.filter(
+    (p) =>
+      (deptId === undefined || p.departmentId === deptId) &&
+      (branchId === undefined || p.branchId === branchId) &&
+      matchesText(lu.rq, p.employeeName, p.employeeCode, p.department),
+  );
   const eligibleIds = people.filter((p) => p.eligible).map((p) => p.employeeId);
   const check = checkClaim(selection, reason, canRaise);
   const ticked = Object.keys(selection).length;
+  const filtered = people.length !== everyone.length;
 
   const reset = () => {
     setSelection({});
@@ -259,7 +241,7 @@ function RaiseClaim({
     setError(null);
   };
   const chooseDate = (next: string) => {
-    setUrl({ hdate: next });
+    setLu({ hdate: next });
     reset();
     setWarnings([]);
   };
@@ -270,10 +252,16 @@ function RaiseClaim({
       else next[id] = bulk;
       return next;
     });
+  const allTicked = eligibleIds.length > 0 && eligibleIds.every((id) => id in selection);
   const toggleAll = () =>
-    setSelection(
-      ticked === eligibleIds.length ? {} : Object.fromEntries(eligibleIds.map((id) => [id, selection[id] ?? bulk])),
-    );
+    setSelection((s) => {
+      if (allTicked) {
+        const next = { ...s };
+        for (const id of eligibleIds) delete next[id];
+        return next;
+      }
+      return { ...s, ...Object.fromEntries(eligibleIds.map((id) => [id, s[id] ?? bulk])) };
+    });
   const applyBulk = (shifts: ShiftsValue) => {
     setBulk(shifts);
     setSelection((s) => Object.fromEntries(Object.keys(s).map((id) => [Number(id), shifts])));
@@ -304,14 +292,15 @@ function RaiseClaim({
         setSelection({});
         setReason("");
         setTouched(false);
-        // Claims files a claim under the month of the WORK, so open it on the month of the new claims (every status): a
+        // Claims files a claim under the month of the WORK, so open it on that month, every kind and status, everyone: a
         // Sunday of last month would otherwise be raised and then not be on screen.
         const worked = parseIso(date);
         if (worked && here.current) {
           const params = new URLSearchParams(search);
           params.set("hmonth", String(worked.month));
           params.set("hyear", String(worked.year));
-          params.delete("hstatus");
+          if (!params.get("hdate")) params.set("hdate", date);
+          for (const key of ["hstatus", "hkind", "hraised", "hemp", "hclaim", "hpage", "hq"]) params.delete(key);
           const qs = params.toString();
           navigate(`${subPath("leave", "holiday-work", "", "claims")}${qs ? `?${qs}` : ""}`);
         }
@@ -326,44 +315,50 @@ function RaiseClaim({
       testId="claim-form"
       icon={Sun}
       title="Raise a claim for Sunday / holiday work"
-      description="Pick the Sunday or company holiday, then the staff who worked. Claims go to each employee's Department Head; nothing is credited until they approve."
+      description="The Sundays and declared holidays of the month, week by week, with how many worked. Pick a day, then the staff who worked; the claims go to each employee's Department Head and nothing is credited until they approve."
     >
       <div className="space-y-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <Field
-            label="Date of the work"
-            htmlFor="claim-date"
-            hint="A Sunday or a declared holiday, up to 45 days ago."
-          >
-            <Input
-              id="claim-date"
-              type="date"
-              value={date}
-              max={today}
-              onChange={(e) => chooseDate(e.target.value)}
-              className="w-44"
-              data-testid="claim-date"
-            />
-          </Field>
-          <div {...{ [VIEW_SAFE_ATTR]: "" }}>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mb-6 h-9"
-              onClick={() => chooseDate(lastSunday(today))}
-              data-testid="claim-last-sunday"
-            >
-              Last Sunday
-            </Button>
-          </div>
-        </div>
+        <FilterBar label="Raise filters" testId="raise-filters" sticky={false}>
+          <OrgFilters
+            dept={lu.rdept}
+            branch={lu.rbranch}
+            onDept={(v) => setLu({ rdept: v })}
+            onBranch={(v) => setLu({ rbranch: v })}
+            testId="raise"
+          />
+          <SearchFilter
+            value={lu.rq}
+            onChange={(v) => setLu({ rq: v })}
+            placeholder="Name or code"
+            label="Search who worked by name or code"
+            testId="raise-search"
+          />
+        </FilterBar>
+
+        <MonthStrip
+          month={month}
+          year={year}
+          today={today}
+          selected={date}
+          query={monthQuery}
+          onMonth={(m, y) => setLu({ rmonth: String(m), ryear: String(y) })}
+          onThisMonth={() => {
+            setLu({ rmonth: "", ryear: "", hdate: "" });
+            reset();
+          }}
+          onPick={chooseDate}
+          onLastSunday={() => {
+            setLu({ rmonth: "", ryear: "", hdate: prevSunday });
+            reset();
+            setWarnings([]);
+          }}
+        />
 
         {date === "" ? (
           <EmptyNote
             icon={CalendarCheck}
-            title="Choose the date of the work"
-            hint="The staff who punched in on that Sunday or holiday are listed so you can pick them."
+            title="Pick a Sunday or a holiday in the strip"
+            hint="The staff who punched in on that day are listed so you can pick them."
             testId="claim-no-date"
           />
         ) : eligible.isLoading ? (
@@ -380,7 +375,7 @@ function RaiseClaim({
           <Notice accent="amber" testId="claim-not-claimable">
             <p>{data.message}</p>
           </Notice>
-        ) : data && people.length === 0 ? (
+        ) : data && everyone.length === 0 ? (
           <EmptyNote
             icon={SearchX}
             title={`Nobody has punches on ${dateLong(date)}`}
@@ -393,6 +388,7 @@ function RaiseClaim({
               <strong>{dateLong(data.date)}</strong> ·{" "}
               {data.dayKind === "sunday" ? "Sunday" : (data.holidayName ?? "Company holiday")} · {data.counts.worked}{" "}
               worked, {data.counts.eligible} can be claimed for
+              {filtered && <span className="text-muted-foreground"> · {people.length} shown with the filters</span>}
             </p>
             <div className="flex flex-wrap items-center gap-2" {...{ [VIEW_SAFE_ATTR]: "" }}>
               <span className="text-xs font-semibold text-slate-700">Same shifts for every ticked employee:</span>
@@ -403,89 +399,98 @@ function RaiseClaim({
                 testId="claim-bulk"
               />
             </div>
-            <div className="overflow-x-auto rounded-xl border border-slate-100">
-              <table className="w-full min-w-[820px] text-sm" data-testid="claim-table">
-                <thead className={TABLE_HEAD}>
-                  <tr>
-                    <th className="w-10 px-3 py-2.5">
-                      <Checkbox
-                        checked={eligibleIds.length > 0 && ticked === eligibleIds.length}
-                        disabled={eligibleIds.length === 0}
-                        onCheckedChange={toggleAll}
-                        aria-label="Tick every employee who can be claimed for"
-                        data-testid="claim-select-all"
-                      />
-                    </th>
-                    <th className="px-3 py-2.5">Employee</th>
-                    <th className="px-3 py-2.5">Punches that day</th>
-                    <th className="px-3 py-2.5">Shifts to claim</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {people.map((p) => {
-                    const on = p.employeeId in selection;
-                    const problem = problems[p.employeeId];
-                    return (
-                      <tr
-                        key={p.employeeId}
-                        className={on ? "bg-indigo-50/50" : undefined}
-                        data-testid={`claim-person-${p.employeeCode}`}
-                      >
-                        <td className={CELL}>
-                          <Checkbox
-                            checked={on}
-                            disabled={!p.eligible}
-                            onCheckedChange={() => toggle(p.employeeId)}
-                            aria-label={`Tick ${p.employeeName}`}
-                            data-testid={`claim-select-${p.employeeCode}`}
-                          />
-                        </td>
-                        <td className={CELL}>
-                          <PersonCell name={p.employeeName} code={p.employeeCode} department={p.department} />
-                        </td>
-                        <td className={`${CELL} text-gray-700`}>
-                          <span data-testid={`claim-punches-${p.employeeCode}`}>{punchSummary(p)}</span>
-                        </td>
-                        <td className={CELL}>
-                          {p.eligible ? (
-                            <div className="space-y-1">
-                              <ShiftsPicker
-                                value={selection[p.employeeId] ?? null}
-                                disabled={!on}
-                                label={`Shifts to claim for ${p.employeeName}`}
-                                onChange={(shifts) => setSelection((s) => ({ ...s, [p.employeeId]: shifts }))}
-                                testId={`claim-shifts-${p.employeeCode}`}
-                              />
-                              {on && selection[p.employeeId] === null && touched && (
-                                <p role="alert" className="text-xs font-medium text-red-600">
-                                  Choose the shifts.
-                                </p>
-                              )}
-                            </div>
-                          ) : (
-                            <p
-                              className="text-xs leading-snug text-muted-foreground"
-                              data-testid={`claim-reason-${p.employeeCode}`}
-                            >
-                              {p.reason ?? "Cannot be claimed for."}
-                            </p>
-                          )}
-                          {problem && (
-                            <p
-                              role="alert"
-                              className="mt-1 text-xs font-medium text-red-600"
-                              data-testid={`claim-problem-${p.employeeCode}`}
-                            >
-                              {problem}
-                            </p>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {people.length === 0 ? (
+              <EmptyNote
+                icon={SearchX}
+                title="Nobody who worked matches the filters"
+                hint="Clear the department, branch or search above."
+                testId="claim-filtered-out"
+              />
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-slate-100">
+                <table className="w-full min-w-[720px] text-sm" data-testid="claim-table">
+                  <thead className={TABLE_HEAD}>
+                    <tr>
+                      <th className="w-10 px-3 py-2.5">
+                        <Checkbox
+                          checked={allTicked}
+                          disabled={eligibleIds.length === 0}
+                          onCheckedChange={toggleAll}
+                          aria-label="Tick every employee who can be claimed for"
+                          data-testid="claim-select-all"
+                        />
+                      </th>
+                      <th className="px-3 py-2.5">Employee</th>
+                      <th className="px-3 py-2.5">Punches that day</th>
+                      <th className="px-3 py-2.5">Shifts to claim</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {people.map((p) => {
+                      const on = p.employeeId in selection;
+                      const problem = problems[p.employeeId];
+                      return (
+                        <tr
+                          key={p.employeeId}
+                          className={on ? "bg-indigo-50" : undefined}
+                          data-testid={`claim-person-${p.employeeCode}`}
+                        >
+                          <td className={CELL}>
+                            <Checkbox
+                              checked={on}
+                              disabled={!p.eligible}
+                              onCheckedChange={() => toggle(p.employeeId)}
+                              aria-label={`Tick ${p.employeeName}`}
+                              data-testid={`claim-select-${p.employeeCode}`}
+                            />
+                          </td>
+                          <td className={CELL}>
+                            <PersonCell name={p.employeeName} code={p.employeeCode} department={p.department} />
+                          </td>
+                          <td className={`${CELL} text-gray-700`}>
+                            <span data-testid={`claim-punches-${p.employeeCode}`}>{punchSummary(p)}</span>
+                          </td>
+                          <td className={CELL}>
+                            {p.eligible ? (
+                              <div className="space-y-1">
+                                <ShiftsPicker
+                                  value={selection[p.employeeId] ?? null}
+                                  disabled={!on}
+                                  label={`Shifts to claim for ${p.employeeName}`}
+                                  onChange={(shifts) => setSelection((s) => ({ ...s, [p.employeeId]: shifts }))}
+                                  testId={`claim-shifts-${p.employeeCode}`}
+                                />
+                                {on && selection[p.employeeId] === null && touched && (
+                                  <p role="alert" className="text-xs font-medium text-red-600">
+                                    Choose the shifts.
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              <p
+                                className="text-xs leading-snug text-muted-foreground"
+                                data-testid={`claim-reason-${p.employeeCode}`}
+                              >
+                                {p.reason ?? "Cannot be claimed for."}
+                              </p>
+                            )}
+                            {problem && (
+                              <p
+                                role="alert"
+                                className="mt-1 text-xs font-medium text-red-600"
+                                data-testid={`claim-problem-${p.employeeCode}`}
+                              >
+                                {problem}
+                              </p>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <Field
               label="Reason"
@@ -532,305 +537,195 @@ function RaiseClaim({
   );
 }
 
-// ── The claims ────────────────────────────────────────────────────────────────
+// ── The month strip ───────────────────────────────────────────────────────────
 
-function ClaimList({
-  query,
-  canWithdraw,
-  pausedReason,
-  url,
-  setUrl,
+const STEP_BUTTON = "size-11 sm:size-9";
+
+/**
+ * The Sundays and declared holidays of one month, week by week, each with how many worked, how many can still be claimed
+ * for and the claims already made. Picking a day lists who worked it (below). A day still to come cannot be picked.
+ */
+function MonthStrip({
   month,
-  wholeYear,
   year,
   today,
-  warnings,
-  onDismissWarnings,
+  selected,
+  query,
+  onMonth,
+  onThisMonth,
+  onPick,
+  onLastSunday,
 }: {
-  warnings: string[];
-  onDismissWarnings: () => void;
-  query: ReturnType<typeof useHolidayWorkClaims>;
-  canWithdraw: boolean;
-  pausedReason: string;
-  url: CompensationUrl;
-  setUrl: SetUrl;
   month: number;
-  wholeYear: boolean;
   year: number;
   today: string;
+  selected: string;
+  query: ReturnType<typeof useHolidayWorkMonth>;
+  onMonth: (month: number, year: number) => void;
+  onThisMonth: () => void;
+  onPick: (date: string) => void;
+  onLastSunday: () => void;
 }) {
-  const { toast } = useToast();
-  const withdraw = useWithdrawHolidayWork();
-  const [withdrawing, setWithdrawing] = useState<HolidayWorkClaim | null>(null);
-  const rows = useMemo(() => query.data?.results ?? [], [query.data]);
-  const paged = usePaged(rows, `claims|${url.hstatus}|${wholeYear ? "all" : month}|${year}|${rows.length}`, 15);
-  const summary = query.data?.summary;
-  const years = yearChoices(today);
-
-  const confirmWithdraw = async () => {
-    if (!withdrawing) return;
-    try {
-      await withdraw.mutateAsync(withdrawing.id);
-      toast({
-        title: "Claim withdrawn",
-        description: `${withdrawing.employeeName}, ${dateShort(withdrawing.workDate)}.`,
-      });
-    } catch (err) {
-      toast({
-        title: "Could not withdraw it",
-        description: errorMessage(err, "Try again."),
-        variant: "destructive",
-      });
-    } finally {
-      setWithdrawing(null);
-    }
+  const days = query.data?.days ?? [];
+  const weeks = groupWeeks(days);
+  const sundays = days.filter((d) => d.kind === "sunday").length;
+  const holidays = days.length - sundays;
+  const worked = days.reduce((n, d) => n + d.worked, 0);
+  const toClaim = days.reduce((n, d) => n + d.eligible, 0);
+  const waiting = days.reduce((n, d) => n + d.claimed.pending, 0);
+  const now = parseIso(today);
+  const isThisMonth = !!now && now.month === month && now.year === year;
+  const step = (delta: number) => {
+    const next = stepMonth(month, year, delta);
+    onMonth(next.month, next.year);
   };
 
   return (
-    <SectionCard
-      testId="claim-list"
-      icon={ClipboardCheck}
-      title="Claims"
-      description="Each claim with where it stands in the approval: waiting for the Department Head, approved or rejected, and who decided."
-      bodyClassName="space-y-4 px-0 pb-0"
+    <section
+      className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3"
+      aria-label={`Sundays and holidays of ${monthYear(month, year)}`}
+      data-testid="hw-strip"
+      {...{ [VIEW_SAFE_ATTR]: "" }}
     >
-      <div className="space-y-3 px-5">
-        {warnings.length > 0 && (
-          <Notice accent="amber" testId="claim-warnings">
-            <p className="font-semibold">Raised, but nobody can decide these yet:</p>
-            <ul className="list-disc space-y-0.5 pl-5">
-              {warnings.map((w) => (
-                <li key={w}>{w}</li>
-              ))}
-            </ul>
-            <button
-              type="button"
-              className="font-semibold underline"
-              onClick={onDismissWarnings}
-              data-testid="claim-warnings-dismiss"
-            >
-              Dismiss
-            </button>
-          </Notice>
-        )}
-        {query.isLoading ? (
-          <SkeletonKpis count={3} className="md:grid-cols-3 xl:grid-cols-3" />
-        ) : summary ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="claim-kpis">
-            <KpiTile
-              testId="claim-kpi-pending"
-              label="Waiting for HOD"
-              value={summary.pending}
-              sub={`${fmtShifts(summary.pendingShifts)} shifts`}
-              icon={UserCheck}
-              tone="bg-amber-50 text-amber-800"
-            />
-            <KpiTile
-              testId="claim-kpi-approved"
-              label="Approved"
-              value={summary.approved}
-              sub={`${fmtShifts(summary.approvedShifts)} shifts added to balances`}
-              icon={ClipboardCheck}
-              tone="bg-emerald-50 text-emerald-800"
-            />
-            <KpiTile
-              testId="claim-kpi-rejected"
-              label="Rejected"
-              value={summary.rejected}
-              sub="nothing credited"
-              icon={SearchX}
-              tone="bg-rose-50 text-rose-800"
-            />
-          </div>
-        ) : null}
-
-        <div
-          className="flex flex-wrap items-center gap-2"
-          role="search"
-          aria-label="Claim filters"
-          {...{ [VIEW_SAFE_ATTR]: "" }}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={STEP_BUTTON}
+          onClick={() => step(-1)}
+          aria-label="Previous month"
+          title="Previous month"
+          data-testid="hw-strip-prev"
         >
-          <Select value={wholeYear ? WHOLE_YEAR : String(month)} onValueChange={(v) => setUrl({ hmonth: v })}>
-            <SelectTrigger className="h-10 w-40" aria-label="Month of the work" data-testid="claim-month">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={WHOLE_YEAR}>All months</SelectItem>
-              {MONTH_NAMES.map((name, i) => (
-                <SelectItem key={name} value={String(i + 1)}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={String(year)} onValueChange={(v) => setUrl({ hyear: v })} disabled={wholeYear}>
-            <SelectTrigger className="h-10 w-28" aria-label="Year of the work" data-testid="claim-year">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {years.map((y) => (
-                <SelectItem key={y} value={String(y)}>
-                  {y}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <FilterSelect
-            value={url.hstatus === "all" ? "" : url.hstatus}
-            onChange={(v) => setUrl({ hstatus: v === "" ? "all" : v })}
-            options={CLAIM_STATUS_OPTIONS}
-            allLabel="Every status"
-            label="Filter claims by status"
-            testId="claim-status"
-            className="w-full sm:w-52"
-          />
-        </div>
+          <ChevronLeft size={15} />
+        </Button>
+        <h4 className="min-w-[9rem] text-center text-sm font-bold text-slate-900" data-testid="hw-strip-month">
+          {monthYear(month, year)}
+        </h4>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={STEP_BUTTON}
+          onClick={() => step(1)}
+          aria-label="Next month"
+          title="Next month"
+          data-testid="hw-strip-next"
+        >
+          <ChevronRight size={15} />
+        </Button>
+        {!isThisMonth && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-11 sm:h-9"
+            onClick={onThisMonth}
+            data-testid="hw-strip-today"
+          >
+            This month
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-11 sm:h-9"
+          onClick={onLastSunday}
+          data-testid="claim-last-sunday"
+        >
+          Last Sunday
+        </Button>
+        {query.data && (
+          <p className="w-full text-xs text-slate-600 sm:ml-auto sm:w-auto" data-testid="hw-strip-summary">
+            {countOf(sundays, "Sunday")}
+            {holidays > 0 ? ` and ${countOf(holidays, "holiday")}` : ""} · {worked} worked · {toClaim} still to claim
+            {waiting > 0 ? ` · ${waiting} waiting for HOD` : ""}
+          </p>
+        )}
       </div>
 
       {query.isLoading ? (
-        <div className="px-5 pb-5">
-          <SkeletonRows rows={3} />
-        </div>
-      ) : query.isError && !query.data ? (
-        <div className="px-5 pb-5">
-          <LoadError
-            what="the claims"
-            detail={errorDetail(query.error)}
-            onRetry={() => void query.refetch()}
-            retrying={query.isFetching}
-            testId="claims-error"
-          />
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="px-5 pb-5">
-          <EmptyNote
-            icon={ClipboardCheck}
-            title={wholeYear ? "No claim with this status" : "No claim for this month and status"}
-            hint="Claims are filed under the date of the work. Change the month or the status, or raise one in the Raise a claim tab."
-            testId="claims-empty"
-          />
-        </div>
+        <SkeletonRows rows={2} />
+      ) : query.isError ? (
+        <LoadError
+          what="the Sundays and holidays of the month"
+          detail={errorDetail(query.error)}
+          onRetry={() => void query.refetch()}
+          retrying={query.isFetching}
+          testId="hw-strip-error"
+        />
+      ) : days.length === 0 ? (
+        <p className="text-xs text-muted-foreground" data-testid="hw-strip-empty">
+          No Sunday or declared holiday in {monthYear(month, year)}.
+        </p>
       ) : (
-        <>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm" data-testid="claims-table">
-              <thead className={TABLE_HEAD}>
-                <tr>
-                  <th className="px-3 py-2.5 pl-5">Employee</th>
-                  <th className="px-3 py-2.5">Work date</th>
-                  <th className="px-3 py-2.5">Shifts</th>
-                  <th className="px-3 py-2.5">Reason</th>
-                  <th className="px-3 py-2.5">Approval</th>
-                  <th className="px-3 py-2.5 text-right">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {paged.rows.map((claim) => {
-                  const info = claimStatusInfo(claim);
-                  const decided = decisionText(claim);
-                  return (
-                    <tr key={claim.id} data-testid={`claim-row-${claim.id}`} data-status={claim.status}>
-                      <td className={`${CELL} pl-5`}>
-                        <PersonCell name={claim.employeeName} code={claim.employeeCode} department={claim.department} />
-                      </td>
-                      <td className={CELL}>
-                        <p className="whitespace-nowrap font-semibold">{dateShort(claim.workDate)}</p>
-                        <p className="text-[11px] text-muted-foreground">{dayKindText(claim)}</p>
-                      </td>
-                      <td className={`${CELL} whitespace-nowrap font-semibold`}>{shiftsText(claim.shifts)}</td>
-                      <td className={`${CELL} max-w-xs break-words text-gray-700`}>{claim.reason}</td>
-                      <td className={CELL}>
-                        <StatusChip tone={info.tone}>{info.label}</StatusChip>
-                        {claim.status === "pending" && (
-                          <p className="mt-1 text-[11px] text-muted-foreground" data-testid={`claim-hod-${claim.id}`}>
-                            {claim.hodName ? `HOD: ${claim.hodName}` : "No Department Head assigned"}
-                          </p>
-                        )}
-                        {decided && (
-                          <p
-                            className="mt-1 text-[11px] text-muted-foreground"
-                            data-testid={`claim-decision-${claim.id}`}
-                          >
-                            {decided}
-                          </p>
-                        )}
-                        {claim.status === "rejected" && claim.reviewComment && (
-                          <p className="mt-0.5 text-[11px] italic text-muted-foreground">“{claim.reviewComment}”</p>
-                        )}
-                        {claim.status === "approved" && claim.credited && (
-                          <p className="mt-0.5 text-[11px] text-emerald-700">Added to the balance</p>
-                        )}
-                        {claim.approval && (
-                          <div className="mt-2 hidden sm:block">
-                            <ApprovalTrail approval={claim.approval} submittedBy="HR" />
-                          </div>
-                        )}
-                      </td>
-                      <td className={`${CELL} pr-5 text-right`}>
-                        {claim.status === "pending" && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={!canWithdraw}
-                            aria-label={`Withdraw the claim of ${claim.employeeName} for ${dateShort(claim.workDate)}`}
-                            title={
-                              canWithdraw
-                                ? "Withdraw and remove this claim from the Department Head's queue"
-                                : pausedReason
-                            }
-                            onClick={() => setWithdrawing(claim)}
-                            data-testid={`claim-withdraw-${claim.id}`}
-                          >
-                            Withdraw
-                          </Button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <Pager paged={paged} size={15} />
-          {query.data?.truncated && (
-            <p className="px-5 pb-4 text-xs text-muted-foreground">
-              Only the newest {rows.length} claims are shown: narrow the month or status.
-            </p>
-          )}
-        </>
+        // the weeks side by side (one column each, a holiday in the same week under its Sunday), so the strip reads left to
+        // right across the card; two columns on a phone, three on a tablet
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5" data-testid="hw-weeks">
+          {weeks.map((week) => (
+            <div key={week.label} className="min-w-0 space-y-1.5" data-testid="hw-week">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{week.label}</p>
+              <div className="grid grid-cols-1 gap-2">
+                {week.days.map((day) => (
+                  <DayButton
+                    key={day.date}
+                    day={day}
+                    on={day.date === selected}
+                    future={day.date > today}
+                    onPick={onPick}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
+    </section>
+  );
+}
 
-      <AlertDialog
-        open={withdrawing !== null}
-        onOpenChange={(open) => !open && !withdraw.isPending && setWithdrawing(null)}
-      >
-        <AlertDialogContent data-testid="claim-withdraw-dialog">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Withdraw this claim?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {withdrawing
-                ? `${withdrawing.employeeName}, ${dateShort(withdrawing.workDate)}, ${shiftsText(withdrawing.shifts)}. The claim leaves the Department Head's queue and nothing is credited. You can raise it again later.`
-                : ""}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={withdraw.isPending}>Keep the claim</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault();
-                void confirmWithdraw();
-              }}
-              disabled={withdraw.isPending}
-              data-testid="claim-withdraw-confirm"
-            >
-              Withdraw claim
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </SectionCard>
+function DayButton({
+  day,
+  on,
+  future,
+  onPick,
+}: {
+  day: HolidayWorkMonthDay;
+  on: boolean;
+  future: boolean;
+  onPick: (date: string) => void;
+}) {
+  const counts = dayCounts(day);
+  const what = day.kind === "holiday" ? (day.holidayName ?? "Company holiday") : "Sunday";
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      disabled={future}
+      onClick={() => onPick(day.date)}
+      title={future ? "This day has not come yet" : `See who worked on ${dateLong(day.date)}`}
+      className={cn(
+        "flex min-h-11 flex-col items-start rounded-xl border px-3 py-2 text-left outline-none transition-colors",
+        "focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+        on ? "border-indigo-500 bg-indigo-50" : "border-slate-200 bg-white hover:bg-slate-50",
+      )}
+      data-testid={`hw-day-${day.date}`}
+    >
+      <span className="flex w-full items-center gap-1.5 text-sm font-bold text-slate-900">
+        <CalendarDays size={14} className={day.kind === "holiday" ? "text-amber-600" : "text-indigo-600"} />
+        {dateLong(day.date)}
+      </span>
+      <span className="text-[11px] text-slate-500">{what}</span>
+      <span className="mt-1 text-xs text-slate-700" data-testid={`hw-day-${day.date}-worked`}>
+        {future ? "Not come yet" : counts.worked}
+      </span>
+      {!future && (
+        <span className="text-[11px] text-slate-500" data-testid={`hw-day-${day.date}-claims`}>
+          {counts.claims}
+        </span>
+      )}
+    </button>
   );
 }

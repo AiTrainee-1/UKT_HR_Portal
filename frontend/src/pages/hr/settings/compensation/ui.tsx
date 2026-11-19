@@ -3,6 +3,7 @@ import { Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import type { QuarterRuleHistoryEntry } from "@/lib/api-client/custom-hooks";
 import { dateNote, type CompensationDraft, type Validation } from "./form";
 
 /** What every section of the tab needs: the form, how to change it, and what is wrong with it. */
@@ -16,6 +17,10 @@ export type SectionProps = {
   validation: Validation;
   /** Today in India, YYYY-MM-DD. */
   today: string;
+  /** The claim workflow's start date (read-only, set by the server); null when the server does not report it. */
+  claimsFrom?: string | null;
+  /** When the quarters rule was on / off (read-only, oldest first); empty when never changed or not reported. */
+  quarterRuleHistory?: QuarterRuleHistoryEntry[];
 };
 
 /**

@@ -1025,6 +1025,26 @@ class PayrollSettings(models.Model):
             "day's own shift start time. Set to 0 to remove this cap."
         ),
     )
+    # ── Staff next-morning cut-off (compensation claims, 2026-11-19, migration 0166) ──────────────────
+    # Like production's 06:00 rule: a staff punch on day D+1 BEFORE the cut-off belongs to day D's overtime when day D's
+    # punches leave a session open (an odd count); from the cut-off on it is day D+1's start. Per employee, measured from
+    # day D's shift end to that punch. Applies only to days on or after `staff_next_morning_from` (set to the day 0166 ran,
+    # IST, by its data step) so no earlier day changes when it is recomputed; see staff_next_morning_applies_on().
+    # db_default: an older backend still running during a rolling deploy inserts the row without these columns.
+    staff_next_morning_enabled = models.BooleanField(
+        default=True, db_default=True, db_column="staff_next_morning_enabled"
+    )
+    staff_next_morning_cutoff = models.TimeField(
+        default=time(6, 0), db_default=time(6, 0), db_column="staff_next_morning_cutoff"
+    )
+    staff_next_morning_from = models.DateField(null=True, blank=True, db_column="staff_next_morning_from")
+    # The dated history of the switch and the cut-off (migration 0167): [{"from": "YYYY-MM-DD" | null, "enabled": bool,
+    # "cutoff": "HH:MM"}]. Every change in Settings appends an entry dated today (IST), so a day keeps the rule it was
+    # judged by even when it is recomputed after a change; a day before every entry keeps the old grace-hours rule. Empty
+    # (a row that never recorded a change) = the three fields above decide. See api/settings_history.py.
+    staff_next_morning_history = models.JSONField(
+        default=list, blank=True, db_default=[], db_column="staff_next_morning_history"
+    )
 
     # ── Production attendance windows (1.5-shift day) ─────────────────────
     prod_first_half_start = models.TimeField(default="08:30", db_column="prod_first_half_start")
@@ -1130,6 +1150,16 @@ class PayrollSettings(models.Model):
             # (e.g. half_day_first_half_end_time in attendance_final.py).
             obj.refresh_from_db()
         return obj
+
+    def staff_next_morning_applies_on(self, day: date) -> bool:
+        """Whether the staff next-morning cut-off rule decides `day` (day D, the day whose overtime may take the next
+        morning's punch): by the dated history when there is one (the entry in force on `day` is switched on; a day
+        before every entry keeps the old rule), else switched on and `day` on or after `staff_next_morning_from`. No
+        from-date (a row created after migration 0166, i.e. a fresh install with no history to protect) = every day.
+        shift_engine.staff_next_morning_rule is the engine's copy (it reads the fields one by one for an overlay)."""
+        from ..shift_engine import staff_next_morning_rule
+
+        return staff_next_morning_rule(self, day) is not None
 
 
 class BranchSettingsOverride(models.Model):
@@ -1447,6 +1477,22 @@ class CompensationConfig(models.Model):
     # Compensation Leave C: paid birthday leave
     birthday_enabled = models.BooleanField(default=False, db_column="birthday_enabled")
     birthday_effective_from = models.DateField(null=True, blank=True, db_column="birthday_effective_from")
+    # ── Compensation claims (2026-11-19, migration 0166) ────────────────────────────────────────────────
+    # The effective date of the claim workflow: from this day on a Type 1 allowance applies only after the HOD approves
+    # its claim, a staff OT day's Type 2 credit is claimed (quarters rule below), and a birthday is a normal working day
+    # (absent / on leave = paid birthday leave; present = one 1.00 credit to claim; "birthday claims" are ON when
+    # birthday_enabled and the birthday is on or after this day). Days before it keep the old rules even when recomputed.
+    # Set to the day 0166 ran (IST) by its data step; editable later only forward. See claims_apply_on().
+    claims_from = models.DateField(null=True, blank=True, db_column="claims_from")
+    # Type 2 credit by the quarters rule: OT minutes / the employee's working shift length, in quarters, rounded down,
+    # capped at 1.00 a day (below 0.25 = no Type 2 credit). Off = the old last-punch ladder (CompensationRule kind=shift).
+    ot_quarter_rule = models.BooleanField(default=True, db_default=True, db_column="ot_quarter_rule")
+    # The dated history of the quarters rule switch (migration 0167): [{"from": "YYYY-MM-DD" | null, "on": bool}]. Every
+    # change in Settings appends an entry dated today (IST), so an OT day keeps the rule it was detected under; a day
+    # before every entry keeps the ladder. Empty = `ot_quarter_rule` decides. See ot_quarter_rule_on().
+    ot_quarter_rule_history = models.JSONField(
+        default=list, blank=True, db_default=[], db_column="ot_quarter_rule_history"
+    )
     updated_by = models.TextField(null=True, blank=True, db_column="updated_by")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -1457,6 +1503,27 @@ class CompensationConfig(models.Model):
     def get(cls) -> "CompensationConfig":
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    def claims_apply_on(self, day: date) -> bool:
+        """Whether `day` (an OT date, a birthday, a holiday-work date) follows the claim workflow rules (decisions 2-4 of
+        the 2026-11-19 spec) rather than the old automatic ones. No `claims_from` (a row created after migration 0166, i.e.
+        a fresh install with no history to protect) = every day. The single place both the claims (BE-1) and the engine /
+        detection (BE-2) ask; the feature switches (allowance_enabled, birthday_enabled ...) are checked by the callers."""
+        return self.claims_from is None or day >= self.claims_from
+
+    def ot_quarter_rule_on(self, day: date) -> bool:
+        """Whether the Type 2 quarters rule decides the OT of `day`: the day follows the claim rules (claims_apply_on) and
+        the quarters rule was on THAT day - by the dated history when there is one (a day before every entry keeps the
+        ladder), else by `ot_quarter_rule`. The one place every reader asks (detection, the credit, the OT list)."""
+        from ..settings_history import entry_on
+
+        if not self.claims_apply_on(day):
+            return False
+        history = self.ot_quarter_rule_history
+        if not history:
+            return bool(self.ot_quarter_rule)
+        entry = entry_on(history, day)
+        return bool(entry and entry.get("on"))
 
 
 class CompensationRule(models.Model):
@@ -1488,14 +1555,47 @@ class CompensationRule(models.Model):
 
 
 class HolidayWorkClaim(models.Model):
-    """Compensation for working on a Sunday or a company holiday: HR assigns 0.25 / 0.50 / 0.75 / 1 shift and the
-    Department Head must approve it (approval_workflow key `holiday_work`, HR-requested like an attendance
-    correction). Approval adds the shifts to the employee's compensation balance (CompensationLedger) exactly once."""
+    """THE compensation claim (every kind, since 2026-11-19 / migration 0166; the table keeps its name and every column).
+
+    Raised by the employee (mobile app / Employee Web App) or by HR on the employee's behalf (`raised_by_role`); every
+    claim goes to the employee's Department Head (approval_workflow key `holiday_work`, flag
+    DepartmentManager.can_approve_compensation). `kind`:
+      holiday_work  work on a Sunday / company holiday: approval credits `shifts` to the balance (ledger source holiday_work)
+      ot_allowance  a detected Type 1 late-in allowance (`overtime_record`, `minutes`): approval applies it to the next
+                    working day after the OT date (no ledger entry)
+      ot_shift      a staff OT day's Type 2 credit (`overtime_record`, `shifts` by the quarters rule): approval credits
+                    the balance (ledger source ot_shift)
+      birthday      one 1.00 credit for being present on the birthday: approval credits the balance (source birthday)
+      use_balance   the employee takes `shifts` off on `work_date` from the balance: approval writes one ledger debit
+                    (source redemption, `claim` set) and relaxes that day
+    `work_date` is the claim's date for every kind (holiday_work: the work date; ot_*: the OT date; birthday: the birthday;
+    use_balance: the day off). Credits / the debit are written exactly once (constraints on CompensationLedger)."""
 
     STATUS_PENDING = "pending"
     STATUS_APPROVED = "approved"
     STATUS_REJECTED = "rejected"
     STATUS_CHOICES = [(STATUS_PENDING, "Pending"), (STATUS_APPROVED, "Approved"), (STATUS_REJECTED, "Rejected")]
+    OPEN_STATUSES = (STATUS_PENDING, STATUS_APPROVED)
+
+    KIND_HOLIDAY_WORK = "holiday_work"
+    KIND_OT_ALLOWANCE = "ot_allowance"
+    KIND_OT_SHIFT = "ot_shift"
+    KIND_BIRTHDAY = "birthday"
+    KIND_USE_BALANCE = "use_balance"
+    KIND_CHOICES = [
+        (KIND_HOLIDAY_WORK, "Sunday / holiday work"),
+        (KIND_OT_ALLOWANCE, "OT late-in allowance"),
+        (KIND_OT_SHIFT, "OT shift credit"),
+        (KIND_BIRTHDAY, "Birthday credit"),
+        (KIND_USE_BALANCE, "Use balance"),
+    ]
+    OT_KINDS = (KIND_OT_ALLOWANCE, KIND_OT_SHIFT)
+    # kinds whose approval adds a credit to the balance (use_balance takes one away; ot_allowance touches neither)
+    CREDIT_KINDS = (KIND_HOLIDAY_WORK, KIND_OT_SHIFT, KIND_BIRTHDAY)
+
+    RAISED_BY_HR = "hr"
+    RAISED_BY_EMPLOYEE = "employee"
+    RAISED_BY_CHOICES = [(RAISED_BY_HR, "HR"), (RAISED_BY_EMPLOYEE, "Employee")]
 
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="holiday_work_claims",
@@ -1511,29 +1611,58 @@ class HolidayWorkClaim(models.Model):
     # The approval pipeline's progress (approval_workflow.py): [{role, decision, by, at, comment, skipped}].
     approval_trail = models.JSONField(null=True, blank=True, db_column="approval_trail")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    # ── every claim kind (2026-11-19, migration 0166). db_default: an older backend still running during a rolling
+    # deploy inserts holiday-work claims without these columns, and they must read as what they are.
+    kind = models.TextField(
+        choices=KIND_CHOICES, default=KIND_HOLIDAY_WORK, db_default=KIND_HOLIDAY_WORK, db_column="kind"
+    )
+    # ot_allowance / ot_shift: the detected OT day the claim is for
+    overtime_record = models.ForeignKey(
+        OvertimeRecord, on_delete=models.SET_NULL, null=True, blank=True, db_column="overtime_record_id",
+        related_name="claims",
+    )
+    # ot_allowance: the allowance minutes claimed (the late-in it allows on the next working day)
+    minutes = models.IntegerField(null=True, blank=True, db_column="minutes")
+    raised_by_role = models.TextField(
+        choices=RAISED_BY_CHOICES, default=RAISED_BY_HR, db_default=RAISED_BY_HR, db_column="raised_by_role"
+    )
 
     class Meta:
         db_table = "holiday_work_claims"
         ordering = ["-created_at"]
         constraints = [
-            # One pending-or-approved claim per employee per work date (a rejected one can be raised again): the
-            # database refuses what the row locks in holiday_work_views are meant to prevent, whoever writes.
+            # One pending-or-approved claim per employee, kind and date (a rejected one can be raised again): the
+            # database refuses what the row locks in the claim code are meant to prevent, whoever writes. Replaced
+            # uniq_open_holiday_work_claim (employee, work_date) in 0166: every old row is kind holiday_work.
             models.UniqueConstraint(
-                fields=["employee", "work_date"],
+                fields=["employee", "kind", "work_date"],
                 condition=models.Q(status__in=["pending", "approved"]),
-                name="uniq_open_holiday_work_claim",
+                name="uniq_open_comp_claim",
+            ),
+            # An OT day (ot_allowance / ot_shift) has at most one open claim, whatever its kind.
+            models.UniqueConstraint(
+                fields=["overtime_record"],
+                condition=models.Q(status__in=["pending", "approved"], overtime_record__isnull=False),
+                name="uniq_open_comp_claim_per_ot",
             ),
         ]
 
 
 class CompensationLedger(models.Model):
     """The compensation balance of an employee, in shifts: entries are only ever added, never edited. A credit comes
-    from an approved HolidayWorkClaim (or a migrated legacy credit); a debit is HR redeeming shifts on a date.
+    from an approved HolidayWorkClaim of a credit kind (holiday_work / ot_shift / birthday) or a migrated legacy credit;
+    a debit is HR redeeming shifts on a date (claim null) or an approved use_balance claim (claim set).
     balance = sum(credits) - sum(debits)."""
 
     ENTRY_CREDIT = "credit"
     ENTRY_DEBIT = "debit"
     ENTRY_CHOICES = [(ENTRY_CREDIT, "Credit"), (ENTRY_DEBIT, "Debit")]
+
+    SOURCE_HOLIDAY_WORK = "holiday_work"
+    SOURCE_LEGACY_CREDIT = "legacy_credit"
+    SOURCE_REDEMPTION = "redemption"
+    SOURCE_OT_SHIFT = "ot_shift"
+    SOURCE_BIRTHDAY = "birthday"
 
     employee = models.ForeignKey(
         Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="compensation_ledger",
@@ -1542,7 +1671,7 @@ class CompensationLedger(models.Model):
     shifts = models.DecimalField(max_digits=3, decimal_places=2)  # always positive
     # credit: the day it was earned (the work date); debit: the day it was taken
     date = models.DateField()
-    source = models.CharField(max_length=24, default="")  # holiday_work | legacy_credit | redemption | ot_shift
+    source = models.CharField(max_length=24, default="")  # holiday_work | legacy_credit | redemption | ot_shift | birthday
     claim = models.ForeignKey(
         HolidayWorkClaim, on_delete=models.SET_NULL, null=True, blank=True, db_column="claim_id", related_name="ledger_entries",
     )
@@ -1562,6 +1691,12 @@ class CompensationLedger(models.Model):
                 fields=["claim"],
                 condition=models.Q(entry_type="credit", claim__isnull=False),
                 name="uniq_ledger_credit_per_claim",
+            ),
+            # An approved use_balance claim is debited exactly once (HR's direct redeem writes debits with no claim).
+            models.UniqueConstraint(
+                fields=["claim"],
+                condition=models.Q(entry_type="debit", claim__isnull=False),
+                name="uniq_ledger_debit_per_claim",
             ),
             models.UniqueConstraint(
                 fields=["overtime_record"],

@@ -49,7 +49,8 @@ export const KIND_META: Record<MarkKind, KindMeta> = {
     icon: TimerReset,
     chip: "bg-violet-100 text-violet-800 border-violet-200",
     solid: "bg-violet-600",
-    meaning: "Worked extra hours the day before and arrived inside the next-day late-in allowance, so no Late mark.",
+    meaning:
+      "Worked extra hours the day before and arrived inside the next-day late-in allowance (approved by the Department Head on a claim), so no Late mark.",
   },
   window_late_in: {
     label: "Announced late-in",
@@ -73,7 +74,8 @@ export const KIND_META: Record<MarkKind, KindMeta> = {
     icon: Cake,
     chip: "bg-pink-100 text-pink-800 border-pink-200",
     solid: "bg-pink-600",
-    meaning: "The employee's birthday: paid compensation leave, no attendance detection applies that day.",
+    meaning:
+      "Birthday leave (paid): absent or on approved leave on the birthday, so the day is paid in full without using any leave balance.",
   },
   relaxation: {
     label: "Relaxation (compensation day)",
@@ -81,7 +83,8 @@ export const KIND_META: Record<MarkKind, KindMeta> = {
     icon: CalendarHeart,
     chip: "bg-indigo-100 text-indigo-800 border-indigo-200",
     solid: "bg-indigo-600",
-    meaning: "A compensation day off (relaxation) was applied to this day; no punches are needed for it.",
+    meaning:
+      "A compensation day off was applied to this day (an approved request to use the balance, or an earlier relaxation); no punches are needed for it.",
   },
   other: {
     label: "Compensation",

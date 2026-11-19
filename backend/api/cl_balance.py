@@ -18,13 +18,19 @@ again. A Casual Leave HR proposes from the Attendance Edit page counts as pendin
 the Department Head and HR (it becomes a real approved Casual Leave when both approve: attendance_edit._apply_casual_leave),
 so the employee cannot use the same days twice in the meantime.
 
+A Casual Leave dated on an employee's birthday under the NEW birthday rule (compensation, owner 2026-11-19: on/after
+CompensationConfig.claims_from, birthday switched on, an active staff member, not an off day) that was NOT worked (no
+punch that day) uses NO balance: the day is a paid birthday leave (attendance_final), so the Casual Leave request stays
+as it is but is never counted (Part.birthday). On a worked birthday it counts like any Casual Leave (the worked birthday
+earns its own credit to claim instead).
+
 Read-only: nothing here writes anything.
 """
 
 from __future__ import annotations
 
 import calendar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -88,9 +94,14 @@ class Part:
     decided_at: datetime | None = None
     # HR gave it for an absent date on the Carry Forward tab: it uses the year's balance whatever its date
     assigned: bool = False
+    # dated on a NEW-rule birthday (see new_rule_birthdays): a paid birthday leave, so it never uses the balance
+    birthday: bool = False
 
     def counts(self, cut_over: date) -> bool:
-        """Whether it uses the yearly balance: dated on/after the cut-over, or given by HR for an absent date."""
+        """Whether it uses the yearly balance: dated on/after the cut-over, or given by HR for an absent date; never when
+        it falls on a new-rule birthday (paid birthday leave, no Casual Leave balance used)."""
+        if self.birthday:
+            return False
         return self.assigned or counts(self.date, cut_over)
 
     @property
@@ -107,7 +118,54 @@ class Part:
             "days": number(self.days),
             "status": self.status,
             "source": self.source,
+            # added 2026-11-19: on a new-rule birthday (paid birthday leave): it uses no Casual Leave balance
+            "birthday": self.birthday,
         }
+
+
+def new_rule_birthdays(candidates) -> set[tuple[int, date]]:
+    """{(employee id, date)} of the (employee id, date of birth, employment type, date) candidates whose date is the
+    employee's birthday under the NEW birthday rule (compensation_engine.birthday_rule: master + birthday switch on,
+    on/after the birthday effective date and CompensationConfig.claims_from, active staff, not before joining, not an off
+    day) AND that was not worked: nobody punched that day (correctness review 2026-11-19). A Casual Leave on such a day
+    is a paid birthday leave and uses no balance; on a WORKED birthday it counts like any Casual Leave (the worked
+    birthday gives its own credit to claim instead). No query unless a date of birth matches a candidate date (then the
+    switches, those employees and their punches of those days are read)."""
+    from .compensation_rules import is_birthday
+
+    matched = [
+        (emp_id, d)
+        for emp_id, dob, kind, d in candidates
+        if kind == "staff" and dob is not None and is_birthday(dob, d)
+    ]
+    if not matched:
+        return set()
+    from . import compensation_engine as comp
+    from .models import CompensationConfig, Employee, PayrollSettings
+
+    if not PayrollSettings.get().compensation_feature_enabled:
+        return set()
+    ctx = comp.CompContext(master=True, config=CompensationConfig.get())
+    if not ctx.birthday_on:
+        return set()
+    employees = Employee.objects.in_bulk({emp_id for emp_id, _d in matched})
+    new_rule = {
+        (emp_id, d)
+        for emp_id, d in matched
+        if emp_id in employees and comp.birthday_rule(employees[emp_id], d, ctx) == comp.BIRTHDAY_RULE_NEW
+    }
+    if not new_rule:
+        return set()
+    from .models import AttendanceLog
+
+    worked = set(
+        AttendanceLog.objects.filter(
+            employee_id__in={emp_id for emp_id, _d in new_rule}, date__in={d for _e, d in new_rule}
+        )
+        .values_list("employee_id", "date")
+        .distinct()
+    )
+    return new_rule - worked
 
 
 def is_hr_edit_cl(cl) -> bool:
@@ -138,16 +196,26 @@ def hr_edit_id_of(cl) -> int | None:
 
 def parts(employee_ids, start: date, end: date, exclude_override_ids=()) -> dict[int, list[Part]]:
     """{employee id: [Part, ...]} for every Casual Leave day held between start and end (both included): pending and
-    approved requests, plus Casual Leave proposed on the Attendance Edit page that is still waiting. Two queries."""
+    approved requests, plus Casual Leave proposed on the Attendance Edit page that is still waiting. Two queries (more
+    only when a Casual Leave falls on the employee's birthday: new_rule_birthdays marks those Part.birthday)."""
+    from django.db.models import F
+
     from .models import AttendanceOverrideRequest, CasualLeaveRequest
 
     ids = list(employee_ids)
     out: dict[int, list[Part]] = {i: [] for i in ids}
     if not ids or start > end:
         return out
-    for cl in CasualLeaveRequest.objects.filter(
-        employee_id__in=ids, date__range=(start, end), status__in=("pending", "approved")
-    ).order_by("date", "id"):
+    who = {"emp_dob": F("employee__date_of_birth"), "emp_kind": F("employee__employment_type")}
+    candidates = []
+    for cl in (
+        CasualLeaveRequest.objects.filter(
+            employee_id__in=ids, date__range=(start, end), status__in=("pending", "approved")
+        )
+        .annotate(**who)
+        .order_by("date", "id")
+    ):
+        candidates.append((cl.employee_id, cl.emp_dob, cl.emp_kind, cl.date))
         out[cl.employee_id].append(
             Part(
                 cl.employee_id,
@@ -168,7 +236,8 @@ def parts(employee_ids, start: date, end: date, exclude_override_ids=()) -> dict
         status=AttendanceOverrideRequest.STATUS_PENDING,
         requested_values__option=HR_EDIT_OPTION,
     ).exclude(pk__in=list(exclude_override_ids))
-    for req in proposed.order_by("date", "id"):
+    for req in proposed.annotate(**who).order_by("date", "id"):
+        candidates.append((req.employee_id, req.emp_dob, req.emp_kind, req.date))
         out[req.employee_id].append(
             Part(
                 req.employee_id,
@@ -182,6 +251,10 @@ def parts(employee_ids, start: date, end: date, exclude_override_ids=()) -> dict
                 None,
             )
         )
+    birthdays = new_rule_birthdays(candidates)
+    if birthdays:
+        for emp_id, held in out.items():
+            out[emp_id] = [replace(p, birthday=True) if (emp_id, p.date) in birthdays else p for p in held]
     return out
 
 
@@ -192,7 +265,11 @@ def balance_json(held: list[Part], year: int, cut_over: date) -> dict:
     counted = [
         p
         for p in held
-        if win is not None and p.date.year == year and (win[0] <= p.date or p.assigned) and p.date <= win[1]
+        if win is not None
+        and not p.birthday
+        and p.date.year == year
+        and (win[0] <= p.date or p.assigned)
+        and p.date <= win[1]
     ]
     used = sum((p.days for p in counted if p.status == "approved"), Decimal("0"))
     pending = sum((p.days for p in counted if p.status == "pending"), Decimal("0"))
@@ -255,7 +332,7 @@ def month_usage(emp, year: int, cut_over: date | None = None) -> list[dict]:
     for month in range(1, 13):
         mine = [p for p in held if p.date.month == month]
         counted = [p for p in mine if p.counts(cut_over)]
-        before = [p for p in mine if not p.counts(cut_over)]
+        before = [p for p in mine if not p.counts(cut_over) and not p.birthday]
         last_day = date(year, month, calendar.monthrange(year, month)[1])
         out.append(
             {
@@ -305,13 +382,29 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
         return {**head, "entries": []}
 
     events: list[tuple] = []  # (day, order, kind, change, payload)
-    for cl in CasualLeaveRequest.objects.filter(employee=emp, date__range=(date(year, 1, 1), win[1])).order_by(
-        "created_at", "id"
-    ):
+    requests = list(
+        CasualLeaveRequest.objects.filter(employee=emp, date__range=(date(year, 1, 1), win[1])).order_by(
+            "created_at", "id"
+        )
+    )
+    proposals = list(
+        AttendanceOverrideRequest.objects.filter(
+            employee=emp,
+            date__range=win,
+            status=AttendanceOverrideRequest.STATUS_PENDING,
+            requested_values__option=HR_EDIT_OPTION,
+        ).order_by("created_at", "id")
+    )
+    # a Casual Leave on a new-rule birthday is a paid birthday leave: listed, but it uses no days
+    birthdays = new_rule_birthdays(
+        (emp.pk, emp.date_of_birth, emp.employment_type, row.date) for row in [*requests, *proposals]
+    )
+    for cl in requests:
         if cl.date < win[0] and not is_assigned_cl(cl):
             continue  # before the cut-over: never counted
         portion = portion_of(cl.portion)
         days = PORTION_DAYS[portion]
+        change = Decimal("0") if (emp.pk, cl.date) in birthdays else -days
         source = source_of(cl)
         base = {
             "date": cl.date.isoformat(),
@@ -322,21 +415,17 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
             "requestKind": "casual_leave",
             "source": source,
             "status": cl.status,
+            "birthday": (emp.pk, cl.date) in birthdays,
         }
         if cl.status == "approved":
             on = _ist(cl.reviewed_at) or _ist(cl.created_at)
-            events.append((on, cl.created_at, "approved", -days, base))
+            events.append((on, cl.created_at, "approved", change, base))
         elif cl.status == "pending":
-            events.append((_ist(cl.created_at), cl.created_at, "pending", -days, base))
+            events.append((_ist(cl.created_at), cl.created_at, "pending", change, base))
         elif cl.status == "rejected":
             on = _ist(cl.reviewed_at) or _ist(cl.created_at)
             events.append((on, cl.created_at, "rejected", Decimal("0"), base))
-    for req in AttendanceOverrideRequest.objects.filter(
-        employee=emp,
-        date__range=win,
-        status=AttendanceOverrideRequest.STATUS_PENDING,
-        requested_values__option=HR_EDIT_OPTION,
-    ).order_by("created_at", "id"):
+    for req in proposals:
         portion = portion_of((req.requested_values or {}).get("portion"))
         days = PORTION_DAYS[portion]
         events.append(
@@ -344,7 +433,7 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
                 _ist(req.created_at),
                 req.created_at,
                 "pending",
-                -days,
+                Decimal("0") if (emp.pk, req.date) in birthdays else -days,
                 {
                     "date": req.date.isoformat(),
                     "portion": portion,
@@ -354,6 +443,7 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
                     "requestKind": "attendance_correction",
                     "source": "hr_edit",
                     "status": "pending",
+                    "birthday": (emp.pk, req.date) in birthdays,
                 },
             )
         )
@@ -385,7 +475,9 @@ def history(emp, year: int, today: date | None = None, cut_over: date | None = N
         cl_day = date.fromisoformat(base["date"]).strftime("%d %b %Y")
         what = f"{base['portionLabel']}, {cl_day}"
         by_hr = base["source"] == "hr_edit"
-        if kind == "approved" and base["source"] == "hr_assign":
+        if base.get("birthday") and kind != "rejected":
+            did = "Casual Leave on the birthday: paid birthday leave, no balance used"
+        elif kind == "approved" and base["source"] == "hr_assign":
             did = "Casual Leave given by HR for an absent / leave / half day"
         elif kind == "approved":
             did = "Casual Leave given by HR (attendance edit), approved" if by_hr else "Casual Leave approved"

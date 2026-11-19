@@ -1,14 +1,17 @@
 import type {
   BalanceDetail,
-  BalanceRow,
+  BalanceListRow,
+  BirthdayOutcome,
   BirthdayRow,
   BirthdaysResponse,
+  CompensationClaim,
   CompensationCreditRow,
   CompensationReport,
   CompensationWindow,
-  HolidayWorkClaim,
   HolidayWorkEligibleEmployee,
   HolidayWorkEligibleResponse,
+  HolidayWorkMonthDay,
+  LedgerRow,
   OvertimeConfig,
   OvertimeRow,
   ReportPeriod,
@@ -273,7 +276,7 @@ const claimApproval = (state: "pending" | "approved" | "rejected", by?: string):
   canReject: { hod: state === "pending", hr: false },
 });
 
-export const claim = (id: number, over: Partial<HolidayWorkClaim> = {}): HolidayWorkClaim => ({
+export const claim = (id: number, over: Partial<CompensationClaim> = {}): CompensationClaim => ({
   id,
   employeeId: 20 + id,
   employeeCode: `E${20 + id}`,
@@ -298,10 +301,21 @@ export const claim = (id: number, over: Partial<HolidayWorkClaim> = {}): Holiday
   hodName: "Suresh Raj",
   credited: false,
   approval: claimApproval("pending"),
+  kind: "holiday_work",
+  kindLabel: null,
+  raisedByRole: "hr",
+  minutes: null,
+  overtime: null,
+  overtimeRecordId: null,
+  useDate: null,
+  appliesOn: null,
+  ledger: null,
+  statusLabel: null,
   ...over,
 });
 
-export const CLAIMS: HolidayWorkClaim[] = [
+/** The claims of every kind (Claims lists them all): three of Sunday work, then OT, birthday and a use of the balance. */
+export const CLAIMS: CompensationClaim[] = [
   claim(3001, { employeeId: 23, employeeCode: "E23", employeeName: "Hari Om" }),
   claim(3002, {
     employeeId: 24,
@@ -313,6 +327,9 @@ export const CLAIMS: HolidayWorkClaim[] = [
     reviewedAt: "2026-10-12T05:00:00+00:00",
     credited: true,
     approval: claimApproval("approved", "Suresh Raj"),
+    department: "Sales",
+    departmentId: 1,
+    ledger: { id: 20, type: "credit", shifts: 1, date: "2026-10-12", source: "holiday_work" },
   }),
   claim(3003, {
     employeeId: 25,
@@ -324,7 +341,96 @@ export const CLAIMS: HolidayWorkClaim[] = [
     reviewComment: "Not authorised",
     approval: claimApproval("rejected", "Suresh Raj"),
   }),
+  claim(3004, {
+    employeeId: 11,
+    employeeCode: "E11",
+    employeeName: "Asha Kumar",
+    department: "Sales",
+    departmentId: 1,
+    kind: "ot_allowance",
+    workDate: "2026-10-07",
+    shifts: 0,
+    minutes: 60,
+    reason: "Stayed for the audit",
+    raisedByRole: "employee",
+    requestedBy: "Asha Kumar",
+    overtimeRecordId: 2,
+    overtime: { date: "2026-10-07", shiftEnd: "17:30", lastPunch: "19:30", lastPunchNextDay: false, extraMinutes: 120 },
+  }),
+  claim(3005, {
+    employeeId: 13,
+    employeeCode: "E13",
+    employeeName: "Chitra Devi",
+    kind: "ot_shift",
+    workDate: "2026-10-05",
+    shifts: 0.5,
+    reason: "Shipment",
+    status: "approved",
+    reviewedBy: "Suresh Raj",
+    reviewedAt: "2026-10-06T05:00:00+00:00",
+    credited: true,
+    approval: claimApproval("approved", "Suresh Raj"),
+    overtimeRecordId: 3,
+    overtime: { date: "2026-10-05", shiftEnd: "17:30", lastPunch: "02:10", lastPunchNextDay: true, extraMinutes: 520 },
+    ledger: { id: 15, type: "credit", shifts: 0.5, date: "2026-10-06", source: "ot_shift" },
+  }),
+  claim(3006, {
+    employeeId: 34,
+    employeeCode: "E34",
+    employeeName: "Priya Menon",
+    department: "Sales",
+    departmentId: 1,
+    kind: "birthday",
+    workDate: "2026-10-13",
+    shifts: 1,
+    reason: "Worked on my birthday",
+    raisedByRole: "employee",
+    requestedBy: "Priya Menon",
+  }),
+  claim(3007, {
+    employeeId: 21,
+    employeeCode: "E21",
+    employeeName: "Fara Khan",
+    kind: "use_balance",
+    workDate: "2026-10-16",
+    useDate: "2026-10-16",
+    shifts: 0.5,
+    reason: "Family function",
+  }),
 ];
+
+/** The Sundays and holidays of October 2026 (and September), as GET /holiday-work/month sends them, by "YYYY-MM". */
+const monthDay = (date: string, weekLabel: string, over: Partial<HolidayWorkMonthDay> = {}): HolidayWorkMonthDay => ({
+  date,
+  kind: "sunday",
+  holidayName: null,
+  weekLabel,
+  worked: 0,
+  eligible: 0,
+  claimed: { pending: 0, approved: 0 },
+  ...over,
+});
+
+export const MONTH_DAYS: Record<string, HolidayWorkMonthDay[]> = {
+  "2026-10": [
+    monthDay("2026-10-02", "Week 1", {
+      kind: "holiday",
+      holidayName: "Gandhi Jayanti",
+      worked: 1,
+      claimed: { pending: 0, approved: 1 },
+    }),
+    monthDay("2026-10-04", "Week 1", { worked: 2, eligible: 1, claimed: { pending: 0, approved: 1 } }),
+    monthDay(SUNDAY, "Week 2", { worked: 3, eligible: 2, claimed: { pending: 1, approved: 1 } }),
+    monthDay("2026-10-18", "Week 3"),
+    monthDay("2026-10-25", "Week 4"),
+  ],
+  "2026-09": [
+    monthDay("2026-09-06", "Week 1", { worked: 1 }),
+    monthDay("2026-09-13", "Week 2"),
+    monthDay("2026-09-20", "Week 3", { worked: 2, eligible: 2 }),
+    monthDay("2026-09-27", "Week 4"),
+  ],
+};
 
 const person = (
   code: string,
@@ -372,6 +478,13 @@ export const ELIGIBLE_SUNDAY: HolidayWorkEligibleResponse = {
   ],
 };
 
+export const ELIGIBLE_FIRST_SUNDAY: HolidayWorkEligibleResponse = {
+  ...ELIGIBLE_SUNDAY,
+  date: "2026-10-04",
+  counts: { worked: 1, eligible: 1 },
+  employees: [person("E27", "Lata Roy")],
+};
+
 export const ELIGIBLE_WEEKDAY: HolidayWorkEligibleResponse = {
   ...ELIGIBLE_SUNDAY,
   date: "2026-10-13",
@@ -384,10 +497,28 @@ export const ELIGIBLE_WEEKDAY: HolidayWorkEligibleResponse = {
 
 // ── Balance ──
 
-export const BALANCES: BalanceRow[] = [
-  { employeeId: 21, employeeCode: "E21", employeeName: "Fara Khan", department: "Cutting", balance: 1.5 },
-  { employeeId: 24, employeeCode: "E24", employeeName: "Indu Nair", department: "Sales", balance: 0.25 },
-  { employeeId: 26, employeeCode: "E26", employeeName: "Kiran Paul", department: "Sales", balance: 0 },
+const balanceRow = (
+  id: number,
+  name: string,
+  department: string,
+  departmentId: number,
+  figures: Pick<BalanceListRow, "earned" | "used" | "pending" | "available">,
+): BalanceListRow => ({
+  employeeId: id,
+  employeeCode: `E${id}`,
+  employeeName: name,
+  department,
+  departmentId,
+  branch: "Head Office",
+  branchId: 2,
+  lastActivity: "2026-10-12",
+  ...figures,
+});
+
+export const BALANCES: BalanceListRow[] = [
+  balanceRow(21, "Fara Khan", "Cutting", 3, { earned: 2, used: 0.5, pending: 0.5, available: 1 }),
+  balanceRow(24, "Indu Nair", "Sales", 1, { earned: 1, used: 0.75, pending: 0, available: 0.25 }),
+  balanceRow(26, "Kiran Paul", "Sales", 1, { earned: 1, used: 1, pending: 0, available: 0 }),
 ];
 
 export const LEDGERS: Record<number, BalanceDetail> = {
@@ -396,6 +527,10 @@ export const LEDGERS: Record<number, BalanceDetail> = {
     employeeCode: "E21",
     employeeName: "Fara Khan",
     balance: 1.5,
+    earned: 2,
+    used: 0.5,
+    pending: 0.5,
+    available: 1,
     entries: [
       {
         id: 12,
@@ -418,6 +553,7 @@ export const LEDGERS: Record<number, BalanceDetail> = {
         createdBy: "HOD",
         createdAt: "2026-10-05T10:00:00+05:30",
         counted: true,
+        claim: { id: 2990, kind: "holiday_work", status: "approved" },
       },
       {
         id: null,
@@ -435,6 +571,72 @@ export const LEDGERS: Record<number, BalanceDetail> = {
   },
   24: { employeeId: 24, employeeCode: "E24", employeeName: "Indu Nair", balance: 0.25, entries: [] },
 };
+
+/** The ledger (Credits): credits and debits of every balance, each with the claim that made it. */
+const ledgerRow = (id: number, over: Partial<LedgerRow>): LedgerRow => ({
+  id,
+  employeeId: 21,
+  employeeCode: "E21",
+  employeeName: "Fara Khan",
+  department: "Cutting",
+  departmentId: 3,
+  branch: "Head Office",
+  branchId: 2,
+  type: "credit",
+  shifts: 1,
+  date: "2026-10-04",
+  source: "holiday_work",
+  sourceLabel: null,
+  note: null,
+  createdBy: "Suresh Raj",
+  createdAt: "2026-10-05T10:00:00+05:30",
+  counted: true,
+  claim: null,
+  overtimeRecordId: null,
+  overtime: null,
+  ...over,
+});
+
+export const LEDGER: LedgerRow[] = [
+  ledgerRow(20, {
+    employeeId: 24,
+    employeeCode: "E24",
+    employeeName: "Indu Nair",
+    department: "Sales",
+    departmentId: 1,
+    date: "2026-10-12",
+    claim: { id: 3002, kind: "holiday_work", status: "approved" },
+  }),
+  ledgerRow(15, {
+    employeeId: 13,
+    employeeCode: "E13",
+    employeeName: "Chitra Devi",
+    shifts: 0.5,
+    date: "2026-10-06",
+    source: "ot_shift",
+    claim: { id: 3005, kind: "ot_shift", status: "approved" },
+    overtimeRecordId: 3,
+  }),
+  ledgerRow(12, {
+    type: "debit",
+    shifts: 0.5,
+    date: "2026-10-09",
+    source: "redemption",
+    note: "Redeemed on 2026-10-09",
+    createdBy: "Meena",
+  }),
+  ledgerRow(9, { claim: { id: 2990, kind: "holiday_work", status: "approved" } }),
+  ledgerRow(7, {
+    employeeId: 26,
+    employeeCode: "E26",
+    employeeName: "Kiran Paul",
+    department: "Sales",
+    departmentId: 1,
+    date: "2026-09-27",
+    source: "birthday",
+    claim: { id: 2980, kind: "birthday", status: "approved" },
+  }),
+];
 
 export const CREDITS: CompensationCreditRow[] = [
   {
@@ -484,16 +686,35 @@ const birthday = (code: string, name: string, day: string, over: Partial<Birthda
   ...over,
 });
 
-const BIRTHDAYS_TODAY: BirthdayRow[] = [birthday("E31", "Mala Iyer", TODAY)];
+// Mala worked on her birthday today (a credit nobody claimed yet); Naveen was absent (paid birthday leave); Priya worked and
+// claimed it from her app (waiting for the HOD); Omar's falls on a Sunday (nothing); Ravi's is still to come (month only).
+const BIRTHDAYS_TODAY: BirthdayRow[] = [
+  birthday("E31", "Mala Iyer", TODAY, {
+    outcome: "credit_claimable",
+    applied: false,
+    compensationKind: null,
+  }),
+];
 const BIRTHDAYS_WEEK: BirthdayRow[] = [
   birthday("E32", "Naveen Das", "2026-10-12", {
     weekday: "Monday",
+    outcome: "paid_leave",
     attendanceStatus: "absent",
     firstPunch: null,
     lastPunch: null,
   }),
+  birthday("E34", "Priya Menon", "2026-10-13", {
+    weekday: "Tuesday",
+    outcome: "credit_pending",
+    applied: false,
+    compensationKind: null,
+    firstPunch: "09:10",
+    lastPunch: "18:00",
+    claim: { id: 3006, status: "pending", shifts: 1, kind: "birthday" },
+  }),
   ...BIRTHDAYS_TODAY,
   birthday("E33", "Omar Ali", "2026-10-18", {
+    outcome: "off_day",
     weekday: "Sunday",
     benefits: false,
     reason: "18 Oct 2026 is a Sunday: it is already a day off.",
@@ -506,22 +727,55 @@ const BIRTHDAYS_WEEK: BirthdayRow[] = [
   }),
 ];
 
-export function birthdaysOf(period: ReportPeriod, date: string, enabled = true): BirthdaysResponse {
+const BIRTHDAYS_MONTH: BirthdayRow[] = [
+  ...BIRTHDAYS_WEEK,
+  birthday("E35", "Ravi Shankar", "2026-10-22", {
+    weekday: "Thursday",
+    outcome: "upcoming",
+    benefits: false,
+    attendanceStatus: null,
+    applied: false,
+    compensationKind: null,
+    firstPunch: null,
+    lastPunch: null,
+    shiftsEarned: null,
+  }),
+];
+
+/** GET /api/compensation/birthdays: the period's birthdays, with the department / search / outcome filters applied. */
+export function birthdaysOf(
+  period: ReportPeriod,
+  date: string,
+  enabled = true,
+  qs: URLSearchParams = new URLSearchParams(),
+): BirthdaysResponse {
   const range =
     period === "today"
       ? { from: date, to: date }
       : period === "week"
         ? { from: "2026-10-12", to: "2026-10-18" }
         : { from: "2026-10-01", to: "2026-10-31" };
-  const results = period === "today" ? BIRTHDAYS_TODAY : BIRTHDAYS_WEEK;
+  const all = period === "today" ? BIRTHDAYS_TODAY : period === "week" ? BIRTHDAYS_WEEK : BIRTHDAYS_MONTH;
+  const dept = qs.get("departmentId");
+  const q = (qs.get("q") ?? "").toLowerCase();
+  const scoped = all.filter(
+    (r) =>
+      (!dept || String(r.departmentId) === dept) &&
+      (!q || r.employeeName.toLowerCase().includes(q) || r.employeeCode.toLowerCase().includes(q)),
+  );
+  const byOutcome: Partial<Record<BirthdayOutcome, number>> = {};
+  for (const r of scoped) if (r.outcome) byOutcome[r.outcome] = (byOutcome[r.outcome] ?? 0) + 1;
+  const outcome = qs.get("outcome");
+  const results = scoped.filter((r) => !outcome || r.outcome === outcome);
   return {
     period,
     date,
     ...range,
-    enabled: { master: true, birthday: enabled, effectiveFrom: "2026-10-01" },
+    enabled: { master: true, birthday: enabled, effectiveFrom: "2026-10-01", claimsFrom: "2026-10-01" },
     count: results.length,
     benefitCount: results.filter((r) => r.benefits).length,
-    results,
+    results: JSON.parse(JSON.stringify(results)) as BirthdayRow[],
+    summary: { byOutcome },
   };
 }
 

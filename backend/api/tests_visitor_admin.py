@@ -443,11 +443,15 @@ class RegisterTests(Fixture):
         out = self.post(self.URL, self.body(name="Prakash S", phone="94000 00882"), status=409)
         self.assertEqual(out["code"], "already_inside")
 
-    def test_a_returning_visitor_with_a_new_name_updates_it(self):
+    def test_a_returning_visitor_with_a_new_name_gives_the_new_visit_that_name(self):
+        # 19 Nov 2026: the name is the visit's own; the earlier visit and the shared Visitor row keep theirs
         VisitorVisit.objects.filter(pk=self.g.pk).update(checked_out_at=ist(18, 11, 0))
-        self.post(self.URL, self.body(name="Suresh J", phone="9900000112"), status=201)
+        out = self.post(self.URL, self.body(name="Suresh J", phone="9900000112"), status=201)
+        self.assertEqual(out["name"], "Suresh J")
+        self.assertEqual(VisitorVisit.objects.get(pk=out["id"]).visitor_name, "Suresh J")
+        self.assertEqual(self.get(f"/api/visitor/visits/{self.g.id}")["name"], "Suresh Joshi")
         self.v5.refresh_from_db()
-        self.assertEqual(self.v5.name, "Suresh J")
+        self.assertEqual(self.v5.name, "Suresh Joshi")
 
     def test_someone_already_inside_is_not_registered_twice(self):
         out = self.post(self.URL, self.body(phone="9845012210"), status=409)
@@ -919,17 +923,22 @@ class OneBranchRegisterTests(Fixture):
         self.assertEqual((out["name"], out["aadhaar"], out["aadhaarLast4"]), ("Typed Name", None, None))
         self.assert_v4_untouched()
 
-    def test_someone_this_branch_knows_shows_at_most_the_last_four_aadhaar_digits(self):
+    def test_someone_this_branch_knows_gets_this_branchs_own_name_and_aadhaar(self):
+        # 19 Nov 2026: a blank field is copied from the person's latest visit at THIS branch (what this branch was told),
+        # so the desk sees its own Aadhaar like on its list; the shared Visitor row is never changed
         VisitorVisit.objects.filter(pk=self.a.pk).update(checked_out_at=NOW)  # Ramesh left, comes again
         out = self.post(
             "/api/reception-devices/visits", self.body(name="", phone="9845012210"), status=201, **self.desk(self.desk1)
         )
-        self.assertEqual((out["name"], out["aadhaar"], out["aadhaarLast4"]), ("Ramesh Kumar", None, "9012"))
-        # known here only: a new name typed here still updates the person, as before
+        self.assertEqual((out["name"], out["aadhaar"], out["aadhaarLast4"]), ("Ramesh Kumar", AADHAAR, "9012"))
+        visit = VisitorVisit.objects.get(pk=out["id"])
+        self.assertEqual((visit.visitor_name, visit.aadhaar_number), ("Ramesh Kumar", AADHAAR))
+        # a new name typed here goes on the new visit only
         VisitorVisit.objects.filter(visitor=self.v1, checked_out_at__isnull=True).update(checked_out_at=NOW)
-        self.post("/api/visitor/visits", self.body(name="Ramesh K", phone="9845012210"), status=201)
+        out = self.post("/api/visitor/visits", self.body(name="Ramesh K", phone="9845012210"), status=201)
+        self.assertEqual((out["name"], out["aadhaar"]), ("Ramesh K", AADHAAR))
         self.v1.refresh_from_db()
-        self.assertEqual(self.v1.name, "Ramesh K")
+        self.assertEqual(self.v1.name, "Ramesh Kumar")
 
     def test_someone_known_here_and_elsewhere_is_never_changed_by_one_branch(self):
         VisitorVisit.objects.filter(pk=self.a.pk).update(checked_out_at=NOW)
@@ -961,7 +970,7 @@ class OneBranchRegisterTests(Fixture):
         found = self.post("/api/reception-devices/host-lookup", {"phone": "90000 33333"}, **self.desk(self.desk2))
         self.assertEqual(found["employee"]["id"], self.host3.id)
 
-    def test_an_hr_account_not_bound_to_a_branch_keeps_the_old_behaviour(self):
+    def test_an_hr_account_not_bound_to_a_branch_may_pick_any_host_and_the_name_stays_per_branch(self):
         out = self.post(
             "/api/visitor/visits",
             self.body(name="Dinesh V", branchId=self.b1.id, meetingEmployeeId=self.host3.id),
@@ -969,8 +978,9 @@ class OneBranchRegisterTests(Fixture):
             status=201,
         )
         self.assertEqual(out["name"], "Dinesh V")
-        self.v4.refresh_from_db()
-        self.assertEqual(self.v4.name, "Dinesh V")  # the shared person is updated, as before
+        # 19 Nov 2026: the name is that visit's own; unit 2 still sees what it was told and the shared row is unchanged
+        self.assertEqual(self.get(f"/api/visitor/visits/{self.f.id}", self.b2_editor)["name"], "Dinesh Varma")
+        self.assert_v4_untouched()
 
 
 class DeviceAuditActorTests(Fixture):

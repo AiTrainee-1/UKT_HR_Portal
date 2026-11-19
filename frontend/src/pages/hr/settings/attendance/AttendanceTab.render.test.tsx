@@ -312,6 +312,90 @@ describe("Settings -> Attendance", () => {
     expect(protection()).toContain("the grace above is 0");
   });
 
+  it("sets the staff next-morning cut-off: the example follows what is typed, the date only moves later, then it is sent", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-20T06:00:00Z"));
+    try {
+      await open({
+        ...SAVED,
+        staffNextMorningEnabled: true,
+        staffNextMorningCutoff: "06:00",
+        staffNextMorningFrom: "2026-11-19",
+      });
+      const line = (id: string) => (byTestId(id)?.textContent ?? "").replace(/\s+/g, " ");
+      expect(page!.container.querySelector("#staff-next-morning-switch")?.getAttribute("aria-checked")).toBe("true");
+      expect(input("staff-next-morning-cutoff").value).toBe("06:00");
+      expect(byTestId("next-morning-example")?.textContent).toContain("in 08:30, out 13:00, in 14:00");
+      expect(line("next-morning-night-line")).toContain(
+        "Monday's overtime: from the 17:30 shift end until 02:10 (8 h 40 min)",
+      );
+      expect(line("next-morning-morning-line")).toContain("Tuesday's arrival: from 06:00 a punch starts the new day");
+      // a cut-off before the night punch: that punch starts Tuesday
+      await page!.type("#staff-next-morning-cutoff", "02:00");
+      expect(line("next-morning-night-line")).toContain("Tuesday's arrival: it is not before the 02:00 cut-off");
+      // a cut-off after 06:20: the morning punch still ends Monday - but the early-arrival guard of Tuesday's 08:30 shift
+      // (2 h of protection) moves the 07:00 cut-off to 06:30, as the server does
+      expect(byTestId("next-morning-guard-line")).toBeNull();
+      await page!.type("#staff-next-morning-cutoff", "07:00");
+      expect(line("next-morning-guard-line")).toContain("Tuesday's cut-off is 06:30, not 07:00");
+      expect(line("next-morning-morning-line")).toContain("Monday's last punch: it is before the 06:30 cut-off");
+      // the date only moves later
+      expect(input("staff-next-morning-from-date").min).toBe("2026-11-19");
+      await page!.type("#staff-next-morning-from-date", "2026-11-10");
+      expect(byTestId("next-morning-from-error")?.textContent).toContain("can only be moved later than 19 Nov 2026");
+      expect(buttonNamed("Save Attendance Settings")?.disabled).toBe(true);
+      await page!.type("#staff-next-morning-from-date", "2026-11-19");
+      await press("Save Attendance Settings");
+      expect(byTestId("confirm-save")?.textContent).toContain("Next-morning cut-off time");
+      await press("Confirm and save");
+      expect(puts[0]).toMatchObject({ staffNextMorningEnabled: true, staffNextMorningCutoff: "07:00" });
+      expect("staffNextMorningFrom" in puts[0]).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the next-morning rule's dated history read-only under the switch, newest first", async () => {
+    await open({
+      ...SAVED,
+      staffNextMorningEnabled: false,
+      staffNextMorningCutoff: "05:30",
+      staffNextMorningFrom: "2026-11-19",
+      staffNextMorningHistory: [
+        { from: "2026-11-19", enabled: true, cutoff: "06:00" },
+        { from: "2026-11-25", enabled: true, cutoff: "05:30" },
+        { from: "2026-12-02", enabled: false, cutoff: "05:30" },
+      ],
+    });
+    const lines = page!.container.querySelectorAll('[data-testid="next-morning-history-line"]');
+    expect([...lines].map((l) => (l.textContent ?? "").replace(/\s+/g, " "))).toEqual([
+      "From 2 Dec 2026: off (the forgotten last-out window decides)",
+      "From 25 Nov 2026: on, cut-off 05:30",
+      "From 19 Nov 2026: on, cut-off 06:00",
+    ]);
+    expect(byTestId("next-morning-history")?.textContent).toContain("earlier days keep the rule");
+  });
+
+  it("switches the next-morning cut-off off, and shows an older server's rule read-only", async () => {
+    await open({
+      ...SAVED,
+      staffNextMorningEnabled: true,
+      staffNextMorningCutoff: "06:00",
+      staffNextMorningFrom: "2026-11-19",
+    });
+    await page!.click("#staff-next-morning-switch");
+    expect(byTestId("next-morning-off-line")?.textContent).toContain("forgotten last-out window below decides");
+    expect(input("staff-next-morning-cutoff").disabled).toBe(true);
+    await press("Save Attendance Settings");
+    await press("Confirm and save");
+    expect(puts[0]).toMatchObject({ staffNextMorningEnabled: false });
+    page!.unmount();
+
+    await open();
+    expect((page!.container.querySelector("#staff-next-morning-switch") as HTMLButtonElement).disabled).toBe(true);
+    expect(byTestId("attendance-next-morning")?.textContent).toContain("does not report the next-morning cut-off yet");
+  });
+
   it("has the Staff | Production pills, opens on Staff, and keeps production off the staff page", async () => {
     await open();
     expect([

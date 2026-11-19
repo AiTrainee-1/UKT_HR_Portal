@@ -302,6 +302,11 @@ def _write_attendance_for_cl(cl: CasualLeaveRequest, reviewer: str) -> None:
     if portion_of(cl) != FULL:
         _refresh_day_for_half_cl(cl)
         return
+    if cl.status != CasualLeaveRequest.STATUS_APPROVED and _unworked_new_rule_birthday(cl):
+        # A rejected Casual Leave on a birthday nobody worked (new birthday rule): the birthday itself is a paid birthday
+        # leave, so the day is left to the engine instead of being fixed as unpaid leave (correctness review 2026-11-19)
+        _refresh_day_for_half_cl(cl)
+        return
     record = AttendanceDayRecord.objects.filter(employee=cl.employee, date=cl.date).first()
     if record is None:
         record = compute_day_record(cl.employee, cl.date)
@@ -322,9 +327,21 @@ def _write_attendance_for_cl(cl: CasualLeaveRequest, reviewer: str) -> None:
         record.late_reason = None
         record.is_half_shift = False
         record.override_note = "Casual Leave rejected -marked as leave"
+    # a verdict set by hand is the whole story of the day: no engine compensation marker (a birthday leave, an
+    # allowance, a relaxation) may stay on it and claim something the day no longer pays
+    record.compensation_kind = ""
+    record.compensation_minutes = 0
+    record.compensation_note = ""
     record.source = "manual"
     record.override_by = reviewer
     record.save()
+
+
+def _unworked_new_rule_birthday(cl: CasualLeaveRequest) -> bool:
+    """Is the Casual Leave's date the employee's birthday under the NEW birthday rule, with no punch that day? (Then the
+    day is a paid birthday leave whatever happens to the Casual Leave: cl_balance.new_rule_birthdays.)"""
+    emp = cl.employee
+    return bool(cl_balance.new_rule_birthdays([(emp.pk, emp.date_of_birth, emp.employment_type, cl.date)]))
 
 
 def resolve_casual_leave(

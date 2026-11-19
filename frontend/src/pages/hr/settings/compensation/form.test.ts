@@ -562,3 +562,29 @@ describe("editing the rows", () => {
     expect(check(empty).ok).toBe(true);
   });
 });
+
+describe("the quarters rule switch", () => {
+  it("is read from the server, and is null (never sent) when an older server does not report it", () => {
+    expect(fresh().quarterRule).toBeNull();
+    expect("quarterRule" in (toInput(fresh()).shift ?? {})).toBe(false);
+    const on = draftFrom({ ...SETTINGS, shift: { ...SETTINGS.shift, quarterRule: true } });
+    expect(on.quarterRule).toBe(true);
+    expect(toInput(on).shift).toEqual({
+      enabled: true,
+      minExtraMinutes: 150,
+      relaxationEnabled: true,
+      payEnabled: false,
+      quarterRule: true,
+    });
+  });
+
+  it("counts a flip as a change, and leaves the ladder's own checks as they were (the ladder still serves older days)", () => {
+    const on = draftFrom({ ...SETTINGS, shift: { ...SETTINGS.shift, quarterRule: true } });
+    expect(sameDraft(on, { ...on, quarterRule: false })).toBe(false);
+    expect(sameDraft(on, { ...on })).toBe(true);
+    const noRules = { ...on, shiftRules: on.shiftRules.map((r) => ({ ...r, enabled: false })) };
+    expect(validateDraft(noRules, { allowanceFrom: "2026-10-14", birthdayFrom: "" }).shiftTable).toMatch(
+      /no rule is switched on/,
+    );
+  });
+});

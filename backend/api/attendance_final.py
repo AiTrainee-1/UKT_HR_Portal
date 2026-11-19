@@ -229,6 +229,19 @@ def _sunday(d: date_type) -> bool:
     return d.weekday() == 6
 
 
+def _approved_birthday_credit(employee_id: int, d: date_type) -> bool:
+    """Has this birthday already given an APPROVED birthday credit (a claim of kind birthday)? Asked only for a new-rule
+    birthday with no punch (a handful of rows a year), so one small query then."""
+    from .models import HolidayWorkClaim
+
+    return HolidayWorkClaim.objects.filter(
+        employee_id=employee_id,
+        kind=HolidayWorkClaim.KIND_BIRTHDAY,
+        work_date=d,
+        status=HolidayWorkClaim.STATUS_APPROVED,
+    ).exists()
+
+
 def _compensation_days_by_date(date_from: date_type, date_to: date_type, settings=None) -> dict:
     """{date: [CompensationDayAnnouncement, ...]} for [date_from, date_to],
     with each announcement's explicit employee list prefetched -one round of
@@ -1327,11 +1340,13 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
 
     Compensation (staff only; master switch, the feature's own switch and its
     effective-from date all apply -see compensation_engine.py): a Type 1 OT
-    allowance moves the first-punch limits later, a company-announced late-in /
+    allowance moves the first-punch limits later (from the claims date on:
+    only once the HOD approved its claim), a company-announced late-in /
     early-out window replaces the shift's start / end and grace, a birthday is
-    a paid full day with no detection, and an OT relaxation / redeemed balance
-    tops the day up to at most one shift. What shaped the day is recorded in
-    compensation_kind / _minutes / _note.
+    a paid full day with no detection before the claims date and, from it on,
+    a normal day unless nobody punched (then paid birthday leave), and an OT
+    relaxation / redeemed balance tops the day up to at most one shift. What
+    shaped the day is recorded in compensation_kind / _minutes / _note.
     """
     prefetch = prefetch or {}
     assignments = prefetch.get("assignments")
@@ -1486,9 +1501,13 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     arrival_deadline_secs = None
     marks: list = []  # [(kind, minutes, note)] compensation that shaped this day, most important first
 
-    # Paid birthday leave (Compensation Leave C): a whole paid day whatever the punches say -no Late / Early-Out /
-    # Permission / Half-Day detection. Manual overrides were returned above, so they still win.
-    birthday = (not is_production) and comp.birthday_applies(emp, d, comp_ctx, assignments)
+    # Birthday (Compensation Leave C). OLD rule (a birthday before CompensationConfig.claims_from): a whole paid day
+    # whatever the punches say -no Late / Early-Out / Permission / Half-Day detection. NEW rule (from claims_from on,
+    # owner 2026-11-19): the day is judged normally from the punches; only a birthday with no punch at all (absent, or on
+    # approved leave) becomes paid birthday leave, below, after the normal verdict. Manual overrides were returned
+    # above, so they still win (an approved full-day Casual Leave is one).
+    birthday_rule = None if is_production else comp.birthday_rule(emp, d, comp_ctx, assignments)
+    birthday = birthday_rule == comp.BIRTHDAY_RULE_OLD
     if birthday:
         computed = {
             "status": AttendanceDayRecord.STATUS_PRESENT, "shifts_earned": Decimal("1.00"), "is_half_shift": False,
@@ -1552,7 +1571,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             # still owes a normal morning arrival (its Late verdict is kept below), so the allowance covers it.
             grant = None
             if (
-                comp_ctx.allowance_on and limits is not None and not comp_day
+                comp_ctx.allowance_possible and limits is not None and not comp_day
                 and leave_slot != LeaveRequest.HALF_DAY_MORNING
                 and zone_window not in (ZONE_ON_TIME, ZONE_EXCUSED)
             ):
@@ -1801,7 +1820,46 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
     else:
         computed = {"status": "absent", "shifts_earned": Decimal("0")}
 
-    if cl_portions and not birthday:
+    # Birthday, NEW rule: a birthday nobody punched on (absent, or approved full / half-day leave or half-day Casual
+    # Leave without a punch) is a PAID birthday leave: present, one full shift, marker "birthday", and the half-day CL
+    # step below is skipped so the day is paid once as the birthday (the Casual Leave balance itself is counted from the
+    # CasualLeaveRequest rows, see cl_balance). A worked birthday (any punch) stays the normal day computed above.
+    # Only a birthday that is OVER (before today, IST) can be "not worked": TODAY's birthday with no punch yet is judged
+    # normally and stored as provisional until midnight, so the background refresh (attendance_refresh.
+    # refresh_provisional) works it out again the next day, when it becomes paid birthday leave if nobody punched.
+    birthday_leave = False
+    if (
+        birthday_rule == comp.BIRTHDAY_RULE_NEW
+        and not day_times
+        and not has_manual
+        and computed.get("status") in (AttendanceDayRecord.STATUS_ABSENT, "on_leave")
+        and d >= ist_today()
+    ):
+        from .clock import FACTORY_TZ
+
+        fields["provisional_until"] = datetime.combine(d + timedelta(days=1), datetime.min.time()).replace(
+            tzinfo=FACTORY_TZ
+        )
+    elif (
+        birthday_rule == comp.BIRTHDAY_RULE_NEW
+        and not day_times
+        and not has_manual
+        and computed.get("status") in (AttendanceDayRecord.STATUS_ABSENT, "on_leave")
+        # a birthday already turned into an APPROVED credit (it was worked, then its punches were corrected away) is
+        # never ALSO a paid birthday leave: one benefit per birthday (security review 2026-11-19)
+        and not _approved_birthday_credit(emp.pk, d)
+    ):
+        why = "approved leave on the birthday" if computed.get("status") == "on_leave" else "no punch on the birthday"
+        computed = {
+            "status": AttendanceDayRecord.STATUS_PRESENT, "shifts_earned": Decimal("1.00"), "is_half_shift": False,
+        }
+        marks.append((
+            comp.KIND_BIRTHDAY, 0,
+            f"Birthday leave: a paid day off for the birthday ({why}); no leave or Casual Leave balance is used",
+        ))
+        birthday_leave = True
+
+    if cl_portions and not (birthday or birthday_leave):
         _apply_half_casual_leave(computed, cl_portions, halves_attended)
 
     if not is_production:

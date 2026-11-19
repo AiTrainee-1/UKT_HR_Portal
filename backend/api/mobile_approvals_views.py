@@ -130,9 +130,10 @@ def _rows_outpass(rows, cfg):
 
 
 def _rows_holiday_work(rows, cfg):
-    from .holiday_work_views import claims_json
+    """Every compensation claim kind (2026-11-19): the row /manager/pending-requests sends in holidayWorkClaims."""
+    from .compensation_claims import claims_json
 
-    return claims_json(list(rows))
+    return claims_json(list(rows), for_role="hod")
 
 
 def _rows_on_duty(rows, cfg):
@@ -277,6 +278,7 @@ CATEGORIES: tuple[Category, ...] = (
         ("pending",),
         "can_approve_compensation",
         _rows_holiday_work,
+        select=(*_EMP, "overtime_record"),
         prefetch=("ledger_entries",),
         legacy_names=("reviewed_by",),
         aliases=("holidaywork", "compensation"),

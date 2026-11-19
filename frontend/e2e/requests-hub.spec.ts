@@ -91,7 +91,8 @@ test("every kind of request has its own sub-tab, with how many are waiting", asy
     "Outpass",
     "Other requests",
     "Attendance correction",
-    "Holiday / Sunday work",
+    // the holiday_work kind holds every compensation claim since 2026-11-19 (Sunday / holiday work, OT, birthday ...)
+    "Compensation claims",
     "Resignation",
     "Advance",
   ]) {

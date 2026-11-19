@@ -22,7 +22,7 @@ function OtDetection({ sub, nested }: { sub: (typeof OT_SUBS)[number]; nested: s
     <CompensationPageShell
       icon={<Clock size={20} className="text-teal-600" />}
       title="OT Detection"
-      description="The month's extra work past the shift end: the automatic late-in allowance, the shift compensation HR assigns, and earlier records."
+      description="The month's extra work past the shift end: the next-day late-in allowance and the shift credit, each claimed and approved by the Department Head (HR can claim for an employee or pay Type 2), and earlier records."
     >
       <OtTab sub={sub} nested={nested} featuresOff={featuresOff} url={url} setUrl={setUrl} />
     </CompensationPageShell>

@@ -18,7 +18,10 @@ puts it in a period:
                        later day and did not need it) or pending (not worked since). Never paid.
   ot_shift_relaxation  Type 2 given as relaxation: filed under the granted date (`claim_date`, the day off). `status`:
                        applied (the day record carries the relaxation marker), scheduled (the date has not come yet) or
-                       not_applied (the date has passed and the engine did not top it up).
+                       not_applied (the date has passed and the engine did not top it up). A Type 2 day CREDITED to the
+                       compensation balance (an approved claim, or HR's relaxation without a date) has no day off of its
+                       own: it is filed under the OT day with status `credited` (the balance is used later, see
+                       holiday_work's `redemptions`).
   ot_shift_pay         Type 2 given as pay: filed under the granted date (HR need not give one for pay: then the OT day).
                        `amount` = shifts x the daily rate of the month's salary slip (the very rate payroll used) when
                        payroll has been generated; otherwise `amount` is the ESTIMATE shifts x salary / 30 (the one the
@@ -35,7 +38,10 @@ allowance minutes earned: the Type 1 rows) say it explicitly, and are null on ev
                        reason and who announced it. The summary also says how many announcements there were and how many
                        staff-days they covered, so the share who used it is visible.
   holiday_work         Sunday / holiday work claims filed under the work date, with their status (pending / approved /
-                       rejected), who raised and who approved them. `redemptions` lists the balance redeemed in the period.
+                       rejected), who raised and who approved them. The section also carries the compensation balance's
+                       ledger for the period, exactly what Holiday work > Credits / Balance show: `credits` (every credit
+                       of every source: holiday work, OT shift credits, birthday credits, earlier credits; status
+                       `credited`) and `redemptions` (every debit: the balance used, by HR or by an approved request).
   birthday             Staff whose birthday falls in the period AND who benefit (feature on, effective date reached, a working
                        day). `status`: applied (the day carries the birthday marker), pending (today or later, not applied
                        yet) or not_applied (the day passed without the marker, e.g. a manual override won).
@@ -119,6 +125,14 @@ STATUS_LABELS = {
     "in_payroll": "In payroll",
     "pending_payroll": "Waiting for payroll",
     "redeemed": "Redeemed",
+    "credited": "Added to the balance",
+}
+# What a ledger credit came from (the Credits tab's words).
+CREDIT_SOURCE_LABELS = {
+    "holiday_work": "Sunday / holiday work",
+    "ot_shift": "OT shift credit",
+    "birthday": "Birthday credit",
+    "legacy_credit": "Earlier Alternative Day credit",
 }
 # Type 2 records HR has assigned: "announced" is what the assign endpoint stores; "assigned" is accepted too.
 ASSIGNED_STATUSES = ("announced", "assigned")
@@ -339,11 +353,13 @@ def _allowance(ctx: Ctx):
 
 
 def _shift_records(ctx: Ctx):
-    """The assigned Type 2 records filed inside the period: by the date they are granted for - and a Pay record HR gave
-    no date (the date is optional for Pay, payroll pays it by the OT day) by the OT day."""
+    """The assigned Type 2 records filed inside the period: by the date they are granted for - and a record with no date
+    by the OT day: Pay (the date is optional for Pay, payroll pays it by the OT day) and a relaxation CREDITED to the
+    compensation balance (an approved claim, or HR's relaxation without a date: the day off is taken later from the
+    balance), so the report agrees with Credits / Balance (correctness review 2026-11-19)."""
     in_period = Q(claim_date__gte=ctx.start, claim_date__lte=ctx.end) | Q(
         claim_date__isnull=True,
-        compensation_type=OvertimeRecord.TYPE_PAY,
+        compensation_type__in=(OvertimeRecord.TYPE_PAY, OvertimeRecord.TYPE_RELAXATION),
         date__gte=ctx.start,
         date__lte=ctx.end,
     )
@@ -379,7 +395,15 @@ def _shift_row(type_: str, r: OvertimeRecord) -> dict:
 def _relaxation(ctx: Ctx, records: list[OvertimeRecord]):
     records = [r for r in records if r.compensation_type == OvertimeRecord.TYPE_RELAXATION]
     if not records:
-        return [], {"records": 0, "shifts": 0.0, "applied": 0, "scheduled": 0, "notApplied": 0, "employees": 0}
+        return [], {
+            "records": 0,
+            "shifts": 0.0,
+            "applied": 0,
+            "scheduled": 0,
+            "notApplied": 0,
+            "credited": 0,
+            "employees": 0,
+        }
     applied = {
         (rec.employee_id, rec.date)
         for rec in AttendanceDayRecord.objects.filter(
@@ -392,6 +416,12 @@ def _relaxation(ctx: Ctx, records: list[OvertimeRecord]):
     rows = []
     for r in records:
         row = _shift_row("ot_shift_relaxation", r)
+        if r.claim_date is None:
+            # credited to the compensation balance: no day off of its own (used later from the balance)
+            set_status(row, "credited")
+            row["detail"] += " Added to the compensation balance (to use on another day)."
+            rows.append(row)
+            continue
         if (r.employee_id, r.claim_date) in applied:
             set_status(row, "applied")
             row["usedOn"] = r.claim_date.isoformat()
@@ -407,6 +437,7 @@ def _relaxation(ctx: Ctx, records: list[OvertimeRecord]):
         "applied": sum(1 for r in rows if r["status"] == "applied"),
         "scheduled": sum(1 for r in rows if r["status"] == "scheduled"),
         "notApplied": sum(1 for r in rows if r["status"] == "not_applied"),
+        "credited": sum(1 for r in rows if r["status"] == "credited"),
         "employees": _employees(rows),
     }
     return rows, summary
@@ -608,7 +639,9 @@ def _window(ctx: Ctx, kind: str, table: dict):
 def _holiday_work(ctx: Ctx):
     claims = list(
         scoped(
-            HolidayWorkClaim.objects.filter(work_date__gte=ctx.start, work_date__lte=ctx.end)
+            HolidayWorkClaim.objects.filter(
+                kind=HolidayWorkClaim.KIND_HOLIDAY_WORK, work_date__gte=ctx.start, work_date__lte=ctx.end
+            )
             .select_related(*SELECT)
             .prefetch_related("ledger_entries"),
             ctx,
@@ -651,6 +684,26 @@ def _holiday_work(ctx: Ctx):
         )
         set_status(row, "redeemed")
         redemptions.append(row)
+    credits = []
+    for entry in scoped(
+        CompensationLedger.objects.filter(
+            entry_type=CompensationLedger.ENTRY_CREDIT, date__gte=ctx.start, date__lte=ctx.end
+        ).select_related(*SELECT),
+        ctx,
+    ).order_by("date", "employee__first_name", "id"):
+        row = blank_row("holiday_work", entry.employee, entry.date)
+        row.update(
+            {
+                "workDate": entry.date.isoformat(),
+                "shifts": _num(entry.shifts),
+                "assignedBy": entry.created_by,
+                "grantedOn": _ist_date(entry.created_at),
+                "reason": CREDIT_SOURCE_LABELS.get(entry.source, entry.source),
+                "detail": entry.note or "Added to the compensation balance.",
+            }
+        )
+        set_status(row, "credited")
+        credits.append(row)
     approved_rows = [r for r in rows if r["status"] == "approved"]
     pending_rows = [r for r in rows if r["status"] == "pending"]
     summary = {
@@ -661,9 +714,12 @@ def _holiday_work(ctx: Ctx):
         "approvedShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in approved_rows)),
         "pendingShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in pending_rows)),
         "redeemedShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in redemptions)),
+        # the balance's ledger in the period, every source (what Credits / Balance show)
+        "creditedShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in credits)),
+        "credits": len(credits),
         "employees": _employees(rows),
     }
-    return rows, summary, redemptions
+    return rows, summary, redemptions, credits
 
 
 # ─────────────────────────── birthday ───────────────────────────
@@ -671,7 +727,20 @@ def _holiday_work(ctx: Ctx):
 
 def _birthday(ctx: Ctx):
     rows = []
-    for b in birthday_rows(ctx.request, ctx.start, ctx.end, ctx.department_id, ctx.branch_id):
+    from .compensation_views import can_edit_compensation
+
+    # a birthday not worked out yet is worked out only for a login that may change Compensation (never in a finalized
+    # month): a view-only report never writes attendance (security review 2026-11-19)
+    rows_in = birthday_rows(
+        ctx.request,
+        ctx.start,
+        ctx.end,
+        ctx.department_id,
+        ctx.branch_id,
+        today=ctx.today,
+        refresh=can_edit_compensation(ctx.request),
+    )
+    for b in rows_in:
         if not b["benefits"]:
             continue
         day = date.fromisoformat(b["birthday"])
@@ -689,23 +758,59 @@ def _birthday(ctx: Ctx):
                 "detail": "",
             }
         )
+        outcome = b.get("outcome")
+        claim = b.get("claim") or {}
         if b["applied"]:
+            # paid birthday leave: the old automatic rule, or (claim rules) a birthday nobody punched on
             set_status(row, "applied")
             row["usedOn"] = b["birthday"]
             row["shifts"] = b["shiftsEarned"]
-            row["detail"] = "Paid birthday leave: present for the whole day, no attendance detection."
+            row["detail"] = (
+                "Paid birthday leave: present for the whole day, no attendance detection."
+                if outcome == "old_rule"
+                else "Paid birthday leave: not worked on the birthday, paid as a full day (no leave balance used)."
+            )
+        elif outcome == "credit_approved":
+            # worked on the birthday (claim rules): the approved claim added one shift to the compensation balance
+            set_status(row, "approved")
+            row["assignedBy"] = "Claim"
+            row["shifts"] = claim.get("shifts")
+            row["detail"] = "Worked on the birthday: the credit claim was approved (added to the compensation balance)."
+        elif outcome == "credit_pending":
+            set_status(row, "pending")
+            row["assignedBy"] = "Claim"
+            row["detail"] = "Worked on the birthday: the credit claim waits for the Department Head."
+        elif outcome == "credit_rejected":
+            set_status(row, "rejected")
+            row["assignedBy"] = "Claim"
+            row["detail"] = "Worked on the birthday: the credit claim was rejected."
+        elif outcome == "credit_claimable":
+            set_status(row, "not_applied")
+            row["assignedBy"] = "Claim"
+            row["detail"] = "Worked on the birthday: a normal working day; one shift can still be claimed as a credit."
         elif day >= ctx.today:
             set_status(row, "pending")
-            row["detail"] = "Paid birthday leave applies on the day."
+            row["detail"] = (
+                "Paid birthday leave applies on the day."
+                if outcome == "old_rule"
+                else "Still to come: not worked = paid birthday leave; worked = one shift to claim."
+            )
         else:
             set_status(row, "not_applied")
-            row["detail"] = "The day was not marked as birthday leave (check the day's attendance)."
+            row["detail"] = (
+                "The day was not marked as birthday leave (check the day's attendance)."
+                if outcome in (None, "old_rule")
+                else (b.get("message") or "The birthday gave no leave or credit.")
+            )
         rows.append(row)
     summary = {
         "birthdays": len(rows),
         "applied": sum(1 for r in rows if r["status"] == "applied"),
         "pending": sum(1 for r in rows if r["status"] == "pending"),
         "notApplied": sum(1 for r in rows if r["status"] == "not_applied"),
+        # claim rules: worked birthdays whose credit claim was approved / rejected
+        "credited": sum(1 for r in rows if r["status"] == "approved"),
+        "rejected": sum(1 for r in rows if r["status"] == "rejected"),
         "shifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in rows)),
         "employees": _employees(rows),
     }
@@ -764,8 +869,9 @@ def compensation_reports(request: Request) -> Response:
         elif type_ == "window_early_out":
             rows, summary = _window(ctx, CompensationDayAnnouncement.KIND_EARLY_OUT, table)
         elif type_ == "holiday_work":
-            rows, summary, redemptions = _holiday_work(ctx)
+            rows, summary, redemptions, credits = _holiday_work(ctx)
             extra["redemptions"] = redemptions
+            extra["credits"] = credits
         else:
             rows, summary = _birthday(ctx)
         sections.append(

@@ -418,7 +418,9 @@ class CompensationAlertTests(alerts_base.AlertBase):
         super().setUp()
         seed_default_rules()
         CompensationConfig.objects.all().delete()
-        CompensationConfig.get()
+        # the automatic allowance / birthday these tests pin are the rules BEFORE the claims date (the claim rules are
+        # covered in tests_compensation_claims_engine and tests_whatsapp_alerts.BirthdayAlertTests)
+        set_config(claims_from=date(2099, 1, 1))
 
     def test_no_alert_of_any_kind_on_a_paid_birthday(self):
         set_config(birthday_enabled=True, birthday_effective_from=date(2026, 1, 1))

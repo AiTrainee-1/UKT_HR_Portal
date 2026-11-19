@@ -1061,8 +1061,9 @@ def _penalty_early_out_run(ctx):
         "off the day. Leaving early by up to that many minutes is an ordinary Early-Out (see the Early Departure report).",
         "The shift deducted is already out of the day's shifts earned, so payroll pays the reduced day; the amount is that "
         "part of the day at payroll's own day rate (salary / the company month) and is NOT deducted a second time.",
-        "A Half Day (no punch in the second half), a compensation day, a birthday, a half-day leave or half-day CL is never "
-        "also a Penalty Early Out; today's day is judged only after the shift's end plus grace.",
+        "A Half Day (no punch in the second half), a compensation day, a paid birthday leave, a half-day leave or half-day "
+        "CL is never also a Penalty Early Out (a birthday worked under the claim rules is a normal day); today's day is "
+        "judged only after the shift's end plus grace.",
         "Late pool: 'Not counted' = charged only here (the default); 'Also counted' = Settings asks for it to be one "
         "Early-Out mark as well.",
     ]

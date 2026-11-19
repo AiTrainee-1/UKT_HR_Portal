@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react";
-import { CalendarPlus, Clock, DoorOpen, Loader2, LogIn, Trash2, Users } from "lucide-react";
-import { EmptyNote, SectionCard, SkeletonRows } from "@/components/payroll/kit/parts";
-import { LoadError } from "@/components/payroll/panels/issues/panel-kit";
-import { errorDetail } from "@/components/payroll/panels/issues/lists";
+import { CalendarClock, CalendarPlus, Clock, DoorOpen, Loader2, LogIn, Trash2, Users } from "lucide-react";
+import { SectionCard } from "@/components/payroll/kit/parts";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,26 +28,29 @@ import {
   type CompensationWindow,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
+import {
+  ClearFilters,
+  DataTable,
+  FilterBar,
+  SearchFilter,
+  SelectFilter,
+  StatRow,
+  StatTile,
+  StatusChip as KitChip,
+  type DataColumn,
+} from "@/pages/hr/outpass-visitors/kit";
 import { dateLong, errorMessage, todayIst } from "../logic";
 import { NestedTabs } from "@/components/ui/nested-tabs";
 import { LEAVE_NESTED, subPath } from "../routes";
 import { keepOpenNested, useCanOpen } from "../visible";
-import {
-  CELL,
-  ErrorNotice,
-  Field,
-  Notice,
-  PersonCell,
-  StatusChip,
-  SwitchOffNotice,
-  TABLE_HEAD,
-  useSingleFlight,
-} from "../ui";
+import { ErrorNotice, Field, Notice, SwitchOffNotice, useSingleFlight } from "../ui";
+import { WINDOW_KIND_OPTIONS, WINDOW_STATUS_OPTIONS, windowWhen, type WindowWhen } from "./claims-logic";
+import { MonthFilter, OrgFilters } from "./LeaveFilters";
+import { idOf, monthChoice, monthChoiceLabel, pageOf, useLeaveUrl } from "./leave-url";
 import {
   WINDOW_REASON_MAX,
   checkWindow,
   emptyWindowForm,
-  splitWindows,
   windowDateRange,
   windowKindText,
   windowPayload,
@@ -60,6 +61,13 @@ import {
 } from "./leave-logic";
 
 const ANY = "__any__";
+const PAGE_SIZE = 25;
+
+const WHEN_CHIP: Record<WindowWhen, { label: string; tone: "amber" | "indigo" | "slate" }> = {
+  today: { label: "Today", tone: "amber" },
+  upcoming: { label: "Upcoming", tone: "indigo" },
+  past: { label: "Past", tone: "slate" },
+};
 
 const KIND_INFO = {
   late_in: {
@@ -80,7 +88,10 @@ const KIND_INFO = {
  * Compensation Leave A: HR announces, for a date, that ALL staff may arrive up to a time (Late-in) or leave from a time
  * (Early-out), for example in heavy rain. On that date only, the shift's own start / end and grace do not apply for the
  * announced edge, and Late-in / Early-out detection does not run for it. Two nested subtabs: Announce, and the list of
- * Announcements (with their count). The form and the list share one query, so switching between them is instant.
+ * Announcements (with their count): one month at a time (the current one first), filtered by kind, department, branch,
+ * today-and-upcoming or past, and the reason / who announced it, a page at a time from the server. Any announcement can be
+ * deleted: for today or a past day the server checks that day's attendance again, and it refuses when that payroll month
+ * is locked. The form and the list share one query, so switching between them is instant.
  */
 export function WindowsPart({
   featuresOff,
@@ -95,7 +106,19 @@ export function WindowsPart({
   const { toast } = useToast();
   const canOpen = useCanOpen();
   const today = useMemo(() => todayIst(), []);
-  const query = useCompensationWindows({ kind: "all" });
+  const [lu, setLu] = useLeaveUrl();
+  const month = monthChoice(lu.wmonth, lu.wyear, today, false);
+  const query = useCompensationWindows({
+    kind: lu.wkind || "all",
+    month: month.month ?? undefined,
+    year: month.year ?? undefined,
+    departmentId: idOf(lu.wdept),
+    branchId: idOf(lu.wbranch),
+    q: lu.wq.trim() || undefined,
+    status: lu.wstatus || undefined,
+    page: pageOf(lu.wpage),
+    pageSize: PAGE_SIZE,
+  });
   const create = useCreateCompensationWindow();
   const remove = useDeleteCompensationWindow();
   const { data: departments } = useListDepartments();
@@ -105,6 +128,7 @@ export function WindowsPart({
   const [touched, setTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<CompensationWindow | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const enabled = query.data?.enabled;
   const serverToday = query.data?.today ?? today;
@@ -125,7 +149,19 @@ export function WindowsPart({
     branch: isBranchScoped ? null : branchName,
     department: departmentName,
   });
-  const lists = useMemo(() => splitWindows(query.data?.results ?? [], serverToday), [query.data, serverToday]);
+  const rows = useMemo(() => query.data?.results ?? [], [query.data]);
+  const total = query.data?.count ?? rows.length;
+  // the month's figures: the server's when it sends them, else the rows on screen
+  const summary = query.data?.summary ?? null;
+  const tiles = {
+    total: summary?.total ?? total,
+    lateIn: summary?.lateIn ?? rows.filter((r) => r.kind === "late_in").length,
+    earlyOut: summary?.earlyOut ?? rows.filter((r) => r.kind === "early_out").length,
+    upcoming: summary?.upcoming ?? rows.filter((r) => r.date >= serverToday).length,
+  };
+  const filtersOn = [lu.wkind, lu.wdept, lu.wbranch, lu.wq, lu.wstatus].filter((v) => v !== "").length;
+  /** One filter changes and the list goes back to its first page (one write, see leave-url.ts). */
+  const filter = (patch: Partial<typeof lu>) => setLu({ ...patch, wpage: "" });
 
   const patch = (change: Partial<WindowForm>) => {
     setForm((f) => ({ ...f, ...change }));
@@ -158,19 +194,28 @@ export function WindowsPart({
       }
     });
 
+  const openDelete = (row: CompensationWindow) => {
+    setDeleteError(null);
+    setDeleting(row);
+  };
   const confirmDelete = async () => {
     if (!deleting) return;
+    setDeleteError(null);
     try {
       await remove.mutateAsync(deleting.id);
-      toast({ title: "Announcement deleted" });
-      setDeleting(null);
-    } catch (err) {
       toast({
-        title: "Could not delete it",
-        description: errorMessage(err, "It may already have been acted on: only a future date can be removed."),
-        variant: "destructive",
+        title: "Announcement deleted",
+        description:
+          deleting.date <= serverToday
+            ? `The attendance of ${dateLong(deleting.date)} is checked again for the staff it covered.`
+            : undefined,
       });
       setDeleting(null);
+    } catch (err) {
+      // the server's own sentence (a locked payroll month, Payroll Done ...) stays in the dialog
+      const message = errorMessage(err, "The announcement could not be deleted. Check the connection and try again.");
+      setDeleteError(message);
+      toast({ title: "Could not delete it", description: message, variant: "destructive" });
     }
   };
 
@@ -195,7 +240,7 @@ export function WindowsPart({
         label="Sections of Announce late-in / early-out"
         items={keepOpenNested(canOpen, "leave", "announcements", [
           { value: "announce", label: LEAVE_NESTED.announcements[0].label },
-          { value: "list", label: LEAVE_NESTED.announcements[1].label, count: query.data?.results.length },
+          { value: "list", label: LEAVE_NESTED.announcements[1].label, count: query.data ? total : undefined },
         ])}
       >
         {nested === "announce" && (
@@ -386,8 +431,9 @@ export function WindowsPart({
                   previous month is closed.
                 </li>
                 <li>
-                  One late-in and one early-out per person per date. A future date can be deleted; today&apos;s has
-                  already acted.
+                  One late-in and one early-out per person per date. Any announcement can be deleted: for today or a
+                  past day that day&apos;s attendance is checked again, and a payroll month that is locked or marked
+                  Payroll Done refuses it.
                 </li>
                 <li>It is a company announcement, not a leave: a day nobody attended is still absent.</li>
               </ul>
@@ -400,50 +446,134 @@ export function WindowsPart({
             testId="windows-list"
             icon={Users}
             title="Announcements"
-            description="Who announced each one and how many staff it covers. Only a future date can be deleted."
+            description={`Who announced each one and how many staff it covers, ${monthChoiceLabel(month)}. Any of them can be deleted.`}
+            bodyClassName="space-y-3"
           >
-            {query.isLoading ? (
-              <SkeletonRows rows={3} />
-            ) : query.isError && !query.data ? (
-              <LoadError
-                what="the announcements"
-                detail={errorDetail(query.error)}
-                onRetry={() => void query.refetch()}
-                retrying={query.isFetching}
-                testId="windows-error"
+            <FilterBar label="Announcement filters" testId="windows-filters" sticky={false}>
+              <MonthFilter
+                value={month}
+                today={serverToday}
+                onChange={(m, y) => filter({ wmonth: m, wyear: y })}
+                label="Month of the announcements"
+                testId="windows-month"
               />
-            ) : (query.data?.results.length ?? 0) === 0 ? (
-              <EmptyNote
+              <SelectFilter
+                label="Kind"
+                value={lu.wkind}
+                onChange={(v) => filter({ wkind: v })}
+                options={WINDOW_KIND_OPTIONS}
+                allLabel="Every kind"
+                testId="windows-kind"
+              />
+              <SelectFilter
+                label="When"
+                value={lu.wstatus}
+                onChange={(v) => filter({ wstatus: v })}
+                options={WINDOW_STATUS_OPTIONS}
+                allLabel="Upcoming and past"
+                testId="windows-status"
+              />
+              <OrgFilters
+                dept={lu.wdept}
+                branch={lu.wbranch}
+                onDept={(v) => filter({ wdept: v })}
+                onBranch={(v) => filter({ wbranch: v })}
+                testId="windows"
+              />
+              <SearchFilter
+                value={lu.wq}
+                onChange={(v) => filter({ wq: v })}
+                placeholder="Reason or who announced"
+                label="Search by reason or who announced"
+                testId="windows-search"
+              />
+              <ClearFilters
+                count={filtersOn}
+                onClear={() => filter({ wkind: "", wdept: "", wbranch: "", wq: "", wstatus: "" })}
+                testId="windows-clear"
+              />
+            </FilterBar>
+
+            <StatRow columns={4} testId="windows-kpis">
+              <StatTile
+                label="Announcements"
+                value={tiles.total}
+                hint={monthChoiceLabel(month)}
                 icon={CalendarPlus}
-                title="No announcement yet"
-                hint="Announce a late-in or early-out in the Announce tab when something unusual happens."
-                testId="windows-empty"
+                loading={query.isLoading}
+                testId="windows-kpi-total"
               />
-            ) : (
-              <div className="space-y-5">
-                <WindowTable
-                  title="Today and upcoming"
-                  rows={lists.upcoming}
-                  onDelete={setDeleting}
-                  paused={!canAnnounce}
-                  pausedReason={pausedReason}
-                  testId="windows-upcoming"
-                />
-                <WindowTable
-                  title="Earlier"
-                  rows={lists.earlier}
-                  onDelete={setDeleting}
-                  paused={!canAnnounce}
-                  pausedReason={pausedReason}
-                  testId="windows-earlier"
-                />
-                {query.data?.truncated && (
-                  <p className="text-xs text-muted-foreground">
-                    Only the newest {query.data.results.length} are shown.
-                  </p>
-                )}
-              </div>
-            )}
+              <StatTile
+                label="Late-in"
+                value={tiles.lateIn}
+                icon={LogIn}
+                tone="indigo"
+                loading={query.isLoading}
+                onClick={() => filter({ wkind: lu.wkind === "late_in" ? "" : "late_in" })}
+                active={lu.wkind === "late_in"}
+                title="Show only the late-in announcements"
+                testId="windows-kpi-late"
+              />
+              <StatTile
+                label="Early-out"
+                value={tiles.earlyOut}
+                icon={DoorOpen}
+                tone="amber"
+                loading={query.isLoading}
+                onClick={() => filter({ wkind: lu.wkind === "early_out" ? "" : "early_out" })}
+                active={lu.wkind === "early_out"}
+                title="Show only the early-out announcements"
+                testId="windows-kpi-early"
+              />
+              <StatTile
+                label="Today and upcoming"
+                value={tiles.upcoming}
+                icon={CalendarClock}
+                tone="teal"
+                loading={query.isLoading}
+                onClick={() => filter({ wstatus: lu.wstatus === "upcoming" ? "" : "upcoming" })}
+                active={lu.wstatus === "upcoming"}
+                title="Show only today and the days to come"
+                testId="windows-kpi-upcoming"
+              />
+            </StatRow>
+
+            <DataTable
+              columns={windowColumns({
+                today: serverToday,
+                onDelete: openDelete,
+                paused: !canAnnounce,
+                pausedReason,
+              })}
+              rows={rows}
+              rowKey={(r) => r.id}
+              loading={query.isLoading}
+              error={
+                query.isError && !query.data
+                  ? `Could not load the announcements. ${errorMessage(query.error, "Check the connection and try again.")}`
+                  : null
+              }
+              onRetry={() => void query.refetch()}
+              empty={{
+                icon: CalendarPlus,
+                title:
+                  filtersOn > 0
+                    ? "No announcement matches these filters"
+                    : `No announcement in ${monthChoiceLabel(month)}`,
+                hint:
+                  filtersOn > 0
+                    ? "Clear a filter, or pick another month."
+                    : "Pick another month, or announce a late-in or early-out in the Announce tab when something unusual happens.",
+              }}
+              pagination={{
+                page: pageOf(lu.wpage),
+                pageSize: PAGE_SIZE,
+                total,
+                onPageChange: (p) => setLu({ wpage: p > 1 ? String(p) : "" }),
+              }}
+              caption="Announcements"
+              testId="windows-table"
+            />
           </SectionCard>
         )}
       </NestedTabs>
@@ -454,10 +584,28 @@ export function WindowsPart({
             <AlertDialogTitle>Delete this announcement?</AlertDialogTitle>
             <AlertDialogDescription>
               {deleting
-                ? `${windowKindText(deleting)} on ${dateLong(deleting.date)}: staff will be judged by their normal shifts again on that day.`
+                ? `${windowKindText(deleting)} on ${dateLong(deleting.date)}, covering ${deleting.covers} ${deleting.covers === 1 ? "staff member" : "staff"}: staff will be judged by their normal shifts again on that day.`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {deleting && (
+            <ul
+              className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-slate-600"
+              data-testid="window-delete-effects"
+            >
+              <li>
+                {deleting.date <= serverToday
+                  ? "That day's attendance is checked again for every staff member it covered (a day HR edited by hand stays as it is)."
+                  : "The day has not come yet: its attendance will simply follow the normal shift."}
+              </li>
+              <li>The staff it covered are told it was cancelled.</li>
+              <li>
+                If that day&apos;s payroll month is locked or marked Payroll Done, the delete is refused and the reason
+                is shown here.
+              </li>
+            </ul>
+          )}
+          {deleteError && <ErrorNotice testId="window-delete-error">{deleteError}</ErrorNotice>}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={remove.isPending}>Keep it</AlertDialogCancel>
             <AlertDialogAction
@@ -477,83 +625,97 @@ export function WindowsPart({
   );
 }
 
-function WindowTable({
-  title,
-  rows,
+/** The columns of the announcements table: the date (with Today / Upcoming / Past), what, why, who it covers, who
+ *  announced it, and Delete (not for an older Compensation Day). */
+function windowColumns({
+  today,
   onDelete,
   paused,
   pausedReason,
-  testId,
 }: {
-  title: string;
-  rows: CompensationWindow[];
+  today: string;
   onDelete: (row: CompensationWindow) => void;
   paused: boolean;
   pausedReason: string;
-  testId: string;
-}) {
-  if (rows.length === 0) return null;
-  return (
-    <div className="space-y-2" data-testid={testId}>
-      <h4 className="text-sm font-bold text-gray-900">
-        {title} <span className="font-semibold text-muted-foreground">({rows.length})</span>
-      </h4>
-      <div className="overflow-x-auto rounded-xl border border-slate-100">
-        <table className="w-full min-w-[760px] text-sm">
-          <thead className={TABLE_HEAD}>
-            <tr>
-              <th className="px-3 py-2.5">Date</th>
-              <th className="px-3 py-2.5">What</th>
-              <th className="px-3 py-2.5">Reason</th>
-              <th className="px-3 py-2.5">Covers</th>
-              <th className="px-3 py-2.5">Announced by</th>
-              <th className="px-3 py-2.5 text-right">
-                <span className="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.map((row) => (
-              <tr key={row.id} data-testid={`window-row-${row.id}`}>
-                <td className={`${CELL} whitespace-nowrap font-semibold`}>{dateLong(row.date)}</td>
-                <td className={CELL}>
-                  <StatusChip tone={row.kind === "day" ? "neutral" : row.kind === "late_in" ? "info" : "accent"}>
-                    {windowKindText(row)}
-                  </StatusChip>
-                  <p className="mt-1 text-xs text-gray-600">{windowTimeText(row)}</p>
-                </td>
-                <td className={`${CELL} max-w-xs break-words text-gray-700`}>{row.reason || "—"}</td>
-                <td className={CELL}>
-                  <p className="font-semibold">
-                    {row.covers} {row.covers === 1 ? "staff member" : "staff"}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">{windowScopeText(row)}</p>
-                </td>
-                <td className={CELL}>
-                  <PersonCell name={row.announcedBy ?? "HR"} />
-                </td>
-                <td className={`${CELL} text-right`}>
-                  {row.canDelete && (
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      className="text-rose-600"
-                      disabled={paused}
-                      aria-label={`Delete the announcement of ${dateLong(row.date)}`}
-                      title={paused ? pausedReason : `Delete the announcement of ${dateLong(row.date)}`}
-                      onClick={() => onDelete(row)}
-                      data-testid={`window-delete-${row.id}`}
-                    >
-                      <Trash2 size={15} />
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+}): DataColumn<CompensationWindow>[] {
+  return [
+    {
+      key: "date",
+      header: "Date",
+      cell: (row) => {
+        const when = WHEN_CHIP[windowWhen(row.date, today)];
+        return (
+          <div className="flex flex-col items-start gap-0.5" data-testid={`window-row-${row.id}`}>
+            <span className="font-semibold text-slate-900">{dateLong(row.date)}</span>
+            <KitChip tone={when.tone}>{when.label}</KitChip>
+          </div>
+        );
+      },
+      truncate: false,
+      minWidth: 140,
+    },
+    {
+      key: "what",
+      header: "What",
+      cell: (row) => (
+        <div className="flex flex-col items-start gap-0.5">
+          <KitChip tone={row.kind === "day" ? "slate" : row.kind === "late_in" ? "indigo" : "amber"}>
+            {windowKindText(row)}
+          </KitChip>
+          <span className="text-xs text-slate-600">{windowTimeText(row)}</span>
+        </div>
+      ),
+      truncate: false,
+      minWidth: 170,
+    },
+    {
+      key: "reason",
+      header: "Reason",
+      cell: (row) => row.reason || "—",
+      text: (row) => row.reason,
+      maxWidth: 260,
+    },
+    {
+      key: "covers",
+      header: "Covers",
+      cell: (row) => (
+        <div className="leading-tight">
+          <p className="font-semibold text-slate-900">
+            {row.covers} {row.covers === 1 ? "staff member" : "staff"}
+          </p>
+          <p className="text-[11px] text-slate-500">{windowScopeText(row)}</p>
+        </div>
+      ),
+      text: (row) => windowScopeText(row),
+      minWidth: 140,
+    },
+    {
+      key: "by",
+      header: "Announced by",
+      cell: (row) => row.announcedBy ?? "HR",
+      hideOnPhone: true,
+    },
+    {
+      key: "actions",
+      header: <span className="sr-only">Actions</span>,
+      align: "right",
+      truncate: false,
+      cell: (row) =>
+        row.kind === "day" ? null : (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-11 text-rose-600 sm:size-9"
+            disabled={paused}
+            aria-label={`Delete the announcement of ${dateLong(row.date)}`}
+            title={paused ? pausedReason : `Delete the announcement of ${dateLong(row.date)}`}
+            onClick={() => onDelete(row)}
+            data-testid={`window-delete-${row.id}`}
+          >
+            <Trash2 size={15} />
+          </Button>
+        ),
+    },
+  ];
 }

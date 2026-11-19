@@ -69,7 +69,7 @@ KINDS: dict[str, Kind] = {
         ),
         Kind(
             "holiday_work",
-            "Holiday work",
+            "Compensation",
             "other",
             "holidayWorkClaims",
             "can_approve_compensation",
@@ -211,8 +211,17 @@ def _describe(kind: str, row: dict) -> tuple[str, str | None, str | None, str | 
         note = (row.get("requestedValues") or {}).get("note")
         return row.get("typeLabel") or "Attendance change", row.get("date"), None, note
     if kind == "holiday_work":
+        # every compensation claim kind lives here (2026-11-19): holiday work, OT allowance / shift credit, birthday
+        # credit, use of the balance
+        claim_kind = row.get("kind") or "holiday_work"
+        raised = " · raised by the employee" if row.get("raisedByRole") == "employee" else ""
+        if claim_kind == "ot_allowance":
+            return "OT late-in allowance", row.get("workDate"), None, f"{row.get('minutes') or 0} min{raised}"
+        if claim_kind != "holiday_work":
+            title = row.get("kindLabel") or "Compensation claim"
+            return title, row.get("workDate"), None, _plural(row.get("shifts") or 0, "shift") + raised
         day = row.get("holidayName") or ("Sunday" if row.get("dayKind") == "sunday" else "Holiday")
-        return f"Holiday work · {day}", row.get("workDate"), None, _plural(row.get("shifts") or 0, "shift")
+        return f"Holiday work · {day}", row.get("workDate"), None, _plural(row.get("shifts") or 0, "shift") + raised
     if kind == "resignation":
         last = row.get("lastWorkingDate")
         return "Resignation", _date_part(row.get("createdAt")), None, f"Last working day {last}" if last else None

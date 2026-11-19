@@ -172,8 +172,14 @@ def compensation_list(request: Request) -> Response:
 # Two kinds of OT (see overtime.py): Type 1 "allowance" (automatic next-day late-in allowance, status "auto", HR does
 # nothing) and Type 2 "shift" (0.25 / 0.50 / 0.75 / 1 shift that HR assigns as relaxation or pay). Records made before the
 # overhaul are "legacy" (one day's pay, or one credit): they keep their old meaning and the old announce endpoint.
+# From CompensationConfig.claims_from on (2026-11-19 claim workflow) both types are CLAIMED: the employee (or HR on their
+# behalf, compensation_claims_views) claims, the HOD approves; the list shows each row's claim, whether it can be claimed,
+# the quarters credit and the day a Type 1 allowance applies to. HR may still PAY such a Type 2 record (pay switched on)
+# but never one that has a pending / approved claim, and never grants relaxation for it (relaxation = the claim's credit).
 
 STATUS_LABELS = {"detected": "Detected", "announced": "Assigned", "rejected": "Rejected", "auto": "Automatic"}
+# A Type 1 row on/after claims_from is not automatic any more: it is a detection the employee may claim.
+CLAIMABLE_ALLOWANCE_LABEL = "Detected"
 LEGACY_ANNOUNCED_LABEL = "Announced"
 MODES = (OvertimeRecord.TYPE_RELAXATION, OvertimeRecord.TYPE_PAY)
 
@@ -182,10 +188,14 @@ def _shifts_json(value):
     return float(value) if value is not None else None
 
 
-def _ot_dict(r: OvertimeRecord, used: dict | None = None, statuses: dict | None = None) -> dict:
+def _ot_dict(
+    r: OvertimeRecord, used: dict | None = None, statuses: dict | None = None, claim_info: dict | None = None
+) -> dict:
     """One OT row. `used` = {(employee_id, date of OT day): (date used on, minutes used)} for Type 1 rows whose allowance
     the employee actually used on the next working day (built by the list view; absent = unknown/not used). `statuses` =
-    {(employee_id, date): "used" | "pending" | "not_used"}, the same rows' `allowanceStatus` (see _allowance_use_map)."""
+    {(employee_id, date): "used" | "pending" | "not_used"}, the same rows' `allowanceStatus` (see _allowance_use_map).
+    `claim_info` = this row's claim facts from _ot_claim_info (claimable, claim, creditShifts, appliesOn, shiftMinutes);
+    absent = the keys are still sent, empty (an assign / announce answer)."""
     emp = r.employee
     last_next_day = bool(
         r.shift_end_time is not None
@@ -199,6 +209,9 @@ def _ot_dict(r: OvertimeRecord, used: dict | None = None, statuses: dict | None 
     )
     hit = (used or {}).get((r.employee_id, r.date))
     is_allowance = r.ot_type == OvertimeRecord.OT_TYPE_ALLOWANCE
+    info = claim_info or {}
+    if is_allowance and r.status == OvertimeRecord.STATUS_AUTO and info.get("claimRules"):
+        label = CLAIMABLE_ALLOWANCE_LABEL
     return {
         "id": r.id,
         "employeeId": emp.id,
@@ -231,8 +244,139 @@ def _ot_dict(r: OvertimeRecord, used: dict | None = None, statuses: dict | None 
             if is_allowance
             else None
         ),
-        "canAssign": r.status == OvertimeRecord.STATUS_DETECTED and r.ot_type == OvertimeRecord.OT_TYPE_SHIFT,
+        "canAssign": (
+            r.status == OvertimeRecord.STATUS_DETECTED
+            and r.ot_type == OvertimeRecord.OT_TYPE_SHIFT
+            and not (info.get("claim") or {}).get("open")
+        ),
+        # The claim workflow (from claims_from on; see _ot_claim_info). claimRules: the row follows it (else the old
+        # automatic Type 1 / HR-assigned Type 2). claim: its latest claim (a pending / approved one first) or null.
+        "claimRules": bool(info.get("claimRules")),
+        "claimable": bool(info.get("claimable")),
+        "claim": info.get("claim"),
+        "creditShifts": info.get("creditShifts"),
+        "creditRule": info.get("creditRule", "ladder"),
+        "appliesOn": info.get("appliesOn"),
+        "shiftMinutes": info.get("shiftMinutes"),
+        "claimProblem": info.get("claimProblem"),
     }
+
+
+def _ot_claim_info(records, config, today=None, settings=None) -> dict:
+    """{record id: {claimRules, claimable, claim, creditShifts, appliesOn, shiftMinutes}} for the OT list, in a fixed
+    handful of queries (claims, Department Heads, shift assignments):
+      claimRules    the OT date is on/after CompensationConfig.claims_from (the claim workflow decides it)
+      claim         the record's claim {id, kind, status, shifts, minutes, raisedByRole, hodName, open}: a pending /
+                    approved one, else the latest (a rejected one), else null
+      claimable     the employee may claim it now: what compensation_claims.eligibility(check_hod=True) answers for an
+                    OT record, worked out for the whole list at once - claim rules, a staff record still undecided (Type 1
+                    "auto", Type 2 "detected"), its type, the master switch and the claim workflow switched on, no
+                    pending / approved claim, within the claim window, for Type 2 a credit to claim (ot_credit: the
+                    quarters credit, else the suggested shifts), and a Department Head who may approve it
+      claimProblem  why an otherwise claimable record cannot be claimed (no Department Head ...), else null
+      creditShifts  the quarters-rule credit (claim rules + quarters rule on, the employee's shift known): null below a
+                    quarter / otherwise
+      appliesOn     Type 1: the next working day the allowance applies to (ISO)
+      shiftMinutes  the working shift length (end - start - lunch) the quarters rule divides by, or null"""
+    from . import compensation_claims as claims_mod
+    from . import compensation_engine as comp
+    from .holiday_work_views import hod_names
+    from .overtime import next_working_day
+    from .shift_engine import _get_shift_for_date
+
+    records = list(records)
+    if not records:
+        return {}
+    today = today or ist_today()
+    settings = settings or PayrollSettings.get()
+    master = bool(settings.compensation_feature_enabled)
+    ctx = claims_mod.context(today=today, cfg=config, master=master)
+    claims = claims_mod.latest_claims_for_records([r.pk for r in records])
+    hods = hod_names({c.employee_id for c in claims.values()}) if claims else {}
+    assignments = _assignments_by_employee(
+        {r.employee_id for r in records},
+        min(r.date for r in records),
+        max(r.date for r in records) + timedelta(days=rules.LOOKBACK_DAYS),
+    )
+    out: dict = {}
+    for r in records:
+        emp_assignments = assignments.get(r.employee_id, [])
+        claim_rules = config.claims_apply_on(r.date) and r.ot_type != OvertimeRecord.OT_TYPE_LEGACY
+        shift = _get_shift_for_date(r.employee, r.date, assignments=emp_assignments)
+        length = comp.shift_working_minutes(shift) or None
+        credit = None
+        quarter_rule = claim_rules and config.ot_quarter_rule_on(r.date) and bool(length)
+        if quarter_rule:
+            value = rules.quarter_credit(r.ot_minutes or 0, length)
+            credit = float(value) if value >= rules.QUARTER else None
+        applies_on = None
+        if r.ot_type == OvertimeRecord.OT_TYPE_ALLOWANCE:
+            nwd = next_working_day(r.employee, r.date, emp_assignments)
+            applies_on = nwd.isoformat() if nwd else None
+        c = claims.get(r.pk)
+        claim = None
+        if c is not None:
+            claim = {
+                "id": c.pk,
+                "kind": c.kind,
+                "status": c.status,
+                "shifts": float(c.shifts) if c.shifts is not None else None,
+                "minutes": c.minutes,
+                "raisedByRole": c.raised_by_role,
+                "hodName": hods.get(c.employee_id),
+                "open": c.status in ("pending", "approved"),
+            }
+        if r.ot_type == OvertimeRecord.OT_TYPE_ALLOWANCE:
+            type_on = config.allowance_enabled
+            undecided = r.status == OvertimeRecord.STATUS_AUTO
+            has_value = bool(r.allowance_minutes)
+        else:
+            type_on = config.shift_enabled
+            undecided = r.status == OvertimeRecord.STATUS_DETECTED
+            # under the quarters rule below a quarter is nothing to claim (never the ladder's suggestion)
+            has_value = bool(credit) if quarter_rule else bool(r.suggested_shifts)
+        claimable = bool(
+            claim_rules
+            and master
+            and ctx.workflow_on
+            and type_on
+            and undecided
+            and has_value
+            and r.employee.employment_type == "staff"
+            and r.employee.status == "active"
+            and not (claim and claim["open"])
+            and (today - r.date).days <= claims_mod.CLAIM_WINDOW_DAYS
+            and r.date <= today
+        )
+        problem = ctx.hod_problem(r.employee) if claimable else None  # one look-up per employee (cached)
+        out[r.pk] = {
+            "claimRules": claim_rules,
+            "claimable": claimable and not problem,
+            "claimProblem": problem,
+            "claim": claim,
+            "creditShifts": credit,
+            # Type 2: which rule the credit follows: "quarters" (creditShifts; null there = below a quarter) or "ladder"
+            # (before claims_from, the quarters rule switched off or the shift unknown: suggestedShifts is the credit)
+            "creditRule": "quarters" if quarter_rule else "ladder",
+            "appliesOn": applies_on,
+            "shiftMinutes": length,
+        }
+    return out
+
+
+def _claim_allowance_statuses(records, statuses: dict, claim_info: dict) -> None:
+    """allowanceStatus of a Type 1 row under the claim rules: the allowance can only be used after an APPROVED claim, so
+    an unclaimed / rejected row is "not_used" and a row whose claim waits for the HOD is "pending"; an approved one keeps
+    what the attendance shows (used / pending until its day / not_used). Changes `statuses` in place."""
+    for r in records:
+        info = claim_info.get(r.pk) or {}
+        if r.ot_type != OvertimeRecord.OT_TYPE_ALLOWANCE or not info.get("claimRules"):
+            continue
+        key = (r.employee_id, r.date)
+        status = (info.get("claim") or {}).get("status")
+        if status == "approved":
+            continue
+        statuses[key] = "pending" if status == "pending" else "not_used"
 
 
 def _allowance_use_map(records, today=None) -> tuple[dict, dict]:
@@ -340,8 +484,10 @@ def overtime_list(request: Request) -> Response:
         records = [r for r in records if str(r.employee_id) == str(emp)]
 
     used, statuses = _allowance_use_map(records, today)
+    claim_info = _ot_claim_info(records, config, today, settings)
+    _claim_allowance_statuses(records, statuses, claim_info)
     return Response({
-        "results": [_ot_dict(r, used, statuses) for r in records],
+        "results": [_ot_dict(r, used, statuses, claim_info.get(r.pk)) for r in records],
         "count": len(records),
         # kept for the old screen: it read these three
         "settings": {
@@ -359,16 +505,40 @@ def overtime_list(request: Request) -> Response:
             "relaxationEnabled": config.relaxation_enabled,
             "payEnabled": config.pay_enabled,
             "shiftMinExtraMinutes": config.shift_min_extra_minutes,
+            # the claim workflow: OT dates on/after claimsFrom are claimed (Assign = Pay only for them)
+            "claimsFrom": config.claims_from.isoformat() if config.claims_from else None,
+            "quarterRule": bool(config.ot_quarter_rule),
         },
     })
 
 
+CLAIM_CONFLICT = "claim_conflict"  # _assign_one's marker: the record has a pending / approved claim (answered 409)
+
+
+def open_claim_for_record(record_id):
+    """The pending / approved claim of an OT record, or None (compensation_claims.open_claim_for_record, imported late:
+    compensation_claims imports this module's neighbours)."""
+    from .compensation_claims import open_claim_for_record as _open
+
+    return _open(record_id)
+
+
 def _assign_one(
-    request: Request, emp_id: int, item: dict, mode: str, batch_shifts, batch_claim, actor: str, settings=None
+    request: Request,
+    emp_id: int,
+    item: dict,
+    mode: str,
+    batch_shifts,
+    batch_claim,
+    actor: str,
+    settings=None,
+    config=None,
 ) -> dict:
     """Assign ONE Type 2 record of employee `emp_id`. Returns {"ok": True, "record": rec} or {"ok": False, "reason":
-    sentence}. `settings` (the PayrollSettings the request already loaded) is handed to the day check and the day
-    re-computation so neither reads it again per record."""
+    sentence} (+ "code": CLAIM_CONFLICT when the record has a pending / approved claim). `settings` (the PayrollSettings
+    the request already loaded) is handed to the day check and the day re-computation so neither reads it again per
+    record. A record on/after CompensationConfig.claims_from may only be PAID (its credit is the employee's claim)."""
+
     from django.utils import timezone
 
     from .compensation_apply import RelaxationRefused, apply_relaxation, check_relaxation_day
@@ -392,6 +562,17 @@ def _assign_one(
         if rec is None:
             return {"ok": False, "reason": "No overtime record found for that employee and date."}
         who = f"{rec.employee.employee_code} on {ot_date.strftime('%d %b %Y')}"
+        open_claim = open_claim_for_record(rec.pk)
+        if open_claim is not None:
+            state = "waits for the Department Head" if open_claim.status == "pending" else "was approved"
+            return {
+                "ok": False,
+                "code": CLAIM_CONFLICT,
+                "reason": (
+                    f"{who}: the employee's claim for this overtime {state}, so it cannot also be paid or assigned. "
+                    "One overtime day is either paid or credited, never both."
+                ),
+            }
         if rec.ot_type != OvertimeRecord.OT_TYPE_SHIFT:
             if rec.ot_type == OvertimeRecord.OT_TYPE_ALLOWANCE:
                 return {"ok": False, "reason": f"{who}: a next-day allowance is automatic, there is nothing to assign."}
@@ -400,6 +581,15 @@ def _assign_one(
             return {"ok": False, "reason": f"{who}: it is already {STATUS_LABELS.get(rec.status, rec.status).lower()}."}
         if rec.employee.employment_type != "staff":
             return {"ok": False, "reason": f"{who}: compensation applies to staff employees only."}
+        config = config or CompensationConfig.get()
+        if mode == OvertimeRecord.TYPE_RELAXATION and config.claims_apply_on(rec.date):
+            return {
+                "ok": False,
+                "reason": (
+                    f"{who}: overtime from {config.claims_from.strftime('%d %b %Y') if config.claims_from else 'now'} "
+                    "on is credited through the employee's claim (the Department Head approves it); HR can only pay it."
+                ),
+            }
 
         raw_shifts = item.get("shifts")
         if raw_shifts in (None, ""):
@@ -511,13 +701,23 @@ def overtime_assign(request: Request) -> Response:
                 "reason": "No overtime record found for that employee and date.",
             })
             continue
-        result = _assign_one(request, emp_id, item, mode, data.get("shifts"), data.get("claimDate"), actor, settings)
+        result = _assign_one(
+            request, emp_id, item, mode, data.get("shifts"), data.get("claimDate"), actor, settings, config
+        )
         if result["ok"]:
             assigned.append(result["record"])
         else:
-            skipped.append({"employeeId": item.get("employeeId"), "date": item.get("date"), "reason": result["reason"]})
+            skipped.append({
+                "employeeId": item.get("employeeId"), "date": item.get("date"), "reason": result["reason"],
+                **({"code": result["code"]} if result.get("code") else {}),
+            })
     if not assigned:
-        return Response({"error": skipped[0]["reason"], "assigned": 0, "skipped": skipped}, status=400)
+        # every record has a pending / approved claim: a conflict, not a bad request
+        conflict = all(item.get("code") == CLAIM_CONFLICT for item in skipped)
+        body = {"error": skipped[0]["reason"], "assigned": 0, "skipped": skipped}
+        if conflict:
+            body["code"] = CLAIM_CONFLICT
+        return Response(body, status=409 if conflict else 400)
     return Response({"assigned": len(assigned), "results": [_ot_dict(r) for r in assigned], "skipped": skipped})
 
 
@@ -576,6 +776,10 @@ def overtime_announce(request: Request) -> Response:
             )
             if rec is None:
                 continue  # not there, not undecided any more (somebody got there first), or not this person's
+            if open_claim_for_record(rec.pk) is not None:
+                continue  # the employee claimed it: one OT day is paid or credited, never both
+            if comp_type == OvertimeRecord.TYPE_RELAXATION and config.claims_apply_on(rec.date):
+                continue  # under the claim rules its credit is the employee's claim, never a direct HR credit
             if rec.ot_type == OvertimeRecord.OT_TYPE_SHIFT:
                 if rec.suggested_shifts is None or not config.shift_enabled:
                     continue
@@ -646,6 +850,8 @@ def overtime_reject(request: Request) -> Response:
         )
         if rec is None:
             continue
+        if open_claim_for_record(rec.pk) is not None:
+            continue  # the employee's claim decides it (the Department Head approves or rejects the claim)
         updated = OvertimeRecord.objects.filter(pk=rec.pk, status=OvertimeRecord.STATUS_DETECTED).update(
             status=OvertimeRecord.STATUS_REJECTED
         )

@@ -8,10 +8,11 @@ window_early_out when the employee's punch used the window). An announcement cov
 scoped to a branch, a department or a list of employees. Production employees are never covered.
 
     GET    /api/compensation/windows          the announcements, newest first (?kind=late_in|early_out|day|all &month= &year=
-                                              &date= &upcoming=1 &limit=)
+                                              &date= &upcoming=1 &limit= ; 2026-11-19: &departmentId= &branchId= &q=
+                                              &status=upcoming|past|all &page= &pageSize=)
     POST   /api/compensation/windows          {date, kind: "late_in"|"early_out", time: "HH:MM", reason,
                                                branchId?, departmentId?, employeeIds?}
-    DELETE /api/compensation/windows/<id>     remove an announcement for a FUTURE date
+    DELETE /api/compensation/windows/<id>     remove an announcement, for ANY date (2026-11-19)
 
 Rules, every refusal a plain sentence:
 
@@ -29,8 +30,23 @@ Rules, every refusal a plain sentence:
   * at least one active staff member must be covered;
   * a branch-scoped HR user announces for their own branch only (the announcement is stamped with it) and cannot remove a
     company-wide one; an unscoped HR user can announce for any branch or for the whole company;
-  * only an announcement for a FUTURE date can be removed (today's has already been acted on), exactly like the legacy
-    Compensation Days.
+  * removing (owner brief 2026-11-19: "delete existing announcements"): an announcement of ANY date can be removed, unless
+    its month's payroll is finalized (Payroll Done, payroll_month_workflow.is_locked): then a 409 says why, whatever the
+    date (that month is paid and closed). Removing one for today or a past day re-derives the stored attendance of the
+    staff it covered for that day at once (refresh_attendance, the same path an announcement takes; a day HR set by hand
+    is never recomputed), so the Late / Early-out marks it lifted come back. Every covered staff member is told on their
+    phone that it was cancelled (compensation_notices.announcement_cancelled), and the removal is audited.
+
+The list (GET) filters, all optional and combined with AND (the old parameters keep their meaning):
+  * departmentId: the announcements that cover somebody of that department by their scope: the department's own ones,
+    the company-wide ones, the branch-wide ones of the department's branch, and those that list an employee of it;
+  * branchId: the branch's own ones (incl. its departments'), the company-wide ones and those that list an employee of it;
+  * q: text in the reason or the name of who announced it (case-insensitive);
+  * status: upcoming (today and later), past (before today) or all (the default); `upcoming=1` still means upcoming;
+  * page / pageSize: only when either is sent, the answer is that page of the list (pageSize 1 to 200, default 25) and
+    also carries `total`, `page`, `pageSize`; without them the old `limit` (default 200, at most 500) applies as before.
+`canDelete` on each row: a late-in / early-out window, of any date, the caller may edit Compensation, its month is not
+finalized, and (for a branch-scoped user) it is their own branch's.
 
 The legacy /api/compensation/leave-days routes are untouched: they keep creating and listing the old "day exemption" kind.
 Both routes read and write the same table, so rows made here also appear in the legacy list (with no `kind` field there).
@@ -52,7 +68,7 @@ from .auth import get_hr_display_name, require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import ist_today
 from .compensation_shared import date_text, parse_date, parse_int, parse_time, switches
-from .compensation_views import require_compensation_features_for_changes
+from .compensation_views import can_edit_compensation, require_compensation_features_for_changes
 from .models import (
     AttendanceDayRecord,
     Branch,
@@ -60,6 +76,7 @@ from .models import (
     CompensationDayAnnouncement,
     Department,
     Employee,
+    PayrollMonthClose,
     PayrollSettings,
 )
 
@@ -185,13 +202,41 @@ def coverage_table(request: Request) -> dict[tuple, int]:
     return _coverage_table(request)
 
 
-def window_json(ann: CompensationDayAnnouncement, table: dict, today, scope_branch=None) -> dict:
-    """One announcement. `table` is _coverage_table (the staff in the caller's scope per branch / department)."""
+def locked_months() -> set[tuple[int, int]]:
+    """{(year, month)} of every staff payroll month finalized (Payroll Done): one query, a handful of rows."""
+    return set(PayrollMonthClose.objects.values_list("year", "month"))
+
+
+def owns(ann: CompensationDayAnnouncement, scope_branch) -> bool:
+    """May a user scoped to `scope_branch` (None = unscoped) remove this announcement: their own branch's, or one that
+    lists only employees of their branch (prefetch `employees`)."""
+    if scope_branch is None or ann.branch_id == scope_branch:
+        return True
+    listed = list(ann.employees.all())
+    return bool(listed) and all(e.branch_id == scope_branch for e in listed)
+
+
+def window_json(
+    ann: CompensationDayAnnouncement,
+    table: dict,
+    today,
+    scope_branch=None,
+    locked: set | None = None,
+    may_edit: bool = True,
+) -> dict:
+    """One announcement. `table` is _coverage_table (the staff in the caller's scope per branch / department), `locked`
+    locked_months() (None = read it here), `may_edit` whether the caller may change Compensation. `today` is kept for the
+    callers: since 2026-11-19 an announcement of any date can be removed (see the module docstring)."""
     listed = list(ann.employees.all())
     covers = covers_count(ann, table)
-    deletable = ann.date > today and ann.kind in WINDOW_KINDS
-    if deletable and scope_branch is not None and ann.branch_id != scope_branch:
-        deletable = bool(listed) and all(e.branch_id == scope_branch for e in listed)
+    if locked is None:
+        locked = locked_months()
+    deletable = (
+        may_edit
+        and ann.kind in WINDOW_KINDS
+        and (ann.date.year, ann.date.month) not in locked
+        and owns(ann, scope_branch)
+    )
     return {
         "id": ann.id,
         "date": ann.date.isoformat(),
@@ -221,6 +266,30 @@ def _enabled_block() -> dict:
 # ─────────────────────────── list ───────────────────────────
 
 
+PAGE_SIZE_DEFAULT = 25
+PAGE_SIZE_MAX = 200
+STATUSES = ("upcoming", "past", "all")
+
+
+def _department_filter(department: Department) -> Q:
+    """The announcements that cover somebody of `department` by their scope (see the module docstring)."""
+    wide = Q(department__isnull=True, employees__isnull=True)
+    if department.branch_id is not None:
+        wide &= Q(branch__isnull=True) | Q(branch_id=department.branch_id)
+    return Q(department_id=department.pk) | wide | Q(employees__department_id=department.pk)
+
+
+def _branch_filter(branch_id: int) -> Q:
+    """The announcements of a branch: its own (incl. a department of it with no branch stamped), the company-wide ones
+    and those that list an employee of it."""
+    unlisted = Q(employees__isnull=True)
+    return (
+        Q(branch_id=branch_id)
+        | (Q(branch__isnull=True) & unlisted & (Q(department__isnull=True) | Q(department__branch_id=branch_id)))
+        | Q(employees__branch_id=branch_id)
+    )
+
+
 def _list_windows(request: Request) -> Response:
     q = request.query_params
     today = ist_today()
@@ -228,10 +297,6 @@ def _list_windows(request: Request) -> Response:
     if kind not in ("windows", "all", *KIND_LABEL):
         return _bad("kind must be late_in, early_out, day, windows (late-in and early-out) or all.")
     qs = CompensationDayAnnouncement.objects.select_related("branch", "department").prefetch_related("employees")
-    if kind == "windows":
-        qs = qs.filter(kind__in=WINDOW_KINDS)
-    elif kind != "all":
-        qs = qs.filter(kind=kind)
     scope = get_branch_scope(request)
     qs = visible_announcements(qs, scope)
     if q.get("date"):
@@ -243,21 +308,80 @@ def _list_windows(request: Request) -> Response:
         qs = qs.filter(date__year=parse_int(q.get("year")))
     if parse_int(q.get("month")) is not None:
         qs = qs.filter(date__month=parse_int(q.get("month")))
+    status = (q.get("status") or "all").lower()
+    if status not in STATUSES:
+        return _bad("status must be upcoming, past or all.")
+    joined = False  # a filter through the employee list repeats rows: made distinct once at the end
+    if q.get("departmentId") not in (None, ""):
+        dept_id = parse_int(q.get("departmentId"))
+        department = Department.objects.filter(pk=dept_id).first() if dept_id and dept_id > 0 else None
+        if department is None:
+            return _bad("departmentId must be the id of a department.")
+        qs = qs.filter(_department_filter(department))
+        joined = True
+    if q.get("branchId") not in (None, ""):
+        branch_id = parse_int(q.get("branchId"))
+        if branch_id is None or branch_id < 1:
+            return _bad("branchId must be the id of a branch.")
+        qs = qs.filter(_branch_filter(branch_id))
+        joined = True
+    text = (q.get("q") or "").strip()
+    if text:
+        qs = qs.filter(Q(reason__icontains=text) | Q(announced_by__icontains=text))
+    if joined:
+        qs = qs.distinct()
+    # The tiles: the late-in / early-out windows matching every filter except kind and status (date, month, department,
+    # branch, search), so they do not change while the user flips the kind / status chips.
+    summary = _summary(qs, today)
+    if kind == "windows":
+        qs = qs.filter(kind__in=WINDOW_KINDS)
+    elif kind != "all":
+        qs = qs.filter(kind=kind)
     if (q.get("upcoming") or "").lower() in ("1", "true", "yes"):
         qs = qs.filter(date__gte=today)
-    limit = max(1, min(parse_int(q.get("limit")) or LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT))
+    if status == "upcoming":
+        qs = qs.filter(date__gte=today)
+    elif status == "past":
+        qs = qs.filter(date__lt=today)
+
+    paged = "page" in q or "pageSize" in q
+    if paged:
+        page = parse_int(q.get("page")) if q.get("page") not in (None, "") else 1
+        size = parse_int(q.get("pageSize")) if q.get("pageSize") not in (None, "") else PAGE_SIZE_DEFAULT
+        if page is None or page < 1:
+            return _bad("page must be a whole number from 1.")
+        if size is None or not 1 <= size <= PAGE_SIZE_MAX:
+            return _bad(f"pageSize must be a whole number from 1 to {PAGE_SIZE_MAX}.")
+        start = (page - 1) * size
+    else:
+        start, size = 0, max(1, min(parse_int(q.get("limit")) or LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT))
     total = qs.count()
-    rows = list(qs.order_by("-date", "-id")[:limit])
+    rows = list(qs.order_by("-date", "-id")[start : start + size])
     table = _coverage_table(request)
-    return Response(
-        {
-            "results": [window_json(a, table, today, scope) for a in rows],
-            "count": total,
-            "truncated": total > len(rows),
-            "today": today.isoformat(),
-            "enabled": _enabled_block(),
-        }
-    )
+    locked = locked_months()
+    may_edit = can_edit_compensation(request)
+    body = {
+        "results": [window_json(a, table, today, scope, locked, may_edit) for a in rows],
+        "count": total,
+        "truncated": total > start + len(rows),
+        "today": today.isoformat(),
+        "enabled": _enabled_block(),
+        "summary": summary,
+    }
+    if paged:
+        body.update(total=total, page=page, pageSize=size)
+    return Response(body)
+
+
+def _summary(qs, today) -> dict:
+    """{total, lateIn, earlyOut, upcoming, past} of the late-in / early-out windows in `qs` (one query)."""
+    rows = qs.filter(kind__in=WINDOW_KINDS).order_by().values_list("id", "kind", "date").distinct()
+    out = {"total": 0, "lateIn": 0, "earlyOut": 0, "upcoming": 0, "past": 0}
+    for _id, kind, day in rows:
+        out["total"] += 1
+        out["lateIn" if kind == CompensationDayAnnouncement.KIND_LATE_IN else "earlyOut"] += 1
+        out["upcoming" if day >= today else "past"] += 1
+    return out
 
 
 # ─────────────────────────── announce ───────────────────────────
@@ -369,7 +493,7 @@ def _announce(request: Request) -> Response:
                     f"A {label} window is already announced for {date_text(day)} ({_hhmm(window_time(other))}, by "
                     f"{other.announced_by or 'HR'}) and it covers {len(overlap)} of the same "
                     f"{'person' if len(overlap) == 1 else 'people'}. Only one {label} window can apply to a person on a "
-                    "date: remove that one first (only a future date can be removed) or announce for different people."
+                    "date: remove that one first or announce for different people."
                 )
         ann = CompensationDayAnnouncement.objects.create(
             date=day,
@@ -430,24 +554,48 @@ def compensation_window_detail(request: Request, pk: int) -> Response:
     if ann is None:
         return _bad("Window not found.", 404)
     today = ist_today()
-    if ann.date <= today:
-        return _bad("Cannot remove a window for today or a past date: it has already been acted on.")
-    scope = get_branch_scope(request)
-    if scope is not None:
-        listed = list(ann.employees.all())
-        own = ann.branch_id == scope or (bool(listed) and all(e.branch_id == scope for e in listed))
-        if not own:
-            return _bad(
-                "This window belongs to the whole company or another branch: only its owner can remove it.", 403
-            )
-    snapshot = {"date": ann.date.isoformat(), "kind": ann.kind, "time": _hhmm(window_time(ann)), "reason": ann.reason}
-    ann.delete()
+    if not owns(ann, get_branch_scope(request)):
+        return _bad("This window belongs to the whole company or another branch: only its owner can remove it.", 403)
+    from . import payroll_month_workflow as month_workflow
+
+    day = ann.date
+    if month_workflow.is_locked(day.month, day.year):
+        return _bad(
+            f"Payroll for {month_workflow.month_label(day.month, day.year)} is done, so this announcement can no "
+            "longer be removed.",
+            409,
+        )
+    listed = [e.id for e in ann.employees.all()]
+    covered = covered_staff_ids(ann.branch_id, ann.department_id, listed)
+    snapshot = {
+        "date": day.isoformat(),
+        "kind": ann.kind,
+        "time": _hhmm(window_time(ann)),
+        "reason": ann.reason,
+        "branchId": ann.branch_id,
+        "departmentId": ann.department_id,
+        "employeeIds": listed,
+    }
+    with transaction.atomic():
+        # the settings row is the mutex an announcement takes too: a removal and an announcement are never interleaved
+        CompensationConfig.objects.select_for_update().filter(pk=1).first()
+        ann.delete()
+    # today or a past day: the covered staff's stored day is judged again without the window (its marks come back)
+    refreshed = refresh_attendance(day, covered) if day <= today else 0
+    label = KIND_LABEL[snapshot["kind"]].lower()
     log_action(
         request,
         "delete",
         "compensation",
         record_id=pk,
-        description=f"Removed {KIND_LABEL[snapshot['kind']].lower()} window for {snapshot['date']}",
+        description=(
+            f"Removed {label} window for {snapshot['date']} ({len(covered)} staff"
+            + (f", attendance re-derived for {refreshed}" if day <= today else "")
+            + ")"
+        ),
         old_values=snapshot,
     )
+    from . import compensation_notices
+
+    compensation_notices.announcement_cancelled(ann, covered, announcement_id=pk)  # every covered staff member's phone
     return Response(status=204)

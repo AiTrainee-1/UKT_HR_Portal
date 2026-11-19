@@ -190,9 +190,20 @@ def _outpass(r) -> tuple[str, str]:
 
 
 def _holiday_work(r) -> tuple[str, str]:
-    day = "Sunday" if r.work_date.weekday() == 6 else "Holiday"
+    """Every compensation claim kind (the one claim table, 2026-11-19)."""
     shifts = float(r.shifts)
-    return day_text(r.work_date), f"{day} work · {shifts:g} shift{'' if shifts <= 1 else 's'}"
+    amount = f"{shifts:g} shift{'' if shifts <= 1 else 's'}"
+    kind = getattr(r, "kind", "holiday_work") or "holiday_work"
+    if kind == "ot_allowance":
+        return day_text(r.work_date), f"OT late-in allowance · {r.minutes or 0} min"
+    if kind == "ot_shift":
+        return day_text(r.work_date), f"OT shift credit · {amount}"
+    if kind == "birthday":
+        return day_text(r.work_date), f"Birthday credit · {amount}"
+    if kind == "use_balance":
+        return day_text(r.work_date), f"Use balance · {amount}"
+    day = "Sunday" if r.work_date.weekday() == 6 else "Holiday"
+    return day_text(r.work_date), f"{day} work · {amount}"
 
 
 def _resignation(r) -> tuple[str, str]:

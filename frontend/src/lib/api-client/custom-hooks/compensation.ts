@@ -80,16 +80,39 @@ const withParams = (path: string, params: Record<string, string | number | null 
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  OT Detection: Type 1 (automatic next-day late-in allowance) and Type 2 (shift-based, HR assigns)
+//  OT Detection: Type 1 (next-day late-in allowance) and Type 2 (shift-based), claimed and approved by the HOD from the
+//  claims date (see ./compensation-ot-claims.ts); HR may still pay a Type 2 record
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** allowance = Type 1, shift = Type 2, legacy = a record made before the overhaul (one day's pay or one credit). */
 export type OvertimeType = "allowance" | "shift" | "legacy";
-/** auto = Type 1 (nothing to do), detected = a Type 2 candidate, announced = assigned by HR, rejected. */
+/** auto = Type 1 (nothing for HR to assign), detected = a Type 2 candidate, announced = assigned by HR, rejected. */
 export type OvertimeStatus = "detected" | "auto" | "announced" | "rejected";
 /** Type 1: used on the next working day, not used (that day has come and the employee did not need it), or not decided yet. */
 export type AllowanceStatus = "used" | "not_used" | "pending";
 export type OvertimeMode = "relaxation" | "pay";
+
+/** Where the claim of an OT record stands: waiting for the Department Head, approved or rejected. */
+export type OvertimeClaimStatus = "pending" | "approved" | "rejected";
+
+/**
+ * The claim raised for an OT record (the newest one), from the claim workflow: the employee (in the apps) or HR (here)
+ * claims, the employee's Department Head approves. Type 1 claims are kind `ot_allowance`, Type 2 claims `ot_shift`.
+ */
+export type OvertimeClaim = {
+  id: number;
+  kind: string;
+  status: OvertimeClaimStatus;
+  statusLabel?: string | null;
+  /** ot_shift: the shifts claimed. */
+  shifts: number | null;
+  /** ot_allowance: the allowance minutes claimed. */
+  minutes: number | null;
+  /** "hr" | "employee": who raised it. */
+  raisedByRole: string;
+  /** The Department Head who decides it (optional: a newer backend may send it). */
+  hodName?: string | null;
+};
 
 export type OvertimeRow = {
   id: number;
@@ -127,6 +150,30 @@ export type OvertimeRow = {
   usedMinutes: number | null;
   /** True only for a detected Type 2 row. */
   canAssign: boolean;
+  // ── the claim workflow (records on or after the claims date; an older backend sends none of these) ──
+  /** Can the employee or HR claim it now (eligible, not too old, not claimed or paid already)? */
+  claimable?: boolean;
+  /** The record's claim, or null when nobody has claimed it. */
+  claim?: OvertimeClaim | null;
+  /**
+   * Type 2: the credit by the quarters rule: the OT minutes over the employee's own working shift (end - start - lunch),
+   * in quarters, rounded down, at most 1.00 (null below a quarter). What a claim suggests.
+   */
+  creditShifts?: number | null;
+  /**
+   * Type 2: which rule the credit follows. "quarters": `creditShifts` (null = below a quarter); "ladder": the record is
+   * before the claims date, the quarters rule is off or the shift is unknown, so `suggestedShifts` is the credit.
+   * Optional (older backends).
+   */
+  creditRule?: "quarters" | "ladder";
+  /** True when the record follows the claim workflow (its date is on or after the claims date). Optional. */
+  claimRules?: boolean;
+  /** Why an otherwise claimable record cannot be claimed (no Department Head who may approve it ...), else null. */
+  claimProblem?: string | null;
+  /** Type 1: the working day an approved allowance applies to (the next working day after the OT date). Optional. */
+  appliesOn?: string | null;
+  /** Type 2: the working shift the credit is measured against, in minutes (end - start - lunch). Optional. */
+  shiftMinutes?: number | null;
 };
 
 /** What the OT list says is switched on (the server's own reading of the master switch and the Settings -> Compensation tab). */
@@ -137,6 +184,8 @@ export type OvertimeConfig = {
   relaxationEnabled: boolean;
   payEnabled: boolean;
   shiftMinExtraMinutes: number;
+  /** The claim workflow's start date (YYYY-MM-DD): optional, the page also reads it from the Compensation settings. */
+  claimsFrom?: string | null;
 };
 
 export type OvertimeListResponse = {
@@ -230,7 +279,7 @@ export type BalanceEntry = {
   type: BalanceEntryType;
   shifts: number;
   date: string;
-  /** holiday_work | legacy_credit | redemption | ot_shift */
+  /** holiday_work | legacy_credit | redemption | ot_shift | birthday */
   source: string;
   note: string | null;
   createdBy: string | null;
@@ -238,6 +287,10 @@ export type BalanceEntry = {
   /** false for the debit that only mirrors a legacy credit being used (it is not taken off the balance twice). */
   counted: boolean;
   legacyCreditId?: number;
+  /** The claim that made the entry (an approved claim's credit, an approved use-balance request's debit). Optional. */
+  claim?: { id: number; kind: string; status?: string | null } | null;
+  /** The OT record behind an ot_shift credit. Optional. */
+  overtimeRecordId?: number | null;
 };
 
 export type BalanceRow = {
@@ -254,6 +307,12 @@ export type BalanceDetail = {
   employeeName: string;
   balance: number;
   entries: BalanceEntry[];
+  /** The claim workflow's split of the balance (optional: an older backend sends only `balance`). */
+  earned?: number;
+  used?: number;
+  /** Asked to use and still waiting for the Department Head. */
+  pending?: number;
+  available?: number;
 };
 
 export const getBalancesQueryKey = () => ["/api/compensation/balance", "all"] as const;
@@ -343,13 +402,22 @@ export type CompensationWindow = {
   allStaff: boolean;
   announcedBy: string | null;
   createdAt: string | null;
-  /** A future date HR may remove. */
+  /** HR may remove it (any date since the claim workflow; an older backend: a future date only). */
   canDelete: boolean;
 };
 
 /** POST /api/compensation/windows answers the new announcement plus how many staff had that day's attendance judged again
  * (a window for today or a past day; 0 for a later day). */
 export type CreatedCompensationWindow = CompensationWindow & { attendanceUpdated?: number };
+
+/** The month's figures of the announcements list (optional: the page counts the rows it has when the server sends none). */
+export type CompensationWindowsSummary = {
+  total?: number;
+  lateIn?: number;
+  earlyOut?: number;
+  upcoming?: number;
+  past?: number;
+};
 
 export type CompensationWindowsResponse = {
   results: CompensationWindow[];
@@ -358,6 +426,10 @@ export type CompensationWindowsResponse = {
   /** The server's today (India), YYYY-MM-DD. */
   today: string;
   enabled: { master: boolean; windows: boolean; canAnnounce: boolean };
+  /** Paging (when the request asked for a page). */
+  page?: number;
+  pageSize?: number;
+  summary?: CompensationWindowsSummary | null;
 };
 
 export type CompensationWindowsParams = {
@@ -366,20 +438,38 @@ export type CompensationWindowsParams = {
   month?: number;
   year?: number;
   upcoming?: boolean;
+  departmentId?: number;
+  branchId?: number;
+  /** The reason or who announced it. */
+  q?: string;
+  /** upcoming (today on) | past | all */
+  status?: string;
+  page?: number;
+  pageSize?: number;
 };
 
 export const useCompensationWindows = (params: CompensationWindowsParams = {}) =>
   useQuery<CompensationWindowsResponse>({
     queryKey: ["/api/compensation/windows", params],
-    queryFn: () =>
-      customFetch<CompensationWindowsResponse>(
+    queryFn: async () => {
+      const raw = await customFetch<CompensationWindowsResponse & { items?: CompensationWindow[]; total?: number }>(
         withParams("/api/compensation/windows", {
           kind: params.kind,
           month: params.month,
           year: params.year,
           upcoming: params.upcoming ? 1 : undefined,
+          departmentId: params.departmentId,
+          branchId: params.branchId,
+          q: params.q,
+          status: params.status && params.status !== "all" ? params.status : undefined,
+          page: params.page,
+          pageSize: params.pageSize,
         }),
-      ),
+      );
+      // the paged list may name its rows `items` / `total`: read either
+      const results = raw.results ?? raw.items ?? [];
+      return { ...raw, results, count: raw.count ?? raw.total ?? results.length };
+    },
   });
 
 export type CreateWindowBody = {
@@ -559,12 +649,36 @@ export const useWithdrawHolidayWork = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  Compensation Leave C: birthdays (paid leave for the whole day, automatic)
+//  Compensation Leave C: birthdays. From the claims date a birthday is a normal working day: absent or on approved leave =
+//  an automatic paid birthday leave; present = one 1-shift credit to claim (the HOD approves it into the balance)
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type ReportPeriod = "today" | "week" | "month";
 
+/**
+ * What a birthday gave: paid_leave (absent / on leave), credit_claimable (worked: a credit nobody claimed yet),
+ * credit_pending / credit_approved / credit_rejected (its claim), upcoming (not come yet), off_day (Sunday, holiday, off
+ * Saturday: nothing), not_eligible (not staff, joined later ...), old_rule (before the claims date: the old automatic leave).
+ */
+export type BirthdayOutcome =
+  | "paid_leave"
+  | "credit_claimable"
+  | "credit_pending"
+  | "credit_approved"
+  | "credit_rejected"
+  | "upcoming"
+  | "off_day"
+  | "not_eligible"
+  | "old_rule";
+
 export type BirthdayRow = {
+  /** Optional: an older backend sends none (the page then reads `benefits`). */
+  outcome?: BirthdayOutcome | null;
+  outcomeLabel?: string | null;
+  /** The birthday credit's claim, once one was raised. */
+  claim?: { id: number; status: string; shifts?: number | null; kind?: string } | null;
+  /** Can a credit be claimed now (worked, no pending / approved claim; a rejected one may be claimed again)? Optional. */
+  claimable?: boolean;
   employeeId: number;
   employeeCode: string;
   employeeName: string;
@@ -594,13 +708,28 @@ export type BirthdaysResponse = {
   date: string;
   from: string;
   to: string;
-  enabled: { master: boolean; birthday: boolean; effectiveFrom: string | null };
+  enabled: {
+    master: boolean;
+    birthday: boolean;
+    effectiveFrom: string | null;
+    /** The day the attendance-based rule starts (the claims date). Optional. */
+    claimsFrom?: string | null;
+  };
   count: number;
   benefitCount: number;
   results: BirthdayRow[];
+  /** How many rows have each outcome, before the outcome filter (optional: the page counts its rows otherwise). */
+  summary?: { byOutcome?: Partial<Record<BirthdayOutcome, number>> } | null;
 };
 
-export type BirthdaysParams = { period: ReportPeriod; date?: string; departmentId?: number; branchId?: number };
+export type BirthdaysParams = {
+  period: ReportPeriod;
+  date?: string;
+  departmentId?: number;
+  branchId?: number;
+  q?: string;
+  outcome?: string;
+};
 
 export const useCompensationBirthdays = (params: BirthdaysParams) =>
   useQuery<BirthdaysResponse>({

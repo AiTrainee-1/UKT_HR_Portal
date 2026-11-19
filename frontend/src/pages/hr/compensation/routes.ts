@@ -114,8 +114,9 @@ export const LEAVE_NESTED: NestedMap = {
   "holiday-work": [
     { value: "raise", label: "Raise a claim" },
     { value: "claims", label: "Claims" },
-    { value: "balance", label: "Compensation balance" },
-    { value: "credits", label: "Earlier Alternative-Day credits" },
+    { value: "balance", label: "Balance" },
+    // every credit and debit of the balances (the earlier Alternative-Day credits are a section of it)
+    { value: "credits", label: "Credits" },
   ],
   birthdays: [
     { value: "list", label: "Who has a birthday" },
@@ -154,8 +155,9 @@ export const nestedOf = (key: CompensationPageKey, sub: string): readonly Subtab
 
 /**
  * The nested subtab a subtab address opens when it names none (or an unknown one): the first, except that a link carrying the
- * filter of one section opens that section (`hstatus` / `hmonth` / `hyear` are the Claims filters, `otstatus` is the
- * Assigned-and-rejected one). Undefined for a subtab with no nested level.
+ * filter of one section opens that section (`hstatus` / `hmonth` / `hyear` / `hkind` / `hclaim` / `hemp` are the Claims
+ * filters, `balemp` opens a Balance drawer, `lemp` / `lclaim` / `ltype` / `lsource` are the Credits filters, `otstatus` is
+ * the Assigned-and-rejected one). Undefined for a subtab with no nested level.
  */
 export function defaultNested(key: CompensationPageKey, sub: string, search = ""): string | undefined {
   const nested = nestedOf(key, sub);
@@ -165,7 +167,11 @@ export function defaultNested(key: CompensationPageKey, sub: string, search = ""
     const v = params.get(name);
     return v !== null && v !== "" && v !== "all";
   };
-  if (key === "leave" && sub === "holiday-work" && (set("hstatus") || set("hmonth") || set("hyear"))) return "claims";
+  if (key === "leave" && sub === "holiday-work") {
+    if (["hstatus", "hmonth", "hyear", "hkind", "hclaim", "hemp"].some(set)) return "claims";
+    if (set("balemp")) return "balance";
+    if (["lemp", "lclaim", "ltype", "lsource"].some(set)) return "credits";
+  }
   if (key === "ot" && sub === "type-2" && set("otstatus")) return "assigned";
   return nested[0].value;
 }

@@ -43,7 +43,7 @@ from .audit_utils import log_action
 from .auth import require_reception_device
 from .employee_photo import photo_links
 from .jwt_utils import verify_token
-from .models import ReceptionDevice, ReceptionSession, Visitor, VisitorVisit
+from .models import ReceptionDevice, ReceptionSession, VisitorVisit
 from .outpass_visitor_views import (
     VisitFilterError,
     _day_start,
@@ -69,6 +69,7 @@ from .reception_credentials import (
     token_expires_soon,
 )
 from .throttles import throttle
+from .visitor_identity import visit_name
 
 
 def _desk_json(desk: ReceptionDevice) -> dict:
@@ -232,8 +233,7 @@ def _desk_register(request: Request) -> Response:
         "outpass_visitors",
         record_id=visit.id,
         description=(
-            f"Visitor registered at the reception desk {desk.name}: "
-            f"{(visit.shown_identity or {}).get('name') or visit.visitor.name}, meeting {visit.whom_to_meet}"
+            f"Visitor registered at the reception desk {desk.name}: {visit_name(visit)}, meeting {visit.whom_to_meet}"
         )[:480],
     )
     return Response(vav.registered_json(visit, desk.branch_id), status=201)
@@ -275,7 +275,8 @@ def reception_host_lookup(request: Request) -> Response:
 @require_reception_device
 def reception_visitor_lookup(request: Request) -> Response:
     """A returning visitor of this desk's branch by phone (however it is typed): {visitor: {id, name, visitCount,
-    lastVisitAt, insideNow, lastVisitId} | null}. Someone who has only visited other branches is not shown."""
+    lastVisitAt, insideNow, lastVisitId} | null}. Someone who has only visited other branches is not shown, and the name
+    is the one given at their latest visit at this branch (19 Nov 2026), never another branch's."""
     branch_id = request.reception_device.branch_id
     match = find_visitor_by_phone(request.query_params.get("phone") or "")
     if match is None:
@@ -289,17 +290,16 @@ def reception_visitor_lookup(request: Request) -> Response:
     )
     if not agg["n"]:
         return Response({"visitor": None})
-    last = here.order_by("-visited_at", "-id").values_list("id", flat=True).first()
-    person: Visitor = match
+    last = here.select_related("visitor").order_by("-visited_at", "-id").first()
     return Response(
         {
             "visitor": {
-                "id": person.id,
-                "name": person.name,
+                "id": match.id,
+                "name": visit_name(last),
                 "visitCount": agg["n"],
                 "lastVisitAt": _iso(agg["last"]),
                 "insideNow": agg["inside"] > 0,
-                "lastVisitId": last,
+                "lastVisitId": last.id,
             }
         }
     )

@@ -34,6 +34,16 @@ ADVICE = (
 )
 
 
+# The explanations the 2026-11-19 claim workflow added to the groups (plain help texts the screens show): the shape tests
+# below compare the settings themselves, the help texts are checked on their own (ReadTests).
+HELP_KEYS = ("help", "quarterRuleHelp")
+
+
+def plain(group: dict) -> dict:
+    """A settings group without its help texts."""
+    return {k: v for k, v in group.items() if k not in HELP_KEYS}
+
+
 def login(permissions: dict, branch=None, name="Perm Test") -> dict:
     role = Role.objects.create(name=f"role-{name}-{len(permissions)}-{Role.objects.count()}", permissions=permissions)
     user = HRUser.objects.create(
@@ -111,16 +121,31 @@ class ReadTests(SettingsBase):
                 "shiftRules",
                 "updatedBy",
                 "updatedAt",
+                "claims",
             },
         )
         self.assertEqual(b["masterEnabled"], True)
-        self.assertEqual(b["allowance"], {"enabled": False, "effectiveFrom": None})
+        self.assertEqual(plain(b["allowance"]), {"enabled": False, "effectiveFrom": None})
         self.assertEqual(
-            b["shift"], {"enabled": False, "minExtraMinutes": 150, "relaxationEnabled": True, "payEnabled": False}
+            plain(b["shift"]),
+            {
+                "enabled": False,
+                "minExtraMinutes": 150,
+                "relaxationEnabled": True,
+                "payEnabled": False,
+                "quarterRule": True,
+                # read-only, review fix 2026-11-19: empty while the switch never changed
+                "quarterRuleHistory": [],
+            },
         )
         self.assertEqual(b["windows"], {"enabled": False})
         self.assertEqual(b["holidayWork"], {"enabled": False})
-        self.assertEqual(b["birthday"], {"enabled": False, "effectiveFrom": None})
+        self.assertEqual(plain(b["birthday"]), {"enabled": False, "effectiveFrom": None})
+        # the claim workflow: its effective date (read-only) and the plain explanations
+        self.assertEqual(set(b["claims"]), {"from", "fromText", "help"})
+        self.assertEqual(b["claims"]["from"], str(base.OLD_RULES_UNTIL))
+        for group, key in (("allowance", "help"), ("birthday", "help"), ("shift", "quarterRuleHelp")):
+            self.assertTrue(b[group][key].startswith("From the claims date on"), group)
 
     def test_the_default_rule_tables(self):
         b = self.body()
@@ -183,12 +208,29 @@ class WriteTests(SettingsBase):
 
     def test_keys_inside_a_group_are_independent(self):
         self.put({"shift": {"enabled": True, "minExtraMinutes": 180, "payEnabled": True}})
-        b = self.body()["shift"]
-        self.assertEqual(b, {"enabled": True, "minExtraMinutes": 180, "relaxationEnabled": True, "payEnabled": True})
+        b = plain(self.body()["shift"])
+        self.assertEqual(
+            b,
+            {
+                "enabled": True,
+                "minExtraMinutes": 180,
+                "relaxationEnabled": True,
+                "payEnabled": True,
+                "quarterRule": True,
+                "quarterRuleHistory": [],
+            },
+        )
         self.put({"shift": {"relaxationEnabled": False}})
         self.assertEqual(
-            self.body()["shift"],
-            {"enabled": True, "minExtraMinutes": 180, "relaxationEnabled": False, "payEnabled": True},
+            plain(self.body()["shift"]),
+            {
+                "enabled": True,
+                "minExtraMinutes": 180,
+                "relaxationEnabled": False,
+                "payEnabled": True,
+                "quarterRule": True,
+                "quarterRuleHistory": [],
+            },
         )
 
     def test_the_master_switch_off_does_not_block_a_save(self):
@@ -229,8 +271,8 @@ class WriteTests(SettingsBase):
         r = self.put({"allowance": {"enabled": True}, "birthday": {"enabled": True}})
         self.assertEqual(r.status_code, 200, r.content)
         b = r.json()
-        self.assertEqual(b["allowance"], {"enabled": True, "effectiveFrom": str(TODAY)})
-        self.assertEqual(b["birthday"], {"enabled": True, "effectiveFrom": str(TODAY)})
+        self.assertEqual(plain(b["allowance"]), {"enabled": True, "effectiveFrom": str(TODAY)})
+        self.assertEqual(plain(b["birthday"]), {"enabled": True, "effectiveFrom": str(TODAY)})
 
     def test_a_named_date_is_used_even_if_earlier_and_a_later_date_too(self):
         r = self.put(
@@ -246,15 +288,15 @@ class WriteTests(SettingsBase):
     def test_switching_off_keeps_the_date_and_switching_on_again_starts_from_today_again(self):
         self.put({"allowance": {"enabled": True, "effectiveFrom": "2026-03-01"}})
         self.put({"allowance": {"enabled": False}})
-        self.assertEqual(self.body()["allowance"], {"enabled": False, "effectiveFrom": "2026-03-01"})
+        self.assertEqual(plain(self.body()["allowance"]), {"enabled": False, "effectiveFrom": "2026-03-01"})
         # off -> on without naming a date: the gap while it was off must not be judged retroactively
         self.put({"allowance": {"enabled": True}})
-        self.assertEqual(self.body()["allowance"], {"enabled": True, "effectiveFrom": str(TODAY)})
+        self.assertEqual(plain(self.body()["allowance"]), {"enabled": True, "effectiveFrom": str(TODAY)})
 
     def test_changing_the_date_of_a_feature_that_is_already_on(self):
         self.put({"birthday": {"enabled": True}})
         self.put({"birthday": {"effectiveFrom": "2026-10-20"}})
-        self.assertEqual(self.body()["birthday"], {"enabled": True, "effectiveFrom": "2026-10-20"})
+        self.assertEqual(plain(self.body()["birthday"]), {"enabled": True, "effectiveFrom": "2026-10-20"})
 
     def test_a_feature_that_is_on_needs_a_date(self):
         self.put({"allowance": {"enabled": True}})

@@ -116,3 +116,27 @@ export function dayWords(shifts: number): string {
   if (shifts === 0.75) return "three quarters of a day";
   return `${shifts.toFixed(2)} of a day`;
 }
+
+// ── Type 2: the quarters rule (staff OT credit from the claims date) ──
+
+/** The 9-hour shift of the quarters example: 9:00 AM to 6:00 PM with a 1-hour lunch, so 8 hours of work. */
+export const QUARTER_EXAMPLE_SHIFT = { start: 9 * 60, end: 18 * 60, lunch: 60 };
+
+/** The working length of a shift: end - start - lunch, in minutes (a shift past midnight wraps). */
+export const workingMinutes = (
+  shift: { start: number; end: number; lunch: number } = QUARTER_EXAMPLE_SHIFT,
+): number => {
+  const span = (((shift.end - shift.start) % 1440) + 1440) % 1440;
+  return Math.max(0, span - shift.lunch);
+};
+
+/**
+ * The Type 2 credit by the quarters rule: the OT minutes over the employee's working shift, in quarters, rounded DOWN, at
+ * most 1.00. Below a quarter it is 0 (no Type 2 credit; the day may still earn the Type 1 allowance). The backend's
+ * compensation_effects.staff_ot_credit does the same.
+ */
+export function quarterCredit(otMinutes: number, shiftMinutes: number): number {
+  if (!(shiftMinutes > 0) || !(otMinutes > 0)) return 0;
+  const quarters = Math.floor((otMinutes * 4) / shiftMinutes + 1e-9);
+  return Math.min(4, quarters) / 4;
+}

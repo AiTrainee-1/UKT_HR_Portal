@@ -43,6 +43,8 @@ export type CompensationDraft = {
   shiftMinExtra: string;
   relaxationEnabled: boolean;
   payEnabled: boolean;
+  /** Staff OT credit in quarters of the employee's own shift; null = the server does not report it (an older backend). */
+  quarterRule: boolean | null;
   shiftRules: ShiftRow[];
   windowsEnabled: boolean;
   holidayWorkEnabled: boolean;
@@ -96,6 +98,7 @@ export function draftFrom(s: CompensationSettings): CompensationDraft {
     shiftMinExtra: String(shift.minExtraMinutes),
     relaxationEnabled: shift.relaxationEnabled !== false,
     payEnabled: shift.payEnabled === true,
+    quarterRule: typeof shift.quarterRule === "boolean" ? shift.quarterRule : null,
     shiftRules: [...(s.shiftRules ?? [])].sort(byOrder).map((r) => ({
       key: `s-${r.id}`,
       id: r.id,
@@ -171,6 +174,7 @@ export function sameDraft(a: CompensationDraft, b: CompensationDraft): boolean {
     sameNumber(a.shiftMinExtra, b.shiftMinExtra) &&
     a.relaxationEnabled === b.relaxationEnabled &&
     a.payEnabled === b.payEnabled &&
+    a.quarterRule === b.quarterRule &&
     a.windowsEnabled === b.windowsEnabled &&
     a.holidayWorkEnabled === b.holidayWorkEnabled &&
     a.birthdayEnabled === b.birthdayEnabled &&
@@ -401,6 +405,8 @@ export function toInput(draft: CompensationDraft): CompensationSettingsInput {
       minExtraMinutes: num(draft.shiftMinExtra),
       relaxationEnabled: draft.relaxationEnabled,
       payEnabled: draft.payEnabled,
+      // only when the server reports it: a guessed value is never written to an older backend
+      ...(draft.quarterRule === null ? {} : { quarterRule: draft.quarterRule }),
     },
     windows: { enabled: draft.windowsEnabled },
     holidayWork: { enabled: draft.holidayWorkEnabled },

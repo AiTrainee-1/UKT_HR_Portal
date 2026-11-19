@@ -40,6 +40,7 @@ export function StatTile({
   title,
   testId,
   className,
+  wrapLabel = false,
 }: {
   label: string;
   /** A number is grouped the Indian way (1,240); a string is shown as it is; nothing is a dash. */
@@ -56,12 +57,22 @@ export function StatTile({
   /** The tile's test id; the number carries `<testId>-value`. */
   testId?: string;
   className?: string;
+  /** The label wraps onto a second line instead of being cut with an ellipsis (narrow tiles in a row of many). */
+  wrapLabel?: boolean;
 }) {
   const shown = typeof value === "number" ? fmtCount(value) : (value ?? NONE);
   const body = (
     <>
       <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+        <p
+          className={cn(
+            "min-w-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500",
+            wrapLabel ? "break-words leading-snug" : "truncate",
+          )}
+          data-testid={testId ? `${testId}-label` : undefined}
+        >
+          {label}
+        </p>
         {Icon && (
           <span
             className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg", ICON_TONE[tone])}

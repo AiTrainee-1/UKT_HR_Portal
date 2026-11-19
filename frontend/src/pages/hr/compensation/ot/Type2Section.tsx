@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
-import { CheckCheck, History, Hourglass, Loader2, XCircle } from "lucide-react";
+import { CheckCheck, History, Hourglass, Loader2, Send, XCircle } from "lucide-react";
 import { EmptyNote, SectionCard } from "@/components/payroll/kit/parts";
 import { FilterSelect } from "@/components/payroll/panels/issues/panel-kit";
 import {
@@ -27,14 +27,23 @@ import { formatDuration } from "@/pages/hr/settings/compensation/time";
 import { compensationSettingsHref, dateShort, errorMessage, shiftsText } from "../logic";
 import { CELL, PersonCell, Pager, StatusChip, TABLE_HEAD, usePaged } from "../ui";
 import { AssignDialog } from "./AssignDialog";
+import { ClaimDialog } from "./ClaimDialog";
+import { ClaimCell, LastPunch } from "./parts";
 import {
   HISTORY_STATUSES,
+  assignModesFor,
   assignedText,
+  canClaim,
+  creditBasis,
+  creditText,
   filterHistory,
+  inClaimFlow,
+  isCredited,
   isHistoryStatus,
-  lastPunchText,
   rowKey,
   shiftsOf,
+  type2ClaimState,
+  type2Lock,
   type HistoryStatus,
   type Pause,
 } from "./ot-logic";
@@ -42,9 +51,13 @@ import { ShiftRules } from "./RulesExplain";
 
 /**
  * Type 2: shift-based compensation (0.25 / 0.50 / 0.75 / 1 shift) for staff who worked well past their shift end. It is NOT
- * automatic: the candidates wait here with the rules' suggested shifts until HR assigns them (Relaxation or Payment) or
- * rejects them. Three nested subtabs show one thing each: the candidates waiting, what was already assigned or rejected, and
- * how the suggested shifts are worked out. The ticked rows live here, so they stay ticked while HR looks at another one.
+ * automatic. From the claims date the credit is worked out in quarters of the employee's own working shift (rounded down, at
+ * most 1.00); the employee (in the apps) or HR (here, "Claim for employee") claims it, the employee's Department Head
+ * approves, and the shifts go to the compensation balance. HR may instead pay a record while Payment is on; a record is
+ * either paid or credited, never both, so a claimed record cannot be ticked. Records before the claims date keep the old
+ * way: HR assigns them (Relaxation or Payment) or rejects them. Three nested subtabs show one thing each: the records
+ * waiting, what was already decided, and how the credit is worked out. The ticked rows live here, so they stay ticked
+ * while HR looks at another one.
  */
 export type Type2View = "waiting" | "assigned" | "how";
 
@@ -59,6 +72,8 @@ export function Type2Section({
   modes,
   historyStatus,
   onHistoryStatus,
+  claimsFrom,
+  claimPause,
 }: {
   /** The nested subtab shown. */
   view: Type2View;
@@ -74,6 +89,10 @@ export function Type2Section({
   modes: OvertimeMode[];
   historyStatus: string;
   onHistoryStatus: (value: string) => void;
+  /** The claim workflow's start date (null: not known, an older server). */
+  claimsFrom: string | null;
+  /** Why claiming is paused right now, or null. */
+  claimPause: Pause;
 }) {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -83,14 +102,26 @@ export function Type2Section({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assigning, setAssigning] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const [claiming, setClaiming] = useState<OvertimeRow[] | null>(null);
 
-  const chosen = useMemo(() => waiting.filter((r) => selected.has(rowKey(r))), [waiting, selected]);
+  // a claimed record (waiting for the HOD, or credited) cannot be paid, assigned or rejected, so it cannot be ticked
+  const selectable = useMemo(() => waiting.filter((r) => !type2Lock(r)), [waiting]);
+  const chosen = useMemo(() => selectable.filter((r) => selected.has(rowKey(r))), [selectable, selected]);
+  const chosenClaimable = useMemo(() => chosen.filter(canClaim), [chosen]);
+  const anyClaimable = useMemo(() => waiting.some(canClaim), [waiting]);
+  const anyClaimFlow = useMemo(() => waiting.some((r) => inClaimFlow(r, claimsFrom)), [waiting, claimsFrom]);
+  // Payment only for a record under the claim workflow (it is credited by a claim instead of Relaxation)
+  const chosenModes = useMemo(() => assignModesFor(modes, chosen, claimsFrom), [modes, chosen, claimsFrom]);
+  const payOnly =
+    chosen.length > 0
+      ? chosenModes.length === 1 && chosenModes[0] === "pay"
+      : anyClaimFlow && waiting.every((r) => inClaimFlow(r, claimsFrom));
   const paged = usePaged(waiting, `t2w|${waiting.length}`);
   const status: HistoryStatus = isHistoryStatus(historyStatus) ? historyStatus : "all";
   const shownHistory = useMemo(() => filterHistory(history, status), [history, status]);
   const historyPaged = usePaged(shownHistory, `t2h|${status}|${shownHistory.length}`);
 
-  const allOn = waiting.length > 0 && chosen.length === waiting.length;
+  const allOn = selectable.length > 0 && chosen.length === selectable.length;
   const toggle = (key: string) =>
     setSelected((set) => {
       const next = new Set(set);
@@ -98,7 +129,13 @@ export function Type2Section({
       else next.add(key);
       return next;
     });
-  const toggleAll = () => setSelected(allOn ? new Set() : new Set(waiting.map(rowKey)));
+  const toggleAll = () => setSelected(allOn ? new Set() : new Set(selectable.map(rowKey)));
+  const afterClaim = (keys: string[]) =>
+    setSelected((set) => {
+      const next = new Set(set);
+      for (const key of keys) next.delete(key);
+      return next;
+    });
 
   const afterAssign = (result: OvertimeAssignResult) =>
     setSelected((set) => {
@@ -125,15 +162,35 @@ export function Type2Section({
   };
 
   const disabled = !!pause || chosen.length === 0;
+  // why Assign / Pay cannot be used for the ticked records (beyond the general pause)
+  const assignBlock =
+    pause?.reason ??
+    (chosen.length > 0 && chosenModes.length === 0
+      ? "Payment is switched off in Settings → Compensation: a record under the claim workflow is credited by a claim instead"
+      : null);
+  const assignTitle =
+    assignBlock ??
+    (payOnly
+      ? "Assign the selected records as Payment (OT pay in that month's payroll)"
+      : "Assign the selected records as Relaxation or Payment");
+  const claimTitle =
+    claimPause?.reason ??
+    (chosen.length > 0 && chosenClaimable.length === 0
+      ? "None of the ticked records can be claimed"
+      : "Send claims for the ticked records to the employees' Department Heads");
   return (
     <>
       {view === "waiting" && (
         <SectionCard
           testId="ot-type2"
           icon={Hourglass}
-          title="Type 2 · Waiting for HR"
-          description="For staff who worked more than the Type 2 threshold past their shift end. HR assigns it as Relaxation or Payment, or rejects it."
-          actions={<StatusChip tone="info">HR assigns</StatusChip>}
+          title="Type 2 · Waiting for a claim or HR"
+          description={
+            claimsFrom
+              ? `For staff who worked past their shift end. From ${dateShort(claimsFrom)}, with the quarters rule on, a day is Type 2 once its overtime reaches a quarter of the employee's own shift and the credit is counted in quarters (less is Type 1's allowance); the employee or HR claims it and the Department Head approves it into the balance, or HR pays it. Earlier days, and days with the quarters rule off, need more than the Type 2 threshold and are assigned by HR as before.`
+              : "For staff who worked past their shift end: a quarter of the employee's own shift with the quarters rule on, more than the Type 2 threshold with it off. The employee or HR claims it and the Department Head approves it into the balance, or HR assigns it (Relaxation or Payment), or rejects it."
+          }
+          actions={<StatusChip tone="info">{anyClaimFlow ? "Claim · HOD approves" : "HR assigns"}</StatusChip>}
           bodyClassName="space-y-4 px-0 pb-0"
         >
           {/* the candidates */}
@@ -141,23 +198,40 @@ export function Type2Section({
             <div className="flex flex-wrap items-center justify-between gap-2 px-5">
               <p className="text-xs text-muted-foreground">
                 {waitingTotal === 1 ? "1 candidate" : `${waitingTotal} candidates`} this month. Tick the ones to decide,
-                then Assign or Reject.
+                then {anyClaimable ? "Claim for employee, " : ""}
+                {payOnly ? "Pay" : "Assign"} or Reject.
+                {anyClaimFlow ? " A claimed record waits for its Department Head." : ""}
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs text-muted-foreground" data-testid="ot2-selected">
                   {chosen.length} selected
                 </span>
+                {anyClaimable && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!!claimPause || chosenClaimable.length === 0}
+                    title={claimTitle}
+                    onClick={() => setClaiming(chosenClaimable)}
+                    data-testid="ot2-claim"
+                  >
+                    <Send size={13} className="mr-1.5" />
+                    Claim for employee{chosenClaimable.length > 0 ? ` (${chosenClaimable.length})` : ""}
+                  </Button>
+                )}
                 {mayDecide && (
                   <>
                     <Button
                       type="button"
                       size="sm"
-                      disabled={disabled}
-                      title={pause?.reason ?? "Assign the selected records as Relaxation or Payment"}
+                      disabled={disabled || !!assignBlock}
+                      title={assignTitle}
                       onClick={() => setAssigning(true)}
                       data-testid="ot2-assign"
                     >
-                      Assign{chosen.length > 0 ? ` (${chosen.length})` : ""}
+                      {payOnly ? "Pay" : "Assign"}
+                      {chosen.length > 0 ? ` (${chosen.length})` : ""}
                     </Button>
                     <Button
                       type="button"
@@ -196,13 +270,14 @@ export function Type2Section({
             ) : (
               <>
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[820px] text-sm" data-testid="ot-type2-table">
+                  <table className="w-full min-w-[1040px] text-sm" data-testid="ot-type2-table">
                     <thead className={TABLE_HEAD}>
                       <tr>
                         <th className="w-10 px-3 py-2.5 pl-5">
                           <Checkbox
                             checked={allOn}
                             onCheckedChange={toggleAll}
+                            disabled={selectable.length === 0}
                             aria-label="Select every candidate in the list"
                             data-testid="ot2-select-all"
                           />
@@ -212,38 +287,85 @@ export function Type2Section({
                         <th className="px-3 py-2.5">Shift end</th>
                         <th className="px-3 py-2.5">Last punch</th>
                         <th className="px-3 py-2.5">Extra time</th>
-                        <th className="px-3 py-2.5">Suggested</th>
+                        <th className="px-3 py-2.5">{anyClaimFlow ? "Credit" : "Suggested"}</th>
+                        <th className="px-3 py-2.5">Claim</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {paged.rows.map((row) => (
-                        <tr
-                          key={row.id}
-                          className={selected.has(rowKey(row)) ? "bg-indigo-50/50" : undefined}
-                          data-testid={`ot-type2-row-${row.employeeCode}-${row.date}`}
-                        >
-                          <td className={`${CELL} pl-5`}>
-                            <Checkbox
-                              checked={selected.has(rowKey(row))}
-                              onCheckedChange={() => toggle(rowKey(row))}
-                              aria-label={`Select ${row.employeeName}, ${dateShort(row.date)}`}
-                              data-testid={`ot2-select-${row.employeeCode}-${row.date}`}
-                            />
-                          </td>
-                          <td className={CELL}>
-                            <PersonCell name={row.employeeName} code={row.employeeCode} department={row.department} />
-                          </td>
-                          <td className={`${CELL} whitespace-nowrap`}>{dateShort(row.date)}</td>
-                          <td className={`${CELL} text-gray-600`}>{row.shiftEndTime ?? "—"}</td>
-                          <td className={`${CELL} whitespace-nowrap text-gray-600`}>{lastPunchText(row)}</td>
-                          <td className={`${CELL} whitespace-nowrap font-semibold text-amber-700`}>
-                            {formatDuration(row.otMinutes)}
-                          </td>
-                          <td className={CELL}>
-                            <StatusChip tone="info">{shiftsText(row.suggestedShifts)}</StatusChip>
-                          </td>
-                        </tr>
-                      ))}
+                      {paged.rows.map((row) => {
+                        const id = `${row.employeeCode}-${row.date}`;
+                        const lock = type2Lock(row);
+                        const state = type2ClaimState(row, claimsFrom);
+                        const basis = creditBasis(row);
+                        const can = canClaim(row);
+                        return (
+                          <tr
+                            key={row.id}
+                            className={selected.has(rowKey(row)) && !lock ? "bg-indigo-50/50" : undefined}
+                            data-testid={`ot-type2-row-${id}`}
+                          >
+                            <td className={`${CELL} pl-5`}>
+                              <Checkbox
+                                checked={!lock && selected.has(rowKey(row))}
+                                onCheckedChange={() => toggle(rowKey(row))}
+                                disabled={!!lock}
+                                title={lock ?? undefined}
+                                aria-label={`Select ${row.employeeName}, ${dateShort(row.date)}${lock ? ` (${lock})` : ""}`}
+                                data-testid={`ot2-select-${id}`}
+                              />
+                            </td>
+                            <td className={CELL}>
+                              <PersonCell name={row.employeeName} code={row.employeeCode} department={row.department} />
+                            </td>
+                            <td className={`${CELL} whitespace-nowrap`}>{dateShort(row.date)}</td>
+                            <td className={`${CELL} text-gray-600`}>{row.shiftEndTime ?? "—"}</td>
+                            <td className={`${CELL} whitespace-nowrap text-gray-600`}>
+                              <LastPunch row={row} />
+                            </td>
+                            <td className={`${CELL} whitespace-nowrap font-semibold text-amber-700`}>
+                              {formatDuration(row.otMinutes)}
+                            </td>
+                            <td className={CELL} data-testid={`ot2-credit-${id}`}>
+                              <StatusChip tone="info">{creditText(row)}</StatusChip>
+                              {basis && <p className="mt-1 text-[11px] text-muted-foreground">{basis}</p>}
+                            </td>
+                            <td className={CELL}>
+                              {row.claim ? (
+                                <ClaimCell
+                                  claim={row.claim}
+                                  employeeId={row.employeeId}
+                                  testId={`ot-type2-claim-${id}`}
+                                />
+                              ) : (
+                                <span data-testid={`ot2-claim-state-${id}`} data-status={state.status}>
+                                  <StatusChip tone={state.tone} title={state.title}>
+                                    {state.text}
+                                  </StatusChip>
+                                </span>
+                              )}
+                              {can && (
+                                <div>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="mt-1.5 h-8"
+                                    disabled={!!claimPause}
+                                    title={
+                                      claimPause?.reason ??
+                                      `Send a claim for this OT of ${row.employeeName} to the Department Head`
+                                    }
+                                    onClick={() => setClaiming([row])}
+                                    data-testid={`ot2-claim-${id}`}
+                                  >
+                                    Claim
+                                  </Button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -271,7 +393,7 @@ export function Type2Section({
           testId="ot-type2-assigned"
           icon={History}
           title="Type 2 · Assigned and rejected"
-          description="What HR already dealt with this month: given as Relaxation or Payment, or rejected."
+          description="What is already decided this month: paid or given as Relaxation by HR, credited to the balance by an approved claim, or rejected."
           bodyClassName="space-y-2 px-0 pb-0"
           actions={
             <FilterSelect
@@ -324,17 +446,27 @@ export function Type2Section({
                             {formatDuration(row.otMinutes)}
                           </td>
                           <td className={`${CELL} whitespace-nowrap font-semibold`}>
-                            {row.status === "rejected" ? "—" : shiftsText(shiftsOf(row))}
+                            {row.status === "rejected" && !isCredited(row) ? "—" : shiftsText(shiftsOf(row))}
                           </td>
                           <td className={`${CELL} text-gray-700`}>
-                            {row.status === "rejected" ? "—" : assignedText(row)}
+                            {row.status === "rejected" && !isCredited(row) ? "—" : assignedText(row)}
                           </td>
                           <td className={CELL}>
-                            <StatusChip tone={row.status === "rejected" ? "danger" : "success"}>
-                              {row.statusLabel}
-                            </StatusChip>
-                            {row.status === "announced" && row.announcedBy && (
-                              <p className="mt-1 text-[11px] text-muted-foreground">by {row.announcedBy}</p>
+                            {isCredited(row) && row.claim ? (
+                              <ClaimCell
+                                claim={row.claim}
+                                employeeId={row.employeeId}
+                                testId={`ot-type2-history-claim-${row.employeeCode}-${row.date}`}
+                              />
+                            ) : (
+                              <>
+                                <StatusChip tone={row.status === "rejected" ? "danger" : "success"}>
+                                  {row.statusLabel}
+                                </StatusChip>
+                                {row.status === "announced" && row.announcedBy && (
+                                  <p className="mt-1 text-[11px] text-muted-foreground">by {row.announcedBy}</p>
+                                )}
+                              </>
                             )}
                           </td>
                         </tr>
@@ -355,7 +487,38 @@ export function Type2Section({
           icon={Hourglass}
           title="How the suggested shifts are worked out"
           description="Read-only: the rules are set in Settings → Compensation."
+          bodyClassName="space-y-3"
         >
+          <ol
+            className="list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-gray-600"
+            data-testid="ot2-how-steps"
+          >
+            <li>
+              <strong>Detected.</strong> With the quarters rule on, the overtime reaches a quarter of the
+              employee&apos;s own working shift (less is the Type 1 allowance); with it off, and before the claims date,
+              the last punch is more than the Type 2 threshold past the shift end. A punch on the next morning before
+              the next-morning cut-off (Settings → Attendance, staff) ends the OT day, so it is that day&apos;s
+              overtime, shown as &quot;02:10 next day&quot;.
+            </li>
+            <li>
+              <strong>Credit in quarters.</strong> The OT time is divided by the employee&apos;s own working shift
+              (shift end - start - lunch) and rounded down to a quarter, at most 1.00. Below a quarter there is no Type
+              2 credit.
+            </li>
+            <li>
+              <strong>Claimed and approved.</strong> The employee (in the app) or HR (Claim for employee) claims it; the
+              Department Head approves; the shifts are added to the compensation balance, to use on another day.
+            </li>
+            <li>
+              <strong>Or paid.</strong> While Payment is on, HR may pay a record instead (shifts × the daily rate in
+              that month&apos;s payroll). One record is paid or credited, never both.
+            </li>
+          </ol>
+          <p className="text-xs text-gray-600" data-testid="ot2-how-before">
+            {claimsFrom
+              ? `This applies from ${dateShort(claimsFrom)}. Earlier records keep the old way: the shifts come from the last-punch table below and HR assigns them.`
+              : "Earlier records keep the old way: the shifts come from the last-punch table below and HR assigns them."}
+          </p>
           <ShiftRules defaultOpen />
         </SectionCard>
       )}
@@ -364,8 +527,16 @@ export function Type2Section({
         open={assigning}
         onOpenChange={setAssigning}
         selected={chosen}
-        modes={modes}
+        modes={chosenModes}
         onAssigned={afterAssign}
+      />
+
+      <ClaimDialog
+        open={claiming !== null}
+        onOpenChange={(open) => !open && setClaiming(null)}
+        kind="ot_shift"
+        rows={claiming ?? []}
+        onClaimed={afterClaim}
       />
 
       <AlertDialog open={rejecting} onOpenChange={(open) => !reject.isPending && setRejecting(open)}>

@@ -14,8 +14,11 @@ check-in has source "qr". A check-out can be recorded once, within 24 hours of t
 the evening can be checked out after midnight), by HR or the reception desk of that branch; a visit older than that
 with no check-out stays "Left without check-out".
 
-A Visitor row is one person for every branch (matched by phone). A caller that sees one branch only (a reception desk,
-a branch-bound HR account) never reads or changes what another branch recorded about that person: see register_visit.
+A Visitor row is one person for every branch (matched by phone), but the name and Aadhaar are per branch (19 Nov 2026):
+each visit keeps what was given at it (VisitorVisit.visitor_name / aadhaar_number, visitor_identity.py), a register
+copies a blank field only from the person's latest visit at the SAME branch, and a caller that sees one branch (a
+reception desk, a branch-bound HR account) only ever sees, counts and finds that branch's visits: see register_visit,
+visitor_people and visitor_visit_detail.
 """
 
 from __future__ import annotations
@@ -24,8 +27,8 @@ import logging
 from types import SimpleNamespace
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Max, Q
-from django.db.models.functions import Right, Trim
+from django.db.models import Count, F, Max, Q
+from django.db.models.functions import Coalesce, Right, Trim
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -62,6 +65,7 @@ from .outpass_visitor_views import (
     whole_minutes,
     with_visit_count,
 )
+from .visitor_identity import aadhaar_expr, identity, latest_name_subquery, name_expr, visit_name
 
 logger = logging.getLogger(__name__)
 
@@ -188,83 +192,65 @@ def _register_input(request: Request):
     return f, None
 
 
-def _typed_identity(f: dict) -> dict:
-    """The person as the register form typed them (the visit JSON's name / phone / Aadhaar keys)."""
-    typed = f["aadhaarNumber"] or None
-    return {"name": f["name"], "phone": f["phone"], "aadhaar": typed, "aadhaarLast4": typed[-4:] if typed else None}
-
-
 def register_visit(f: dict, *, branch, source: str, checked_in_by: str, desk=None, scoped: bool = False):
     """Checks the visitor of the form `f` (register_fields) in now at `branch`: (visit, None) or (None, error response).
-    The phone finds a returning visitor (that row is reused; a name / Aadhaar sent updates it), else a new visitor is made;
-    a visitor still inside at this branch today is 409 already_inside. The host is told like the QR form does (email +
-    WhatsApp, best effort: it never fails the request). `desk`: the reception desk that registered it (checked_in_desk).
-    Shared by HR (source "hr") and the reception desk (source "reception"); the caller writes its own audit row and
-    answers with registered_json.
+    The phone finds a returning visitor (that Visitor row, the phone anchor, is reused and never changed), else a new
+    one is made; a visitor still inside at this branch today is 409 already_inside. The host is told like the QR form
+    does (email + WhatsApp, best effort: it never fails the request). `desk`: the reception desk that registered it
+    (checked_in_desk). Shared by HR (source "hr") and the reception desk (source "reception"); the caller writes its own
+    audit row and answers with registered_json.
 
-    `scoped`: the caller sees `branch` only (a reception desk, a branch-bound HR account; 19 Nov 2026). Then the host must
-    work at `branch` (400 "Choose someone from this branch."); a returning visitor who has visits at another branch is
-    never changed (that branch's name / Aadhaar stay as they are); someone this branch has not seen before needs a name,
-    like a new visitor; and the answer (visit.shown_identity, applied by registered_json) shows what was typed for
-    someone new here, and at most the last four Aadhaar digits for someone this branch already knows."""
+    The name and Aadhaar are the visit's own (19 Nov 2026, visitor_identity.py): what the form typed, and for a field left
+    blank, what the person's latest visit at THIS branch had; never another branch's. Someone this branch has not seen
+    before therefore needs a name, like a new visitor. The Visitor row's own name / Aadhaar (what was given when it was
+    first made) are left as they are: nothing shows them any more, and one branch's register must not change them.
+
+    `scoped`: the caller sees `branch` only (a reception desk, a branch-bound HR account). Then the host must work at
+    `branch` (400 "Choose someone from this branch.")."""
     now = _now()
     host = f["host"]
     if scoped and host is not None and host.branch_id != branch.id:
         return None, _bad(OTHER_BRANCH_HOST)
-    shown = None
+    name, aadhaar = f["name"], f["aadhaarNumber"] or None
 
     with transaction.atomic():
-        visitor = find_visitor_by_phone(f["phone"])
+        visitor, created = find_visitor_by_phone(f["phone"]), False
         if visitor is None:
-            if not f["name"]:
+            if not name:
                 return None, _bad("Enter the visitor's name.")
             try:
                 with transaction.atomic():
-                    visitor = Visitor.objects.create(
-                        name=f["name"], phone=f["phone"], aadhaar_number=f["aadhaarNumber"] or None
-                    )
-            except IntegrityError:  # registered a moment ago by another screen
+                    visitor = Visitor.objects.create(name=name, phone=f["phone"], aadhaar_number=aadhaar)
+                    created = True
+            except IntegrityError:  # registered a moment ago by another screen (perhaps at another branch)
                 visitor = Visitor.objects.get(phone=f["phone"])
-                if scoped:  # perhaps at another branch: show what was typed here
-                    shown = _typed_identity(f)
-        else:
+        if not created:
+            here = VisitorVisit.objects.filter(visitor=visitor, branch=branch).select_related("visitor")
             open_visit = (
-                VisitorVisit.objects.filter(
-                    visitor=visitor, branch=branch, checked_out_at__isnull=True, visited_at__gte=_day_start(now)
-                )
-                .order_by("-visited_at")
+                here.filter(checked_out_at__isnull=True, visited_at__gte=_day_start(now))
+                .order_by("-visited_at", "-id")
                 .first()
             )
             if open_visit is not None:
                 return None, _bad(
-                    f"{visitor.name} is already inside (checked in at {_hhmm(open_visit.visited_at)}). "
+                    f"{visit_name(open_visit)} is already inside (checked in at {_hhmm(open_visit.visited_at)}). "
                     "Check them out before registering a new visit.",
                     409,
                     code="already_inside",
                     visitId=open_visit.id,
                 )
-            may_change = True
-            if scoped:
-                visits = VisitorVisit.objects.filter(visitor=visitor)
-                known_here = visits.filter(branch=branch).exists()
-                may_change = not visits.exclude(branch=branch).exists()  # never another branch's details
-                if not known_here and not f["name"]:
-                    return None, _bad("Enter the visitor's name.")
-                # someone new here: what was typed; someone this branch knows: at most the Aadhaar's last four digits
-                shown = {"aadhaar": None} if known_here else _typed_identity(f)
-            changed = []
-            if may_change and f["name"] and f["name"] != visitor.name:
-                visitor.name = f["name"]
-                changed.append("name")
-            if may_change and f["aadhaarNumber"] and f["aadhaarNumber"] != visitor.aadhaar_number:
-                visitor.aadhaar_number = f["aadhaarNumber"]
-                changed.append("aadhaar_number")
-            if changed:
-                visitor.save(update_fields=changed)
+            last_here = here.order_by("-visited_at", "-id").first()
+            if last_here is not None:  # a blank field: what this branch was told last time
+                known_name, known_aadhaar = identity(last_here)
+                name, aadhaar = name or known_name, aadhaar or known_aadhaar
+            if not name:  # known only at other branches (or not at all): their name is never borrowed
+                return None, _bad("Enter the visitor's name.")
 
         visit = VisitorVisit.objects.create(
             visitor=visitor,
             branch=branch,
+            visitor_name=name,
+            aadhaar_number=aadhaar,
             why_came=f["whyCame"] or None,
             whom_to_meet=f["whomToMeet"],
             purpose=f["purpose"],
@@ -279,7 +265,6 @@ def register_visit(f: dict, *, branch, source: str, checked_in_by: str, desk=Non
             badge_number=f["badgeNumber"] or None,
             notes=f["notes"] or None,
         )
-    visit.shown_identity = shown
 
     try:  # best effort, exactly like the QR form: the visitor is in whatever happens to the message
         _notify_employee_of_visitor(visit)
@@ -289,13 +274,9 @@ def register_visit(f: dict, *, branch, source: str, checked_in_by: str, desk=Non
 
 
 def registered_json(visit, branch_id) -> dict | None:
-    """The answer to a register: the visit as the list shows it (visit count over `branch_id`), with what
-    register_visit decided a one-branch caller may see of the person (visit.shown_identity) on top."""
-    body = _visit_json(visit.id, branch_id)
-    shown = getattr(visit, "shown_identity", None)
-    if body is not None and shown:
-        body.update(shown)
-    return body
+    """The answer to a register: the visit as the list shows it (its own name / Aadhaar, the visit count over
+    `branch_id`)."""
+    return _visit_json(visit.id, branch_id)
 
 
 @api_view(["POST"])
@@ -317,15 +298,13 @@ def visitor_visits_create(request: Request) -> Response:
     )
     if error is not None:
         return error
-    visitor = visit.visitor
 
     log_action(
         request,
         "create",
         "outpass_visitors",
         record_id=visit.id,
-        description=f"Visitor registered: {(visit.shown_identity or {}).get('name') or visitor.name}, "
-        f"meeting {visit.whom_to_meet} ({branch.name})"[:480],
+        description=f"Visitor registered: {visit_name(visit)}, meeting {visit.whom_to_meet} ({branch.name})"[:480],
     )
     return Response(registered_json(visit, scope), status=201)
 
@@ -376,7 +355,7 @@ def _check_out(qs, *, by: str, source: str, note: str, desk=None):
             return None, _bad(NOT_FOUND, 404)
         if visit.checked_out_at is not None:
             return None, _bad(
-                f"{visit.visitor.name} was already checked out at {_hhmm(visit.checked_out_at)}.",
+                f"{visit_name(visit)} was already checked out at {_hhmm(visit.checked_out_at)}.",
                 409,
                 code="already_checked_out",
                 checkedOutAt=visit.checked_out_at.isoformat(),
@@ -426,7 +405,7 @@ def visitor_visit_check_out(request: Request, pk: int) -> Response:
         "update",
         "outpass_visitors",
         record_id=visit.id,
-        description=f"Visitor checked out: {visit.visitor.name}"[:480],
+        description=f"Visitor checked out: {visit_name(visit)}"[:480],
     )
     return Response(_visit_json(visit.id, get_branch_scope(request)))
 
@@ -453,7 +432,7 @@ def reception_visit_check_out(request: Request, pk: int) -> Response:
         "update",
         "outpass_visitors",
         record_id=visit.id,
-        description=f"Visitor checked out at the reception desk {device.name}: {visit.visitor.name}"[:480],
+        description=f"Visitor checked out at the reception desk {device.name}: {visit_name(visit)}"[:480],
     )
     return Response(_visit_json(visit.id, device.branch_id))
 
@@ -467,7 +446,11 @@ def visitor_people(request: Request) -> Response:
     """Everyone who has visited (this account's branch, or ?branchId= for an account not bound to one), most recent
     first: {id, name, phoneMasked, lastVisitAt, visitCount, lastHost, insideNow, lastVisitId, lastCompany}. q: up to
     four words, each in the name or the phone. phone: the visitor with this number (however it is typed), for the
-    register form's "returning visitor" check."""
+    register form's "returning visitor" check.
+
+    Per branch (19 Nov 2026): only visits at that branch count (who is listed or found by phone, visitCount, the last
+    visit, inside now) and the name is the one given at the person's latest visit there (visitor_identity.py); an
+    account not bound to a branch without ?branchId= sees every branch, named as at their latest visit anywhere."""
     scope = get_branch_scope(request)
     branch_id = scope
     if scope is None:
@@ -479,15 +462,18 @@ def visitor_people(request: Request) -> Response:
     today_start = _day_start(_now())
 
     in_branch = Q() if branch_id is None else Q(visits__branch_id=branch_id)
+    seen = VisitorVisit.objects.all() if branch_id is None else VisitorVisit.objects.filter(branch_id=branch_id)
     qs = Visitor.objects.annotate(
-        visit_count=Count("visits", filter=in_branch), last_visit_at=Max("visits__visited_at", filter=in_branch)
+        visit_count=Count("visits", filter=in_branch),
+        last_visit_at=Max("visits__visited_at", filter=in_branch),
+        shown_name=Coalesce(latest_name_subquery(seen), F("name")),
     ).filter(visit_count__gt=0)
     phone = (request.query_params.get("phone") or "").strip()
     if phone:
         match = find_visitor_by_phone(phone)
         qs = qs.filter(pk=match.pk if match is not None else 0)
     for term in (request.query_params.get("q") or "").split()[:4]:
-        qs = qs.filter(Q(name__icontains=term) | Q(phone__icontains=term))
+        qs = qs.filter(Q(shown_name__icontains=term) | Q(phone__icontains=term))
 
     total = qs.count()
     offset = (page - 1) * page_size
@@ -526,7 +512,7 @@ def visitor_people(request: Request) -> Response:
             "items": [
                 {
                     "id": p.id,
-                    "name": p.name,
+                    "name": p.shown_name,
                     "phoneMasked": mask_phone(p.phone),
                     "lastVisitAt": p.last_visit_at.isoformat() if p.last_visit_at else None,
                     "visitCount": p.visit_count,
@@ -626,11 +612,12 @@ def visits_file(request: Request, p: dict, *, title: str = "Visitors", slug: str
     today_start = _range_bounds(now)[0]
     rows = list(
         filtered_visits(p, today_start)
-        .annotate(aadhaar_tail=Right(Trim("visitor__aadhaar_number"), 4))
+        # the name / Aadhaar given at each visit (visitor_identity.py), the Aadhaar's last four digits only
+        .annotate(shown_name=name_expr(), aadhaar_tail=Right(Trim(aadhaar_expr()), 4))
         .values(
             "visited_at",
             "checked_out_at",
-            "visitor__name",
+            "shown_name",
             "visitor__phone",
             "aadhaar_tail",
             "company",
@@ -667,7 +654,7 @@ def visits_file(request: Request, p: dict, *, title: str = "Visitors", slug: str
         out.append(
             {
                 "visitedAt": r["visited_at"],
-                "visitor": r["visitor__name"],
+                "visitor": r["shown_name"],
                 "phone": r["visitor__phone"],
                 "aadhaar": _masked_aadhaar(r["aadhaar_tail"]),
                 "company": r["company"],

@@ -1725,3 +1725,45 @@ class GeoApprovalTests(TestCase):
         )
         resolve_on_duty_punch_hr(v2, "approved", "Priya (HR)", None, notify=False)
         self.post.assert_not_called()
+
+
+class BirthdayAlertTests(AlertBase):
+    """Birthdays (owner 2026-11-19): only a PAID birthday leave is excused. Before the claims date (the old rule) the whole
+    birthday is paid whatever happens, so no alert at all; from it on a birthday nobody punched on is paid birthday leave
+    (no alerts) but a worked birthday is a normal day (late is late). claims_from is set explicitly in every test."""
+
+    def setUp(self):
+        super().setUp()
+        from .models import CompensationConfig
+
+        ps = PayrollSettings.get()
+        ps.compensation_feature_enabled = True
+        ps.save()
+        CompensationConfig.objects.update_or_create(
+            pk=1, defaults={"birthday_enabled": True, "birthday_effective_from": date(2026, 1, 1)}
+        )
+        Employee.objects.filter(pk=self.emp.pk).update(date_of_birth=date(1990, 9, 23))  # WED
+        self.other = self.make_employee("A2", "Bala", "Kumar", phone="9000000002")
+
+    def claims_from(self, day):
+        from .models import CompensationConfig
+
+        CompensationConfig.objects.filter(pk=1).update(claims_from=day)
+
+    def test_claim_rules_a_birthday_nobody_punched_on_gets_no_absent_alert(self):
+        self.claims_from(date(2026, 9, 1))
+        self.run_at(WED, 10, 5)  # past the Absent cut-off, nobody has punched
+        self.assertFalse(self.logs().filter(employee=self.emp).exists())
+        self.assertTrue(self.logs("absent_alert").filter(employee=self.other).exists())
+
+    def test_claim_rules_a_worked_birthday_is_alerted_like_any_day(self):
+        self.claims_from(date(2026, 9, 1))
+        self.punch(self.emp, WED, "09:25")
+        self.run_at(WED, 9, 26)
+        self.assertEqual(self.logs("late_alert").get().employee_id, self.emp.id)
+
+    def test_old_rule_a_late_birthday_is_never_alerted(self):
+        self.claims_from(date(2026, 12, 1))
+        self.punch(self.emp, WED, "09:25")
+        self.run_at(WED, 9, 26)
+        self.assertFalse(self.logs("late_alert").exists())

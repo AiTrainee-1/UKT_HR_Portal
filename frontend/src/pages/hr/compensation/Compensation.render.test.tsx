@@ -112,13 +112,13 @@ describe("the five pages", () => {
     expect(nestedLabels("holiday-nested").map((l) => l.replace(/ \(\d+\)$/, ""))).toEqual([
       "Raise a claim",
       "Claims",
-      "Compensation balance",
-      "Earlier Alternative-Day credits",
+      "Balance",
+      "Credits",
     ]);
     expect(q("claim-form")).not.toBeNull();
     expect(q("claim-list")).toBeNull();
     expect(q("balance-part")).toBeNull();
-    expect(q("credits-card")).toBeNull();
+    expect(q("credits-part")).toBeNull();
     expect(q("windows-part")).toBeNull();
   });
 

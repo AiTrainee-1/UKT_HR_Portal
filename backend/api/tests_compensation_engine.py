@@ -58,6 +58,8 @@ SUN = date(2026, 3, 8)
 MON2 = date(2026, 3, 9)
 FEB_28 = date(2026, 2, 28)
 EFFECTIVE = date(2026, 3, 1)
+# The claim workflow / staff next-morning effective date the old-rule tests use: far after every date they compute.
+OLD_RULES_UNTIL = date(2099, 1, 1)
 
 DEFAULT_ALLOWANCE_ROWS = [
     ("1 hour", 60, 30),
@@ -85,7 +87,12 @@ def seed_default_rules():
 
 
 def set_config(**fields) -> CompensationConfig:
+    """Set CompensationConfig fields. Setting claims_from / ot_quarter_rule also clears the quarters rule's dated history
+    (migration 0167 seeds it in every database with the real date of the run, the same time bomb as claims_from) unless
+    the test sets the history itself: the live fields then decide, as the test means."""
     config = CompensationConfig.get()
+    if ("claims_from" in fields or "ot_quarter_rule" in fields) and "ot_quarter_rule_history" not in fields:
+        fields = {**fields, "ot_quarter_rule_history": []}
     for name, value in fields.items():
         setattr(config, name, value)
     config.save()
@@ -130,10 +137,15 @@ class CompBase(TestCase):
         ps.evening_early_out_enabled = True
         ps.permission_monthly_cap = 3
         ps.compensation_feature_enabled = True
+        # The rules these tests pin are the ones BEFORE the 2026-11-19 claim workflow (automatic Type 1, the old Type 2
+        # threshold + ladder, the automatic birthday, the grace-hours next-morning rule): their effective dates are put
+        # far ahead so every March 2026 day keeps the old rules, exactly as a day before the dates does in production.
+        # The new rules are covered in tests_compensation_claims_engine (dates set explicitly there).
+        ps.staff_next_morning_from = OLD_RULES_UNTIL
         ps.save()
         seed_default_rules()
         CompensationConfig.objects.all().delete()
-        self.config = CompensationConfig.get()
+        self.config = set_config(claims_from=OLD_RULES_UNTIL)
         self.shift = make_shift()
         self.emp = self.new_staff(self.CODE)
 

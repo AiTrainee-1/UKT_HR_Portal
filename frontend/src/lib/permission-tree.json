@@ -1585,7 +1585,7 @@
                       "type": "subtab",
                       "help": "Claim a day worked.",
                       "routes": ["/hr/compensation/compensation-leave/holiday-work/raise"],
-                      "enforce": "screen"
+                      "enforce": "server"
                     },
                     {
                       "key": "compensation.leave.holiday_work.claims",
@@ -1593,11 +1593,11 @@
                       "type": "subtab",
                       "help": "Claims raised.",
                       "routes": ["/hr/compensation/compensation-leave/holiday-work/claims"],
-                      "enforce": "screen"
+                      "enforce": "server"
                     },
                     {
                       "key": "compensation.leave.holiday_work.balance",
-                      "label": "Compensation balance",
+                      "label": "Balance",
                       "type": "subtab",
                       "help": "Leave earned and redeeming it.",
                       "routes": ["/hr/compensation/compensation-leave/holiday-work/balance"],
@@ -1605,7 +1605,7 @@
                     },
                     {
                       "key": "compensation.leave.holiday_work.credits",
-                      "label": "Earlier Alternative-Day credits",
+                      "label": "Credits",
                       "type": "subtab",
                       "help": "Credits from the old system.",
                       "routes": ["/hr/compensation/compensation-leave/holiday-work/credits"],
@@ -3129,9 +3129,9 @@
   "approvalInfo": [
     {
       "key": "holiday_work",
-      "label": "Holiday / Sunday work claims",
+      "label": "Compensation claims",
       "group": "compensation",
-      "text": "Decided by the Department Head only: HR has no approval step for them."
+      "text": "Sunday / holiday work, OT allowance and credit, birthday credit and using the balance, raised by the employee or HR. Decided by the Department Head only: HR has no approval step for them."
     }
   ],
   "assistantLocked": {

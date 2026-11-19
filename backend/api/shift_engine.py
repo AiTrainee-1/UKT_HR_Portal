@@ -254,6 +254,220 @@ def _claimed_by_previous_day(punch_time, prev_day_last_punch, shift_for_prev_day
     return True
 
 
+# ── Staff next-morning cut-off (compensation claims, 2026-11-19) ──────────
+#
+# Owner decision 5 (like production's 06:00 rule): a staff punch on day D+1
+# strictly BEFORE the cut-off (PayrollSettings.staff_next_morning_cutoff,
+# default 06:00) belongs to day D -the end of D's overtime, measured from
+# D's shift end to that punch- when day D's OWN punches leave a session open
+# (an odd count); a punch at or after the cut-off is always day D+1's own.
+# Every punch of D+1 before the cut-off goes with it (a double tap stays
+# together). "Day D's own punches" are D's punches minus any of D's early
+# punches that day D-1 took the same way, so a run of days with early
+# punches is followed back (at most STAFF_NIGHT_CHAIN_DAYS days; a capped
+# walk counts as "not taken") and one day, a range and a month agree.
+#
+# Per PAIR of days: the pair (D, D+1) follows this rule when it is switched
+# on and D is on or after staff_next_morning_from; an earlier pair (or the
+# switch off) keeps the old grace-hours rule above exactly as it was, so no
+# day before the from-date changes when it is recomputed. The cut-off rule
+# needs no shift and ignores last_punch_post_shift_grace_hours (it has its
+# own switch).
+#
+# Early-arrival guard (like production's, 2026-11-19): the cut-off for the
+# punches of a WORKING day D+1 is the earlier of the setting and that day's
+# own shift start minus first_punch_pre_shift_buffer_hours, so a punch inside
+# the employee's normal pre-shift window is their arrival, never the end of
+# D's overtime (an 08:30 shift with the 2 h buffer keeps 06:00; a 06:00 shift
+# gets 04:00, so a 05:15 arrival stays D+1's own). An off day D+1 (Sunday,
+# holiday, off Saturday) expects no arrival: the plain cut-off applies.
+STAFF_NIGHT_CHAIN_DAYS = 10
+DEFAULT_STAFF_NEXT_MORNING_CUTOFF = time_type(6, 0)
+
+
+def staff_next_morning_cutoff_secs(settings) -> int:
+    """The staff next-morning cut-off as seconds since midnight (default 06:00)."""
+    value = getattr(settings, "staff_next_morning_cutoff", None)
+    if isinstance(value, str):
+        try:
+            value = time_type.fromisoformat(value.strip()[:8])
+        except ValueError:
+            value = None
+    return _t2s(value or DEFAULT_STAFF_NEXT_MORNING_CUTOFF)
+
+
+def staff_next_morning_day_cutoff_secs(
+    settings, shift_next_day, next_day_off: bool = False, cutoff: int | None = None
+) -> int:
+    """The cut-off (seconds since midnight) for the early punches of one day D+1: the earlier of the staff next-morning
+    cut-off (`cutoff`, the one in force for the pair; default: the live setting) and D+1's own shift start minus
+    first_punch_pre_shift_buffer_hours (the early-arrival guard), never below 00:00. No shift on D+1, or D+1 an off day:
+    the cut-off itself."""
+    if cutoff is None:
+        cutoff = staff_next_morning_cutoff_secs(settings)
+    if next_day_off or shift_next_day is None or getattr(shift_next_day, "start_time", None) is None:
+        return cutoff
+    buffer_s = int(float(getattr(settings, "first_punch_pre_shift_buffer_hours", 0) or 0) * 3600)
+    return max(0, min(cutoff, _t2s(shift_next_day.start_time) - buffer_s))
+
+
+def staff_next_morning_rule(settings, open_day: date_type) -> int | None:
+    """The cut-off (seconds since midnight) when the pair (open_day, open_day + 1) is judged by the staff next-morning
+    rule, else None (the old grace-hours rule). By the dated history PayrollSettings.staff_next_morning_history when it
+    has entries (the entry in force on `open_day`: switched on, with ITS cut-off; a day before every entry keeps the old
+    rule), so changing the switch or the cut-off never re-judges a day before the change. With no history: switched on
+    and `open_day` on or after staff_next_morning_from (none = every day), at staff_next_morning_cutoff. Read field by
+    field so a branch overlay and a light stand-in both work; a settings object without the fields keeps the old rule."""
+    from .settings_history import entry_on
+
+    history = getattr(settings, "staff_next_morning_history", None)
+    if isinstance(history, list) and history:
+        entry = entry_on(history, open_day)
+        if entry is None or not entry.get("enabled"):
+            return None
+        return staff_next_morning_cutoff_secs(_CutoffOnly(entry.get("cutoff")))
+    if not getattr(settings, "staff_next_morning_enabled", False):
+        return None
+    start = getattr(settings, "staff_next_morning_from", None)
+    if isinstance(start, str):
+        try:
+            start = date_type.fromisoformat(start[:10])
+        except ValueError:
+            return None
+    if start is not None and open_day < start:
+        return None
+    return staff_next_morning_cutoff_secs(settings)
+
+
+class _CutoffOnly:
+    """A stand-in carrying one history entry's cut-off for staff_next_morning_cutoff_secs."""
+
+    def __init__(self, cutoff):
+        self.staff_next_morning_cutoff = cutoff
+
+
+def staff_next_morning_applies(settings, open_day: date_type) -> bool:
+    """Is the pair (open_day, open_day + 1) judged by the staff next-morning cut-off rule? See staff_next_morning_rule."""
+    return staff_next_morning_rule(settings, open_day) is not None
+
+
+# The odd / even decision of the next-morning rule counts a double tap once (owner 2026-11-19 review): two punches less
+# than this apart are one (production's double-tap default, production_shift_rules.TAP_GAP_S), so a complete day whose
+# exit was pressed twice is never "left open" and never takes the next morning's arrival as its overtime. Only the COUNT
+# is affected: every punch is still kept and shown.
+STAFF_PARITY_TAP_GAP_S = 300
+
+
+def parity_count(punches) -> int:
+    """How many punches `punches` (of one day) count for the odd / even decision: a punch less than
+    STAFF_PARITY_TAP_GAP_S after the previous counted one is the same tap."""
+    count = 0
+    last = None
+    for secs in sorted(_t2s(p.punch_time) for p in punches):
+        if last is None or secs - last >= STAFF_PARITY_TAP_GAP_S:
+            count += 1
+            last = secs
+    return count
+
+
+class _StaffNight:
+    """The punches of one staff employee around day `d`, and how many of a day's punches the day before took (old rule
+    or the cut-off rule, per pair). Memoised per call. `logs_by_date` is trusted for d-1 .. d+1 (every bulk caller
+    fetches at least that) and for any day from its earliest key on; an earlier day - needed only when a run of early
+    punches is followed back - is read from the database once."""
+
+    def __init__(self, emp, d: date_type, settings, assignments, logs_by_date):
+        self.emp = emp
+        self.d = d
+        self.settings = settings
+        self.assignments = assignments
+        self.logs_by_date = logs_by_date
+        self._first_known = min(logs_by_date) if logs_by_date else None
+        self._raw: dict = {}
+        self._taken: dict = {}
+        self._shift: dict = {}
+        self._cutoff: dict = {}
+
+    def raw(self, day: date_type) -> list:
+        if day not in self._raw:
+            known = self.logs_by_date
+            trusted = known is not None and (
+                day in known
+                or abs((day - self.d).days) <= 1
+                or (self._first_known is not None and day >= self._first_known)
+            )
+            if trusted:
+                logs = list(known.get(day, []))
+            else:
+                from .models import AttendanceLog
+
+                logs = list(AttendanceLog.objects.filter(employee=self.emp, date=day).order_by("punch_time"))
+            self._raw[day] = sorted(logs, key=lambda p: p.punch_time)
+        return self._raw[day]
+
+    def shift(self, day: date_type):
+        if day not in self._shift:
+            self._shift[day] = _get_shift_for_date(self.emp, day, assignments=self.assignments)
+        return self._shift[day]
+
+    def cutoff_for(self, day: date_type) -> int:
+        """The cut-off for `day`'s early punches: the one in force for the pair (day - 1, day) (the dated history), with
+        the early-arrival guard of `day`'s own shift (working days)."""
+        if day not in self._cutoff:
+            from .compensation_engine import is_off_day
+
+            shift = self.shift(day)
+            off = shift is not None and is_off_day(self.emp, day, self.assignments)
+            pair = staff_next_morning_rule(self.settings, day - timedelta(days=1))
+            self._cutoff[day] = staff_next_morning_day_cutoff_secs(self.settings, shift, off, cutoff=pair)
+        return self._cutoff[day]
+
+    def is_early(self, punch, day: date_type) -> bool:
+        """A punch of `day` before its cut-off (the setting in force, moved earlier by the early-arrival guard)."""
+        return _t2s(punch.punch_time) < self.cutoff_for(day)
+
+    def own_count(self, day: date_type, depth: int = 0) -> int:
+        """How many punches `day` keeps once the day before has taken its share, as the odd / even decision counts them:
+        a double tap counts once (parity_count)."""
+        raw = self.raw(day)
+        if not raw:
+            return 0
+        taken = self.taken(day, depth)
+        if not taken:
+            return parity_count(raw)
+        gone = {id(p) for p in taken}
+        return parity_count([p for p in raw if id(p) not in gone])
+
+    def taken_count(self, day: date_type, depth: int = 0) -> int:
+        """How many of `day`'s own punches belong to the day before (its forgotten exit / the end of its overtime)."""
+        return len(self.taken(day, depth))
+
+    def taken(self, day: date_type, depth: int = 0) -> list:
+        """The punches of `day` that belong to the day before (its forgotten exit / the end of its overtime)."""
+        if day in self._taken:
+            return self._taken[day]
+        prev = day - timedelta(days=1)
+        raw = self.raw(day)
+        out: list = []
+        if raw and staff_next_morning_applies(self.settings, prev):
+            early = [p for p in raw if self.is_early(p, day)]
+            if early and depth < STAFF_NIGHT_CHAIN_DAYS and self.own_count(prev, depth + 1) % 2 == 1:
+                out = early
+        elif raw and self.settings.last_punch_post_shift_grace_hours and self.shift(prev):
+            cutoff = _cross_midnight_claim_cutoff(self.shift(prev), self.shift(day), self.settings)
+            if cutoff is not None and any(_t2s(p.punch_time) <= cutoff for p in raw):
+                prev_last = max((p.punch_time for p in self.raw(prev)), default=None)
+                out = [
+                    p
+                    for p in raw
+                    if _claimed_by_previous_day(
+                        p.punch_time, prev_last, self.shift(prev), self.shift(day), self.settings
+                    )
+                ]
+        self._taken[day] = out
+        return out
+
+
 def resolve_day_punch_logs(emp, d: date_type, own_day_logs: list, settings, assignments=None, logs_by_date=None) -> list:
     """
     The definitive punch list for (emp, d) once cross-midnight
@@ -261,7 +475,7 @@ def resolve_day_punch_logs(emp, d: date_type, own_day_logs: list, settings, assi
       - EXCLUDES any of this day's own early-morning punches that are
         actually yesterday's forgotten last-out, made late.
       - INCLUDES tomorrow's early-morning punches that are actually
-        today's own forgotten last-out.
+        today's own forgotten last-out (or the end of its overtime).
     Every staff shift-value computation (simple mode via compute_day_record
     and strict mode via compute_daily_shift_log alike) should source its
     punches through this instead of a raw `AttendanceLog.filter(date=d)`
@@ -269,52 +483,58 @@ def resolve_day_punch_logs(emp, d: date_type, own_day_logs: list, settings, assi
     model doesn't use punch-order logic) -returns `own_day_logs` untouched
     for them.
 
+    Which rule decides a pair of days (D, D+1): the staff next-morning
+    cut-off rule (staff_next_morning_applies: switched on and D on/after
+    PayrollSettings.staff_next_morning_from) or, for an earlier pair / with
+    it switched off, the old grace-hours rule (_claimed_by_previous_day),
+    which last_punch_post_shift_grace_hours = 0 still disables.
+
     `logs_by_date`, when given, is a {date: [AttendanceLog, ...]} map a
     bulk caller (compute_month_records/compute_range_records) already
     fetched once for the employee's whole range, spanning at least one day
     before and one day after the range being computed -this looks up
-    `d-1`/`d+1` from it instead of querying. Omitted, both are queried
-    directly (cheap: one employee, one day, at most a handful of rows).
-
-    Disabled entirely when PayrollSettings.last_punch_post_shift_grace_hours
-    is 0 -returns `own_day_logs` unchanged, matching exact pre-feature
-    behavior.
+    `d-1`/`d+1` from it instead of querying (see _StaffNight for the rare
+    day before it). Omitted, the days are queried directly (cheap: one
+    employee, a handful of rows a day).
     """
     if emp.employment_type != "staff":
         return own_day_logs
-    if not settings.last_punch_post_shift_grace_hours:
-        return own_day_logs
-
-    from .models import AttendanceLog
     prev_d = d - timedelta(days=1)
     next_d = d + timedelta(days=1)
+    new_back = staff_next_morning_applies(settings, prev_d)
+    new_forward = staff_next_morning_applies(settings, d)
+    if not (new_back or new_forward or settings.last_punch_post_shift_grace_hours):
+        return own_day_logs
 
-    shift_for_prev_d = _get_shift_for_date(emp, prev_d, assignments=assignments)
-    shift_for_d = _get_shift_for_date(emp, d, assignments=assignments)
-    shift_for_next_d = _get_shift_for_date(emp, next_d, assignments=assignments)
-
-    def _logs_for(date_val):
-        if logs_by_date is not None:
-            return logs_by_date.get(date_val, [])
-        return list(AttendanceLog.objects.filter(employee=emp, date=date_val).order_by("punch_time"))
+    night = _StaffNight(emp, d, settings, assignments, logs_by_date)
 
     # ── Exclude: this day's own early punches actually belong to yesterday ──
     result = own_day_logs
-    if shift_for_prev_d and result:
-        prev_logs = _logs_for(prev_d)
-        prev_last_punch = max((p.punch_time for p in prev_logs), default=None)
+    if result and new_back:
+        # a double tap counts once in the odd / even decision (parity_count): the punches themselves all stay
+        if any(night.is_early(p, d) for p in result) and night.own_count(prev_d) % 2 == 1:
+            result = [p for p in result if not night.is_early(p, d)]
+    elif result and settings.last_punch_post_shift_grace_hours and night.shift(prev_d):
+        shift_for_prev_d = night.shift(prev_d)
+        prev_last_punch = max((p.punch_time for p in night.raw(prev_d)), default=None)
         result = [
             p for p in result
-            if not _claimed_by_previous_day(p.punch_time, prev_last_punch, shift_for_prev_d, shift_for_d, settings)
+            if not _claimed_by_previous_day(
+                p.punch_time, prev_last_punch, shift_for_prev_d, night.shift(d), settings
+            )
         ]
 
     # ── Claim: tomorrow's early punches actually belong to today ───────────
-    if shift_for_d:
+    if new_forward:
+        if parity_count(result) % 2 == 1:
+            claimed = [p for p in night.raw(next_d) if night.is_early(p, next_d)]
+            if claimed:
+                result = result + claimed
+    elif settings.last_punch_post_shift_grace_hours and night.shift(d):
         this_day_last_punch = max((p.punch_time for p in result), default=None)
-        next_logs = _logs_for(next_d)
         claimed = [
-            p for p in next_logs
-            if _claimed_by_previous_day(p.punch_time, this_day_last_punch, shift_for_d, shift_for_next_d, settings)
+            p for p in night.raw(next_d)
+            if _claimed_by_previous_day(p.punch_time, this_day_last_punch, night.shift(d), night.shift(next_d), settings)
         ]
         if claimed:
             result = result + claimed

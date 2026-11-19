@@ -5,13 +5,15 @@ import { vi, type Mock } from "vitest";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import type {
   BalanceDetail,
-  BalanceRow,
+  BalanceListRow,
+  CompensationClaim,
   CompensationCreditRow,
   CompensationReport,
   CompensationSettings,
   CompensationWindow,
-  HolidayWorkClaim,
   HolidayWorkEligibleResponse,
+  HolidayWorkMonthDay,
+  LedgerRow,
   OvertimeConfig,
   OvertimeRow,
 } from "@/lib/api-client/custom-hooks";
@@ -24,9 +26,12 @@ import {
   CREDITS,
   CTC_ROWS,
   DEPARTMENTS,
+  ELIGIBLE_FIRST_SUNDAY,
   ELIGIBLE_SUNDAY,
   ELIGIBLE_WEEKDAY,
+  LEDGER,
   LEDGERS,
+  MONTH_DAYS,
   OT_CONFIG,
   OT_ROWS,
   SUNDAY,
@@ -49,11 +54,16 @@ export type World = {
   otConfig: OvertimeConfig;
   windows: CompensationWindow[];
   windowsEnabled: boolean;
-  claims: HolidayWorkClaim[];
+  /** The claims of every kind (GET /claims lists them, GET /holiday-work the Sunday / holiday ones). */
+  claims: CompensationClaim[];
   holidayEnabled: { master: boolean; holidayWork: boolean; workflow: boolean; canRaise: boolean };
   eligible: Record<string, HolidayWorkEligibleResponse>;
-  balances: BalanceRow[];
+  /** The Raise strip: the Sundays and holidays of a month, by "YYYY-MM". */
+  monthDays: Record<string, HolidayWorkMonthDay[]>;
+  balances: BalanceListRow[];
   ledgers: Record<number, BalanceDetail>;
+  /** Every credit and debit (Credits). */
+  ledger: LedgerRow[];
   credits: CompensationCreditRow[];
   birthdayEnabled: boolean;
   report: (qs: URLSearchParams) => CompensationReport;
@@ -78,6 +88,13 @@ export const apiError = (status: number, body: unknown = null): ApiError =>
 
 const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+/** One page of a list (`page` / `pageSize` of the request, 25 by default), under the list's own key names. */
+function pageOfRows<T>(rows: T[], qs: URLSearchParams, list: string, count: string): Record<string, unknown> {
+  const page = Math.max(1, Number(qs.get("page") ?? 1) || 1);
+  const pageSize = Math.max(1, Number(qs.get("pageSize") ?? 25) || 25);
+  return { [list]: rows.slice((page - 1) * pageSize, page * pageSize), [count]: rows.length, page, pageSize };
+}
+
 /** The month of October 2026, behind `fetchMock`. Everything a test changes is a field of the returned world. */
 export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World {
   const held = new Map<string, Promise<void>>();
@@ -91,9 +108,15 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
     windowsEnabled: true,
     claims: copy(CLAIMS),
     holidayEnabled: { master: true, holidayWork: true, workflow: true, canRaise: true },
-    eligible: { [SUNDAY]: copy(ELIGIBLE_SUNDAY), "2026-10-13": copy(ELIGIBLE_WEEKDAY) },
+    eligible: {
+      [SUNDAY]: copy(ELIGIBLE_SUNDAY),
+      "2026-10-04": copy(ELIGIBLE_FIRST_SUNDAY),
+      "2026-10-13": copy(ELIGIBLE_WEEKDAY),
+    },
+    monthDays: copy(MONTH_DAYS),
     balances: copy(BALANCES),
     ledgers: copy(LEDGERS),
+    ledger: copy(LEDGER),
     credits: copy(CREDITS),
     birthdayEnabled: true,
     report: (qs) => reportOf(qs),
@@ -202,10 +225,24 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
       case method === "POST" && path === "/api/compensation/ot/announce":
         return { announced: ((body.records ?? []) as unknown[]).length, results: [] };
       case GET && path === "/api/compensation/windows": {
-        const results = world.windows;
+        // the list's filters (month, kind, today-and-upcoming / past, department, branch, reason or who) and paging
+        const kind = qs.get("kind");
+        const status = qs.get("status");
+        const month = qs.get("month");
+        const year = qs.get("year");
+        const q = (qs.get("q") ?? "").toLowerCase();
+        const matching = world.windows.filter(
+          (w) =>
+            (!kind || kind === "all" || w.kind === kind) &&
+            (!month || Number(w.date.slice(5, 7)) === Number(month)) &&
+            (!year || w.date.startsWith(year)) &&
+            (!status || (status === "upcoming" ? w.date >= TODAY : w.date < TODAY)) &&
+            (!qs.get("departmentId") || String(w.departmentId) === qs.get("departmentId")) &&
+            (!qs.get("branchId") || String(w.branchId) === qs.get("branchId")) &&
+            (!q || `${w.reason ?? ""} ${w.announcedBy ?? ""}`.toLowerCase().includes(q)),
+        );
         return copy({
-          results,
-          count: results.length,
+          ...pageOfRows(matching, qs, "results", "count"),
           truncated: false,
           today: TODAY,
           enabled: { master: true, windows: world.windowsEnabled, canAnnounce: world.windowsEnabled },
@@ -241,7 +278,9 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
       }
       case GET && path === "/api/compensation/holiday-work": {
         const status = qs.get("status");
-        const results = world.claims.filter((c) => !status || status === "all" || c.status === status);
+        const results = world.claims.filter(
+          (c) => c.kind === "holiday_work" && (!status || status === "all" || c.status === status),
+        );
         return copy({
           results,
           count: results.length,
@@ -273,7 +312,7 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
             workDate: day,
             shifts: item.shifts,
             reason: String(body.reason),
-          } as HolidayWorkClaim;
+          } as CompensationClaim;
         });
         world.claims.unshift(...made);
         return { created: made.length, warnings: [], claims: made };
@@ -296,14 +335,143 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
           if (!detail) throw apiError(404, { error: "Employee not found" });
           return copy(detail);
         }
-        return { results: copy(world.balances), count: world.balances.length };
+        const q = (qs.get("q") ?? "").toLowerCase();
+        const matching = world.balances.filter(
+          (b) =>
+            (!qs.get("departmentId") || String(b.departmentId) === qs.get("departmentId")) &&
+            (!qs.get("branchId") || String(b.branchId) === qs.get("branchId")) &&
+            (!q || `${b.employeeName} ${b.employeeCode}`.toLowerCase().includes(q)),
+        );
+        const total = (key: "earned" | "used" | "pending" | "available") =>
+          Math.round(matching.reduce((t, b) => t + b[key], 0) * 100) / 100;
+        return copy({
+          ...pageOfRows(matching, qs, "items", "total"),
+          summary: {
+            employees: matching.filter((b) => b.available > 0).length,
+            earned: total("earned"),
+            used: total("used"),
+            pending: total("pending"),
+            available: total("available"),
+          },
+        });
       }
       case GET && path === "/api/compensation/credits":
         return { results: copy(world.credits), count: world.credits.length };
       case GET && path === "/api/compensation/birthdays":
-        return birthdaysOf((qs.get("period") ?? "today") as "today", qs.get("date") ?? TODAY, world.birthdayEnabled);
+        return birthdaysOf(
+          (qs.get("period") ?? "today") as "today",
+          qs.get("date") ?? TODAY,
+          world.birthdayEnabled,
+          qs,
+        );
       case GET && path === "/api/compensation/reports":
         return copy(world.report(qs));
+      // ── the claim workflow (Compensation Leave B) ──
+      case GET && path === "/api/compensation/claims": {
+        const month = qs.get("month");
+        const year = qs.get("year");
+        const q = (qs.get("q") ?? "").toLowerCase();
+        // everything but the status and the kind: the tiles count by those
+        const scoped = world.claims.filter(
+          (c) =>
+            (qs.get("anyMonth") || !month || Number(c.workDate.slice(5, 7)) === Number(month)) &&
+            (qs.get("anyMonth") || !year || c.workDate.startsWith(year)) &&
+            (!qs.get("employeeId") || String(c.employeeId) === qs.get("employeeId")) &&
+            (!qs.get("departmentId") || String(c.departmentId) === qs.get("departmentId")) &&
+            (!qs.get("branchId") || String(c.branchId) === qs.get("branchId")) &&
+            (!qs.get("raisedBy") || c.raisedByRole === qs.get("raisedBy")) &&
+            (!q || `${c.employeeName} ${c.employeeCode}`.toLowerCase().includes(q)),
+        );
+        const count = (key: (c: CompensationClaim) => string) =>
+          scoped.reduce<Record<string, number>>((acc, c) => ({ ...acc, [key(c)]: (acc[key(c)] ?? 0) + 1 }), {});
+        const shiftsOf = (status: string) =>
+          scoped.filter((c) => c.status === status).reduce((t, c) => t + c.shifts, 0);
+        const matching = scoped.filter(
+          (c) => (!qs.get("status") || c.status === qs.get("status")) && (!qs.get("kind") || c.kind === qs.get("kind")),
+        );
+        return copy({
+          ...pageOfRows(matching, qs, "items", "total"),
+          summary: {
+            byStatus: count((c) => c.status),
+            byKind: count((c) => c.kind),
+            pendingShifts: shiftsOf("pending"),
+            approvedShifts: shiftsOf("approved"),
+            // the review fix: what waits, split into credits (in) and days off (out)
+            pendingCreditShifts: scoped
+              .filter((c) => c.status === "pending" && c.kind !== "use_balance")
+              .reduce((t, c) => t + c.shifts, 0),
+            pendingUseShifts: scoped
+              .filter((c) => c.status === "pending" && c.kind === "use_balance")
+              .reduce((t, c) => t + c.shifts, 0),
+          },
+          enabled: world.holidayEnabled,
+        });
+      }
+      case method === "POST" && path === "/api/compensation/claims": {
+        // HR claims for employees: every item goes through, waiting for the Department Head
+        const made = ((body.items ?? []) as { employeeId: number; shifts?: number; overtimeRecordId?: number }[]).map(
+          (item, i) =>
+            ({
+              ...copy(CLAIMS[0]),
+              id: 3200 + world.claims.length + i,
+              employeeId: item.employeeId,
+              employeeCode: `E${item.employeeId}`,
+              employeeName: `Employee ${item.employeeId}`,
+              kind: body.kind,
+              workDate: String(body.date),
+              shifts: item.shifts ?? 1,
+              overtimeRecordId: item.overtimeRecordId ?? null,
+              reason: String(body.reason),
+            }) as CompensationClaim,
+        );
+        world.claims.unshift(...made);
+        return { created: made.length, warnings: [], claims: made };
+      }
+      case method === "DELETE" && /^\/api\/compensation\/claims\/\d+$/.test(path): {
+        const id = Number(path.split("/").pop());
+        world.claims = world.claims.filter((c) => c.id !== id);
+        return null;
+      }
+      case method === "POST" && path === "/api/compensation/use": {
+        const made = {
+          ...copy(CLAIMS[0]),
+          id: 3300 + world.claims.length,
+          employeeId: Number(body.employeeId),
+          kind: "use_balance",
+          workDate: String(body.date),
+          useDate: String(body.date),
+          shifts: Number(body.shifts),
+          reason: String(body.reason),
+        } as CompensationClaim;
+        world.claims.unshift(made);
+        const row = world.balances.find((b) => b.employeeId === made.employeeId);
+        if (row) {
+          row.pending += made.shifts;
+          row.available -= made.shifts;
+        }
+        return made;
+      }
+      case GET && path === "/api/compensation/ledger": {
+        const month = qs.get("month");
+        const year = qs.get("year");
+        const q = (qs.get("q") ?? "").toLowerCase();
+        const matching = world.ledger.filter(
+          (r) =>
+            (!qs.get("entryType") || r.type === qs.get("entryType")) &&
+            (!qs.get("source") || r.source === qs.get("source")) &&
+            (!month || Number(r.date.slice(5, 7)) === Number(month)) &&
+            (!year || r.date.startsWith(year)) &&
+            (!qs.get("employeeId") || String(r.employeeId) === qs.get("employeeId")) &&
+            (!qs.get("departmentId") || String(r.departmentId) === qs.get("departmentId")) &&
+            (!qs.get("branchId") || String(r.branchId) === qs.get("branchId")) &&
+            (!q || `${r.employeeName} ${r.employeeCode}`.toLowerCase().includes(q)),
+        );
+        return copy(pageOfRows(matching, qs, "items", "total"));
+      }
+      case GET && path === "/api/compensation/holiday-work/month": {
+        const key = `${qs.get("year")}-${String(qs.get("month")).padStart(2, "0")}`;
+        return copy({ days: world.monthDays[key] ?? [], defaultDate: SUNDAY, maxAgeDays: 45 });
+      }
       default:
         world.unexpected.push(`${method} ${url}`);
         throw new Error(`unexpected request ${method} ${url}`);

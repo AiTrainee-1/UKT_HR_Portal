@@ -11,6 +11,15 @@ Everything here is gated, in this order, by
 Relaxation top-ups (an OT relaxation HR assigned, a balance HR redeemed) are commitments HR already made, so they follow
 the master switch only: switching a feature off later does not take back what was granted.
 
+The claim workflow (2026-11-19 spec, from CompensationConfig.claims_from on; earlier days keep the old rules even when
+recomputed):
+  * Type 1: the late-in allowance of an OT day on/after claims_from applies to the next working day ONLY when the HOD
+    APPROVED the employee's ot_allowance claim for that OT record (CompContext.allowance_claims, loaded once with the
+    context); before claims_from it stays automatic, derived from the previous working day's extra work.
+  * Birthday: a birthday on/after claims_from is judged NORMALLY from the punches (birthday_rule() -> "new"); an absent
+    day / a day of approved leave becomes paid birthday leave in attendance_final. Before it the old automatic rule
+    ("old": present, 1.00, whatever the punches) stays.
+
 Query discipline: a bulk caller (compute_month_records / compute_range_records) builds ONE CompContext for its employee
 and range - a fixed handful of queries whatever the number of days - and the day-level helpers below do no queries of
 their own on that path. A single-day caller gets the same context built for just that day. A loop over MANY employees
@@ -61,10 +70,19 @@ class CompContext:
     # The same facts for a whole ROSTER on one date (many employees, one day), loaded together the first time a late
     # arrival needs them. None = not a roster context.
     roster: "RosterLookback | None" = None
+    # {(employee_id, OT date): (allowance minutes, extra minutes)} of the APPROVED ot_allowance claims whose OT date can
+    # feed an arrival in the range (claim workflow: from claims_from on the allowance needs one). Loaded by build_context.
+    allowance_claims: dict = field(default_factory=dict)
 
     @property
     def allowance_on(self) -> bool:
         return bool(self.master and self.config is not None and self.config.allowance_enabled and self.allowance_rules)
+
+    @property
+    def allowance_possible(self) -> bool:
+        """Can an arrival use a Type 1 allowance at all: the automatic rule is on (allowance_on), or an approved
+        allowance claim feeds the range (it follows the master switch only)."""
+        return bool(self.allowance_on or (self.master and self.config is not None and self.allowance_claims))
 
     @property
     def windows_on(self) -> bool:
@@ -186,9 +204,37 @@ def build_context(settings, date_from: date_type, date_to: date_type, employee_i
     for emp_id, day, shifts in debits.values_list("employee_id", "date", "shifts"):
         ctx.relaxation.setdefault((emp_id, day), []).append((Decimal(shifts), "the compensation balance"))
 
+    # an APPROVED allowance claim is a granted commitment: it follows the master switch only, never the allowance switch
+    # (turning Type 1 off later stops new allowances, not the ones a Department Head already granted; review 2026-11-19)
+    ctx.allowance_claims = _approved_allowance_claims(config, date_from, date_to, employee_ids)
+
     if lookback_employee is not None and config.allowance_enabled:
         ctx.ot_lookback = _stored_ot_lookback(lookback_employee, date_from)
     return ctx
+
+
+def _approved_allowance_claims(config, date_from: date_type, date_to: date_type, employee_ids=None) -> dict:
+    """{(employee_id, OT date): (minutes, extra)} of the approved ot_allowance claims whose OT date may feed an arrival in
+    [date_from, date_to] (the previous working day lies up to LOOKBACK_DAYS back). One query; none at all when the whole
+    range is before claims_from (every arrival there follows the old automatic rule)."""
+    from .models import HolidayWorkClaim
+
+    if config.claims_from is not None and date_to <= config.claims_from:
+        return {}
+    rows = HolidayWorkClaim.objects.filter(
+        kind=HolidayWorkClaim.KIND_OT_ALLOWANCE,
+        status=HolidayWorkClaim.STATUS_APPROVED,
+        work_date__gte=date_from - timedelta(days=rules.LOOKBACK_DAYS + 1),
+        work_date__lt=date_to,
+    )
+    if employee_ids is not None:
+        rows = rows.filter(employee_id__in=list(employee_ids))
+    out: dict = {}
+    for emp_id, day, minutes, record_minutes, extra in rows.values_list(
+        "employee_id", "work_date", "minutes", "overtime_record__allowance_minutes", "overtime_record__ot_minutes"
+    ):
+        out[(emp_id, day)] = (int(minutes or record_minutes or 0), int(extra or 0))
+    return out
 
 
 # ── announcements (legacy day exemptions + the new windows) ─────────────────
@@ -337,9 +383,16 @@ def _extra_from_punches(emp, p: date_type, settings, assignments, logs_by_date=N
 def allowance_for_arrival(emp, d: date_type, ctx: CompContext, settings, prefetch=None):
     """The Type 1 allowance (AllowanceGrant) the arrival on working day `d` may use, or None. The OT day is the previous
     WORKING day (Sundays, company holidays and an off Saturday in between do not count); both days must be on or after
-    the feature's effective-from date; extra work beyond the Type 2 threshold is Type 2's, not the allowance's."""
-    if not ctx.allowance_on:
+    the feature's effective-from date.
+
+    An OT day on/after CompensationConfig.claims_from gives an allowance only through an APPROVED ot_allowance claim for
+    it (the minutes the claim carries; ctx.allowance_claims, no query here); a granted claim follows the master switch
+    only (the allowance switch and its rules stop NEW allowances, not granted ones). An earlier OT day keeps the old
+    automatic rule: the allowance its extra work earns, where extra work beyond the Type 2 threshold is Type 2's."""
+    if not (ctx.master and ctx.config is not None):
         return None
+    if not ctx.allowance_on and not ctx.allowance_claims:
+        return None  # nothing granted in the range and the automatic rule is off: no query below
     effective = ctx.config.allowance_effective_from
     assignments = (prefetch or {}).get("assignments")
     if effective and d < effective:
@@ -348,6 +401,13 @@ def allowance_for_arrival(emp, d: date_type, ctx: CompContext, settings, prefetc
         return None
     p = rules.previous_working_day(d, lambda day: is_off_day(emp, day, assignments))
     if p is None or (effective and p < effective):
+        return None
+    if ctx.config.claims_apply_on(p):
+        claimed = ctx.allowance_claims.get((emp.pk, p))
+        if claimed is None or claimed[0] <= 0:
+            return None
+        return AllowanceGrant(minutes=claimed[0], source_date=p, extra=claimed[1])
+    if not ctx.allowance_on:
         return None
     extra = previous_day_extra(emp, p, settings, prefetch, ctx)
     minutes = rules.allowance_minutes_for(extra, ctx.allowance_rules, max_extra=ctx.config.shift_min_extra_minutes)
@@ -371,23 +431,47 @@ def _parse_join_date(raw):
     return None
 
 
-def birthday_applies(emp, d: date_type, ctx: CompContext, assignments=None) -> bool:
-    """Is `d` this employee's paid birthday leave? Feature (and master) on, on or after the effective-from date, an
-    active STAFF employee whose date of birth falls on `d` (29 Feb -> 28 Feb in a non-leap year), on a working day (a
-    Sunday / holiday / off Saturday is already a day off) that is not before the employee joined."""
+BIRTHDAY_RULE_OLD = "old"  # before claims_from: a paid full day whatever the punches (no detection)
+BIRTHDAY_RULE_NEW = "new"  # from claims_from: a normal working day; absent / on approved leave = paid birthday leave
+
+
+def birthday_rule(emp, d: date_type, ctx: CompContext, assignments=None) -> str | None:
+    """Which birthday rule covers `d` for this employee, or None when the birthday gives nothing: feature (and master)
+    on, on or after the effective-from date, an active STAFF employee whose date of birth falls on `d` (29 Feb -> 28 Feb
+    in a non-leap year), on a working day (a Sunday / holiday / off Saturday is already a day off; working it is ordinary
+    holiday work) that is not before the employee joined. BIRTHDAY_RULE_NEW on/after CompensationConfig.claims_from (the
+    day is judged from the punches: attendance_final makes an absent / on-leave birthday paid birthday leave, a worked one
+    is a normal day with a credit to claim), BIRTHDAY_RULE_OLD before it (paid whatever the punches)."""
     if not ctx.birthday_on:
-        return False
+        return None
     effective = ctx.config.birthday_effective_from
     if effective and d < effective:
-        return False
+        return None
     if emp.employment_type != "staff" or emp.status != "active":
-        return False
+        return None
     if not rules.is_birthday(emp.date_of_birth, d):
-        return False
+        return None
     joined = _parse_join_date(emp.join_date)
     if joined is not None and d < joined:
-        return False
-    return not is_off_day(emp, d, assignments)
+        return None
+    if is_off_day(emp, d, assignments):
+        return None
+    return BIRTHDAY_RULE_NEW if ctx.config.claims_apply_on(d) else BIRTHDAY_RULE_OLD
+
+
+def birthday_applies(emp, d: date_type, ctx: CompContext, assignments=None) -> bool:
+    """Is `d` this employee's paid birthday leave WHATEVER the punches? Only under the old automatic rule (a birthday
+    before CompensationConfig.claims_from, see birthday_rule). From claims_from on a birthday is paid only when it was not
+    worked, which only the computed day knows: its compensation_kind is "birthday" (attendance_final)."""
+    return birthday_rule(emp, d, ctx, assignments) == BIRTHDAY_RULE_OLD
+
+
+def shift_working_minutes(shift) -> int:
+    """The working length of a shift in minutes (end - start - lunch; an overnight shift ends the next day): what the
+    Type 2 quarters rule divides by. 0 without a shift."""
+    if shift is None:
+        return 0
+    return rules.working_minutes(shift.start_time, shift.end_time, getattr(shift, "lunch_duration_minutes", 0))
 
 
 # ── relaxation top-up ───────────────────────────────────────────────────────

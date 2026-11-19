@@ -291,7 +291,9 @@ class TodayTests(EngineBase):
         self.punch(TODAY, time(9, 0), time(15, 0))
         self.at(16, 0)
         self.judge(TODAY)
-        self.assertEqual(attendance_refresh.refresh_provisional(), 0, "not due before 18:11")
+        # the real clock is long past 13 Nov 2026: pin "now" too, or the day would already be due
+        with mock.patch("django.utils.timezone.now", return_value=datetime(2026, 11, 13, 16, 0, tzinfo=FACTORY_TZ)):
+            self.assertEqual(attendance_refresh.refresh_provisional(), 0, "not due before 18:11")
 
         self.at(18, 30)
         with mock.patch("django.utils.timezone.now", return_value=datetime(2026, 11, 13, 18, 30, tzinfo=FACTORY_TZ)):

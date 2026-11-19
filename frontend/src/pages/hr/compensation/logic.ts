@@ -42,6 +42,8 @@ export const COMPENSATION_URL_DEFAULTS = {
   otq: "",
   otdept: "",
   otstatus: "all",
+  /** Type 1's status filter: claimable, claim_pending, approved, rejected, used, not_used, unclaimed. */
+  ot1status: "all",
   // Compensation Leave
   hmonth: "",
   hyear: "",

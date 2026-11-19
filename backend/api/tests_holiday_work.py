@@ -866,11 +866,13 @@ class WorkflowDefinitionTests(HolidayWorkBase):
         defn = approval.definition("holiday_work")
         self.assertEqual(
             (defn.requested_by, defn.allowed_roles, defn.editable, defn.hod_flag, defn.group),
-            ("HR", (approval.HOD,), False, "can_approve_compensation", "Leave & attendance"),
+            ("Employee or HR", (approval.HOD,), False, "can_approve_compensation", "Leave & attendance"),
         )
+        # since 2026-11-19 the one workflow of every compensation claim, raised by the employee or by HR
+        self.assertEqual(defn.label, "Compensation claims")
         self.assertEqual(defn.default_steps, (approval.Step((approval.HOD,), True),))
         self.assertTrue(defn.fixed_note)
-        self.assertIn("HR cannot raise new holiday-work claims", defn.on_off_effect)
+        self.assertIn("New compensation claims cannot be raised", defn.on_off_effect)
         self.assertTrue(hasattr(DepartmentManager, defn.hod_flag))
         self.assertEqual(approval.project_status("holiday_work", (approval.HOD,)), "pending")
 
@@ -878,7 +880,8 @@ class WorkflowDefinitionTests(HolidayWorkBase):
         rows = {w["key"]: w for w in self.client.get("/api/approval-workflows", **self.admin).json()["workflows"]}
         row = rows["holiday_work"]
         self.assertEqual(
-            (row["path"], row["editable"], row["hodSwitch"]), ("HR → HOD", False, "Can approve compensation")
+            (row["path"], row["editable"], row["hodSwitch"]),
+            ("Employee or HR → HOD", False, "Can approve compensation"),
         )
         self.assertEqual((row["waiting"]["total"], row["canDisable"]), (0, True))
         refused = self.client.put(
@@ -944,9 +947,10 @@ class RequestsHubTests(HolidayWorkBase):
                 kinds["holiday_work"]["waitingHod"],
                 kinds["holiday_work"]["waitingHr"],
             ),
-            ("Holiday / Sunday work", "link", 1, 1, 0),
+            ("Compensation claims", "link", 1, 1, 0),
         )
-        self.assertEqual(kinds["holiday_work"]["pipeline"], "HR → HOD")
+        self.assertEqual(kinds["holiday_work"]["pipeline"], "Employee or HR → HOD")
+        self.assertEqual(kinds["holiday_work"]["openPath"], "/hr/compensation/compensation-leave/holiday-work/claims")
         row = next(i for i in body["items"] if i["kind"] == "holiday_work")
         self.assertEqual(
             (row["id"], row["status"], row["queue"], row["employee"]["code"]), (claim.id, "pending", "hod", "HW1")
@@ -954,6 +958,11 @@ class RequestsHubTests(HolidayWorkBase):
         self.assertEqual(row["reason"], "Dispatch rush")
         self.assertIn("0.5 shift", row["summary"])
         self.assertIsNone(row["decided"])
+        self.assertEqual(row["label"], "Holiday / Sunday work")
+        self.assertEqual(
+            row["extra"]["openPath"],
+            f"/hr/compensation/compensation-leave/holiday-work/claims?hmonth=all&hemp={claim.employee_id}&hclaim={claim.id}",
+        )
 
     def test_a_decided_claim_shows_who_decided_it(self):
         claim = self.raise_claim()

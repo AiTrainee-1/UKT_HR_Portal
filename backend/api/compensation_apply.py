@@ -71,8 +71,9 @@ def granted_for_day(emp, d: date_type) -> Decimal:
 def day_shifts_now(emp, d: date_type, settings=None) -> Decimal:
     """Shifts the day earns right now. A past / current day: its computed record (which already includes grants). A
     future day has no computed record yet, so what it WILL earn is worked out from what is already known: a day HR set
-    by hand keeps its stored shifts (the engine never recomputes it, so a grant is already inside that figure), a paid
-    birthday leave is a full day, and anything else earns what has been granted for it."""
+    by hand keeps its stored shifts (the engine never recomputes it, so a grant is already inside that figure), a
+    birthday is a full day (old rule: paid whatever happens; claim rules: a birthday taken off is paid birthday leave, so
+    a relaxation there would be wasted), and anything else earns what has been granted for it."""
     if d > ist_today():
         manual = AttendanceDayRecord.objects.filter(employee=emp, date=d, source="manual").first()
         if manual is not None:
@@ -87,9 +88,11 @@ def day_shifts_now(emp, d: date_type, settings=None) -> Decimal:
 
 
 def _birthday_leave_on(emp, d: date_type, settings=None) -> bool:
-    """Is `d` this employee's paid birthday leave under the CURRENT switches (the engine decides when the day arrives)?"""
+    """Is `d` a birthday the CURRENT switches cover (the engine decides when the day arrives)? Old rule: paid whatever
+    happens. Claim rules (compensation_engine.birthday_rule "new"): not working it is paid birthday leave, so a day off
+    taken from the balance there is worth nothing either."""
     ctx = comp.build_context(settings or PayrollSettings.get(), d, d, employee_ids=[emp.pk])
-    return comp.birthday_applies(emp, d, ctx)
+    return comp.birthday_rule(emp, d, ctx) is not None
 
 
 def _off_day_reason(emp, d: date_type) -> str | None:

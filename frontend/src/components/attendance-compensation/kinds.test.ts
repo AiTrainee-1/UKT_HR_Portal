@@ -77,6 +77,15 @@ describe("the compensation marker of a day", () => {
       expect(KIND_META[k].meaning.length).toBeGreaterThan(20);
     }
   });
+
+  it("reads the birthday marker as paid Birthday leave given from attendance, never as automatic", () => {
+    expect(KIND_META.birthday.label).toBe("Birthday leave");
+    expect(KIND_META.birthday.meaning).toContain("Birthday leave (paid)");
+    expect(KIND_META.birthday.meaning).toContain("absent or on approved leave");
+    for (const k of COMPENSATION_KINDS) expect(KIND_META[k].meaning.toLowerCase()).not.toContain("automatic");
+    // the late-in allowance is applied after the Department Head approves a claim
+    expect(KIND_META.ot_allowance.meaning).toContain("approved by the Department Head");
+  });
 });
 
 describe("a day made up by a relaxation", () => {

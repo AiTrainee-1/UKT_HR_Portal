@@ -60,8 +60,9 @@ def window(today: date | None = None) -> tuple[date, date]:
 
 def refresh_after_punches(pairs) -> int:
     """Re-judge the stored days of these just-saved punches: `pairs` is an iterable of (employee id, punch date). Each
-    employee's days from the day before their earliest punch to their latest one (never after today, at most
-    MAX_INLINE_DAYS back) are worked out again in one call. Returns how many employees were re-judged."""
+    employee's days from the day before their earliest punch to their latest one - for staff to the day AFTER it (the
+    next-morning rule: a day's punch count decides whose the next morning's early punch is) - never after today, at
+    most MAX_INLINE_DAYS back, are worked out again in one call. Returns how many employees were re-judged."""
     from .attendance_final import compute_range_records
     from .models import Employee, PayrollSettings
 
@@ -78,7 +79,16 @@ def refresh_after_punches(pairs) -> int:
         days[int(employee_id)].add(punch_date)
     if not days:
         return 0
-    spans = {emp_id: (max(min(ds) - timedelta(days=1), floor), min(max(ds), today)) for emp_id, ds in days.items()}
+    # Staff: one day FORWARD too. Under the next-morning rule a new punch on D can change whether D is left open (an
+    # odd count), and so which day D+1's early punch belongs to (correctness review 2026-11-19).
+    staff = set(Employee.objects.filter(pk__in=list(days), employment_type="staff").values_list("pk", flat=True))
+    spans = {
+        emp_id: (
+            max(min(ds) - timedelta(days=1), floor),
+            min(max(ds) + timedelta(days=1 if emp_id in staff else 0), today),
+        )
+        for emp_id, ds in days.items()
+    }
     spans = {emp_id: span for emp_id, span in spans.items() if span[0] <= span[1]}
     employee_days = sum((hi - lo).days + 1 for lo, hi in spans.values())
     if len(spans) > INLINE_MAX_EMPLOYEES or employee_days > INLINE_MAX_EMPLOYEE_DAYS:

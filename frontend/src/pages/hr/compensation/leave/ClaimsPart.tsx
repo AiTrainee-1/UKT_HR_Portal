@@ -1,0 +1,476 @@
+import { useMemo, useState } from "react";
+import { Cake, ClipboardCheck, Clock3, PiggyBank, SearchX, Sun, Timer, UserCheck, XCircle } from "lucide-react";
+import { SectionCard } from "@/components/payroll/kit/parts";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import {
+  CLAIM_KINDS,
+  useWithdrawCompensationClaim,
+  type ClaimKind,
+  type ClaimsListParams,
+  type ClaimsSummary,
+  type CompensationClaim,
+  type useCompensationClaims,
+} from "@/lib/api-client/custom-hooks";
+import {
+  ClearFilters,
+  DataTable,
+  FilterBar,
+  PersonCell,
+  SearchFilter,
+  SelectFilter,
+  StatRow,
+  StatTile,
+  StatusChip,
+  type DataColumn,
+  type TileTone,
+} from "@/pages/hr/outpass-visitors/kit";
+import { dateLong, dateShort, errorMessage, fmtShifts } from "../logic";
+import { Notice } from "../ui";
+import { ClaimDrawer } from "./ClaimDrawer";
+import {
+  CLAIM_STATUS_FILTER,
+  KIND_LABEL,
+  KIND_OPTIONS,
+  RAISED_BY_OPTIONS,
+  STATUS_TONE,
+  claimAmountText,
+  claimDateDetail,
+  claimStatusText,
+  decisionLine,
+  kindText,
+  raisedByText,
+} from "./claims-logic";
+import { EmployeeChip, MonthFilter, OrgFilters } from "./LeaveFilters";
+import { idOf, monthChoice, monthChoiceLabel, pageOf, useLeaveUrl, type LeaveUrl } from "./leave-url";
+
+export const CLAIMS_PAGE_SIZE = 25;
+
+/** What the Claims section asks the server for, from its filters in the address. */
+export function claimsParamsOf(lu: LeaveUrl, today: string): ClaimsListParams {
+  const month = monthChoice(lu.hmonth, lu.hyear, today);
+  return {
+    kind: lu.hkind || undefined,
+    status: lu.hstatus === "all" || lu.hstatus === "" ? undefined : lu.hstatus,
+    ...(month.all ? { anyMonth: true } : { month: month.month, year: month.year }),
+    employeeId: idOf(lu.hemp),
+    departmentId: idOf(lu.hdept),
+    branchId: idOf(lu.hbranch),
+    q: lu.hq.trim() || undefined,
+    raisedBy: lu.hraised || undefined,
+    page: pageOf(lu.hpage),
+    pageSize: CLAIMS_PAGE_SIZE,
+  };
+}
+
+const KIND_ICON: Record<ClaimKind, typeof Sun> = {
+  holiday_work: Sun,
+  ot_allowance: Clock3,
+  ot_shift: Timer,
+  birthday: Cake,
+  use_balance: PiggyBank,
+};
+
+/**
+ * The kind tiles' own short labels: the full kind names ("OT shift credit (Type 2)") do not fit five narrow tiles, so each
+ * tile says it in a word or two (the tooltip and the table keep the full name).
+ */
+export const KIND_TILE_LABEL: Record<ClaimKind, string> = {
+  holiday_work: "Sunday work",
+  ot_allowance: "Allowance",
+  ot_shift: "OT credit",
+  birthday: "Birthday",
+  use_balance: "Day off",
+};
+
+/** "1.75 shifts" or, when days off wait too, "1.75 in · 0.50 out" (older backends: the one total). */
+export function pendingHint(summary: ClaimsSummary | undefined): string {
+  if (!summary) return "0 shifts";
+  const credit = summary.pendingCreditShifts;
+  const use = summary.pendingUseShifts;
+  if (credit === null || use === null) return `${fmtShifts(summary.pendingShifts)} shifts`;
+  if (use <= 0) return `${fmtShifts(credit)} shifts to add`;
+  return `${fmtShifts(credit)} in · ${fmtShifts(use)} out`;
+}
+
+const KIND_TONE: Record<ClaimKind, TileTone> = {
+  holiday_work: "amber",
+  ot_allowance: "indigo",
+  ot_shift: "indigo",
+  birthday: "rose",
+  use_balance: "teal",
+};
+
+/**
+ * Claims: every claim of every kind (Sunday / holiday work, OT allowance, OT shift credit, birthday credit, use of the
+ * balance), whoever raised it, with where it stands in the Department Head's approval. Filtered by month (or every month),
+ * kind, status, who raised it, department, branch and the employee's name or code; the tiles count them by status and by
+ * kind (a click filters). A row opens its drawer: the approval trail, what the claim is based on, and what it put on the
+ * balance (with links to Credits and the employee's balance). A claim still waiting can be withdrawn.
+ */
+export function ClaimsPart({
+  query,
+  canWithdraw,
+  pausedReason,
+  today,
+  warnings,
+  onDismissWarnings,
+}: {
+  query: ReturnType<typeof useCompensationClaims>;
+  canWithdraw: boolean;
+  pausedReason: string;
+  today: string;
+  warnings: string[];
+  onDismissWarnings: () => void;
+}) {
+  const { toast } = useToast();
+  const [lu, setLu] = useLeaveUrl();
+  const withdraw = useWithdrawCompensationClaim();
+  const [withdrawing, setWithdrawing] = useState<CompensationClaim | null>(null);
+  const month = monthChoice(lu.hmonth, lu.hyear, today);
+  const rows = useMemo(() => query.data?.items ?? [], [query.data]);
+  const summary = query.data?.summary;
+  const openId = idOf(lu.hclaim) ?? null;
+  const open = openId === null ? null : (rows.find((r) => r.id === openId) ?? null);
+  const employeeName = idOf(lu.hemp) ? (rows.find((r) => r.employeeId === idOf(lu.hemp))?.employeeName ?? null) : null;
+
+  const filter = (patch: Partial<LeaveUrl>) => setLu({ ...patch, hpage: "", hclaim: "" });
+  const filtersOn = [
+    lu.hkind,
+    lu.hstatus === "all" ? "" : lu.hstatus,
+    lu.hraised,
+    lu.hdept,
+    lu.hbranch,
+    lu.hq,
+    lu.hemp,
+  ].filter((v) => v !== "").length;
+
+  const confirmWithdraw = async () => {
+    if (!withdrawing) return;
+    try {
+      await withdraw.mutateAsync(withdrawing.id);
+      toast({
+        title: "Claim withdrawn",
+        description: `${withdrawing.employeeName}, ${kindText(withdrawing)}, ${dateShort(withdrawing.workDate)}.`,
+      });
+    } catch (err) {
+      toast({ title: "Could not withdraw it", description: errorMessage(err, "Try again."), variant: "destructive" });
+    } finally {
+      setWithdrawing(null);
+    }
+  };
+
+  const columns = useMemo<DataColumn<CompensationClaim>[]>(
+    () => [
+      {
+        key: "employee",
+        header: "Employee",
+        cell: (c) => <PersonCell name={c.employeeName} code={c.employeeCode} sub={c.department} size={28} />,
+        text: (c) => `${c.employeeName} (${c.employeeCode})`,
+        minWidth: 180,
+        truncate: false,
+      },
+      {
+        key: "kind",
+        header: "Kind",
+        cell: (c) => (
+          <div className="leading-tight">
+            <p className="font-medium text-slate-900">{kindText(c)}</p>
+            <p className="text-[11px] text-slate-500">Raised by {raisedByText(c)}</p>
+          </div>
+        ),
+        text: (c) => `${kindText(c)} · raised by ${raisedByText(c)}`,
+        minWidth: 170,
+      },
+      {
+        key: "date",
+        header: "Date",
+        cell: (c) => (
+          <div className="leading-tight">
+            <p className="font-semibold text-slate-900">{dateShort(c.workDate)}</p>
+            <p className="text-[11px] text-slate-500">{claimDateDetail(c)}</p>
+          </div>
+        ),
+        text: (c) => `${dateLong(c.workDate)} · ${claimDateDetail(c)}`,
+        minWidth: 150,
+        maxWidth: 260,
+      },
+      {
+        key: "amount",
+        header: "Claimed",
+        cell: (c) => <span className="font-semibold text-slate-900">{claimAmountText(c)}</span>,
+        minWidth: 100,
+      },
+      {
+        key: "status",
+        header: "Approval",
+        truncate: false,
+        minWidth: 170,
+        cell: (c) => {
+          const decided = decisionLine(c);
+          return (
+            <div className="flex flex-col items-start gap-0.5">
+              <StatusChip tone={STATUS_TONE[c.status] ?? "slate"}>{claimStatusText(c)}</StatusChip>
+              {c.status === "pending" ? (
+                <span className="text-[11px] text-slate-500" data-testid={`claim-hod-${c.id}`}>
+                  {c.hodName ? `HOD: ${c.hodName}` : "No Department Head assigned"}
+                </span>
+              ) : (
+                decided && (
+                  <span className="text-[11px] text-slate-500" data-testid={`claim-decision-${c.id}`}>
+                    {decided}
+                  </span>
+                )
+              )}
+            </div>
+          );
+        },
+      },
+      {
+        key: "actions",
+        header: <span className="sr-only">Actions</span>,
+        align: "right",
+        truncate: false,
+        cell: (c) => (
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-11 sm:h-8"
+              aria-label={`Details of the claim of ${c.employeeName} for ${dateShort(c.workDate)}`}
+              onClick={() => setLu({ hclaim: String(c.id) })}
+              data-view-safe=""
+              data-testid={`claim-view-${c.id}`}
+            >
+              Details
+            </Button>
+            {c.status === "pending" && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-11 sm:h-8"
+                disabled={!canWithdraw}
+                aria-label={`Withdraw the claim of ${c.employeeName} for ${dateShort(c.workDate)}`}
+                title={canWithdraw ? "Withdraw and remove this claim from the Department Head's queue" : pausedReason}
+                onClick={() => setWithdrawing(c)}
+                data-testid={`claim-withdraw-${c.id}`}
+              >
+                Withdraw
+              </Button>
+            )}
+          </div>
+        ),
+      },
+    ],
+    [canWithdraw, pausedReason, setLu],
+  );
+
+  const statusTile = (status: "pending" | "approved" | "rejected", label: string, hint: string, icon: typeof Sun) => (
+    <StatTile
+      label={label}
+      value={summary?.byStatus[status] ?? 0}
+      hint={hint}
+      icon={icon}
+      tone={STATUS_TONE[status]}
+      loading={query.isLoading}
+      onClick={() => filter({ hstatus: lu.hstatus === status ? "all" : status })}
+      active={lu.hstatus === status}
+      title={`Show only the claims that are ${label.toLowerCase()}`}
+      testId={`claim-kpi-${status}`}
+    />
+  );
+
+  return (
+    <SectionCard
+      testId="claim-list"
+      icon={ClipboardCheck}
+      title="Claims"
+      description="Every compensation claim, from the employees' apps and from HR, with where it stands in the Department Head's approval and what it put on the balance."
+      bodyClassName="space-y-3"
+    >
+      {warnings.length > 0 && (
+        <Notice accent="amber" testId="claim-warnings">
+          <p className="font-semibold">Raised, but nobody can decide these yet:</p>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="font-semibold underline"
+            onClick={onDismissWarnings}
+            data-testid="claim-warnings-dismiss"
+          >
+            Dismiss
+          </button>
+        </Notice>
+      )}
+
+      <FilterBar label="Claim filters" testId="claim-filters" sticky={false}>
+        <MonthFilter
+          value={month}
+          today={today}
+          allowAll
+          onChange={(m, y) => filter({ hmonth: m, hyear: y })}
+          label="Month of the claim"
+          testId="claim-month"
+        />
+        <SelectFilter
+          label="Kind"
+          value={lu.hkind}
+          onChange={(v) => filter({ hkind: v })}
+          options={KIND_OPTIONS}
+          allLabel="Every kind"
+          testId="claim-kind"
+        />
+        <SelectFilter
+          label="Status"
+          value={lu.hstatus === "all" ? "" : lu.hstatus}
+          onChange={(v) => filter({ hstatus: v === "" ? "all" : v })}
+          options={CLAIM_STATUS_FILTER}
+          allLabel="Every status"
+          testId="claim-status"
+        />
+        <SelectFilter
+          label="Raised by"
+          value={lu.hraised}
+          onChange={(v) => filter({ hraised: v })}
+          options={RAISED_BY_OPTIONS}
+          allLabel="Raised by anyone"
+          testId="claim-raised"
+        />
+        <OrgFilters
+          dept={lu.hdept}
+          branch={lu.hbranch}
+          onDept={(v) => filter({ hdept: v })}
+          onBranch={(v) => filter({ hbranch: v })}
+          testId="claim"
+        />
+        <SearchFilter
+          value={lu.hq}
+          onChange={(v) => filter({ hq: v })}
+          placeholder="Name or code"
+          label="Search the claims by name or code"
+          testId="claim-search"
+        />
+        {lu.hemp && <EmployeeChip name={employeeName} onClear={() => filter({ hemp: "" })} testId="claim-employee" />}
+        <ClearFilters
+          count={filtersOn}
+          onClear={() => filter({ hkind: "", hstatus: "all", hraised: "", hdept: "", hbranch: "", hq: "", hemp: "" })}
+          testId="claim-clear"
+        />
+      </FilterBar>
+
+      <StatRow columns={3} testId="claim-kpis">
+        {statusTile("pending", "Waiting for HOD", pendingHint(summary), UserCheck)}
+        {statusTile(
+          "approved",
+          "Approved",
+          `${fmtShifts(summary?.creditedShifts ?? summary?.approvedShifts ?? 0)} shifts credited`,
+          ClipboardCheck,
+        )}
+        {statusTile("rejected", "Rejected", "nothing credited", XCircle)}
+      </StatRow>
+      {/* five tiles in a row only from 1280 px (with the sidebar they are too narrow before); short labels that wrap */}
+      <StatRow columns={5} className="lg:grid-cols-3 xl:grid-cols-5" testId="claim-kinds">
+        {CLAIM_KINDS.map((kind) => (
+          <StatTile
+            key={kind}
+            label={KIND_TILE_LABEL[kind]}
+            wrapLabel
+            value={summary?.byKind[kind] ?? 0}
+            icon={KIND_ICON[kind]}
+            tone={KIND_TONE[kind]}
+            loading={query.isLoading}
+            onClick={() => filter({ hkind: lu.hkind === kind ? "" : kind })}
+            active={lu.hkind === kind}
+            title={`Show only: ${KIND_LABEL[kind]}`}
+            testId={`claim-kpi-kind-${kind}`}
+          />
+        ))}
+      </StatRow>
+
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(c) => c.id}
+        onRowClick={(c) => setLu({ hclaim: String(c.id) })}
+        rowLabel={(c) => `Open the claim of ${c.employeeName}, ${kindText(c)}, ${dateShort(c.workDate)}`}
+        selectedKey={openId}
+        loading={query.isLoading}
+        error={
+          query.isError && !query.data
+            ? `Could not load the claims. ${errorMessage(query.error, "Check the connection and try again.")}`
+            : null
+        }
+        onRetry={() => void query.refetch()}
+        empty={{
+          icon: SearchX,
+          title: filtersOn > 0 ? "No claim matches these filters" : `No claim for ${monthChoiceLabel(month)}`,
+          hint: "Claims are filed under their date (the work, the OT, the birthday or the day off). Change the month or a filter, or raise one in the Raise a claim tab.",
+        }}
+        pagination={{
+          page: pageOf(lu.hpage),
+          pageSize: CLAIMS_PAGE_SIZE,
+          total: query.data?.total ?? 0,
+          onPageChange: (p) => setLu({ hpage: p > 1 ? String(p) : "" }),
+        }}
+        caption="Compensation claims"
+        testId="claims-table"
+      />
+
+      <ClaimDrawer
+        claim={open}
+        onClose={() => setLu({ hclaim: "" })}
+        canWithdraw={canWithdraw}
+        pausedReason={pausedReason}
+        onWithdraw={(c) => {
+          setLu({ hclaim: "" });
+          setWithdrawing(c);
+        }}
+      />
+
+      <AlertDialog
+        open={withdrawing !== null}
+        onOpenChange={(isOpen) => !isOpen && !withdraw.isPending && setWithdrawing(null)}
+      >
+        <AlertDialogContent data-testid="claim-withdraw-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Withdraw this claim?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {withdrawing
+                ? `${withdrawing.employeeName}, ${kindText(withdrawing)}, ${dateShort(withdrawing.workDate)}, ${claimAmountText(withdrawing)}. The claim leaves the Department Head's queue and nothing is credited. It can be raised again later.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={withdraw.isPending}>Keep the claim</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmWithdraw();
+              }}
+              disabled={withdraw.isPending}
+              data-testid="claim-withdraw-confirm"
+            >
+              Withdraw claim
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </SectionCard>
+  );
+}

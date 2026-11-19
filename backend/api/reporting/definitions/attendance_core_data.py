@@ -15,7 +15,9 @@ Design rules every attendance_core report follows (see also reporting/README.md)
 * The day's compensation marker (``compensation_kind`` / ``_minutes`` / ``_note``) says what shaped the verdict: a next-day
   OT allowance moved the start later (late minutes are measured from the moved start), a company-announced late-in /
   early-out time replaced the shift's own (the record does not keep it, so those minutes are unknown, never guessed), and
-  birthday / relaxation days are paid present (or half) days. The readers are at ``paid_without_punches`` below.
+  birthday-leave / relaxation days are paid present (or half) days. The readers are at ``paid_without_punches`` below.
+  A birthday carries the "birthday" marker only when it is PAID birthday leave: always under the old rule (before
+  CompensationConfig.claims_from), and from that day on only when nobody punched (a worked birthday is a normal day).
 * A stored verdict is only as fresh as the last time somebody opened the day in Attendance. When punches changed, or a
   leave was approved, after it was stored, the day keeps its stored status but carries an "Out of date" flag
   (build_day) -- and the absentee list treats a leave approved after the fact as leave, not absence.

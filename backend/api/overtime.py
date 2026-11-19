@@ -8,12 +8,26 @@ punch list, so a punch after midnight counts (the first OT screen subtracted clo
 Two kinds of OT, both following the rules in Settings -> Compensation (compensation_rules.py):
 
   Type 1 - "allowance": up to the Type 2 threshold (default 2 h 30) of extra work earns the next working day's first
-      punch a late-in allowance. AUTOMATIC: a status "auto" row is listed for information, HR does nothing, nothing is
-      paid. The attendance engine does NOT read these rows (it derives the allowance from the previous day itself), so a
-      row that was never listed can never cost an employee their allowance.
+      punch a late-in allowance. Before CompensationConfig.claims_from it is AUTOMATIC: a status "auto" row is listed for
+      information, HR does nothing, nothing is paid, and the attendance engine does NOT read these rows (it derives the
+      allowance from the previous day itself), so a row that was never listed can never cost an employee their
+      allowance. From claims_from on (2026-11-19 spec) the "auto" row is a CLAIMABLE detection: the employee (or HR on
+      their behalf) claims it, the HOD approves, and only an approved claim applies the allowance to the next working day
+      (compensation_engine.allowance_for_arrival). An unclaimed row simply stays in the records.
   Type 2 - "shift": MORE than the threshold earns 0.25 / 0.50 / 0.75 / 1 shift. Detection lists the day as "detected"
       with the SUGGESTED shifts from the clock-time ladder; HR assigns it (compensation_views.overtime_assign) as
-      relaxation (a day off) or pay, or rejects it.
+      relaxation (a day off) or pay, or rejects it. From claims_from on, with the quarters rule on
+      (CompensationConfig.ot_quarter_rule), a day is Type 2 when its extra work reaches a QUARTER of the employee's own
+      working shift length (compensation_rules.quarter_credit, rounded down, max 1.00: the suggested shifts), and below a
+      quarter it is Type 1 (the allowance rules, without the Type 2 threshold). The employee claims the credit (HOD
+      approves, ledger source ot_shift); HR's Pay stays possible, but a record with a pending / approved claim is never
+      paid or assigned (one OT day is paid or credited, never both).
+
+A row with an APPROVED claim (HolidayWorkClaim.overtime_record) is DECIDED as far as detection goes: it is never updated
+or pruned again (the approved claim keeps the figures it was granted for). A row whose claim is still PENDING (or was
+rejected) stays in step with the punches like any undecided row (security review 2026-11-19): a punch correction updates
+it, or prunes it when the day no longer qualifies, and the Department Head's approval then re-checks the claim against it
+(compensation_claims._approval_problem refuses a claim whose OT is gone or now earns less).
 
 Detection is a safe, idempotent upsert (sync_overtime): it never changes attendance or payroll on its own, never touches a
 record HR has already decided (announced / rejected), writes NOTHING when nothing changed, and re-running it only
@@ -40,7 +54,7 @@ from dataclasses import dataclass
 from datetime import date as date_type, timedelta
 
 from django.db import transaction
-from django.db.models import Max, Q
+from django.db.models import Exists, Max, OuterRef, Q
 
 from . import compensation_engine as comp
 from . import compensation_rules as rules
@@ -52,6 +66,7 @@ from .models import (
     CompensationRule,
     Employee,
     EmployeeShiftAssignment,
+    HolidayWorkClaim,
     OvertimeRecord,
     PayrollSettings,
 )
@@ -117,6 +132,69 @@ def _snapshot(employee_ids, date_from: date_type, date_to: date_type) -> dict:
     }
 
 
+def _claimed_record_ids(rows) -> set:
+    """Ids of the OT rows (of `rows`) that have an APPROVED claim: detection treats them as decided (a pending claim is
+    re-checked when it is approved instead)."""
+    ids = [r.pk for r in rows]
+    if not ids:
+        return set()
+    return set(
+        HolidayWorkClaim.objects.filter(
+            overtime_record_id__in=ids, status=HolidayWorkClaim.STATUS_APPROVED
+        ).values_list("overtime_record_id", flat=True)
+    )
+
+
+def _has_claim():
+    """Exists() test of "this OT row has an approved claim", for the conditional writes (approved after the snapshot)."""
+    return Exists(
+        HolidayWorkClaim.objects.filter(overtime_record_id=OuterRef("pk"), status=HolidayWorkClaim.STATUS_APPROVED)
+    )
+
+
+def classify_day(extra: int, shift, day, config, allowance_rules, shift_rules) -> dict | None:
+    """What one staff OT day is: {"ot_type", "status", "suggested_shifts", "allowance_minutes"} or None (nothing).
+
+    From CompensationConfig.claims_from on with the quarters rule on (and a shift whose working length is known): Type 2
+    when the extra work reaches a quarter of the working shift (the quarters credit is the suggested shifts), else Type 1
+    by the allowance rules with no Type 2 threshold (below a quarter is Type 1's). Otherwise the old rule: Type 2 MORE
+    than shift_min_extra_minutes (ladder on the last punch), Type 1 up to it (allowance rules)."""
+    threshold = config.shift_min_extra_minutes
+    allowance_from = config.allowance_effective_from
+    allowance_ok = config.allowance_enabled and (allowance_from is None or day >= allowance_from)
+    length = comp.shift_working_minutes(shift) if config.ot_quarter_rule_on(day) else 0
+    if length > 0:
+        credit = rules.quarter_credit(extra, length)
+        if credit >= rules.QUARTER:
+            if not config.shift_enabled:
+                return None
+            return {
+                "ot_type": OvertimeRecord.OT_TYPE_SHIFT,
+                "status": OvertimeRecord.STATUS_DETECTED,
+                "suggested_shifts": credit,
+                "allowance_minutes": 0,
+            }
+        minutes = rules.allowance_minutes_for(extra, allowance_rules) if allowance_ok else 0
+    else:
+        if config.shift_enabled and rules.is_type2_day(extra, threshold):
+            last_minutes = comp.shift_end_secs(shift) // 60 + extra  # minutes since the OT day's midnight
+            return {
+                "ot_type": OvertimeRecord.OT_TYPE_SHIFT,
+                "status": OvertimeRecord.STATUS_DETECTED,
+                "suggested_shifts": rules.shift_for_last_punch(last_minutes, shift_rules),
+                "allowance_minutes": 0,
+            }
+        minutes = rules.allowance_minutes_for(extra, allowance_rules, max_extra=threshold) if allowance_ok else 0
+    if minutes <= 0:
+        return None
+    return {
+        "ot_type": OvertimeRecord.OT_TYPE_ALLOWANCE,
+        "status": OvertimeRecord.STATUS_AUTO,
+        "allowance_minutes": minutes,
+        "suggested_shifts": None,
+    }
+
+
 def _gates(settings=None, config=None):
     """(settings, config) when detection may run at all, else None: the master switch and at least one feature on."""
     if settings is None:
@@ -140,7 +218,9 @@ def sync_overtime(
 ) -> SyncResult:
     """Bring the OT rows of [date_from, date_to] in step with the stored attendance days of the active staff (all of them,
     or only `employee_ids`): create what is missing, refresh what is still undecided and, with `prune`, remove an
-    undecided row whose day no longer qualifies. Writes nothing when nothing differs. Never touches a decided row."""
+    undecided row whose day no longer qualifies. Writes nothing when nothing differs. Never touches a decided row, nor a
+    row with an APPROVED claim (a pending claim's row follows its day; the approval re-checks it): see classify_day for
+    what a day is."""
     result = SyncResult()
     gates = _gates(settings, config)
     if gates is None:
@@ -165,9 +245,6 @@ def sync_overtime(
         if config.shift_enabled
         else []
     )
-    threshold = config.shift_min_extra_minutes
-    allowance_from = config.allowance_effective_from
-
     assignments: dict[int, list] = {}
     for a in (
         EmployeeShiftAssignment.objects.filter(employee_id__in=ids, effective_from__lte=date_to)
@@ -188,6 +265,7 @@ def sync_overtime(
         .only("employee_id", "date", "last_punch", "ot_extra_minutes")
     )
     existing = _snapshot(ids, date_from, date_to)
+    claimed = _claimed_record_ids(existing.values())
 
     wanted: dict[tuple, dict] = {}  # (employee_id, date) -> the row this day should be
     for rec in day_records:
@@ -201,31 +279,14 @@ def sync_overtime(
         extra = extra_for_record(rec, shift)
         if extra <= 0:
             continue
-        end_secs = comp.shift_end_secs(shift)
-        last_minutes = end_secs // 60 + extra  # minutes since the OT day's midnight (after midnight: 1440 +)
-        base = {
-            "shift_end_time": shift.end_time,
-            "last_punch_out": rec.last_punch,
-            "ot_minutes": extra,
-        }
-        if config.shift_enabled and rules.is_type2_day(extra, threshold):
+        kind = classify_day(extra, shift, rec.date, config, allowance_rules, shift_rules)
+        if kind is not None:
             wanted[(rec.employee_id, rec.date)] = {
-                **base,
-                "ot_type": OvertimeRecord.OT_TYPE_SHIFT,
-                "status": OvertimeRecord.STATUS_DETECTED,
-                "suggested_shifts": rules.shift_for_last_punch(last_minutes, shift_rules),
-                "allowance_minutes": 0,
+                "shift_end_time": shift.end_time,
+                "last_punch_out": rec.last_punch,
+                "ot_minutes": extra,
+                **kind,
             }
-        elif config.allowance_enabled and (allowance_from is None or rec.date >= allowance_from):
-            minutes = rules.allowance_minutes_for(extra, allowance_rules, max_extra=threshold)
-            if minutes > 0:
-                wanted[(rec.employee_id, rec.date)] = {
-                    **base,
-                    "ot_type": OvertimeRecord.OT_TYPE_ALLOWANCE,
-                    "status": OvertimeRecord.STATUS_AUTO,
-                    "allowance_minutes": minutes,
-                    "suggested_shifts": None,
-                }
 
     to_create: list[OvertimeRecord] = []
     to_update: list[tuple[OvertimeRecord, dict]] = []
@@ -234,8 +295,8 @@ def sync_overtime(
         if row is None:
             to_create.append(OvertimeRecord(employee_id=key[0], date=key[1], **values))
             continue
-        if row.status not in UNDECIDED:
-            continue  # HR already decided: never silently re-flag it
+        if row.status not in UNDECIDED or row.pk in claimed:
+            continue  # HR already decided, or its claim was approved: never silently re-flag it
         if row.ot_type == OvertimeRecord.OT_TYPE_LEGACY and values["ot_type"] != OvertimeRecord.OT_TYPE_SHIFT:
             continue  # an undecided legacy row stays what it was unless the day is now a Type 2 candidate
         changed = {field: value for field, value in values.items() if getattr(row, field) != value}
@@ -247,8 +308,8 @@ def sync_overtime(
     stale: list[int] = []
     if prune:
         for key, row in existing.items():
-            if key in wanted:
-                continue
+            if key in wanted or row.pk in claimed:
+                continue  # a row with an approved claim stays whatever the day now shows
             if config.allowance_enabled and row.status == OvertimeRecord.STATUS_AUTO:
                 stale.append(row.pk)
             elif (
@@ -272,12 +333,16 @@ def sync_overtime(
         for row, changed in sorted(to_update, key=lambda pair: pair[0].pk):
             # Conditional on the row STILL being undecided: an assignment or rejection committed after the snapshot
             # above makes this match nothing, and the HR decision stands.
-            result.updated += OvertimeRecord.objects.filter(pk=row.pk, status__in=UNDECIDED).update(**changed)
+            # A claim approved after the snapshot freezes the row too.
+            result.updated += (
+                OvertimeRecord.objects.filter(pk=row.pk, status__in=UNDECIDED).exclude(_has_claim()).update(**changed)
+            )
         if stale:
             victims = list(
                 OvertimeRecord.objects.select_for_update()
                 .filter(pk__in=stale, status__in=UNDECIDED)
                 .exclude(ot_type=OvertimeRecord.OT_TYPE_LEGACY)
+                .exclude(_has_claim())
                 .order_by("pk")
                 .values_list("pk", flat=True)
             )
@@ -336,7 +401,8 @@ def recompute_stale_days(
     staff = Employee.objects.filter(status="active", employment_type__in=list(employment_types))
     if employee_ids is not None:
         staff = staff.filter(pk__in=list(employee_ids))
-    ids = list(staff.values_list("pk", flat=True))
+    kinds = dict(staff.values_list("pk", "employment_type"))
+    ids = list(kinds)
     if not ids:
         return 0
     latest_punch: dict[tuple, object] = {}
@@ -359,8 +425,14 @@ def recompute_stale_days(
     }
     dirty: dict[int, set] = {}
     for (emp_id, punch_day), latest in latest_punch.items():
-        # a punch stamped after midnight can belong to the day before it, so it makes both days stale
-        for day in (punch_day, punch_day - timedelta(days=1)):
+        # a punch stamped after midnight can belong to the day before it, so it makes both days stale; for staff the day
+        # AFTER it too when that day has punches or a record (the next-morning rule: this day's punch count decides whose
+        # the next morning's early punch is)
+        candidates = [punch_day, punch_day - timedelta(days=1)]
+        next_day = punch_day + timedelta(days=1)
+        if kinds.get(emp_id) == "staff" and ((emp_id, next_day) in latest_punch or (emp_id, next_day) in stored):
+            candidates.append(next_day)
+        for day in candidates:
             if not date_from <= day <= date_to:
                 continue
             record = stored.get((emp_id, day))

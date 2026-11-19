@@ -1099,6 +1099,8 @@ COMPENSATION = N(
                 "subtab",
                 "Claim a day worked.",
                 routes=[_comp("compensation-leave/holiday-work/raise")],
+                # the month strip of Sundays / holidays with who worked (2026-11-19)
+                api=["compensation/holiday-work/month"],
             ),
             N(
                 "compensation.leave.holiday_work.claims",
@@ -1106,22 +1108,30 @@ COMPENSATION = N(
                 "subtab",
                 "Claims raised.",
                 routes=[_comp("compensation-leave/holiday-work/claims")],
+                # every claim kind (2026-11-19): the list, HR raising one on an employee's behalf (one path for both, so
+                # raising from the Raise / Birthdays / OT tabs needs Edit here too) and withdrawing compensation/claims/<id>
+                api=["compensation/claims"],
+                # the old holiday-work claim routes (the list / raise, and one claim's GET / DELETE) are claims too: the
+                # same key, so a role with View here cannot raise or withdraw through them (security review 2026-11-19)
+                apiPatterns=[r"compensation/holiday-work(/\d+)?"],
             ),
             N(
                 "compensation.leave.holiday_work.balance",
-                "Compensation balance",
+                "Balance",
                 "subtab",
                 "Leave earned and redeeming it.",
                 routes=[_comp("compensation-leave/holiday-work/balance")],
-                api=["compensation/balance"],
+                # compensation/use: HR asks the HOD to let an employee use the balance on a date (2026-11-19)
+                api=["compensation/balance", "compensation/use"],
             ),
             N(
                 "compensation.leave.holiday_work.credits",
-                "Earlier Alternative-Day credits",
+                "Credits",
                 "subtab",
                 "Credits from the old system.",
                 routes=[_comp("compensation-leave/holiday-work/credits")],
-                api=["compensation/credits"],
+                # compensation/ledger: every credit and debit of the balance with its claim / OT link (2026-11-19)
+                api=["compensation/credits", "compensation/ledger"],
             ),
             routes=[_comp("compensation-leave/holiday-work")],
             api=["compensation/holiday-work"],

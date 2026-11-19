@@ -23,6 +23,8 @@ import { LateMarksSection } from "./attendance/LateMarksSection";
 import { PenaltyEarlyOutSection } from "./attendance/PenaltyEarlyOutSection";
 import { LunchSection } from "./attendance/LunchSection";
 import { MidnightSection } from "./attendance/MidnightSection";
+import { NextMorningSection } from "./attendance/NextMorningSection";
+import { todayIst } from "./compensation/form";
 import { ModeSection } from "./attendance/ModeSection";
 import { ProductionSection } from "./attendance/ProductionSection";
 import { SaveFooter } from "./attendance/SaveFooter";
@@ -40,6 +42,7 @@ const STAFF_CONTENTS = [
   { id: "attendance-late-marks", label: "Late and Early Out" },
   { id: "attendance-penalty-early-out", label: "Penalty Early Out" },
   { id: "attendance-lunch", label: "Lunch return" },
+  { id: "attendance-next-morning", label: "Next-morning cut-off" },
   { id: "attendance-midnight", label: "After midnight" },
 ];
 
@@ -76,7 +79,8 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
   const [sample, setSample] = useState<Sample>({ start: EXAMPLE_START, grace: EXAMPLE_GRACE });
   const shift = exampleShift(sample.start, sample.grace);
   const arrival = arrivalOf(draft);
-  const errors = validateStaff(draft, access);
+  const today = useMemo(() => todayIst(), []);
+  const errors = validateStaff(draft, access, { savedNextMorningFrom: saved?.nextMorningFrom ?? "", today });
   const problem = firstError(errors);
   const changes = saved ? staffChanges(draft, saved) : [];
 
@@ -151,9 +155,9 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
           <Building size={15} className="mt-0.5 shrink-0" />
           <p>
             You are signed in for a branch. The company-wide rules (Second Half Start, the arrival timeline, the Late /
-            Early Out switches and Penalty Early Out) are shown but only an administrator can change them. Anything else
-            you save here is stored for your branch only: payroll, reports and WhatsApp alerts keep using the
-            company-wide values.
+            Early Out switches, Penalty Early Out and the next-morning cut-off) are shown but only an administrator can
+            change them. Anything else you save here is stored for your branch only: payroll, reports and WhatsApp
+            alerts keep using the company-wide values.
           </p>
         </div>
       )}
@@ -207,6 +211,17 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
           shift={shift}
         />
         <LunchSection draft={draft} patch={patch} errors={errors} loaded={loaded} shift={shift} />
+        <NextMorningSection
+          draft={draft}
+          patch={patch}
+          errors={errors}
+          loaded={loaded}
+          reported={access.nextMorningReported}
+          savedFrom={saved?.nextMorningFrom ?? ""}
+          today={today}
+          companyWide={access.companyWideEditable}
+          history={data?.staffNextMorningHistory ?? []}
+        />
         <MidnightSection draft={draft} patch={patch} errors={errors} loaded={loaded} shift={shift} />
 
         <SaveFooter

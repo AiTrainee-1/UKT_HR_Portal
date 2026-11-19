@@ -28,11 +28,22 @@ def _name(e) -> str:
 
 
 def request_waiting(
-    head, workflow: str, emp, what: str, obj=None, *, request_type: str = "", details: str = "", date: str = ""
+    head,
+    workflow: str,
+    emp,
+    what: str,
+    obj=None,
+    *,
+    request_type: str = "",
+    details: str = "",
+    date: str = "",
+    dedupe: str = "",
 ):
     """Queue the message for `head` (an Employee) about `emp`'s request `obj` of `workflow`. `what` is the short phrase the
     caller already has ("leave request"); `request_type` / `details` / `date` fill in for a request with no summary
-    builder (On-Duty). Returns the log row or None (switched off, no phone, already queued)."""
+    builder (On-Duty). `dedupe`, when given, replaces the request's id in the dedupe key (one message per employee + kind
+    + date of a compensation claim, however often it is raised and withdrawn). Returns the log row or None (switched off,
+    no phone, already queued)."""
     from . import whatsapp_service
     from .whatsapp_approvals import _BUILDERS
 
@@ -50,11 +61,15 @@ def request_waiting(
             "requested_on": (summary.requested_on if summary else "") or timezone.localdate().strftime("%d %b %Y"),
         }
         ref = getattr(obj, "pk", None)
+        if dedupe:
+            key = f"hodwait:{workflow}:{dedupe}:{head.pk}"
+        else:
+            key = f"hodwait:{workflow}:{ref}:{head.pk}" if ref else ""
         return whatsapp_service.send_notification(
             head,
             TYPE,
             params,
-            dedupe_key=f"hodwait:{workflow}:{ref}:{head.pk}" if ref else "",
+            dedupe_key=key,
             document_ref_id=ref,
             related_module=workflow,
             announce=False,  # the phone notification is Phone Notify Control's own (approval_waiting)

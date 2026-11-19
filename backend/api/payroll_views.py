@@ -2307,6 +2307,10 @@ def _ps_response(ps) -> dict:
         "simpleHalfShiftCutoff": str(ps.simple_half_shift_cutoff)[:5],
         "lastPunchPostShiftGraceHours": float(ps.last_punch_post_shift_grace_hours),
         "firstPunchPreShiftBufferHours": float(ps.first_punch_pre_shift_buffer_hours),
+        # Staff next-morning cut-off (compensation claims 2026-11-19, company-wide): a punch on the next date BEFORE the
+        # cut-off belongs to the day before when that day's punches leave a session open (shift_engine). From the
+        # from-date on only (forward-only: earlier days keep the grace rule above).
+        **_staff_next_morning_json(ps),
         # Late Detection: Morning Late-In / Evening Early-Out
         "morningLateInEnabled": ps.morning_late_in_enabled,
         "eveningEarlyOutEnabled": ps.evening_early_out_enabled,
@@ -2386,6 +2390,10 @@ def _ps_response(ps) -> dict:
 # Settings keys that only a company-wide (admin / branch-less) editor may change -see the guard in
 # payroll_settings_view. Keys, not model attributes, because they are what the request carries.
 COMPANY_WIDE_RULE_KEYS: tuple[str, ...] = (
+    # the staff next-morning cut-off: one company-wide rule (user_settings.COMPANY_WIDE_FIELDS)
+    "staffNextMorningEnabled",
+    "staffNextMorningCutoff",
+    "staffNextMorningFrom",
     "morningLateInEnabled",
     "eveningEarlyOutEnabled",
     # Penalty Early Out: the engine reads the company row only
@@ -2445,6 +2453,9 @@ FIELD_GROUPS: dict[str, tuple[str, ...]] = {
     "arrivalQuarterDeduction": ("settings.attendance.staff",),
     "lastPunchPostShiftGraceHours": ("settings.attendance.staff",),
     "firstPunchPreShiftBufferHours": ("settings.attendance.staff",),
+    "staffNextMorningEnabled": ("settings.attendance.staff",),
+    "staffNextMorningCutoff": ("settings.attendance.staff",),
+    "staffNextMorningFrom": ("settings.attendance.staff",),
     "prodFirstHalfStart": ("settings.attendance",),
     "prodFirstHalfEnd": ("settings.attendance",),
     "prodSecondHalfStart": ("settings.attendance",),
@@ -2908,6 +2919,9 @@ def payroll_settings_view(request: Request) -> Response:
             if not isinstance(data[key], bool):
                 return _error(f"{label} must be true (on) or false (off).")
             setattr(ps, attr, data[key])
+    next_morning_change, next_morning_problem = _apply_staff_next_morning(data, ps)
+    if next_morning_problem:
+        return _error(next_morning_problem)
     if "permissionMonthlyCap" in data and not (0 <= int(ps.permission_monthly_cap) <= 31):
         return _error("Permission monthly cap must be between 0 and 31")
     if "lateFreeAllowance" in data and int(ps.late_free_allowance) < 0:
@@ -2983,8 +2997,124 @@ def payroll_settings_view(request: Request) -> Response:
     else:
         ps.save()
         log_action(request, "update", "settings", description="Universal settings updated")
+    if next_morning_change:
+        old, new = next_morning_change
+        log_action(
+            request, "update", "settings",
+            description="Staff next-morning cut-off changed (Settings > Attendance > Staff)",
+            old_values=old, new_values=new,
+        )
 
     return Response(_ps_response(ps))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Staff next-morning cut-off (Settings > Attendance > Staff; shift_engine.staff_next_morning_applies)
+# ─────────────────────────────────────────────────────────────────────────────
+
+STAFF_NEXT_MORNING_CUTOFF_MIN = 1  # 00:01
+STAFF_NEXT_MORNING_CUTOFF_MAX = 12 * 60  # 12:00
+
+
+def _cutoff_text(cutoff) -> str:
+    return cutoff.strftime("%H:%M") if hasattr(cutoff, "strftime") else str(cutoff or "06:00")[:5]
+
+
+def _staff_next_morning_json(ps) -> dict:
+    from .settings_history import as_json
+
+    cutoff = ps.staff_next_morning_cutoff
+    from_date = ps.staff_next_morning_from
+    return {
+        "staffNextMorningEnabled": bool(ps.staff_next_morning_enabled),
+        "staffNextMorningCutoff": _cutoff_text(cutoff),
+        "staffNextMorningFrom": from_date.isoformat() if hasattr(from_date, "isoformat") else (from_date or None),
+        # read-only: when the rule was switched on / off and which cut-off was in force (a day follows the entry in
+        # force on it, so a change never re-judges an earlier day; review 2026-11-19). Empty = never changed.
+        "staffNextMorningHistory": [
+            {"from": e.get("from"), "enabled": bool(e.get("enabled")), "cutoff": _cutoff_text(e.get("cutoff"))}
+            for e in as_json(getattr(ps, "staff_next_morning_history", None) or [])
+        ],
+    }
+
+
+def _apply_staff_next_morning(data, ps):
+    """Validate and set the three staff next-morning keys of a PUT. Returns ((old, new) audit values | None, problem
+    sentence | None); nothing is saved here. Rules: the switch is true / false; the cut-off is "HH:MM" between 00:01 and
+    12:00; the from-date only moves FORWARD (never earlier than the saved one, never cleared once set), so no day already
+    judged by the old grace rule changes.
+
+    Dated history (staff_next_morning_history, review 2026-11-19): switching the rule on / off or changing the cut-off
+    appends an entry dated TODAY (IST), so every earlier day keeps the rule and the cut-off it was judged by, however often
+    it is recomputed (the switch and the cut-off used to re-judge every day already decided). Moving the from-date forward
+    moves the history's start there. A history never recorded before is first seeded with the rule as it was."""
+    from datetime import time as time_type
+
+    from .clock import ist_today
+
+    keys = ("staffNextMorningEnabled", "staffNextMorningCutoff", "staffNextMorningFrom")
+    if not any(k in data for k in keys):
+        return None, None
+    from .settings_history import appended, moved_start
+
+    before = _staff_next_morning_json(ps)
+    saved_from = ps.staff_next_morning_from
+    if isinstance(saved_from, str):
+        saved_from = date.fromisoformat(saved_from[:10])
+    history = list(getattr(ps, "staff_next_morning_history", None) or [])
+    if not history:  # the rule as it was until now, from its own start
+        history = [
+            {
+                "from": saved_from.isoformat() if saved_from else None,
+                "enabled": bool(ps.staff_next_morning_enabled),
+                "cutoff": before["staffNextMorningCutoff"],
+            }
+        ]
+    if "staffNextMorningEnabled" in data:
+        if not isinstance(data["staffNextMorningEnabled"], bool):
+            return None, "The next-morning cut-off switch must be true (on) or false (off)."
+        ps.staff_next_morning_enabled = data["staffNextMorningEnabled"]
+    if "staffNextMorningCutoff" in data:
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", str(data["staffNextMorningCutoff"] or "").strip())
+        minutes = int(match.group(1)) * 60 + int(match.group(2)) if match and int(match.group(2)) < 60 else None
+        if minutes is None or not STAFF_NEXT_MORNING_CUTOFF_MIN <= minutes <= STAFF_NEXT_MORNING_CUTOFF_MAX:
+            return None, "The next-morning cut-off must be a time between 00:01 and 12:00 (HH:MM)."
+        ps.staff_next_morning_cutoff = time_type(minutes // 60, minutes % 60)
+    if "staffNextMorningFrom" in data:
+        raw = data["staffNextMorningFrom"]
+        if raw in (None, ""):
+            if saved_from is not None:
+                return None, (
+                    "The next-morning cut-off start date cannot be cleared: that would change days already judged by the "
+                    "old rule. Choose a later date instead."
+                )
+            new_from = None
+        else:
+            try:
+                new_from = date.fromisoformat(str(raw)[:10])
+            except ValueError:
+                return None, "The next-morning cut-off start date must be a date (YYYY-MM-DD)."
+            if saved_from is not None and new_from < saved_from:
+                return None, (
+                    f"The next-morning cut-off start date can only move forward: it is {saved_from.isoformat()}, so "
+                    "choose that day or a later one (earlier days keep the rule they were judged by)."
+                )
+        ps.staff_next_morning_from = new_from
+    after = _staff_next_morning_json(ps)
+    changed = [k for k in keys if before[k] != after[k]]
+    if not changed:
+        return None, None
+    if "staffNextMorningEnabled" in changed or "staffNextMorningCutoff" in changed:
+        # from today on (IST): the days already judged keep the entry in force on them
+        history = appended(
+            history,
+            {"enabled": bool(ps.staff_next_morning_enabled), "cutoff": after["staffNextMorningCutoff"]},
+            ist_today(),
+        )
+    if "staffNextMorningFrom" in changed and ps.staff_next_morning_from is not None:
+        history = moved_start(history, ps.staff_next_morning_from)
+    ps.staff_next_morning_history = history
+    return ({k: before[k] for k in changed}, {k: after[k] for k in changed}), None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

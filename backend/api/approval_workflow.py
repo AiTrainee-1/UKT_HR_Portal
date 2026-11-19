@@ -40,6 +40,7 @@ from typing import Callable
 
 from django.apps import apps
 from django.core.signals import request_started
+from django.db import IntegrityError, transaction
 from django.db.models.signals import post_delete, post_save
 from django.utils import timezone
 
@@ -209,20 +210,22 @@ DEFINITIONS: tuple[WorkflowDef, ...] = (
     ),
     WorkflowDef(
         key="holiday_work",
-        label="Holiday / Sunday work compensation",
+        label="Compensation claims",
         group="Leave & attendance",
         purpose=(
-            "HR records that a staff member worked on a Sunday or a company holiday and asks for 0.25 to 1 shift of "
-            "compensation. The Department Head must approve it before the shifts are added to the employee's "
-            "compensation balance, which HR later redeems as an alternative day off."
+            "A staff member (in the mobile app or the Employee Web App) or HR on their behalf claims compensation the "
+            "system detected: work on a Sunday or a company holiday, an OT late-in allowance, an OT shift credit or a "
+            "birthday credit, or asks to use the compensation balance on a day. The Department Head must approve it "
+            "before anything happens: credits are added to the compensation balance, an allowance applies to the next "
+            "working day, and a use request takes the shifts from the balance and gives that day off."
         ),
-        requested_by="HR",
+        requested_by="Employee or HR",
         default_steps=(_step(HOD),),
         allowed_roles=(HOD,),
         editable=False,
         hod_flag="can_approve_compensation",
-        fixed_note="HR is the one who raises the claim, so the Department Head always decides it.",
-        on_off_effect="HR cannot raise new holiday-work claims while it is off; claims already waiting can still be decided.",
+        fixed_note="The employee or HR raises the claim, so the Department Head always decides it.",
+        on_off_effect="New compensation claims cannot be raised while it is off; claims already waiting can still be decided.",
     ),
     WorkflowDef(
         key="outpass",
@@ -869,7 +872,7 @@ def resync_pending(key: str) -> int:
     return changed
 
 
-def notify_hod_of_request(key: str, emp, what: str, obj=None) -> None:
+def notify_hod_of_request(key: str, emp, what: str, obj=None, dedupe: str = "") -> None:
     """Tell the employee's ONE Department Head (if they may act on this kind of request) that a request has reached
     their step. Used when a decision passes a request to the Department Head, and at submission when the pipeline
     starts with the Department Head alone.
@@ -879,7 +882,11 @@ def notify_hod_of_request(key: str, emp, what: str, obj=None) -> None:
     other kinds keep telling whoever the employee's Department Head is, exactly as before.
 
     Two independent channels: the head's phone notification (Phone Notify Control) and, when WhatsApp Control has it on,
-    a WhatsApp message (whatsapp_hod.py; `obj`, the request, gives it the details)."""
+    a WhatsApp message (whatsapp_hod.py; `obj`, the request, gives it the details).
+
+    `dedupe` (optional) names WHAT the request is about rather than which row it is (a compensation claim: employee +
+    kind + date): the head is told once per such key on each channel, so raising, withdrawing and raising the same thing
+    again never repeats the message (security review 2026-11-19). Empty = once per request row, as before."""
     defn = definition(key)
     if not defn.hod_flag:
         return
@@ -889,33 +896,41 @@ def notify_hod_of_request(key: str, emp, what: str, obj=None) -> None:
 
     notification = apps.get_model("api", "Notification")
     for m in managers_to_notify(emp, defn.hod_flag, exclude_self=defn.hod_only):
-        whatsapp_hod.request_waiting(m.employee, key, emp, what, obj)  # WhatsApp Control's own message
+        whatsapp_hod.request_waiting(m.employee, key, emp, what, obj, dedupe=dedupe)  # WhatsApp Control's own message
         if not push_recipients.allows(m.employee):
             continue  # not a phone notification recipient (Phone Notify Control -> Settings)
+        push_key = f"hodwait:{key}:{dedupe}"[:160] if dedupe else ""
+        if push_key and notification.objects.filter(employee=m.employee, dedupe_key=push_key).exists():
+            continue  # already told about this very thing
         title, message = push_templates.apply(  # HR's wording (Phone Notify Control -> Message Text), else this one
             "approval_waiting",
             {"employee_name": f"{emp.first_name} {emp.last_name}", "employee_code": emp.employee_code, "request": what},
             "",
             f"{emp.first_name} {emp.last_name}'s {what} is waiting for your approval.",
         )
-        notification.objects.create(
-            employee=m.employee,
-            type=key,
-            title=title,
-            message=message,
-            # its own switch on Phone Notify Control (mobile_messages.EXTRA_TYPES), and the workflow's
-            source="approval_waiting",
-            related_module=_push_module(key),
-        )
+        try:
+            with transaction.atomic():
+                notification.objects.create(
+                    employee=m.employee,
+                    type=key,
+                    title=title,
+                    message=message,
+                    # its own switch on Phone Notify Control (mobile_messages.EXTRA_TYPES), and the workflow's
+                    source="approval_waiting",
+                    related_module=_push_module(key),
+                    dedupe_key=push_key,
+                )
+        except IntegrityError:
+            continue  # the same notice was written a moment ago (uniq_notification_employee_dedupe_key)
 
 
-def notify_new_request(key: str, emp, what: str, cfg: Config | None = None, obj=None) -> None:
+def notify_new_request(key: str, emp, what: str, cfg: Config | None = None, obj=None, dedupe: str = "") -> None:
     """At submission: when the Department Head alone is the first step, they have to be told (they act on a list, not
     an inbox). A first step shared with HR ('HOD or HR') is left as it always was: HR's queue and the HOD's approvals
-    screen show it."""
+    screen show it. `dedupe`: see notify_hod_of_request."""
     cfg = cfg or get_config(key)
     if cfg.steps[0].roles == (HOD,):
-        notify_hod_of_request(key, emp, what, obj)
+        notify_hod_of_request(key, emp, what, obj, dedupe=dedupe)
 
 
 def phrase(roles: tuple[str, ...]) -> str:

@@ -181,8 +181,17 @@ class AccessTests(EmployeeBase):
                     "tomorrowAllowance",
                     "askHr",
                     "message",
+                    # the claim workflow (2026-11-19, additive)
+                    "canClaim",
+                    "claimMessage",
+                    "claimWindowDays",
+                    "useBalance",
                 ]
             ),
+        )
+        self.assertEqual(body["claimWindowDays"], 45)
+        self.assertEqual(
+            sorted(body["useBalance"]), ["allowed", "availableShifts", "balanceShifts", "message", "pendingShifts"]
         )
         self.assertEqual(
             sorted(body["enabled"]),
@@ -211,8 +220,12 @@ class FlagsAndAskHrTests(EmployeeBase):
         ask = self.comp()["askHr"]
         self.assertEqual(ask["title"], "Ask Request for Compensation")
         self.assertIn("contact HR", ask["text"])
-        self.assertEqual(len(ask["points"]), 5)
-        self.assertTrue(any("automatic" in p for p in ask["points"]))
+        # since 2026-11-19 the employee claims in the app (the allowance is no longer automatic): one point per switch
+        # that is on, plus "Use my balance"
+        self.assertEqual(len(ask["points"]), 6)
+        self.assertFalse(any("automatic" in p for p in ask["points"]))
+        self.assertTrue(any("Claim it here" in p for p in ask["points"]))
+        self.assertTrue(any("Use my balance" in p for p in ask["points"]))
         self.assertTrue(any("Sunday or a company holiday" in p for p in ask["points"]))
         self.assertEqual(
             (
@@ -229,8 +242,9 @@ class FlagsAndAskHrTests(EmployeeBase):
             allowance_enabled=False, shift_enabled=False, windows_enabled=False, birthday_enabled=False
         )
         points = self.comp()["askHr"]["points"]
-        self.assertEqual(len(points), 1)
+        self.assertEqual(len(points), 2)  # holiday work, and using the balance (the master switch is on)
         self.assertIn("Sunday", points[0])
+        self.assertIn("Use my balance", points[1])
         CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=False)
         self.assertEqual(
             self.comp()["askHr"]["points"], ["Compensation is not switched on yet. Contact HR for any question."]
@@ -733,13 +747,17 @@ class ItemTests(EmployeeBase):
         self.assertEqual(self.items(self.comp(), "window_late_in"), [])
 
     def test_birthday_leave_upcoming_and_this_year(self):
+        # pinned (migration 0166 stamps claims_from with the real date of the run): March 2026 keeps the old rule
+        CompensationConfig.objects.filter(pk=1).update(claims_from=date(2026, 10, 1))
         self.asha.date_of_birth = date(1990, 12, 25)  # Friday this year, still to come
         self.asha.save()
         items = self.items(self.comp(), "birthday")
         self.assertEqual(
             [(i["date"], i["status"], i["group"]) for i in items], [("2026-12-25", "upcoming", "birthday")]
         )
-        self.assertEqual(items[0]["title"], "Birthday leave (paid)")
+        # the claim rule (claims_from 2026-10-01): a normal working day, paid leave only when not worked
+        self.assertEqual(items[0]["title"], "Birthday: a normal working day")
+        self.assertNotIn("whether you come to work or not", items[0]["detail"])
         # a birthday that has passed this year shows (applied or not) together with next year's
         self.asha.date_of_birth = date(1990, 3, 10)
         self.asha.save()
@@ -960,7 +978,9 @@ class QueryCountTests(EmployeeBase):
             body = self.comp()
         self.assertGreater(len(body["items"]), 200)
         self.assertEqual(len(more), len(month))
-        self.assertLessEqual(len(more), 45)
+        # 45 until 2026-11-19; the claim workflow reads the open claims, the worked Sundays, the Department Head and the
+        # balance figures once per answer (never per item)
+        self.assertLessEqual(len(more), 50)
 
 
 # ═════════════════════════════ /api/employee/hod ═════════════════════════════
@@ -1039,8 +1059,11 @@ class HodCardTests(HodBase):
         self.assertTrue(all(a["canApprove"] for a in approvals))
         self.assertTrue(all(a["reason"] is None for a in approvals))
         self.assertEqual(by_key["leave"]["label"], "Leave")
-        self.assertEqual(by_key["holiday_work"]["label"], "Holiday / Sunday work compensation")
-        self.assertEqual((by_key["holiday_work"]["requestedBy"], by_key["holiday_work"]["path"]), ("HR", "HR → HOD"))
+        self.assertEqual(by_key["holiday_work"]["label"], "Compensation claims")
+        self.assertEqual(
+            (by_key["holiday_work"]["requestedBy"], by_key["holiday_work"]["path"]),
+            ("Employee or HR", "Employee or HR → HOD"),
+        )
         self.assertEqual(by_key["leave"]["path"], "Employee → HOD or HR")
         self.assertEqual(by_key["attendance_correction"]["requestedBy"], "HR")
 
@@ -1083,7 +1106,7 @@ class HodCardTests(HodBase):
         item = self.approvals(self.hod())["holiday_work"]
         self.assertEqual(item["canApprove"], True)
         self.assertIn("switched off", item["reason"])
-        self.assertIn("HR cannot raise new claims", item["reason"])
+        self.assertIn("nor HR can raise new claims", item["reason"])
         self.assertIn("already waiting can still be decided", item["reason"])
         CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=True)
         settings = PayrollSettings.get()
@@ -1101,6 +1124,10 @@ class HodCardTests(HodBase):
         # the same claim, decided through the head's own endpoint, with the switch off: 200 and a credit
         claim = HolidayWorkClaim.objects.create(
             employee=self.asha, work_date=date(2026, 10, 11), shifts=Decimal("0.50"), approval_trail=[]
+        )
+        # the work is on record (the approval checks it again: security review 2026-11-19)
+        AttendanceDayRecord.objects.create(
+            employee=self.asha, date=date(2026, 10, 11), status="present", shifts_earned=Decimal("1.00")
         )
         CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=False)
         self.assertTrue(self.approvals(self.hod())["holiday_work"]["canApprove"])

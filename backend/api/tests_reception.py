@@ -121,6 +121,11 @@ class VisitorGateEmployeeLinkTests(TestCase):
 
     def test_repeat_visitor_links_meeting_employee(self):
         visitor = Visitor.objects.create(name="Returning Person", phone="70000 00003")
+        # "Already visited" is for someone who has visited THIS branch before (per-branch identity, 19 Nov 2026)
+        VisitorVisit.objects.create(
+            visitor=visitor, branch=self.branch, whom_to_meet="Someone", purpose="First visit",
+            visitor_name="Returning Person",
+        )
         request = self.factory.post(f"/api/visitor/gate/{self.qr.token}/repeat", {
             "phone": "70000 00003", "whomToMeet": "Meeting Target", "purpose": "Follow-up",
             "meetingEmployeeId": self.emp.id,

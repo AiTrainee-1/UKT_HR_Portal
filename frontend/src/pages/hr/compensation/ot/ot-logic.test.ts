@@ -161,7 +161,8 @@ describe("words", () => {
 
   it("marks a punch after midnight", () => {
     expect(lastPunchText(row(3))).toBe("21:30");
-    expect(lastPunchText(row(4))).toBe("01:00 (next day)");
+    // a next-morning punch before the cut-off ends the OT day: it says so in words
+    expect(lastPunchText(row(4))).toBe("01:00 next day");
     expect(lastPunchText({ lastPunchOut: null, lastPunchNextDay: false })).toBe("—");
   });
 

@@ -511,6 +511,8 @@ KINDS: tuple[Kind, ...] = (
         ("approved",),
         ("rejected",),
         raised_by="hr",
+        # the claim table holds every compensation claim kind since 2026-11-19: this row is Sunday / holiday work only
+        extra=(("kind", "holiday_work"),),
         decided_columns=("reviewed_at",),
         approver_columns=("reviewed_by",),
     ),

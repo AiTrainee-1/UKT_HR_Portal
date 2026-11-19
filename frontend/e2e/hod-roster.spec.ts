@@ -143,10 +143,9 @@ test("the Add Department User dialog has a clear permission picker, hides existi
   await expect(dialog.getByTestId("perm-canApproveCompensation")).toContainText("Holiday / Sunday work");
   await expect(dialog.getByTestId("perm-note-canApproveLeaves")).toContainText("Employee → HOD or HR");
   await expect(dialog.getByTestId("perm-note-canApproveMissingPunch")).toContainText("Employee → HOD → HR");
-  // Holiday / Sunday work is raised by HR and decided by the Department Head
-  await expect(dialog.getByTestId("perm-note-canApproveCompensation")).toContainText(
-    "HR raises it, the Department Head approves",
-  );
+  // compensation claims (every kind since 2026-11-19) are raised by the employee or HR and decided by the
+  // Department Head
+  await expect(dialog.getByTestId("perm-note-canApproveCompensation")).toContainText("Employee or HR → HOD");
 
   // switching all off warns; switching two back on counts them
   await dialog.getByRole("button", { name: "Disable all" }).click();

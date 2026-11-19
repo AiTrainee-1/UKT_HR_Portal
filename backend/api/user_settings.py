@@ -60,6 +60,12 @@ COMPANY_WIDE_FIELDS = frozenset(
         "early_out_penalty_deduction",
         "early_out_penalty_from",
         "early_out_penalty_in_late_pool",
+        # The staff next-morning cut-off (compensation claims 2026-11-19): the attendance engine reads the company row, and
+        # its from-date protects history, so a branch can never hold a private value.
+        "staff_next_morning_enabled",
+        "staff_next_morning_cutoff",
+        "staff_next_morning_from",
+        "staff_next_morning_history",
     }
 )
 

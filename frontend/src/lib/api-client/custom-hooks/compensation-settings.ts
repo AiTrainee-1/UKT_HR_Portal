@@ -28,11 +28,38 @@ export type CompensationShiftRule = {
   sortOrder: number;
 };
 
+/**
+ * The claim workflow (2026-11-19): from `from` on, Type 1 allowances, Type 2 OT credits and birthday credits are given only
+ * after a claim (by the employee in the apps, or by HR) is approved by the employee's Department Head. Read-only: the
+ * server sets the date once (the day the workflow started); days before it keep the old rules. An older backend sends none.
+ */
+export type CompensationClaimsInfo = { from: string | null };
+
+/** One entry of the quarters rule's dated history. */
+export type QuarterRuleHistoryEntry = { from: string | null; on: boolean };
+
 export type CompensationSettings = {
   /** Settings -> Payroll -> OT / Compensation: while it is off none of the features below acts. */
   masterEnabled: boolean;
   allowance: { enabled: boolean; effectiveFrom: string | null };
-  shift: { enabled: boolean; minExtraMinutes: number; relaxationEnabled: boolean; payEnabled: boolean };
+  shift: {
+    enabled: boolean;
+    minExtraMinutes: number;
+    relaxationEnabled: boolean;
+    payEnabled: boolean;
+    /**
+     * Staff OT credit by quarters of the employee's own working shift (rounded down, at most 1.00) instead of the
+     * last-punch ladder. Absent on an older backend.
+     */
+    quarterRule?: boolean;
+    /**
+     * When the quarters rule was on / off: a day follows the entry in force on it (`from` null = since the claims date),
+     * so a change never re-detects an earlier day. Read-only; absent on an older backend, empty while never changed.
+     */
+    quarterRuleHistory?: QuarterRuleHistoryEntry[];
+  };
+  /** Absent on an older backend. */
+  claims?: CompensationClaimsInfo | null;
   windows: { enabled: boolean };
   holidayWork: { enabled: boolean };
   birthday: { enabled: boolean; effectiveFrom: string | null };
@@ -49,7 +76,13 @@ export type CompensationSettings = {
  */
 export type CompensationSettingsInput = {
   allowance?: { enabled?: boolean; effectiveFrom?: string | null };
-  shift?: { enabled?: boolean; minExtraMinutes?: number; relaxationEnabled?: boolean; payEnabled?: boolean };
+  shift?: {
+    enabled?: boolean;
+    minExtraMinutes?: number;
+    relaxationEnabled?: boolean;
+    payEnabled?: boolean;
+    quarterRule?: boolean;
+  };
   windows?: { enabled?: boolean };
   holidayWork?: { enabled?: boolean };
   birthday?: { enabled?: boolean; effectiveFrom?: string | null };

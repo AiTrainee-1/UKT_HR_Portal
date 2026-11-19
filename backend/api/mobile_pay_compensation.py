@@ -76,16 +76,79 @@ KIND_SOURCE = {
     "birthday": "automatic",
     "balance_credit": "hr",
     "alternative_day": "hr",
+    # the claim workflow (2026-11-19): detected by the system, claimed and approved by the Department Head
+    "birthday_credit": "automatic",
+    "use_balance": "hr",
 }
 
 
-def _tag(item: dict) -> dict:
+def _tag(item: dict, cfg=None) -> dict:
     source = KIND_SOURCE.get(item["kind"], "hr")
+    label = _birthday_source_label(item, cfg)
+    own = _own_claim_source(item)
+    if own is not None:
+        source, label = "automatic", own
     item["source"] = source
-    item["sourceLabel"] = SOURCE_LABELS[source]
+    item["sourceLabel"] = label or SOURCE_LABELS[source]
     item["givenByHr"] = source in ("hr", "company")
     item["month"] = (item.get("date") or "")[:7] or None
     return item
+
+
+# What decided a birthday under the claim rule (on/after CompensationConfig.claims_from): the attendance, then a claim the
+# Department Head approves; never "Automatic" whatever the punches (the old rule's label, kept for older birthdays).
+BIRTHDAY_CLAIM_LABELS = {
+    "pending": "Claimed: waiting for your Department Head",
+    "approved": "Claim approved by your Department Head",
+    "rejected": "Claim not approved by your Department Head",
+}
+
+
+OWN_CLAIM_LABELS = {
+    "holiday_work": {
+        "pending": "Claimed by you: waiting for your Department Head",
+        "approved": "Claimed by you, approved by your Department Head",
+        "rejected": "Claimed by you, not approved",
+    },
+    "use_balance": {
+        "pending": "Asked by you: waiting for your Department Head",
+        "approved": "Asked by you, approved by your Department Head",
+        "rejected": "Asked by you, not approved",
+    },
+}
+
+
+def _own_claim_source(item: dict) -> str | None:
+    """The sourceLabel of a holiday-work / use-balance item that HR did NOT give: a worked Sunday or holiday still to claim
+    (hwd-<date>) or a claim the employee raised themselves; None for everything else. Such an item is tagged source
+    "automatic" (not "Given by HR"): `source` keeps one of its three old values, older app builds turn others into hr."""
+    if item.get("kind") not in OWN_CLAIM_LABELS:
+        return None
+    if str(item.get("key") or "").startswith("hwd-"):
+        return "Detected: you worked this day"
+    claim = item.get("claim") or {}
+    if claim.get("raisedByRole") != "employee":
+        return None
+    labels = OWN_CLAIM_LABELS[item["kind"]]
+    return labels.get(claim.get("status"), labels["pending"])
+
+
+def _birthday_source_label(item: dict, cfg) -> str | None:
+    """The sourceLabel of a NEW-rule birthday item (`source` keeps its old value for older app builds), else None."""
+    if cfg is None or item.get("kind") not in ("birthday", "birthday_credit") or not item.get("date"):
+        return None
+    try:
+        day = date.fromisoformat(item["date"][:10])
+    except ValueError:
+        return None
+    if not cfg.claims_apply_on(day):
+        return None
+    if item["kind"] == "birthday_credit":
+        claim = item.get("claim") or {}
+        return BIRTHDAY_CLAIM_LABELS.get(claim.get("status"), "Worked on your birthday: claim one shift")
+    if item.get("status") == "applied":
+        return "Automatic: not at work on your birthday"
+    return "Decided by your attendance on the day"
 
 
 def _compensation_day_items(emp, today: date, start: date, end: date) -> list[dict]:
@@ -123,13 +186,16 @@ def _compensation_day_items(emp, today: date, start: date, end: date) -> list[di
 
 
 def _credit_items(emp, start: date, end: date) -> list[dict]:
-    """Credits on the balance that are not a holiday-work approval (those are listed as their claim)."""
+    """Credits on the balance that no claim wrote (a claim's credit is listed as the claim: holiday work, OT shift,
+    birthday)."""
     out = []
     for e in (
         CompensationLedger.objects.filter(
             employee=emp, entry_type=CompensationLedger.ENTRY_CREDIT, date__gte=start, date__lte=end
         )
         .exclude(source="holiday_work")
+        # a credit an approved claim wrote (OT shift, birthday) is listed as its claim's own item
+        .exclude(claim__isnull=False)
         .order_by("-date", "-id")
     ):
         if e.source == "ot_shift":
@@ -250,18 +316,22 @@ def history_for(emp, year: int, today: date) -> dict:
     def holidays_for(day: date) -> dict:
         return holidays if start <= day <= end else holiday_names(day, day)
 
-    items, _today, _tomorrow = _ot_items(emp, today, cfg, flags["master"], assignments, since=start)
-    items += _claim_items(emp, today, holidays, since=start)
+    from .compensation_claims import context
+
+    ctx = context(for_employee=True, today=today, cfg=cfg, master=flags["master"])
+    ctx.remember_open_claims(emp)
+    items, _today, _tomorrow = _ot_items(emp, today, cfg, flags["master"], assignments, since=start, ctx=ctx)
+    items += _claim_items(emp, today, holidays, since=start, ctx=ctx)
     items += _redemption_items(emp, today, since=start)
     if flags["windows"]:
         items += _window_items(emp, today, since=start, until=end)
     if flags["birthday"]:
-        items += _birthday_items(emp, today, holidays_for, cfg, flags["master"], assignments, year=year)
+        items += _birthday_items(emp, today, holidays_for, cfg, flags["master"], assignments, year=year, ctx=ctx)
     items += _compensation_day_items(emp, today, start, end)
     items += _credit_items(emp, start, end)
     items += _alternative_day_items(emp, start, end)
     # the builders read "from `since` on": keep the year only
-    items = [_tag(i) for i in items if i.get("date") and start.isoformat() <= i["date"] <= end.isoformat()]
+    items = [_tag(i, cfg) for i in items if i.get("date") and start.isoformat() <= i["date"] <= end.isoformat()]
     items.sort(key=lambda i: (i["date"] or "", i["key"]), reverse=True)
 
     ledger = CompensationLedger.objects.filter(employee=emp, date__gte=start, date__lte=end)
@@ -273,7 +343,7 @@ def history_for(emp, year: int, today: date) -> dict:
             Decimal(str(i["shifts"]))
             for i in items
             if i["kind"] in ("ot_shift_relaxation", "ot_shift_pay")
-            or (i["kind"] == "holiday_work" and i["status"] == "approved")
+            or (i["kind"] == "holiday_work" and i["status"] == "approved" and i["source"] == "hr")
             if i["shifts"] is not None
         ),
         Decimal("0"),

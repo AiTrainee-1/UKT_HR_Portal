@@ -878,10 +878,11 @@ def hod_requests(m: DepartmentManager, status_filter: str = "pending") -> dict:
         attendance_qs = AttendanceOverrideRequest.objects.none()
     attendance_qs = attendance_qs.order_by("-created_at")
 
-    from .holiday_work_views import claims_json
+    # every compensation claim kind (2026-11-19): holiday work, OT allowance / shift credit, birthday, use of the balance
+    from .compensation_claims import claims_json as compensation_claims_json
     from .models import HolidayWorkClaim
     holiday_qs = HolidayWorkClaim.objects.select_related(
-        "employee__department", "employee__designation", "employee__branch"
+        "employee__department", "employee__designation", "employee__branch", "overtime_record"
     ).prefetch_related("ledger_entries").filter(emp_filter)
     if status_filter != "all" and m.can_approve_compensation:
         holiday_qs = holiday_qs.filter(status=status_filter)
@@ -959,7 +960,7 @@ def hod_requests(m: DepartmentManager, status_filter: str = "pending") -> dict:
             _override_request_dict(r, cfgs["attendance_correction"]) for r in mine("attendance_correction", attendance_qs)
         ],
         "casualLeaves": [_cl_dict(r, cfgs["casual_leave"]) for r in mine("casual_leave", casual_qs)],
-        "holidayWorkClaims": claims_json(mine("holiday_work", holiday_qs)),
+        "holidayWorkClaims": compensation_claims_json(mine("holiday_work", holiday_qs), for_role="hod"),
         "onDutySessions": [
             {**_on_duty_session_dict(s, cfg=cfgs["on_duty"]), "journeyId": on_duty_journeys.get(s.pk)}
             for s in on_duty_rows
@@ -1386,14 +1387,36 @@ def manager_update_casual_leave_status(request: Request, pk: int) -> Response:
     return hod_decide_casual_leave(m, pk, request.data, hod_display_name(m), request)
 
 
+def _claim_audit_tail(claim, entries) -> str:
+    """The end of the audit line for a HOD decision on a compensation claim: what the decision did to the balance
+    (credit kinds: "added to the compensation balance"; a use request: "taken from the compensation balance"; an
+    allowance: the minutes) and the ledger entry it wrote."""
+    from .models import HolidayWorkClaim
+
+    approved = claim.status == HolidayWorkClaim.STATUS_APPROVED
+    if claim.kind == HolidayWorkClaim.KIND_OT_ALLOWANCE:
+        tail = f": {claim.minutes or 0} min late-in allowance" + (" for the next working day" if approved else "")
+    elif claim.kind == HolidayWorkClaim.KIND_USE_BALANCE:
+        tail = f": {claim.shifts:.2f} shift" + (" taken from the compensation balance" if approved else "")
+    else:
+        tail = f": {claim.shifts:.2f} shift" + (" added to the compensation balance" if approved else "")
+    if entries:
+        tail += f", ledger entry {entries[0].id} ({entries[0].entry_type})"
+    return tail
+
+
 def hod_decide_holiday_work(m: DepartmentManager, pk: int, data, actor: str, request: Request) -> Response:
     """
-    Department Head decision on a Holiday / Sunday work compensation claim that HR raised (approval workflow
-    `holiday_work`). Approval adds the claimed shifts to the employee's compensation balance, once; rejection keeps the
-    HOD's comment and changes nothing else. Needs the `can_approve_compensation` switch on the HOD's own profile. A claim
-    that is already decided is refused. Body: {"status": "approved" | "rejected", "comment"?}.
+    Department Head decision on a compensation claim of ANY kind (approval workflow `holiday_work`; since 2026-11-19 the
+    one claim table holds Sunday / holiday work, OT late-in allowance, OT shift credit, birthday credit and requests to
+    use the balance, raised by HR or by the employee). Approval writes the claim's ledger entry once (a credit, or the
+    debit of a use request; an allowance has none) and compensation_effects re-derives what the claim changes;
+    rejection keeps the HOD's comment and changes nothing else. Needs the `can_approve_compensation` switch on the HOD's
+    own profile. A claim that is already decided is refused, and so is an approval the claim's effects refuse (409,
+    code claim_refused). Body: {"status": "approved" | "rejected", "comment"?}. Reply: the claim (as listed) with
+    `credited` (true when the approval added shifts to the balance) and `effect` (one sentence: what the decision did).
     """
-    from .holiday_work_views import claims_json, decide_claim
+    from .compensation_claims import claim_json, decide, effect_text, what_text
     from .models import HolidayWorkClaim
 
     if not m.can_approve_compensation:
@@ -1422,36 +1445,44 @@ def hod_decide_holiday_work(m: DepartmentManager, pk: int, data, actor: str, req
 
     reviewer_name = actor
     try:
-        claim, _outcome = decide_claim(
-            claim.pk, approval.HOD, status_val, actor=reviewer_name, comment=data.get("comment")
-        )
+        claim, _outcome = decide(claim.pk, status_val, reviewer_name, data.get("comment"), role=approval.HOD)
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    except HolidayWorkClaim.DoesNotExist:
+        # the employee / HR withdrew it (deleted the pending claim) between the list and this decision
+        return Response({"error": "This claim was withdrawn.", "code": "withdrawn"}, status=404)
     claim = HolidayWorkClaim.objects.select_related(
-        "employee__department", "employee__designation", "employee__branch"
+        "employee__department", "employee__designation", "employee__branch", "overtime_record"
     ).prefetch_related("ledger_entries").get(pk=claim.pk)
-    # The audit trail: who decided, and that an approval put shifts on the balance (the ledger credit is the money-like part).
-    credited = [e for e in claim.ledger_entries.all() if e.entry_type == "credit"]
+    # The audit trail: who decided, and the ledger entry an approval wrote (the money-like part).
+    entries = list(claim.ledger_entries.all())
+    credited = [e for e in entries if e.entry_type == "credit"]
     log_action(
         request,
         "approve" if claim.status == HolidayWorkClaim.STATUS_APPROVED else "reject",
         "compensation",
         record_id=claim.id,
         description=(
-            f"{reviewer_name} (Department Head) {claim.status} the holiday-work claim of {claim.employee.employee_code} for "
-            f"{claim.work_date}: {claim.shifts:.2f} shift"
-            + (f", added to the compensation balance (ledger entry {credited[0].id})" if credited else "")
+            f"{reviewer_name} (Department Head) {claim.status} the {what_text(claim)} of {claim.employee.employee_code}"
+            + _claim_audit_tail(claim, entries)
         ),
         new_values={
             "claimId": claim.id,
+            "kind": claim.kind,
             "employeeId": claim.employee_id,
             "workDate": str(claim.work_date),
             "shifts": float(claim.shifts),
+            "minutes": claim.minutes,
             "status": claim.status,
-            "ledgerEntryId": credited[0].id if credited else None,
+            "ledgerEntryId": entries[0].id if entries else None,
         },
     )
-    return Response(claims_json([claim])[0])
+    from .holiday_work_views import hod_names
+
+    body = claim_json(claim, for_role="hod", hods=hod_names([claim.employee_id]))
+    body["credited"] = bool(credited)
+    body["effect"] = effect_text(claim)
+    return Response(body)
 
 
 @api_view(["PATCH"])

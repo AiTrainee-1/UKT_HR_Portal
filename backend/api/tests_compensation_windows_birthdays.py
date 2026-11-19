@@ -391,20 +391,120 @@ class WindowGateTests(LeaveBase):
 
 
 class DeleteTests(LeaveBase):
-    def test_only_a_future_window_can_be_removed(self):
+    def test_a_window_of_any_date_can_be_removed(self):
+        # owner brief 2026-11-19: "delete existing announcements" (it used to be future dates only)
         future = self.announce(day=TOMORROW)
         today = self.announce(day=TODAY, at="09:30")
-        self.assertEqual((future["canDelete"], today["canDelete"]), (True, False))
-        r = self.delete(f"{WINDOWS}/{today['id']}")
-        self.assertEqual((r.status_code, "today or a past date" in r.json()["error"]), (400, True))
         past = CompensationDayAnnouncement.objects.create(
             date=date(2026, 10, 1), kind="late_in", allowed_time=time(10, 0), reason="x"
         )
-        self.assertEqual(self.delete(f"{WINDOWS}/{past.id}").status_code, 400)
-        self.assertEqual(self.delete(f"{WINDOWS}/{future['id']}").status_code, 204)
-        self.assertEqual(CompensationDayAnnouncement.objects.count(), 2)
+        self.assertEqual((future["canDelete"], today["canDelete"]), (True, True))
+        listed = {w["id"]: w["canDelete"] for w in self.get().json()["results"]}
+        self.assertEqual(listed, {future["id"]: True, today["id"]: True, past.id: True})
+        for made in (future["id"], today["id"], past.id):
+            self.assertEqual(self.delete(f"{WINDOWS}/{made}").status_code, 204, made)
+        self.assertFalse(CompensationDayAnnouncement.objects.exists())
         log = AuditLog.objects.get(module="compensation", action="delete", record_id=future["id"])
         self.assertEqual(log.old_values["time"], "10:30")
+        self.assertIn("late-in window for 2026-10-15 (3 staff)", log.record_description)
+        today_log = AuditLog.objects.get(module="compensation", action="delete", record_id=today["id"])
+        self.assertIn("attendance re-derived for 0", today_log.record_description)
+
+    def test_a_finalized_month_refuses_removal_whatever_the_date(self):
+        from django.utils import timezone
+
+        from .models import PayrollMonthClose
+
+        past = self.announce(day=date(2026, 10, 13))
+        future = self.announce(day=TOMORROW, kind="early_out", at="16:00")
+        PayrollMonthClose.objects.create(month=10, year=2026, finalized_at=timezone.now(), finalized_by="Admin")
+        for made in (past, future):
+            r = self.delete(f"{WINDOWS}/{made['id']}")
+            self.assertEqual(r.status_code, 409, r.content)
+            self.assertEqual(
+                r.json()["error"], "Payroll for October 2026 is done, so this announcement can no longer be removed."
+            )
+        self.assertEqual(CompensationDayAnnouncement.objects.count(), 2)
+        self.assertEqual({w["canDelete"] for w in self.get().json()["results"]}, {False})
+        self.assertFalse(AuditLog.objects.filter(module="compensation", action="delete").exists())
+
+    def test_a_view_only_login_is_never_offered_delete(self):
+        self.announce()
+        self.assertEqual([w["canDelete"] for w in self.get(who=self.view_only).json()["results"]], [False])
+        self.assertEqual([w["canDelete"] for w in self.get().json()["results"]], [True])
+
+    def test_removing_a_past_window_judges_that_days_stored_attendance_again(self):
+        from .attendance_final import compute_day_record
+        from .models import EmployeeShiftAssignment, ShiftTemplate
+
+        settings = PayrollSettings.get()
+        settings.attendance_mode = "simple"
+        settings.morning_late_in_enabled = True
+        settings.save()
+        shift = ShiftTemplate.objects.create(
+            name="WB Past Delete",
+            shift_type="staff",
+            start_time=time(8, 30),
+            end_time=time(17, 30),
+            grace_period_minutes=10,
+            first_half_end=time(13, 0),
+            lunch_duration_minutes=60,
+            lunch_grace_minutes=10,
+        )
+        yesterday = date(2026, 10, 13)
+        for emp in (self.asha, self.ravi, self.mani):
+            EmployeeShiftAssignment.objects.create(employee=emp, shift=shift, effective_from=date(2026, 1, 1))
+            for t in (time(9, 30), time(13, 0), time(14, 0), time(17, 40)):
+                AttendanceLog.objects.create(employee=emp, date=yesterday, punch_time=t, punch_type="IN", source="test")
+            compute_day_record(emp, yesterday, settings=settings)
+        made = self.announce("late_in", day=yesterday, at="10:00", reason="Heavy rain")
+        self.assertEqual(
+            AttendanceDayRecord.objects.get(employee=self.asha, date=yesterday).compensation_kind, "window_late_in"
+        )
+        # Ravi's day was set by hand meanwhile: it stays exactly as HR left it
+        AttendanceDayRecord.objects.filter(employee=self.ravi, date=yesterday).update(source="manual", is_late=False)
+
+        with mock.patch("api.compensation_notices.announcement_cancelled") as told:
+            self.assertEqual(self.delete(f"{WINDOWS}/{made['id']}").status_code, 204)
+
+        asha = AttendanceDayRecord.objects.get(employee=self.asha, date=yesterday)
+        self.assertEqual((asha.is_late, asha.compensation_kind), (True, ""))  # the window's relief is gone
+        ravi = AttendanceDayRecord.objects.get(employee=self.ravi, date=yesterday)
+        self.assertEqual((ravi.source, ravi.is_late), ("manual", False))
+        told.assert_called_once()
+        self.assertEqual(told.call_args.args[1], {self.asha.id, self.ravi.id, self.mani.id})
+        self.assertEqual(told.call_args.kwargs["announcement_id"], made["id"])
+        log = AuditLog.objects.get(module="compensation", action="delete", record_id=made["id"])
+        self.assertIn("attendance re-derived for 2", log.record_description)
+
+    def test_every_covered_staff_member_is_told_it_was_cancelled(self):
+        from .models import Notification
+
+        dept = self.announce(day=TOMORROW, branchId=self.ho.id, departmentId=self.cutting.id, at="10:15")
+        listed = self.announce(day=TOMORROW, kind="early_out", at="16:00", employeeIds=[self.ravi.id, self.mani.id])
+        for made in (dept, listed):
+            self.assertEqual(self.delete(f"{WINDOWS}/{made['id']}").status_code, 204)
+        cancelled = Notification.objects.filter(dedupe_key__startswith="compday-cancel:")
+        self.assertEqual(
+            sorted((n.employee_id, n.dedupe_key) for n in cancelled),
+            sorted(
+                [
+                    (self.asha.id, f"compday-cancel:{dept['id']}"),
+                    (self.ravi.id, f"compday-cancel:{listed['id']}"),
+                    (self.mani.id, f"compday-cancel:{listed['id']}"),
+                ]
+            ),
+        )
+        asha = cancelled.get(employee=self.asha)
+        self.assertEqual(
+            (asha.source, asha.type, asha.title),
+            ("compensation_announcement", "compensation", "Announcement cancelled"),
+        )
+        self.assertIn("late arrival allowed on 15 Oct 2026 (up to 10:15 AM) was cancelled", asha.message)
+        self.assertIn(
+            "early leaving allowed on 15 Oct 2026 (from 4:00 PM) was cancelled",
+            cancelled.filter(employee=self.mani).get().message,
+        )
 
     def test_a_legacy_day_exemption_and_an_unknown_id_are_not_windows(self):
         legacy = CompensationDayAnnouncement.objects.create(date=date(2026, 10, 20), reason="Festival")
@@ -420,6 +520,99 @@ class DeleteTests(LeaveBase):
         self.assertEqual(self.delete(f"{WINDOWS}/{theirs['id']}", self.ho_hr).status_code, 403)
         self.assertEqual(self.delete(f"{WINDOWS}/{mine['id']}", self.ho_hr).status_code, 204)
         self.assertEqual(self.delete(f"{WINDOWS}/{company['id']}").status_code, 204)  # unscoped HR can
+
+
+class WindowListFilterTests(LeaveBase):
+    """The list's 2026-11-19 filters (department, branch, search, status, paging); the old parameters are unchanged."""
+
+    def setUp(self):
+        super().setUp()
+        self.company = self.announce(day=date(2026, 10, 16), reason="Heavy rain")["id"]
+        self.ho_wide = self.announce(day=date(2026, 10, 17), reason="Transport strike", branchId=self.ho.id)["id"]
+        self.cut = self.announce(
+            day=date(2026, 10, 19), reason="Machine repair", branchId=self.ho.id, departmentId=self.cutting.id
+        )["id"]
+        self.u2_wide = self.announce(day=date(2026, 10, 20), reason="Power cut", branchId=self.u2.id)["id"]
+        self.mani_only = self.announce(day=date(2026, 10, 21), reason="Bus late", employeeIds=[self.mani.id])["id"]
+        self.finish = self.announce(day=date(2026, 10, 22), reason="Audit", departmentId=self.finishing.id)["id"]
+        self.old = CompensationDayAnnouncement.objects.create(
+            date=date(2026, 10, 1), kind="late_in", allowed_time=time(10, 0), reason="Old flood", announced_by="Priya"
+        ).id
+
+    def ids(self, **params):
+        r = self.get(**params)
+        self.assertEqual(r.status_code, 200, r.content)
+        return {w["id"] for w in r.json()["results"]}
+
+    def test_department_shows_what_covers_somebody_of_it(self):
+        self.assertEqual(self.ids(departmentId=self.cutting.id), {self.company, self.ho_wide, self.cut, self.old})
+        self.assertEqual(self.ids(departmentId=self.sewing.id), {self.company, self.u2_wide, self.mani_only, self.old})
+        self.assertEqual(self.ids(departmentId=self.finishing.id), {self.company, self.ho_wide, self.finish, self.old})
+
+    def test_branch_shows_its_own_the_company_wide_and_listed_ones(self):
+        self.assertEqual(self.ids(branchId=self.ho.id), {self.company, self.ho_wide, self.cut, self.finish, self.old})
+        self.assertEqual(self.ids(branchId=self.u2.id), {self.company, self.u2_wide, self.mani_only, self.old})
+
+    def test_search_reads_the_reason_and_who_announced(self):
+        self.assertEqual(self.ids(q="STRIKE"), {self.ho_wide})
+        self.assertEqual(self.ids(q="priya"), {self.old})
+        self.assertEqual(len(self.ids(q="wb_admin")), 6)  # every one announced through the API
+
+    def test_status_upcoming_past_all(self):
+        self.assertEqual(self.ids(status="past"), {self.old})
+        self.assertEqual(len(self.ids(status="upcoming")), 6)
+        self.assertEqual(len(self.ids(status="all")), 7)
+        self.assertEqual(len(self.ids()), 7)
+        self.assertEqual(self.ids(upcoming=1), self.ids(status="upcoming"))  # the old parameter keeps its meaning
+
+    def test_filters_combine(self):
+        self.assertEqual(self.ids(branchId=self.ho.id, status="past"), {self.old})
+        self.assertEqual(self.ids(departmentId=self.cutting.id, q="repair", month=10, year=2026), {self.cut})
+
+    def test_paging_only_when_asked(self):
+        plain = self.get().json()
+        self.assertNotIn("total", plain)
+        self.assertNotIn("page", plain)
+        first = self.get(page=1, pageSize=3).json()
+        self.assertEqual(
+            (
+                len(first["results"]),
+                first["total"],
+                first["count"],
+                first["page"],
+                first["pageSize"],
+                first["truncated"],
+            ),
+            (3, 7, 7, 1, 3, True),
+        )
+        last = self.get(page=3, pageSize=3).json()
+        self.assertEqual((len(last["results"]), last["truncated"]), (1, False))
+        self.assertEqual([w["id"] for w in last["results"]], [self.old])  # newest first, so the oldest is last
+        self.assertEqual(self.get(page=9, pageSize=3).json()["results"], [])
+        self.assertEqual(self.get(pageSize=2).json()["page"], 1)
+        self.assertEqual(self.get(page=2).json()["pageSize"], 25)
+        pages = [w["id"] for p in (1, 2, 3) for w in self.get(page=p, pageSize=3).json()["results"]]
+        self.assertEqual(len(pages), len(set(pages)))
+
+    def test_bad_parameters_are_400(self):
+        for params in (
+            {"status": "soon"},
+            {"departmentId": 999999},
+            {"departmentId": "x"},
+            {"branchId": "x"},
+            {"branchId": 0},
+            {"page": 0},
+            {"page": "x"},
+            {"pageSize": 0},
+            {"pageSize": 201},
+        ):
+            self.assertEqual(self.get(**params).status_code, 400, params)
+
+    def test_a_listed_employee_in_two_matching_ways_is_one_row(self):
+        both = self.announce(day=date(2026, 10, 23), employeeIds=[self.asha.id, self.ravi.id])["id"]
+        rows = [w["id"] for w in self.get(branchId=self.ho.id).json()["results"]]
+        self.assertEqual(rows.count(both), 1)
+        self.assertEqual(self.get(branchId=self.ho.id).json()["count"], len(rows))
 
 
 class WindowListTests(LeaveBase):
@@ -524,8 +717,14 @@ class LegacyRoutesTests(LeaveBase):
 
 
 class BirthdayTests(LeaveBase):
+    """The birthday list under the OLD automatic rule: every birthday here is before the claims date (set explicitly:
+    the test database's claims_from is the real date the migration ran, see the 0166 data step)."""
+
+    CLAIMS_FROM = date(2026, 12, 1)
+
     def setUp(self):
         super().setUp()
+        CompensationConfig.objects.filter(pk=1).update(claims_from=self.CLAIMS_FROM)
         self.asha.date_of_birth = date(1990, 10, 14)  # today
         self.asha.save()
         self.ravi.date_of_birth = date(1992, 10, 12)  # Monday of this week
@@ -764,19 +963,202 @@ class BirthdayTests(LeaveBase):
             body = self.listing("month")
         self.assertEqual(body["count"], 255)
         self.assertEqual(len(large), len(small))
-        self.assertLessEqual(len(large), 12)
+        # 13: one more since the review fix (2026-11-19): whether the login may change Compensation decides if a missing
+        # birthday may be worked out (a view-only read never writes)
+        self.assertLessEqual(len(large), 13)
+
+
+class BirthdayClaimRuleTests(LeaveBase):
+    """The birthday list under the CLAIM rules (from CompensationConfig.claims_from, owner 2026-11-19): a birthday is a
+    normal working day; not worked = paid birthday leave, worked = one credit to claim (HOD approves)."""
+
+    CLAIMS_FROM = date(2026, 10, 1)
+
+    def setUp(self):
+        super().setUp()
+        from .models import EmployeeShiftAssignment, ShiftTemplate
+
+        CompensationConfig.objects.filter(pk=1).update(claims_from=self.CLAIMS_FROM)
+        shift = ShiftTemplate.objects.create(
+            name="WB Claim Day", shift_type="staff", start_time=time(9, 0), end_time=time(18, 0),
+            first_half_end=time(13, 30),
+        )  # fmt: skip
+        self.asha.date_of_birth = date(1990, 10, 14)  # today (Wednesday)
+        self.asha.save()
+        self.ravi.date_of_birth = date(1992, 10, 12)  # Monday of this week (past)
+        self.ravi.save()
+        self.mani.date_of_birth = date(1988, 10, 18)  # Sunday of this week (a day off)
+        self.mani.save()
+        self.boss = _employee("WBB", self.ho, self.cutting, dob=date(1985, 10, 16))  # Friday (still to come)
+        for emp in (self.asha, self.ravi, self.mani, self.boss):
+            EmployeeShiftAssignment.objects.create(employee=emp, shift=shift, effective_from=date(2026, 1, 1))
+
+    def listing(self, period="week", day=None, who=None, **params):
+        r = self.get(BIRTHDAYS, who, period=period, **({"date": day} if day else {}), **params)
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def rows(self, **params):
+        return {r["employeeCode"]: r for r in self.listing(**params)["results"]}
+
+    def punch(self, emp, day, *times):
+        for t in times:
+            AttendanceLog.objects.create(employee=emp, date=day, punch_time=t, punch_type="IN", source="test")
+
+    def claim(self, emp, day, status="pending"):
+        from .models import HolidayWorkClaim
+
+        return HolidayWorkClaim.objects.create(
+            employee=emp, work_date=day, shifts=Decimal("1.00"), status=status, kind="birthday", reason="Birthday"
+        )
+
+    def test_a_birthday_not_worked_is_paid_birthday_leave(self):
+        ravi = self.rows()["WB2"]
+        self.assertEqual(
+            (
+                ravi["outcome"],
+                ravi["applied"],
+                ravi["attendanceStatus"],
+                ravi["shiftsEarned"],
+                ravi["compensationKind"],
+            ),
+            ("paid_leave", True, "present", 1.0, "birthday"),
+        )
+        self.assertEqual((ravi["outcomeLabel"], ravi["claimable"], ravi["claim"]), ("Paid birthday leave", False, None))
+        self.assertTrue(ravi["benefits"])
+        record = AttendanceDayRecord.objects.get(employee=self.ravi, date=date(2026, 10, 12))
+        self.assertEqual((record.total_punches, record.source), (0, "auto"))
+        self.assertTrue(record.compensation_note.startswith("Birthday leave"))
+
+    def test_a_birthday_worked_is_a_normal_day_with_a_credit_to_claim(self):
+        self.punch(self.ravi, date(2026, 10, 12), time(9, 40), time(18, 0))  # late: a normal day judges it
+        ravi = self.rows()["WB2"]
+        self.assertEqual(
+            (ravi["outcome"], ravi["applied"], ravi["attendanceStatus"], ravi["firstPunch"], ravi["claimable"]),
+            ("credit_claimable", False, "present", "09:40", True),
+        )
+        self.assertNotEqual(ravi["compensationKind"], "birthday")
+        self.assertEqual(ravi["outcomeShifts"], 1.0)
+        self.assertIn("claim", ravi["message"])
+        record = AttendanceDayRecord.objects.get(employee=self.ravi, date=date(2026, 10, 12))
+        self.assertTrue(record.is_late)  # no birthday exemption from late detection any more
+
+    def test_a_half_day_on_the_birthday_is_also_worked(self):
+        self.punch(self.ravi, date(2026, 10, 12), time(9, 0), time(12, 0))
+        ravi = self.rows()["WB2"]
+        self.assertEqual(
+            (ravi["outcome"], ravi["attendanceStatus"], ravi["applied"]), ("credit_claimable", "half_shift", False)
+        )
+
+    def test_approved_leave_on_the_birthday_is_paid_birthday_leave(self):
+        LeaveRequest.objects.create(
+            employee=self.ravi, type="sick", start_date="2026-10-12", end_date="2026-10-12", status="approved"
+        )
+        ravi = self.rows()["WB2"]
+        self.assertEqual(
+            (ravi["outcome"], ravi["attendanceStatus"], ravi["shiftsEarned"]), ("paid_leave", "present", 1.0)
+        )
+
+    def test_the_claim_decides_the_outcome_of_a_worked_birthday(self):
+        self.punch(self.ravi, date(2026, 10, 12), time(9, 0), time(18, 0))
+        claim = self.claim(self.ravi, date(2026, 10, 12))
+        ravi = self.rows()["WB2"]
+        self.assertEqual((ravi["outcome"], ravi["claimable"]), ("credit_pending", False))
+        self.assertEqual(
+            ravi["claim"],
+            {"id": claim.id, "kind": "birthday", "status": "pending", "statusLabel": "Pending", "shifts": 1.0},
+        )
+        claim.status = "approved"
+        claim.save()
+        ravi = self.rows()["WB2"]
+        self.assertEqual(
+            (ravi["outcome"], ravi["outcomeLabel"], ravi["claimable"]), ("credit_approved", "Credit approved", False)
+        )
+        claim.status = "rejected"
+        claim.save()
+        ravi = self.rows()["WB2"]
+        self.assertEqual((ravi["outcome"], ravi["claimable"]), ("credit_rejected", True))  # may be claimed again
+
+    def test_today_upcoming_and_off_days(self):
+        rows = self.rows()
+        self.assertEqual(rows["WB1"]["outcome"], "paid_leave")  # today, no punch (yet)
+        self.assertEqual(rows["WBB"]["outcome"], "upcoming")
+        self.assertEqual(rows["WBB"]["applied"], False)
+        self.assertEqual((rows["WB3"]["outcome"], rows["WB3"]["benefits"]), ("off_day", False))  # a Sunday
+        self.punch(self.asha, TODAY, time(9, 0))
+        from .attendance_final import compute_range_records
+
+        compute_range_records(self.asha, TODAY, TODAY)  # what the attendance refresh pass does after a new punch
+        self.assertEqual(self.rows()["WB1"]["outcome"], "credit_claimable")  # punched in: a normal working day
+        self.assertFalse(
+            AttendanceDayRecord.objects.filter(employee=self.boss).exists()
+        )  # a future day is never computed
+
+    def test_the_claims_date_splits_the_two_rules(self):
+        CompensationConfig.objects.filter(pk=1).update(claims_from=TODAY)
+        self.punch(self.ravi, date(2026, 10, 12), time(9, 40), time(18, 0))
+        self.punch(self.asha, TODAY, time(9, 40), time(18, 0))
+        rows = self.rows()
+        self.assertEqual(rows["WB2"]["outcome"], "old_rule")  # before the claims date: the old automatic rule
+        self.assertEqual(rows["WB1"]["outcome"], "credit_claimable")  # the claims date itself follows the new rule
+
+    def test_the_outcome_and_search_filters(self):
+        self.punch(self.ravi, date(2026, 10, 12), time(9, 0), time(18, 0))
+        body = self.listing()
+        self.assertEqual(
+            {k: v for k, v in body["outcomeCounts"].items() if v},
+            {"paid_leave": 1, "credit_claimable": 1, "off_day": 1, "upcoming": 1},
+        )
+        self.assertEqual(body["enabled"]["claimsFrom"], "2026-10-01")
+        self.assertEqual(body["outcomeLabels"]["credit_claimable"], "Worked: credit to claim")
+        only = self.listing(outcome="credit_claimable")
+        self.assertEqual([r["employeeCode"] for r in only["results"]], ["WB2"])
+        self.assertEqual(only["count"], 1)
+        self.assertEqual(only["outcomeCounts"]["paid_leave"], 1)  # the tiles still count the whole period
+        both = self.listing(outcome="paid_leave,upcoming")
+        self.assertEqual(sorted(r["employeeCode"] for r in both["results"]), ["WB1", "WBB"])
+        self.assertEqual([r["employeeCode"] for r in self.listing(q="wb2")["results"]], ["WB2"])
+        self.assertEqual([r["employeeCode"] for r in self.listing(q="WB1 wb")["results"]], ["WB1"])
+        self.assertEqual(self.listing(q="nobody")["count"], 0)
+        self.assertEqual(self.get(BIRTHDAYS, period="week", outcome="paid").status_code, 400)
+
+    def test_stored_days_make_the_list_a_fixed_number_of_queries(self):
+        self.listing("month")  # computes the birthdays that have come once
+        with CaptureQueriesContext(connection) as small:
+            self.listing("month")
+        people = [
+            Employee(
+                employee_code=f"WBQ{i}",
+                first_name="Q",
+                last_name=str(i),
+                employment_type="staff",
+                status="active",
+                branch=self.ho,
+                department=self.cutting,
+                date_of_birth=date(1990, 10, 19 + i % 4),  # Mon-Thu still to come: nothing to compute, no Saturday
+            )
+            for i in range(120)
+        ]
+        Employee.objects.bulk_create(people)
+        with CaptureQueriesContext(connection) as large:
+            body = self.listing("month")
+        self.assertEqual(body["count"], 124)
+        self.assertEqual(len(large), len(small))
 
 
 # ═════════════════ the punch-based Attendance daily list ═════════════════
 
 
 class DailyListTests(LeaveBase):
-    """GET /api/attendance/daily lists punches, so a paid birthday leave / a relaxation day must not read as Absent."""
+    """GET /api/attendance/daily lists punches, so a paid birthday leave / a relaxation day must not read as Absent.
+    The OLD birthday rule (today is before the claims date, set explicitly); DailyListClaimRuleTests has the new one."""
 
     DAILY = "/api/attendance/daily"
+    CLAIMS_FROM = date(2026, 12, 1)
 
     def setUp(self):
         super().setUp()
+        CompensationConfig.objects.filter(pk=1).update(claims_from=self.CLAIMS_FROM)
         self.asha.date_of_birth = date(1990, 10, 14)  # today
         self.asha.save()
 
@@ -878,3 +1260,41 @@ class DailyListTests(LeaveBase):
             rows = self.rows()
         self.assertEqual(len(rows), 254)  # four active people + 250 (the inactive one is not listed)
         self.assertEqual(len(large), len(small))
+
+
+class DailyListClaimRuleTests(LeaveBase):
+    """The daily list under the CLAIM rules: only a birthday nobody punched on is paid birthday leave; a worked birthday
+    is a normal day with no birthday marker (late is late)."""
+
+    DAILY = "/api/attendance/daily"
+
+    def setUp(self):
+        super().setUp()
+        CompensationConfig.objects.filter(pk=1).update(claims_from=date(2026, 10, 1))
+        self.asha.date_of_birth = date(1990, 10, 14)  # today
+        self.asha.save()
+
+    def rows(self, day=TODAY):
+        r = self.get(self.DAILY, date=day.isoformat())
+        self.assertEqual(r.status_code, 200, r.content)
+        return {row["employeeCode"]: row for row in r.json()}
+
+    def test_a_birthday_without_punches_is_paid_birthday_leave(self):
+        row = self.rows()["WB1"]
+        self.assertEqual((row["status"], row["compensationKind"], row["totalPunches"]), ("on_leave", "birthday", 0))
+        self.assertIn("Birthday leave", row["compensationNote"])
+
+    def test_a_worked_birthday_is_a_normal_day_without_the_marker(self):
+        for t in (time(9, 40), time(18, 0)):
+            AttendanceLog.objects.create(employee=self.asha, date=TODAY, punch_time=t, punch_type="IN", source="test")
+        row = self.rows()["WB1"]
+        self.assertEqual((row["status"], row["compensationKind"], row["totalPunches"]), ("present", None, 2))
+        # a worked birthday never goes through the day engine here (nothing to show that the punches don't)
+        self.assertFalse(AttendanceDayRecord.objects.filter(employee=self.asha, date=TODAY).exists())
+
+    def test_a_birthday_on_an_approved_leave_day_is_paid_birthday_leave(self):
+        LeaveRequest.objects.create(
+            employee=self.asha, type="casual", start_date="2026-10-14", end_date="2026-10-14", status="approved"
+        )
+        row = self.rows()["WB1"]
+        self.assertEqual((row["status"], row["compensationKind"]), ("on_leave", "birthday"))

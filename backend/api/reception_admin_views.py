@@ -69,6 +69,7 @@ from .reception_credentials import (
     revoke_desk_sessions,
     set_desk_password,
 )
+from .visitor_identity import visit_name
 
 MIN_USERNAME_LENGTH = 3
 MAX_USERNAME_LENGTH = 60
@@ -733,7 +734,7 @@ def _record_json(e: dict, v: VisitorVisit | None, desk_names: dict, now, today_s
         if v is None
         else {
             "id": v.id,
-            "visitorName": v.visitor.name,
+            "visitorName": visit_name(v),  # as given at this visit (19 Nov 2026)
             "company": v.company,
             "peopleCount": v.people_count,
             "host": _host(v),

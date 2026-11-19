@@ -12,16 +12,26 @@ Body (GET, and the PUT answer):
   {
     "masterEnabled": true,
     "allowance": {"enabled": false, "effectiveFrom": "2026-10-14"},
-    "shift": {"enabled": false, "minExtraMinutes": 150, "relaxationEnabled": true, "payEnabled": false},
+    "shift": {"enabled": false, "minExtraMinutes": 150, "relaxationEnabled": true, "payEnabled": false,
+              "quarterRule": true, "quarterRuleHelp": "...", "quarterRuleHistory": [{"from": "2026-11-19", "on": true}]},
     "windows": {"enabled": false},
     "holidayWork": {"enabled": false},
-    "birthday": {"enabled": false, "effectiveFrom": null},
+    "birthday": {"enabled": false, "effectiveFrom": null, "help": "..."},
+    "claims": {"from": "2026-11-19", "fromText": "19 Nov 2026", "help": "..."},
     "allowanceRules": [{"id": 1, "label": "1 hour", "enabled": true, "minExtraMinutes": 60, "allowanceMinutes": 30,
                         "sortOrder": 1}],
     "shiftRules": [{"id": 5, "label": "Up to 9:00 PM", "enabled": true, "untilMinutes": 1260, "shifts": 0.25,
                     "sortOrder": 1}],
     "updatedBy": "Asha", "updatedAt": "2026-10-14T10:00:00+05:30"
   }
+
+`claims` is READ-ONLY (a PUT ignores it): the claim workflow's effective date (CompensationConfig.claims_from, set by
+migration 0166 to the day it ran). From it on a Type 1 allowance applies only after the HOD approves its claim, a staff OT
+day's Type 2 credit follows the quarters rule (`shift.quarterRule`: OT minutes / the employee's working shift length in
+quarters, rounded down, at most 1.00; off = the old ladder below) and is claimed, and a birthday is a normal working day
+(not worked = paid birthday leave; worked = one 1.00 credit to claim). Earlier days keep the old rules. The `help` texts
+are the plain explanations the screens show. `shift.quarterRuleHistory` is READ-ONLY too: the quarters rule's dated history
+(migration 0167; every switch change appends an entry from today, so an OT day keeps the rule it was detected under).
 
 PUT takes the same body without masterEnabled / updatedBy / updatedAt. Every top-level group is optional (an omitted
 group is left alone); inside a group only the keys sent change. The two rule arrays REPLACE the whole set: an item
@@ -34,7 +44,7 @@ Rules of the PUT (each a plain-sentence 400 when broken):
   * allowance minutes 0..240, `minExtraMinutes` >= 1 and not repeated among the enabled allowance rules;
   * shift rules: `shifts` one of 0.25 / 0.50 / 0.75 / 1; `untilMinutes` (minutes after the OT day's midnight, 1..2880)
     strictly increasing among the ENABLED rows, and the last enabled row must have none (null = no limit);
-  * `shift.minExtraMinutes` 1..1440;
+  * `shift.minExtraMinutes` 1..1440; `shift.quarterRule` true / false;
   * an enabled feature needs at least one enabled rule (allowance: an allowance rule; shift: a shift rule AND at least
     one of relaxation / pay switched on);
   * `effectiveFrom` (a date or null) for allowance and birthday. SWITCHING A FEATURE ON (off -> on) with no date named
@@ -89,6 +99,49 @@ def _date_json(value):
     return str(value) if value else None
 
 
+QUARTER_RULE_HELP = (
+    "From the claims date on, a staff overtime day earns shift credit in quarters of the employee's own working shift "
+    "(shift end minus start minus lunch), rounded down and at most one shift a day. With a 9:00 to 18:00 shift and a "
+    "1 hour lunch (8 working hours): 2 hours of overtime = 0.25, 4 hours = 0.50, 6 hours = 0.75, 8 hours or more = 1.00; "
+    "less than 2 hours earns no shift credit but may earn a next-day late-in allowance. The employee claims the credit "
+    "and the Department Head approves it. Switched off, the clock-time ladder below decides, as before."
+)
+BIRTHDAY_HELP = (
+    "From the claims date on, a birthday is a normal working day. Absent on the birthday (no punch, or on approved "
+    "leave or Casual Leave): a paid birthday leave for the whole day, using no leave balance. Present or a half day: one "
+    "paid day (1.00 shift) the employee can claim; the Department Head approves it and it goes to the compensation "
+    "balance. A birthday on a Sunday, company holiday or off Saturday gives nothing (working it is holiday work). "
+    "Before the claims date a birthday was paid automatically."
+)
+ALLOWANCE_HELP = (
+    "From the claims date on, a next-day late-in allowance is no longer automatic: the overtime is listed as claimable, "
+    "the employee (or HR for them) claims it, and once the Department Head approves it the allowance covers the first "
+    "punch of the next working day. An approval that comes after that day corrects the day, unless HR set it by hand or "
+    "its payroll is done."
+)
+CLAIMS_HELP = (
+    "Overtime, Sunday / holiday work and birthday credits are claimed by the employee (mobile app or Employee Web App) "
+    "or by HR on their behalf, and approved by the employee's Department Head. Days before this date keep the old "
+    "automatic rules."
+)
+
+
+def _quarter_history_json(config) -> list[dict]:
+    """[{from, on}] oldest first (from null = since the claims date); empty while no change was ever recorded."""
+    from .settings_history import as_json
+
+    return [{"from": e.get("from"), "on": bool(e.get("on"))} for e in as_json(config.ot_quarter_rule_history)]
+
+
+def _claims_body(config) -> dict:
+    day = config.claims_from
+    return {
+        "from": _date_json(day),
+        "fromText": f"{day.day} {day.strftime('%b %Y')}" if day else None,
+        "help": CLAIMS_HELP,
+    }
+
+
 def settings_body() -> dict:
     """The whole Settings -> Compensation body (see the module docstring)."""
     config = CompensationConfig.get()
@@ -105,16 +158,26 @@ def settings_body() -> dict:
         "allowance": {
             "enabled": config.allowance_enabled,
             "effectiveFrom": _date_json(config.allowance_effective_from),
+            "help": ALLOWANCE_HELP,
         },
         "shift": {
             "enabled": config.shift_enabled,
             "minExtraMinutes": config.shift_min_extra_minutes,
             "relaxationEnabled": config.relaxation_enabled,
             "payEnabled": config.pay_enabled,
+            "quarterRule": bool(config.ot_quarter_rule),
+            "quarterRuleHelp": QUARTER_RULE_HELP,
+            # read-only: when the switch was on / off (a day follows the entry in force on it; review 2026-11-19)
+            "quarterRuleHistory": _quarter_history_json(config),
         },
         "windows": {"enabled": config.windows_enabled},
         "holidayWork": {"enabled": config.holiday_work_enabled},
-        "birthday": {"enabled": config.birthday_enabled, "effectiveFrom": _date_json(config.birthday_effective_from)},
+        "birthday": {
+            "enabled": config.birthday_enabled,
+            "effectiveFrom": _date_json(config.birthday_effective_from),
+            "help": BIRTHDAY_HELP,
+        },
+        "claims": _claims_body(config),
         "allowanceRules": [
             {
                 "id": r.id,
@@ -579,6 +642,19 @@ def apply_settings(data: dict, actor: str):
         pay = _bool(shift, "payEnabled", "Shift")
         if pay is not None:
             config.pay_enabled = pay
+        quarter = _bool(shift, "quarterRule", "Shift")
+        if quarter is not None:
+            if quarter != config.ot_quarter_rule:
+                warnings.append(
+                    "The quarters rule was switched "
+                    + ("on" if quarter else "off")
+                    + " from today: overtime from today on "
+                    + ("is credited in quarters of the employee's working shift." if quarter else "follows the ladder.")
+                    + " Earlier days keep the rule they were detected under, and overtime that already has a claim or "
+                    "a decision keeps what it has."
+                )
+                _record_quarter_change(config, quarter, today)
+            config.ot_quarter_rule = quarter
 
     if windows is not None:
         enabled = _bool(windows, "enabled", "Announced late-in / early-out")
@@ -643,8 +719,12 @@ def apply_settings(data: dict, actor: str):
                     f"The '{rule.label}' allowance can never apply: shift-based compensation already starts at "
                     f"{rules.describe_duration(threshold)} of extra work."
                 )
-    # advice only: the ladder as saved may wait for a punch the engine never attaches to the day
-    if config.shift_enabled:
+    # advice only: the ladder as saved may wait for a punch the engine never attaches to the day. Only while the ladder
+    # still decides today's overtime (the quarters rule is off, or today is before the claims date) and the old
+    # grace-hours cut-off still attaches the next-date punches (the staff next-morning cut-off rule does not decide today):
+    # otherwise the warning would describe a ladder or a cut-off no new day uses.
+    ladder_decides = not config.ot_quarter_rule_on(today)
+    if config.shift_enabled and ladder_decides and not _next_morning_rule_on(today):
         warning = _unearnable_shift_row_warning(config)
         if warning:
             warnings.append(warning)
@@ -661,6 +741,25 @@ def apply_settings(data: dict, actor: str):
             old_values[name] = rules_before[name]
             new_values[name] = table
     return warnings, old_values, new_values
+
+
+def _record_quarter_change(config, on: bool, today) -> None:
+    """Append the change to the dated history (from today, IST), so the OT of earlier days keeps the rule it was detected
+    under however often it is recomputed. A history never recorded before is first seeded with the rule as it was (from
+    the claims date)."""
+    from .settings_history import appended
+
+    history = list(config.ot_quarter_rule_history or [])
+    if not history:
+        start = config.claims_from.isoformat() if config.claims_from else None
+        history = [{"from": start, "on": bool(config.ot_quarter_rule)}]
+    config.ot_quarter_rule_history = appended(history, {"on": bool(on)}, today)
+
+
+def _next_morning_rule_on(day) -> bool:
+    from .shift_engine import staff_next_morning_applies
+
+    return staff_next_morning_applies(PayrollSettings.get(), day)
 
 
 def _forbid_branch_logins(request: Request):

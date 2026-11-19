@@ -1,6 +1,5 @@
 import { CalendarPlus } from "lucide-react";
 import { ToFirstSubtab, useSubtab } from "@/components/ui/subtab-nav";
-import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   CompensationPageShell,
@@ -10,7 +9,6 @@ import {
   useNestedSubtab,
 } from "../CompensationPageShell";
 import LeaveTab from "../leave/LeaveTab";
-import { COMPENSATION_URL_DEFAULTS } from "../logic";
 import { LEAVE_SUBS, pagePath, type LeaveSub } from "../routes";
 import { openSubs, useCanOpen } from "../visible";
 
@@ -18,7 +16,6 @@ const BASE = pagePath("leave");
 
 function CompensationLeave({ sub, nested }: { sub: LeaveSub; nested: string }) {
   const { user } = useAuth();
-  const [url, setUrl] = useUrlParams(COMPENSATION_URL_DEFAULTS);
   const featuresOff = useCompensationFeaturesOff();
   return (
     <CompensationPageShell
@@ -26,14 +23,7 @@ function CompensationLeave({ sub, nested }: { sub: LeaveSub; nested: string }) {
       title="Compensation Leave"
       description="Late-in and early-out announced for everyone, work on Sundays and company holidays with the compensation balance, and birthdays."
     >
-      <LeaveTab
-        sub={sub}
-        nested={nested}
-        featuresOff={featuresOff}
-        isBranchScoped={!!user?.branchId}
-        url={url}
-        setUrl={setUrl}
-      />
+      <LeaveTab sub={sub} nested={nested} featuresOff={featuresOff} isBranchScoped={!!user?.branchId} />
     </CompensationPageShell>
   );
 }

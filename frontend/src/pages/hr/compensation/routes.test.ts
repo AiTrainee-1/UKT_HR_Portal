@@ -89,12 +89,9 @@ describe("the nested subtabs", () => {
       "How the suggested shifts are worked out",
     ]);
     expect(LEAVE_NESTED.announcements.map((n) => n.value)).toEqual(["announce", "list"]);
-    expect(LEAVE_NESTED["holiday-work"].map((n) => n.label)).toEqual([
-      "Raise a claim",
-      "Claims",
-      "Compensation balance",
-      "Earlier Alternative-Day credits",
-    ]);
+    // one claim workflow: raise, every claim, the balances, every credit and debit (with the earlier credits as a section)
+    expect(LEAVE_NESTED["holiday-work"].map((n) => n.label)).toEqual(["Raise a claim", "Claims", "Balance", "Credits"]);
+    expect(LEAVE_NESTED["holiday-work"].map((n) => n.value)).toEqual(["raise", "claims", "balance", "credits"]);
     expect(LEAVE_NESTED.birthdays.map((n) => n.value)).toEqual(["list", "how"]);
     expect(HISTORY_NESTED["company-windows"].map((n) => n.value)).toEqual(["late-in", "early-out"]);
     expect(HISTORY_NESTED["holiday-work"].map((n) => n.value)).toEqual(["work", "redeemed"]);
@@ -118,6 +115,16 @@ describe("the nested subtabs", () => {
     expect(defaultNested("leave", "holiday-work", "hstatus=all")).toBe("raise");
     expect(defaultNested("leave", "holiday-work", "hstatus=pending")).toBe("claims");
     expect(defaultNested("leave", "holiday-work", "hmonth=9&hyear=2026")).toBe("claims");
+    // a link that opens one claim, one kind, or one employee's claims lands on Claims
+    expect(defaultNested("leave", "holiday-work", "hclaim=3005")).toBe("claims");
+    expect(defaultNested("leave", "holiday-work", "hkind=birthday")).toBe("claims");
+    expect(defaultNested("leave", "holiday-work", "hmonth=all&hemp=21")).toBe("claims");
+    // an employee's balance, and the credits of an employee or of a claim
+    expect(defaultNested("leave", "holiday-work", "balemp=21")).toBe("balance");
+    expect(defaultNested("leave", "holiday-work", "lmonth=all&lemp=21&lclaim=3005")).toBe("credits");
+    expect(defaultNested("leave", "holiday-work", "ltype=debit")).toBe("credits");
+    // the Raise strip's own month does not move the section
+    expect(defaultNested("leave", "holiday-work", "rmonth=9&ryear=2026&hdate=2026-09-20")).toBe("raise");
     expect(defaultNested("leave", "announcements", "hstatus=pending")).toBe("announce");
     expect(defaultNested("ot", "type-2", "otstatus=rejected")).toBe("assigned");
     expect(defaultNested("ot", "type-2", "otstatus=all")).toBe("waiting");

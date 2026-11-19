@@ -4,22 +4,26 @@ import { ToggleField } from "../kit/Field";
 import { COMPENSATION_SECTIONS, compensationText } from "../CompensationTab.meta";
 import { AllowanceTable } from "./AllowanceTable";
 import { Type1Example } from "./Examples";
-import { warningsFor } from "./form";
+import { prettyDate, warningsFor } from "./form";
 import { FromDate, masterOffNote, notes, type SectionProps } from "./ui";
 import { historyPath, otPath } from "@/pages/hr/compensation/routes";
 
 const block = (id: string) => ({ id, ...compensationText(id) });
 
-/** OT Detection - Type 1: the automatic next-day late-in allowance (never paid, nothing to claim). */
+/**
+ * OT Detection - Type 1: the next-day late-in allowance (never paid). From the claims date it is given only after a claim
+ * approved by the Department Head; before it, it was automatic.
+ */
 export function Type1Section(props: SectionProps) {
-  const { draft, patch, readOnly, masterOn, validation, today } = props;
+  const { draft, patch, readOnly, masterOn, validation, today, claimsFrom } = props;
   const warnings = warningsFor(draft);
+  const fromText = claimsFrom ? prettyDate(claimsFrom) : "the claims date";
   return (
     <SettingsSection
       id="compensation-type1"
       icon={Clock}
       title={COMPENSATION_SECTIONS.type1}
-      purpose="Automatic and never paid. Staff who work extra hours after their shift end get an allowance for their first punch the next working day: if they arrive late inside it, it is not marked Late, it is marked Compensation instead. Nothing to claim and nothing for HR to assign. Staff only."
+      purpose="Never paid. Staff who work extra hours after their shift end earn an allowance for their first punch the next working day: if they arrive late inside it, it is not marked Late, it is marked Compensation instead. From the claims date it is given only after a claim (by the employee or HR) that the Department Head approves. Staff only."
       usedBy={[
         { label: "Staff Attendance", to: "/hr/attendance/staff" },
         { label: "Compensation", to: otPath("type-1") },
@@ -43,6 +47,11 @@ export function Type1Section(props: SectionProps) {
             to: "/hr/payroll",
           },
           {
+            where: "Compensation - OT Detection",
+            what: "lists each allowance as claimable, waiting for the HOD, approved or rejected, with Claim for employee",
+            to: otPath("type-1"),
+          },
+          {
             where: "Compensation - History",
             what: "lists who got the allowance and who used it",
             to: historyPath("ot-allowance"),
@@ -54,6 +63,7 @@ export function Type1Section(props: SectionProps) {
         ]}
         note={notes(
           "Applies from the date below and only to staff; production workers are never affected.",
+          `From ${fromText} nothing is applied until the Department Head approves a claim; an approval after the day has passed corrects that day unless it was edited by hand or its payroll month is locked.`,
           masterOffNote(masterOn),
         )}
         preview={<Type1Example draft={draft} />}
@@ -66,7 +76,7 @@ export function Type1Section(props: SectionProps) {
           offLabel="Type 1 allowance is off"
           disabled={readOnly}
         >
-          Automatic: the employee does not claim it and may or may not use it. It is never paid.
+          Claimed, then approved by the Department Head; the employee may or may not use it. It is never paid.
         </ToggleField>
       </SettingBlock>
 

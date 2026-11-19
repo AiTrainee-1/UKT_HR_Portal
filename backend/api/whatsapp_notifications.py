@@ -241,6 +241,7 @@ def notify_visitor_arrival(visit, host):
     contact card to tap and call. Reception's "notified on WhatsApp" time is stamped once the
     message is really sent (the dispatcher's "visitor_notified" hook)."""
     visitor = visit.visitor
+    name = visit.visitor_name or visitor.name  # as given at this visit (per branch, 19 Nov 2026)
     arrived = visit.visited_at or timezone.now()
     normalized = whatsapp_service.normalize_phone(visitor.phone)
     return whatsapp_service.send_notification(
@@ -248,7 +249,7 @@ def notify_visitor_arrival(visit, host):
         "visitor_notification",
         {
             "employee_name": full_name(host),
-            "visitor_name": visitor.name,
+            "visitor_name": name,
             "visitor_phone": pretty_phone(visitor.phone, normalized),
             "purpose": visit.purpose or "",
             "company": getattr(visitor, "company", "") or "",
@@ -262,7 +263,7 @@ def notify_visitor_arrival(visit, host):
         document_ref_id=visit.id,
         contact={
             "document_type": "visitor_contact",
-            "first_name": visitor.name,
+            "first_name": name,
             "last_name": "",
             "phone": normalized or visitor.phone,
         },

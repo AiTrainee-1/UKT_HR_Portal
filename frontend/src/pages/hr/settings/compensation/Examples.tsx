@@ -12,7 +12,10 @@ import {
   EXAMPLE_SHIFT,
   judgeFirstPunch,
   payForShifts,
+  QUARTER_EXAMPLE_SHIFT,
+  quarterCredit,
   shiftFor,
+  workingMinutes,
   shiftsText,
   ruleName,
   type AllowanceValue,
@@ -217,6 +220,81 @@ export function Type2Example({ draft }: { draft: CompensationDraft }) {
         </p>
       ) : (
         line(tried.minutes, "try", "type2-try-line")
+      )}
+    </PreviewCard>
+  );
+}
+
+const QUARTER_SAMPLES = [165, 255, 375, 490, 640];
+
+/**
+ * The quarters rule worked out on a 9-hour shift (9:00 AM to 6:00 PM, 1 hour of lunch, so 8 hours of work and a quarter of
+ * 2 hours): the overtime of five made-up days, the credit each earns (rounded down to a quarter, at most 1.00), and a box to
+ * try another amount. Under the quarters rule the Type 2 threshold does not apply (it decides only days before the claims
+ * date and days with the rule off): a day is Type 2 once its overtime reaches a quarter of the shift, and less than that is
+ * the Type 1 allowance's (as the server's overtime.classify_day does).
+ */
+export function QuarterExample({ draft }: { draft: CompensationDraft }) {
+  void draft; // the rule needs no setting of the form: the shift alone decides
+  const [tryText, setTryText] = useState("200");
+  const shift = workingMinutes(QUARTER_EXAMPLE_SHIFT);
+  const end = QUARTER_EXAMPLE_SHIFT.end;
+  const tried = parseNumber(tryText, { min: 1, max: 1440, decimals: 0 });
+
+  const line = (ot: number, key: string, testId: string) => {
+    const label = `Last punch ${formatUntil(end + ot)}: ${formatShort(ot)} of overtime`;
+    const credit = quarterCredit(ot, shift);
+    if (credit === 0) {
+      return (
+        <PreviewLine
+          key={key}
+          testId={testId}
+          label={label}
+          result={`Not Type 2: less than a quarter of the shift (${formatShort(shift / 4)}); the Type 1 allowance may apply`}
+          tone="neutral"
+        />
+      );
+    }
+    const share = (ot / shift).toFixed(2);
+    return (
+      <PreviewLine
+        key={key}
+        testId={testId}
+        label={label}
+        result={`${share} of the shift → ${shiftsText(credit)}${ot > shift ? " (at most 1.00)" : ""}`}
+        tone="good"
+      />
+    );
+  };
+
+  return (
+    <PreviewCard
+      title="Worked example: a 9-hour shift"
+      scenario={`${formatClock(QUARTER_EXAMPLE_SHIFT.start)} to ${formatClock(end)} with a ${formatShort(QUARTER_EXAMPLE_SHIFT.lunch)} lunch: ${formatShort(shift)} of work, so a quarter is ${formatShort(shift / 4)}. The credit is the overtime in quarters of it, rounded down, at most 1.00 shift.`}
+      testId="quarter-example"
+    >
+      {QUARTER_SAMPLES.map((ot) => line(ot, String(ot), "quarter-line"))}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <Label htmlFor="quarter-try-ot" className="text-[12px] font-semibold text-gray-700">
+          Try minutes of overtime (not saved)
+        </Label>
+        <Input
+          id="quarter-try-ot"
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          value={tryText}
+          onChange={(e) => setTryText(e.target.value)}
+          className="h-8 w-20 bg-white text-xs tabular-nums"
+          aria-invalid={tried.error ? true : undefined}
+        />
+      </div>
+      {tried.error || tried.value === null ? (
+        <p className="text-[12px] text-red-600" role="alert">
+          {tried.error}
+        </p>
+      ) : (
+        line(tried.value, "try", "quarter-try-line")
       )}
     </PreviewCard>
   );

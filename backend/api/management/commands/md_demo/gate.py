@@ -239,6 +239,9 @@ def create_visitors(world: World) -> None:
             VisitorVisit(
                 visitor=who.row,
                 branch=world.branches[unit],
+                # the identity given at this visit (per branch since 19 Nov 2026): a demo person gives the same everywhere
+                visitor_name=who.row.name,
+                aadhaar_number=who.row.aadhaar_number,
                 why_came=f"{kind.name.title()} - {who.company}: {rng.choice(kind.why)}" if first else None,
                 whom_to_meet=host.full_name if host else "Reception",
                 purpose=f"{purpose} ({who.company})" if kind.name not in ("candidate", "other") else purpose,

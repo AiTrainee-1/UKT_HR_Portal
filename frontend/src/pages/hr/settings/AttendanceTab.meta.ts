@@ -7,6 +7,10 @@ const MARKS = "Late and Early Out marks";
 const PENALTY = "Penalty Early Out";
 const LUNCH = "Late back from lunch (Strict mode only)";
 const MIDNIGHT = "Forgotten last punch after midnight";
+const NEXT_MORNING = "Next-morning cut-off (staff overtime)";
+
+/** Section headings drawn from this list (the newer sections; the older ones write theirs in place). */
+export const ATTENDANCE_SECTIONS = { nextMorning: NEXT_MORNING } as const;
 const PRODUCTION = "Production workers";
 
 /** Every setting on the Attendance tab, for the page's search (see kit/catalog.ts). Same words as the blocks. */
@@ -138,6 +142,24 @@ export const ATTENDANCE_SETTINGS: SettingMeta[] = [
     keywords: ["afternoon", "permission zone", "lunch", "strict"],
   },
   {
+    id: "staff-next-morning",
+    tab: "attendance",
+    section: NEXT_MORNING,
+    title: "Next-morning cut-off",
+    purpose:
+      "A staff punch on the next morning before this time ends the day before as its overtime, when that day's punches leave a session open (in 08:30, out 13:00, in 14:00, then 02:10 the next morning). From this time on a punch is that morning's arrival. Each employee's own punches decide.",
+    keywords: ["next morning", "06:00", "6 am", "cut-off", "night", "overtime", "ot", "midnight", "staff", "arrival"],
+  },
+  {
+    id: "staff-next-morning-from",
+    tab: "attendance",
+    section: NEXT_MORNING,
+    title: "Next-morning cut-off applies from",
+    purpose:
+      "The first day the next-morning cut-off is used. Days before it keep the forgotten last-out window below, even when worked out again. It can only be moved later.",
+    keywords: ["next morning", "effective", "from", "start date", "cut-off"],
+  },
+  {
     id: "forgotten-last-out",
     tab: "attendance",
     section: MIDNIGHT,
@@ -191,3 +213,10 @@ const PRODUCTION_PAGE = new Set(["production-days-valued", "production-attendanc
 export const ATTENDANCE_VIEW_OF: Record<string, ClassView> = Object.fromEntries(
   ATTENDANCE_SETTINGS.map((m) => [m.id, PRODUCTION_PAGE.has(m.id) ? "production" : "staff"]),
 );
+
+/** The title and purpose a block shows (the same words the search finds). */
+export function attendanceText(id: string): { title: string; purpose: string } {
+  const meta = ATTENDANCE_SETTINGS.find((m) => m.id === id);
+  if (!meta) throw new Error(`No Attendance setting "${id}"`);
+  return { title: meta.title, purpose: meta.purpose };
+}

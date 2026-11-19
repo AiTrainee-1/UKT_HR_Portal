@@ -532,3 +532,12 @@ api/reception_credentials.py
 api/reception_admin_views.py
 api/reception_views.py
 api/tests_reception_admin.py
+api/visitor_identity.py
+api/tests_visitor_identity.py
+api/compensation_claims.py
+api/compensation_effects.py
+api/compensation_claims_views.py
+api/tests_compensation_claims.py
+api/tests_compensation_claims_engine.py
+api/tests_comp_integration.py
+api/settings_history.py

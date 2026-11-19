@@ -2309,14 +2309,20 @@ class AdversarialReviewTests(_Base):
         hosts = [self.e1, self.e2, self.e4, self.e3, None, None, None]
         branches = [self.b1, self.b2, None]
         free = ["Mr Shah", "mr shah ", "MR SHAH", "Accounts", "accounts", "HR"]
-        for _ in range(160):
+        for n in range(160):
             v, br, host = rnd.choice(visitors), rnd.choice(branches), rnd.choice(hosts)
             at = ist(9, rnd.randint(1, 20), rnd.randint(0, 23), rnd.randint(0, 59), rnd.randint(0, 59))
             whom = f"{host.first_name} {host.last_name}" if host else rnd.choice(free)
             stamp = lambda: rnd.choice([None, at + timedelta(seconds=rnd.randint(1, 90))])  # noqa: E731
+            # the identity given at the visit (per branch since 19 Nov 2026): a name of that branch's own, with or
+            # without an Aadhaar, or none at all (a row an older release wrote: it falls back to the Visitor row)
+            own = rnd.random() < 0.7
+            given_aadhaar = rnd.choice([None, f" 1111 2222 3{n:03d} "]) if own else None
             vv = VisitorVisit.objects.create(
                 visitor=v,
                 branch=br,
+                visitor_name=f"{v.name} at {br.code if br else 'no branch'} #{n}" if own else None,
+                aadhaar_number=given_aadhaar,
                 whom_to_meet=whom,
                 purpose=rnd.choice(["Audit", "Sample", "Interview"]),
                 meeting_employee=host,
@@ -2329,6 +2335,17 @@ class AdversarialReviewTests(_Base):
         for whom in ("tie-a", "tie-b"):
             vv = VisitorVisit.objects.create(visitor=visitors[0], branch=self.b1, whom_to_meet=whom, purpose="p")
             VisitorVisit.objects.filter(pk=vv.pk).update(visited_at=at)
+
+    @staticmethod
+    def _given(v):
+        """(name, masked Aadhaar) a visit shows (api.visitor_identity): its own copy, the Visitor row's only for a visit
+        with no name of its own."""
+        name, aadhaar = (
+            (v.visitor_name, v.aadhaar_number)
+            if v.visitor_name is not None
+            else (v.visitor.name, v.visitor.aadhaar_number)
+        )
+        return name, C.mask_aadhaar(aadhaar.strip()[-4:] if aadhaar else None)
 
     def _visit_oracle(self, scope_branch):
         every = list(VisitorVisit.objects.select_related("visitor").order_by("visited_at", "id"))
@@ -2346,12 +2363,13 @@ class AdversarialReviewTests(_Base):
             oracle = self._visit_oracle(scope_branch)
             body = self.get_report("visitor-register", SEPT, user)
             got = [
-                (r["visitedAt"], r["visitorName"], r["visitNo"], r["whomToMeet"], r["hostCode"]) for r in body["rows"]
+                (r["visitedAt"], r["visitorName"], r["aadhaarMasked"], r["visitNo"], r["whomToMeet"], r["hostCode"])
+                for r in body["rows"]
             ]
             want = [
                 (
                     v.visited_at.astimezone(FACTORY_TZ).strftime("%Y-%m-%d %H:%M"),
-                    v.visitor.name,
+                    *self._given(v),  # the name / Aadhaar given at that visit
                     n,
                     v.whom_to_meet,
                     v.meeting_employee.employee_code if v.meeting_employee_id else None,
@@ -2424,6 +2442,8 @@ class AdversarialReviewTests(_Base):
                     (scope_branch, phone),
                 )
                 self.assertEqual(r["lastHost"], vs[-1].whom_to_meet, (scope_branch, phone))
+                # named as at the latest visit in view (never a name given at a branch outside the scope)
+                self.assertEqual((r["visitorName"], r["aadhaarMasked"]), self._given(vs[-1]), (scope_branch, phone))
 
             # notification report
             linked = [v for v, _ in oracle if v.meeting_employee_id]

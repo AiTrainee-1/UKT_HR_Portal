@@ -222,14 +222,26 @@ test("with the features off the page stays in the sidebar and still works; only 
 
   // The API agrees: reads answer, changes are refused with the reason.
   const auth = { Authorization: `Bearer ${await hrToken(page)}` };
-  const reads = ["", "/ot", "/credits", "/leave-days", "/summary", "/config", "/windows", "/holiday-work", "/balance"];
+  const reads = [
+    "",
+    "/ot",
+    "/credits",
+    "/leave-days",
+    "/summary",
+    "/config",
+    "/windows",
+    "/holiday-work",
+    "/balance",
+    "/claims",
+    "/ledger",
+  ];
   for (const path of [...reads, "/birthdays", "/reports"]) {
     const r = await page.request.get(`/api/compensation${path}`, { headers: auth });
     expect(r.status(), path || "/").toBe(200);
   }
   // every kind of change is refused with the same reason: the old Compensation Day, an announced window, a Sunday /
-  // holiday work claim, an OT assignment and a redemption of the balance
-  for (const path of ["/leave-days", "/windows", "/holiday-work", "/ot/assign", "/balance/redeem"]) {
+  // holiday work claim, a claim of any kind raised by HR, an OT assignment, a use of the balance and a redemption of it
+  for (const path of ["/leave-days", "/windows", "/holiday-work", "/claims", "/ot/assign", "/use", "/balance/redeem"]) {
     const refused = await page.request.post(`/api/compensation${path}`, {
       headers: auth,
       data: path === "/leave-days" ? { date: "2030-01-01" } : {},
@@ -325,12 +337,23 @@ test("OT Detection keeps Type 1 and Type 2 in two subtabs with their own address
   }
   const type1 = page.getByTestId("ot-type1");
   await expect(type1).toContainText("Type 1");
-  await expect(type1).toContainText("Automatic and unpaid");
+  await expect(type1).toContainText("Unpaid");
   // only Type 1 is on screen
   await expect(page.getByTestId("ot-type2")).toHaveCount(0);
-  // Type 1 is read-only: nothing to tick, assign or reject inside it
-  await expect(type1.getByRole("checkbox")).toHaveCount(0);
+  // Type 1 is never assigned or rejected by HR: it is claimed (by the employee, or by HR for them) and the HOD approves
   await expect(type1.getByRole("button", { name: /assign|reject|announce/i })).toHaveCount(0);
+  // the status filter is a control of Type 1, kept in the address
+  await page.getByTestId("ot1-status").click();
+  await page.getByRole("option", { name: "Claimable" }).click();
+  await expect(page).toHaveURL(/ot1status=claimable/);
+  await page.getByTestId("ot-reset").click();
+  await expect(page).not.toHaveURL(/ot1status=/);
+  // How it is worked out explains the claim workflow
+  await page.getByTestId("ot-type1-nested-how").click();
+  await expect(page).toHaveURL(/\/ot-detection\/type-1\/how$/);
+  await expect(page.getByTestId("ot1-how-steps")).toContainText("Approved by the Department Head.");
+  await page.getByTestId("ot-type1-nested-allowance").click();
+  await expect(page).toHaveURL(/\/ot-detection\/type-1\/allowance$/);
 
   // the month and the search are controls of the page, the address remembers them, and the subtab switch keeps them
   await page.getByTestId("ot-month").click();
@@ -420,13 +443,27 @@ test("Compensation Leave has three subtabs, each with its own notice for its own
   await expect(page).toHaveURL(/\/compensation-leave\/announcements\/list$/);
   await expect(page.getByTestId("windows-list")).toBeVisible();
   await expect(page.getByTestId("windows-form")).toHaveCount(0);
+  // the list is one month at a time (the current one first), with its figures and its filters in the address
+  await expect(page.getByTestId("windows-kpis")).toBeVisible();
+  await expect(page.getByTestId("windows-month-month")).toHaveValue(String(new Date().getMonth() + 1));
+  await page.getByTestId("windows-month-prev").click();
+  await expect(page).toHaveURL(/wmonth=\d+/);
+  await page.getByTestId("windows-kind").selectOption("late_in");
+  await expect(page).toHaveURL(/wkind=late_in/);
+  await page.getByTestId("windows-clear").click();
+  await expect(page).not.toHaveURL(/wkind=/);
 
   // B. work on Sundays and company holidays, one nested subtab per section
   await part(/^B\. Sunday & holiday work/).click();
   await expect(page).toHaveURL(/\/compensation-leave\/holiday-work\/raise$/);
   await expect(page.getByTestId("holiday-part")).toBeVisible();
-  await expect(page.getByTestId("holiday-how")).toContainText("only HR raises a claim here");
-  await expect(page.getByTestId("holiday-how")).toContainText("Department Head approves it in Approvals");
+  await expect(page.getByTestId("holiday-how")).toContainText(
+    "employees can now claim a Sunday or holiday they worked",
+  );
+  await expect(page.getByTestId("holiday-how")).toContainText("Every claim goes to the employee's Department Head");
+  await expect(page.getByTestId("holiday-how")).toContainText("approves it in Approvals");
+  // the month's Sundays and holidays, week by week
+  await expect(page.getByTestId("hw-strip")).toBeVisible();
   await expect(page.getByTestId("holiday-off")).toHaveCount(offCount(m, config.holidayWork.enabled));
   await expect(page.getByTestId("claim-form")).toBeVisible();
   await expect(page.getByTestId("claim-list")).toHaveCount(0);
@@ -435,12 +472,43 @@ test("Compensation Leave has three subtabs, each with its own notice for its own
   await expect(page).toHaveURL(/\/holiday-work\/claims$/);
   await expect(page.getByTestId("claim-list")).toBeVisible();
   await expect(page.getByTestId("claim-form")).toHaveCount(0);
+  // every kind of claim, counted by status and by kind; a filter is kept in the address
+  await expect(page.getByTestId("claim-kpis")).toBeVisible();
+  await expect(page.getByTestId("claim-kinds")).toBeVisible();
+  // the five kind tiles never cut their labels off ("SUNDA...", review 2026-11-19), from a phone to a wide screen
+  const viewport = page.viewportSize();
+  for (const width of [390, 768, 1024, 1100, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    // a label may wrap between words, but no word may be wider than its tile (it would be cut or broken mid-word)
+    const cut = await page.getByTestId("claim-kinds").evaluate((row) =>
+      [...row.querySelectorAll<HTMLElement>('[data-testid$="-label"]')].flatMap((label) =>
+        (label.textContent ?? "").split(/\s+/).filter((word) => {
+          const probe = document.createElement("span");
+          probe.style.whiteSpace = "nowrap";
+          probe.textContent = word;
+          label.appendChild(probe);
+          const wide = probe.getBoundingClientRect().width > label.clientWidth + 1;
+          probe.remove();
+          return wide || label.scrollWidth > label.clientWidth + 1;
+        }),
+      ),
+    );
+    expect(cut, `labels cut off at ${width} px`).toEqual([]);
+  }
+  if (viewport) await page.setViewportSize(viewport);
+  await page.getByTestId("claim-kind").selectOption("birthday");
+  await expect(page).toHaveURL(/hkind=birthday/);
+  await page.getByTestId("claim-clear").click();
   await page.getByTestId("holiday-nested-balance").click();
   await expect(page).toHaveURL(/\/holiday-work\/balance$/);
   await expect(page.getByTestId("balance-part")).toBeVisible();
+  await expect(page.getByTestId("balance-kpis")).toBeVisible();
   await expect(page.getByTestId("claim-list")).toHaveCount(0);
   await page.getByTestId("holiday-nested-credits").click();
   await expect(page).toHaveURL(/\/holiday-work\/credits$/);
+  // Credits: every credit and debit, with the earlier Alternative-Day credits as a section of it
+  await expect(page.getByTestId("credits-part")).toBeVisible();
+  await expect(page.getByTestId("ledger-card")).toBeVisible();
   await expect(page.getByTestId("credits-card")).toBeVisible();
   await expect(page.getByTestId("balance-part")).toHaveCount(0);
 
@@ -454,7 +522,8 @@ test("Compensation Leave has three subtabs, each with its own notice for its own
   await expect(page.getByTestId("birthday-kpis")).toBeVisible();
   await page.getByTestId("birthday-nested-how").click();
   await expect(page).toHaveURL(/\/birthdays\/how\?bperiod=week/);
-  await expect(page.getByTestId("birthday-how")).toContainText("Automatic: HR does nothing.");
+  await expect(page.getByTestId("birthday-how")).toContainText("A birthday is a normal working day.");
+  await expect(page.getByTestId("birthday-how")).toContainText("one 1-shift credit to claim");
   await expect(page.getByTestId("birthday-kpis")).toHaveCount(0);
 
   // the section is in the address: a reload lands on it again
@@ -465,9 +534,9 @@ test("Compensation Leave has three subtabs, each with its own notice for its own
 test("a date that is neither a Sunday nor a holiday cannot be claimed for, and says why", async ({ page }) => {
   await loginAsHr(page);
   await page.goto("/hr/compensation/compensation-leave/holiday-work");
-  await expect(page.getByTestId("claim-no-date")).toBeVisible();
-  // 3 Aug 2026 is a Monday
-  await page.getByTestId("claim-date").fill("2026-08-03");
+  await expect(page.getByTestId("hw-strip")).toBeVisible();
+  // 3 Aug 2026 is a Monday (a link can still name any day)
+  await page.goto("/hr/compensation/compensation-leave/holiday-work/raise?hdate=2026-08-03");
   await expect(page.getByTestId("claim-not-claimable")).toContainText("neither a Sunday nor a declared holiday");
   await expect(page.getByTestId("claim-submit")).toHaveCount(0);
 });
@@ -627,7 +696,8 @@ test("announcing a late-in window: add it, see it with who announced it, delete 
     await expect(page.getByTestId("window-reason")).toHaveValue("");
     await page.getByTestId("windows-nested-list").click();
     await expect(page).toHaveURL(/\/announcements\/list$/);
-    const row = page.getByTestId("windows-upcoming").locator("tr", { hasText: reason });
+    // one table for the month (upcoming and past together), the new announcement among its rows
+    const row = page.getByTestId("windows-table").locator("tr", { hasText: reason });
     await expect(row).toBeVisible();
     await expect(row).toContainText("Late-in");
     await expect(row).toContainText("Arrive up to 10:30 AM");

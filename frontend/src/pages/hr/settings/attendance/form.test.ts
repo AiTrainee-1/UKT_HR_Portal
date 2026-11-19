@@ -3,6 +3,7 @@ import type { PayrollSettingsItem } from "@/lib/api-client/custom-hooks";
 import {
   carriedKeysFrom,
   firstError,
+  nextMorningErrors,
   sameStaff,
   staffAccess,
   staffChanges,
@@ -64,6 +65,10 @@ describe("loading", () => {
       lunchPermissionZone: "60",
       forgottenExitHours: "9",
       earlyArrivalProtectionHours: "2",
+      // nor the next-morning cut-off: the default time, no date, and it cannot be changed
+      nextMorningEnabled: null,
+      nextMorningCutoff: "06:00",
+      nextMorningFrom: "",
     });
   });
 
@@ -75,6 +80,7 @@ describe("loading", () => {
       morningReported: true,
       eveningReported: true,
       penaltyReported: false,
+      nextMorningReported: false,
     });
     const old = staffAccess({ attendanceMode: "simple" });
     expect(old).toMatchObject({ halfDayReported: false, arrivalReported: false, morningReported: false });
@@ -282,5 +288,82 @@ describe("Penalty Early Out", () => {
     expect(firstError(validateStaff({ ...was, earlyOutPenaltyMinutes: "0" }, can))).toMatch(
       /Penalty Early Out minutes/,
     );
+  });
+});
+
+describe("the staff next-morning cut-off", () => {
+  const NEW = {
+    ...SERVER,
+    staffNextMorningEnabled: true,
+    staffNextMorningCutoff: "06:00",
+    staffNextMorningFrom: "2026-11-19",
+  };
+  const newSaved = staffDraftFrom(NEW);
+  const newAccess = staffAccess(NEW);
+  const context = { savedNextMorningFrom: "2026-11-19", today: "2026-11-20" };
+
+  it("reads the switch, the time and the date from a newer server", () => {
+    expect(newAccess.nextMorningReported).toBe(true);
+    expect(newSaved).toMatchObject({
+      nextMorningEnabled: true,
+      nextMorningCutoff: "06:00",
+      nextMorningFrom: "2026-11-19",
+    });
+    expect(staffDraftFrom({ ...NEW, staffNextMorningCutoff: "05:30:00" }).nextMorningCutoff).toBe("05:30");
+  });
+
+  it("wants a morning time, and a date that only moves later", () => {
+    expect(validateStaff(newSaved, newAccess, context)).toEqual({});
+    expect(validateStaff({ ...newSaved, nextMorningCutoff: "13:00" }, newAccess, context).nextMorningCutoff).toMatch(
+      /morning time from 00:01 to 12:00/,
+    );
+    expect(validateStaff({ ...newSaved, nextMorningCutoff: "" }, newAccess, context).nextMorningCutoff).toBeTruthy();
+    expect(validateStaff({ ...newSaved, nextMorningFrom: "2026-11-18" }, newAccess, context).nextMorningFrom).toMatch(
+      /can only be moved later than 19 Nov 2026/,
+    );
+    expect(
+      validateStaff({ ...newSaved, nextMorningFrom: "2026-12-01" }, newAccess, context).nextMorningFrom,
+    ).toBeUndefined();
+    expect(validateStaff({ ...newSaved, nextMorningFrom: "" }, newAccess, context).nextMorningFrom).toMatch(
+      /Pick the date/,
+    );
+    // a date set for the first time: today or later
+    expect(nextMorningErrors({ ...newSaved, nextMorningFrom: "2026-11-01" }, "", "2026-11-20").nextMorningFrom).toMatch(
+      /today or a later date/,
+    );
+    expect(nextMorningErrors({ ...newSaved, nextMorningFrom: "2026-11-20" }, "", "2026-11-20")).toEqual({});
+    // an older server: nothing to check
+    expect(validateStaff({ ...saved, nextMorningCutoff: "nonsense" }, access, context)).toEqual({});
+    expect(firstError(validateStaff({ ...newSaved, nextMorningCutoff: "13:00" }, newAccess, context))).toMatch(
+      /Next-morning cut-off/,
+    );
+  });
+
+  it("sends the switch and the time when the server reports them, and the date only when it moved", () => {
+    const body = staffPayload({ ...newSaved, nextMorningCutoff: "05:30" }, newSaved, carried, newAccess);
+    expect(body).toMatchObject({ staffNextMorningEnabled: true, staffNextMorningCutoff: "05:30" });
+    expect("staffNextMorningFrom" in body).toBe(false);
+    const moved = staffPayload({ ...newSaved, nextMorningFrom: "2026-12-01" }, newSaved, carried, newAccess);
+    expect(moved.staffNextMorningFrom).toBe("2026-12-01");
+    // an older server never gets them
+    const old = staffPayload(saved, saved, carried, access);
+    expect(Object.keys(old).some((k) => k.startsWith("staffNextMorning"))).toBe(false);
+  });
+
+  it("never sends them for a branch login (a company-wide rule the server would refuse with 403)", () => {
+    const branch = staffPayload({ ...newSaved, nextMorningCutoff: "05:30", lateWindow: "45" }, newSaved, carried, {
+      ...newAccess,
+      companyWideEditable: false,
+    });
+    expect(Object.keys(branch).some((k) => k.startsWith("staffNextMorning"))).toBe(false);
+    expect(branch.lastPunchPostShiftGraceHours).toBeDefined(); // the branch's own settings are still saved
+  });
+
+  it("lists the changes for the confirm dialog, marked as pay", () => {
+    const changes = staffChanges({ ...newSaved, nextMorningEnabled: false, nextMorningFrom: "2026-12-01" }, newSaved);
+    expect(changes.map((c) => [c.label, c.from, c.to, c.money])).toEqual([
+      ["Next-morning cut-off", "On", "Off", true],
+      ["Next-morning cut-off applies from", "19 Nov 2026", "1 Dec 2026", true],
+    ]);
   });
 });

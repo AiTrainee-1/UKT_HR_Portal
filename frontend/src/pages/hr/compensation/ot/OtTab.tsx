@@ -5,11 +5,20 @@ import { FilterSelect, LoadError, ResetButton, SearchField } from "@/components/
 import { errorDetail } from "@/components/payroll/panels/issues/lists";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDraft } from "@/hooks/use-debounced";
-import { useOvertimeList } from "@/lib/api-client/custom-hooks";
+import { useCompensationConfig, useOvertimeList } from "@/lib/api-client/custom-hooks";
 import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
 import { formatDuration } from "@/pages/hr/settings/compensation/time";
 import { SubtabBar } from "@/components/ui/subtab-nav";
-import { MONTH_NAMES, countOf, fmtShifts, minutesText, monthYearFromUrl, todayIst, yearChoices } from "../logic";
+import {
+  MONTH_NAMES,
+  countOf,
+  dateShort,
+  fmtShifts,
+  minutesText,
+  monthYearFromUrl,
+  todayIst,
+  yearChoices,
+} from "../logic";
 import type { CompensationUrl } from "../logic";
 import { NestedTabs } from "@/components/ui/nested-tabs";
 import { OT_NESTED, OT_SUBS, OT_SUB_LABEL, pagePath, subPath, type OtSub } from "../routes";
@@ -18,7 +27,18 @@ import { SwitchOffNotice } from "../ui";
 import { LegacySection } from "./LegacySection";
 import { Type1How, Type1Section } from "./Type1Section";
 import { Type2Section, type Type2View } from "./Type2Section";
-import { assignModes, filterOt, groupOt, otDepartments, otKpis, type2Pause } from "./ot-logic";
+import {
+  assignModes,
+  claimPause,
+  claimsFromOf,
+  filterOt,
+  filterType1,
+  groupOt,
+  isType1Filter,
+  otDepartments,
+  otKpis,
+  type2Pause,
+} from "./ot-logic";
 
 type SetUrl = (patch: Partial<CompensationUrl>) => void;
 
@@ -26,11 +46,12 @@ const OT_BASE = pagePath("ot");
 
 /**
  * OT Detection (staff only): the month's extra work past the shift end, in subtabs that each show one list. Type 1 is the
- * automatic next-day late-in allowance (read-only). Type 2 is shift-based compensation that HR assigns as Relaxation or
- * Payment. Earlier records are the ones made before the new rules. The month, the filters and the five tiles stay on top of
- * every subtab. Type 1 and Type 2 show one section at a time as nested subtabs (the list, the HR decisions, how it is worked
- * out), each with its count where it has one. Everything stays readable while a feature is off in Settings; only the changes
- * are paused.
+ * next-day late-in allowance and Type 2 the shift-based credit; from the claims date (Settings -> Compensation) both are
+ * given only after a claim (by the employee in the apps, or by HR here) is approved by the employee's Department Head, and
+ * HR may still pay a Type 2 record. Earlier records are the ones made before the overhaul. The month, the filters and the
+ * five tiles stay on top of every subtab. Type 1 and Type 2 show one section at a time as nested subtabs (the list, the
+ * decisions, how it is worked out), each with its count where it has one. Everything stays readable while a feature is off
+ * in Settings; only the changes are paused.
  */
 export default function OtTab({
   sub,
@@ -52,27 +73,36 @@ export default function OtTab({
   const query = useOvertimeList(month, year);
   const rows = useMemo(() => query.data?.results ?? [], [query.data]);
   const config = query.data?.config;
+  // the claim workflow's start date: the OT list may name it, the Compensation settings always do (a newer server)
+  const rules = useCompensationConfig();
+  const claimsFrom = claimsFromOf(config?.claimsFrom, rules.data?.claims?.from);
 
   const groups = useMemo(() => groupOt(rows), [rows]);
-  const kpis = useMemo(() => otKpis(rows), [rows]);
+  const kpis = useMemo(() => otKpis(rows, claimsFrom), [rows, claimsFrom]);
   // The box shows every letter; the address (and the lists filtered from it) changes once typing pauses, so the page is
   // not re-rendered per keystroke.
   const [searchDraft, setSearchDraft] = useDraft(url.otq, (otq) => setUrl({ otq }));
   const filters = useMemo(() => ({ q: url.otq, dept: url.otdept }), [url.otq, url.otdept]);
   const departments = useMemo(() => otDepartments(rows), [rows]);
-  const allowance = useMemo(() => filterOt(groups.allowance, filters), [groups.allowance, filters]);
+  const type1Status = isType1Filter(url.ot1status) ? url.ot1status : "all";
+  const allowance = useMemo(
+    () => filterType1(filterOt(groups.allowance, filters), type1Status, claimsFrom),
+    [groups.allowance, filters, type1Status, claimsFrom],
+  );
   const waiting = useMemo(() => filterOt(groups.waiting, filters), [groups.waiting, filters]);
   const history = useMemo(() => filterOt(groups.history, filters), [groups.history, filters]);
   const legacy = useMemo(() => filterOt(groups.legacy, filters), [groups.legacy, filters]);
 
   const modes = assignModes(config);
   const pause = type2Pause(config, featuresOff);
+  const pause1 = claimPause(config, featuresOff, 1);
+  const pause2 = claimPause(config, featuresOff, 2);
   const loading = query.isLoading;
   const masterOn = !featuresOff && config?.masterEnabled !== false;
-  const filtersOn = (url.otq ? 1 : 0) + (url.otdept ? 1 : 0);
+  const filtersOn = (url.otq ? 1 : 0) + (url.otdept ? 1 : 0) + (sub === "type-1" && type1Status !== "all" ? 1 : 0);
   const years = yearChoices(today);
 
-  const reset = () => setUrl({ otq: "", otdept: "" });
+  const reset = () => setUrl({ otq: "", otdept: "", ot1status: "all" });
 
   return (
     <div className="space-y-4" data-testid="ot-tab">
@@ -158,7 +188,11 @@ export default function OtTab({
                 testId="ot-kpi-earned"
                 label="Type 1 earned"
                 value={kpis.allowanceEarned}
-                sub={`${minutesText(kpis.allowanceMinutes)} allowed in all`}
+                sub={`${minutesText(kpis.allowanceMinutes)} allowed in all${
+                  kpis.allowanceClaimable + kpis.allowanceClaimPending > 0
+                    ? ` · ${kpis.allowanceClaimable} claimable · ${kpis.allowanceClaimPending} with the HOD`
+                    : ""
+                }`}
                 icon={Moon}
                 tone="bg-slate-100 text-slate-800"
               />
@@ -172,19 +206,25 @@ export default function OtTab({
               />
               <KpiTile
                 testId="ot-kpi-waiting"
-                label="Type 2 waiting for HR"
+                label="Type 2 waiting"
                 value={kpis.waiting}
                 sub={
-                  kpis.waiting > 0 ? `${fmtShifts(kpis.waitingSuggestedShifts)} shifts suggested` : "Nothing to decide"
+                  kpis.waiting > 0
+                    ? `${fmtShifts(kpis.waitingSuggestedShifts)} shifts suggested${
+                        kpis.waitingClaimPending > 0 ? ` · ${kpis.waitingClaimPending} with the HOD` : ""
+                      }`
+                    : "Nothing to decide"
                 }
                 icon={Hourglass}
                 tone="bg-amber-50 text-amber-800"
               />
               <KpiTile
                 testId="ot-kpi-assigned"
-                label="Assigned this month"
-                value={kpis.assigned}
-                sub={`${fmtShifts(kpis.assignedShifts)} shifts · ${countOf(kpis.assignedRelaxation, "relaxation")}, ${countOf(kpis.assignedPay, "payment")}`}
+                label={kpis.credited > 0 ? "Given this month" : "Assigned this month"}
+                value={kpis.assigned + kpis.credited}
+                sub={`${fmtShifts(kpis.assignedShifts + kpis.creditedShifts)} shifts · ${countOf(kpis.assignedRelaxation, "relaxation")}, ${countOf(kpis.assignedPay, "payment")}${
+                  kpis.credited > 0 ? `, ${kpis.credited} credited by claim` : ""
+                }`}
                 icon={Banknote}
                 tone="bg-indigo-50 text-indigo-800"
               />
@@ -207,7 +247,7 @@ export default function OtTab({
                   title="Type 1 (next-day late-in allowance) is switched off."
                   setting="allowance-enabled"
                 >
-                  No new allowance is detected or given. The rows already earned stay readable below.
+                  No new allowance is detected, claimed or given. The rows already earned stay readable below.
                 </SwitchOffNotice>
               )}
               <NestedTabs
@@ -225,13 +265,17 @@ export default function OtTab({
                 ])}
               >
                 {nested === "how" ? (
-                  <Type1How />
+                  <Type1How claimsFrom={claimsFrom} />
                 ) : (
                   <Type1Section
                     rows={allowance}
                     total={groups.allowance.length}
                     loading={loading}
                     off={config?.allowanceEnabled === false}
+                    claimsFrom={claimsFrom}
+                    pause={pause1}
+                    status={type1Status}
+                    onStatus={(v) => setUrl({ ot1status: v })}
                   />
                 )}
               </NestedTabs>
@@ -245,7 +289,7 @@ export default function OtTab({
                   title="Type 2 (shift-based compensation) is switched off."
                   setting="shift-enabled"
                 >
-                  Assigning and rejecting are paused. Everything already assigned or rejected stays readable below.
+                  Claiming, paying and rejecting are paused. Everything already decided stays readable below.
                 </SwitchOffNotice>
               )}
               {masterOn && config && config.shiftEnabled && !config.relaxationEnabled && !config.payEnabled && (
@@ -254,7 +298,9 @@ export default function OtTab({
                   title="Neither Relaxation nor Payment is switched on."
                   setting="shift-relaxation"
                 >
-                  Type 2 cannot be assigned until one of them is on.
+                  {claimsFrom
+                    ? "HR cannot pay or assign Type 2 until one of them is on; claims still go to the Department Head."
+                    : "Type 2 cannot be assigned until one of them is on."}
                 </SwitchOffNotice>
               )}
               <NestedTabs
@@ -287,6 +333,8 @@ export default function OtTab({
                   modes={modes}
                   historyStatus={url.otstatus}
                   onHistoryStatus={(v) => setUrl({ otstatus: v })}
+                  claimsFrom={claimsFrom}
+                  claimPause={pause2}
                 />
               </NestedTabs>
             </>
@@ -313,8 +361,9 @@ export default function OtTab({
           {query.data && (
             <p className="px-1 text-[11px] text-muted-foreground" data-testid="ot-footnote">
               {countOf(rows.length, "record")} in {MONTH_NAMES[month - 1]} {year}. Type 2 threshold:{" "}
-              {formatDuration(config?.shiftMinExtraMinutes ?? 150)} past the shift end. Staff only: production employees
-              are never listed.
+              {formatDuration(config?.shiftMinExtraMinutes ?? 150)} past the shift end.
+              {claimsFrom ? ` Claims apply from ${dateShort(claimsFrom)}; earlier days keep the old rules.` : ""} Staff
+              only: production employees are never listed.
             </p>
           )}
         </>

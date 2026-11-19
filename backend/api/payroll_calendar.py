@@ -228,7 +228,10 @@ def calendar_extras(
     )
     claim_dates = set(
         HolidayWorkClaim.objects.filter(
-            employee=emp, work_date__range=(start, end), status=HolidayWorkClaim.STATUS_APPROVED
+            employee=emp,
+            kind=HolidayWorkClaim.KIND_HOLIDAY_WORK,  # only Sunday / holiday work marks a worked holiday
+            work_date__range=(start, end),
+            status=HolidayWorkClaim.STATUS_APPROVED,
         ).values_list("work_date", flat=True)
     )
     ot_dates = set(

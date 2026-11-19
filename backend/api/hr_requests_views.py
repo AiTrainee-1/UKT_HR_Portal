@@ -67,6 +67,9 @@ class Kind:
     select: tuple[str, ...] = ("employee__department", "employee__designation", "employee__branch")
 
 
+# The Compensation claims list (the Sunday / holiday work section's Claims tab lists every claim kind).
+COMPENSATION_CLAIMS_PATH = "/hr/compensation/compensation-leave/holiday-work/claims"
+
 KINDS: tuple[Kind, ...] = (
     Kind("leave", "Leave", "leave", "LeaveRequest", "quick", "/hr/leave?tab=leaves", "Leave & Holiday", ("pending",)),
     Kind(
@@ -155,13 +158,15 @@ KINDS: tuple[Kind, ...] = (
         None,
         ("pending",),
     ),
+    # every compensation claim kind since 2026-11-19 (Sunday / holiday work, OT allowance / shift credit, birthday credit,
+    # use of the balance): the Department Head decides them, so HR opens the Compensation claims list
     Kind(
         "holiday_work",
-        "Holiday / Sunday work",
+        "Compensation claims",
         "compensation",
         "HolidayWorkClaim",
         "link",
-        "/hr/compensation",
+        COMPENSATION_CLAIMS_PATH,
         "Compensation",
         ("pending",),
     ),
@@ -461,19 +466,43 @@ def _correction(r):
 
 
 def _holiday_work(r):
-    day = "Sunday" if r.work_date.weekday() == 6 else "Holiday"
+    """A compensation claim of any kind (the one claim table, 2026-11-19)."""
+    from .compensation_claims import KIND_LABELS
+
+    kind = getattr(r, "kind", "holiday_work") or "holiday_work"
+    raised = "Employee" if getattr(r, "raised_by_role", "hr") == "employee" else "HR"
+    shifts = f"{float(r.shifts):.2f}"
+    if kind == "holiday_work":
+        day = "Sunday" if r.work_date.weekday() == 6 else "Holiday"
+        details = [("Work date", str(r.work_date)), ("Day", day), ("Shifts claimed", shifts)]
+        label, summary = "Holiday / Sunday work", f"{r.work_date} · {float(r.shifts):g} shift"
+    elif kind == "ot_allowance":
+        details = [("OT date", str(r.work_date)), ("Late-in allowance", f"{r.minutes or 0} min")]
+        label, summary = KIND_LABELS[kind], f"{r.work_date} · {r.minutes or 0} min"
+    elif kind == "use_balance":
+        details = [("Day off", str(r.work_date)), ("Shifts to use", shifts)]
+        label, summary = KIND_LABELS[kind], f"{r.work_date} · {float(r.shifts):g} shift"
+    else:
+        date_label = "OT date" if kind == "ot_shift" else "Birthday"
+        details = [(date_label, str(r.work_date)), ("Shifts claimed", shifts)]
+        label, summary = KIND_LABELS.get(kind, "Compensation claim"), f"{r.work_date} · {float(r.shifts):g} shift"
+    if raised == "Employee":
+        details.append(("Raised by", f"{r.requested_by or 'The employee'} (employee)"))
+    else:
+        details.append(("Raised by", r.requested_by or "HR"))
     return {
-        "label": "Holiday / Sunday work",
-        "summary": f"{r.work_date} · {float(r.shifts):g} shift",
+        "label": label,
+        "summary": summary,
         "reason": r.reason,
         "date": str(r.work_date),
-        "details": [
-            ("Work date", str(r.work_date)),
-            ("Day", day),
-            ("Shifts claimed", f"{float(r.shifts):.2f}"),
-            ("Raised by", r.requested_by or "HR"),
-        ],
+        "details": details,
         "decision": (r.reviewed_by, "hod" if r.reviewed_by else None, r.reviewed_at, r.review_comment),
+        "extra": {
+            "claimKind": kind,
+            "raisedByRole": getattr(r, "raised_by_role", "hr"),
+            # the Claims tab's own URL state (hmonth / hemp / hclaim): every month, this employee, this claim open
+            "openPath": f"{COMPENSATION_CLAIMS_PATH}?hmonth=all&hemp={r.employee_id}&hclaim={r.id}",
+        },
     }
 
 

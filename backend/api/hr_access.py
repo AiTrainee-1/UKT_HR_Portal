@@ -297,9 +297,12 @@ APPROVAL_KEYS = tuple(k.key for k in APPROVAL_KINDS)
 INFO_KINDS: tuple[dict, ...] = (
     {
         "key": "holiday_work",
-        "label": "Holiday / Sunday work claims",
+        "label": "Compensation claims",
         "group": "compensation",
-        "text": "Decided by the Department Head only: HR has no approval step for them.",
+        "text": (
+            "Sunday / holiday work, OT allowance and credit, birthday credit and using the balance, raised by the "
+            "employee or HR. Decided by the Department Head only: HR has no approval step for them."
+        ),
     },
 )
 

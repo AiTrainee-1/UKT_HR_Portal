@@ -94,6 +94,21 @@ def parse_int(raw) -> int | None:
         return None
 
 
+MAX_DB_ID = 2**63 - 1  # the largest id the database can hold
+
+
+def parse_id(raw) -> int | None:
+    """A record id from a query string or a JSON body: a whole number from 1 to the largest id the database can hold.
+    Anything else (text, a list, a bool, a fraction, an infinity, 99999999999999999999999) is None, so the caller
+    answers 400 "must be a number" instead of a misleading 404."""
+    if isinstance(raw, (list, tuple, dict)):
+        return None
+    value = parse_int(raw)
+    if value is None or (isinstance(raw, float) and value != raw):
+        return None
+    return value if 0 < value <= MAX_DB_ID else None
+
+
 def shifts_text(value) -> str:
     """0.5 -> '0.50' (the way shifts are written everywhere in the HRMS)."""
     return f"{Decimal(str(value)).quantize(Decimal('0.01'))}"

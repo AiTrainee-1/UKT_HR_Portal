@@ -4,7 +4,8 @@ Two kinds, each with its own switch on Phone Notify Control (mobile_messages.EXT
   * ot_compensation: HR decided a staff member's detected overtime (Compensation -> OT): assigned as payment or as time off
     (on a date, or into the compensation balance), or rejected. One notification per record and decision.
   * compensation_announcement: HR announced a Compensation Day (no Late / Permission that day) or a late-in / early-out window
-    for a date. Every active staff member it covers gets one notification.
+    for a date. Every active staff member it covers gets one notification; removing one later sends each of them a
+    "cancelled" notice under the same switch (announcement_cancelled, 2026-11-19).
 
 A Notification row IS the push (signals.py -> push_delivery.py, after the commit). Nothing in here ever raises into the
 compensation workflow: a notice that cannot be made is logged and skipped.
@@ -191,3 +192,114 @@ def announcement_made(ann, employee_ids=None) -> int:
     except Exception:
         logger.exception("Could not notify the compensation announcement %s", getattr(ann, "pk", None))
         return 0
+
+
+def cancelled_text(ann) -> tuple[str, str]:
+    """(title, body) telling staff an announcement was removed (2026-11-19: an announcement of any date can be removed)."""
+    from .models import CompensationDayAnnouncement as A
+
+    when = _day(ann.date)
+    if ann.kind == A.KIND_LATE_IN:
+        what = f"The late arrival allowed on {when} (up to {_time(ann.allowed_time)})"
+    elif ann.kind == A.KIND_EARLY_OUT:
+        what = f"The early leaving allowed on {when} (from {_time(ann.allowed_time or ann.leave_until_time)})"
+    else:
+        what = f"The Compensation Day on {when}"
+    return "Announcement cancelled", f"{what} was cancelled by HR: the normal shift times apply that day."
+
+
+def announcement_cancelled(ann, employee_ids=None, *, announcement_id=None) -> int:
+    """One "cancelled" notification per staff member the removed announcement covered (same Phone Notify Control switch as
+    the announcement: source compensation_announcement). Call it after the delete with the ids worked out BEFORE it (the
+    row and its employee list are gone) and the removed row's id (`ann.pk` is None after a delete). HR's own wording for
+    announcements (Message Text) is not applied: it describes an announcement, not its cancellation. Returns how many.
+    Never raises."""
+    from . import push_delivery, push_recipients
+    from .models import Notification
+
+    try:
+        ids = sorted(push_recipients.keep(employee_ids)) if employee_ids is not None else covered_staff(ann)
+        if not ids:
+            return 0
+        title, body = cancelled_text(ann)
+        key = f"compday-cancel:{announcement_id or ann.pk}"
+        with transaction.atomic():
+            Notification.objects.bulk_create(
+                [
+                    Notification(
+                        employee_id=emp_id,
+                        type=NOTIFICATION_TYPE,
+                        title=title,
+                        message=body,
+                        source=SOURCE_ANNOUNCEMENT,
+                        dedupe_key=key,
+                    )
+                    for emp_id in ids
+                ],
+                batch_size=500,
+                ignore_conflicts=True,
+            )
+            made = list(
+                Notification.objects.filter(dedupe_key=key, employee_id__in=ids, push_status="").values_list(
+                    "pk", flat=True
+                )
+            )
+        push_delivery.schedule(made)  # bulk_create sends no post_save
+        return len(made)
+    except Exception:
+        logger.exception("Could not notify the cancelled compensation announcement %s", announcement_id)
+        return 0
+
+
+# ── compensation claims (2026-11-19) ─────────────────────────────────────────────────────────────────────────────────
+# A decided claim is told by whatsapp_approvals.notify_decision (workflow `holiday_work`: the WhatsApp message and its phone
+# notification of type "compensation", whose focus id in the apps is hw-<claim id>). What is added here is the one event that
+# has no message of its own: HR raising a claim on the employee's behalf (the employee raising their own needs no notice).
+
+
+def claim_raised_text(claim) -> tuple[str, str]:
+    from .compensation_claims import KIND_LABELS
+
+    label = KIND_LABELS.get(claim.kind, "Compensation")
+    when = _day(claim.work_date)
+    if claim.kind == "use_balance":
+        body = (
+            f"HR asked, for you, to use {_shifts(claim.shifts)} of your compensation balance on {when}. "
+            "It is waiting for your Department Head."
+        )
+    elif claim.kind == "ot_allowance":
+        body = (
+            f"HR claimed your late-in allowance ({claim.minutes or 0} min) for the extra hours on {when}. "
+            "It is waiting for your Department Head."
+        )
+    else:
+        body = (
+            f"HR claimed {_shifts(claim.shifts)} of compensation for you ({label.lower()}, {when}). "
+            "It is waiting for your Department Head."
+        )
+    return f"Compensation claim raised: {label}", body
+
+
+def claim_raised(claim) -> None:
+    """Tell the employee that HR raised a claim for them (Phone Notify Control's "Compensation & overtime" switch, the
+    same source as the overtime decisions). One notification per claim. Never raises."""
+    from . import push_recipients
+    from .models import Notification
+
+    if not push_recipients.allows(claim.employee_id):
+        return
+    try:
+        title, body = claim_raised_text(claim)
+        with transaction.atomic():
+            Notification.objects.create(
+                employee_id=claim.employee_id,
+                type=NOTIFICATION_TYPE,
+                title=title,
+                message=body,
+                source=SOURCE_OT,
+                dedupe_key=f"claim:{claim.pk}:raised",
+            )
+    except IntegrityError:
+        pass  # already told
+    except Exception:
+        logger.exception("Could not notify the claim %s raised by HR", getattr(claim, "pk", None))

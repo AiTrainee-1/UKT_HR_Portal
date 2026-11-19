@@ -31,6 +31,12 @@ export type StaffDraft = {
   lunchPermissionZone: string;
   forgottenExitHours: string;
   earlyArrivalProtectionHours: string;
+  /** Staff next-morning cut-off: null = the server does not report it (an older backend), so it cannot be changed here. */
+  nextMorningEnabled: boolean | null;
+  /** "06:00" */
+  nextMorningCutoff: string;
+  /** YYYY-MM-DD the rule applies from ("" = not set yet); it can only be moved later. */
+  nextMorningFrom: string;
 };
 
 /**
@@ -62,6 +68,7 @@ export type StaffAccess = {
   morningReported: boolean;
   eveningReported: boolean;
   penaltyReported: boolean;
+  nextMorningReported: boolean;
 };
 
 export function staffAccess(data: Partial<PayrollSettingsItem> | undefined): StaffAccess {
@@ -72,8 +79,12 @@ export function staffAccess(data: Partial<PayrollSettingsItem> | undefined): Sta
     morningReported: data?.morningLateInEnabled != null,
     eveningReported: data?.eveningEarlyOutEnabled != null,
     penaltyReported: data?.earlyOutPenaltyEnabled != null,
+    nextMorningReported: data?.staffNextMorningEnabled != null,
   };
 }
+
+/** The staff next-morning cut-off as the server ships it: on, 06:00. */
+export const NEXT_MORNING_DEFAULTS = { cutoff: "06:00" } as const;
 
 const text = (value: number | null | undefined, fallback: number) => String(value ?? fallback);
 
@@ -99,6 +110,9 @@ export function staffDraftFrom(data: Partial<PayrollSettingsItem>): StaffDraft {
     lunchPermissionZone: text(data.afternoonPermissionWindowMinutes, 60),
     forgottenExitHours: text(data.lastPunchPostShiftGraceHours, 9),
     earlyArrivalProtectionHours: text(data.firstPunchPreShiftBufferHours, 2),
+    nextMorningEnabled: data.staffNextMorningEnabled ?? null,
+    nextMorningCutoff: (data.staffNextMorningCutoff || NEXT_MORNING_DEFAULTS.cutoff).slice(0, 5),
+    nextMorningFrom: data.staffNextMorningFrom ?? "",
   };
 }
 
@@ -149,8 +163,51 @@ const hours = (value: string, label: string): string | undefined => {
     : `${label} must be from 0 to 24 hours, with at most one decimal (for example 9 or 9.5).`;
 };
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** "2026-11-19" -> "19 Nov 2026". */
+export function dayText(iso: string): string {
+  if (!ISO_DAY.test(iso)) return iso;
+  const [y, m, d] = iso.split("-").map(Number);
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1];
+  return `${d} ${month} ${y}`;
+}
+
+/**
+ * What is wrong with the next-morning cut-off: a morning clock time (after midnight, up to noon), and a start date that only
+ * moves later (days already judged keep the old rule): never before the saved date, and a newly set one is today or later.
+ */
+export function nextMorningErrors(
+  d: Pick<StaffDraft, "nextMorningEnabled" | "nextMorningCutoff" | "nextMorningFrom">,
+  savedFrom: string,
+  today: string,
+): Pick<StaffErrors, "nextMorningCutoff" | "nextMorningFrom"> {
+  const errors: Pick<StaffErrors, "nextMorningCutoff" | "nextMorningFrom"> = {};
+  if (d.nextMorningEnabled === null) return errors;
+  const cutoff = minutesOf(d.nextMorningCutoff);
+  if (cutoff === null || cutoff < 1 || cutoff > 12 * 60) {
+    errors.nextMorningCutoff = "Next-morning cut-off must be a morning time from 00:01 to 12:00.";
+  }
+  const from = d.nextMorningFrom;
+  if (from === savedFrom) return errors;
+  if (from === "") {
+    errors.nextMorningFrom = "Pick the date the next-morning cut-off applies from.";
+  } else if (!ISO_DAY.test(from)) {
+    errors.nextMorningFrom = "Pick a valid date.";
+  } else if (savedFrom && from < savedFrom) {
+    errors.nextMorningFrom = `The date can only be moved later than ${dayText(savedFrom)}: days before it keep the old rule.`;
+  } else if (!savedFrom && today && from < today) {
+    errors.nextMorningFrom = "Pick today or a later date: days already judged are not changed.";
+  }
+  return errors;
+}
+
 /** The checks the server makes on save (and a few it does not, where a value would be stored wrongly). */
-export function validateStaff(d: StaffDraft, access: StaffAccess): StaffErrors {
+export function validateStaff(
+  d: StaffDraft,
+  access: StaffAccess,
+  context: { savedNextMorningFrom?: string; today?: string } = {},
+): StaffErrors {
   const errors: StaffErrors = {};
   if (access.companyWideEditable && access.halfDayReported && minutesOf(d.secondHalfStart) === null) {
     errors.secondHalfStart = "Enter Second Half Start as a valid clock time.";
@@ -175,6 +232,9 @@ export function validateStaff(d: StaffDraft, access: StaffAccess): StaffErrors {
   if (grace) errors.forgottenExitHours = grace;
   const buffer = hours(d.earlyArrivalProtectionHours, "Next-day early-arrival protection");
   if (buffer) errors.earlyArrivalProtectionHours = buffer;
+  if (access.nextMorningReported) {
+    Object.assign(errors, nextMorningErrors(d, context.savedNextMorningFrom ?? d.nextMorningFrom, context.today ?? ""));
+  }
   if (access.companyWideEditable && access.penaltyReported) {
     const minutes = num(d.earlyOutPenaltyMinutes);
     if (!(Number.isInteger(minutes) && minutes >= 1 && minutes <= PENALTY_DEFAULTS.maxMinutes)) {
@@ -202,6 +262,8 @@ export const firstError = (errors: StaffErrors): string | null =>
   errors.lunchPermissionZone ??
   errors.forgottenExitHours ??
   errors.earlyArrivalProtectionHours ??
+  errors.nextMorningCutoff ??
+  errors.nextMorningFrom ??
   errors.earlyOutPenaltyMinutes ??
   errors.earlyOutPenaltyDeduction ??
   null;
@@ -254,6 +316,14 @@ export const STAFF_FIELDS: Record<keyof StaffDraft, FieldInfo> = {
     label: "Next-day early-arrival protection",
     show: plain("hours"),
     number: true,
+    money: true,
+  },
+  nextMorningEnabled: { label: "Next-morning cut-off", show: onOff, number: false, money: true },
+  nextMorningCutoff: { label: "Next-morning cut-off time", show: (v) => String(v), number: false, money: true },
+  nextMorningFrom: {
+    label: "Next-morning cut-off applies from",
+    show: (v) => (v ? dayText(String(v)) : "not set"),
+    number: false,
     money: true,
   },
 };
@@ -323,6 +393,15 @@ export function staffPayload(
       companyWide.arrivalPermissionWindowMinutes = arrival.permissionWindowMinutes;
       companyWide.arrivalExtraMinutes = arrival.extraMinutes;
       companyWide.arrivalQuarterDeduction = arrival.quarterDeduction;
+    }
+    // the next-morning cut-off (a company-wide rule: a branch login's save would be refused) only when the server
+    // reports it; its start date only when it was moved
+    if (access.nextMorningReported && draft.nextMorningEnabled !== null) {
+      companyWide.staffNextMorningEnabled = draft.nextMorningEnabled;
+      companyWide.staffNextMorningCutoff = draft.nextMorningCutoff;
+      if (draft.nextMorningFrom !== saved.nextMorningFrom && draft.nextMorningFrom) {
+        companyWide.staffNextMorningFrom = draft.nextMorningFrom;
+      }
     }
   }
   return {

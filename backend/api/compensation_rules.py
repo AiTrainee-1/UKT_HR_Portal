@@ -13,6 +13,9 @@ Two rule tables, both editable in Settings -> Compensation (rows can be edited, 
       2 h 30 -> 60 min. It applies only up to the Type 2 threshold (extra work beyond it is Type 2's).
 
   Type 2 - SHIFT-based compensation (shift rules)
+      From the claims date (CompensationConfig.claims_from) on, with the quarters rule on, the credit is the OT minutes
+      over the employee's own working shift length in quarters, rounded down, capped at 1.00 (quarter_credit below);
+      the threshold and the ladder that follow stay for older days and for the quarters rule switched off.
       A day with MORE than the Type 2 threshold (default 150 min) of extra work is a candidate HR assigns by hand.
       The shifts it suggests come from a LADDER on the clock time of the day's LAST punch, in minutes since the OT
       day's midnight (a punch at 01:00 the next calendar day is 1500). The first enabled row, in `until_minutes`
@@ -189,6 +192,38 @@ def shift_for_last_punch(
 def is_type2_day(extra: int, min_extra_minutes: int) -> bool:
     """MORE than the threshold of extra work: a Type 2 candidate."""
     return extra is not None and extra > min_extra_minutes
+
+
+# ── Type 2: the quarters rule (compensation claims, 2026-11-19) ─────────────
+#
+# From CompensationConfig.claims_from on, with CompensationConfig.ot_quarter_rule on, a staff OT day's Type 2 credit is
+# the extra minutes measured against the employee's OWN working shift length (shift end - start - lunch) in QUARTERS,
+# rounded DOWN and capped at one shift: with an 8-hour working shift, 2 h of OT is 0.25, 4 h 0.50, 6 h 0.75, 8 h or more
+# 1.00; 1 h 59 min is below a quarter (no Type 2 credit: the day may still earn a Type 1 allowance).
+
+QUARTER = Decimal("0.25")
+MAX_DAY_CREDIT = Decimal("1.00")
+
+
+def working_minutes(start_time, end_time, lunch_minutes) -> int:
+    """A shift's working length in minutes: end - start (an overnight shift ends the next day) minus the lunch break,
+    never negative. 0 when a time is missing."""
+    if start_time is None or end_time is None:
+        return 0
+    start, end = clock_to_minutes(start_time), clock_to_minutes(end_time)
+    span = end - start if end > start else end + MINUTES_PER_DAY - start
+    return max(0, span - max(0, int(lunch_minutes or 0)))
+
+
+def quarter_credit(extra_minutes: int, shift_minutes: int) -> Decimal:
+    """The quarters rule: `extra_minutes` of OT over a working shift of `shift_minutes`, in whole quarters (rounded down),
+    capped at MAX_DAY_CREDIT. Decimal("0.00") below a quarter or without a shift length. Integer arithmetic: 120 of 480
+    is exactly 0.25, 119 is 0.00."""
+    extra, length = int(extra_minutes or 0), int(shift_minutes or 0)
+    if extra <= 0 or length <= 0:
+        return Decimal("0.00")
+    quarters = (extra * 4) // length
+    return min(MAX_DAY_CREDIT, QUARTER * quarters).quantize(Decimal("0.01"))
 
 
 def normalise_shifts(value) -> Decimal | None:

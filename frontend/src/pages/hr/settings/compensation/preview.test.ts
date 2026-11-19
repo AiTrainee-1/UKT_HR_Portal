@@ -8,9 +8,12 @@ import {
   judgeFirstPunch,
   ladderOrder,
   payForShifts,
+  QUARTER_EXAMPLE_SHIFT,
+  quarterCredit,
   ruleName,
   shiftFor,
   shiftsText,
+  workingMinutes,
   type AllowanceValue,
   type ShiftValue,
 } from "./preview";
@@ -185,5 +188,27 @@ describe("what a shift is worth", () => {
     expect(dayWords(0.5)).toBe("half a day");
     expect(dayWords(0.75)).toBe("three quarters of a day");
     expect(dayWords(1)).toBe("one whole day");
+  });
+});
+
+describe("the quarters rule (staff OT credit from the claims date)", () => {
+  it("measures the working shift without its lunch, also across midnight", () => {
+    expect(workingMinutes(QUARTER_EXAMPLE_SHIFT)).toBe(480);
+    expect(workingMinutes({ start: 22 * 60, end: 6 * 60, lunch: 30 })).toBe(450);
+  });
+
+  it("counts the overtime in quarters of the shift, rounded down, at most 1.00, and nothing below a quarter", () => {
+    expect(quarterCredit(119, 480)).toBe(0);
+    expect(quarterCredit(120, 480)).toBe(0.25);
+    expect(quarterCredit(239, 480)).toBe(0.25);
+    expect(quarterCredit(240, 480)).toBe(0.5);
+    expect(quarterCredit(360, 480)).toBe(0.75);
+    expect(quarterCredit(479, 480)).toBe(0.75);
+    expect(quarterCredit(480, 480)).toBe(1);
+    expect(quarterCredit(900, 480)).toBe(1);
+    // the employee's own shift decides: 3 hours is half of a 6-hour shift
+    expect(quarterCredit(180, 360)).toBe(0.5);
+    expect(quarterCredit(0, 480)).toBe(0);
+    expect(quarterCredit(200, 0)).toBe(0);
   });
 });

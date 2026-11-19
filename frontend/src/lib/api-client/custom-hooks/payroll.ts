@@ -691,6 +691,19 @@ export type PayrollSettingsItem = {
   simpleGraceMinutes: number;
   lastPunchPostShiftGraceHours: number;
   firstPunchPreShiftBufferHours: number;
+  // Staff next-morning cut-off (2026-11-19, like production's 06:00): a staff punch on the next morning BEFORE the cut-off
+  // ends the day before as overtime when that day's punches leave a session open; from the cut-off on it is the new day's
+  // arrival. From `staffNextMorningFrom` (forward-only); days before keep the forgotten last-out window above. An older
+  // backend sends none of these.
+  staffNextMorningEnabled?: boolean;
+  /** "06:00" */
+  staffNextMorningCutoff?: string;
+  staffNextMorningFrom?: string | null;
+  /**
+   * Read-only: when the rule was switched on / off and which cut-off was in force (a day follows the entry in force on it,
+   * so a change never re-judges an earlier day). `from` null = from the very start. Empty while never changed.
+   */
+  staffNextMorningHistory?: { from: string | null; enabled: boolean; cutoff: string }[];
   // Production attendance windows (1.5-shift day)
   prodFirstHalfStart: string;
   prodFirstHalfEnd: string;

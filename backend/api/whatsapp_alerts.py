@@ -505,8 +505,10 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
         + f". Time now {_fmt_time(now_s)}."
     )
 
-    # Compensation days are never penalised, and neither is a paid birthday (the whole day is compensation leave, so no
-    # attendance detection applies to it); looked up only if something is due.
+    # Compensation days are never penalised, and neither is a PAID birthday leave; looked up only if something is due.
+    # Birthday before the claims date (compensation_engine.birthday_rule "old"): the whole day is paid whatever the
+    # punches, so no detection applies. From the claims date on ("new"): a birthday nobody punched on is paid birthday
+    # leave (no alerts), but once the employee punches it is a normal working day and every alert applies as usual.
     comp = {}
 
     def excused() -> bool:
@@ -514,11 +516,19 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
             comp["v"] = bool(_compensation_day_for(emp, day.today, settings=day.payroll))
             if comp["v"]:
                 say("Today is a Compensation Day for this employee: never penalised, no alerts.")
-            elif day.comp_ctx is not None and comp_engine.birthday_applies(
-                emp, day.today, day.comp_ctx, emp_assignments
-            ):
-                comp["v"] = True
-                say("Today is this employee's paid birthday leave: no attendance detection applies, so no alerts.")
+            elif day.comp_ctx is not None:
+                rule = comp_engine.birthday_rule(emp, day.today, day.comp_ctx, emp_assignments)
+                if rule == comp_engine.BIRTHDAY_RULE_OLD:
+                    comp["v"] = True
+                    say("Today is this employee's paid birthday leave: no attendance detection applies, so no alerts.")
+                elif rule == comp_engine.BIRTHDAY_RULE_NEW and n == 0:
+                    comp["v"] = True
+                    say(
+                        "Today is this employee's birthday and they have not punched: a birthday not worked is paid "
+                        "birthday leave, so no alerts."
+                    )
+                elif rule == comp_engine.BIRTHDAY_RULE_NEW:
+                    say("Today is this employee's birthday, but they punched in: a worked birthday is a normal day.")
         return comp["v"]
 
     if emp.id in day.on_duty:
@@ -602,7 +612,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
         and times[0] <= end_s
         and now_s - first_minute_s <= LATE_FRESH_S
         and day.comp_ctx is not None
-        and day.comp_ctx.allowance_on
+        and day.comp_ctx.allowance_possible
         and not tag_sent("late")
     ):
         grant = comp_engine.allowance_for_arrival(emp, day.today, day.comp_ctx, day.payroll)

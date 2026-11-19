@@ -3,6 +3,7 @@ import { ArrowUpRight, Cake, CalendarClock, Megaphone } from "lucide-react";
 import { SettingBlock, SettingsSection } from "../kit/SettingBlock";
 import { ToggleField } from "../kit/Field";
 import { COMPENSATION_SECTIONS, compensationText } from "../CompensationTab.meta";
+import { prettyDate } from "./form";
 import { FromDate, masterOffNote, notes, type SectionProps } from "./ui";
 import { leavePath } from "@/pages/hr/compensation/routes";
 
@@ -67,7 +68,7 @@ export function HolidayWorkSection({ draft, patch, readOnly, masterOn }: Section
       id="compensation-leave-b"
       icon={CalendarClock}
       title={COMPENSATION_SECTIONS.holidayWork}
-      purpose="HR grants 0.25, 0.50, 0.75 or 1 shift of alternative-day compensation, by the shifts the employee worked on a Sunday or a company holiday. Staff only."
+      purpose="0.25, 0.50, 0.75 or 1 shift of alternative-day compensation, by the shifts the employee worked on a Sunday or a company holiday: claimed by the employee or HR, approved by the Department Head, then added to the balance. Staff only."
       usedBy={[
         { label: "Compensation", to: leavePath("holiday-work") },
         { label: "Approvals" },
@@ -82,7 +83,7 @@ export function HolidayWorkSection({ draft, patch, readOnly, masterOn }: Section
         affects={[
           {
             where: "Compensation - Compensation Leave",
-            what: "HR can assign shifts for a Sunday or company-holiday work day only while this is on",
+            what: "the employee or HR can claim shifts for a Sunday or company-holiday work day only while this is on",
             to: leavePath("holiday-work"),
           },
           {
@@ -111,25 +112,29 @@ export function HolidayWorkSection({ draft, patch, readOnly, masterOn }: Section
           id="compensation-holiday-work-switch"
           checked={draft.holidayWorkEnabled}
           onChange={(v) => patch({ holidayWorkEnabled: v })}
-          onLabel="HR can assign Sunday and holiday work"
+          onLabel="Sunday and holiday work can be claimed"
           offLabel="Sunday and holiday work is not offered"
           disabled={readOnly}
         >
-          Only HR assigns it; it counts only after the Department Head approves it.
+          The employee or HR claims it; it counts only after the Department Head approves it.
         </ToggleField>
       </SettingBlock>
     </SettingsSection>
   );
 }
 
-/** Compensation Leave - C: paid leave on the employee's birthday, from the date of birth on the employee record. */
-export function BirthdaySection({ draft, patch, readOnly, masterOn, validation, today }: SectionProps) {
+/**
+ * Compensation Leave - C: the birthday, judged from attendance (from the claims date): absent or on leave = paid Birthday
+ * leave; present = one 1.00 credit to claim. Before the claims date it was automatic.
+ */
+export function BirthdaySection({ draft, patch, readOnly, masterOn, validation, today, claimsFrom }: SectionProps) {
+  const fromText = claimsFrom ? prettyDate(claimsFrom) : "the claims date";
   return (
     <SettingsSection
       id="compensation-leave-c"
       icon={Cake}
       title={COMPENSATION_SECTIONS.birthday}
-      purpose="A paid day on the employee's birthday, worked out from the date of birth on the employee record. Nothing for the employee or HR to claim. Staff only; HR sees who benefits on the Compensation page."
+      purpose="The birthday is a normal working day, worked out from the date of birth on the employee record and judged from attendance: never given without checking it. Staff only; HR sees each employee's outcome on the Compensation page."
       usedBy={[
         { label: "Compensation", to: leavePath("birthdays") },
         { label: "Staff Attendance", to: "/hr/attendance/staff" },
@@ -145,19 +150,27 @@ export function BirthdaySection({ draft, patch, readOnly, masterOn, validation, 
         affects={[
           {
             where: "Staff Attendance",
-            what: "on the birthday the day is Present with one full shift whatever the punches, and no Late, Early Out, Half Day or permission is detected for it",
+            what: "absent (no punch) or on approved leave, casual leave included, on the birthday: the day becomes paid Birthday leave (1.00 shift) without using any leave balance",
             to: "/hr/attendance/staff",
           },
-          { where: "Staff Payroll", what: "the day is paid as a full working day", to: "/hr/payroll" },
+          { where: "Staff Payroll", what: "the Birthday leave day is paid as a full working day", to: "/hr/payroll" },
           {
             where: "Compensation - Compensation Leave",
-            what: "shows which employees benefit",
+            what: "shows each employee's outcome: paid leave, a credit to claim, claimed, approved",
             to: leavePath("birthdays"),
           },
-          { where: "Employee apps", what: "the calendar shows the birthday leave" },
+          {
+            where: "Approvals",
+            what: "present or half day on the birthday: one 1.00 credit, claimed by the employee or HR, approved by the Department Head into the balance",
+          },
+          {
+            where: "Employee apps",
+            what: "the calendar shows the Birthday leave; My Compensation offers the credit to claim",
+          },
         ]}
         note={notes(
-          "A birthday that falls on a Sunday or a company holiday is already a day off, so nothing extra is given. A birthday on 29 February is given on 28 February in other years. An employee with no date of birth gets nothing.",
+          "A birthday on a Sunday, a company holiday or an off Saturday gives nothing (working that day is ordinary holiday work). A birthday on 29 February counts on 28 February in other years. An employee with no date of birth gets nothing.",
+          `This applies from ${fromText}; birthdays before it kept the old automatic paid day.`,
           masterOffNote(masterOn),
         )}
       >
@@ -169,7 +182,7 @@ export function BirthdaySection({ draft, patch, readOnly, masterOn, validation, 
           offLabel="Birthday leave is not given"
           disabled={readOnly}
         >
-          Automatic, from the date of birth. Staff only.
+          Judged from attendance: paid leave when absent or on leave, a credit to claim when present. Staff only.
         </ToggleField>
       </SettingBlock>
 

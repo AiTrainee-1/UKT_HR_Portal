@@ -292,14 +292,20 @@ describe("Settings -> Compensation: what it shows", () => {
     expect(saveButton().disabled).toBe(false);
   });
 
-  it("says Payment applies to Type 2 only, that Type 1 is automatic and never paid, and links the approval pipeline", async () => {
+  it("says Payment applies to Type 2 only, that Type 1 is claimed and never paid, and links the approval pipeline", async () => {
     await open();
     expect(text('[data-testid="setting-shift-pay"]')).toContain("Payment applies to Type 2 only");
-    expect(text('[data-testid="setting-allowance-enabled"]')).toContain("automatic and never paid");
+    expect(text('[data-testid="setting-allowance-enabled"]')).toContain("It is never paid");
+    expect(text('[data-testid="setting-allowance-enabled"]')).toContain(
+      "given only after a claim (by the employee or HR) that the Department Head approves",
+    );
     expect(q('[data-testid="link-approval-workflow"]')?.getAttribute("href")).toBe("/hr/user-management?tab=approvals");
     expect(text('[data-testid="setting-holiday-work-enabled"]')).toContain("Department Head approves");
     expect(text('[data-testid="setting-windows-enabled"]')).toContain("grace do not apply");
-    expect(text('[data-testid="setting-birthday-enabled"]')).toContain("no attendance detection applies that day");
+    // the birthday is judged from attendance now: paid leave when absent, a credit to claim when present
+    expect(text('[data-testid="setting-birthday-enabled"]')).toContain("judged from attendance");
+    expect(text('[data-testid="setting-birthday-enabled"]')).toContain("paid Birthday leave (1.00 shift)");
+    expect(text('[data-testid="setting-birthday-enabled"]')).not.toContain("automatically");
   });
 
   it("tells HR when the master switch is off: still editable, but nothing acts", async () => {
@@ -885,5 +891,117 @@ describe("Settings -> Compensation: view-only, loading and the search", () => {
       expect(block.querySelector('[data-testid="setting-affects"]'), meta.id).not.toBeNull();
       expect(meta.purpose.length, meta.id).toBeGreaterThan(60);
     }
+  });
+});
+
+describe("Settings -> Compensation: the claim workflow and the quarters rule", () => {
+  const withClaims: CompensationSettings = {
+    ...SEEDED,
+    shift: { ...SEEDED.shift, quarterRule: true },
+    claims: { from: "2026-11-19" },
+  };
+
+  it("explains the claim workflow step by step, and shows the date claims started, read-only", async () => {
+    await open(withClaims);
+    const steps = qa('[data-testid="claims-steps"] li').map((li) => (li.textContent ?? "").replace(/\s+/g, " "));
+    expect(steps.map((t) => t.split(".")[0])).toEqual(["1", "2", "3", "4", "5"]);
+    expect(steps[0]).toContain("Detected");
+    expect(steps[2]).toContain("Approved by the HOD");
+    expect(steps[4]).toContain("Used on another day");
+    expect(text('[data-testid="claims-from-date"]')).toBe("19 Nov 2026");
+    // read-only: nothing to type or switch there
+    expect(q('[data-testid="claims-from"] input, [data-testid="claims-from"] button')).toBeNull();
+    expect(q('[data-testid="link-claims-approval-workflow"]')?.getAttribute("href")).toBe(
+      "/hr/user-management?tab=approvals",
+    );
+    // the other sections name the date too
+    expect(text('[data-testid="setting-shift-quarter-rule"]')).toContain("Applies to days from 19 Nov 2026");
+    expect(text('[data-testid="setting-birthday-enabled"]')).toContain("This applies from 19 Nov 2026");
+  });
+
+  it("says so when the server does not report the date yet", async () => {
+    await open();
+    expect(text('[data-testid="claims-from"]')).toContain("Not reported by the server yet");
+    // an older server does not report the quarters rule: it cannot be changed, and is never sent
+    expect((q("#compensation-quarter-switch") as HTMLButtonElement).disabled).toBe(true);
+    expect(text('[data-testid="setting-shift-quarter-rule"]')).toContain("does not report the quarters rule yet");
+  });
+
+  it("works the quarters rule out on a 9-hour shift, rounded down, at most 1.00, and takes a number to try", async () => {
+    await open(withClaims);
+    expect(q("#compensation-quarter-switch")?.getAttribute("aria-checked")).toBe("true");
+    expect(text('[data-testid="quarter-example"]')).toContain("8 h of work, so a quarter is 2 h");
+    const lines = qa('[data-testid="quarter-line"]').map((l) => (l.textContent ?? "").replace(/\s+/g, " "));
+    expect(lines).toEqual([
+      "Last punch 8:45 PM: 2 h 45 min of overtime0.34 of the shift → 0.25 shift",
+      "Last punch 10:15 PM: 4 h 15 min of overtime0.53 of the shift → 0.50 shift",
+      "Last punch 12:15 AM next day: 6 h 15 min of overtime0.78 of the shift → 0.75 shift",
+      "Last punch 2:10 AM next day: 8 h 10 min of overtime1.02 of the shift → 1.00 shift (at most 1.00)",
+      "Last punch 4:40 AM next day: 10 h 40 min of overtime1.33 of the shift → 1.00 shift (at most 1.00)",
+    ]);
+    expect(text('[data-testid="quarter-try-line"]')).toContain("0.42 of the shift → 0.25 shift");
+    await page!.type("#quarter-try-ot", "100");
+    // under the quarters rule the 2 h 30 threshold does not decide: less than a quarter (2 h) is not Type 2 ...
+    expect(text('[data-testid="quarter-try-line"]')).toContain("Not Type 2: less than a quarter of the shift (2 h)");
+    // ... and 2 h 10, below the old threshold, already is
+    await page!.type("#quarter-try-ot", "130");
+    expect(text('[data-testid="quarter-try-line"]')).toContain("0.27 of the shift → 0.25 shift");
+    // the ladder's example moves to the ladder: it is used only for days before the claims date now
+    expect(q('[data-testid="setting-shift-ladder"] [data-testid="type2-example"]')).not.toBeNull();
+    expect(q('[data-testid="setting-shift-enabled"] [data-testid="type2-example"]')).toBeNull();
+    expect(text('[data-testid="setting-shift-ladder"]')).toContain("used only for days before 19 Nov 2026");
+  });
+
+  it("switches the quarters rule off and sends it with the shift group", async () => {
+    await open(withClaims);
+    await page!.click("#compensation-quarter-switch");
+    expect(q("#compensation-quarter-switch")?.getAttribute("aria-checked")).toBe("false");
+    expect(q('[data-testid="setting-shift-enabled"] [data-testid="type2-example"]')).not.toBeNull();
+    expect(saveBar().dataset.dirty).toBe("true");
+    await press("Save Compensation Settings");
+    expect(server.puts[0].shift).toEqual({
+      enabled: true,
+      minExtraMinutes: 150,
+      relaxationEnabled: true,
+      payEnabled: false,
+      quarterRule: false,
+    });
+    // the read-only date is never sent
+    expect("claims" in server.puts[0]).toBe(false);
+  });
+
+  it("says the threshold decides only before the claims date while the quarters rule is on", async () => {
+    await open(withClaims);
+    const threshold = text('[data-testid="setting-shift-threshold"]');
+    expect(threshold).toContain("this threshold decides only days before 19 Nov 2026");
+    expect(threshold).toContain("a quarter of the employee's shift");
+    expect(text('[data-testid="compensation-type2"]')).not.toContain("For staff who work more than the threshold");
+    await page!.click("#compensation-quarter-switch");
+    expect(text('[data-testid="setting-shift-threshold"]')).not.toContain("decides only days before");
+  });
+
+  it("lists when the quarters rule was switched, read-only, newest first", async () => {
+    await open({
+      ...withClaims,
+      shift: {
+        ...withClaims.shift,
+        quarterRule: false,
+        quarterRuleHistory: [
+          { from: "2026-11-19", on: true },
+          { from: "2026-12-01", on: false },
+        ],
+      },
+    });
+    const lines = qa('[data-testid="quarter-rule-history-line"]').map((l) =>
+      (l.textContent ?? "").replace(/\s+/g, " "),
+    );
+    expect(lines).toEqual([
+      "From 1 Dec 2026: off (the last punch-out table)",
+      "From 19 Nov 2026: on (the credit in quarters of the shift)",
+    ]);
+    // never sent back
+    await page!.click("#compensation-quarter-switch");
+    await press("Save Compensation Settings");
+    expect(JSON.stringify(server.puts[0])).not.toContain("quarterRuleHistory");
   });
 });

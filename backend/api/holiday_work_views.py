@@ -34,13 +34,11 @@ from datetime import timedelta
 
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Max, Min, Sum
-from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from . import approval_workflow as approval
-from . import whatsapp_approvals
 from .audit_utils import log_action
 from .auth import get_hr_display_name, require_hr
 from .branch_scope import scope_to_branch
@@ -126,40 +124,19 @@ def claim_json(
     hods: dict | None = None,
 ) -> dict:
     """One claim for HR and for the Department Head. `holidays` ({date: name}) and `hods` ({employee_id: HOD name}) are
-    passed by a list so it does not query once per row; without them the row says so with nulls."""
-    work_date = claim.work_date
-    names = holidays or {}
-    kind = day_kind(work_date, names)
-    ledger = [e for e in claim.ledger_entries.all() if e.entry_type == CompensationLedger.ENTRY_CREDIT]
-    return {
-        "id": claim.id,
-        **employee_json(claim.employee),
-        "workDate": work_date.isoformat(),
-        "dayKind": kind or ("sunday" if work_date.weekday() == 6 else "holiday"),
-        "holidayName": names.get(work_date),
-        "shifts": float(claim.shifts),
-        "reason": claim.reason,
-        "status": claim.status,
-        "requestedBy": claim.requested_by,
-        "reviewedBy": claim.reviewed_by,
-        "reviewComment": claim.review_comment,
-        "reviewedAt": claim.reviewed_at.isoformat() if claim.reviewed_at else None,
-        "createdAt": claim.created_at.isoformat() if claim.created_at else None,
-        "hodName": (hods or {}).get(claim.employee_id),
-        "credited": bool(ledger),
-        "approval": approval.progress(WORKFLOW, claim, cfg),
-    }
+    passed by a list so it does not query once per row; without them the row says so with nulls. Since 2026-11-19 the
+    row of compensation_claims.claim_json: the keys it always had plus the claim kind's (kind, kindLabel, raisedByRole,
+    minutes, overtime, useDate, ledger, statusLabel ...)."""
+    from .compensation_claims import claim_json as _claim_json
+
+    return _claim_json(claim, for_role="hr", cfg=cfg, holidays=holidays or {}, hods=hods)
 
 
 def claims_json(claims: list[HolidayWorkClaim]) -> list[dict]:
     """A list of claims, with the holiday names and Department Heads looked up once for the whole list."""
-    if not claims:
-        return []
-    cfg = approval.get_config(WORKFLOW)
-    dates = [c.work_date for c in claims]
-    holidays = holiday_names(min(dates), max(dates))
-    hods = hod_names({c.employee_id for c in claims})
-    return [claim_json(c, cfg, holidays, hods) for c in claims]
+    from .compensation_claims import claims_json as _claims_json
+
+    return _claims_json(claims, for_role="hr")
 
 
 def _enabled_block() -> dict:
@@ -219,9 +196,12 @@ def worked_ids(work_date, employee_ids=None) -> set[int]:
 
 
 def open_claims(work_date, employee_ids=None) -> dict[int, HolidayWorkClaim]:
-    """{employee_id: the pending or approved claim for that date}: what blocks a second claim."""
+    """{employee_id: the pending or approved holiday-work claim for that date}: what blocks a second claim (the other
+    claim kinds on the same table never do)."""
     qs = HolidayWorkClaim.objects.filter(
-        work_date=work_date, status__in=(HolidayWorkClaim.STATUS_PENDING, HolidayWorkClaim.STATUS_APPROVED)
+        kind=HolidayWorkClaim.KIND_HOLIDAY_WORK,
+        work_date=work_date,
+        status__in=(HolidayWorkClaim.STATUS_PENDING, HolidayWorkClaim.STATUS_APPROVED),
     ).order_by("-id")
     if employee_ids is not None:
         qs = qs.filter(employee_id__in=employee_ids)
@@ -349,6 +329,8 @@ def _raise_claims(request: Request) -> Response:
             emp = employees[emp_id]
             claim = HolidayWorkClaim.objects.create(
                 employee=emp,
+                kind=HolidayWorkClaim.KIND_HOLIDAY_WORK,
+                raised_by_role=HolidayWorkClaim.RAISED_BY_HR,
                 work_date=work_date,
                 shifts=shifts_by_employee[emp_id],
                 reason=reason,
@@ -356,8 +338,14 @@ def _raise_claims(request: Request) -> Response:
                 requested_by=hr_name,
                 approval_trail=[],
             )
+            from .compensation_claims import hod_dedupe
+
             approval.notify_new_request(
-                WORKFLOW, emp, f"holiday-work compensation claim for {date_text(work_date)}", obj=claim
+                WORKFLOW,
+                emp,
+                f"holiday-work compensation claim for {date_text(work_date)}",
+                obj=claim,
+                dedupe=hod_dedupe(claim),
             )
             log_action(
                 request,
@@ -433,7 +421,10 @@ def _list_claims(request: Request) -> Response:
     limit = parse_int(q.get("limit")) or LIST_DEFAULT_LIMIT
     limit = max(1, min(limit, LIST_MAX_LIMIT))
 
-    qs = scope_to_branch(HolidayWorkClaim.objects.all(), request, field="employee__branch_id")
+    # only Sunday / holiday work: the other claim kinds are listed by GET /api/compensation/claims
+    qs = scope_to_branch(
+        HolidayWorkClaim.objects.filter(kind=HolidayWorkClaim.KIND_HOLIDAY_WORK), request, field="employee__branch_id"
+    )
     if year is not None:
         qs = qs.filter(work_date__year=year)
     if month is not None:
@@ -451,6 +442,7 @@ def _list_claims(request: Request) -> Response:
     rows = list(
         qs.select_related("employee__department", "employee__designation", "employee__branch")
         .prefetch_related("ledger_entries")
+        .select_related("overtime_record")
         .order_by("-work_date", "-id")[:limit]
     )
     total = sum(r["n"] for r in counts.values())
@@ -494,8 +486,14 @@ def holiday_work_claims(request: Request) -> Response:
 @require_hr
 @require_compensation_features_for_changes
 def holiday_work_claim_detail(request: Request, pk: int) -> Response:
+    # the old route is the holiday-work claim's only: the other kinds (OT, birthday, using the balance) are read and
+    # withdrawn through /api/compensation/claims/<id>, under the Claims sub-tab's permission (security review 2026-11-19)
     claim = (
-        scope_to_branch(HolidayWorkClaim.objects.all(), request, field="employee__branch_id")
+        scope_to_branch(
+            HolidayWorkClaim.objects.filter(kind=HolidayWorkClaim.KIND_HOLIDAY_WORK),
+            request,
+            field="employee__branch_id",
+        )
         .select_related("employee__department", "employee__designation", "employee__branch")
         .prefetch_related("ledger_entries")
         .filter(pk=pk)
@@ -510,7 +508,9 @@ def holiday_work_claim_detail(request: Request, pk: int) -> Response:
     if blocked is not None:
         return blocked
     with transaction.atomic():
-        locked = HolidayWorkClaim.objects.select_for_update().filter(pk=pk).first()
+        locked = (
+            HolidayWorkClaim.objects.select_for_update().filter(pk=pk, kind=HolidayWorkClaim.KIND_HOLIDAY_WORK).first()
+        )
         if locked is None:
             return _bad("Claim not found.", 404)
         if locked.status != HolidayWorkClaim.STATUS_PENDING:
@@ -624,7 +624,12 @@ def holiday_work_eligible(request: Request) -> Response:
                 "eligible": reason is None and message is None,
                 "reason": reason or message,
                 "claim": (
-                    {"id": existing.id, "status": existing.status, "shifts": float(existing.shifts)}
+                    {
+                        "id": existing.id,
+                        "status": existing.status,
+                        "shifts": float(existing.shifts),
+                        "kind": existing.kind,
+                    }
                     if existing
                     else None
                 ),
@@ -642,54 +647,18 @@ def holiday_work_eligible(request: Request) -> Response:
 
 
 def decide_claim(claim_id: int, role: str, decision: str, *, actor: str, comment: str | None = None):
-    """Apply one approve / reject decision by `role` and, on the final approval, add the shifts to the balance.
+    """Apply one approve / reject decision by `role` to a claim of ANY kind and, on the final approval, write its ledger
+    entry (kept for the callers that always used it: manager_views, md_portal.hod_approvals). The work is
+    compensation_claims.decide: the claim row is locked for the whole decision, so two clicks (or two Department Heads)
+    cannot both finish it. Returns (claim, outcome); raises approval.ApprovalError when the pipeline does not allow the
+    decision or approving is refused."""
+    from .compensation_claims import decide
 
-    The claim row is locked for the whole decision, so two clicks (or two Department Heads) cannot both finish it: the
-    second one finds it already decided and is refused by the engine. Returns (claim, outcome); raises
-    approval.ApprovalError when the pipeline does not allow the decision. The employee's in-app notice is written here;
-    the WhatsApp message goes after the transaction has committed."""
-    with transaction.atomic():
-        claim = (
-            HolidayWorkClaim.objects.select_for_update(of=("self",))
-            .select_related("employee__department", "employee__designation", "employee__branch")
-            .get(pk=claim_id)
-        )
-        outcome = approval.decide(WORKFLOW, claim, role, decision, actor=actor, comment=comment)
-        claim.status = outcome.status
-        claim.reviewed_by = actor
-        claim.reviewed_at = timezone.now()
-        if comment:
-            claim.review_comment = comment
-        claim.save()
-        if outcome.final:
-            credit_balance(claim, actor)
-        what = f"holiday-work compensation claim for {date_text(claim.work_date)}"
-        tail = f" and {shifts_text(claim.shifts)} shift was added to your compensation balance" if outcome.final else ""
-        approval.stage_notice(claim.employee, "compensation", approval.notice_for(what, outcome, tail), outcome)
-    if outcome.final or outcome.rejected:
-        whatsapp_approvals.notify_decision(
-            WORKFLOW,
-            claim,
-            decision,
-            approver=actor,
-            role=approval.LEGACY_ROLE[role],
-            comment=claim.review_comment,
-        )
-    return claim, outcome
+    return decide(claim_id, decision, actor, comment, role=role)
 
 
-def credit_balance(claim: HolidayWorkClaim, actor: str) -> CompensationLedger:
-    """The ledger credit for an approved claim: one row, once (a claim that already has its credit gets no second one)."""
-    entry, _ = CompensationLedger.objects.get_or_create(
-        claim=claim,
-        entry_type=CompensationLedger.ENTRY_CREDIT,
-        defaults={
-            "employee": claim.employee,
-            "shifts": claim.shifts,
-            "date": claim.work_date,
-            "source": "holiday_work",
-            "note": f"Holiday / Sunday work on {claim.work_date.isoformat()}",
-            "created_by": actor,
-        },
-    )
-    return entry
+def credit_balance(claim: HolidayWorkClaim, actor: str) -> CompensationLedger | None:
+    """The ledger entry for an approved claim: one row, once (compensation_claims.credit_or_debit)."""
+    from .compensation_claims import credit_or_debit
+
+    return credit_or_debit(claim, actor)

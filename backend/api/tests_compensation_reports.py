@@ -370,7 +370,15 @@ class ShiftTests(ReportBase):
         )
         self.assertEqual(
             self.section(body, "ot_shift_relaxation")["summary"],
-            {"records": 2, "shifts": 0.75, "applied": 1, "scheduled": 1, "notApplied": 0, "employees": 2},
+            {
+                "records": 2,
+                "shifts": 0.75,
+                "applied": 1,
+                "scheduled": 1,
+                "notApplied": 0,
+                "credited": 0,
+                "employees": 2,
+            },
         )
         month = self.section(self.report("month"), "ot_shift_relaxation")
         self.assertEqual([r["status"] for r in month["rows"]], ["not_applied", "applied", "scheduled"])
@@ -615,8 +623,15 @@ class HolidayWorkTests(ReportBase):
                 "approvedShifts": 0.5,
                 "pendingShifts": 1.0,
                 "redeemedShifts": 0.25,
+                # the balance's credits in the period, every source (review fix 2026-11-19): RP1's approved 0.50
+                "creditedShifts": 0.5,
+                "credits": 1,
                 "employees": 3,
             },
+        )
+        self.assertEqual(
+            [(c["employeeCode"], c["status"], c["shifts"], c["reason"]) for c in section["credits"]],
+            [("RP1", "credited", 0.5, "Sunday / holiday work")],
         )
         redemption = section["redemptions"][0]
         self.assertEqual(
@@ -642,6 +657,13 @@ class HolidayWorkTests(ReportBase):
 
 
 class BirthdayTests(ReportBase):
+    """The OLD automatic birthday rule: every birthday here is before the claims date (set explicitly: the test database's
+    claims_from is the real date migration 0166 ran)."""
+
+    def setUp(self):
+        super().setUp()
+        CompensationConfig.objects.filter(pk=1).update(claims_from=date(2026, 12, 1))
+
     def test_only_those_who_benefit_with_what_happened_on_the_day(self):
         _employee("RPB1", self.ho, self.cutting, dob=date(1990, 10, 14))  # today, nothing stored yet
         applied = _employee("RPB2", self.ho, self.cutting, dob=date(1990, 10, 12))
@@ -668,7 +690,16 @@ class BirthdayTests(ReportBase):
         )
         self.assertEqual(
             section["summary"],
-            {"birthdays": 4, "applied": 1, "pending": 2, "notApplied": 1, "shifts": 1.0, "employees": 4},
+            {
+                "birthdays": 4,
+                "applied": 1,
+                "pending": 2,
+                "notApplied": 1,
+                "credited": 0,
+                "rejected": 0,
+                "shifts": 1.0,
+                "employees": 4,
+            },
         )
 
     def test_nothing_is_reported_while_the_feature_is_off(self):
@@ -689,6 +720,53 @@ class BirthdayTests(ReportBase):
         _employee("RPL", self.ho, self.cutting, dob=date(2000, 2, 29))
         self.assertEqual([r["date"] for r in self.rows(self.report("month", "2026-02-10"), "birthday")], ["2026-02-28"])
         self.assertEqual([r["date"] for r in self.rows(self.report("month", "2028-02-10"), "birthday")], ["2028-02-29"])
+
+
+class BirthdayClaimRuleTests(ReportBase):
+    """The CLAIM rules (from claims_from): not worked = paid birthday leave (applied), worked = a normal day whose credit
+    claim decides the row (claimable / pending / approved / rejected)."""
+
+    def setUp(self):
+        super().setUp()
+        CompensationConfig.objects.filter(pk=1).update(claims_from=date(2026, 10, 1))
+
+    def test_paid_leave_and_credit_claims(self):
+        from .models import AttendanceLog
+
+        absent = _employee("RPC1", self.ho, self.cutting, dob=date(1990, 10, 12))  # no punch: paid birthday leave
+        worked = _employee("RPC2", self.ho, self.cutting, dob=date(1990, 10, 13))
+        for t in (time(9, 0), time(18, 0)):
+            AttendanceLog.objects.create(employee=worked, date=date(2026, 10, 13), punch_time=t, source="test")
+        credited = _employee("RPC3", self.ho, self.cutting, dob=date(1990, 10, 12))
+        _day(credited, date(2026, 10, 12), first=time(9, 0), last=time(18, 0))
+        HolidayWorkClaim.objects.create(
+            employee=credited, work_date=date(2026, 10, 12), shifts=Decimal("1.00"), status="approved", kind="birthday"
+        )
+        _employee("RPC4", self.ho, self.cutting, dob=date(1990, 10, 16))  # still to come
+        section = self.section(self.report("week"), "birthday")
+        rows = {r["employeeCode"]: r for r in section["rows"]}
+        self.assertEqual(
+            {code: r["status"] for code, r in rows.items()},
+            {"RPC1": "applied", "RPC3": "approved", "RPC2": "not_applied", "RPC4": "pending"},
+        )
+        self.assertEqual((rows["RPC1"]["shifts"], rows["RPC1"]["usedOn"]), (1.0, "2026-10-12"))
+        self.assertIn("not worked", rows["RPC1"]["detail"])
+        self.assertEqual((rows["RPC3"]["shifts"], rows["RPC3"]["assignedBy"]), (1.0, "Claim"))
+        self.assertIn("can still be claimed", rows["RPC2"]["detail"])
+        self.assertEqual(
+            section["summary"],
+            {
+                "birthdays": 4,
+                "applied": 1,
+                "pending": 1,
+                "notApplied": 1,
+                "credited": 1,
+                "rejected": 0,
+                "shifts": 2.0,
+                "employees": 4,
+            },
+        )
+        self.assertEqual(absent.employee_code, "RPC1")
 
 
 # ═════════════════════════════ periods, filters, scope ═════════════════════════════

@@ -10,6 +10,10 @@ export * from "./device-control";
 export * from "./chat";
 export * from "./compensation";
 export * from "./compensation-settings";
+// OT Detection claims for an employee (the compensation claim workflow, 2026-11-19)
+export * from "./compensation-ot-claims";
+// Claims of every kind, the balance (earned / used / waiting / available), the ledger and the Raise month strip (2026-11-19)
+export * from "./compensation-claims";
 export * from "./documents";
 export * from "./gate";
 // Gate Pass / Visitors / Tea Break rebuild (2026-11-18): one file per slice, the record row the gate pages share

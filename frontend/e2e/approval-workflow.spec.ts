@@ -91,7 +91,7 @@ test("Approval Workflow Control is the second User Management tab and lists ever
     on_duty: "Employee → HOD → HR",
     on_duty_punch: "Employee → HR",
     attendance_correction: "HR → HOD → HR",
-    holiday_work: "HR → HOD",
+    holiday_work: "Employee or HR → HOD",
     outpass: "Employee → HOD or HR",
     request: "Employee → HR",
     resignation: "Employee → HOD → HR",
@@ -108,9 +108,9 @@ test("Approval Workflow Control is the second User Management tab and lists ever
   // the per-person switch on a Department Head's profile is a hint, not a warning about the pipeline
   await expect(page.getByTestId("wf-hint-leave")).toContainText("Can approve leaves");
   await expect(page.getByTestId("wf-warnings-leave")).toHaveCount(0);
-  // Holiday / Sunday work compensation: raised by HR, decided by the Department Head (whose profile switch is "Can approve
-  // compensation"), in the Leave & attendance group, with a fixed pipeline that HR can still switch off
-  await expect(card(page, "holiday_work")).toContainText("Holiday / Sunday work compensation");
+  // Compensation claims (every kind since 2026-11-19): raised by the employee or HR, decided by the Department Head (whose
+  // profile switch is "Can approve compensation"), in the Leave & attendance group, with a fixed pipeline HR can switch off
+  await expect(card(page, "holiday_work")).toContainText("Compensation claims");
   await expect(page.getByTestId("wf-hint-holiday_work")).toContainText("Can approve compensation");
   await expect(page.getByTestId("wf-fixed-holiday_work")).toBeVisible();
 

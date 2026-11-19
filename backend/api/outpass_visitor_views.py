@@ -27,6 +27,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count, F, Func, IntegerField, OuterRef, Q, Subquery, TextField, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
@@ -41,6 +42,7 @@ from .employee_photo import employee_photo_link, photo_links
 from .models import Branch, Employee, GateQRCode, OutpassRecord, Visitor, VisitorVisit
 from .throttles import throttle
 from .user_settings import settings_for_employee
+from .visitor_identity import identity, latest_visit, name_q
 
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
@@ -184,7 +186,7 @@ def _send_visitor_email(visit: VisitorVisit, emp: Employee) -> None:
         to_email=emp.email,
         params={
             "employee_name": emp_name,
-            "visitor_name": visitor.name,
+            "visitor_name": identity(visit)[0],  # the name given at this visit (per branch, 19 Nov 2026)
             "visitor_phone": visitor.phone,
             "purpose": visit.purpose,
         },
@@ -378,7 +380,8 @@ def visit_filter_params(request: Request) -> dict:
     from / to (YYYY-MM-DD, India days, inclusive; without either, the old `range` today / week / month applies, month by
     default), status, source, branchId (only an HR account not bound to a branch may pick one; a bound account always
     gets its own branch), hostEmployeeId, departmentId (the host's department) and q (up to four words, each must match
-    the visitor's name or phone, the company, the host, the purpose, the vehicle or the badge)."""
+    the visitor's name (as given at that visit: visitor_identity.name_q) or phone, the company, the host, the purpose,
+    the vehicle or the badge)."""
     qp = request.query_params
     d_from, d_to = _filter_date(qp.get("from"), "from"), _filter_date(qp.get("to"), "to")
     if d_from and d_to and d_from > d_to:
@@ -405,7 +408,7 @@ def visit_filter_params(request: Request) -> dict:
 
 def _search_q(term: str) -> Q:
     return (
-        Q(visitor__name__icontains=term)
+        name_q(term)  # the name given at the visit itself, never another branch's
         | Q(visitor__phone__icontains=term)
         | Q(company__icontains=term)
         | Q(whom_to_meet__icontains=term)
@@ -658,16 +661,19 @@ def _visitor_visit_dict(v: VisitorVisit, photos: dict | None = None, *, now=None
     # endpoint, which calls this same function. (Files never carry it: visitor_export masks it in the database.)
     # Keys are only ever added (the reception console and older screens read the first ones). A list passes `now` /
     # `today_start` once and annotates visit_count (with_visit_count), so a row costs no query of its own.
+    # name / aadhaar: as given at THIS visit (19 Nov 2026, visitor_identity.identity), so a branch only ever sees what it
+    # was told itself; the phone is the person's (the Visitor row, matched by phone).
     now = now or _now()
     today_start = today_start or _day_start(now)
     status = visit_status(v, today_start)
     visit_count = getattr(v, "visit_count", None)
     if visit_count is None:
         visit_count = VisitorVisit.objects.filter(visitor_id=v.visitor_id).count()
-    aadhaar = v.visitor.aadhaar_number or ""
+    name, aadhaar = identity(v)
+    aadhaar = aadhaar or ""
     return {
         "id": v.id,
-        "name": v.visitor.name,
+        "name": name,
         "phone": v.visitor.phone,
         "aadhaar": aadhaar or None,
         "aadhaarLast4": aadhaar[-4:] if len(aadhaar) >= 4 else None,
@@ -741,9 +747,21 @@ def visitor_gate_info(request: Request, token: str) -> Response:
     return Response({"branchName": qr.branch.name})
 
 
+def _known_here(phone: str, branch_id: int):
+    """(visitor, their latest visit at this QR's branch) for the exact phone the form sent; (visitor | None, None) when
+    the phone is new or has only visited other branches. The public form never learns about another branch's visits."""
+    visitor = Visitor.objects.filter(phone=phone).first() if phone else None
+    if visitor is None:
+        return None, None
+    return visitor, latest_visit(visitor.id, branch_id)
+
+
 @api_view(["POST"])
 @throttle("gate_submit")
 def visitor_check_phone(request: Request, token: str) -> Response:
+    """"Already visited": {found, name} only for a phone that has visited THIS QR's branch, with the name given at its
+    latest visit here (19 Nov 2026); a phone known only at another branch is {found: false}, so the visitor fills the
+    new-visitor form."""
     qr = _gate_qr_or_none(token, GateQRCode.KIND_VISITOR)
     if not qr:
         return _QR_NOT_FOUND
@@ -752,10 +770,10 @@ def visitor_check_phone(request: Request, token: str) -> Response:
     if not phone:
         return Response({"error": "Phone number is required."}, status=400)
 
-    visitor = Visitor.objects.filter(phone=phone).first()
-    if not visitor:
+    _visitor, last_here = _known_here(phone, qr.branch_id)
+    if last_here is None:
         return Response({"found": False})
-    return Response({"found": True, "name": visitor.name})
+    return Response({"found": True, "name": identity(last_here)[0]})
 
 
 @api_view(["POST"])
@@ -802,7 +820,10 @@ def visitor_gate_new(request: Request, token: str) -> Response:
             {"error": "Name, phone, whom you're meeting and purpose are all required."}, status=400
         )
 
-    if Visitor.objects.filter(phone=phone).exists():
+    # 409 only for a phone that has already visited THIS branch (19 Nov 2026): someone known only at another branch is
+    # new here, so the visit is recorded with what they typed (the Visitor row, the phone anchor, is reused untouched)
+    visitor, last_here = _known_here(phone, qr.branch_id)
+    if last_here is not None:
         return Response(
             {"error": 'A visitor with this phone number already exists. Use "Already Visited" instead.'},
             status=409,
@@ -810,11 +831,18 @@ def visitor_gate_new(request: Request, token: str) -> Response:
 
     meeting_employee = Employee.objects.filter(pk=meeting_employee_id).first() if meeting_employee_id else None
 
-    visitor = Visitor.objects.create(name=name, phone=phone, aadhaar_number=aadhaar or None)
-    visit = VisitorVisit.objects.create(
-        visitor=visitor, branch=qr.branch, why_came=why_came or None,
-        whom_to_meet=whom_to_meet, purpose=purpose, meeting_employee=meeting_employee,
-    )
+    with transaction.atomic():
+        if visitor is None:
+            try:
+                with transaction.atomic():
+                    visitor = Visitor.objects.create(name=name, phone=phone, aadhaar_number=aadhaar or None)
+            except IntegrityError:  # the same phone sent a moment ago from another screen
+                visitor = Visitor.objects.get(phone=phone)
+        visit = VisitorVisit.objects.create(
+            visitor=visitor, branch=qr.branch, why_came=why_came or None,
+            whom_to_meet=whom_to_meet, purpose=purpose, meeting_employee=meeting_employee,
+            visitor_name=name, aadhaar_number=aadhaar or None,
+        )
     _notify_employee_of_visitor(visit)
     return Response({"submitted": True}, status=201)
 
@@ -831,17 +859,20 @@ def visitor_gate_repeat(request: Request, token: str) -> Response:
     purpose = (request.data.get("purpose") or "").strip()
     meeting_employee_id = request.data.get("meetingEmployeeId")
 
-    visitor = Visitor.objects.filter(phone=phone).first()
-    if not visitor:
+    # only someone who has visited THIS branch (19 Nov 2026): their name / Aadhaar are copied from their latest visit
+    # here, never from another branch's (a phone known only elsewhere is 404 and the visitor fills the new form)
+    visitor, last_here = _known_here(phone, qr.branch_id)
+    if last_here is None:
         return Response({"error": "No visitor found with this phone number."}, status=404)
     if not whom_to_meet or not purpose:
         return Response({"error": "Whom you're meeting and purpose are both required."}, status=400)
 
     meeting_employee = Employee.objects.filter(pk=meeting_employee_id).first() if meeting_employee_id else None
 
+    name, aadhaar = identity(last_here)
     visit = VisitorVisit.objects.create(
         visitor=visitor, branch=qr.branch, whom_to_meet=whom_to_meet, purpose=purpose,
-        meeting_employee=meeting_employee,
+        meeting_employee=meeting_employee, visitor_name=name, aadhaar_number=aadhaar,
     )
     _notify_employee_of_visitor(visit)
     return Response({"submitted": True}, status=201)

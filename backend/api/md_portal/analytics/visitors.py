@@ -15,7 +15,9 @@ Where the numbers come from, and the decisions that keep them honest
   2026). Check-out is recorded from 18 Nov 2026 only for visits checked out by HR or reception, and the QR form asks for
   no company, so "who is inside now", time on site and "by company" are not derived here and never shown. The visit's
   *purpose* is free text typed by the visitor: it is grouped into a few categories by the words in it
-  (``PURPOSE_CATEGORIES``), always with an "Other" bucket, and the typed wording is available too.
+  (``PURPOSE_CATEGORIES``), always with an "Other" bucket, and the typed wording is available too. A visitor's name
+  is the one given at each visit (per branch since 19 Nov 2026, ``visitor_identity``); a person in a list (repeat
+  visitors) is named as at their latest visit among the rows counted. Phone and Aadhaar never leave this module.
 * **Outpasses**: ``OutpassRequest`` (the employee's request, the approval, the gate exit and the gate return). The
   status rules, door-to-door duration and rounding are the Report Center's own
   (``reporting/definitions/gate_outpass_common``: ``pass_state``, ``minutes_between``, ``mean_minutes``), so a figure
@@ -46,7 +48,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from django.db.models import Count, Max, Min, Q
+from django.db.models import Count, Max, Min, OuterRef, Q, Subquery, TextField
 from django.db.models.functions import ExtractHour, Lower, Trim, TruncDate
 from django.utils import timezone
 
@@ -55,6 +57,7 @@ from ...models import Branch, OutpassGateScan, OutpassRecord, OutpassRequest, Vi
 from ...reporting.definitions import gate_outpass_common as GO
 from ...reporting.definitions import gate_visitor_tea_common as GV
 from ...reporting.formatting import indian_number
+from ...visitor_identity import name_expr
 from ..assistant.tools_base import integer_param, string_param, tool
 from ..common import MdParamError, Period, Scope, cached, change, envelope, parse_day, pct, period_for_preset, prov
 from . import tea_break as tea
@@ -1305,16 +1308,19 @@ def _host_breakdown(qs, total: int, limit: int) -> tuple[list[dict], dict, list[
 
 def _repeat_visitor_rows(qs, minimum: int, limit: int) -> tuple[int, int, list[dict]]:
     """(visitors with `minimum`+ visits, how many visits they make up, the top `limit` with their latest purpose)."""
+    # the name given at the person's latest visit among these rows (per branch: never a name from outside `qs`)
+    newest = qs.filter(visitor_id=OuterRef("visitor_id")).order_by("-visited_at", "-id").annotate(nm=name_expr())
     grouped = list(
-        qs.values("visitor_id", "visitor__name")
+        qs.values("visitor_id")
         .annotate(
             n=Count("id"),
             first=Min("visited_at"),
             last=Max("visited_at"),
             hosts=Count(Lower(Trim("whom_to_meet")), distinct=True),
+            shown_name=Subquery(newest.values("nm")[:1], output_field=TextField()),
         )
         .filter(n__gte=minimum)
-        .order_by("-n", "visitor__name", "visitor_id")
+        .order_by("-n", "shown_name", "visitor_id")
     )
     top = grouped[:limit]
     latest: dict[int, str | None] = {}
@@ -1327,7 +1333,7 @@ def _repeat_visitor_rows(qs, minimum: int, limit: int) -> tuple[int, int, list[d
     rows = [
         {
             "visitorId": g["visitor_id"],
-            "visitorName": g["visitor__name"],
+            "visitorName": g["shown_name"],
             "visits": g["n"],
             "hostsMet": g["hosts"],
             "firstVisitAt": _stamp(g["first"]),
@@ -1641,12 +1647,12 @@ _SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2, "good": 3}
 
 def _after_hours_rows(qs, limit: int) -> list[dict]:
     rows = (
-        qs.annotate(h=_hour_expr())
+        qs.annotate(h=_hour_expr(), shown_name=name_expr())
         .filter(_after_hours_q())
         .values(
             "id",
             "visited_at",
-            "visitor__name",
+            "shown_name",
             "purpose",
             "whom_to_meet",
             "meeting_employee_id",
@@ -1665,7 +1671,7 @@ def _visit_item(r: dict) -> dict:
     return {
         "visitId": r["id"],
         "visitedAt": _stamp(r["visited_at"]),
-        "visitorName": r["visitor__name"],
+        "visitorName": r["shown_name"],  # as given at this visit
         "hostName": host or _text(r["whom_to_meet"], 80),
         "hostLinked": linked,
         "hostDepartment": r["meeting_employee__department__name"] if linked else None,
@@ -2131,10 +2137,10 @@ def _form_item(r: dict) -> dict:
     }
 
 
-VISIT_FEED_VALUES = (
+VISIT_FEED_VALUES = (  # read from _with_visit_name(...) (shown_name = the name given at the visit)
     "id",
     "visited_at",
-    "visitor__name",
+    "shown_name",
     "purpose",
     "whom_to_meet",
     "meeting_employee_id",
@@ -2155,9 +2161,14 @@ FORM_VALUES = (
 )
 
 
+def _with_visit_name(qs):
+    """Visits with `shown_name`: the visitor's name as given at that visit (visitor_identity.name_expr)."""
+    return qs.annotate(shown_name=name_expr())
+
+
 def _feed_sources(scope: Scope, period: Period, query: str):
     """(visit rows, pass rows, form rows) querysets for the period, narrowed by the search text."""
-    visits = _visit_qs(scope, period)
+    visits = _with_visit_name(_visit_qs(scope, period))
     lo, hi = _bounds(period)
     passes = OutpassRequest.objects.filter(
         scope.employee_q("employee__"), source="manual", created_at__gte=lo, created_at__lt=hi
@@ -2168,7 +2179,7 @@ def _feed_sources(scope: Scope, period: Period, query: str):
             _text_q(
                 query,
                 (
-                    "visitor__name",
+                    "shown_name",
                     "purpose",
                     "whom_to_meet",
                     "meeting_employee__first_name",
@@ -2254,7 +2265,10 @@ def day_snapshot(scope: Scope, day: date, *, limit: int = 15) -> dict:
     period = Period(day, day, "custom", f"{day.day:02d} {day.strftime('%b')} {day.year}")
     vqs = _visit_qs(scope, period)
     totals = _visit_totals(vqs)
-    visit_rows = [_visit_feed_item(r) for r in vqs.values(*VISIT_FEED_VALUES).order_by("-visited_at", "-id")[:limit]]
+    visit_rows = [
+        _visit_feed_item(r)
+        for r in _with_visit_name(vqs).values(*VISIT_FEED_VALUES).order_by("-visited_at", "-id")[:limit]
+    ]
     facts, _ = _facts(_pass_rows(scope, period), now, today)
     manual_rows = sorted(facts, key=lambda f: (f.row["created_at"], f.row["id"]), reverse=True)
     metrics = _pass_metrics(facts)

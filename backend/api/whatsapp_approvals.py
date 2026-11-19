@@ -186,6 +186,43 @@ def _attendance_correction(r) -> Summary:
 
 @register("holiday_work")
 def _holiday_work(r) -> Summary:
+    """Every compensation claim kind (the one claim table, 2026-11-19); holiday work keeps its old wording."""
+    kind = getattr(r, "kind", "holiday_work") or "holiday_work"
+    shifts = f"{float(r.shifts):g} shift"
+    if kind == "ot_allowance":
+        return Summary(
+            r.employee,
+            "OT Late-in Allowance",
+            r.id,
+            date=_date(r.work_date),
+            details=_join(f"Extra hours on this day: {r.minutes or 0} min late-in allowance", r.reason),
+            reason=r.reason or "",
+            requested_on=_stamp(r.created_at),
+            next_step="The allowance applies on your next working day.",
+        )
+    if kind == "use_balance":
+        return Summary(
+            r.employee,
+            "Use Compensation Balance",
+            r.id,
+            date=_date(r.work_date),
+            details=_join(f"Day off from the balance: {shifts}", r.reason),
+            reason=r.reason or "",
+            requested_on=_stamp(r.created_at),
+            next_step="The shifts were taken from your compensation balance for that day.",
+        )
+    if kind in ("ot_shift", "birthday"):
+        what = "OT shift credit" if kind == "ot_shift" else "Birthday credit"
+        return Summary(
+            r.employee,
+            "OT Shift Compensation" if kind == "ot_shift" else "Birthday Compensation",
+            r.id,
+            date=_date(r.work_date),
+            details=_join(f"{what}: {shifts}", r.reason),
+            reason=r.reason or "",
+            requested_on=_stamp(r.created_at),
+            next_step="The shifts are now in your compensation balance.",
+        )
     day = "Sunday" if r.work_date.weekday() == 6 else "Holiday"
     return Summary(
         r.employee,

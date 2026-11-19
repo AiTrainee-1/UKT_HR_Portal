@@ -11,6 +11,10 @@ vehicle and ID type are typed only on HR registrations and are not part of these
 Privacy: the full Aadhaar number is never read into Python -- only ``RIGHT(TRIM(aadhaar), 4)`` is selected and
 printed as ``XXXX XXXX 1234``. Phone numbers appear only in the two per-person listings (register, repeat
 visitors), never in the aggregate summaries.
+
+Identity per branch (19 Nov 2026): the name and Aadhaar of a visit are the ones given at that visit
+(``api.visitor_identity``), so a branch's report never shows what another branch was told. The repeat-visitor list
+names each person as at their latest visit among the rows the user may see in the period.
 """
 
 from __future__ import annotations
@@ -18,7 +22,9 @@ from __future__ import annotations
 from datetime import date
 
 from django.db.models import Avg, Case, Count, Exists, F, Max, Min, OuterRef, Q, Subquery, TextField, Value, When
-from django.db.models.functions import Cast, Concat, Right, Trim
+from django.db.models.functions import Cast, Coalesce, Concat, Right, Trim
+
+from api.visitor_identity import aadhaar_expr, latest_aadhaar_subquery, latest_name_subquery, name_expr, name_q
 
 from ..filters import branches, date_range, departments, employees, select, text
 from ..formatting import fmt_dt
@@ -90,15 +96,15 @@ def _run_register(ctx):
     qs = _apply_notification(qs, ctx.params.get("notification"))
     needle = ctx.params.get("q")
     if needle:
-        qs = qs.filter(Q(visitor__name__icontains=needle) | Q(visitor__phone__icontains=needle))
+        qs = qs.filter(name_q(needle) | Q(visitor__phone__icontains=needle))
 
     rows_qs = (
-        qs.annotate(aad_tail=Right(Trim("visitor__aadhaar_number"), 4))
+        qs.annotate(shown_name=name_expr(), aad_tail=Right(Trim(aadhaar_expr()), 4))
         .values(
             "id",
             "visited_at",
             "checked_out_at",
-            "visitor__name",
+            "shown_name",
             "visitor__phone",
             "aad_tail",
             "why_came",
@@ -124,7 +130,7 @@ def _run_register(ctx):
                 "visitedAt": fmt_dt(r["visited_at"]),
                 "checkedOutAt": fmt_dt(r["checked_out_at"]),
                 "minutesInside": _minutes_inside(r["visited_at"], r["checked_out_at"]),
-                "visitorName": r["visitor__name"],
+                "visitorName": r["shown_name"],
                 "phone": r["visitor__phone"],
                 "aadhaarMasked": C.mask_aadhaar(r["aad_tail"]),
                 "whyCame": r["why_came"],
@@ -379,9 +385,8 @@ def _run_frequency(ctx):
     scope = C.branch_q(ctx, "visits__branch_id")  # branch isolation AND the branch filter, for every count
     period = scope & Q(visits__visited_at__gte=lo, visits__visited_at__lt=hi)
 
-    latest = VisitorVisit.objects.filter(
-        C.branch_q(ctx, "branch_id"), C.in_range("visited_at", ctx), visitor_id=OuterRef("pk")
-    ).order_by("-visited_at", "-id")
+    in_view = VisitorVisit.objects.filter(C.branch_q(ctx, "branch_id"), C.in_range("visited_at", ctx))
+    latest = in_view.filter(visitor_id=OuterRef("pk")).order_by("-visited_at", "-id")
     host_key = Case(
         When(
             visits__meeting_employee_id__isnull=False,
@@ -407,7 +412,9 @@ def _run_frequency(ctx):
             hosts=Count(host_key, filter=period, distinct=True),
             last_host=Subquery(latest.values("whom_to_meet")[:1]),
             last_purpose=Subquery(latest.values("purpose")[:1]),
-            aad_tail=Right(Trim("aadhaar_number"), 4),
+            # the name / Aadhaar given at the same latest visit (never another branch's: in_view is branch-isolated)
+            shown_name=Coalesce(latest_name_subquery(in_view), F("name")),
+            aad_tail=latest_aadhaar_subquery(in_view, Right(Trim(aadhaar_expr()), 4)),
         )
         .filter(in_period__gte=max(1, int(ctx.params.get("minVisits") or 1)))
     )
@@ -418,12 +425,12 @@ def _run_frequency(ctx):
         qs = qs.filter(first_visit__lt=lo)
     needle = ctx.params.get("q")
     if needle:
-        qs = qs.filter(Q(name__icontains=needle) | Q(phone__icontains=needle))
+        qs = qs.filter(Q(shown_name__icontains=needle) | Q(phone__icontains=needle))
 
     fetched = list(
-        qs.order_by("-in_period", "-ever", "name", "id").values(
+        qs.order_by("-in_period", "-ever", "shown_name", "id").values(
             "id",
-            "name",
+            "shown_name",
             "phone",
             "aad_tail",
             "first_visit",
@@ -439,7 +446,7 @@ def _run_frequency(ctx):
     for r in fetched:
         rows.append(
             {
-                "visitorName": r["name"],
+                "visitorName": r["shown_name"],
                 "phone": r["phone"],
                 "aadhaarMasked": C.mask_aadhaar(r["aad_tail"]),
                 "firstSeenAt": fmt_dt(r["first_visit"]),
@@ -474,7 +481,7 @@ def _run_frequency(ctx):
         {"label": "Returning", "value": len(fetched) - new_count, "format": "integer"},
         {
             "label": "Most frequent visitor",
-            "value": f"{top['name']} ({top['in_period']})" if top else None,
+            "value": f"{top['shown_name']} ({top['in_period']})" if top else None,
             "format": "text",
         },
     ]
@@ -654,24 +661,28 @@ def _run_notification(ctx):
     elif state == "none_sent":
         qs = qs.filter(~has_email, ~has_wa)
 
-    fetched = qs.values(
-        "visited_at",
-        "visitor__name",
-        "meeting_employee_id",
-        "meeting_employee__first_name",
-        "meeting_employee__last_name",
-        "meeting_employee__department__name",
-        "meeting_employee__email",
-        "meeting_employee__phone",
-        "notified_email_at",
-        "notified_whatsapp_at",
-    ).order_by("visited_at", "id")[: ctx.row_limit]
+    fetched = (
+        qs.annotate(shown_name=name_expr())
+        .values(
+            "visited_at",
+            "shown_name",
+            "meeting_employee_id",
+            "meeting_employee__first_name",
+            "meeting_employee__last_name",
+            "meeting_employee__department__name",
+            "meeting_employee__email",
+            "meeting_employee__phone",
+            "notified_email_at",
+            "notified_whatsapp_at",
+        )
+        .order_by("visited_at", "id")[: ctx.row_limit]
+    )
     rows = []
     for r in fetched:
         rows.append(
             {
                 "visitedAt": fmt_dt(r["visited_at"]),
-                "visitorName": r["visitor__name"],
+                "visitorName": r["shown_name"],
                 "hostName": C.person_name(r["meeting_employee__first_name"], r["meeting_employee__last_name"]),
                 "hostDepartment": r["meeting_employee__department__name"] or "Unassigned",
                 "hostHasEmail": "Yes" if (r["meeting_employee__email"] or "").strip() else "No",

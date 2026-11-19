@@ -25,9 +25,11 @@ import {
   type World,
 } from "../harness";
 
-// OT Detection in jsdom with a fake server behind customFetch: the tiles, the two separate lists (Type 1 read-only, Type 2
-// with its candidates and its history), the filters, the notices for what is switched off, and the Assign dialog: its modes,
-// its shifts, the granted date limited to the OT month, its summary, its payload and the server's refusals.
+// OT Detection in jsdom with a fake server behind customFetch: the tiles, the two separate lists (Type 1, Type 2 with its
+// candidates and its history), the filters, the notices for what is switched off, and the Assign dialog: its modes, its
+// shifts, the granted date limited to the OT month, its summary, its payload and the server's refusals. The records here are
+// from before the claim workflow (the server names no claims date and sends no claim fields), so they keep the old rules;
+// the claim workflow itself is covered by OtClaims.render.test.tsx.
 
 const h = vi.hoisted(() => ({ fetch: vi.fn(), toast: vi.fn() }));
 
@@ -128,7 +130,7 @@ describe("the tiles", () => {
   });
 });
 
-describe("Type 1: the automatic next-day late-in allowance", () => {
+describe("Type 1: the next-day late-in allowance, before the claim workflow (automatic)", () => {
   it("lists who worked past the shift end, the allowance and whether it was used", async () => {
     await openOt();
     const table = must("ot-type1-table");
@@ -183,13 +185,14 @@ describe("Type 1: the automatic next-day late-in allowance", () => {
     expect(text(q("ot-kpi-used"))).toContain("30 min used · 1 not used · 1 pending");
   });
 
-  it("is read-only: no checkbox, no button, nothing to assign", async () => {
+  it("keeps an allowance from before the claim workflow automatic: nothing to tick, claim or assign", async () => {
     await openOt();
     const card = must("ot-type1");
     expect(card.querySelectorAll('button[role="checkbox"], input[type="checkbox"]')).toHaveLength(0);
     const buttons = [...card.querySelectorAll("button")].map(text);
-    expect(buttons.filter((b) => /assign|reject|announce/i.test(b))).toEqual([]);
-    expect(text(card)).toContain("Automatic and unpaid");
+    expect(buttons.filter((b) => /assign|reject|announce|claim/i.test(b))).toEqual([]);
+    expect(text(card)).toContain("Unpaid");
+    expect(text(must("ot-type1-row-E11-2026-10-06"))).toContain("Automatic");
     // what the allowance does is on the other nested subtab, not on this one
     expect(q("rules-type1")).toBeNull();
     expect(q("ot-type1-how")).toBeNull();
@@ -246,7 +249,8 @@ describe("Type 2: shift-based compensation", () => {
     expect(chitra).toContain("4 hours");
     expect(chitra).toContain("0.50 shifts");
     const asha = text(must("ot-type2-row-E11-2026-10-09"));
-    expect(asha).toContain("01:00 (next day)");
+    // the next-morning punch says so in words, not only by its colour
+    expect(asha).toContain("01:00 next day");
     expect(asha).toContain("7 hours 30 minutes");
     expect(asha).toContain("0.75 shifts");
   });

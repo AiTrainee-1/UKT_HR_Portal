@@ -11,6 +11,7 @@ import {
   installWorld,
   mountPage,
   must,
+  params,
   q,
   settle,
   text,
@@ -19,10 +20,12 @@ import {
   waitFor,
   type World,
 } from "../harness";
+import { choose, lastQuery, rowKeys, rowOf } from "./leave-test-utils";
 
-// The compensation balance in jsdom (Compensation Leave B): who has shifts to take, what is behind each balance, the Redeem
-// dialog that replaced the old date prompt (employee, date, shifts that cannot be more than the balance), and the earlier
-// Alternative-Day credits, which stay visible.
+// The balance and the credits of the claim workflow in jsdom (Compensation Leave B): every employee's EARNED / USED /
+// WAITING / AVAILABLE with its filters, the drawer with every entry behind a balance (and the claim that made it), Use
+// balance (a request on the employee's behalf that goes to the Department Head), HR's direct Redeem (kept), and Credits:
+// every credit and debit of the balances with its filters and links, with the earlier Alternative-Day credits below.
 
 const h = vi.hoisted(() => ({ fetch: vi.fn(), toast: vi.fn() }));
 
@@ -45,10 +48,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   freezeClock();
   world = installWorld(h.fetch);
-  // a redemption takes the shifts off the balance, as the server does
+  // a redemption takes the shifts off the balance at once, as the server does
   world.on.set("POST /api/compensation/balance/redeem", (call) => {
     const row = world.balances.find((b) => b.employeeId === call.body.employeeId)!;
-    row.balance = Math.round((row.balance - Number(call.body.shifts)) * 100) / 100;
+    row.used = Math.round((row.used + Number(call.body.shifts)) * 100) / 100;
+    row.available = Math.round((row.available - Number(call.body.shifts)) * 100) / 100;
     return {
       entry: {
         id: 77,
@@ -61,7 +65,7 @@ beforeEach(() => {
         createdAt: null,
         counted: true,
       },
-      balance: row.balance,
+      balance: row.available,
     };
   });
 });
@@ -72,134 +76,260 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const HOLIDAY = "/hr/compensation/compensation-leave/holiday-work";
+const BALANCE_PATH = `${HOLIDAY}/balance`;
+const CREDITS_PATH = `${HOLIDAY}/credits`;
+const BALANCE_API = "/api/compensation/balance";
+const LEDGER_API = "/api/compensation/ledger";
 const REDEEM = "/api/compensation/balance/redeem";
+const USE = "/api/compensation/use";
 
-async function openBalance() {
-  mountPage("/hr/compensation/compensation-leave/holiday-work/balance");
-  await waitFor(() => !!q("balance-table"), "the balances");
+const balanceReady = () => rowKeys("balance-table").length > 0;
+const ledgerReady = () => rowKeys("ledger-table").length > 0;
+
+async function openBalance(url = BALANCE_PATH) {
+  mountPage(url);
+  await waitFor(balanceReady, "the balances");
+}
+
+async function openCredits(url = CREDITS_PATH) {
+  mountPage(url);
+  await waitFor(ledgerReady, "the credits");
 }
 
 const button = (id: string) => must(id) as HTMLButtonElement;
 const input = (id: string) => must(id) as HTMLInputElement;
-const rowIds = () =>
-  [...(q("balance-table")?.querySelectorAll("tbody tr") ?? [])].map((r) => r.getAttribute("data-testid"));
+const balanceAsked = () =>
+  lastQuery(
+    world.requests().filter((r) => !r.includes("employeeId=")),
+    BALANCE_API,
+  )!;
+const ledgerAsked = () => lastQuery(world.requests(), LEDGER_API)!;
 
 describe("the balances", () => {
-  it("are their own nested subtab: the claim form, the claims and the earlier credits are not on it", async () => {
+  it("are their own nested subtab: the claim form, the claims and the credits are not on it", async () => {
     await openBalance();
-    for (const other of ["claim-form", "claim-list", "credits-card"]) expect(q(other), other).toBeNull();
+    for (const other of ["claim-form", "claim-list", "credits-part"]) expect(q(other), other).toBeNull();
   });
 
-  it("list the staff with shifts to take, and total them", async () => {
+  it("list every employee's earned, used, waiting and available shifts, a page of 25", async () => {
     await openBalance();
-    expect(rowIds()).toEqual(["balance-row-E21", "balance-row-E24", "balance-row-E26"]);
-    expect(text(q("balance-row-E21"))).toContain("Fara Khan");
-    expect(text(q("balance-row-E21"))).toContain("1.50 shifts");
-    expect(text(q("balance-row-E24"))).toContain("0.25 shifts");
+    expect(Object.fromEntries(balanceAsked())).toEqual({ page: "1", pageSize: "25" });
+    expect(rowKeys("balance-table")).toEqual(["21", "24", "26"]);
+    const fara = text(rowOf("balance-table", 21));
+    expect(fara).toContain("Fara Khan");
+    expect(fara).toContain("Cutting");
+    expect(text(q("balance-available-E21"))).toBe("1 shift");
+    expect(text(q("balance-available-E24"))).toBe("0.25 shifts");
+    // the columns, in order: earned 2, used 0.50, waiting 0.50, available 1
+    const cells = [...rowOf("balance-table", 21)!.querySelectorAll("td")].map(text);
+    expect(cells.slice(1, 5)).toEqual(["2", "0.50", "0.50", "1 shift"]);
+    expect(cells[5]).toBe("12 Oct 2026");
+  });
+
+  it("total them in the tiles", async () => {
+    await openBalance();
     expect(text(q("balance-kpi-people-value"))).toBe("2");
-    expect(text(q("balance-kpi-total-value"))).toBe("1.75");
+    expect(text(q("balance-kpi-earned-value"))).toBe("4");
+    expect(text(q("balance-kpi-used-value"))).toBe("2.25");
+    expect(text(q("balance-kpi-pending-value"))).toBe("0.50");
+    expect(text(q("balance-kpi-total-value"))).toBe("1.25");
   });
 
-  it("say how a balance comes about, and that HR redeems it", async () => {
+  it("say how a balance comes about", async () => {
     await openBalance();
     const card = text(q("balance-card"));
-    expect(card).toContain("They are added when the Department Head approves a Sunday / holiday work claim");
-    expect(card).toContain("HR redeems them on a date");
+    expect(card).toContain("Shifts earned from approved claims and earlier credits");
+    expect(card).toContain("what is waiting for the Department Head");
   });
 
-  it("search by name, code or department", async () => {
+  it("filter by department, branch and name or code, each one asking the server", async () => {
     await openBalance();
+    choose("balance-dept", "1");
+    await waitFor(() => balanceAsked().get("departmentId") === "1", "the department");
+    await waitFor(() => rowKeys("balance-table").join() === "24,26", "Sales");
+    choose("balance-branch", "2");
+    await waitFor(() => balanceAsked().get("branchId") === "2", "the branch");
     typeInto(must("balance-search") as HTMLInputElement, "indu");
-    expect(rowIds()).toEqual(["balance-row-E24"]);
+    await waitFor(() => balanceAsked().get("q") === "indu", "the search");
+    await waitFor(() => rowKeys("balance-table").join() === "24", "Indu");
+    expect(params()).toMatchObject({ baldept: "1", balbranch: "2", balq: "indu" });
     typeInto(must("balance-search") as HTMLInputElement, "zzz");
-    expect(text(q("balance-empty"))).toContain("Nobody matches the search");
+    await waitFor(() => text(q("balance-table")).includes("Nobody matches the filters"), "nobody");
   });
 
   it("show the shape of the list while it loads, and an error with a Retry", async () => {
-    const release = world.hold("/api/compensation/balance");
-    mountPage("/hr/compensation/compensation-leave/holiday-work/balance");
+    const release = world.hold(BALANCE_API);
+    mountPage(BALANCE_PATH);
     await waitFor(() => !!q("balance-card"), "the card");
-    expect(q("skeleton-kpis")).not.toBeNull();
+    expect(must("balance-table").getAttribute("aria-busy")).toBe("true");
     release();
-    await waitFor(() => !!q("balance-table"), "the balances");
+    await waitFor(balanceReady, "the balances");
     unmountPage();
 
-    world.failing.set("/api/compensation/balance", { status: 500 });
-    mountPage("/hr/compensation/compensation-leave/holiday-work/balance");
-    await waitFor(() => !!q("balance-error"), "the error");
-    expect(text(q("balance-error"))).toContain("Could not load the balances");
+    world.failing.set(BALANCE_API, { status: 500 });
+    mountPage(BALANCE_PATH);
+    await waitFor(() => text(q("balance-table")).includes("Could not load the balances"), "the error");
     world.failing.clear();
-    click([...must("balance-error").querySelectorAll("button")].find((b) => text(b) === "Retry"));
-    await waitFor(() => !!q("balance-table"), "the balances");
+    click([...must("balance-table").querySelectorAll("button")].find((b) => text(b) === "Try again"));
+    await waitFor(balanceReady, "the balances");
   });
 
   it("explain that nobody has one yet", async () => {
     world.balances = [];
-    mountPage("/hr/compensation/compensation-leave/holiday-work/balance");
-    await waitFor(() => !!q("balance-empty"), "the empty state");
-    expect(text(q("balance-empty"))).toContain("Nobody has a balance yet");
+    mountPage(BALANCE_PATH);
+    await waitFor(() => text(q("balance-table")).includes("Nobody has a balance yet"), "the empty state");
   });
 });
 
-describe("what is behind a balance", () => {
-  it("lists the credits and the days off taken, with where each came from", async () => {
+describe("the drawer of a balance", () => {
+  it("opens from a row: the four figures, the request still waiting and every entry with its claim", async () => {
     await openBalance();
-    click(must("balance-details-E21"));
-    await waitFor(() => !!q("ledger-table"), "the entries");
-    const dialog = text(q("ledger-dialog"));
-    expect(dialog).toContain("Balance of Fara Khan");
-    expect(dialog).toContain("1.50 shifts to take");
+    click(rowOf("balance-table", 21));
+    expect(params().balemp).toBe("21");
+    await waitFor(() => !!q("ledger-table") && !!q("ledger-waiting"), "the entries");
+    const drawer = text(q("ledger-dialog"));
+    expect(drawer).toContain("Balance of Fara Khan");
+    expect(drawer).toContain("E21 · 1 shift available");
+    expect(text(q("ledger-earned-value"))).toBe("2");
+    expect(text(q("ledger-used-value"))).toBe("0.50");
+    expect(text(q("ledger-pending-value"))).toBe("0.50");
+    expect(text(q("ledger-available-value"))).toBe("1");
+    // the use of the balance waiting for the HOD, with its link
+    expect(text(q("ledger-waiting"))).toContain("0.50 shifts on 16 Oct 2026 · HOD: Suresh Raj");
+    expect(must("ledger-waiting-3007").getAttribute("href")).toBe(`${HOLIDAY}/claims?hmonth=all&hemp=21&hclaim=3007`);
+    const pending = lastQuery(world.requests(), "/api/compensation/claims")!;
+    expect(Object.fromEntries(pending)).toMatchObject({
+      employeeId: "21",
+      kind: "use_balance",
+      status: "pending",
+      anyMonth: "1",
+    });
     const rows = [...must("ledger-table").querySelectorAll("tbody tr")].map(text);
     expect(rows).toHaveLength(3);
     expect(rows[0]).toContain("9 Oct 2026");
-    expect(rows[0]).toContain("Redeemed as a day off");
+    expect(rows[0]).toContain("Redeemed as a day off (by HR)");
     expect(rows[0]).toContain("−0.50");
     expect(rows[1]).toContain("Sunday / holiday work (approved by the Department Head)");
     expect(rows[1]).toContain("+1");
+    expect(must("ledger-claim-2990").getAttribute("href")).toBe(`${HOLIDAY}/claims?hmonth=all&hemp=21&hclaim=2990`);
     expect(rows[2]).toContain("Earlier Alternative-Day credit");
+    expect(must("ledger-credits-link").getAttribute("href")).toBe(`${HOLIDAY}/credits?lmonth=all&lemp=21`);
   });
 
-  it("says there are no entries for a balance without any", async () => {
-    await openBalance();
-    click(must("balance-details-E24"));
-    await waitFor(() => !!q("ledger-empty"), "the empty state");
+  it("opens from a link on the employee, and says when there is no entry", async () => {
+    await openBalance(`${BALANCE_PATH}?balemp=24`);
+    await waitFor(() => !!q("ledger-empty"), "the empty entries");
+    expect(text(q("ledger-dialog"))).toContain("Balance of Indu Nair");
+  });
+
+  it("follows the link of an entry to its claim", async () => {
+    await openBalance(`${BALANCE_PATH}?balemp=21`);
+    await waitFor(() => !!q("ledger-claim-2990"), "the entries");
+    click(must("ledger-claim-2990"));
+    await waitFor(() => window.location.pathname === `${HOLIDAY}/claims`, "Claims");
+    expect(params()).toEqual({ hmonth: "all", hemp: "21", hclaim: "2990" });
   });
 
   it("is open to a View Only role", async () => {
     await openBalance();
     lockMutatingControls(document.body);
     await settle();
-    expect(button("balance-details-E21").disabled).toBe(false);
+    click(rowOf("balance-table", 21));
+    await waitFor(() => !!q("ledger-table"), "the entries");
   });
 });
 
-describe("the Redeem dialog", () => {
-  it("replaces the old date prompt: the employee, the day and the shifts, with what will happen", async () => {
+describe("Use balance: a request for the Department Head, on the employee's behalf", () => {
+  it("asks for the day, the shifts and a reason, and says what happens", async () => {
+    await openBalance();
+    click(must("balance-use-E21"));
+    await waitFor(() => !!q("use-dialog"), "the dialog");
+    expect(text(q("use-dialog"))).toContain("Use the balance of Fara Khan");
+    expect(text(q("use-available"))).toBe("1 shift");
+    expect(text(q("use-dialog"))).toContain("This asks the employee's Department Head");
+    click(must("use-submit"));
+    await settle();
+    expect(text(q("use-dialog"))).toContain("Choose the day off.");
+    expect(text(q("use-dialog"))).toContain("Choose how many shifts.");
+    expect(text(q("use-dialog"))).toContain("Give a reason");
+    expect(bodiesOf(world, "POST", USE)).toEqual([]);
+    typeInto(input("use-date"), "2026-10-20");
+    click(must("use-shifts-0.5"));
+    typeInto(must("use-reason") as unknown as HTMLInputElement, "Family function");
+    expect(text(q("use-summary"))).toContain(
+      "Tue, 20 Oct 2026 is topped up by 0.50 shifts once the Department Head approves",
+    );
+    expect(text(q("use-summary"))).toContain("the available balance goes from 1 to 0.50");
+  });
+
+  it("sends the employee, the day, the shifts and the reason, then the balance shows it waiting", async () => {
+    await openBalance();
+    click(must("balance-use-E21"));
+    await waitFor(() => !!q("use-dialog"), "the dialog");
+    typeInto(input("use-date"), "2026-10-20");
+    click(must("use-shifts-0.5"));
+    typeInto(must("use-reason") as unknown as HTMLInputElement, "Family function");
+    click(must("use-submit"));
+    await waitFor(() => bodiesOf(world, "POST", USE).length === 1, "the request");
+    expect(bodiesOf(world, "POST", USE)[0]).toEqual({
+      employeeId: 21,
+      date: "2026-10-20",
+      shifts: 0.5,
+      reason: "Family function",
+    });
+    await waitFor(() => !q("use-dialog"), "the dialog to close");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Sent to the Department Head" }));
+    // every Compensation list is read again: the balance now shows 1 shift waiting and 0.50 available
+    await waitFor(() => text(q("balance-available-E21")) === "0.50 shifts", "the new balance");
+    expect([...rowOf("balance-table", 21)!.querySelectorAll("td")].map(text)[3]).toBe("1");
+  });
+
+  it("never offers more than is available, and not at all when nothing is", async () => {
+    await openBalance();
+    expect(button("balance-use-E26").disabled).toBe(true);
+    expect(button("balance-use-E26").title).toBe("Nothing available to use");
+    click(must("balance-use-E24"));
+    await waitFor(() => !!q("use-dialog"), "the dialog");
+    expect(button("use-shifts-0.25").disabled).toBe(false);
+    for (const choice of ["0.5", "0.75", "1"]) expect(button(`use-shifts-${choice}`).disabled).toBe(true);
+  });
+
+  it("shows the server's sentence when the day cannot be used, and stays open", async () => {
+    world.on.set(`POST ${USE}`, () =>
+      apiError(400, {
+        error: "20 Oct 2026 is outside the request window: only this month can be asked for.",
+        code: "not_eligible",
+      }),
+    );
+    await openBalance();
+    click(must("balance-use-E21"));
+    await waitFor(() => !!q("use-dialog"), "the dialog");
+    typeInto(input("use-date"), "2026-10-20");
+    click(must("use-shifts-0.5"));
+    typeInto(must("use-reason") as unknown as HTMLInputElement, "Family function");
+    click(must("use-submit"));
+    await waitFor(() => !!q("use-error"), "the refusal");
+    expect(text(q("use-error"))).toContain("outside the request window");
+    expect(q("use-dialog")).not.toBeNull();
+  });
+});
+
+describe("Redeem: HR's direct day off, kept", () => {
+  it("redeems from what is available and closes", async () => {
     await openBalance();
     click(must("balance-redeem-E21"));
     await waitFor(() => !!q("redeem-dialog"), "the dialog");
     expect(text(q("redeem-dialog"))).toContain("Redeem the balance of Fara Khan");
-    expect(text(q("redeem-balance"))).toBe("1.50 shifts");
-    expect(button("redeem-submit").disabled).toBe(true);
+    expect(text(q("redeem-balance"))).toBe("1 shift");
     typeInto(input("redeem-date"), "2026-10-15");
     click(must("redeem-shifts-0.5"));
-    expect(button("redeem-submit").disabled).toBe(false);
-    expect(text(q("redeem-summary"))).toBe(
-      "Thu, 15 Oct 2026 is topped up by 0.50 shifts (a day never goes above 1 shift) and marked Compensation in attendance. The balance goes from 1.50 to 1.",
-    );
-  });
-
-  it("sends the employee, the day and the shifts, then closes and shows the new balance", async () => {
-    await openBalance();
-    click(must("balance-redeem-E21"));
-    await waitFor(() => !!q("redeem-dialog"), "the dialog");
-    typeInto(input("redeem-date"), "2026-10-15");
-    click(must("redeem-shifts-0.5"));
+    expect(text(q("redeem-summary"))).toContain("The balance goes from 1 to 0.50.");
     click(must("redeem-submit"));
     await waitFor(() => bodiesOf(world, "POST", REDEEM).length === 1, "the request");
     expect(bodiesOf(world, "POST", REDEEM)[0]).toEqual({ employeeId: 21, date: "2026-10-15", shifts: 0.5 });
     await waitFor(() => !q("redeem-dialog"), "the dialog to close");
-    await waitFor(() => text(q("balance-row-E21")).includes("1 shift"), "the new balance");
+    await waitFor(() => text(q("balance-available-E21")) === "0.50 shifts", "the new balance");
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Day off recorded" }));
   });
 
@@ -222,7 +352,7 @@ describe("the Redeem dialog", () => {
           createdAt: null,
           counted: true,
         },
-        balance: 1,
+        balance: 0.5,
       };
     });
     await openBalance();
@@ -231,7 +361,6 @@ describe("the Redeem dialog", () => {
     typeInto(input("redeem-date"), "2026-10-15");
     click(must("redeem-shifts-0.5"));
     const submit = must("redeem-submit");
-    // both clicks arrive before the page has drawn again (a double click)
     act(() => {
       submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -243,102 +372,113 @@ describe("the Redeem dialog", () => {
     expect(bodiesOf(world, "POST", REDEEM)).toHaveLength(1);
   });
 
-  it("never offers more shifts than the balance", async () => {
-    await openBalance();
-    click(must("balance-redeem-E24")); // 0.25
-    await waitFor(() => !!q("redeem-dialog"), "the dialog");
-    expect(button("redeem-shifts-0.25").disabled).toBe(false);
-    for (const choice of ["0.5", "0.75", "1"]) {
-      expect(button(`redeem-shifts-${choice}`).disabled).toBe(true);
-      expect(button(`redeem-shifts-${choice}`).title).toBe("More than the balance (0.25)");
-    }
-    typeInto(input("redeem-date"), "2026-10-15");
-    click(must("redeem-shifts-1")); // a disabled choice does nothing
-    expect(button("redeem-submit").disabled).toBe(true);
-    click(must("redeem-shifts-0.25"));
-    expect(button("redeem-submit").disabled).toBe(false);
-  });
-
-  it("allows the whole balance", async () => {
-    await openBalance();
-    click(must("balance-redeem-E21")); // 1.50: the most one day can take is 1
-    await waitFor(() => !!q("redeem-dialog"), "the dialog");
-    typeInto(input("redeem-date"), "2026-10-15");
-    click(must("redeem-shifts-1"));
-    expect(text(q("redeem-summary"))).toContain("The balance goes from 1.50 to 0.50.");
-  });
-
-  it("needs a real day", async () => {
-    await openBalance();
-    click(must("balance-redeem-E21"));
-    await waitFor(() => !!q("redeem-dialog"), "the dialog");
-    click(must("redeem-shifts-0.5"));
-    expect(button("redeem-submit").disabled).toBe(true);
-    typeInto(input("redeem-date"), "2026-10-15");
-    expect(button("redeem-submit").disabled).toBe(false);
-  });
-
-  it("shows the server's sentence when the day cannot take the shifts, and stays open", async () => {
-    world.on.set(`POST ${REDEEM}`, () =>
-      apiError(400, {
-        error: "11 Oct 2026 is a Sunday: it is already a day off, so there is nothing to top up.",
-        balance: 1.5,
-      }),
-    );
-    await openBalance();
-    click(must("balance-redeem-E21"));
-    await waitFor(() => !!q("redeem-dialog"), "the dialog");
-    typeInto(input("redeem-date"), "2026-10-11");
-    click(must("redeem-shifts-0.5"));
-    click(must("redeem-submit"));
-    await waitFor(() => !!q("redeem-error"), "the refusal");
-    expect(text(q("redeem-error"))).toContain("is a Sunday");
-    expect(q("redeem-dialog")).not.toBeNull();
-    expect(h.toast).not.toHaveBeenCalled();
-  });
-
-  it("does nothing on Cancel", async () => {
-    await openBalance();
-    click(must("balance-redeem-E21"));
-    await waitFor(() => !!q("redeem-dialog"), "the dialog");
-    click([...must("redeem-dialog").querySelectorAll("button")].find((b) => text(b) === "Cancel"));
-    await waitFor(() => !q("redeem-dialog"), "the dialog to close");
-    expect(world.writes).toEqual([]);
-  });
-
-  it("is not offered for a balance of nothing", async () => {
-    await openBalance();
+  it("is not offered for nothing, and the drawer offers it too", async () => {
+    await openBalance(`${BALANCE_PATH}?balemp=21`);
     expect(button("balance-redeem-E26").disabled).toBe(true);
     expect(button("balance-redeem-E26").title).toBe("Nothing to redeem");
+    await waitFor(() => !!q("ledger-table"), "the drawer");
+    click(must("ledger-redeem"));
+    await waitFor(() => !!q("redeem-dialog"), "the dialog");
+    expect(text(q("redeem-balance"))).toBe("1 shift");
   });
 });
 
-describe("what pauses Redeem", () => {
-  it("pauses it, with the reason, while the master switch is off", async () => {
+describe("what pauses Use balance and Redeem", () => {
+  it("pauses both, with the reason, while the master switch is off, and keeps everything readable", async () => {
     world.settings.compensationFeatureEnabled = false;
     await openBalance();
     await waitFor(() => button("balance-redeem-E21").disabled, "the pause");
     expect(button("balance-redeem-E21").title).toMatch(/switched off in Settings → Payroll/);
-    // the balance and what is behind it stay readable
-    expect(rowIds()).toHaveLength(3);
-    expect(button("balance-details-E21").disabled).toBe(false);
+    expect(button("balance-use-E21").disabled).toBe(true);
+    expect(rowKeys("balance-table")).toHaveLength(3);
   });
 
-  it("locks Redeem for a View Only role", async () => {
+  it("locks Use balance and Redeem for a View Only role", async () => {
     await openBalance();
     expect(button("balance-redeem-E21").title).toMatch(/create a day off/);
+    expect(button("balance-use-E21").title).toMatch(/send a request/);
     lockMutatingControls(document.body);
     await settle();
     expect(button("balance-redeem-E21").disabled).toBe(true);
+    expect(button("balance-use-E21").disabled).toBe(true);
   });
 });
 
-describe("the earlier Alternative-Day credits", () => {
-  it("stay visible, with each one's state", async () => {
-    mountPage("/hr/compensation/compensation-leave/holiday-work/credits");
-    await waitFor(() => !!q("credits-table"), "the credits");
-    // the credits are their own nested subtab: the balance table is not on it
-    expect(q("balance-card")).toBeNull();
+describe("Credits: every credit and debit", () => {
+  it("lists the month's entries, newest first, with the claim behind each", async () => {
+    await openCredits();
+    expect(Object.fromEntries(ledgerAsked())).toEqual({ month: "10", year: "2026", page: "1", pageSize: "25" });
+    expect(rowKeys("ledger-table")).toEqual(["20", "15", "12", "9"]);
+    const indu = text(rowOf("ledger-table", 20));
+    expect(indu).toContain("12 Oct 2026");
+    expect(indu).toContain("Indu Nair");
+    expect(indu).toContain("+1");
+    expect(indu).toContain("Sunday / holiday work (approved by the Department Head)");
+    expect(must("ledger-row-claim-3002").getAttribute("href")).toBe(`${HOLIDAY}/claims?hmonth=all&hemp=24&hclaim=3002`);
+    expect(text(rowOf("ledger-table", 15))).toContain("OT shift credit, Type 2 (approved by the Department Head)");
+    const redeem = text(rowOf("ledger-table", 12));
+    expect(redeem).toContain("−0.50");
+    expect(redeem).toContain("Redeemed as a day off (by HR)");
+    expect(redeem).toContain("HR redeem");
+  });
+
+  it("totals the credits and the debits", async () => {
+    await openCredits();
+    expect(text(q("ledger-kpi-credits-value"))).toBe("3");
+    expect(text(q("ledger-kpi-credits"))).toContain("+2.50 shifts");
+    expect(text(q("ledger-kpi-debits-value"))).toBe("1");
+    expect(text(q("ledger-kpi-debits"))).toContain("−0.50 shifts");
+    expect(text(q("ledger-kpi-net-value"))).toBe("2");
+  });
+
+  it("filters by credit or debit, source, every month, department, branch and name: each one asks the server", async () => {
+    await openCredits();
+    choose("ledger-type", "debit");
+    await waitFor(() => ledgerAsked().get("entryType") === "debit", "debits");
+    await waitFor(() => rowKeys("ledger-table").join() === "12", "the debit");
+    choose("ledger-type", "");
+    choose("ledger-source", "birthday");
+    await waitFor(() => ledgerAsked().get("source") === "birthday", "the source");
+    choose("ledger-month-month", "all");
+    await waitFor(
+      () => ledgerAsked().get("month") === null && ledgerAsked().get("source") === "birthday",
+      "every month",
+    );
+    await waitFor(() => rowKeys("ledger-table").join() === "7", "September's birthday credit");
+    choose("ledger-dept", "1");
+    await waitFor(() => ledgerAsked().get("departmentId") === "1", "the department");
+    choose("ledger-branch", "2");
+    await waitFor(() => ledgerAsked().get("branchId") === "2", "the branch");
+    typeInto(must("ledger-search") as HTMLInputElement, "kiran");
+    await waitFor(() => ledgerAsked().get("q") === "kiran", "the search");
+    expect(params()).toMatchObject({ lsource: "birthday", lmonth: "all", ldept: "1", lbranch: "2", lq: "kiran" });
+  });
+
+  it("filters by a tile", async () => {
+    await openCredits();
+    click(must("ledger-kpi-credits"));
+    expect(params().ltype).toBe("credit");
+    await waitFor(() => rowKeys("ledger-table").join() === "20,15,9", "the credits");
+  });
+
+  it("follows the link of an entry to its claim, opened in its drawer", async () => {
+    await openCredits();
+    click(must("ledger-row-claim-3002"));
+    await waitFor(() => !!q("claim-drawer-claim"), "the claim's drawer");
+    expect(window.location.pathname).toBe(`${HOLIDAY}/claims`);
+    expect(text(q("claim-drawer"))).toContain("Indu Nair");
+  });
+
+  it("opens the employee's balance from the name", async () => {
+    await openCredits();
+    const link = rowOf("ledger-table", 20)!.querySelector("a[href*='balemp']")!;
+    expect(link.getAttribute("href")).toBe(`${HOLIDAY}/balance?balemp=24`);
+  });
+
+  it("shows the earlier Alternative-Day credits as a section of their own", async () => {
+    await openCredits();
+    await waitFor(() => !!q("credits-table"), "the earlier credits");
+    expect(text(q("credits-card"))).toContain("Earlier Alternative-Day credits (2)");
     expect(text(q("credit-row-4"))).toContain("Fara Khan");
     expect(text(q("credit-row-4"))).toContain("12 Sep 2026");
     expect(text(q("credit-row-4"))).toContain("Available: 1 shift");
@@ -346,9 +486,11 @@ describe("the earlier Alternative-Day credits", () => {
     expect(text(q("credits-card"))).toContain("Each available credit counts as one shift in the Compensation balance");
   });
 
-  it("say so when there are none", async () => {
+  it("says when there are no entries, and no earlier credits", async () => {
+    world.ledger = [];
     world.credits = [];
-    mountPage("/hr/compensation/compensation-leave/holiday-work/credits");
-    await waitFor(() => !!q("credits-empty"), "the empty state");
+    mountPage(CREDITS_PATH);
+    await waitFor(() => text(q("ledger-table")).includes("No entry for October 2026"), "the empty ledger");
+    await waitFor(() => !!q("credits-empty"), "the empty earlier credits");
   });
 });
