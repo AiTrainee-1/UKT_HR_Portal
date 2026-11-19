@@ -183,6 +183,13 @@ RULES: tuple[Rule, ...] = (
          modules=("user_management",), starts=("Updated HR user",)),
     Rule("app-password", "access", "medium", "Employee app password set, reset or cleared",
          modules=("mobile_app_login",), has=("mobile app password",)),
+    # Visitors -> Manage Reception -> View on a reception desk's login password (2026-11-18), before the gate rule below
+    # (same action and module; the desk entry names "reception desk"): the password itself is never in the entry
+    Rule("desk-password-viewed", "access", "high", "Reception desk login password viewed",
+         actions=("view_password",), modules=("outpass_visitors",), has=("reception desk",)),
+    # Manage Gates -> View on a gate's login password (2026-11-18): the password itself is never in the entry
+    Rule("gate-password-viewed", "access", "high", "Gate login password viewed",
+         actions=("view_password",), modules=("outpass_visitors",)),
     # backup and restore: the whole database leaving or being replaced
     Rule("restore-started", "backup", "critical", "Database restore started", actions=("restore",)),
     Rule("restore-uploaded", "backup", "high", "Restore file uploaded",
@@ -327,6 +334,8 @@ AREAS: dict[str, tuple[str, str]] = {
     "reports": ("reports", "Reports & exports"),
     "mobile_app_login": ("mobile", "Mobile app"),
     "mobile_app_version": ("mobile", "Mobile app"),
+    # Gate Pass, Manage Gates, Visitors and Tea Break (their own audit entries since 2026-11-18)
+    "outpass_visitors": ("gate", "Gate & visitors"),
 }
 
 

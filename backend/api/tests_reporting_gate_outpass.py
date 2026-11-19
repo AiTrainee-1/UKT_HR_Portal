@@ -1716,8 +1716,10 @@ class GateActivityTests(World):
         body = self.run_report(self.RID, **EMPTY_RANGE)
         self.assertTrue(all(r["totalScans"] == 0 for r in body["rows"]))  # gates are still listed, all zero
         ws = load_workbook(io.BytesIO(self.export(self.RID, "xlsx", **RANGE).content)).active
-        self.assertEqual([c.value for c in ws[7]][:4], ["Gate", "Branch", "Status", "Last Login"])
-        self.assertEqual((ws["A8"].value, ws["N8"].value), ("Gate 1", 21))
+        header = [c.value for c in ws[7]]
+        self.assertEqual(header[:4], ["Gate", "Branch", "Status", "Last Login"])
+        # (Not Allowed Here and Tea Refused were added on 19 Nov 2026: Total Scans is found by its heading)
+        self.assertEqual((ws["A8"].value, ws.cell(row=8, column=header.index("Total Scans") + 1).value), ("Gate 1", 21))
         self.assertTrue(self.export(self.RID, "pdf", **RANGE).content.startswith(b"%PDF"))
 
 
@@ -2592,3 +2594,62 @@ class RandomCrossCheckTests(TestCase):
             }
             for k, v in want.items():
                 self.assertEqual(rows[day.isoformat()][k], v, (day, k))
+
+
+# ── 19 Nov 2026: a refused tea-break code (scan_type "tea") is a tea refusal, never an exit or a gate-pass denial ──
+
+
+class RefusedTeaScanReportTests(World):
+    def setUp(self):
+        super().setUp()
+        # Gate 1 (Unit 1) refuses a tea-break code on 6 Sep, and a gate pass (it took neither kind that day)
+        self.tea_scan = mk_scan(
+            self.g1,
+            None,
+            self.e1,
+            "tea",
+            "not_allowed_here",
+            "2026-09-06 10:00",
+            "This gate does not take tea-break scans.",
+        )
+        self.pass_scan = mk_scan(
+            self.g1,
+            None,
+            self.e1,
+            "exit",
+            "not_allowed_here",
+            "2026-09-06 10:05",
+            "This gate does not take gate passes.",
+        )
+
+    def test_the_scan_log_names_it_a_refused_tea_break(self):
+        body = self.run_report("gate-scan-audit-log", **RANGE)
+        rows = [r for r in body["rows"] if r.get("detail", "").startswith(("Tea-break code", "Gate pass refused"))]
+        self.assertEqual(
+            sorted((r["scanType"], r["result"], r["detail"]) for r in rows),
+            [
+                ("Exit", "Not allowed at this gate", "Gate pass refused: this gate does not take gate passes"),
+                ("Tea break", "Not allowed at this gate", "Tea-break code refused: this gate does not take tea breaks"),
+            ],
+        )
+        legs = {r["detail"] for r in self.run_report("gate-scan-audit-log", scanType="tea", **RANGE)["rows"]}
+        self.assertEqual(legs, {"Tea-break code refused: this gate does not take tea breaks"})
+        spec = registry.get_spec("gate-scan-audit-log")
+        result_filter = next(f for f in spec.filters if f.key == "result")
+        self.assertIn(
+            "not_allowed_here", [o[0] if isinstance(o, tuple) else o.get("value") for o in result_filter.options]
+        )
+
+    def test_gate_activity_counts_it_as_a_tea_refusal_and_the_pass_one_as_not_allowed_here(self):
+        rows = self.by(self.run_report("gate-activity-summary", **RANGE), "gate")
+        g1 = rows["Gate 1"]
+        # the golden Gate 1 row (see GateActivityTests) plus these two scans
+        self.assertEqual((g1["exitScans"], g1["notAllowedHere"], g1["teaRefused"]), (2, 1, 1))
+        self.assertEqual((g1["deniedScans"], g1["totalScans"]), (6 + 1, 21 + 2))
+        self.assertEqual(g1["denialPct"], round(7 * 100 / 9, 2))  # 8 outpass attempts before + the refused pass
+
+    def test_the_daily_summary_counts_it_as_a_tea_refusal_not_a_denied_gate_pass(self):
+        rows = self.by(self.run_report("gate-daily-summary", **RANGE), "date")
+        day = rows["2026-09-06"]
+        self.assertEqual((day["teaRefused"], day["deniedScans"]), (1, 1 + 1))  # the golden 1 + the refused pass
+        self.assertEqual(rows["2026-09-05"]["teaRefused"], 0)

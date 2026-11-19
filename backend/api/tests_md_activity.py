@@ -216,6 +216,14 @@ CORPUS = [
     ("update", "mobile_app_login", "Cleared mobile app password for E1 (A B)", "app-password"),
     ("update", "mobile_app_login", "Reset mobile app password for E1 (A B)", "app-password"),
     ("update", "mobile_app_login", "Set mobile app password for E1 (A B)", "app-password"),
+    ("view_password", "outpass_visitors", "Viewed the login password of gate Gate 1", "gate-password-viewed"),
+    (
+        "view_password",
+        "outpass_visitors",
+        "Viewed the login password of reception desk Front Desk (Unit 1)",
+        "desk-password-viewed",
+    ),
+    ("update", "outpass_visitors", "Updated gate Gate 1", None),
     # backup and restore
     ("restore", "settings", "Automated restore started from /tmp/x.zip", "restore-started"),
     ("upload", "settings", "Restore backup uploaded + validated: x.zip", "restore-uploaded"),
@@ -415,6 +423,7 @@ class VocabularyGuardTests(SimpleTestCase):
         "login", "logout", "login_failed", "login_blocked", "create", "update", "delete", "export", "approve",
         "reject", "upload", "restore", "backup", "announce", "assign", "redeem", "lock", "reset",
         "check",  # a device connection test (device_status_views.py): read-only, so routine, no sensitive rule
+        "view_password",  # Manage Gates -> View on a gate's password: rule gate-password-viewed
     }  # fmt: skip
 
     def audited(self):

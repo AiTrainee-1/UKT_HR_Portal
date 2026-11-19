@@ -31,20 +31,25 @@ describe("the three first-level addresses", () => {
 
   it("each opens on its first tab (Visitors has none, so it stays where it is)", () => {
     expect(gateLanding("outpass")).toBe("/hr/outpass-visitors/outpass/overview/passes");
-    expect(gateLanding("visitors")).toBe("/hr/outpass-visitors/visitors");
+    expect(gateLanding("visitors")).toBe("/hr/outpass-visitors/visitors/visits");
     expect(gateLanding("tea-break")).toBe("/hr/outpass-visitors/tea-break/records");
   });
 });
 
 describe("the route table", () => {
   it("lists the tabs of each page in order, and the nested tabs of the subtabs that have sections", () => {
-    expect(subsOf("outpass").map((s) => s.value)).toEqual(["overview", "requests", "in-out"]);
-    expect(subsOf("visitors")).toEqual([]);
+    expect(subsOf("outpass").map((s) => s.value)).toEqual(["overview", "requests", "in-out", "gates"]);
+    expect(subsOf("outpass").map((s) => s.label)).toEqual(["Overview", "Requests", "In/Out", "Manage Gates"]);
+    expect(subsOf("visitors").map((s) => s.value)).toEqual(["visits", "desks"]);
+    expect(subsOf("visitors").map((s) => s.label)).toEqual(["Visitors", "Manage Reception"]);
     expect(subsOf("tea-break").map((s) => s.value)).toEqual(["records", "rule"]);
     expect(nestedOf("outpass", "overview").map((n) => n.value)).toEqual(["passes", "qr-submissions"]);
     // one section: no nested level, so no one-pill strip
     expect(nestedOf("outpass", "requests")).toEqual([]);
     expect(nestedOf("outpass", "in-out")).toEqual([]);
+    expect(nestedOf("outpass", "gates")).toEqual([]);
+    expect(nestedOf("visitors", "visits")).toEqual([]);
+    expect(nestedOf("visitors", "desks")).toEqual([]);
     expect(nestedOf("tea-break", "records")).toEqual([]);
     expect(nestedOf("tea-break", "rule")).toEqual([]);
   });
@@ -113,14 +118,19 @@ describe("the redirect table (resolveGatePath)", () => {
     // a tab with one section drops whatever follows it
     ["/hr/outpass-visitors/outpass/requests/whatever", "/hr/outpass-visitors/outpass/requests"],
     ["/hr/outpass-visitors/outpass/in-out/passes", "/hr/outpass-visitors/outpass/in-out"],
+    ["/hr/outpass-visitors/outpass/gates/12", "/hr/outpass-visitors/outpass/gates"],
     ["/hr/outpass-visitors/tea-break/rule/x/y", "/hr/outpass-visitors/tea-break/rule"],
     // Visitors has no tabs: it is only itself
-    ["/hr/outpass-visitors/visitors", "/hr/outpass-visitors/visitors"],
-    ["/hr/outpass-visitors/visitors/anything", "/hr/outpass-visitors/visitors"],
+    ["/hr/outpass-visitors/visitors", "/hr/outpass-visitors/visitors/visits"],
+    ["/hr/outpass-visitors/visitors/anything", "/hr/outpass-visitors/visitors/visits"],
+    ["/hr/outpass-visitors/visitors/desks/12", "/hr/outpass-visitors/visitors/desks"],
+    ["/hr/outpass-visitors/visitors/visits", "/hr/outpass-visitors/visitors/visits"],
+    ["/hr/outpass-visitors/visitors/desks", "/hr/outpass-visitors/visitors/desks"],
     // a real address is itself
     ["/hr/outpass-visitors/outpass/overview/qr-submissions", "/hr/outpass-visitors/outpass/overview/qr-submissions"],
     ["/hr/outpass-visitors/outpass/requests", "/hr/outpass-visitors/outpass/requests"],
     ["/hr/outpass-visitors/outpass/in-out", "/hr/outpass-visitors/outpass/in-out"],
+    ["/hr/outpass-visitors/outpass/gates", "/hr/outpass-visitors/outpass/gates"],
     ["/hr/outpass-visitors/tea-break/rule", "/hr/outpass-visitors/tea-break/rule"],
     // the capital letters the router ignores are written the one way
     ["/hr/outpass-visitors/Outpass/Requests", "/hr/outpass-visitors/outpass/requests"],
@@ -135,8 +145,10 @@ describe("the redirect table (resolveGatePath)", () => {
   });
 
   it("drops a trailing slash before looking, so the page itself is not a redirect", () => {
-    expect(cleanGatePath("/hr/outpass-visitors/visitors/")).toBe("/hr/outpass-visitors/visitors");
-    expect(resolveGatePath(cleanGatePath("/hr/outpass-visitors/visitors/"))).toBe("/hr/outpass-visitors/visitors");
+    expect(cleanGatePath("/hr/outpass-visitors/visitors/desks/")).toBe("/hr/outpass-visitors/visitors/desks");
+    expect(resolveGatePath(cleanGatePath("/hr/outpass-visitors/visitors/desks/"))).toBe(
+      "/hr/outpass-visitors/visitors/desks",
+    );
   });
 });
 
@@ -150,13 +162,16 @@ describe("the pages and tabs a role may see (Account Management -> Roles & Permi
     expect(gateKey("outpass")).toBe("outpass_visitors.outpass");
     expect(gateKey("tea-break", "rule")).toBe("outpass_visitors.tea_break.rule");
     expect(gateKey("outpass", "in-out")).toBe("outpass_visitors.outpass.in_out");
+    expect(gateKey("outpass", "gates")).toBe("outpass_visitors.outpass.gates");
+    expect(gateKey("visitors", "visits")).toBe("outpass_visitors.visitors.visits");
+    expect(gateKey("visitors", "desks")).toBe("outpass_visitors.visitors.desks");
     expect(gateKey("outpass", "overview", "qr-submissions")).toBe("outpass_visitors.outpass.overview.qr_submissions");
   });
 
   it("lands on the first page, tab and section the role may see", () => {
     const noOutpass = hiding("outpass_visitors.outpass");
-    expect(resolveGatePath("/hr/outpass-visitors", noOutpass)).toBe("/hr/outpass-visitors/visitors");
-    expect(resolveGatePath("/hr/outpass-visitors/nope", noOutpass)).toBe("/hr/outpass-visitors/visitors");
+    expect(resolveGatePath("/hr/outpass-visitors", noOutpass)).toBe("/hr/outpass-visitors/visitors/visits");
+    expect(resolveGatePath("/hr/outpass-visitors/nope", noOutpass)).toBe("/hr/outpass-visitors/visitors/visits");
     const noOverview = hiding("outpass_visitors.outpass.overview");
     expect(resolveGatePath("/hr/outpass-visitors/outpass", noOverview)).toBe("/hr/outpass-visitors/outpass/requests");
     const noPasses = hiding("outpass_visitors.outpass.overview.passes");
@@ -165,6 +180,17 @@ describe("the pages and tabs a role may see (Account Management -> Roles & Permi
     );
     expect(resolveGatePath("/hr/outpass-visitors/tea-break", hiding("outpass_visitors.tea_break.records"))).toBe(
       "/hr/outpass-visitors/tea-break/rule",
+    );
+    // Manage Reception hidden: its address lands on Visitors; Visitors hidden: the page opens on Manage Reception
+    expect(resolveGatePath("/hr/outpass-visitors/visitors/desks", hiding("outpass_visitors.visitors.desks"))).toBe(
+      "/hr/outpass-visitors/visitors/visits",
+    );
+    expect(resolveGatePath("/hr/outpass-visitors/visitors", hiding("outpass_visitors.visitors.visits"))).toBe(
+      "/hr/outpass-visitors/visitors/desks",
+    );
+    // Manage Gates hidden: its address lands on the first tab the role may see
+    expect(resolveGatePath("/hr/outpass-visitors/outpass/gates", hiding("outpass_visitors.outpass.gates"))).toBe(
+      "/hr/outpass-visitors/outpass/overview/passes",
     );
   });
 
@@ -184,7 +210,7 @@ describe("the pages and tabs a role may see (Account Management -> Roles & Permi
 
   it("keeps a page named in the address (the route guard decides about it), and changes nothing when all may be seen", () => {
     const noOutpass = hiding("outpass_visitors.outpass");
-    expect(resolveGatePath("/hr/outpass-visitors/visitors", noOutpass)).toBe("/hr/outpass-visitors/visitors");
+    expect(resolveGatePath("/hr/outpass-visitors/visitors", noOutpass)).toBe("/hr/outpass-visitors/visitors/visits");
     expect(resolveGatePath("/hr/outpass-visitors", () => true)).toBe("/hr/outpass-visitors/outpass/overview/passes");
   });
 });

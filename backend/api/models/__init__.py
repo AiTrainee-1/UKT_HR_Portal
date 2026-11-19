@@ -159,12 +159,16 @@ from .gate import (
     OutpassRecord,
     OutpassRequest,
     GateDevice,
+    GateLoginAttempt,
+    GateSession,
     TeaBreakLog,
     TeaBreakRule,
     OutpassGateScan,
     Visitor,
     VisitorVisit,
     ReceptionDevice,
+    ReceptionLoginAttempt,
+    ReceptionSession,
 )
 from .md_assistant import (
     MdAssistantSettings,

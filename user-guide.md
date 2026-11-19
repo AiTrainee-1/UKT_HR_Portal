@@ -23,6 +23,8 @@
    - [4.11 Managing Director (MD) Portal & AI Assistant](#411-managing-director-md-portal--ai-assistant)
    - [4.12 SMS Control (Codes by SMS)](#412-sms-control-codes-by-sms)
    - [4.13 WhatsApp Control (how WhatsApp messages go out)](#413-whatsapp-control-how-whatsapp-messages-go-out)
+   - [4.14 Gate Pass, Visitors and Tea Break](#414-gate-pass-visitors-and-tea-break)
+   - [4.15 The Gate Monitor and the Reception Desk (screens for security and front-desk staff)](#415-the-gate-monitor-and-the-reception-desk-screens-for-security-and-front-desk-staff)
 5. [Employee Self-Service Module](#5-employee-self-service-module)
    - [5.1 Employee Dashboard](#51-employee-dashboard)
    - [5.2 Leave Management](#52-leave-management)
@@ -1775,6 +1777,172 @@ You can change these numbers and the quiet hours under **Feature Controls**, but
 - Do not raise the limits or switch quiet hours off to "catch up": a burst is exactly what gets the number restricted.
 - Do not switch the punch reminders back on for everyone at once.
 - Do not use WhatsApp for announcements to all staff: use the phone notifications (Mobile Messages) instead.
+
+### 4.14 Gate Pass, Visitors and Tea Break
+
+**What it's for:** everything that happens at the factory gates and the front desk. **Gate Pass** shows the gate passes employees ask for, who went out and came back, and the gates that scan them. **Visitors** shows who is on the premises, whom they came to see and when they left. **Tea Break** shows each employee's tea breaks against the allowed time. None of this changes attendance or payroll.
+
+**Where to find it:** sidebar → **Outpass / Visitors** → **Gate Pass**, **Visitors** or **Tea Break**. Each page, tab and button follows the role's permissions (View to look, Edit to change). An HR login that belongs to one branch only ever sees that branch's gates, desks, visitors, passes and tea breaks.
+
+**What changed on 18 Nov 2026**
+- The **Outpass** page is now called **Gate Pass**, and it has a new tab, **Manage Gates**, for the gate logins (they used to be in a small dialog). The reception desk logins moved to a new tab, **Visitors → Manage Reception**.
+- **One address for every gate:** `<your HRMS address>/gatemonitor`. The username and password HR gives a gate decide which gate the screen becomes. **One address for every reception desk:** `<your HRMS address>/reception-login`. The old per-gate links (`/gate-scanner/<code>`) now open `/gatemonitor`, and the old per-desk links (`/reception-login/<code>`) open the shared desk sign-in with the desk's name as a reminder. Bookmarks keep working.
+- **Every gate and desk screen must sign in once after the update** (sign-ins from before it are no longer accepted). After that a screen stays signed in.
+- HR can now **see a gate's or desk's password** (only roles given that right) and **sign a gate or desk out everywhere**. Passwords set before 18 Nov 2026 cannot be shown: set a new one if you need to see it.
+- Visitors now have a **check-in and a check-out**, HR and the desk can **register** visitors, and every page has filters and **Excel / PDF** files.
+
+#### Gate Pass
+
+Four tabs: **Overview**, **Requests**, **In/Out** and **Manage Gates**.
+
+**Overview.** Five figures (Passes, Waiting, Approved, Rejected, Gate QR submissions) for **Today**, **This Week** or **This Month**; click a figure to filter the list below. Under them, **Passes** (the passes that go through approval) and **Gate QR submissions** (exits logged through the branch's gate QR form). The **Gate QR** button shows the branch's printable gate QR, and **Manage Gates** takes you to the gates (when your role may open them).
+
+**Requests.** The gate passes employees asked for in the Mobile App or Employee Web App that wait for a decision. **Approve** and **Reject** appear only when the approval pipeline gives the decision to HR (User Management → Approval Workflow Control).
+
+**In/Out: who went out and who came back.** One row per pass that went out through a gate.
+- **Figures:** Went out, Came back, Still out, Overdue, Not returned, Average time out. Click one to show only those passes.
+- **Filters:** dates (Today, This week, This month, or your own From / To; the date is the day of the exit scan), **Gate** (the gate they left or came back through), **Department**, **Branch** (logins not tied to a branch), **Status**, **Employee** (roles that can see Employees), and a search box (name, code, destination or reason). **Clear filters** puts everything back. The filters stay in the address, so you can bookmark or share a filtered view.
+- **Status:** **Back** (scanned back in), **Still out** (out today, within the expected return time), **Overdue** (still out after the expected return time), **Not returned** (went out on an earlier day and never scanned back), **Left for the day** (an early-dismissal pass, not expected back).
+- **Click a row** for the pass: where and why, when it went out and came back, through which gates, how long they were out and by how much they passed the expected return time, who approved it and when, and **every scan at the gate**, refused ones included (for example a scan after the pass expired).
+- **Export** → Excel or PDF of exactly the rows the filters show, with the figures on top.
+
+**Manage Gates: every gate login in one place.**
+- **At the top:** the **gate monitor address** (`<your HRMS address>/gatemonitor`) with **Copy**, **Export gates** (a list of the gates, never their passwords), **Add gate**, and four figures: gates, signed in now, records today, denied today.
+- **On the left:** **All gates**, then a card for each gate (name, branch, on or off, username, last activity, records today). Search and the On / Off filter narrow the list.
+- **On the right, the gate you picked:** its switch (on / off), **Edit**, **Reset password**, **Sign out everywhere** and **Delete**; the **Gate login** box (username with **Copy**; the password as dots with **View** and **Copy**); **What this gate scans**; the screens it is **signed in on**; its numbers since it was added (exits, returns, tea breaks, denied, last sign-in, created by); and its **records**. On a phone the list comes first, then the gate.
+
+**Adding a gate, step by step**
+1. Press **Add gate**.
+2. Type the **Gate name** (for example "Main Gate"), pick the **Branch** (a branch login always adds to its own branch) and, if you like, a **Location** ("Spinning side, near the canteen").
+3. Type a **Username**: at least 3 characters, no spaces, not used by another gate (letter case does not matter: "Main.Gate" and "main.gate" are the same).
+4. Type a **Password** of at least 6 characters, or press **Suggest** for an easy-to-read one; **Show** lets you check it.
+5. Leave **Takes gate passes** and **Takes tea breaks** on, or switch off what this gate should not scan. Save.
+6. Give the security guard three things: the address `/gatemonitor`, the username and the password. They sign in once on the gate's computer or tablet.
+
+**Seeing a password (View).** Press **View** in the Gate login box; the password shows for 30 seconds, then turns back into dots (**Hide** hides it at once, **Copy** copies it).
+- Only roles that were **given "See gate passwords" on their own** can do this. It is off for every role until someone gives it in Account Management → Roles & Permissions; having Edit on Gate Pass is not enough. The Super Admin can always see them; the MD cannot.
+- **Every view is recorded** in Activity Logs (who looked, at which gate, when). The password itself is never written anywhere.
+- A gate whose password was set **before 18 Nov 2026** says "Not stored for gates created before 18 Nov 2026: set a new password to see it." Use **Reset password** to set a new one.
+
+**Reset password.** Type a new password (or **Suggest** one) and save. The new password is shown **once** with **Copy**, so you can give it to the gate. Every screen signed in as this gate is signed out at once (within about 20 seconds an open gate screen shows the sign-in page again) and must sign in with the new password. A reset also unlocks a gate that was locked after too many wrong tries.
+
+**Sign out everywhere.** Signs out every screen showing this gate (they go back to the sign-in page). Use it when a gate computer was replaced, lost, or someone signed in where they should not have. The password does not change.
+
+**Edit.** Change the name, branch, location, notes, username or what the gate scans. A **new username** signs the gate out everywhere (a change of capital letters only does not).
+
+**Switch off or Delete?**
+- **Switch off** (the switch in the gate's header): the gate is signed out at once and cannot sign in or scan until you switch it on again. Its records stay. Use this when a gate is closed for a while or its computer is being repaired.
+- **Delete**: cannot be undone. Its login stops working; its records stay but show "Removed gate" instead of its name. The Delete window offers **Switch off instead** while the gate is on. Delete only a gate that will never be used again.
+
+**What each gate scans.** Under **What this gate scans**: **Gate passes** (passes going out and coming back) and **Tea breaks** (tea-break codes, out and in). Switch one off and the gate monitor refuses that kind of code: "This gate does not take gate passes." / "This gate does not take tea-break scans." The refusal is still recorded as a **denied** record of this gate (a refused tea-break scan shows as a denied tea-break attempt, never as an exit).
+
+**Records from a gate, and from all gates.** Pick a gate (or **All gates**) to see what happened there: every exit and return scan, every tea break out and in, and every refused scan with the reason (Already scanned, Pass expired, Not approved, QR not recognised, Not gone out yet, Not allowed at this gate). Filters: dates (this month to start with), **Type** (Exit, Return, Tea break out, Tea break in), **Result** (Allowed, Denied), **Gate** (under All gates) and a search box (employee name, code or destination). Click a row for the details. **Export** gives Excel or PDF of the filtered records; with one gate chosen, the file is titled with its name.
+
+#### Visitors
+
+Two tabs: **Visitors** and **Manage Reception**.
+
+**The Visitors tab.**
+- **At the top:** **Visits** | **People** (two ways to look), **Visitor QR** (the branch's printable QR for visitors to check themselves in on their phone), **Manage Reception** (the desk logins) and **Register visitor** (roles with Edit).
+- **Figures:** Inside now, Visits today, Checked out today, Inside over 2 h, Repeat visitors. Click **Inside now** or **Checked out today** to show only those.
+- **Filters (Visits):** dates (today to start with, or this week, this month, your own From / To), **Status**, **Meeting** (the employee they came to see), **Department** (of that employee), **Checked in by** (QR self check-in, Registered by HR, Reception desk), **Branch** (logins not tied to a branch), and a search box (name, phone, company, host, purpose, vehicle or badge number).
+- **The list:** visitor, phone (partly hidden), whom they are meeting, purpose, in, out, time inside, status, and whether the host was told (email / WhatsApp). A **Check out** button sits on every visitor still inside.
+- **Click a row** for the whole visit: the full phone number, company, people, vehicle, ID proof, badge, notes, who checked them in and out, and their **visit history** (last 20 visits), with **Check out** while they are inside.
+- **People:** everyone who has visited, most recent first: phone (partly hidden), number of visits, last visit, whom they met last and whether they are inside now. Click a person to open their last visit and history.
+
+**What the statuses mean**
+- **Inside**: checked in today and not checked out yet.
+- **Checked out**: HR or a reception desk recorded the check-out.
+- **Left without check-out**: from an earlier day, never checked out. Visitors who check themselves in with the QR form have no check-out unless HR or the desk records one.
+
+**Registering a visitor (HR), step by step**
+1. Press **Register visitor**. A login not tied to a branch picks the **Branch** first.
+2. Type the visitor's **phone number** first. A visitor who came before is recognised and their name is filled in; someone who is **still inside** is pointed to their open visit instead (check them out before registering a new visit).
+3. Fill in the **name** (for a new visitor), and as needed **company**, **people** (how many came, 1-50), **vehicle number**, **ID proof**, **badge number** and **Aadhaar number** (12 digits, optional; shown hidden on screen and only as XXXX XXXX 1234 in files).
+4. **Is the visitor meeting a specific employee?** Yes: type the employee's phone number to look them up (the employee must work at this branch); that person is told by email and WhatsApp that the visitor has arrived. No: type whom they are meeting.
+5. Type the **purpose** of the visit, add **notes** if you like, and save. The visitor is checked in now.
+
+**Checking a visitor out.** Press **Check out** on the row (or in the visit's window), add a note if you like, and confirm. It cannot be undone, and a visit is checked out only once. A visitor still inside after midnight (for example a night delivery) can still be checked out, up to **24 hours after they checked in**.
+
+**Export.** Excel or PDF of exactly the visits the filters show: check-in and check-out times, visitor, phone, Aadhaar (only the last four digits), company, people, vehicle, host, department, purpose, status, time inside, who checked them in, branch; the totals on top.
+
+**Manage Reception: every reception desk login in one place.** It works like Manage Gates.
+- **At the top:** the **desk sign-in address** (`<your HRMS address>/reception-login`) with **Copy**, **Export desks**, **Add desk**, and four figures: desks, signed in now, check-ins today, check-outs today.
+- **Adding a desk:** **Add desk** → **Desk name**, **Branch**, **Location** (optional), **Username** (at least 3 characters, no spaces), **Password** (at least 6 characters, **Suggest** helps), **Notes** (optional). Give the front-desk staff the address `/reception-login`, the username and the password.
+- **A desk's page:** its switch, **Edit**, **Reset password** (the new password shown once), **Sign out everywhere**, **Delete** (with **Switch off instead**); the login box with **View** password (only roles given **"See desk passwords"** on their own; every view is recorded; desks set up before 18 Nov 2026 need a new password first); the screens it is signed in on; its numbers (check-ins, check-outs, today, all records, last sign-in, created).
+- **Records:** the visitors each desk checked in and checked out, with dates, **Type** (check-ins, check-outs), **Desk** (under All desks) and a search box (visitor, company, host or purpose). **Export** gives Excel or PDF (never phone or Aadhaar numbers).
+
+#### Tea Break
+
+Two tabs: **Records** and **Rule**. The page heading says how many minutes a break may take.
+
+**How a break is recorded.** Each employee has a permanent tea-break QR in the Mobile App and the Employee Web App. They show it at a gate that takes tea breaks: the first scan starts the break (**out**), the next one ends it (**in**). No approval is needed.
+
+**Records.**
+- **Breaks** | **By employee**: one row per break, or one row per employee.
+- **Figures:** Breaks, On break now, Over the allowed time (with the minutes over), Not returned, Average break, Employees. Click **On break now**, **Over ...** or **Not returned** to show only those breaks.
+- **Filters:** dates (today to start with), **Branch** (logins not tied to a branch), **Department**, **Employee**, **Status**, **Gate** (where the break started or ended) and a search box (employee name or code).
+- **Status:** **On break** (out, not back yet), **On time** (back within the allowed time), **Overtime** (back, but longer than allowed), **Not returned** (not scanned back within an hour). A break can also be marked **Long break** or **Left open**.
+- **Breaks view:** employee, department, out, back, the duration as a bar against the allowance, how many minutes over, status. **By employee:** breaks, total time, average, longest, overtime count, minutes over the allowance, not returned, on break now; click a column heading to sort, and a row to see that employee's breaks.
+- **Click a break** for the gate scans (out and back, through which gates), the time against the rule, that employee's numbers for the month and their recent breaks.
+- **Export** → Excel or PDF of the view you are looking at (breaks, or by employee), with the filters you set.
+
+**Rule.** How many minutes a tea break may take: one number for every branch. Saving it updates every list and figure on the page at once (on time and overtime are worked out from the rule as it stands). A role with View only sees the number.
+
+#### What NOT to do in Gate Pass, Visitors and Tea Break
+- Do not give **See gate passwords** or **See desk passwords** to every role. Give it only to the people who set up the gates and desks; every view is recorded.
+- Do not send gate or desk passwords in group chats. If a password may have leaked, **Reset password**: that also signs out every screen using the old one.
+- Do not delete a gate or desk to stop it for a while: **switch it off**. Delete only one that will never be used again.
+- Do not sign in to a gate or desk with an HR login, and do not use a gate or desk screen for HR work: each keeps its own sign-in.
+
+### 4.15 The Gate Monitor and the Reception Desk (screens for security and front-desk staff)
+
+These two screens run on a computer or tablet at a gate or at the front desk. They have their own sign-in (the username and password HR made on Manage Gates or Manage Reception), never an HR login, and they never lead to the HR pages.
+
+#### The Gate Monitor (security staff)
+
+**Signing in.**
+1. Open `<your HRMS address>/gatemonitor` on the gate's computer or tablet (an old gate scanner bookmark leads here too).
+2. Type the gate's **Username** and **Password** (**Show** shows what you typed) and press **Sign in**. Capital letters in the username do not matter.
+3. The screen stays signed in on this device until you sign out, renewing itself while it is in use (a screen left unused for 30 days has to sign in again).
+
+If it does not work, the screen says why:
+- **"Wrong username or password."** Check both, or ask HR (HR can look up the password or set a new one on Manage Gates).
+- **"This gate is switched off. Ask HR to switch it on."**
+- **"Too many wrong tries. Wait 15 minutes or ask HR to reset the password."** After 5 wrong passwords in 15 minutes the username is locked for 15 minutes; a password reset by HR unlocks it at once.
+
+**Scanning.** The screen shows **Scan a pass** with what this gate takes (for example "Gate passes and tea breaks"). Hold the QR code under the scanner: a USB or Bluetooth scanner scans from anywhere on the page (**Pair scanner** in the top bar connects one if needed). Without a scanner, type the code under **Or type the pass code** and press **Check**. The answer shows in a big banner with the employee's photo, name, code and department, and the screen says it aloud (**Voice** on / off in the top bar):
+- **Green: "Allowed - exit recorded"** or **"Welcome back - return recorded"**.
+- **Amber: "Tea break started"** or **"Tea break ended - 12 min"**.
+- **Red, refused,** with the reason: pass already used, pass expired, not approved, has not gone out yet, or **not taken at this gate** (HR switched that kind of scan off for this gate).
+- **Grey:** "Code not recognised" (scan again) or "No connection" (check the network and scan again).
+
+Every scan, refused ones too, is recorded.
+
+**Today at this gate.** Exits, returns, tea breaks and refused scans of today, who is still out, **Export today** (Excel or PDF), and **Latest scans** with **See all records**. The screen only ever shows **this gate's** records.
+
+**Gate records.** Press **Gate records** for any dates, type (exit, return, tea break out / in), result (allowed / denied) and a search box (employee name, code or destination). **Export** gives Excel or PDF of this gate's records only.
+
+**Signing out.** Press **Sign out** in the top bar and confirm. Only this screen is signed out (other screens of the same gate stay signed in) and it goes back to the sign-in page. Signing in again needs the username and password.
+
+**When HR changes something.** The screen goes back to the sign-in page by itself, with a message:
+- HR **reset the password**, **changed the username** or pressed **Sign out everywhere**: "This gate was signed out. Sign in again with the gate's username and password." (after a reset, use the new password).
+- HR **switched the gate off** (or deleted it): "This gate was switched off by HR. Ask HR to switch it on, then sign in again."
+- The sign-in ran out (unused for a long time): "This gate's sign-in ran out. Sign in again..."
+
+#### The Reception Desk (front-desk staff)
+
+**Signing in.** Open `<your HRMS address>/reception-login` (an old per-desk link leads here too and shows the desk's name), type the desk's **Username** and **Password** and press **Sign in**. The same messages as the gate monitor appear for a wrong password, a switched-off desk ("This desk is switched off. Ask HR to switch it on.") or too many wrong tries. The desk stays signed in while it is used.
+
+**The desk screen.**
+- **Figures:** Inside now, Today, Checked out today, This month (this desk's branch only).
+- **Visits:** today's visitors (or this week's, this month's): who, whom they are meeting, purpose, in and out, status, and whether the host was told. Every visitor still inside has a **Check out** button.
+- **Register visitor** (a walk-in): the same form HR uses, without the branch (always the desk's own). Type the phone number first: a returning visitor of this branch is recognised. Look up the employee they are meeting by phone so that person is told; the visitor is checked in now.
+- **Check out:** press **Check out**, add a note if you like, confirm. Up to 24 hours after check-in.
+- **Records:** any dates, status and a search box; **Export** gives Excel or PDF.
+- The desk only ever sees **its own branch's** visitors.
+
+**Signing out, and when HR changes something:** exactly as the gate monitor: **Sign out** signs out only this screen and returns to `/reception-login`; a password reset, a new username or **Sign out everywhere** brings the screen back to the sign-in page ("This desk was signed out..."), and switching the desk off says so.
 
 ---
 

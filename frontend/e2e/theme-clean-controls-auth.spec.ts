@@ -160,13 +160,27 @@ const PAGES: PageSpec[] = [
     ready: (p) => expect(p.getByText("Not Verified")).toBeVisible(),
     auth: "none",
   },
-  { name: "Gate scanner link", route: "/gate-scanner/nothing", ready: heading("Gate Scanner"), auth: "none" },
+  // the shared gate sign-in (/gatemonitor) and its console; the old gate scanner links lead there
+  { name: "Gate monitor sign-in", route: "/gatemonitor", ready: heading("Sign in to your gate"), auth: "none" },
   {
-    name: "Gate scanner sign-in",
-    route: () => `/gate-scanner/${gate.loginToken}`,
-    ready: heading("Gate Scanner"),
+    name: "Old gate scanner link",
+    route: "/gate-scanner/nothing",
+    ready: async (p) => {
+      await expect(p).toHaveURL(/\/gatemonitor\?gate=nothing$/);
+      await heading("Sign in to your gate")(p);
+    },
     auth: "none",
   },
+  {
+    name: "Old gate scanner sign-in link",
+    route: () => `/gate-scanner/${gate.loginToken}`,
+    ready: async (p) => {
+      await expect(p).toHaveURL(/\/gatemonitor\?gate=/);
+      await heading("Sign in to your gate")(p);
+    },
+    auth: "none",
+  },
+  { name: "Reception sign-in (shared)", route: "/reception-login", ready: heading("Reception"), auth: "none" },
   {
     name: "Reception sign-in",
     route: () => `/reception-login/${desk.loginToken}`,
@@ -174,14 +188,29 @@ const PAGES: PageSpec[] = [
     auth: "none",
   },
   {
-    name: "Gate scanner console",
+    name: "Gate monitor console",
+    route: "/gatemonitor/console",
+    storage: () => ({
+      gate_device_token: gate.session.token,
+      gate_device_id: String(gate.session.gateId),
+      gate_device_name: gate.session.gateName,
+    }),
+    // the console of the signed-in gate: its counters card (the old "Today's Gate-Out Report" table is gone)
+    ready: heading("Today at this gate"),
+    auth: "none",
+  },
+  {
+    name: "Old gate scanner console address",
     route: "/gate-scanner/console",
     storage: () => ({
       gate_device_token: gate.session.token,
       gate_device_id: String(gate.session.gateId),
       gate_device_name: gate.session.gateName,
     }),
-    ready: (p) => expect(p.getByText("Today's Gate-Out Report")).toBeVisible({ timeout: 15_000 }),
+    ready: async (p) => {
+      await expect(p).toHaveURL(/\/gatemonitor\/console$/);
+      await heading("Today at this gate")(p);
+    },
     auth: "none",
   },
   {

@@ -680,9 +680,9 @@ class DemoDataTests(TestCase):
         ]
         self.assertGreaterEqual(len(late), 1)
         self.assertTrue(all(v.aadhaar_number.startswith(common.VISITOR_TAG) for v in Visitor.objects.all()))
+        # A visit has a check-out since 18 Nov 2026 (HR or a reception desk records it); the demo never invents one.
         self.assertFalse(
-            any(hasattr(VisitorVisit, f) for f in ("left_at", "checked_out_at", "out_time")),
-            "visitors have no check-out",
+            VisitorVisit.objects.filter(checked_out_at__isnull=False).exists(), "the demo invents check-outs"
         )
 
     def test_outpasses_have_repeat_users_passes_never_returned_and_old_pending_requests(self):

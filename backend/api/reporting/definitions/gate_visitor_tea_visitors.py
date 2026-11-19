@@ -1,11 +1,12 @@
 """Gate reports on VISITORS (report group G9).
 
-Data: ``VisitorVisit`` (one row per physical visit, check-in only) + ``Visitor`` (identity, deduplicated by the
+Data: ``VisitorVisit`` (one row per physical visit) + ``Visitor`` (identity, deduplicated by the
 exact phone string). Visits are scoped to a branch through ``VisitorVisit.branch`` (the branch whose QR was
 scanned); a visit with no branch is visible to unscoped users only.
 
-What does NOT exist, and is therefore never faked: check-out time, visit duration, company, vehicle, photo, ID
-type. "Currently inside" cannot be derived.
+Check-out is recorded from 18 Nov 2026, only for visits checked out by HR or reception (QR self check-ins and
+older visits have none): the register shows it and the time inside when it exists and never fakes one. Company,
+vehicle and ID type are typed only on HR registrations and are not part of these reports; there is no photo.
 
 Privacy: the full Aadhaar number is never read into Python -- only ``RIGHT(TRIM(aadhaar), 4)`` is selected and
 printed as ``XXXX XXXX 1234``. Phone numbers appear only in the two per-person listings (register, repeat
@@ -22,7 +23,7 @@ from django.db.models.functions import Cast, Concat, Right, Trim
 from ..filters import branches, date_range, departments, employees, select, text
 from ..formatting import fmt_dt
 from ..registry import register
-from ..types import BADGE, DATE, DATETIME, INTEGER, TEXT, ColumnSpec, ReportResult, ReportSpec
+from ..types import BADGE, DATE, DATETIME, DURATION, INTEGER, TEXT, ColumnSpec, ReportResult, ReportSpec
 from . import gate_visitor_tea_common as C
 
 # ── shared filter definitions ────────────────────────────────────────────────
@@ -72,6 +73,13 @@ def _apply_notification(qs, mode):
     return qs
 
 
+def _minutes_inside(visited_at, checked_out_at):
+    """Whole minutes from check-in to check-out (as the HR Visitors page counts them); None without a check-out."""
+    if visited_at is None or checked_out_at is None:
+        return None
+    return max(0, int((checked_out_at - visited_at).total_seconds() // 60))
+
+
 def _run_register(ctx):
     qs = C.visit_queryset(ctx, with_visit_no=True)
     vtype = ctx.params.get("visitorType")
@@ -89,6 +97,7 @@ def _run_register(ctx):
         .values(
             "id",
             "visited_at",
+            "checked_out_at",
             "visitor__name",
             "visitor__phone",
             "aad_tail",
@@ -113,6 +122,8 @@ def _run_register(ctx):
         rows.append(
             {
                 "visitedAt": fmt_dt(r["visited_at"]),
+                "checkedOutAt": fmt_dt(r["checked_out_at"]),
+                "minutesInside": _minutes_inside(r["visited_at"], r["checked_out_at"]),
                 "visitorName": r["visitor__name"],
                 "phone": r["visitor__phone"],
                 "aadhaarMasked": C.mask_aadhaar(r["aad_tail"]),
@@ -150,7 +161,8 @@ def _run_register(ctx):
         {"label": "Host sent WhatsApp", "value": agg["whatsapped"], "format": "integer"},
     ]
     notes = [
-        "One row per check-in. The system records no check-out time, duration, company or vehicle, so none are shown.",
+        "One row per check-in. The check-out time and time inside are filled only for visits checked out by HR or "
+        "reception (recorded from 18 Nov 2026); QR self check-ins and older visits have none, so those cells are blank.",
         "Aadhaar numbers are masked to the last 4 digits in this report and both exports.",
         "'Why came' is only captured on a visitor's first visit, so it is blank for repeat visits.",
         "Host notification: 'Not sent' means it was not sent OR could not be sent (no email/phone on file, channel "
@@ -202,6 +214,8 @@ register(
         ),
         columns=(
             ColumnSpec("visitedAt", "Visited at", DATETIME, 2.1),
+            ColumnSpec("checkedOutAt", "Checked out at", DATETIME, 2.1),
+            ColumnSpec("minutesInside", "Time inside", DURATION, 1.0),
             ColumnSpec("visitorName", "Visitor", TEXT, 1.6),
             ColumnSpec("phone", "Phone", TEXT, 1.5),
             ColumnSpec("aadhaarMasked", "Aadhaar", TEXT, 1.8),

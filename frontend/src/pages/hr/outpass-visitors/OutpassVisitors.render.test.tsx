@@ -74,40 +74,47 @@ const TEA = "/hr/outpass-visitors/tea-break";
 const VISITORS = "/hr/outpass-visitors/visitors";
 
 describe("the three first-level addresses", () => {
-  it("Outpass opens on its first tab, with its heading and no trace of the other two pages", async () => {
+  it("Gate Pass opens on its first tab, with its heading and no trace of the other two pages", async () => {
     mountPage(OUTPASS);
-    expect(headings()).toEqual(["Outpass"]);
+    expect(headings()).toEqual(["Gate Pass"]);
     await waitFor(() => ready("outpass-passes"), "the passes");
     expect(pathname()).toBe(`${OUTPASS}/overview/passes`);
     expect(pillLabels("outpass-subtabs").map((l) => l.replace(/\s*\(\d+\)$/, ""))).toEqual([
       "Overview",
       "Requests",
       "In/Out",
+      "Manage Gates",
     ]);
     expect(q("tea-break-tab")).toBeNull();
     expect(q("visitors-list")).toBeNull();
   });
 
-  it("Visitors keeps its one list: no tab strip, no nested strip, and it stays at its address", async () => {
+  it("Visitors opens on its Visitors tab: the Visitors / Manage Reception strip, then the list", async () => {
     mountPage(VISITORS);
     expect(headings()).toEqual(["Visitors"]);
     await waitFor(() => ready("visitors-list"), "the visitors");
-    expect(pathname()).toBe(VISITORS);
+    expect(pathname()).toBe(`${VISITORS}/visits`);
     expect(text(q("visitors-list"))).toContain("Visitor One");
-    expect(document.body.querySelector('[data-testid$="subtabs"]')).toBeNull();
+    expect(pillLabels("visitors-subtabs")).toEqual(["Visitors", "Manage Reception"]);
+    // Visits | People is a switch in the address (?view=), not a tab strip with addresses of its own
+    expect(q("visitors-view")).not.toBeNull();
     expect(document.body.querySelector('[data-testid$="-nested"]')).toBeNull();
+    expect(q("visitors-desks")).toBeNull();
   });
 
-  it("Tea Break opens on Records, with the tiles above the two tabs", async () => {
+  it("Tea Break opens on Records: the two tabs, then the tiles, the filters and the list", async () => {
     mountPage(TEA);
     expect(headings()).toEqual(["Tea Break"]);
     await waitFor(() => ready("tea-break-list"), "the records");
     expect(pathname()).toBe(`${TEA}/records`);
     expect(pillLabels("tea-break-subtabs")).toEqual(["Records", "Rule"]);
-    // the tiles (Today / This Week / This Month) come before the strip in the page
-    const strip = must("tea-break-subtabs");
-    const tiles = [...document.body.querySelectorAll("p")].find((p) => text(p) === "This Month")!;
-    expect(tiles.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // the strip, then the period's tiles, the one filter row and the list, in that order
+    const parts = ["tea-break-subtabs", "tea-break-tiles", "tea-break-filters", "tea-break-list"].map(must);
+    for (let i = 1; i < parts.length; i += 1) {
+      expect(parts[i - 1].compareDocumentPosition(parts[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    // the subtitle states the rule
+    await waitFor(() => text(q("tea-break-allowed")) === "Allowed: 10 min.", "the allowed minutes");
   });
 
   it("the bare /hr/outpass-visitors is Outpass", async () => {
@@ -136,7 +143,11 @@ describe("a role that may see only some of it (Account Management -> Roles & Per
     mountPage(OUTPASS);
     await waitFor(() => pathname() === `${OUTPASS}/overview/qr-submissions`, "the first section it may see");
     await waitFor(() => ready("outpass-qr-submissions"), "the QR submissions");
-    expect(pillLabels("outpass-subtabs").map((l) => l.replace(/\s*\(\d+\)$/, ""))).toEqual(["Overview", "Requests"]);
+    expect(pillLabels("outpass-subtabs").map((l) => l.replace(/\s*\(\d+\)$/, ""))).toEqual([
+      "Overview",
+      "Requests",
+      "Manage Gates",
+    ]);
     expect(nestedLabels("outpass-overview-nested").map((l) => l.replace(/\s*\(?\d+\)?$/, ""))).toEqual([
       "Gate QR submissions",
     ]);
@@ -145,7 +156,7 @@ describe("a role that may see only some of it (Account Management -> Roles & Per
   it("the bare address lands on the first page it may see", async () => {
     h.user.current = role({ outpass_visitors: "edit", "outpass_visitors.outpass": "hidden" });
     mountPage("/hr/outpass-visitors");
-    await waitFor(() => pathname() === VISITORS, "Visitors");
+    await waitFor(() => pathname() === `${VISITORS}/visits`, "Visitors");
     expect(headings()).toEqual(["Visitors"]);
   });
 
@@ -162,19 +173,34 @@ describe("a role that may see only some of it (Account Management -> Roles & Per
     expect(world.gets.some((u) => u.startsWith("/api/tea-break"))).toBe(false);
   });
 
-  it("has no Manage Gates without 'Gate scanner devices', and a list that cannot be changed with View only", async () => {
+  it("has no Manage Gates without 'Gate scanner devices'; with it, Overview links to the Manage Gates tab", async () => {
+    // the Overview's Manage Gates button (it opens the tab), not the Manage Gates tab of the strip
+    const overviewButton = () =>
+      [...(q("outpass-overview")?.querySelectorAll("button") ?? [])].find((b) => text(b).includes("Manage Gates")) ??
+      null;
     h.user.current = role({ outpass_visitors: "edit", "outpass_visitors.outpass.gate_devices": "hidden" });
     mountPage(OUTPASS);
     await waitFor(() => ready("outpass-passes"), "the passes");
     expect(button("Manage Gates")).toBeNull();
+    // the Manage Gates tab follows "Gate scanner devices" while the role sets nothing on it
+    expect(pillLabels("outpass-subtabs").map((l) => l.replace(/\s*\(\d+\)$/, ""))).not.toContain("Manage Gates");
     expect(world.gets.some((u) => u.startsWith("/api/gate-devices"))).toBe(false);
     unmountPage();
     h.user.current = role({ outpass_visitors: "edit", "outpass_visitors.outpass.gate_devices": "view" });
     mountPage(OUTPASS);
     await waitFor(() => ready("outpass-passes"), "the passes");
-    click(button("Manage Gates"));
-    await waitFor(() => button("Create Gate") !== null, "the dialog");
-    expect(button("Create Gate")!.disabled).toBe(true);
+    expect(pillLabels("outpass-subtabs").map((l) => l.replace(/\s*\(\d+\)$/, ""))).toContain("Manage Gates");
+    // a link, not an edit: a View-only role may follow it (the page there locks what it may not change)
+    expect(overviewButton()!.disabled).toBe(false);
+    click(overviewButton());
+    expect(pathname()).toBe(`${OUTPASS}/gates`);
+  });
+
+  it("sends a role without 'Gate scanner devices' away from the Manage Gates address", async () => {
+    h.user.current = role({ outpass_visitors: "edit", "outpass_visitors.outpass.gate_devices": "hidden" });
+    mountPage(`${OUTPASS}/gates`);
+    await waitFor(() => pathname() === `${OUTPASS}/overview/passes`, "the first tab it may see");
+    expect(q("outpass-gates")).toBeNull();
   });
 });
 
@@ -188,7 +214,9 @@ describe("the redirects", () => {
     [TEA, `${TEA}/records`],
     [`${TEA}/nope`, `${TEA}/records`],
     [`${TEA}/rule/deeper`, `${TEA}/rule`],
-    [`${VISITORS}/anything`, VISITORS],
+    [VISITORS, `${VISITORS}/visits`],
+    [`${VISITORS}/anything`, `${VISITORS}/visits`],
+    [`${VISITORS}/desks/7`, `${VISITORS}/desks`],
   ];
   it.each(cases)("%s lands on %s", async (from, to) => {
     mountPage(from);
@@ -240,14 +268,28 @@ describe("Outpass: each tab renders only its section", () => {
     expect(document.body.querySelector('[data-testid$="-nested"]')).toBeNull();
   });
 
-  it("In/Out: only the exits", async () => {
+  it("In/Out: only the exits, from its own endpoints", async () => {
     mountPage(`${OUTPASS}/in-out`);
     await waitFor(() => ready("outpass-in-out"), "the exits");
-    expect(text(q("outpass-in-out"))).toContain("Employee 3");
-    expect(text(q("outpass-in-out"))).toContain("(still out)");
+    await waitFor(() => text(q("outpass-in-out")).includes("Arun P"), "today's exits");
+    expect(text(q("outpass-in-out"))).toContain("Meena S");
+    expect(text(q("outpass-in-out"))).toContain("Overdue");
     expect(q("outpass-passes")).toBeNull();
     expect(q("outpass-requests")).toBeNull();
     expect(q("outpass-overview")).toBeNull();
+    // the Requests module's whole list is not read here any more
+    expect(world.gets).not.toContain("/api/outpass-requests");
+  });
+
+  it("Manage Gates: its own address and panel, and no Overview", async () => {
+    mountPage(`${OUTPASS}/gates`);
+    await waitFor(() => q("outpass-gates") !== null, "the Manage Gates panel");
+    expect(pathname()).toBe(`${OUTPASS}/gates`);
+    expect(headings()).toEqual(["Gate Pass"]);
+    expect(selected("Manage Gates")).toBe(true);
+    expect(q("outpass-overview")).toBeNull();
+    expect(q("outpass-passes")).toBeNull();
+    expect(q("outpass-in-out")).toBeNull();
   });
 
   it("a section that is not on screen asks the server for nothing", async () => {
@@ -322,9 +364,9 @@ describe("pill counts", () => {
       "Passes(4)",
       "GateQRsubmissions(2)",
     ]);
-    // 1 request HR can decide (the other waits for a HOD); 2 gate exits
+    // 1 request HR can decide (the other waits for a HOD); 2 people still out today (In/Out's own summary)
     const labels = pillLabels("outpass-subtabs").map((l) => l.replace(/\s+/g, ""));
-    expect(labels).toEqual(["Overview", "Requests(1)", "In/Out(2)"]);
+    expect(labels).toEqual(["Overview", "Requests(1)", "In/Out(2)", "ManageGates"]);
   });
 
   it("follow the filter: the passes and the QR submissions of the chosen range", async () => {
@@ -350,7 +392,7 @@ describe("pill counts", () => {
     expect(world.calls).toEqual([
       { method: "PUT", url: "/api/outpass-requests/1/hr-status", body: { status: "approved" } },
     ]);
-    expect(h.toast).toHaveBeenCalledWith({ title: "Outpass approved" });
+    expect(h.toast).toHaveBeenCalledWith({ title: "Gate pass approved" });
     expect(text(q("outpass-requests"))).not.toContain("Employee 1");
     expect(text(q("outpass-requests"))).toContain("Waiting for HOD");
   });
@@ -378,24 +420,29 @@ describe("Tea Break", () => {
     expect(world.calls[0]).toEqual({ method: "PUT", url: "/api/tea-break/rule", body: { allowedMinutes: 10 } });
   });
 
-  it("the range and the Overtime filter are still set after a trip to Rule", async () => {
+  it("the dates and the status are still set after a trip to Rule (they live in the address)", async () => {
     mountPage(`${TEA}/records`);
     await waitFor(() => ready("tea-break-list"), "the records");
-    click(tab("This Week"));
-    const overtime = () => [...document.body.querySelectorAll("button")].find((b) => text(b) === "Overtime")!;
-    click(overtime());
+    click(must("tea-dates-week"));
+    await waitFor(() => !!q("tea-tile-overtime"), "the tiles");
+    click(must("tea-tile-overtime"));
     await waitFor(() => !text(q("tea-break-list")).includes("Tea Ontime"), "the filtered list");
     expect(text(q("tea-break-list"))).toContain("Tea Overtime");
+    expect(here()).toBe(`${TEA}/records?range=week&status=overtime`);
 
     click(tab("Rule"));
-    expect(pathname()).toBe(`${TEA}/rule`);
+    expect(here()).toBe(`${TEA}/rule?range=week&status=overtime`);
     await waitFor(() => ready("tea-break-rule"), "the rule");
     click(tab("Records"));
     await waitFor(() => ready("tea-break-list"), "the records");
-    expect(selected("This Week")).toBe(true);
+    expect(must("tea-dates-week").getAttribute("aria-pressed")).toBe("true");
+    expect(must("tea-tile-overtime").getAttribute("aria-pressed")).toBe("true");
     await waitFor(() => text(q("tea-break-list")).includes("Tea Overtime"), "the list");
     expect(text(q("tea-break-list"))).not.toContain("Tea Ontime");
-    expect(overtime().className).toContain("text-white");
+    // the list itself (not its summary or options) was asked for with both
+    const list = world.gets.filter((u) => u.split("?")[0] === "/api/tea-break/records").at(-1);
+    expect(list).toContain("status=overtime");
+    expect(list).toContain("from=2026-10-12");
   });
 
   it("the records of a tab that is not on screen are not asked for", async () => {
@@ -432,7 +479,7 @@ describe("the keyboard", () => {
   it("the tab strip is made of real buttons, so Tab reaches them and Enter or Space opens one", async () => {
     mountPage(`${OUTPASS}/requests`);
     await waitFor(() => ready("outpass-requests"), "the requests");
-    for (const label of ["Overview", "Requests", "In/Out"]) expect(tab(label).tagName).toBe("BUTTON");
+    for (const label of ["Overview", "Requests", "In/Out", "Manage Gates"]) expect(tab(label).tagName).toBe("BUTTON");
   });
 });
 

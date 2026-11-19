@@ -70,6 +70,18 @@ describe("who may open Outpass / Visitors", () => {
     }
   });
 
+  it("Manage Reception follows 'Reception desk devices' while the role sets nothing on it; Visitors does not", () => {
+    const desks = gateTabPath("visitors", "desks");
+    const visits = gateTabPath("visitors", "visits");
+    expect(moduleForPath(desks)).toBe("outpass_visitors.visitors.desks");
+    const noDesks = hr({ outpass_visitors: "edit", "outpass_visitors.visitors.reception_devices": "hidden" });
+    expect(canViewRoute(noDesks, desks, moduleForPath(desks))).toBe(false);
+    expect(canViewRoute(noDesks, visits, moduleForPath(visits))).toBe(true);
+    const viewDesks = hr({ outpass_visitors: "edit", "outpass_visitors.visitors.reception_devices": "view" });
+    expect(isRouteViewOnly(viewDesks, desks, moduleForPath(desks))).toBe(true);
+    expect(isRouteViewOnly(viewDesks, visits, moduleForPath(visits))).toBe(false);
+  });
+
   it("lets an administrator open every tab", () => {
     const admin: User = { role: "hr", employeeId: null, isSuperAdmin: true, permissions: {} };
     for (const path of everyPath) expect(canViewRoute(admin, path, "outpass_visitors"), path).toBe(true);

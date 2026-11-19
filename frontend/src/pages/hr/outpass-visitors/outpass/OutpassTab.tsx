@@ -1,111 +1,38 @@
 import { useState } from "react";
-import { NestedTabs } from "@/components/ui/nested-tabs";
-import { SubtabBar } from "@/components/ui/subtab-nav";
-import {
-  useListOutpassRequests,
-  useOutpassQr,
-  useOutpassRecords,
-  useOutpassSummary,
-  type GateRange,
-} from "@/lib/api-client/custom-hooks";
+import { SubtabBar, type SubtabOwnKeys } from "@/components/ui/subtab-nav";
+import { useInOutSummary, useListOutpassRequests, type GateRange } from "@/lib/api-client/custom-hooks";
 import { hrCanAct } from "@/lib/approval-workflow";
 import { inGateRange } from "@/lib/gate-range";
-import { Gate, useLevel, visibleItems } from "@/lib/tab-access";
-import { GateDevicesDialog } from "../GateDevicesDialog";
-import { GateQrDialog } from "../GateQrDialog";
-import { gateKey, gatePagePath, gateTabPath, nestedOf, subsOf, type GateTab } from "../routes";
-import { BranchPicker, KpiRow, PAGE_SIZE, RangeFilter, useSelectedBranch } from "../shared";
-import { InOutSection } from "./InOutSection";
-import { ApprovedPassesSection } from "./PassesSection";
-import { QrSubmissionsSection } from "./QrSubmissionsSection";
+import { useLevel, visibleItems } from "@/lib/tab-access";
+import { GATE_PAGE_DEFAULTS } from "../gates/GateRecords";
+import { ManageGatesPage } from "../gates/ManageGatesPage";
+import { istDateKey } from "../kit";
+import { gateKey, gatePagePath, nestedOf, subsOf } from "../routes";
+import { useSelectedBranch } from "../shared";
+import { IN_OUT_DEFAULTS, InOutSection } from "./InOutSection";
+import { OverviewSection, type PassFilters } from "./OverviewSection";
 import { OutpassRequestsSection } from "./RequestsSection";
 
 const OUTPASS_BASE = gatePagePath("outpass");
-const OVERVIEW_BASE = gateTabPath("outpass", "overview");
 
-type Branches = ReturnType<typeof useSelectedBranch>;
+// In/Out and Manage Gates keep their lists' filters in the address under the same names for different lists (`q`, the
+// dates, `gateId`, `page`): a switch leaves each tab's keys with it and gives them back when it is opened again, so
+// In/Out's search never filters the gate records (or the other way round). Overview and Requests own no keys.
+const OWN_KEYS: SubtabOwnKeys = {
+  "in-out": [...Object.keys(IN_OUT_DEFAULTS), "page"],
+  gates: [...Object.keys(GATE_PAGE_DEFAULTS), "page"],
+};
 
-/**
- * Overview: the gate QR's headline tiles, the Today / This Week / This Month filter with the gate tools, and under them one
- * section at a time: the passes that go through approval, or the exits logged through the QR form. The tiles and the filter
- * stay above the two tabs, so the range you picked is still there when you switch.
- */
-function Overview({
-  nested,
-  sections,
-  isBranchScoped,
-  branch,
-  range,
-  onRange,
-  page,
-  setPage,
-  passesCount,
-}: {
-  nested: string;
-  /** The nested subtabs this role may see (each has its own key and address). */
-  sections: readonly GateTab[];
-  isBranchScoped: boolean;
-  branch: Branches;
-  range: GateRange;
-  onRange: (range: GateRange) => void;
-  page: number;
-  setPage: (page: number) => void;
-  passesCount: number | undefined;
-}) {
-  const { branches, branchId, setBranchId } = branch;
-  const effectiveBranchId = isBranchScoped ? undefined : branchId ? Number(branchId) : undefined;
-  const { data: qr } = useOutpassQr(effectiveBranchId, { enabled: isBranchScoped || effectiveBranchId !== undefined });
-  const { data: summary, isLoading: summaryLoading } = useOutpassSummary();
-  const { data: records, isLoading: recordsLoading } = useOutpassRecords(range, page, PAGE_SIZE);
-
-  return (
-    <div className="space-y-4" data-testid="outpass-overview">
-      <KpiRow summary={summary} isLoading={summaryLoading} />
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <RangeFilter value={range} onChange={onRange} />
-        <div className="flex flex-wrap items-center gap-2">
-          {!isBranchScoped && <BranchPicker branches={branches} branchId={branchId} setBranchId={setBranchId} />}
-          <Gate k="outpass_visitors.outpass.gate_devices">
-            <GateDevicesDialog isBranchScoped={isBranchScoped} branches={branches} defaultBranchId={branchId} />
-          </Gate>
-          <GateQrDialog kind="outpass" token={qr?.token} branchName={qr?.branchName} />
-        </div>
-      </div>
-
-      {sections.length === 0 ? (
-        <p
-          className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground"
-          data-testid="nothing-open"
-        >
-          Neither section of the overview is open to your role.
-        </p>
-      ) : (
-        <NestedTabs
-          base={OVERVIEW_BASE}
-          value={nested}
-          testId="outpass-overview-nested"
-          label="Sections of the Outpass overview"
-          items={sections.map((n) => ({
-            ...n,
-            count: n.value === "passes" ? passesCount : records?.total,
-          }))}
-        >
-          {nested === "passes" ? (
-            <ApprovedPassesSection key={range} range={range} />
-          ) : (
-            <QrSubmissionsSection range={range} records={records} isLoading={recordsLoading} setPage={setPage} />
-          )}
-        </NestedTabs>
-      )}
-    </div>
-  );
+// Manage Gates: the gates, their logins, settings and records (gates/ManageGatesPage.tsx, root test id "outpass-gates").
+function ManageGatesPanel() {
+  return <ManageGatesPage />;
 }
 
 /**
- * The Outpass page: three subtabs, each with its own address: Overview (with nested Passes / Gate QR submissions), Requests
- * (the pending ones to decide) and In/Out (every gate exit and return). The range, the branch and the page of the QR
- * submissions live here, above the panels, so switching tabs keeps them.
+ * The Gate Pass page: four subtabs, each with its own address: Overview (with nested Passes / Gate QR submissions),
+ * Requests (the pending ones to decide), In/Out (every gate exit and return) and Manage Gates (the gates and their
+ * logins). The range, the branch, the page of the QR submissions and the Passes search live here, above the panels, so
+ * switching tabs keeps them (In/Out and Manage Gates keep their own filters in the address, see OWN_KEYS).
  */
 export function OutpassTab({
   isBranchScoped,
@@ -119,6 +46,7 @@ export function OutpassTab({
 }) {
   const [range, setRange] = useState<GateRange>("today");
   const [page, setPage] = useState(1);
+  const [passFilters, setPassFilters] = useState<PassFilters>({ status: "", q: "" });
   const branch = useSelectedBranch(isBranchScoped);
   // only the subtabs (and Overview sections) this role may see are offered; the page lands on the first of them (routes.ts)
   const level = useLevel();
@@ -126,19 +54,29 @@ export function OutpassTab({
   const sectionsOf = (next: string) =>
     visibleItems(nestedOf("outpass", next), (n) => gateKey("outpass", next, n.value), level);
   const sections = sectionsOf("overview");
+  const visible = (value: string) => subs.some((s) => s.value === value);
   const changeRange = (next: GateRange) => {
     setRange(next);
     setPage(1);
   };
 
   // One identical call each shares its cache with the panel that lists them: here they only put a live count on the pills.
-  const { data: pendingRequests } = useListOutpassRequests("pending");
-  const { data: allRequests } = useListOutpassRequests();
+  // (Both read the Requests module's list; In/Out and Manage Gates have data of their own and do not need the whole list.)
+  const onOverview = sub !== "requests" && sub !== "in-out" && sub !== "gates";
+  const { data: pendingRequests } = useListOutpassRequests("pending", { enabled: visible("requests") });
+  const { data: allRequests } = useListOutpassRequests(undefined, { enabled: onOverview });
   const pending = pendingRequests ? pendingRequests.filter((r) => hrCanAct(r.approval, true)).length : undefined;
-  const exits = allRequests ? allRequests.filter((r) => !!r.exitedAt).length : undefined;
   const passesCount = allRequests ? allRequests.filter((r) => inGateRange(r.createdAt, range)).length : undefined;
+  // In/Out counts the people still out right now (today's figures; the same call as In/Out's tiles on a fresh visit)
+  const today = istDateKey();
+  const { data: outToday } = useInOutSummary(new URLSearchParams({ from: today, to: today }).toString(), {
+    enabled: visible("in-out"),
+  });
 
-  const counts: Record<string, number | undefined> = { requests: pending || undefined, "in-out": exits };
+  const counts: Record<string, number | undefined> = {
+    requests: pending || undefined,
+    "in-out": outToday?.stillOut || undefined,
+  };
 
   return (
     <div className="space-y-4" data-testid="outpass-tab">
@@ -148,14 +86,17 @@ export function OutpassTab({
         testId="outpass-subtabs"
         items={subs.map((s) => ({ ...s, count: counts[s.value] }))}
         landing={(next) => sectionsOf(next)[0]?.value}
+        ownKeys={OWN_KEYS}
       />
 
       {sub === "requests" ? (
         <OutpassRequestsSection />
       ) : sub === "in-out" ? (
-        <InOutSection />
+        <InOutSection isBranchScoped={isBranchScoped} />
+      ) : sub === "gates" ? (
+        <ManageGatesPanel />
       ) : (
-        <Overview
+        <OverviewSection
           nested={nested ?? sections[0]?.value ?? ""}
           sections={sections}
           isBranchScoped={isBranchScoped}
@@ -165,6 +106,9 @@ export function OutpassTab({
           page={page}
           setPage={setPage}
           passesCount={passesCount}
+          passFilters={passFilters}
+          onPassFilters={(patch) => setPassFilters((current) => ({ ...current, ...patch }))}
+          canManageGates={visible("gates")}
         />
       )}
     </div>

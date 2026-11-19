@@ -11,14 +11,30 @@ import type {
   VisitorRecordRow,
 } from "@/lib/api-client/custom-hooks";
 import OutpassVisitors from "../OutpassVisitors";
+import { handler as desksHandler } from "./harness-desks";
+import { handler as gatesHandler } from "./harness-gates";
+import { handler as inOutHandler } from "./harness-inout";
+import { copy, NOW, type SliceHandler, type World } from "./harness-kit";
+import { handler as teaHandler } from "./harness-tea";
+import { handler as visitorsHandler } from "./harness-visitors";
 
-// Shared by the render test of Outpass / Visitors / Tea Break: a fake server behind `customFetch`, the page mounted at a real
-// address, and the small DOM helpers the other render tests of the repo use. (The `vi.mock` calls stay in the test file:
-// vitest only hoists them there.) The clock is October 14, 2026 (see `freezeClock`), a Wednesday.
+export { copy, harnessError, NOW, paginate, sliceState } from "./harness-kit";
+export type { Call, SliceHandler, World } from "./harness-kit";
 
-export type Call = { method: string; url: string; body: Record<string, unknown> };
+// Shared by the render test of Gate Pass / Visitors / Tea Break: a fake server behind `customFetch`, the page mounted at a
+// real address, and the small DOM helpers the other render tests of the repo use. (The `vi.mock` calls stay in the test
+// file: vitest only hoists them there.) The clock is October 14, 2026 (see `freezeClock`), a Wednesday.
+//
+// Each rebuilt part registers its own answers in its own file (harness-gates.ts: Manage Gates, harness-inout.ts: In/Out,
+// harness-visitors.ts: Visitors, harness-tea.ts: Tea Break), so the four never edit this one. Every request is offered to
+// them first, in that order: the first that returns something other than undefined answers it (a part may take over an
+// address answered below, e.g. /api/tea-break/records with its new filters); undefined leaves it to the answers below; a
+// request nobody answers is recorded in `world.unexpected` and fails the test. The world, the handler's shape and the
+// helpers a part uses (sliceState, paginate, copy, harnessError) are in harness-kit.ts.
 
-const NOW = "2026-10-14T06:00:00Z";
+// (harness-desks.ts: Visitors -> Manage Reception)
+const SLICES: readonly SliceHandler[] = [gatesHandler, inOutHandler, visitorsHandler, desksHandler, teaHandler];
+
 const iso = (day: string, time = "05:00:00") => `2026-10-${day}T${time}Z`;
 
 const approval = (hr: boolean) =>
@@ -126,18 +142,8 @@ export const TEA_ROWS: TeaBreakRecord[] = [
   teaRow(3, "not_returned", "Tea Missing"),
 ];
 
-export type World = {
-  requests: OutpassRequestItem[];
-  rule: { allowedMinutes: number; updatedAt: string };
-  calls: Call[];
-  /** Every `GET` of the page's lists, by path with its query string, in order. */
-  gets: string[];
-  unexpected: string[];
-};
-
 const page = <T,>(items: T[]): PaginatedRecords<T> => ({ items, total: items.length, page: 1, pageSize: 20 });
 const summary: GateSummary = { today: 2, thisWeek: 3, thisMonth: 5 };
-const copy = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 /** Makes `fetch` answer like the server for everything these three pages ask for. */
 export function installWorld(fetch: Mock): World {
@@ -147,6 +153,7 @@ export function installWorld(fetch: Mock): World {
     calls: [],
     gets: [],
     unexpected: [],
+    state: {},
   };
   fetch.mockReset();
   fetch.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
@@ -154,10 +161,16 @@ export function installWorld(fetch: Mock): World {
     const [path, query = ""] = url.split("?");
     const qs = new URLSearchParams(query);
     const range = qs.get("range") ?? "today";
+    const body = typeof init?.body === "string" && init.body ? (JSON.parse(init.body) as Record<string, unknown>) : {};
     if (method !== "GET") {
-      world.calls.push({ method, url, body: init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : {} });
+      world.calls.push({ method, url, body });
     } else {
       world.gets.push(url);
+    }
+    // the rebuilt parts first (see SliceHandler)
+    for (const slice of SLICES) {
+      const answer = slice(method, path, qs, body, world);
+      if (answer !== undefined) return answer;
     }
     const hrStatus = /^\/api\/outpass-requests\/(\d+)\/hr-status$/.exec(path);
     if (method === "PUT" && hrStatus) {

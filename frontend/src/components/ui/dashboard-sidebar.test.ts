@@ -133,24 +133,31 @@ describe("the Outpass / Visitors group", () => {
   it("keeps its three entries, in this order, with these addresses", () => {
     expect(gate().label).toBe("Outpass / Visitors");
     expect(gate().children?.map((c) => [c.label, c.path])).toEqual([
-      ["Outpass", "/hr/outpass-visitors/outpass"],
+      ["Gate Pass", "/hr/outpass-visitors/outpass"],
       ["Visitors", "/hr/outpass-visitors/visitors"],
       ["Tea Break", "/hr/outpass-visitors/tea-break"],
     ]);
   });
 
   it("lights the entry of the page being viewed, on its tabs and nested tabs too, and only that entry", () => {
-    expect(lit("/hr/outpass-visitors/outpass")).toEqual(["Outpass"]);
-    expect(lit("/hr/outpass-visitors/outpass/overview/passes")).toEqual(["Outpass"]);
-    expect(lit("/hr/outpass-visitors/outpass/overview/qr-submissions")).toEqual(["Outpass"]);
-    expect(lit("/hr/outpass-visitors/outpass/requests")).toEqual(["Outpass"]);
-    expect(lit("/hr/outpass-visitors/outpass/in-out")).toEqual(["Outpass"]);
+    expect(lit("/hr/outpass-visitors/outpass")).toEqual(["Gate Pass"]);
+    expect(lit("/hr/outpass-visitors/outpass/overview/passes")).toEqual(["Gate Pass"]);
+    expect(lit("/hr/outpass-visitors/outpass/overview/qr-submissions")).toEqual(["Gate Pass"]);
+    expect(lit("/hr/outpass-visitors/outpass/requests")).toEqual(["Gate Pass"]);
+    expect(lit("/hr/outpass-visitors/outpass/in-out")).toEqual(["Gate Pass"]);
+    expect(lit("/hr/outpass-visitors/outpass/gates")).toEqual(["Gate Pass"]);
     expect(lit("/hr/outpass-visitors/visitors")).toEqual(["Visitors"]);
+    expect(lit("/hr/outpass-visitors/visitors/visits")).toEqual(["Visitors"]);
+    expect(lit("/hr/outpass-visitors/visitors/desks")).toEqual(["Visitors"]);
     expect(lit("/hr/outpass-visitors/tea-break")).toEqual(["Tea Break"]);
     expect(lit("/hr/outpass-visitors/tea-break/records")).toEqual(["Tea Break"]);
     expect(lit("/hr/outpass-visitors/tea-break/rule")).toEqual(["Tea Break"]);
     expect(lit("/hr/outpass-visitors/outpass-archive")).toEqual([]);
-    for (const path of ["/hr/outpass-visitors/outpass/overview/passes", "/hr/outpass-visitors/tea-break/rule"])
+    for (const path of [
+      "/hr/outpass-visitors/outpass/overview/passes",
+      "/hr/outpass-visitors/visitors/desks",
+      "/hr/outpass-visitors/tea-break/rule",
+    ])
       expect(navItemActive(gate(), path), path).toBe(true);
   });
 });

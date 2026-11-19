@@ -92,6 +92,15 @@ def require_gate_device(view_func):
     stay valid for a long time, so HR deactivating a gate (lost/stolen
     device, decommissioned gate) needs to take effect on the very next
     request, not whenever the JWT happens to expire.
+
+    The token must carry a `gsid` claim (gate monitor sign-ins, 30 days, see
+    gate_credentials.py) naming an open GateSession of that gate, so logout /
+    password reset / "Sign out everywhere" end it at once; the session's
+    last_seen_at is touched at most once a minute. A token without gsid (the
+    24 h kind issued before 18 Nov 2026) cannot be ended by HR, so since
+    19 Nov 2026 it is refused like an ended session (401 session_ended: the
+    console then shows its sign-in page). Sets request.gate_device and
+    request.gate_session.
     """
     @wraps(view_func)
     @_role_only("gate_device")
@@ -100,8 +109,18 @@ def require_gate_device(view_func):
 
         device = GateDevice.objects.filter(id=request.jwt_user.get("deviceId"), is_active=True).first()
         if device is None:
-            return Response({"error": "This gate's access has been revoked"}, status=403)
+            return Response({"error": "This gate's access has been revoked", "code": "gate_revoked"}, status=403)
+        from .gate_credentials import session_for_token, touch_session
+
+        # a token without gsid (before 18 Nov 2026) names no session: session_for_token gives None, so it is refused too
+        session = session_for_token(request.jwt_user, device)
+        if session is None:
+            return Response(
+                {"error": "This gate's sign-in has ended. Sign in again.", "code": "session_ended"}, status=401
+            )
+        touch_session(session)
         request.gate_device = device
+        request.gate_session = session
         return view_func(request, *args, **kwargs)
 
     return wrapper
@@ -111,16 +130,39 @@ def require_reception_device(view_func):
     """Gates the Reception dashboard endpoints (reception_views.py) -same
     shape as require_gate_device above, just for ReceptionDevice instead of
     GateDevice: a live is_active check on every request, so HR revoking a
-    Reception login takes effect on the very next request."""
+    Reception login takes effect on the very next request.
+
+    The token must carry an `rsid` claim (the shared /reception-login
+    sign-in, 30 days, see reception_credentials.py) naming an open
+    ReceptionSession of that desk, so logout / password reset / "Sign out
+    everywhere" end it at once; last_seen_at is touched at most once a
+    minute. A token without rsid (the 24 h kind issued before 18 Nov 2026)
+    cannot be ended by HR, so since 19 Nov 2026 it is refused like an ended
+    session (401 session_ended). Sets request.reception_device and
+    request.reception_session."""
     @wraps(view_func)
     @_role_only("reception_device")
     def wrapper(request: Request, *args, **kwargs):
         from .models import ReceptionDevice
 
-        device = ReceptionDevice.objects.filter(id=request.jwt_user.get("deviceId"), is_active=True).first()
+        device = (
+            ReceptionDevice.objects.select_related("branch")
+            .filter(id=request.jwt_user.get("deviceId"), is_active=True)
+            .first()
+        )
         if device is None:
-            return Response({"error": "This desk's access has been revoked"}, status=403)
+            return Response({"error": "This desk's access has been revoked", "code": "desk_revoked"}, status=403)
+        from .reception_credentials import session_for_token, touch_session
+
+        # a token without rsid (before 18 Nov 2026) names no session: session_for_token gives None, so it is refused too
+        session = session_for_token(request.jwt_user, device)
+        if session is None:
+            return Response(
+                {"error": "This desk's sign-in has ended. Sign in again.", "code": "session_ended"}, status=401
+            )
+        touch_session(session)
         request.reception_device = device
+        request.reception_session = session
         return view_func(request, *args, **kwargs)
 
     return wrapper

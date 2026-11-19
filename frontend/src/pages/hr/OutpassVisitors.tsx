@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Redirect, useLocation, useSearch } from "wouter";
 import { Coffee, DoorOpen, UserRound } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
@@ -6,33 +7,34 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useLevel } from "@/lib/tab-access";
 import { OutpassTab } from "./outpass-visitors/outpass/OutpassTab";
 import { cleanGatePath, readGatePath, resolveGatePath, subsOf, type GatePageKey } from "./outpass-visitors/routes";
-import { TeaBreakTab } from "./outpass-visitors/tea-break/TeaBreakTab";
-import { VisitorsTab } from "./outpass-visitors/visitors/VisitorsTab";
+import { TeaBreakSubtitle, TeaBreakTab } from "./outpass-visitors/tea-break/TeaBreakTab";
+import { VisitorsPage } from "./outpass-visitors/visitors/VisitorsPage";
 
-const HEADING: Record<GatePageKey, { icon: typeof DoorOpen; title: string; description: string }> = {
+// a description may be a small component (Tea Break states the allowed minutes of its rule); it stays one line of text
+const HEADING: Record<GatePageKey, { icon: typeof DoorOpen; title: string; description: ReactNode }> = {
   outpass: {
     icon: DoorOpen,
-    title: "Outpass",
+    title: "Gate Pass",
     description:
-      "Gate exit logs and Outpass requests, collected via a permanent per-branch QR code -no attendance or payroll impact.",
+      "Gate passes, who went out and came back, and the gates that scan them. No attendance or payroll impact.",
   },
   visitors: {
     icon: UserRound,
     title: "Visitors",
-    description: "Front-desk visitor logs, collected via a permanent per-branch QR code.",
+    description: "Who is on the premises, whom they came to see, and when they left.",
   },
   "tea-break": {
     icon: Coffee,
     title: "Tea Break",
-    description: "Employee tea-break Out/In timings, scanned at the gate -no approval, purely for tracking.",
+    description: <TeaBreakSubtitle />,
   },
 };
 
 /**
  * Outpass, Visitors and Tea Break: three independent pages sharing one route file (the sidebar has a separate entry for each,
  * deliberately no in-page switcher, so none of the three shows any trace of the others). The page is the first path segment
- * and its tabs are the ones after it (/outpass/overview/passes, /tea-break/rule): a path that stops early, or names an
- * unknown tab, is replaced by the first one (routes.ts). Visitors is one list, so it has no tabs.
+ * and its tabs are the ones after it (/outpass/overview/passes, /visitors/desks, /tea-break/rule): a path that stops early,
+ * or names an unknown tab, is replaced by the first one (routes.ts).
  * Each page and tab is an address with its own permission key (the route guard blocks a hidden one, HrLayout locks a View-only
  * one): "the first one" is the first this role may see, and a page whose tabs are all hidden for it says so.
  */
@@ -73,7 +75,7 @@ export default function OutpassVisitors() {
         ) : page === "outpass" ? (
           <OutpassTab isBranchScoped={isBranchScoped} sub={sub!} nested={nested} />
         ) : page === "visitors" ? (
-          <VisitorsTab isBranchScoped={isBranchScoped} />
+          <VisitorsPage isBranchScoped={isBranchScoped} sub={sub!} />
         ) : (
           <TeaBreakTab sub={sub!} />
         )}

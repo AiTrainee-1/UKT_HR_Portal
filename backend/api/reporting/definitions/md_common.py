@@ -60,7 +60,10 @@ CAVEAT_PAYROLL = (
     "Money is read from the salary slips (the paid record: what each person was actually paid), by each person's "
     "current department. The latest month may not be closed yet."
 )
-CAVEAT_VISITORS = "Visitors are recorded at check-in only (there is no check-out), so time on site cannot be shown."
+CAVEAT_VISITORS = (
+    "Visitors are counted at check-in. Check-out is recorded from 18 Nov 2026 for visits checked out by HR or "
+    "reception only, so time on site is not shown here."
+)
 CAVEAT_TEA = (
     "Tea-break loss is in minutes, not rupees: the system cannot say what a lost minute costs. Only breaks of 60 "
     "minutes or less that were scanned back in are measured."

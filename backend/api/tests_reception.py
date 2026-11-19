@@ -20,6 +20,17 @@ from .outpass_visitor_views import (
 from .reception_views import reception_summary, reception_visits
 
 
+class _DeskReq:
+    META = {"HTTP_USER_AGENT": "test", "REMOTE_ADDR": "10.0.0.1"}
+
+
+def _desk_session_token(desk) -> str:
+    """A desk token with its own session (a token without rsid is refused since 19 Nov 2026)."""
+    from .reception_credentials import desk_token, new_desk_session
+
+    return desk_token(desk, new_desk_session(desk, _DeskReq()))
+
+
 class FindEmployeeByPhoneTests(TestCase):
     def setUp(self):
         self.dept = Department.objects.create(name="Reception QA Dept")
@@ -142,7 +153,7 @@ class ReceptionDeviceRevocationTests(TestCase):
         )
 
     def test_require_reception_device_rejects_deactivated_desk(self):
-        token = sign_token({"role": "reception_device", "deviceId": self.device.id, "deskName": self.device.name})
+        token = _desk_session_token(self.device)
         self.device.is_active = False
         self.device.save(update_fields=["is_active"])
 
@@ -161,7 +172,7 @@ class ReceptionDeviceRevocationTests(TestCase):
         self.assertEqual(result.status_code, 403)
 
     def test_require_reception_device_accepts_active_desk(self):
-        token = sign_token({"role": "reception_device", "deviceId": self.device.id, "deskName": self.device.name})
+        token = _desk_session_token(self.device)
 
         @require_reception_device
         def view(request):
@@ -193,7 +204,7 @@ class ReceptionDashboardScopingTests(TestCase):
         self.factory = APIRequestFactory()
 
     def _auth_request(self, path: str):
-        token = sign_token({"role": "reception_device", "deviceId": self.device_a.id, "deskName": self.device_a.name})
+        token = _desk_session_token(self.device_a)
         return self.factory.get(path, HTTP_AUTHORIZATION=f"Bearer {token}")
 
     def test_summary_only_counts_own_branch(self):
@@ -204,3 +215,237 @@ class ReceptionDashboardScopingTests(TestCase):
         response = reception_visits(self._auth_request("/api/reception-devices/visits?range=month"))
         self.assertEqual(response.data["total"], 1)
         self.assertEqual(response.data["items"][0]["name"], "Visitor A")
+
+
+# ═══ The shared desk sign-in (/reception-login) and its sessions, 18 Nov 2026 ═══════════════════════════════════════
+# Mirrors tests_gate_monitor.py for desks: reception_credentials.py + reception_views login / me / logout and
+# auth.require_reception_device's session check.
+
+from datetime import timedelta as _timedelta  # noqa: E402
+
+from django.core.cache import cache as _cache  # noqa: E402
+from django.utils import timezone as _tz  # noqa: E402
+
+from . import gate_credentials as _gc  # noqa: E402
+from . import reception_credentials as _rc  # noqa: E402
+from .jwt_utils import verify_token as _verify  # noqa: E402
+from .models import GateDevice, HRUser, ReceptionLoginAttempt, ReceptionSession  # noqa: E402
+
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+
+
+class _Req:
+    META = {"HTTP_USER_AGENT": _UA, "REMOTE_ADDR": "10.9.8.7"}
+    headers: dict = {}
+
+
+class DeskSignInTests(TestCase):
+    def setUp(self):
+        _cache.clear()  # the per-address sign-in throttle
+        self.addCleanup(_cache.clear)
+        self.branch = Branch.objects.create(name="Desk Unit")
+        self.desk = ReceptionDevice(
+            name="Front Desk", branch=self.branch, username="front.desk", login_token="tok-front", location="Lobby",
+        )
+        _rc.set_desk_password(self.desk, "secret-one")
+        self.desk.save()
+        admin = HRUser.objects.create(username="desk_admin", password_hash="x", is_super_admin=True)
+        hr_token = sign_token({"role": "hr", "hrUserId": admin.id})
+        self.hr = {"HTTP_AUTHORIZATION": f"Bearer {hr_token}"}
+
+    def login(self, username, password):
+        return self.client.post(
+            "/api/reception-devices/login", {"username": username, "password": password},
+            content_type="application/json", HTTP_USER_AGENT=_UA,
+        )
+
+    def auth(self, token):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def token_for(self, desk=None):
+        _session, token = _rc.start_desk_session(desk or self.desk, _Req())
+        return token
+
+    def hr_put(self, body):
+        return self.client.put(
+            f"/api/reception-devices/{self.desk.id}", body, content_type="application/json", **self.hr,
+        )
+
+    # ── 19 Nov 2026: equal timing, tries under the desk's own username written before the check, pruning (S2/S3) ──
+    def test_an_unknown_username_costs_a_bcrypt_check_and_tries_are_written_first(self):
+        from unittest import mock
+
+        import bcrypt
+
+        with mock.patch.object(_gc.bcrypt, "checkpw", wraps=bcrypt.checkpw) as checkpw:
+            self.assertEqual(self.login("no.such.desk", "whatever").status_code, 401)
+        checkpw.assert_called_once()
+        seen = []
+
+        def check(desk, raw):
+            seen.append(list(ReceptionLoginAttempt.objects.filter(username="front.desk").values_list("success", flat=True)))
+            return raw == "secret-one"
+
+        ReceptionDevice.objects.filter(pk=self.desk.pk).update(username="Front.Desk")
+        with mock.patch.object(_rc, "check_desk_password", check):
+            self.assertEqual(self.login("  FRONT.desk ", "secret-one").status_code, 200)
+        self.assertEqual(seen, [[False]])  # written (as a failure) before the password check
+        self.assertEqual(
+            list(ReceptionLoginAttempt.objects.filter(username="front.desk").values_list("success", flat=True)), [True]
+        )
+        old = ReceptionLoginAttempt.objects.create(username="someone", ip_address=None, success=False)
+        ReceptionLoginAttempt.objects.filter(pk=old.pk).update(created_at=_tz.now() - _timedelta(days=31))
+        self.assertEqual(self.login("front.desk", "secret-one").status_code, 200)
+        self.assertFalse(ReceptionLoginAttempt.objects.filter(pk=old.pk).exists())  # pruned by a success
+
+    # ── sign-in ──
+    def test_a_right_password_opens_a_session_and_says_which_desk(self):
+        r = self.login("front.desk", "secret-one")
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertEqual(set(body), {"token", "deviceId", "deskName", "desk"})
+        self.assertEqual((body["deviceId"], body["deskName"]), (self.desk.id, "Front Desk"))
+        self.assertEqual(
+            body["desk"], {"id": self.desk.id, "name": "Front Desk", "branchName": "Desk Unit", "location": "Lobby"}
+        )
+        claims = _verify(body["token"])
+        session = ReceptionSession.objects.get(desk=self.desk)
+        self.assertEqual(
+            (claims["role"], claims["deviceId"], claims["rsid"]), ("reception_device", self.desk.id, session.sid)
+        )
+        self.assertNotIn("jti", claims)
+        self.assertNotIn("gsid", claims)
+        self.assertGreater(claims["exp"] - _tz.now().timestamp(), 29 * 86400)
+        self.assertIn("Chrome", session.device_label)
+        self.desk.refresh_from_db()
+        self.assertIsNotNone(self.desk.last_login_at)
+        self.assertTrue(ReceptionLoginAttempt.objects.filter(username="front.desk", success=True).exists())
+        self.assertNotIn("secret-one", r.content.decode())
+
+    def test_the_username_is_not_case_sensitive(self):
+        self.assertEqual(self.login("  FRONT.Desk ", "secret-one").status_code, 200)
+
+    def test_wrong_password_or_unknown_desk_is_401_and_recorded(self):
+        r = self.login("front.desk", "nope")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json(), {"error": "Wrong username or password.", "code": "wrong"})
+        self.assertEqual(self.login("nobody", "secret-one").status_code, 401)
+        self.assertEqual(ReceptionLoginAttempt.objects.filter(success=False).count(), 2)
+        self.assertFalse(ReceptionSession.objects.exists())
+
+    def test_a_switched_off_desk_is_403_with_the_right_password(self):
+        ReceptionDevice.objects.filter(pk=self.desk.pk).update(is_active=False)
+        r = self.login("front.desk", "secret-one")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"], "This desk is switched off. Ask HR to switch it on.")
+        self.assertEqual(r.json()["code"], "switched_off")
+        self.assertEqual(self.login("front.desk", "nope").status_code, 401)  # a wrong password says nothing more
+
+    def test_missing_fields_are_400_and_not_an_attempt(self):
+        self.assertEqual(self.login("", "secret-one").status_code, 400)
+        self.assertEqual(self.login("front.desk", "").status_code, 400)
+        self.assertFalse(ReceptionLoginAttempt.objects.exists())
+
+    def test_five_wrong_tries_lock_the_username_until_hr_changes_the_desk(self):
+        for _ in range(5):
+            self.assertEqual(self.login("front.desk", "nope").status_code, 401)
+        r = self.login("front.desk", "secret-one")
+        self.assertEqual(r.status_code, 429)
+        self.assertEqual(
+            r.json()["error"], "Too many wrong tries. Wait 15 minutes or ask HR to reset the password."
+        )
+        self.assertEqual(self.hr_put({"password": "fresh-pass"}).status_code, 200)
+        self.assertEqual(self.login("front.desk", "fresh-pass").status_code, 200)
+
+    def test_desk_and_gate_attempts_are_counted_apart(self):
+        gate = GateDevice(name="Main Gate", branch=self.branch, username="front.desk", login_token="tok-gate")
+        _gc.set_gate_password(gate, "gate-pass")
+        gate.save()
+        for _ in range(5):
+            _gc.record_login_attempt("front.desk", "1.2.3.4", False)
+        self.assertTrue(_gc.login_locked_out("front.desk"))
+        self.assertEqual(self.login("front.desk", "secret-one").status_code, 200)
+
+    # ── me / logout ──
+    def test_me_says_who_and_renews_a_token_with_less_than_15_days_left(self):
+        token = self.token_for()
+        body = self.client.get("/api/reception-devices/me", **self.auth(token)).json()
+        self.assertEqual(set(body), {"desk", "session", "expiresAt"})  # 30 days left: nothing new
+        self.assertEqual(body["desk"]["name"], "Front Desk")
+        self.assertEqual(set(body["session"]), {"id", "deviceLabel", "createdAt", "lastSeenAt"})
+        sid = _verify(token)["rsid"]
+        short = sign_token(
+            {"role": "reception_device", "deviceId": self.desk.id, "deskName": "Front Desk", "rsid": sid},
+            expires_in=_timedelta(days=10),
+        )
+        body = self.client.get("/api/reception-devices/me", **self.auth(short)).json()
+        self.assertIn("token", body)
+        fresh = _verify(body["token"])
+        self.assertEqual(fresh["rsid"], sid)
+        self.assertGreater(fresh["exp"] - _tz.now().timestamp(), 29 * 86400)
+        self.assertNotIn(sid, self.client.get("/api/reception-devices/me", **self.auth(token)).content.decode())
+
+    def test_an_old_token_without_a_session_is_refused_as_an_ended_sign_in(self):
+        # 19 Nov 2026: a token without rsid names no session HR could end, so every desk call refuses it (S6)
+        legacy = sign_token({"role": "reception_device", "deviceId": self.desk.id, "deskName": "Front Desk"})
+        ended = {"error": "This desk's sign-in has ended. Sign in again.", "code": "session_ended"}
+        for method, path in (("get", "me"), ("post", "logout"), ("get", "summary"), ("get", "visits")):
+            response = getattr(self.client, method)(f"/api/reception-devices/{path}", **self.auth(legacy))
+            self.assertEqual((response.status_code, response.json()), (401, ended), path)
+
+    def test_logout_ends_only_this_browser(self):
+        mine, other = self.token_for(), self.token_for()
+        self.assertEqual(self.client.post("/api/reception-devices/logout", **self.auth(mine)).status_code, 204)
+        r = self.client.get("/api/reception-devices/summary", **self.auth(mine))
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json(), {"error": "This desk's sign-in has ended. Sign in again.", "code": "session_ended"})
+        self.assertEqual(self.client.get("/api/reception-devices/summary", **self.auth(other)).status_code, 200)
+        self.assertEqual(
+            ReceptionSession.objects.filter(revoked_reason=ReceptionSession.REVOKED_LOGOUT).count(), 1
+        )
+
+    def test_a_session_of_another_desk_is_refused(self):
+        other = ReceptionDevice.objects.create(
+            name="Other", branch=self.branch, username="other.desk", password_hash="x", login_token="tok-o"
+        )
+        session = _rc.new_desk_session(other, _Req())
+        forged = sign_token({"role": "reception_device", "deviceId": self.desk.id, "rsid": session.sid})
+        self.assertEqual(self.client.get("/api/reception-devices/me", **self.auth(forged)).status_code, 401)
+
+    # ── HR ends it ──
+    def test_hr_reset_username_change_switch_off_and_sign_out_end_the_desk_session(self):
+        cases = [
+            ({"password": "another-pass"}, 401, "session_ended"),
+            ({"username": "lobby.desk"}, 401, "session_ended"),
+            ({"isActive": False}, 403, "desk_revoked"),
+        ]
+        for body, status, code in cases:
+            token = self.token_for()
+            self.assertEqual(self.hr_put(body).status_code, 200, body)
+            r = self.client.get("/api/reception-devices/me", **self.auth(token))
+            self.assertEqual((r.status_code, r.json().get("code")), (status, code), body)
+            ReceptionDevice.objects.filter(pk=self.desk.pk).update(is_active=True)
+        token = self.token_for()
+        r = self.client.post(f"/api/reception-devices/{self.desk.id}/sign-out", **self.hr)
+        self.assertEqual(r.json(), {"signedOut": 1})
+        self.assertEqual(self.client.get("/api/reception-devices/me", **self.auth(token)).status_code, 401)
+
+    def test_a_deleted_desk_is_refused(self):
+        token = self.token_for()
+        self.assertEqual(self.client.delete(f"/api/reception-devices/{self.desk.id}", **self.hr).status_code, 204)
+        r = self.client.get("/api/reception-devices/summary", **self.auth(token))
+        self.assertEqual((r.status_code, r.json()["code"]), (403, "desk_revoked"))
+
+    # ── the wall between desk and HR tokens ──
+    def test_hr_and_gate_tokens_are_refused_on_desk_endpoints_and_desk_tokens_on_hr_ones(self):
+        for path in ("/api/reception-devices/me", "/api/reception-devices/summary", "/api/reception-devices/visits"):
+            self.assertEqual(self.client.get(path, **self.hr).status_code, 403, path)
+        gate = GateDevice(name="G", branch=self.branch, username="g.gate", login_token="tok-g")
+        _gc.set_gate_password(gate, "gate-pass")
+        gate.save()
+        _s, gate_token = _gc.start_gate_session(gate, _Req())
+        self.assertEqual(self.client.get("/api/reception-devices/me", **self.auth(gate_token)).status_code, 403)
+        desk = self.auth(self.token_for())
+        self.assertEqual(self.client.get("/api/reception-devices", **desk).status_code, 403)
+        self.assertEqual(self.client.get("/api/visitor/records", **desk).status_code, 403)
+        self.assertEqual(self.client.get("/api/gate-monitor/me", **desk).status_code, 403)

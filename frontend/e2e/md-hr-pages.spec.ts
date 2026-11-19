@@ -244,7 +244,7 @@ test("the seven pages with a tall title row line up alike: same title edge, swit
 
 test("the old analytics addresses go to the pages that now hold them", async ({ page }) => {
   await goto(page, "/md/visitors");
-  await expect(page).toHaveURL(/\/md\/outpass-visitors\/visitors$/);
+  await expect(page).toHaveURL(/\/md\/outpass-visitors\/visitors(\/visits)?$/);
   await goto(page, "/md/tea-break");
   await expect(page).toHaveURL(/\/md\/outpass-visitors\/tea-break(\/records)?$/);
   await goto(page, "/md/attendance");

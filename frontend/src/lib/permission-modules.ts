@@ -22,6 +22,8 @@ export type DisplayNode = {
   routePatterns?: string[];
   /** When unset, follow this key instead of the dotted parent. */
   inherits?: string;
+  /** Hidden unless set on the role itself: never follows its page (the gate / desk password reveals). */
+  explicit?: boolean;
   /** Shown under a page although its key is not a dotted child of it: a setting of its own. */
   own?: boolean;
   /** Cannot be given to a role: who may use it (shown, never stored). */
@@ -93,11 +95,18 @@ export function allModuleKeys(): string[] {
 const parentOf = (key: string): string => (key.includes(".") ? key.slice(0, key.lastIndexOf(".")) : "");
 
 /**
+ * Keys that are Hidden unless set on the role (or the account) itself: they never follow their page, the key they would
+ * inherit or the Managing Director's section grant. Mirrors backend permission_registry.REQUIRE_EXPLICIT.
+ */
+export const REQUIRE_EXPLICIT: ReadonlySet<string> = new Set(GRANTABLE.filter((n) => n.explicit).map((n) => n.key));
+
+/**
  * The key whose entry decides `key`'s level: its own, else the key it follows (its `inherits`, else its dotted parent),
  * and so on up. Null when nothing on the way is set (then it is Hidden).
  */
 export function resolveSource(permissions: Record<string, PermissionLevel> | undefined, key: string): string | null {
   if (!permissions) return null;
+  if (REQUIRE_EXPLICIT.has(key)) return key in permissions ? key : null;
   const seen = new Set<string>();
   let current = key;
   while (current && !seen.has(current)) {

@@ -27,7 +27,7 @@ describe("renderMdPage", () => {
       "Geo Attendance",
       "Attendance Search",
       "Report Log",
-      "Outpass",
+      "Gate Pass",
       "Visitors",
       "Tea Break",
       "Manage Shift",

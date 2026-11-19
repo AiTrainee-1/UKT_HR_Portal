@@ -28,7 +28,7 @@ from .branch_scope import scope_to_branch
 from .employee_photo import employee_photo_link, photo_links
 from .mobile_requests_views import month_bounds, parse_month
 from .models import Employee, GateDevice, TeaBreakLog, TeaBreakRule
-from .outpass_visitor_views import _paginate_params, _range_bounds, _range_start
+from .outpass_visitor_views import _range_bounds
 
 # How long an OUT scan stays eligible to be closed by the NEXT scan as an IN
 # -guards against a long-forgotten open row (employee never returned, went
@@ -200,36 +200,15 @@ def tea_break_summary(request: Request) -> Response:
 @api_view(["GET"])
 @require_hr
 def tea_break_records(request: Request) -> Response:
-    """Computed remarks (overtime/not_returned/etc) can't be filtered at the
-    SQL level -evaluated per-row in Python against "now" and the live
-    TeaBreakRule, then filtered/paginated in Python. Fine at this feature's
-    scale (one branch's tea-break volume for a day/week/month), matching the
-    same reasoning already used for _find_employee_by_phone's full scan in
-    outpass_visitor_views.py."""
-    start = _range_start(request.query_params.get("range", "today"))
-    page, page_size = _paginate_params(request)
-    filter_key = request.query_params.get("filter")  # "overtime" | "not_returned" | None
+    """GET /api/tea-break/records: one page of breaks, newest first, filtered and paginated in SQL (2026-11-18).
 
-    now = timezone.now()
-    rule = TeaBreakRule.get()
-    qs = (
-        scope_to_branch(TeaBreakLog.objects, request, field="employee__branch_id")
-        .filter(out_at__gte=start)
-        .select_related("employee__department", "out_gate", "in_gate")
-        .defer("employee__photo_url")  # a month is thousands of rows: only the page's photo links are looked up
-        .order_by("-out_at")
-    )
-    logs = list(qs)
-    if filter_key in ("overtime", "not_returned"):
-        logs = [log for log in logs if _taken_and_remark(log, rule.allowed_minutes, now)[1] == filter_key]
+    The old `range` (today/week/month) and `filter` (overtime/not_returned) still work; the page now also sends
+    from/to (IST days), departmentId, employeeId, gateId, status (on_break/on_time/overtime/not_returned), q and
+    branchId (an unscoped account only). Each item is `_log_json` (unchanged) plus designation, branchName,
+    overMinutes, flag ("long"/"left_open"/null), allowedMinutes and status. The remarks are the same rules as
+    `_taken_and_remark`, in SQL (gate_visitor_tea_common.remark_q; parity is tested there). The body lives in
+    tea_break_admin_views.records_page, imported here lazily: gate_visitor_tea_common imports this module's
+    constants at load time, so importing it at the top of this file would be circular."""
+    from .tea_break_admin_views import records_page
 
-    total = len(logs)
-    offset = (page - 1) * page_size
-    page_logs = logs[offset:offset + page_size]
-    photos = photo_links(log.employee_id for log in page_logs)
-    return Response({
-        "items": [_log_json(log, rule.allowed_minutes, now, photos) for log in page_logs],
-        "total": total,
-        "page": page,
-        "pageSize": page_size,
-    })
+    return records_page(request)

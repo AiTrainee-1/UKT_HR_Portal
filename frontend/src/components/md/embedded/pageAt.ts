@@ -5,9 +5,9 @@ import { mdPageForPath } from "../md-nav";
 const OWN_PAGES: ReadonlySet<string> = new Set(["dashboard"]);
 
 /** Pages whose tabs are path segments below the page (/md/outpass-visitors/outpass/overview/passes, /md/geo-attendance/live-map,
- *  /md/geo-attendance/journeys/12): such an address is still
+ *  /md/geo-attendance/journeys/12, /md/outpass-visitors/visitors/desks): such an address is still
  *  the page itself, the page just redirects its bare address to its first tab. */
-const TAB_PATH_PAGES: ReadonlySet<string> = new Set(["outpass", "tea-break", "geo-attendance"]);
+const TAB_PATH_PAGES: ReadonlySet<string> = new Set(["outpass", "visitors", "tea-break", "geo-attendance"]);
 
 /** The page whose own address this is. A deeper address (an employee's record, a form) is not the page itself and gets no
  *  Insights: the MD copy of it is the HR page alone. A tab of a page that keeps its tabs in the path is the page itself. */

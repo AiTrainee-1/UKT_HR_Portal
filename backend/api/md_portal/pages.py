@@ -74,7 +74,7 @@ MD_PAGES: list[dict] = [
     },
     {
         "id": "outpass",
-        "title": "Outpass",
+        "title": "Gate Pass",
         "path": "/md/outpass-visitors/outpass",
         "summary": "Employee outpasses as HR sees them (requests, approvals, QR) with volumes, hours lost, repeat users and approvals waiting too long.",
         "domain": "visitors",
@@ -83,7 +83,7 @@ MD_PAGES: list[dict] = [
         "id": "visitors",
         "title": "Visitors",
         "path": "/md/outpass-visitors/visitors",
-        "summary": "Visitors as HR sees them (passes, QR, records) with volumes, purposes and exceptions (visitors have no check-out, so who is inside now cannot be shown).",
+        "summary": "Visitors as HR sees them (QR, records, check-in and check-out) with volumes, purposes and exceptions (check-out is recorded from 18 Nov 2026 for visits checked out by HR or reception).",
         "domain": "visitors",
     },
     {

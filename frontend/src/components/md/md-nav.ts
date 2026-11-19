@@ -71,7 +71,7 @@ export const MD_NAV_GROUPS: MdNavGroup[] = [
   {
     heading: "Gate & visitors",
     items: [
-      item("outpass", "Outpass", DoorOpen, "/md/outpass-visitors/outpass"),
+      item("outpass", "Gate Pass", DoorOpen, "/md/outpass-visitors/outpass"),
       item("visitors", "Visitors", UsersRound, "/md/outpass-visitors/visitors"),
       item("tea-break", "Tea Break", Coffee, "/md/outpass-visitors/tea-break"),
     ],

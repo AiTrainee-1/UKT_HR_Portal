@@ -691,6 +691,15 @@
                   "type": "tab",
                   "help": "Who went out and came back.",
                   "routes": ["/hr/outpass-visitors/outpass/in-out"],
+                  "enforce": "server"
+                },
+                {
+                  "key": "outpass_visitors.outpass.gates",
+                  "label": "Manage Gates",
+                  "type": "tab",
+                  "help": "Every gate, its login, its records and its switches.",
+                  "routes": ["/hr/outpass-visitors/outpass/gates"],
+                  "inherits": "outpass_visitors.outpass.gate_devices",
                   "enforce": "screen"
                 },
                 {
@@ -698,7 +707,17 @@
                   "label": "Gate scanner devices",
                   "type": "feature",
                   "help": "The gate scanner logins.",
-                  "enforce": "server"
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "outpass_visitors.outpass.gate_devices.view_password",
+                      "label": "See gate passwords",
+                      "type": "feature",
+                      "help": "Show a gate's password on Manage Gates (needs Edit; every view is recorded). Off unless set here.",
+                      "explicit": true,
+                      "enforce": "server"
+                    }
+                  ]
                 }
               ]
             },
@@ -711,11 +730,38 @@
               "enforce": "server",
               "children": [
                 {
+                  "key": "outpass_visitors.visitors.visits",
+                  "label": "Visitors",
+                  "type": "tab",
+                  "help": "Who is on the premises, registering visitors and checking them out.",
+                  "routes": ["/hr/outpass-visitors/visitors/visits"],
+                  "enforce": "screen"
+                },
+                {
+                  "key": "outpass_visitors.visitors.desks",
+                  "label": "Manage Reception",
+                  "type": "tab",
+                  "help": "Every reception desk, its login, its records and its switch.",
+                  "routes": ["/hr/outpass-visitors/visitors/desks"],
+                  "inherits": "outpass_visitors.visitors.reception_devices",
+                  "enforce": "screen"
+                },
+                {
                   "key": "outpass_visitors.visitors.reception_devices",
                   "label": "Reception desk devices",
                   "type": "feature",
                   "help": "The reception desk logins.",
-                  "enforce": "server"
+                  "enforce": "server",
+                  "children": [
+                    {
+                      "key": "outpass_visitors.visitors.reception_devices.view_password",
+                      "label": "See desk passwords",
+                      "type": "feature",
+                      "help": "Show a desk's password on Manage Reception (needs Edit; every view is recorded). Off unless set here.",
+                      "explicit": true,
+                      "enforce": "server"
+                    }
+                  ]
                 }
               ]
             },

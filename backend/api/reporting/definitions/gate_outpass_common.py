@@ -97,7 +97,9 @@ MOVEMENT_LABELS = {
     "early_dismissal": "Early Dismissal",
 }
 
-SCAN_TYPE_LABELS = {"exit": "Exit", "entry": "Return"}
+# "tea": a tea-break code refused by a gate that does not take tea breaks (19 Nov 2026), always "not_allowed_here"
+SCAN_TYPE_LABELS = {"exit": "Exit", "entry": "Return", "tea": "Tea break"}
+TEA_SCAN_TYPE = "tea"
 SCAN_RESULT_LABELS = {
     "success": "Success",
     "already_scanned": "Already Scanned",
@@ -105,6 +107,7 @@ SCAN_RESULT_LABELS = {
     "not_approved": "Not Approved",
     "invalid_qr": "Invalid QR",
     "not_exited": "Not Yet Exited",
+    "not_allowed_here": "Not allowed at this gate",
 }
 
 

@@ -46,6 +46,7 @@ ENDPOINTS = (
     ("/api/auth/otp/reset-password", "otp_verify"),
     ("/api/auth/otp/activate", "otp_verify"),
     ("/api/gate-devices/login", "login"),
+    ("/api/gate-monitor/login", "login"),
     ("/api/reception-devices/login", "login"),
     ("/api/outpass/gate/no-such-token/submit", "gate_submit"),
     ("/api/visitor/gate/no-such-token/check-phone", "gate_submit"),

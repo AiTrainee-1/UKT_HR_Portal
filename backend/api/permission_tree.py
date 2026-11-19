@@ -39,7 +39,7 @@ def N(key: str, label: str, kind: str, help: str, *children: dict, **extra) -> d
     for name in ("api", "apiPatterns", "routes", "routePatterns"):
         if extra.get(name):
             node[name] = list(extra.pop(name))
-    for name in ("inherits", "own", "locked", "viewCheck"):
+    for name in ("inherits", "own", "locked", "viewCheck", "explicit"):
         if extra.get(name):
             node[name] = extra.pop(name)
     if extra:
@@ -513,12 +513,33 @@ GATE = N(
             "tab",
             "Who went out and came back.",
             routes=["/hr/outpass-visitors/outpass/in-out"],
+            # its own data since 2026-11-18 (it read the Requests module's outpass-requests before)
+            api=["outpass/in-out"],
+        ),
+        N(
+            "outpass_visitors.outpass.gates",
+            "Manage Gates",
+            "tab",
+            "Every gate, its login, its records and its switches.",
+            routes=["/hr/outpass-visitors/outpass/gates"],
+            # screen only: its data is the gate-devices API (the feature below), so a role with nothing set here gets
+            # the level it has there (2026-11-18)
+            inherits="outpass_visitors.outpass.gate_devices",
         ),
         N(
             "outpass_visitors.outpass.gate_devices",
             "Gate scanner devices",
             "feature",
             "The gate scanner logins.",
+            N(
+                "outpass_visitors.outpass.gate_devices.view_password",
+                "See gate passwords",
+                "feature",
+                "Show a gate's password on Manage Gates (needs Edit; every view is recorded). Off unless set here.",
+                apiPatterns=[r"gate-devices/\d+/reveal-password"],
+                # off unless set on the role itself: never follows its page (2026-11-19, fail-closed)
+                explicit=True,
+            ),
             api=["gate-devices"],
         ),
         routes=["/hr/outpass-visitors/outpass"],
@@ -530,14 +551,40 @@ GATE = N(
         "page",
         "Visitors at reception.",
         N(
+            "outpass_visitors.visitors.visits",
+            "Visitors",
+            "tab",
+            "Who is on the premises, registering visitors and checking them out.",
+            routes=["/hr/outpass-visitors/visitors/visits"],
+        ),
+        N(
+            "outpass_visitors.visitors.desks",
+            "Manage Reception",
+            "tab",
+            "Every reception desk, its login, its records and its switch.",
+            routes=["/hr/outpass-visitors/visitors/desks"],
+            # screen only: its data is the reception-devices API (the feature below), so a role with nothing set here
+            # gets the level it has there (2026-11-18)
+            inherits="outpass_visitors.visitors.reception_devices",
+        ),
+        N(
             "outpass_visitors.visitors.reception_devices",
             "Reception desk devices",
             "feature",
             "The reception desk logins.",
+            N(
+                "outpass_visitors.visitors.reception_devices.view_password",
+                "See desk passwords",
+                "feature",
+                "Show a desk's password on Manage Reception (needs Edit; every view is recorded). Off unless set here.",
+                apiPatterns=[r"reception-devices/\d+/reveal-password"],
+                # off unless set on the role itself: never follows its page (2026-11-19, fail-closed)
+                explicit=True,
+            ),
             api=["reception-devices"],
         ),
         routes=["/hr/outpass-visitors/visitors"],
-        api=["visitor/qr", "visitor/summary", "visitor/records"],
+        api=["visitor/qr", "visitor/summary", "visitor/records", "visitor/visits", "visitor/people", "visitor/export"],
     ),
     N(
         "outpass_visitors.tea_break",
@@ -1968,6 +2015,13 @@ def build_key_tree() -> list[dict]:
 
 def inherits_map() -> dict[str, str]:
     return {n["key"]: n["inherits"] for n in grantable_nodes() if n.get("inherits")}
+
+
+def explicit_keys() -> frozenset[str]:
+    """Keys that are Hidden unless a role (or an account's own change) sets them: they never follow their page or the key
+    they would inherit, so giving a section Edit (or the Managing Director's section grant) never includes them. The
+    password reveals of Manage Gates and Manage Reception (2026-11-19)."""
+    return frozenset(n["key"] for n in grantable_nodes() if n.get("explicit"))
 
 
 def view_checked_keys() -> frozenset[str]:

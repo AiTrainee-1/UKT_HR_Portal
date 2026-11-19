@@ -239,7 +239,7 @@ SCAN_COLUMNS = (
     ColumnSpec("destination", "Destination", TEXT, 1.8),
     ColumnSpec("detail", "Detail", TEXT, 2.6),
 )
-_SCAN_TYPES = (("exit", "Exit"), ("entry", "Return"))
+_SCAN_TYPES = (("exit", "Exit"), ("entry", "Return"), ("tea", "Tea break (refused)"))
 _SCAN_RESULTS = tuple(C.SCAN_RESULT_LABELS.items())
 
 
@@ -249,6 +249,10 @@ def _scan_detail(scan) -> str:
     req = scan.outpass_request
     entry = scan.scan_type == "entry"
     result = scan.result
+    if scan.scan_type == C.TEA_SCAN_TYPE:
+        return "Tea-break code refused: this gate does not take tea breaks"
+    if result == "not_allowed_here":
+        return "Gate pass refused: this gate does not take gate passes"
     if result == "success":
         return "Return recorded" if entry else "Exit recorded"
     if result == "already_scanned":
@@ -333,8 +337,9 @@ def _run_scans(ctx) -> ReportResult:
     ]
     notes = _notes(
         NOTE_TIMES,
-        "Every outpass exit and return scan attempt at every gate, successful or denied. Tea-break scans are not "
-        "logged here (see the tea-break reports); a failed tea-break scan appears as Invalid QR.",
+        "Every outpass exit and return scan attempt at every gate, successful or denied. Tea breaks are not listed "
+        "here (see the tea-break reports), except a tea-break code refused by a gate that does not take tea breaks "
+        "(Leg Tea break, from 19 Nov 2026); an unreadable tea-break code appears as Invalid QR.",
         "Leg shows which QR was scanned (exit pass or return QR). A QR that could not be read has no employee or pass, and "
         "its leg is recorded as Exit whichever it was. Rows at a gate that has since been deleted show Unknown gate.",
         "Detail is written from the result and the pass's own times, not from the stored message, which carries a clock "
@@ -388,8 +393,10 @@ ACTIVITY_COLUMNS = (
     ColumnSpec("notApproved", "Not Approved", INTEGER, 0.9, total="sum"),
     ColumnSpec("notExited", "Not Yet Exited", INTEGER, 0.9, total="sum"),
     ColumnSpec("invalidQr", "Invalid QR", INTEGER, 0.8, total="sum"),
+    ColumnSpec("notAllowedHere", "Not Allowed Here", INTEGER, 0.9, total="sum"),
     ColumnSpec("teaOut", "Tea Out", INTEGER, 0.8, total="sum"),
     ColumnSpec("teaIn", "Tea In", INTEGER, 0.8, total="sum"),
+    ColumnSpec("teaRefused", "Tea Refused", INTEGER, 0.8, total="sum"),
     ColumnSpec("totalScans", "Total Scans", INTEGER, 0.9, total="sum"),
     ColumnSpec("deniedScans", "Denied", INTEGER, 0.8, total="sum"),
     ColumnSpec("denialPct", "Denial Rate", PERCENT, 0.9),
@@ -400,6 +407,7 @@ _DENIED_KEY = {
     "not_approved": "notApproved",
     "not_exited": "notExited",
     "invalid_qr": "invalidQr",
+    "not_allowed_here": "notAllowedHere",
 }
 
 
@@ -461,16 +469,19 @@ def _run_activity(ctx) -> ReportResult:
             "notApproved": 0,
             "notExited": 0,
             "invalidQr": 0,
+            "notAllowedHere": 0,
             "teaOut": tea_out.get(gate_id, 0),
             "teaIn": tea_in.get(gate_id, 0),
+            # tea-break codes this gate refused (it does not take tea breaks): a tea scan, never a gate-pass denial
+            "teaRefused": sum(v for (g, t, _r), v in counts.items() if g == gate_id and t == C.TEA_SCAN_TYPE),
         }
-        attempts = sum(v for (g, _t, _r), v in counts.items() if g == gate_id)
-        for (g, _t, result), v in counts.items():
-            if g == gate_id and result in _DENIED_KEY:
+        attempts = sum(v for (g, t, _r), v in counts.items() if g == gate_id and t != C.TEA_SCAN_TYPE)
+        for (g, t, result), v in counts.items():
+            if g == gate_id and t != C.TEA_SCAN_TYPE and result in _DENIED_KEY:
                 row[_DENIED_KEY[result]] += v
         denied = sum(row[k] for k in _DENIED_KEY.values())
         row["deniedScans"] = denied
-        row["totalScans"] = attempts + row["teaOut"] + row["teaIn"]
+        row["totalScans"] = attempts + row["teaOut"] + row["teaIn"] + row["teaRefused"]
         row["denialPct"] = r2(denied * 100 / attempts) if attempts else None
         return row
 
@@ -491,7 +502,7 @@ def _run_activity(ctx) -> ReportResult:
     rows.sort(key=lambda r: (-r["totalScans"], r["gate"]))
 
     totals = C.sum_totals(rows, [c.key for c in ACTIVITY_COLUMNS if c.total == "sum"])
-    attempts_all = sum(v for v in counts.values())
+    attempts_all = sum(v for (_g, t, _r), v in counts.items() if t != C.TEA_SCAN_TYPE)
     totals["denialPct"] = (
         r2(totals["deniedScans"] * 100 / attempts_all) if attempts_all and totals["deniedScans"] is not None else None
     )
@@ -505,10 +516,13 @@ def _run_activity(ctx) -> ReportResult:
     ]
     notes = _notes(
         NOTE_TIMES,
-        "Exits and Returns are successful outpass scans; the five denial columns are failed attempts. Denial rate = "
-        "denied / outpass scan attempts. Tea Out and Tea In count tea-break scans at the gate (each OUT or IN scan is "
-        "one scan) and have no denial states; a failed tea-break scan shows under Invalid QR.",
-        "Total Scans = outpass attempts + tea-break scans. Last Login is the only activity time a gate device records.",
+        "Exits and Returns are successful outpass scans; the six denial columns are failed attempts (Not Allowed Here: "
+        "a gate pass at a gate that does not take gate passes). Denial rate = denied / outpass scan attempts. Tea Out "
+        "and Tea In count tea-break scans at the gate (each OUT or IN scan is one scan); Tea Refused counts tea-break "
+        "codes refused by a gate that does not take tea breaks (from 19 Nov 2026); an unreadable tea-break code shows "
+        "under Invalid QR.",
+        "Total Scans = outpass attempts + tea-break scans (refused ones included). Last Login is the only activity time a "
+        "gate device records.",
         "Scans at a gate that has since been deleted are shown as Unknown / removed gate, to users who can see every "
         "branch only."
         if include_unknown
@@ -552,6 +566,7 @@ DAILY_COLUMNS = (
     ColumnSpec("visitors", "Visitors", INTEGER, 0.8, total="sum"),
     ColumnSpec("teaBreaks", "Tea Breaks", INTEGER, 0.9, total="sum"),
     ColumnSpec("teaOvertime", "Tea Overtime", INTEGER, 0.9, total="sum"),
+    ColumnSpec("teaRefused", "Tea Refused", INTEGER, 0.9, total="sum"),
     ColumnSpec("deniedScans", "Denied Scans", INTEGER, 0.9, total="sum"),
 )
 
@@ -578,10 +593,10 @@ def _run_daily(ctx) -> ReportResult:
         OutpassRecord.objects.filter(source="qr").filter(C.branch_q(ctx)).filter(rng("submitted_at")), "submitted_at"
     )
     visitors = _by_day(VisitorVisit.objects.filter(C.branch_q(ctx)).filter(rng("visited_at")), "visited_at")
-    denied = _by_day(
-        OutpassGateScan.objects.exclude(result="success").filter(C.scan_scope_q(ctx)).filter(rng("scanned_at")),
-        "scanned_at",
-    )
+    scans = OutpassGateScan.objects.exclude(result="success").filter(C.scan_scope_q(ctx)).filter(rng("scanned_at"))
+    # a tea-break code refused by a gate that does not take tea breaks is a tea refusal, not a gate-pass denial
+    denied = _by_day(scans.exclude(scan_type=C.TEA_SCAN_TYPE), "scanned_at")
+    tea_refused = _by_day(scans.filter(scan_type=C.TEA_SCAN_TYPE), "scanned_at")
 
     rule = TeaBreakRule.objects.filter(pk=1).first()  # never TeaBreakRule.get(): that creates the row on a GET
     allowed = rule.allowed_minutes if rule else DEFAULT_TEA_MINUTES
@@ -611,6 +626,7 @@ def _run_daily(ctx) -> ReportResult:
                 "visitors": visitors.get(d, {}).get("n", 0),
                 "teaBreaks": tea.get(d, {}).get("n", 0),
                 "teaOvertime": tea.get(d, {}).get("ot", 0),
+                "teaRefused": tea_refused.get(d, {}).get("n", 0),
                 "deniedScans": denied.get(d, {}).get("n", 0),
             }
         )
@@ -633,7 +649,8 @@ def _run_daily(ctx) -> ReportResult:
         NOTE_TIMES + " Every day in the range is listed, including days with no activity.",
         "Each column is counted on its own timestamp and branch link, so columns are not additive: pass requests by "
         "request date, passes approved by approval date, gate exits and returns by the scan date, QR submissions by "
-        "submission date (branch of the QR), visitors by visit date, tea breaks by the OUT scan date, denied scans by "
+        "submission date (branch of the QR), visitors by visit date, tea breaks by the OUT scan date, tea refused (a "
+        "tea-break code at a gate that does not take tea breaks) and denied gate-pass scans by "
         "scan date (gate or employee branch).",
         "Exits and QR submissions are different things and are never combined: exits are scanned approved passes, QR "
         "submissions are unverified form entries.",

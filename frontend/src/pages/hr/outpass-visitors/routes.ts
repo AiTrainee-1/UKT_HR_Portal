@@ -1,5 +1,6 @@
-// The addresses of Outpass / Visitors: three pages under /hr/outpass-visitors (the three entries of the sidebar), and, on two of
-// them, tabs in the PATH: /hr/outpass-visitors/outpass/overview/passes. Pure, so the page, the redirects and the tests read
+// The addresses of Gate Pass (path segment "outpass") / Visitors / Tea Break: three pages under /hr/outpass-visitors (the
+// three entries of the sidebar), each with tabs in the PATH: /hr/outpass-visitors/outpass/overview/passes,
+// /hr/outpass-visitors/outpass/gates, /hr/outpass-visitors/visitors/desks. Pure, so the page, the redirects and the tests read
 // from one place. The page is the first segment, the subtab the second, the nested subtab the third; whatever is missing or
 // unknown is replaced by the first one (see `resolveGatePath`).
 
@@ -15,14 +16,23 @@ export const gatePagePath = (key: GatePageKey): string => `${GATE_BASE}/${key}`;
 
 export type GateTab = { value: string; label: string };
 
-/** The subtabs of each page, in order. Visitors has none: it is one list, so it has no strip. */
+/**
+ * The subtabs of each page, in order. Gate Pass -> Manage Gates (key outpass_visitors.outpass.gates, which follows "Gate
+ * scanner devices", outpass_visitors.outpass.gate_devices, while a role sets nothing on it). Visitors -> Visitors (the
+ * visits; its Visits / People switch is a `?view=`) and Manage Reception (key outpass_visitors.visitors.desks, which
+ * follows "Reception desk devices", outpass_visitors.visitors.reception_devices, while a role sets nothing on it).
+ */
 export const GATE_SUBS: Record<GatePageKey, readonly GateTab[]> = {
   outpass: [
     { value: "overview", label: "Overview" },
     { value: "requests", label: "Requests" },
     { value: "in-out", label: "In/Out" },
+    { value: "gates", label: "Manage Gates" },
   ],
-  visitors: [],
+  visitors: [
+    { value: "visits", label: "Visitors" },
+    { value: "desks", label: "Manage Reception" },
+  ],
   "tea-break": [
     { value: "records", label: "Records" },
     { value: "rule", label: "Rule" },

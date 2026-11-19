@@ -698,6 +698,17 @@ class OutpassTests(GateData):
         self.assertEqual(a["turnaround"], {"avgMinutes": 16, "medianMinutes": 10, "decisions": 10})
         self.assertEqual(a["rejectionRatePct"], 9.1)
 
+    def test_a_refused_tea_break_code_is_not_a_gate_pass_refusal(self):
+        # 19 Nov 2026: a gate that does not take tea breaks logs the refusal as a "tea" scan: not a gate-pass scan here;
+        # a gate pass refused by a gate that does not take passes is one, with its own words
+        g1 = GateDevice.objects.get(username="g1")
+        make_scan(g1, ist(9, 23, 10), emp=self.e1, scan_type="tea", result="not_allowed_here")
+        make_scan(g1, ist(9, 23, 11), emp=self.e1, result="not_allowed_here")
+        s = self.json("outpass")["gateScans"]
+        self.assertEqual((s["attempts"], s["successful"], s["refused"]), (7, 3, 4))  # 6 + the pass, never the tea code
+        reasons = {r["key"]: (r["label"], r["count"]) for r in s["byReason"]}
+        self.assertEqual(reasons["not_allowed_here"], ("Not allowed at this gate", 1))
+
     def test_gate_scans_and_refusals(self):
         s = self.json("outpass")["gateScans"]
         self.assertEqual((s["attempts"], s["successful"], s["refused"], s["refusedPct"]), (6, 3, 3, 50.0))

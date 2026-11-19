@@ -1,5 +1,5 @@
 // gate: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
-import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
 import type { ApprovalProgress } from "../../approval-workflow";
 
@@ -75,17 +75,10 @@ export const useVisitorQr = (branchId?: number | null, options?: { enabled?: boo
     enabled: options?.enabled ?? true,
   });
 
-export const getVisitorSummaryQueryKey = () => ["/api/visitor/summary"] as const;
-export const useVisitorSummary = () =>
-  useQuery<GateSummary>({
-    queryKey: getVisitorSummaryQueryKey(),
-    queryFn: () => customFetch<GateSummary>("/api/visitor/summary"),
-  });
-
 // The employee a visitor came to meet, resolved by phone-matching against
 // Employee (see backend/api/outpass_visitor_views.py::_employee_contact_json).
 // Shared by the visitor-gate-form lookup result and every visit list that
-// shows who a visit was for (VisitorRecordRow below, ReceptionVisit).
+// shows who a visit was for (VisitorRecordRow below).
 export type EmployeeContact = {
   id: number;
   employeeCode: string;
@@ -115,18 +108,6 @@ export type VisitorRecordRow = {
   notifiedEmailAt: string | null;
   notifiedWhatsappAt: string | null;
 };
-
-export const getVisitorRecordsQueryKey = (range: GateRange, page: number) =>
-  ["/api/visitor/records", range, page] as const;
-export const useVisitorRecords = (range: GateRange, page: number, pageSize = 20) =>
-  useQuery<PaginatedRecords<VisitorRecordRow>>({
-    queryKey: getVisitorRecordsQueryKey(range, page),
-    queryFn: () =>
-      customFetch<PaginatedRecords<VisitorRecordRow>>(
-        `/api/visitor/records?range=${range}&page=${page}&pageSize=${pageSize}`,
-      ),
-    placeholderData: keepPreviousData,
-  });
 
 export const useVisitorGateInfo = (token: string) =>
   useQuery<{ branchName: string }>({
@@ -280,59 +261,17 @@ export type GateDevice = {
   lastLoginAt: string | null;
 };
 
-export const getListGateDevicesQueryKey = () => ["/api/gate-devices"] as const;
-export const useListGateDevices = () =>
-  useQuery<GateDevice[]>({
-    queryKey: getListGateDevicesQueryKey(),
-    queryFn: () => customFetch<GateDevice[]>("/api/gate-devices"),
-  });
+// The gate list and its changes are Manage Gates' hooks (./gate-admin.ts: useManagedGates and the rest).
 
-export const useCreateGateDevice = () =>
-  useMutation({
-    mutationFn: (data: { name: string; branchId?: number; username: string; password: string }) =>
-      customFetch<GateDevice>("/api/gate-devices", { method: "POST", body: JSON.stringify(data) }),
-  });
+// ── Gate kiosk ────────────────────────────────────────────────────────────────
+// The gate monitor (/gatemonitor: sign-in, login-info hint, scan, records) has NO hooks here on purpose: customFetch
+// attaches the HR "uk_textile_token" to any call without its own Authorization header, and a gate must never send it.
+// Its calls go through pages/gate/monitor/client.ts with the gate token only (types in ./gate-monitor).
 
-export const useUpdateGateDevice = () =>
-  useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { name?: string; isActive?: boolean; password?: string } }) =>
-      customFetch<GateDevice>(`/api/gate-devices/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  });
-
-export const useDeleteGateDevice = () =>
-  useMutation({
-    mutationFn: (id: number) => customFetch<void>(`/api/gate-devices/${id}`, { method: "DELETE" }),
-  });
-
-// ── Gate Scanner kiosk auth -public login-info, public login ───────────────
-// The kiosk itself (POST /api/gate-devices/scan) is deliberately NOT a hook
-// here -it authenticates with a gate_device token stored under its own
-// localStorage key, not the HR "uk_textile_token" customFetch auto-attaches,
-// so that one call is made directly from the kiosk page with an explicit
-// Authorization header instead.
-
-export const useGateLoginInfo = (loginToken: string) =>
-  useQuery<{ gateName: string; branchName: string; isActive: boolean }>({
-    queryKey: ["/api/gate-devices/login-info", loginToken],
-    queryFn: () => customFetch(`/api/gate-devices/login-info/${encodeURIComponent(loginToken)}`),
-    enabled: !!loginToken,
-    retry: false,
-  });
-
-export const useGateLogin = () =>
-  useMutation({
-    mutationFn: (body: { username: string; password: string }) =>
-      customFetch<{ token: string; gateId: number; gateName: string }>("/api/gate-devices/login", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-  });
-
-// ── Reception device management (HR side) -see backend/api/reception_views.py ──
-// A per-desk login onto the existing VisitorVisit data -mirrors GateDevice's
-// shape exactly, just for Reception instead of the gate kiosk. It never
-// scans anything itself: the visitor's own phone scanning the permanent
-// Visitor QR (useVisitorQr above) remains the only way a visit is recorded.
+// ── Reception desks (HR side) -see backend/api/reception_admin_views.py ──
+// Only the ReceptionDevice type is left here (Manage Reception's ManagedDesk builds on it): the desk list and its
+// changes are ./reception-admin.ts, and the desk's own sign-in and console calls go through
+// pages/gate/reception/desk-api.ts with the desk token only (customFetch would fall back to the HR token).
 
 export type ReceptionDevice = {
   id: number;
@@ -346,77 +285,6 @@ export type ReceptionDevice = {
   createdAt: string;
   lastLoginAt: string | null;
 };
-
-export const getListReceptionDevicesQueryKey = () => ["/api/reception-devices"] as const;
-export const useListReceptionDevices = () =>
-  useQuery<ReceptionDevice[]>({
-    queryKey: getListReceptionDevicesQueryKey(),
-    queryFn: () => customFetch<ReceptionDevice[]>("/api/reception-devices"),
-  });
-
-export const useCreateReceptionDevice = () =>
-  useMutation({
-    mutationFn: (data: { name: string; branchId?: number; username: string; password: string }) =>
-      customFetch<ReceptionDevice>("/api/reception-devices", { method: "POST", body: JSON.stringify(data) }),
-  });
-
-export const useUpdateReceptionDevice = () =>
-  useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { name?: string; isActive?: boolean; password?: string } }) =>
-      customFetch<ReceptionDevice>(`/api/reception-devices/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  });
-
-export const useDeleteReceptionDevice = () =>
-  useMutation({
-    mutationFn: (id: number) => customFetch<void>(`/api/reception-devices/${id}`, { method: "DELETE" }),
-  });
-
-// ── Reception desk auth + dashboard -public login-info/login, desk-token-
-//    authenticated summary/visits. Same "own localStorage key, explicit
-//    Authorization header" reasoning as the Gate Scanner kiosk above. ──────
-
-export const useReceptionLoginInfo = (loginToken: string) =>
-  useQuery<{ deskName: string; branchName: string; isActive: boolean }>({
-    queryKey: ["/api/reception-devices/login-info", loginToken],
-    queryFn: () => customFetch(`/api/reception-devices/login-info/${encodeURIComponent(loginToken)}`),
-    enabled: !!loginToken,
-    retry: false,
-  });
-
-export const useReceptionLogin = () =>
-  useMutation({
-    mutationFn: (body: { username: string; password: string }) =>
-      customFetch<{ token: string; deviceId: number; deskName: string }>("/api/reception-devices/login", {
-        method: "POST",
-        body: JSON.stringify(body),
-      }),
-  });
-
-function receptionAuthHeader(): HeadersInit | undefined {
-  const token = localStorage.getItem("reception_device_token");
-  return token ? { Authorization: `Bearer ${token}` } : undefined;
-}
-
-export const useReceptionSummary = () =>
-  useQuery<GateSummary>({
-    queryKey: ["/api/reception-devices/summary"],
-    queryFn: () => customFetch<GateSummary>("/api/reception-devices/summary", { headers: receptionAuthHeader() }),
-    refetchInterval: 30_000,
-  });
-
-export type ReceptionVisit = VisitorRecordRow;
-
-export const useReceptionVisits = (range: GateRange, page: number, pageSize = 20) =>
-  useQuery<PaginatedRecords<ReceptionVisit>>({
-    queryKey: ["/api/reception-devices/visits", range, page],
-    queryFn: () =>
-      customFetch<PaginatedRecords<ReceptionVisit>>(
-        `/api/reception-devices/visits?range=${range}&page=${page}&pageSize=${pageSize}`,
-        { headers: receptionAuthHeader() },
-      ),
-    placeholderData: keepPreviousData,
-    refetchInterval: 20_000,
-  });
 
 // ── Tea Break (HR side) -see backend/api/tea_break_views.py ────────────────
 // A permanent per-employee QR, no approval, toggled OUT/IN at any active
@@ -449,40 +317,35 @@ export type TeaBreakRecord = {
 export type TeaBreakRule = { allowedMinutes: number; updatedAt: string };
 
 export const getTeaBreakRuleQueryKey = () => ["/api/tea-break/rule"] as const;
-export const useTeaBreakRule = () =>
+export const useTeaBreakRule = (options?: { enabled?: boolean }) =>
   useQuery<TeaBreakRule>({
     queryKey: getTeaBreakRuleQueryKey(),
     queryFn: () => customFetch<TeaBreakRule>("/api/tea-break/rule"),
+    enabled: options?.enabled ?? true,
   });
 
-export const useUpdateTeaBreakRule = () =>
-  useMutation({
+/**
+ * Saves the allowed minutes. Every overtime / on-time figure is worked out from the rule as it stands, so a save refreshes
+ * the rule, every Tea Break list, summary, detail and option (all keys under "/api/tea-break/records") and
+ * /api/tea-break/summary.
+ */
+export const useUpdateTeaBreakRule = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
     mutationFn: (allowedMinutes: number) =>
       customFetch<TeaBreakRule>("/api/tea-break/rule", {
         method: "PUT",
         body: JSON.stringify({ allowedMinutes }),
       }),
+    onSuccess: (rule) => {
+      queryClient.setQueryData(getTeaBreakRuleQueryKey(), rule);
+      void queryClient.invalidateQueries({ queryKey: getTeaBreakRuleQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: ["/api/tea-break/records"] });
+      void queryClient.invalidateQueries({ queryKey: getTeaBreakSummaryQueryKey() });
+    },
   });
+};
 
+// /api/tea-break/summary (the counts the mobile and employee web apps read); the HR page's lists, figures and files are
+// ./tea-break-admin.ts.
 export const getTeaBreakSummaryQueryKey = () => ["/api/tea-break/summary"] as const;
-export const useTeaBreakSummary = () =>
-  useQuery<GateSummary>({
-    queryKey: getTeaBreakSummaryQueryKey(),
-    queryFn: () => customFetch<GateSummary>("/api/tea-break/summary"),
-    refetchInterval: 30_000,
-  });
-
-export type TeaBreakFilter = "overtime" | "not_returned" | null;
-
-export const getTeaBreakRecordsQueryKey = (range: GateRange, page: number, filter: TeaBreakFilter) =>
-  ["/api/tea-break/records", range, page, filter] as const;
-export const useTeaBreakRecords = (range: GateRange, page: number, filter: TeaBreakFilter, pageSize = 20) =>
-  useQuery<PaginatedRecords<TeaBreakRecord>>({
-    queryKey: getTeaBreakRecordsQueryKey(range, page, filter),
-    queryFn: () =>
-      customFetch<PaginatedRecords<TeaBreakRecord>>(
-        `/api/tea-break/records?range=${range}&page=${page}&pageSize=${pageSize}${filter ? `&filter=${filter}` : ""}`,
-      ),
-    placeholderData: keepPreviousData,
-    refetchInterval: 60_000,
-  });

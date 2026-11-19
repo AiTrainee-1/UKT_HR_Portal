@@ -57,6 +57,7 @@ export function accountSet(
   if (resolvePermission(applyModuleOverrides(rolePermissions, next), node.key) !== level) next[node.key] = level;
   for (const part of partsOf(node)) {
     if (part.key in modules) continue;
+    if (part.explicit) continue; // only ever given on its own row (the password reveals)
     if (resolvePermission(applyModuleOverrides(rolePermissions, next), part.key) !== level) next[part.key] = level;
   }
   return next;

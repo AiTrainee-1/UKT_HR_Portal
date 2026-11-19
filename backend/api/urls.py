@@ -126,8 +126,26 @@ from .manager_views import (
 )
 from .outpass_request_views import outpass_requests, outpass_request_hr_status, generate_return_qr
 from .family_views import my_family
-from .gate_scanner_views import (
-    gate_devices, gate_device_detail, gate_login_info, gate_login, gate_scan, gate_scan_log,
+from .gate_scanner_views import gate_login_info, gate_login, gate_scan, gate_scan_log
+# Gate Pass / Visitors / Tea Break rebuild (2026-11-18): one module per slice, see the per-slice URL blocks below
+from .gate_admin_views import (
+    gate_devices, gate_device_detail, gate_device_reveal_password, gate_device_sign_out,
+    gate_devices_summary, gate_devices_records, gate_devices_records_export, gate_devices_export,
+)
+from .gate_monitor_views import (
+    gate_monitor_login, gate_monitor_me, gate_monitor_logout, gate_monitor_scan,
+    gate_monitor_summary, gate_monitor_records, gate_monitor_records_export,
+)
+from .outpass_inout_views import (
+    outpass_in_out, outpass_in_out_summary, outpass_in_out_detail, outpass_in_out_export, outpass_in_out_options,
+)
+from .visitor_admin_views import (
+    visitor_visits_create, visitor_visit_detail, visitor_visit_check_out, visitor_people, visitor_export,
+    reception_visit_check_out,
+)
+from .tea_break_admin_views import (
+    tea_break_records_summary, tea_break_record_detail, tea_break_records_employees,
+    tea_break_records_export, tea_break_records_options,
 )
 from .tea_break_views import (
     tea_break_qr_token, tea_break_my_status, tea_break_rule, tea_break_summary, tea_break_records,
@@ -155,8 +173,13 @@ from .outpass_visitor_views import (
     visitor_check_phone, visitor_check_employee_phone, visitor_gate_new, visitor_gate_repeat,
 )
 from .reception_views import (
-    reception_devices, reception_device_detail, reception_login_info, reception_login,
-    reception_summary, reception_visits,
+    reception_login_info, reception_login, reception_me, reception_logout,
+    reception_summary, reception_visits, reception_visits_export, reception_host_lookup, reception_visitor_lookup,
+)
+# Visitors -> Manage Reception (HR side of the reception desks, 18 Nov 2026)
+from .reception_admin_views import (
+    reception_devices, reception_device_detail, reception_device_reveal_password, reception_device_sign_out,
+    reception_devices_overview, reception_devices_records, reception_devices_records_export, reception_devices_export,
 )
 from .production_special_shifts_views import (
     production_shifts_overview, production_special_shifts, production_special_shift_detail,
@@ -534,15 +557,45 @@ urlpatterns = [
     path("visitor/gate/<str:token>/new", visitor_gate_new),
     path("visitor/gate/<str:token>/repeat", visitor_gate_repeat),
 
-    # ── Reception -per-desk kiosk login onto the existing Visitor data, see
-    #    reception_views.py. login-info/login are deliberately public;
-    #    summary/visits are reception-device-authenticated, not HR-token ────
-    path("reception-devices", reception_devices),
+    # ── Gate Pass -> In/Out (slice B2: outpass_inout_views.py; key outpass_visitors.outpass.in_out). Literal paths
+    #    before <int:pk> ──────────────────────────────────────────────────
+    path("outpass/in-out", outpass_in_out),
+    path("outpass/in-out/summary", outpass_in_out_summary),
+    path("outpass/in-out/export", outpass_in_out_export),
+    path("outpass/in-out/options", outpass_in_out_options),
+    path("outpass/in-out/<int:pk>", outpass_in_out_detail),
+
+    # ── Visitors (slice C: visitor_admin_views.py; key outpass_visitors.visitors). visitor/records and
+    #    visitor/summary above stay in outpass_visitor_views.py ─────────────────────────────────────────
+    path("visitor/visits", visitor_visits_create),
+    path("visitor/visits/<int:pk>", visitor_visit_detail),
+    path("visitor/visits/<int:pk>/check-out", visitor_visit_check_out),
+    path("visitor/people", visitor_people),
+    path("visitor/export", visitor_export),
+
+    # ── Reception desks, the desk's own side (reception_views.py): login-info/login are deliberately public; the rest
+    #    is reception-device-authenticated (require_reception_device: the desk's session), never an HR token ────
     path("reception-devices/login-info/<str:login_token>", reception_login_info),
     path("reception-devices/login", reception_login),
+    path("reception-devices/me", reception_me),
+    path("reception-devices/logout", reception_logout),
     path("reception-devices/summary", reception_summary),
     path("reception-devices/visits", reception_visits),
+    path("reception-devices/visits/export", reception_visits_export),
+    path("reception-devices/host-lookup", reception_host_lookup),
+    path("reception-devices/visitor-lookup", reception_visitor_lookup),
+    # the desk's Check out (slice C: visitor_admin_views.py; desk-authenticated, never an HR token)
+    path("reception-devices/visits/<int:pk>/check-out", reception_visit_check_out),
+    # ── Visitors -> Manage Reception (HR, reception_admin_views.py; key outpass_visitors.visitors.reception_devices,
+    #    the reveal is ...reception_devices.view_password). Literal paths before <int:pk> ─────────────────────
+    path("reception-devices", reception_devices),
+    path("reception-devices/overview", reception_devices_overview),
+    path("reception-devices/records", reception_devices_records),
+    path("reception-devices/records/export", reception_devices_records_export),
+    path("reception-devices/export", reception_devices_export),
     path("reception-devices/<int:pk>", reception_device_detail),
+    path("reception-devices/<int:pk>/reveal-password", reception_device_reveal_password),
+    path("reception-devices/<int:pk>/sign-out", reception_device_sign_out),
     path("attendance/search", attendance_search),
     path("attendance/search/range", attendance_search_range),
     path("attendance/compute-shifts", compute_shift_logs),
@@ -860,12 +913,31 @@ urlpatterns = [
     # ── Gate Scanner -per-gate kiosk login + QR exit verification, see
     #    gate_scanner_views.py. login-info/login/scan are deliberately public
     #    or gate-device-authenticated, not HR-token-authenticated ───────────
-    path("gate-devices", gate_devices),
     path("gate-devices/login-info/<str:login_token>", gate_login_info),
     path("gate-devices/login", gate_login),
     path("gate-devices/scan", gate_scan),
     path("gate-devices/scan-log", gate_scan_log),
+
+    # ── Manage Gates (slice B1: gate_admin_views.py; key outpass_visitors.outpass.gate_devices, the reveal is
+    #    ...gate_devices.view_password). Literal paths before <int:pk> ─────────────────────────────────────
+    path("gate-devices", gate_devices),
+    path("gate-devices/summary", gate_devices_summary),
+    path("gate-devices/records", gate_devices_records),
+    path("gate-devices/records/export", gate_devices_records_export),
+    path("gate-devices/export", gate_devices_export),
     path("gate-devices/<int:pk>", gate_device_detail),
+    path("gate-devices/<int:pk>/reveal-password", gate_device_reveal_password),
+    path("gate-devices/<int:pk>/sign-out", gate_device_sign_out),
+
+    # ── Gate Monitor (slice A: gate_monitor_views.py). The shared /gatemonitor sign-in and console: public login,
+    #    the rest gate-device-authenticated (require_gate_device), never an HR token, so not in the permission tree ──
+    path("gate-monitor/login", gate_monitor_login),
+    path("gate-monitor/me", gate_monitor_me),
+    path("gate-monitor/logout", gate_monitor_logout),
+    path("gate-monitor/scan", gate_monitor_scan),
+    path("gate-monitor/summary", gate_monitor_summary),
+    path("gate-monitor/records", gate_monitor_records),
+    path("gate-monitor/records/export", gate_monitor_records_export),
 
     # ── Tea Break -permanent per-employee QR, no approval, same gate logins
     #    as above (see tea_break_views.py). qr-token/my-status are employee-
@@ -875,6 +947,13 @@ urlpatterns = [
     path("tea-break/rule", tea_break_rule),
     path("tea-break/summary", tea_break_summary),
     path("tea-break/records", tea_break_records),
+    # Tea Break page (slice D: tea_break_admin_views.py; key outpass_visitors.tea_break.records). Literal paths before
+    # <int:pk>
+    path("tea-break/records/summary", tea_break_records_summary),
+    path("tea-break/records/employees", tea_break_records_employees),
+    path("tea-break/records/export", tea_break_records_export),
+    path("tea-break/records/options", tea_break_records_options),
+    path("tea-break/records/<int:pk>", tea_break_record_detail),
 
     # ── Audit Logs ───────────────────────────────────────────────────────────
     path("audit-logs", audit_logs),

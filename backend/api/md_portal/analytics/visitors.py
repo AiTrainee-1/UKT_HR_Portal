@@ -11,8 +11,9 @@ summary and ``time_lost`` sets the time employees spend out on passes beside the
 
 Where the numbers come from, and the decisions that keep them honest
 --------------------------------------------------------------------
-* **Visitors**: ``VisitorVisit`` (one row per check-in on the reception QR form). The form records NO check-out and NO
-  company, so "who is inside now", time on site and "by company" cannot be derived and are never shown. The visit's
+* **Visitors**: ``VisitorVisit`` (one row per check-in: the reception QR form, or HR / a reception desk from 18 Nov
+  2026). Check-out is recorded from 18 Nov 2026 only for visits checked out by HR or reception, and the QR form asks for
+  no company, so "who is inside now", time on site and "by company" are not derived here and never shown. The visit's
   *purpose* is free text typed by the visitor: it is grouped into a few categories by the words in it
   (``PURPOSE_CATEGORIES``), always with an "Other" bucket, and the typed wording is available too.
 * **Outpasses**: ``OutpassRequest`` (the employee's request, the approval, the gate exit and the gate return). The
@@ -113,8 +114,8 @@ NO_DEPARTMENT = "No department"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 NOTE_NO_CHECKOUT = (
-    "Visitors are recorded at check-in only (there is no check-out), so who is inside right now and how long a visitor "
-    "stayed cannot be shown."
+    "Check-out is recorded from 18 Nov 2026 for visits checked out by HR or reception; QR self check-ins and older "
+    "visits have no check-out, so who is inside right now and how long a visitor stayed are not shown here."
 )
 NOTE_NO_COMPANY = (
     "The gate form does not ask for a company, so visits cannot be grouped by company: the person visited and the "
@@ -157,6 +158,7 @@ SCAN_REFUSAL_LABELS = {
     "not_approved": "Request not approved",
     "not_exited": "Return scanned before any exit",
     "invalid_qr": "Unreadable or invalid QR",
+    "not_allowed_here": "Not allowed at this gate",
 }
 
 #: Visit purpose categories, checked in this order (the first match wins; anything else is "Other"). A keyword of up to
@@ -693,6 +695,8 @@ def _scan_stats(scope: Scope, period: Period) -> dict:
     lo, hi = _bounds(period)
     rows = (
         OutpassGateScan.objects.filter(_scan_scope_q(scope), scanned_at__gte=lo, scanned_at__lt=hi)
+        # a tea-break code refused by a gate that does not take tea breaks is not a gate-pass scan (19 Nov 2026)
+        .exclude(scan_type=OutpassGateScan.SCAN_TYPE_TEA)
         .order_by()
         .values("gate__name", "scan_type", "result")
         .annotate(n=Count("id"))
@@ -2722,8 +2726,8 @@ TOOLS = [
         "visitors_summary",
         "Visitors at the gate for a period compared with the previous period of the same length: visits, unique "
         "visitors, repeat visitors, after-hours visits, average per day, the busiest hour and day. Use for 'how many "
-        "visitors', 'is footfall up'. Visitors have no check-out, so it cannot say who is inside now or how long "
-        "anyone stayed.",
+        "visitors', 'is footfall up'. Check-out is recorded only from 18 Nov 2026 (HR or reception), so it does not say "
+        "who is inside now or how long anyone stayed.",
         _tool_visitors_summary,
         page="visitors",
         period="last_30_days",

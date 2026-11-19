@@ -190,10 +190,64 @@ class GateDevice(models.Model):
     created_by = models.TextField(null=True, blank=True, db_column="created_by")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     last_login_at = models.DateTimeField(null=True, blank=True, db_column="last_login_at")
+    # Fernet ciphertext of the current password, written beside password_hash by gate_credentials.set_gate_password so
+    # HR can be shown it (Manage Gates -> View). Null = set before 18 Nov 2026 and cannot be shown until a new one is set.
+    # Never part of a list / detail / export payload: only POST gate-devices/<id>/reveal-password decrypts it.
+    password_encrypted = models.TextField(null=True, blank=True, db_column="password_encrypted")
+    location = models.TextField(null=True, blank=True, db_column="location")
+    notes = models.TextField(null=True, blank=True, db_column="notes")
+    # What this gate may scan: gate passes (exit and return) and / or tea-break QRs. db_default so a backend still
+    # running the previous release keeps inserting gates that take both.
+    allow_outpass = models.BooleanField(default=True, db_default=True, db_column="allow_outpass")
+    allow_tea_break = models.BooleanField(default=True, db_default=True, db_column="allow_tea_break")
+    updated_at = models.DateTimeField(null=True, blank=True, db_column="updated_at")
+    updated_by = models.TextField(null=True, blank=True, db_column="updated_by")
 
     class Meta:
         db_table = "gate_devices"
         ordering = ["name"]
+
+
+class GateSession(models.Model):
+    """One signed-in gate monitor (a browser at a gate). The gate's JWT carries `gsid` = sid of one row here, so a
+    session can be ended on its own (logout) or with all the gate's others (password reset, username change,
+    deactivation, HR "Sign out everywhere") -see gate_credentials.py and auth.require_gate_device. The claim is NOT
+    called `jti`: auth._authenticate treats any jti as an HR LoginSession."""
+
+    REVOKED_LOGOUT = "logout"
+    REVOKED_PASSWORD_CHANGED = "password_changed"
+    REVOKED_HR_SIGNED_OUT = "hr_signed_out"
+    REVOKED_DEACTIVATED = "deactivated"
+    REVOKED_USERNAME_CHANGED = "username_changed"
+
+    gate = models.ForeignKey(GateDevice, on_delete=models.CASCADE, db_column="gate_id", related_name="sessions")
+    sid = models.TextField(unique=True, db_column="sid")
+    device_label = models.TextField(blank=True, default="", db_column="device_label")
+    user_agent = models.TextField(blank=True, default="", db_column="user_agent")
+    ip_address = models.TextField(null=True, blank=True, db_column="ip_address")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    last_seen_at = models.DateTimeField(null=True, blank=True, db_column="last_seen_at")
+    revoked_at = models.DateTimeField(null=True, blank=True, db_column="revoked_at")
+    revoked_reason = models.TextField(null=True, blank=True, db_column="revoked_reason")
+
+    class Meta:
+        db_table = "gate_sessions"
+        indexes = [models.Index(fields=["gate", "revoked_at"], name="gate_sessions_gate_rev_idx")]
+
+
+class GateLoginAttempt(models.Model):
+    """One row per gate monitor sign-in attempt, for the 5-wrong-tries-in-15-minutes lockout
+    (gate_credentials.login_locked_out). `username` is stored trimmed and lower-cased so the lockout query is an exact
+    match on the index."""
+
+    username = models.TextField(db_column="username")
+    ip_address = models.TextField(null=True, blank=True, db_column="ip_address")
+    success = models.BooleanField(default=False, db_column="success")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "gate_login_attempts"
+        indexes = [models.Index(fields=["username", "created_at"], name="gate_login_att_user_idx")]
 
 
 class TeaBreakLog(models.Model):
@@ -225,6 +279,7 @@ class TeaBreakLog(models.Model):
     class Meta:
         db_table = "tea_break_logs"
         ordering = ["-out_at"]
+        indexes = [models.Index(fields=["out_at"], name="tea_break_logs_out_at_idx")]
 
 
 class TeaBreakRule(models.Model):
@@ -262,6 +317,8 @@ class OutpassGateScan(models.Model):
     RESULT_NOT_APPROVED = "not_approved"
     RESULT_INVALID_QR = "invalid_qr"
     RESULT_NOT_EXITED = "not_exited"
+    # the gate is switched off for gate passes (GateDevice.allow_outpass): the attempt is refused and still logged
+    RESULT_NOT_ALLOWED_HERE = "not_allowed_here"
     RESULT_CHOICES = [
         (RESULT_SUCCESS, "Success"),
         (RESULT_ALREADY_SCANNED, "Already Scanned"),
@@ -269,11 +326,15 @@ class OutpassGateScan(models.Model):
         (RESULT_NOT_APPROVED, "Not Approved"),
         (RESULT_INVALID_QR, "Invalid QR"),
         (RESULT_NOT_EXITED, "Not Yet Exited"),
+        (RESULT_NOT_ALLOWED_HERE, "Not allowed at this gate"),
     ]
 
     SCAN_TYPE_EXIT = "exit"
     SCAN_TYPE_ENTRY = "entry"
-    SCAN_TYPE_CHOICES = [(SCAN_TYPE_EXIT, "Exit"), (SCAN_TYPE_ENTRY, "Entry")]
+    # a tea-break code refused by a gate that does not take tea breaks (GateDevice.allow_tea_break, since 19 Nov 2026):
+    # always a denied row (RESULT_NOT_ALLOWED_HERE). Allowed tea breaks are TeaBreakLog rows, never scans here.
+    SCAN_TYPE_TEA = "tea"
+    SCAN_TYPE_CHOICES = [(SCAN_TYPE_EXIT, "Exit"), (SCAN_TYPE_ENTRY, "Entry"), (SCAN_TYPE_TEA, "Tea break")]
 
     gate = models.ForeignKey(
         GateDevice, on_delete=models.SET_NULL, null=True, blank=True,
@@ -299,6 +360,7 @@ class OutpassGateScan(models.Model):
     class Meta:
         db_table = "outpass_gate_scans"
         ordering = ["-scanned_at"]
+        indexes = [models.Index(fields=["gate", "scanned_at"], name="outpass_gate_scans_gate_idx")]
 
 
 class Visitor(models.Model):
@@ -352,9 +414,40 @@ class VisitorVisit(models.Model):
     notified_whatsapp_at = models.DateTimeField(null=True, blank=True, db_column="notified_whatsapp_at")
     visited_at = models.DateTimeField(auto_now_add=True, db_column="visited_at")
 
+    # How the visit was checked in, and its check-out (both from 18 Nov 2026; every older row is a QR self check-in
+    # with no check-out). db_default so a backend still running the previous release keeps inserting QR visits.
+    SOURCE_QR = "qr"  # the visitor's own phone, through the branch's visitor QR
+    SOURCE_HR = "hr"  # registered by HR on the Visitors page
+    SOURCE_RECEPTION = "reception"  # registered at a reception desk
+    SOURCE_CHOICES = [(SOURCE_QR, "QR self check-in"), (SOURCE_HR, "HR"), (SOURCE_RECEPTION, "Reception")]
+    source = models.TextField(choices=SOURCE_CHOICES, default=SOURCE_QR, db_default=SOURCE_QR, db_column="source")
+    # display name of the HR user / desk that registered it; null for a QR self check-in
+    checked_in_by = models.TextField(null=True, blank=True, db_column="checked_in_by")
+    checked_out_at = models.DateTimeField(null=True, blank=True, db_column="checked_out_at")
+    checked_out_by = models.TextField(null=True, blank=True, db_column="checked_out_by")
+    checkout_source = models.TextField(null=True, blank=True, db_column="checkout_source")  # "hr" | "reception"
+    company = models.TextField(null=True, blank=True, db_column="company")
+    vehicle_number = models.TextField(null=True, blank=True, db_column="vehicle_number")
+    people_count = models.PositiveSmallIntegerField(default=1, db_default=1, db_column="people_count")
+    id_proof_type = models.TextField(null=True, blank=True, db_column="id_proof_type")
+    badge_number = models.TextField(null=True, blank=True, db_column="badge_number")
+    notes = models.TextField(null=True, blank=True, db_column="notes")
+    # The reception desk that checked the visitor in (a walk-in registered at the desk) / out, from 18 Nov 2026, so Manage
+    # Reception can count and list each desk login's records. SET_NULL: deleting a desk never deletes a visit (its
+    # checked_in_by / checked_out_by text keeps the desk's name).
+    checked_in_desk = models.ForeignKey(
+        "ReceptionDevice", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="checked_in_desk_id", related_name="checked_in_visits",
+    )
+    checked_out_desk = models.ForeignKey(
+        "ReceptionDevice", on_delete=models.SET_NULL, null=True, blank=True,
+        db_column="checked_out_desk_id", related_name="checked_out_visits",
+    )
+
     class Meta:
         db_table = "visitor_visits"
         ordering = ["-visited_at"]
+        indexes = [models.Index(fields=["visited_at"], name="visitor_visits_visited_idx")]
 
 
 class ReceptionDevice(models.Model):
@@ -374,6 +467,12 @@ class ReceptionDevice(models.Model):
     `is_active` is the revocation switch, re-checked on every request by
     require_reception_device exactly like require_gate_device does for
     GateDevice.
+
+    Since 18 Nov 2026 a desk signs in at the one shared /reception-login page
+    into a revocable ReceptionSession (30-day token, lockout after 5 wrong
+    tries: reception_credentials.py), registers walk-in visitors and checks
+    them out (VisitorVisit.checked_in_desk / checked_out_desk), and HR manages
+    every desk on Visitors -> Manage Reception (reception_admin_views.py).
     """
 
     name = models.TextField(db_column="name")
@@ -387,7 +486,57 @@ class ReceptionDevice(models.Model):
     created_by = models.TextField(null=True, blank=True, db_column="created_by")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     last_login_at = models.DateTimeField(null=True, blank=True, db_column="last_login_at")
+    # Manage Reception (18 Nov 2026), the same as GateDevice: the Fernet copy of the password for HR's View (never in a
+    # list / detail / export payload: only POST reception-devices/<id>/reveal-password decrypts it; null = set before
+    # this feature), where the desk is, notes, and who changed it last (updated_at also ends a sign-in lock).
+    password_encrypted = models.TextField(null=True, blank=True, db_column="password_encrypted")
+    location = models.TextField(null=True, blank=True, db_column="location")
+    notes = models.TextField(null=True, blank=True, db_column="notes")
+    updated_at = models.DateTimeField(null=True, blank=True, db_column="updated_at")
+    updated_by = models.TextField(null=True, blank=True, db_column="updated_by")
 
     class Meta:
         db_table = "reception_devices"
         ordering = ["name"]
+
+
+class ReceptionSession(models.Model):
+    """One signed-in reception desk browser (/reception-login), exactly like GateSession for gates. The desk's JWT carries
+    `rsid` = sid of one row here, so one browser can be signed out (logout) or all of the desk's (password reset, username
+    change, switching it off, HR "Sign out everywhere") -see reception_credentials.py and auth.require_reception_device.
+    The claim is NOT `jti` (auth._authenticate reads any jti as an HR LoginSession) and not `gsid` (a gate's)."""
+
+    REVOKED_LOGOUT = "logout"
+    REVOKED_PASSWORD_CHANGED = "password_changed"
+    REVOKED_HR_SIGNED_OUT = "hr_signed_out"
+    REVOKED_DEACTIVATED = "deactivated"
+    REVOKED_USERNAME_CHANGED = "username_changed"
+
+    desk = models.ForeignKey(ReceptionDevice, on_delete=models.CASCADE, db_column="desk_id", related_name="sessions")
+    sid = models.TextField(unique=True, db_column="sid")
+    device_label = models.TextField(blank=True, default="", db_column="device_label")
+    user_agent = models.TextField(blank=True, default="", db_column="user_agent")
+    ip_address = models.TextField(null=True, blank=True, db_column="ip_address")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    last_seen_at = models.DateTimeField(null=True, blank=True, db_column="last_seen_at")
+    revoked_at = models.DateTimeField(null=True, blank=True, db_column="revoked_at")
+    revoked_reason = models.TextField(null=True, blank=True, db_column="revoked_reason")
+
+    class Meta:
+        db_table = "reception_sessions"
+        indexes = [models.Index(fields=["desk", "revoked_at"], name="reception_sessions_desk_idx")]
+
+
+class ReceptionLoginAttempt(models.Model):
+    """One row per reception desk sign-in attempt, for the 5-wrong-tries-in-15-minutes lockout
+    (reception_credentials.login_locked_out). Kept apart from GateLoginAttempt on purpose: a username is unique per table,
+    so a desk and a gate may share one. `username` is stored trimmed and lower-cased."""
+
+    username = models.TextField(db_column="username")
+    ip_address = models.TextField(null=True, blank=True, db_column="ip_address")
+    success = models.BooleanField(default=False, db_column="success")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "reception_login_attempts"
+        indexes = [models.Index(fields=["username", "created_at"], name="reception_login_att_user_idx")]

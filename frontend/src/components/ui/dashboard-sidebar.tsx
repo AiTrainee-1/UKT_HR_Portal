@@ -100,9 +100,9 @@ export const navGroups: NavGroupData[] = [
         label: 'Outpass / Visitors',
         icon: DoorOpen,
         children: [
-          // Outpass and Tea Break have tabs in their path (/outpass/overview/passes): they keep their row lit
-          { path: '/hr/outpass-visitors/outpass', label: 'Outpass', matchSubpaths: true },
-          { path: '/hr/outpass-visitors/visitors', label: 'Visitors' },
+          // all three have tabs in their path (/outpass/overview/passes, /visitors/desks): they keep their row lit
+          { path: '/hr/outpass-visitors/outpass', label: 'Gate Pass', matchSubpaths: true },
+          { path: '/hr/outpass-visitors/visitors', label: 'Visitors', matchSubpaths: true },
           { path: '/hr/outpass-visitors/tea-break', label: 'Tea Break', matchSubpaths: true },
         ],
       },

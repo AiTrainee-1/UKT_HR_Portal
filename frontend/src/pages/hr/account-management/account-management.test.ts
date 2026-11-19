@@ -274,7 +274,8 @@ describe("what a role can do", () => {
 
   it("sets everything at once but leaves keys it does not know about", () => {
     const p = setAll({ legacy_module: "edit", "settings.smtp": "edit" }, "view");
-    expect(levelCounts(p)).toEqual({ edit: 0, view: total, hidden: 0, total });
+    // the two password reveals are only ever given on their own row (lib/permission-explicit.test.ts): still hidden
+    expect(levelCounts(p)).toEqual({ edit: 0, view: total - 2, hidden: 2, total });
     expect(p["legacy_module"]).toBe("edit");
     expect(p["settings.smtp"]).toBeUndefined();
   });

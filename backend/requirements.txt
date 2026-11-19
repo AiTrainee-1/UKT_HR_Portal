@@ -4,6 +4,9 @@ django-cors-headers>=4.6,<5
 psycopg2-binary>=2.9,<3
 PyJWT>=2.9,<3
 bcrypt>=4.2,<5
+# Fernet encryption of gate passwords so HR can view them (gate_credentials.py). It was only a transitive
+# dependency before; pinned to the version that was installed.
+cryptography==49.0.0
 python-dotenv>=1.0,<2
 pyzk>=0.9
 apscheduler>=3.10,<4

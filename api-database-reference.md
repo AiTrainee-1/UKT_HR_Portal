@@ -826,6 +826,118 @@ addresses).
 - **GET /api/dashboard/interview-summary** — `@require_hr`. Applicant funnel counts by status (attended/selected/rejected/pending=applied) across all applicants.
 - **GET /api/dashboard/salary-trends** — `@require_hr`. Last 12 months of total salary paid, preferring `Payroll.final_salary` sums and falling back to legacy `SalaryRecord.amount` sums if no payroll rows exist.
 
+## Gate Pass, Visitors & Tea Break (rebuilt 2026-11-18)
+
+Three kinds of caller use these endpoints, and they never share a token:
+
+- **HR portal** (`@require_hr`): keys under `outpass_visitors` (GET needs View, every other method Edit), branch-scoped (a branch-limited HR account only ever sees its own branch: another branch's gate, desk, visit or pass is "not found", and a `branchId` it sends is ignored).
+- **Gate monitor** (`/gatemonitor`, `require_gate_device`): the gate's own session token. Not in the permission tree (`tests_permission_tree.API_ALLOWLIST`: `gate-monitor/.*`).
+- **Reception desk** (`/reception-login`, `require_reception_device`): the desk's own session token, always limited to the desk's branch. The desk's paths sit under the `reception-devices` prefix, which the permission middleware only ever applies to HR tokens.
+
+Architecture (sessions, lockout, encryption, the record union, exports): `backend.md` Section 4.19. The QR pages (`outpass/gate/*`, `visitor/gate/*`), the employee apps' `tea-break/qr-token` and `tea-break/my-status`, and `tea-break/summary` are unchanged.
+
+**Shared conventions.**
+- Dates are `YYYY-MM-DD` India days, inclusive (`from`, `to`); a start after the end is a 400. `q` takes up to 4 words and every word must match. `page` starts at 1, `pageSize` defaults to 25 and is capped at 100. A bad filter is `400 {"error": "<plain words>"}`.
+- **Files** (`?fmt=xlsx|pdf` on every `.../export`): made by the Report Center's own writers and letterhead (`gate_exports.file_response`). `Content-Disposition: attachment; filename="<slug>_<YYYYmmdd_HHMM>.<ext>"`, `Cache-Control: no-store`, an audit row `export` on module `outpass_visitors`. Errors: 400 `{"error": "invalid_format", "message": "Choose Excel (xlsx) or PDF."}`; 413 `{"error": "too_many_rows", "message": "Too many rows for one file. Narrow the dates.", "limit"}` above 30,000 rows (Excel) or 5,000 (PDF); 500 `export_failed`. No file ever holds a password, a password hash, a login link token, a pass QR code or a full Aadhaar number.
+- **Gate record row** (`gate_records.py`, shared by Manage Gates and the gate monitor): `{id ("scan-<pk>" | "teaout-<pk>" | "teain-<pk>"), at, type ("exit" | "return" | "tea_out" | "tea_in"), result ("allowed" | "denied"), reason (the denied scan's result code, else null), reasonLabel, message, gateId, gateName ("Removed gate" for a deleted gate), employee {id, employeeCode, name, department, photoUrl} | null, destination, passId, minutes (tea_in only)}`. Sources: every `OutpassGateScan` (exit -> `exit`, entry -> `return`; success -> allowed, anything else -> denied), and each `TeaBreakLog` twice (its out scan -> `tea_out`, its in scan -> `tea_in`, always allowed). A refused tea-break scan (`OutpassGateScan.scan_type = "tea"`, from migration 0164) is a **denied tea-break record** (type `tea_out`), counted under `denied` and never as an exit. Reason labels: Already scanned, Pass expired, Not approved, QR not recognised, Not gone out yet, Not allowed at this gate. `photoUrl` is a signed link.
+- **Record filters** (gate records): `gateId` (one id or `"1,2"`), `from`, `to`, `type` (one of the four, or a comma list), `result` (`allowed`, `denied`, or one reason code), `q` (employee code or name, or the pass destination), `branchId` (the GATE's branch; an HR account not bound to a branch only), `page`, `pageSize`. Every list answers `{items, total, page, pageSize, counts: {exits, returns, teaOut, teaIn, denied, total}}`: `counts` are for the same gates, dates, search and branch across every type and result (the numbers on the chips); `total` is the filtered count.
+
+### Device sessions (gates and reception desks)
+
+- A gate token is a 30-day JWT `{"role": "gate_device", "deviceId", "gateName", "gsid"}`; a desk token is `{"role": "reception_device", "deviceId", "deskName", "rsid"}`. `gsid` / `rsid` is the `sid` of one row of `gate_sessions` / `reception_sessions`. The claim is deliberately not `jti` (the HR sign-in reads any `jti` as an HR `LoginSession`).
+- Every device request checks the session: missing, revoked or another device's session -> **401** `{"error": "This gate's sign-in has ended. Sign in again." | "This desk's sign-in has ended. Sign in again.", "code": "session_ended"}`. A token without `gsid` / `rsid` (the 24-hour sign-ins issued before this release) is refused the same way, so every gate and desk screen signs in once after the update. A switched-off or deleted device -> **403** `{"error", "code": "gate_revoked" | "desk_revoked"}`.
+- `GET .../me` hands out a fresh token for the same session when fewer than 15 days are left, so a screen in daily use is never signed out. Normal use never ends a session; only Sign out, an HR change (password, username, switch off), HR "Sign out everywhere" or deleting the device does.
+- **Sign-in lock:** 5 wrong attempts for one username within 15 minutes -> **429** `{"error": "Too many wrong tries. Wait 15 minutes or ask HR to reset the password.", "code": "locked"}` until the window passes or HR saves any change to that gate / desk (a password reset included). A correct password for a switched-off device counts as a failed attempt. Every attempt is a row of `gate_login_attempts` / `reception_login_attempts` (the username trimmed and lower-cased; never the password).
+
+### Gate monitor (gate_monitor_views.py)
+
+- **POST /api/gate-monitor/login** — public, throttle scope `login`. `{username, password}` (the username decides the gate; letter case does not matter). 200 `{token, gate: {id, name, branchName, location, allowOutpass, allowTeaBreak}}`. 400 `{code: "missing"}` for an empty field (not counted as an attempt); 401 `{error: "Wrong username or password.", code: "wrong"}`; 403 `{error: "This gate is switched off. Ask HR to switch it on.", code: "switched_off"}`; 429 `code: "locked"`. A success opens a `GateSession` and stamps `last_login_at`.
+- **GET /api/gate-monitor/me** — `{gate, session: {id, deviceLabel, createdAt, lastSeenAt}, expiresAt}` plus `token` when the current one has fewer than 15 days left. The monitor calls it on load, every 5 minutes, when its tab comes back into view and when the network returns.
+- **POST /api/gate-monitor/logout** — ends this session only (other screens of the same gate stay signed in) -> 204.
+- **POST /api/gate-monitor/scan** — `{qrToken}`; the same answers as `POST /api/gate-devices/scan` (`gate_scanner_views.resolve_gate_scan`). A recognised code of a kind the gate does not take (`allowOutpass` / `allowTeaBreak` off) -> **403** `{result: "not_allowed_here", kind: "outpass" | "tea_break", message: "This gate does not take gate passes." | "This gate does not take tea-break scans.", employee?, scanType? and the pass details}`, and a denied `OutpassGateScan` row is written (`scan_type` exit / entry for a pass, `"tea"` for a tea-break code).
+- **GET /api/gate-monitor/summary** — today (IST) at this gate: `{exits, returns, teaOut, teaIn, denied, total, passesOutNow, teaOutNow, outNow, date}`.
+- **GET /api/gate-monitor/records** — this gate's records (record filters above); `gateId` and `branchId` are ignored: a gate only ever sees its own rows.
+- **GET /api/gate-monitor/records/export** — the same rows as a file titled "Gate records - \<gate\>" (no Gate column).
+- **Older kiosk calls, kept:** `POST /api/gate-devices/login` (same keys `{token, gateId, gateName}`; now opens a session with a 30-day `gsid` token, records the attempt and answers 429 when locked; a wrong password and a switched-off gate both stay the old 401 "Invalid username or password"), `GET /api/gate-devices/login-info/<token>` (`{gateName, branchName, isActive}`; only a hint on the sign-in page), `POST /api/gate-devices/scan` and `GET /api/gate-devices/scan-log` (unchanged contracts).
+
+### Manage Gates (gate_admin_views.py; key `outpass_visitors.outpass.gate_devices`)
+
+The HR views moved here from `gate_scanner_views.py`. Every write is audited (`create`, `update` with old / new values and the password only as "changed", `delete`, `view_password`; module `outpass_visitors`) and stamps `updated_at` / `updated_by`.
+
+- **GET /api/gate-devices** — `?q` (name, username, location, branch), `?status=active|inactive`, `?branchId` (unbound HR only). An array of gates: the old keys `{id, name, branchId, branchName, username, isActive, loginToken, createdBy, createdAt, lastLoginAt}` plus `location, notes, allowOutpass, allowTeaBreak, updatedAt, updatedBy, passwordViewable, activeSessions, lastActivityAt, counts: {today, exits, returns, teaOut, teaIn, denied, total}` (`today` = every record of today; the others all time). The counts of a whole list come from a fixed number of grouped queries.
+- **POST /api/gate-devices** — `{name, username, password, branchId, location?, notes?, allowOutpass? (true), allowTeaBreak? (true)}` -> 201 gate. A branch-limited account always creates in its own branch. 400: missing field, username not 3-60 characters or with spaces, password not 6-128 characters, location over 200 / notes over 1,000 characters, a flag that is not true / false; 404 branch; 409 "That username is already taken" (any letter case).
+- **GET /api/gate-devices/\<id\>** — the gate plus `sessions: [{id, deviceLabel, createdAt, lastSeenAt}]` (open sessions seen within the token lifetime).
+- **PUT /api/gate-devices/\<id\>** — any of `name`, `branchId` (unbound HR; a branch-limited account may only name its own branch, else 403 "You can only keep gates in your own branch."), `username` (409 when taken), `location`, `notes`, `allowOutpass`, `allowTeaBreak`, `isActive`, `password`. Signs the gate out everywhere (revoke reason): switching it off (`deactivated`), a new password (`password_changed`), a new username other than a letter-case change (`username_changed`). Any saved change also ends a sign-in lock of that username.
+- **DELETE /api/gate-devices/\<id\>** — 204. Hard delete: its sessions go with it, its records stay (shown under "Removed gate"; only an HR account not bound to a branch sees them).
+- **POST /api/gate-devices/\<id\>/reveal-password** — key `outpass_visitors.outpass.gate_devices.view_password` ("See gate passwords"), which is **off unless a role is given it explicitly**: it does not follow its parent, the MD's section access does not include it, the Super Admin always has it. 200 `{password}` with `Cache-Control: no-store`, and an audit row `view_password` (the password is never logged); 409 `{error: "This gate's password was set before 18 Nov 2026, so it cannot be shown. Set a new password to see it.", code: "not_stored"}` when there is no readable copy (set before 18 Nov 2026, or `JWT_SECRET` changed since).
+- **POST /api/gate-devices/\<id\>/sign-out** — ends every session of the gate (`hr_signed_out`) -> `{signedOut: n}`.
+- **GET /api/gate-devices/summary** — `?from&to&branchId` -> `{gates, active, signedInNow (a session seen in the last 10 minutes), recordsToday, deniedToday, records, denied}` (`records` / `denied` for the dates; no dates = all time).
+- **GET /api/gate-devices/records** — the record filters above, across the gates in scope.
+- **GET /api/gate-devices/records/export** — the same records as a file: "Gate records" (with " - \<gate\>" when one gate is chosen), the filters line and the counts.
+- **GET /api/gate-devices/export** — the gate list (`?q&status&branchId&fmt`): gate, branch, location, username, status, what it takes, its counts, signed-in screens, last activity, last sign-in, created and changed by / on, notes. Never a password or a login link.
+
+### Gate Pass -> In/Out (outpass_inout_views.py; key `outpass_visitors.outpass.in_out`, all GET)
+
+Before 2026-11-18 the tab read the Requests module's `/api/outpass-requests`; these are its own. Rows are passes that went out through a gate (`exited_at` set). A pass's QR codes are never sent.
+
+- **Filters:** `from`, `to` (on the exit scan; neither = today), `gateId` (the exit OR the return gate), `employeeId`, `departmentId`, `status` (`back` | `out` | `overdue` | `not_returned` | `early_dismissal`; `out` = everyone still out today, overdue included), `q` (employee name or code, destination, reason), `branchId` (unbound HR; a bound account sees its branch's employees), `page`, `pageSize`.
+- **GET /api/outpass/in-out** — `{items, total, page, pageSize}`. Row: `{id, employee: {id, employeeCode, name, department, designation, photoUrl}, passType, passTypeLabel, destination, reason, source, sourceLabel, approvedBy, approvedAt, expectedReturnAt, exitGateId, exitGateName, exitedAt, entryGateId, entryGateName, enteredAt, minutesOut (door to door; running while still out today), allowedMinutes, overMinutes, overdue, status, statusLabel}`. Status (the Report Center's `pass_state`): Back, Out, Overdue (still out past the expected return), Not returned (out on an earlier day, never scanned back), Left for the day (an early-dismissal pass).
+- **GET /api/outpass/in-out/summary** — `{wentOut, cameBack, stillOut, overdue, notReturned, earlyDismissal, avgMinutesOut, longestMinutesOut, totalMinutesOut}` for the same filters (the same figures as the Report Center's "Gate In / Out Register").
+- **GET /api/outpass/in-out/\<id\>** — the row plus `requestedAt`, `reviewComment`, `approvalTrail` (the requests list's approval block; null for an On-Duty pass) and `scans: [{id, at, type, result, reason, reasonLabel, gateName, message}]` (every scan of the pass, denied ones too). 404 when unknown, out of scope or not gone out yet.
+- **GET /api/outpass/in-out/export** — the filtered rows as "Gate pass in / out", the headline figures on top.
+- **GET /api/outpass/in-out/options** — `{gates: [{id, name, isActive, branchName}], departments: [{id, name, category, branchName}]}` for the filter selects (the account's branch only; a repeated name gets its branch / kind added). The employee filter uses `GET /api/employees?search=&status=active&lite=1` (needs the Employees permission).
+
+### Visitors, HR side (outpass_visitor_views.py, visitor_admin_views.py; key `outpass_visitors.visitors`)
+
+A visit's status is worked out, never stored: **checked_out** (a check-out was recorded), **inside** (checked in today, India time, and not checked out), **not_checked_out** ("Left without check-out": an earlier day with no check-out). Check-in and check-out exist from 18 Nov 2026; a QR self check-in has no check-out unless HR or a desk records one. A check-out can be recorded up to 24 hours after check-in, so a visitor still inside after midnight can still be checked out.
+
+- **GET /api/visitor/records** — as before (`range` today / week / month, month by default; `page`, `pageSize`) plus `from`, `to`, `status` (`inside` | `checked_out` | `not_checked_out`), `branchId` (unbound HR), `hostEmployeeId`, `departmentId` (the host's), `source` (`qr` | `hr` | `reception`), `q` (visitor name or phone, company, host, purpose, vehicle, badge). Each item keeps every old key and adds `visitorId, branchId, source, sourceLabel, checkedInBy, checkedOutAt, checkedOutBy, checkoutSource, company, vehicleNumber, peopleCount, idProofType, badgeNumber, notes, status, statusLabel, minutesInside, visitCount`. `minutesInside` uses the same rounding as the summary and the files.
+- **GET /api/visitor/summary** — keeps `{today, thisWeek, thisMonth}` and adds `insideNow`, `checkedOutToday`, `longStayNow` (inside over 2 hours), `repeatThisMonth`, `inRange: {visits, checkedOut, avgMinutes}` for the same filters. `?options=1` adds `options: {hosts, departments}` (the people visitors came to meet at this branch, and their departments).
+- **POST /api/visitor/visits** — HR registers a visitor = checked in now (`source "hr"`, `checkedInBy` = the HR user). `{name, phone, aadhaarNumber?, company?, vehicleNumber?, peopleCount? (1-50), idProofType?, badgeNumber?, whomToMeet, meetingEmployeeId?, purpose, whyCame?, notes?, branchId}` (`branchId` only for an unbound account). The phone finds a returning visitor (that row is reused, a name or Aadhaar sent updates it), else a new visitor is created (then `name` is required). The host must be an employee of the visit's branch. The host is told by email and WhatsApp like the QR form (best effort, never fails the request). 201 + the visit. 400 with plain words (missing phone / purpose / whom, phone under 6 digits, an Aadhaar that is not 12 digits, too long a field, people outside 1-50, host not found or not of this branch, no branch); 409 `{code: "already_inside", visitId}` when the visitor is still inside at this branch.
+- **GET /api/visitor/visits/\<id\>** — the visit plus `history` (that visitor's latest 20 visits this account may see, this one included).
+- **POST /api/visitor/visits/\<id\>/check-out** — `{note?}` (at most 300 characters, added to the notes) -> 200 + the visit. Once only, and up to 24 hours after check-in (a visitor still inside after midnight can still be checked out). 404 unknown / other branch; 409 `{code: "already_checked_out", checkedOutAt}`; 409 when the check-in was more than 24 hours ago.
+- **GET /api/visitor/people** — the visitors directory, most recent first: `?q` (name or phone), `?phone` (one visitor by number however it is typed: the register form's returning-visitor check), `?branchId` (unbound HR), `page`, `pageSize` -> items `{id, name, phoneMasked, lastVisitAt, visitCount, lastHost, insideNow, lastVisitId, lastCompany}` (visits counted at the account's branch).
+- **GET /api/visitor/export** — the records filters as a file "Visitors": checked in, visitor, phone, Aadhaar (only `XXXX XXXX 1234`), company, people, vehicle, meeting, department, purpose, status, checked out, time inside, checked in by, branch; summary visits / checked out / inside now / average time inside.
+
+### Reception desk, the desk's side (reception_views.py; desk token)
+
+Everything is limited to the desk's own branch: a `branchId` is ignored, a visit of another branch is 404, and a returning visitor or host is only looked up there.
+
+- **POST /api/reception-devices/login** — public, throttle scope `login`. `{username, password}` -> `{token, deviceId, deskName, desk: {id, name, branchName, location}}` (`token` / `deviceId` / `deskName` are the keys the console stored before). Same errors as the gate monitor's sign-in (`missing` 400, `wrong` 401, `switched_off` 403 "This desk is switched off. Ask HR to switch it on.", `locked` 429). One sign-in for every desk: the username decides the desk.
+- **GET /api/reception-devices/login-info/\<token\>** — public: `{deskName, branchName, isActive}` of an old per-desk link (a hint on the sign-in page), 404 when unknown.
+- **GET /api/reception-devices/me** — `{desk, session, expiresAt}` plus `token` when fewer than 15 days are left. **POST .../logout** — ends this session only -> 204.
+- **GET /api/reception-devices/summary** — `{today, thisWeek, thisMonth, insideNow, checkedOutToday}` at the desk's branch.
+- **GET /api/reception-devices/visits** — the branch's visits: `range` (today by default) or `from` / `to`, `status`, `q`, `page`, `pageSize` -> `{items (the visit JSON above), total, page, pageSize}`.
+- **POST /api/reception-devices/visits** — a walk-in registered at the desk (the body of HR's register without `branchId`; the same checks and host message) -> 201; `source "reception"`, checked in by the desk, `checked_in_desk` = this desk.
+- **GET /api/reception-devices/visits/export** — the list's filters as a file "Visitors - \<desk\>".
+- **POST /api/reception-devices/visits/\<id\>/check-out** — `{note?}`; the HR check-out rules, own branch only; records `checked_out_desk` and `checkout_source "reception"`.
+- **POST /api/reception-devices/host-lookup** — `{phone}` -> `{found, employee?}` (the employee the visitor is meeting); 400 for an empty phone.
+- **GET /api/reception-devices/visitor-lookup** — `?phone` -> `{visitor: {id, name, visitCount, lastVisitAt, insideNow, lastVisitId} | null}`; someone who only visited other branches is `null`.
+
+### Visitors -> Manage Reception (reception_admin_views.py; key `outpass_visitors.visitors.reception_devices`)
+
+The twin of Manage Gates for the desk logins (the old Reception logins dialog read the same list). Audited and stamped the same way.
+
+- **GET /api/reception-devices** — `?q`, `?deskStatus=active|inactive`, `?branchId` (unbound HR). Desks: the old keys `{id, name, branchId, branchName, username, isActive, loginToken, createdBy, createdAt, lastLoginAt}` plus `location, notes, updatedAt, updatedBy, passwordViewable, activeSessions, lastActivityAt, counts: {today, checkIns, checkOuts, total}`.
+- **POST /api/reception-devices** — `{name, username, password, branchId, location?, notes?}` -> 201 (same rules and errors as a gate). **GET .../\<id\>** (+ `sessions`), **PUT .../\<id\>** (`name, branchId, username, location, notes, isActive, password`; the same sign-out rules), **DELETE .../\<id\>** (204; the visits it checked in or out keep the desk's name as text).
+- **POST /api/reception-devices/\<id\>/reveal-password** — key `outpass_visitors.visitors.reception_devices.view_password` ("See desk passwords"), off unless given explicitly, like the gate key. `{password}` or 409 `not_stored`; audited `view_password`.
+- **POST /api/reception-devices/\<id\>/sign-out** — `{signedOut}`.
+- **GET /api/reception-devices/overview** — `?from&to&branchId` -> `{desks, active, signedInNow, checkInsToday, checkOutsToday, checkIns, checkOuts}`.
+- **GET /api/reception-devices/records** — what the desks did (from 18 Nov 2026): `deskId` (one or `"1,2"`), `from`, `to`, `type` (`check_in` | `check_out`), `q`, `branchId`, `page`, `pageSize` -> `{items: [{id ("in-<visit>" | "out-<visit>"), at, type, typeLabel, desk: {id, name} | null, visit: {id, visitorName, company, peopleCount, host, hostDepartment, purpose, badgeNumber, status, statusLabel, visitedAt, checkedOutAt, minutesInside, branchName}}], total, page, pageSize, counts: {checkIns, checkOuts, total}}`.
+- **GET /api/reception-devices/records/export** and **GET /api/reception-devices/export** — the records and the desk list as files (never a phone number, an Aadhaar number, a password or a login link).
+
+### Tea Break (tea_break_views.py, tea_break_admin_views.py; key `outpass_visitors.tea_break.records`)
+
+Numbers come from the Report Center's `gate_visitor_tea_common` (the page, the Report Center and the MD portal cannot disagree). The rule stays `GET/PUT /api/tea-break/rule` (key `.rule`).
+
+- **Filters** (every endpoint below): `from`, `to` (on the break's start; without them the old `range` today / week / month, today by default), `departmentId` (one or a comma list), `employeeId`, `gateId` (the gate the break started OR ended at; one or a list), `status` (`on_break` | `on_time` | `overtime` | `not_returned`; the old `filter=overtime|not_returned` still works), `q` (employee code or name), `branchId` (unbound HR).
+- **GET /api/tea-break/records** — now filtered and paged in SQL. Each item is the unchanged `{id, employee {id, employeeCode, name, department, photoUrl}, outGateName, outAt, inGateName, inAt, takenMinutes, remark}` plus `designation, branchName, overMinutes, flag ("long" | "left_open" | null), flagLabel, allowedMinutes, status, statusLabel, outGateId, inGateId`; the answer adds `allowedMinutes`. Not returned = not scanned back within an hour.
+- **GET /api/tea-break/records/summary** — `{breaks, onBreakNow, onTime, overtime, notReturned, avgMinutes, longestMinutes, employees, overMinutesTotal, allowedMinutes, completed, totalMinutes, longOrOpen, from, to}`.
+- **GET /api/tea-break/records/\<id\>** — the break plus `employeeMonth: {month, label, breaks, onTime, overtime, notReturned, avgMinutes, totalMinutes, overMinutesTotal}` (the month it started in) and `recent` (that employee's latest 10 breaks). 404 unknown / out of scope.
+- **GET /api/tea-break/records/employees** — one row per employee: `{employee {..., designation, branchName}, breaks, completed, onTime, overtime, notReturned, onBreak, onBreakNow, totalMinutes, avgMinutes, longestMinutes, overMinutesTotal}`; `sort` = `name | code | breaks | total | avg | longest | overtime | notReturned | over`, a leading `-` for high to low (default `-breaks`).
+- **GET /api/tea-break/records/export** — `?view=breaks|employees&fmt=` plus the filters (and `sort` for employees).
+- **GET /api/tea-break/records/options** — `{departments, gates (a switched-off gate is labelled so), branches (unbound HR only), branchScoped, allowedMinutes, ruleUpdatedAt}`.
+
 ## Reports (api/reporting/)
 
 The Report Center. All endpoints are `@api_view(["GET"])` + `@require_hr`, branch-scoped through `ReportContext.emp_q()`, and sit under `/api/reports/` (module `reports`).
@@ -844,7 +956,7 @@ Everything is for the one account with `HRUser.is_md`. Every `/api/md/*` view is
 - **GET /api/md/dashboard/overview, trends, briefing** — the first screen: up to 8 headline cards (each module's own `headline()`), merged exceptions (`insights()` of every page), today's attendance by unit, a plain-words briefing; the three trend charts; the briefing alone. A module that fails shows as an error entry, never takes the page down.
 - **GET /api/md/attendance/summary, trend, departments, weekday, heatmap, exceptions, overtime, leave, day** — attendance %, absenteeism, late, overtime, half days, missing punches with the previous period; trend by day/week; ranking by department/unit/type; weekday pattern; department-by-day heat map; chronic absentees, late-comers, long absences, absences after a day off; overtime; leave; one day's roster. Today is provisional and never part of a rate.
 - **GET /api/md/employees/summary, composition, movement, attrition, insights, milestones, directory, employee/\<id\>** — headcount, joiners, leavers, attrition, tenure; composition by type/unit/department/designation/age/gender and planned vs actual staff; monthly movement; attrition by group, reasons, time served, early leavers; milestones; a searchable directory (no salary or contact details); one person's story.
-- **GET /api/md/visitors/summary, trend, visitors, outpass, units, exceptions, activity, day** and **GET /api/md/tea-break/summary, trend, departments, shifts, offenders, heatmap, rule, attention** — gate, visitor, outpass and tea-break analytics (visitors have no check-out, so nobody is shown as "inside").
+- **GET /api/md/visitors/summary, trend, visitors, outpass, units, exceptions, activity, day** and **GET /api/md/tea-break/summary, trend, departments, shifts, offenders, heatmap, rule, attention** — gate, visitor, outpass and tea-break analytics. Check-out is recorded from 18 Nov 2026 for visits checked out by HR or a reception desk; QR self check-ins and older visits have none, so the MD analytics still show nobody as "inside" (the payload keys are unchanged; only the wording of the notes changed).
 - **GET /api/md/payroll/summary, trend, bridge, departments, distribution, components, advances, exceptions, status, attention** — gross/net/cost per head from salary slips, the month-on-month cost bridge, cost by department/unit/type, take-home distribution (counts only), earnings and deductions by head, advances outstanding, exceptions, whether the month is generated and paid.
 - **GET /api/md/recruitment/summary, positions, funnel, joiners, resignations, sources, trend, attention** and **GET /api/md/activity/summary, trend, heatmap, users, modules, sensitive, sign-ins, after-hours, feed, attention** — hiring pipeline, open positions, resignations; what people did in the system and what looks unusual.
 - **Reports:** the MD reads the Report Center through the ordinary `/api/reports/*` endpoints (read-only; the `md_only` executive reports appear only for the MD).
@@ -2122,6 +2234,74 @@ The compensation balance: `employee`, `entry_type` (`credit | debit`), `shifts`,
 - **AttendanceDayRecord** — gained `compensation_kind`, `compensation_minutes`, `compensation_note`, `ot_extra_minutes` (all with DB defaults).
 - **DepartmentManager** — `can_approve_compensation` (default true), the eighth approval switch.
 - **PayrollSettings** — `ot_detection_enabled` / `ot_threshold_minutes` are legacy mirrors of the Compensation tab (see above); the master switch is unchanged.
+
+## Gate Pass, Visitors & Tea Break (api/models/gate.py; migrations 0162, 0163, 0164)
+
+All three migrations are additive (new tables; new columns nullable or with `db_default`; indexes; choice lists), so a backend still running the previous release keeps working against the new schema. Gate and visitor data has no link to attendance or payroll.
+
+### GateDevice (changed)
+**Table name:** `gate_devices` — one gate login (a gate PC or tablet). Existing: `name`, `branch` (FK), `username` (unique, matched case-insensitively), `password_hash` (bcrypt, the only sign-in check), `is_active` (the switch), `login_token` (the old per-gate link, now only a hint), `created_by`, `created_at`, `last_login_at`.
+
+**Added (migration 0162):**
+- `password_encrypted` — TextField, nullable. The current password, Fernet-encrypted with a key derived from `JWT_SECRET`, for HR's View password. Null = set before 18 Nov 2026 (cannot be shown until a new one is set). Never part of a list, detail or file.
+- `location`, `notes` — TextField, nullable
+- `allow_outpass`, `allow_tea_break` — BooleanField, default and `db_default` True: what the gate may scan (gate passes out and back; tea-break codes)
+- `updated_at` — DateTimeField, nullable; `updated_by` — TextField, nullable. Stamped by every HR change; a change also ends a sign-in lock of the username.
+
+### GateSession (new)
+**Table name:** `gate_sessions`
+
+One signed-in gate monitor screen. The gate's token carries `gsid` = `sid` of one row, so one screen (Sign out) or all of a gate's screens (HR) can be signed out.
+
+**Key fields:**
+- `gate` — ForeignKey → `GateDevice`, `on_delete=CASCADE`, related_name `sessions`
+- `sid` — TextField, unique (a random hex id; never sent in any payload)
+- `device_label`, `user_agent` — TextField, default ""; `ip_address` — TextField, nullable
+- `created_at` — auto; `last_seen_at` — nullable, touched at most once a minute
+- `revoked_at` — nullable; `revoked_reason` — nullable: `logout` | `password_changed` | `hr_signed_out` | `deactivated` | `username_changed`
+- Index on `(gate, revoked_at)` (`gate_sessions_gate_rev_idx`)
+
+### GateLoginAttempt (new)
+**Table name:** `gate_login_attempts`
+
+One row per gate sign-in attempt (the shared `/gatemonitor` sign-in and the old kiosk sign-in), for the 5-wrong-tries-in-15-minutes lock. Never holds a password.
+
+**Key fields:** `username` (trimmed, lower-cased), `ip_address` (nullable), `success` (default False), `created_at`; index on `(username, created_at)` (`gate_login_att_user_idx`).
+
+### OutpassGateScan (changed)
+**Table name:** `outpass_gate_scans` — one row per gate scan, allowed or denied.
+- `result` gains the choice `not_allowed_here` ("Not allowed at this gate"): the gate is set not to take that kind of code (migration 0162, choices only).
+- `scan_type` gains the choice `tea` (migration 0164, choices only): a tea-break code refused at a gate with tea breaks switched off. Such a row is always denied; the gate records show it as a denied tea-break attempt, never as an exit, and the Report Center and MD readers of `scan_type` treat it the same way.
+- Index on `(gate, scanned_at)` (`outpass_gate_scans_gate_idx`).
+
+### TeaBreakLog (changed)
+**Table name:** `tea_break_logs` — index on `out_at` (`tea_break_logs_out_at_idx`, migration 0162). No column change.
+
+### VisitorVisit (changed)
+**Table name:** `visitor_visits` — one visit of a `Visitor` (the person, by phone).
+
+**Added (migration 0162):**
+- `source` — TextField, choices `qr` (QR self check-in) | `hr` (registered by HR) | `reception` (registered at a desk), default and `db_default` `qr`
+- `checked_in_by` — TextField, nullable: the HR user's or desk's name (null for a QR check-in)
+- `checked_out_at` — DateTimeField, nullable; `checked_out_by` — TextField, nullable; `checkout_source` — TextField, nullable (`hr` | `reception`)
+- `company`, `vehicle_number`, `id_proof_type`, `badge_number`, `notes` — TextField, nullable
+- `people_count` — PositiveSmallIntegerField, default and `db_default` 1
+- Index on `visited_at` (`visitor_visits_visited_idx`)
+
+**Added (migration 0163):**
+- `checked_in_desk` — ForeignKey → `ReceptionDevice`, nullable, `on_delete=SET_NULL`, related_name `checked_in_visits` (a walk-in registered at that desk)
+- `checked_out_desk` — ForeignKey → `ReceptionDevice`, nullable, `on_delete=SET_NULL`, related_name `checked_out_visits`. Deleting a desk never deletes a visit; the `checked_in_by` / `checked_out_by` text keeps its name.
+
+### ReceptionDevice (changed)
+**Table name:** `reception_devices` — one reception desk login. Existing: `name`, `branch`, `username`, `password_hash`, `is_active`, `login_token`, `created_by`, `created_at`, `last_login_at`.
+
+**Added (migration 0163):** `password_encrypted` (nullable; the same scheme and rules as the gate's), `location`, `notes`, `updated_at`, `updated_by` (all nullable).
+
+### ReceptionSession (new)
+**Table name:** `reception_sessions` — one signed-in reception desk screen; the desk's token carries `rsid` = `sid` of one row. The same columns and revoke reasons as `gate_sessions`, with `desk` (ForeignKey → `ReceptionDevice`, CASCADE, related_name `sessions`) instead of `gate`; index on `(desk, revoked_at)` (`reception_sessions_desk_idx`). Migration 0163.
+
+### ReceptionLoginAttempt (new)
+**Table name:** `reception_login_attempts` — one row per desk sign-in attempt, like `gate_login_attempts` (kept apart: a username is unique per table, so a desk and a gate may share one). Index on `(username, created_at)` (`reception_login_att_user_idx`). Migration 0163.
 
 ## Settings & Configuration
 

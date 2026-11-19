@@ -18,7 +18,14 @@ from __future__ import annotations
 
 import re
 
-from .permission_tree import build_key_tree, inherits_map, url_entries, url_patterns, view_checked_keys
+from .permission_tree import (
+    build_key_tree,
+    explicit_keys,
+    inherits_map,
+    url_entries,
+    url_patterns,
+    view_checked_keys,
+)
 
 # [{"key", "label", "children": [...]}]: every key a role can be given, by key (a dotted key under its dotted parent).
 MODULE_TREE: list[dict] = build_key_tree()
@@ -28,6 +35,11 @@ INHERITS: dict[str, str] = inherits_map()
 
 # Keys the API view checks itself (a settings field group, a Requests kind, a report group): permission_tree.py `viewCheck`.
 VIEW_CHECKED_KEYS: frozenset[str] = view_checked_keys()
+
+# Keys that are Hidden unless set on the role (or the account) itself: they never follow a parent, an `inherits` key or the
+# Managing Director's section grant (permission_tree.py `explicit`: the gate / desk password reveals). A Super Admin is not
+# checked at all (permission_middleware), so keeps them. The portal mirrors it (lib/permission-modules.ts).
+REQUIRE_EXPLICIT: frozenset[str] = explicit_keys()
 
 
 def all_module_keys() -> list[str]:
@@ -135,8 +147,10 @@ def resolve_permission(permissions: dict, key: str) -> str:
     """
     The level of `key`: its own entry, else the entry of the key it follows -its `inherits` key when it has one
     (permission_tree.py), else its dotted parent ("employees.departments" -> "employees")- and so on up. "hidden" when
-    nothing on the way is set (fail closed).
+    nothing on the way is set (fail closed). A REQUIRE_EXPLICIT key follows nothing: its own entry or "hidden".
     """
+    if key in REQUIRE_EXPLICIT:
+        return permissions.get(key, "hidden")
     seen: set[str] = set()
     current = key
     while current and current not in seen:
@@ -241,6 +255,11 @@ _BASE_URL_MODULE_MAP: dict[str, str] = {
     # are deliberately absent so they stay reachable with no bearer token at all (see outpass_visitor_views.py's module
     # docstring); gate-devices/login-info, /login, /scan and reception-devices/login-info, /login, /summary, /visits are
     # never called with an HR token (public, or a device's own login), so the middleware never applies to them anyway.
+    # The same goes for the Gate Monitor (2026-11-18): "gate-monitor/..." (its public login, then the gate's own
+    # session, require_gate_device) is deliberately absent too (tests_permission_tree.API_ALLOWLIST), and
+    # reception-devices/visits/<id>/check-out is the desk's own call (require_reception_device; the "reception-devices"
+    # prefix only ever applies to HR tokens). So are the desk session's me / logout, its visits POST (a walk-in
+    # registered at the desk) and visits/export, host-lookup and visitor-lookup (2026-11-18, reception_views.py).
     # Tea Break: qr-token/my-status are employee-token calls; the rest is the Tea Break page.
     "tea-break": "outpass_visitors.tea_break",
 

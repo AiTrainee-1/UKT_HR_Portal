@@ -321,6 +321,7 @@ export function applyLevel(permissions: Permissions, node: DisplayNode, level: P
   const before = permissions;
   for (const part of partsOf(node)) {
     if (part.key in before) continue; // custom: keeps its own setting
+    if (part.explicit) continue; // only ever given on its own row (Hidden while unset)
     if (resolvePermission(next, part.key) !== level) next[part.key] = level;
   }
   return next;
@@ -330,8 +331,10 @@ export function applyLevel(permissions: Permissions, node: DisplayNode, level: P
 export function setSection(permissions: Permissions, node: DisplayNode, level: PermissionLevel): Permissions {
   const next: Permissions = { ...permissions, [node.key]: level };
   const parts = partsOf(node);
-  for (const part of parts) delete next[part.key];
-  for (const part of parts) if (resolvePermission(next, part.key) !== level) next[part.key] = level;
+  // a part given only on its own row (the password reveals) is never raised with its section, only hidden with it
+  const own = (part: DisplayNode) => part.explicit && level !== "hidden";
+  for (const part of parts) if (!own(part)) delete next[part.key];
+  for (const part of parts) if (!part.explicit && resolvePermission(next, part.key) !== level) next[part.key] = level;
   return next;
 }
 
@@ -363,6 +366,7 @@ const LABEL_OF = new Map(MODULE_LABELS.map((m) => [m.key, m.label]));
 /** Where an unset node takes its level from, in words: "follows Staff Payroll", or "nothing set" (= Hidden). */
 export function followText(permissions: Permissions | undefined, node: DisplayNode): string {
   const source = resolveSource(permissions, node.key);
+  if (!source && node.explicit) return "off unless set here";
   if (!source) return "nothing set";
   return `follows ${LABEL_OF.get(source) ?? source}`;
 }

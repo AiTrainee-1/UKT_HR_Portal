@@ -305,6 +305,11 @@ class ListsSendLinks(Fixture):
         OutpassGateScan.objects.create(
             gate=gate, employee=self.asha, result=OutpassGateScan.RESULT_SUCCESS, message="ok", scan_type="exit"
         )
-        kiosk = bearer({"role": "gate_device", "deviceId": gate.id, "gateName": gate.name})
+        from types import SimpleNamespace
+
+        from .gate_credentials import gate_token, new_gate_session
+
+        session = new_gate_session(gate, SimpleNamespace(META={"HTTP_USER_AGENT": "test", "REMOTE_ADDR": "10.0.0.1"}))
+        kiosk = {"HTTP_AUTHORIZATION": f"Bearer {gate_token(gate, session)}"}
         body = self.get("/api/gate-devices/scan-log", **kiosk)
         self.assertEqual(body["items"][0]["photoUrl"], signed(self.asha.id, PHOTO))

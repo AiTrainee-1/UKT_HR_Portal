@@ -483,6 +483,20 @@ class VisitorRegisterTests(_Base):
         rows = self.rows(self.RID, {"dateFrom": "2026-09-20", "dateTo": "2026-09-20"})
         self.assertEqual([(r["whomToMeet"], r["visitNo"]) for r in rows], [("A", 3), ("B", 4)])  # Mohan had 2 before
 
+    def test_check_out_and_time_inside_only_where_a_check_out_was_recorded(self):
+        # HR or a reception desk checks a visit out (from 18 Nov 2026); a visit without one is never given a fake time
+        VisitorVisit.objects.filter(pk=self.vis1.pk).update(
+            checked_out_at=ist(9, 2, 11, 25, 40), checkout_source="hr", checked_out_by="HR Admin"
+        )
+        body = self.get_report(self.RID, SEPT)
+        rows = body["rows"]
+        self.assertEqual((rows[0]["checkedOutAt"], rows[0]["minutesInside"]), ("2026-09-02 11:25", 85))
+        self.assertTrue(all(r["checkedOutAt"] is None and r["minutesInside"] is None for r in rows[1:]))
+        self.assertEqual([c["key"] for c in body["columns"]][:3], ["visitedAt", "checkedOutAt", "minutesInside"])
+        self.assertIsNone(body["totals"])
+        self.assertEqual(self.export(self.RID, "xlsx", SEPT).status_code, 200)
+        self.assertEqual(self.export(self.RID, "pdf", SEPT).status_code, 200)
+
 
 class VisitorHostSummaryTests(_Base):
     RID = "visitor-host-summary"
@@ -1511,6 +1525,16 @@ class DeviceRegisterTests(_Base):
         self.assertEqual((s["Devices"], s["Active"], s["Deactivated"], s["Never logged in"]), (5, 3, 2, 2))
         self.assertEqual((s["Outpass scans in period"], s["Tea-break scans in period"]), (4, 23))
         self.assertEqual(s["Outpass scans in period"], body["totals"]["outpassScans"])
+
+    def test_a_refused_tea_break_code_counts_with_the_tea_scans(self):
+        # 19 Nov 2026: a tea-break code refused by a gate that does not take tea breaks is scan_type "tea"
+        s = OutpassGateScan.objects.create(gate=self.g1, scan_type="tea", result="not_allowed_here", message="m")
+        OutpassGateScan.objects.filter(pk=s.pk).update(scanned_at=ist(9, 7, 10, 0))
+        body = self.get_report(self.RID, SEPT)
+        g1 = body["rows"][0]
+        self.assertEqual((g1["name"], g1["outpassScans"], g1["teaScans"]), ("Gate 1", 3, 11))
+        s = summary_of(body)
+        self.assertEqual((s["Outpass scans in period"], s["Tea-break scans in period"]), (4, 24))
 
     def test_secrets_never_appear(self):
         body = self.get_report(self.RID, SEPT)

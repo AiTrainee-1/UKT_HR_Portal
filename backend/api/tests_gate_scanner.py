@@ -12,9 +12,19 @@ from django.utils import timezone
 from rest_framework.test import APIRequestFactory
 
 from .auth import require_gate_device
+from .gate_credentials import gate_token, new_gate_session
 from .gate_scanner_views import gate_scan_log, resolve_gate_scan
 from .jwt_utils import sign_token
 from .models import Branch, Employee, GateDevice, OutpassGateScan, OutpassRequest
+
+
+class _Req:
+    META = {"HTTP_USER_AGENT": "test", "REMOTE_ADDR": "10.0.0.1"}
+
+
+def _session_token(gate) -> str:
+    """A gate monitor token with its own session (a token without gsid is refused since 19 Nov 2026)."""
+    return gate_token(gate, new_gate_session(gate, _Req()))
 
 
 def _qr_for(req: OutpassRequest, expires_in: timedelta = timedelta(minutes=60)) -> str:
@@ -272,7 +282,7 @@ class GateScanLogExitOnlyTests(TestCase):
         req.refresh_from_db()
         self.assertIsNotNone(req.entered_at)
 
-        token = sign_token({"role": "gate_device", "deviceId": self.gate.id, "gateName": self.gate.name})
+        token = _session_token(self.gate)
         request = APIRequestFactory().get("/api/gate-devices/scan-log", HTTP_AUTHORIZATION=f"Bearer {token}")
 
         response = gate_scan_log(request)
@@ -289,7 +299,7 @@ class GateDeviceRevocationTests(TestCase):
         )
 
     def test_require_gate_device_rejects_deactivated_gate(self):
-        token = sign_token({"role": "gate_device", "deviceId": self.gate.id, "gateName": self.gate.name})
+        token = _session_token(self.gate)
         self.gate.is_active = False
         self.gate.save(update_fields=["is_active"])
 
@@ -308,7 +318,7 @@ class GateDeviceRevocationTests(TestCase):
         self.assertEqual(result.status_code, 403)
 
     def test_require_gate_device_accepts_active_gate(self):
-        token = sign_token({"role": "gate_device", "deviceId": self.gate.id, "gateName": self.gate.name})
+        token = _session_token(self.gate)
 
         @require_gate_device
         def view(request):
@@ -318,3 +328,45 @@ class GateDeviceRevocationTests(TestCase):
             headers = {"Authorization": f"Bearer {token}"}
 
         self.assertEqual(view(FakeRequest()), "Gate 1")
+
+
+class RefusedTeaAndIndiaTimeTests(TestCase):
+    """C1 / C3 (19 Nov 2026): a refused tea-break code is logged as a "tea" scan; the already-scanned text is in India
+    time."""
+
+    def setUp(self):
+        self.branch = Branch.objects.create(name="Scan Fix Unit")
+        self.gate = GateDevice.objects.create(
+            name="Fix Gate", branch=self.branch, username="fix_gate", password_hash="x", login_token="fix-tok"
+        )
+        self.emp = Employee.objects.create(
+            employee_code="SFX1", first_name="Mani", last_name="K", status="active", employment_type="staff",
+            branch=self.branch,
+        )
+
+    def test_a_refused_tea_break_code_is_a_tea_scan_not_an_exit(self):
+        self.gate.allow_tea_break = False
+        self.gate.save(update_fields=["allow_tea_break"])
+        token = sign_token({"role": "tea_break", "employeeId": self.emp.id})
+        body, status = resolve_gate_scan(self.gate, token)
+        self.assertEqual((status, body["result"], body["kind"]), (403, "not_allowed_here", "tea_break"))
+        row = OutpassGateScan.objects.get()
+        self.assertEqual((row.scan_type, row.result), ("tea", "not_allowed_here"))
+        self.assertEqual(row.get_scan_type_display(), "Tea break")
+        # an unreadable code keeps the type it always had
+        resolve_gate_scan(self.gate, "not-a-code")
+        self.assertEqual(OutpassGateScan.objects.get(result="invalid_qr").scan_type, "exit")
+
+    def test_already_exited_says_the_india_time(self):
+        from datetime import datetime
+        from datetime import timezone as dt_timezone
+
+        exited = datetime(2026, 11, 18, 10, 15, tzinfo=dt_timezone.utc)  # 15:45 in India
+        req = OutpassRequest.objects.create(
+            employee=self.emp, destination="Bank", reason="cash", status=OutpassRequest.STATUS_APPROVED,
+            approved_at=exited, approver_role="hr", approved_by="HR", exit_gate=self.gate, exited_at=exited,
+        )
+        body, status = resolve_gate_scan(self.gate, _qr_for(req))
+        self.assertEqual(status, 409)
+        self.assertEqual(body["message"], "Already exited at 03:45 PM via Fix Gate")
+        self.assertEqual(OutpassGateScan.objects.get().message, "Already exited at 03:45 PM via Fix Gate")

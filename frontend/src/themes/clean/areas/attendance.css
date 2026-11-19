@@ -60,20 +60,6 @@ html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
   box-shadow: none;
 }
 
-/* the three counters on the gate pages (Outpass, Visitors, Tea Break) are sky, violet and amber squares: one is the brand
-   colour like the others, amber is a warning and these are not */
-html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
-  [data-ui-shell="main"]
-  div[class~="grid"][class~="grid-cols-3"]
-  > [data-slot="card"]
-  div[class~="p-1.5"][class~="rounded-lg"]:is(
-    [class~="bg-amber-500"],
-    [class~="bg-violet-500"],
-    [class~="bg-sky-500"]
-  ) {
-  background-color: hsl(var(--primary));
-}
-
 /* ── text and fills that are a shade too light for AA ───────────────────────────────────────────────────────────────── */
 
 /* white writing on a 500 fill (a count badge, a day cell): amber and green at 500 are 2.7:1 and 3.7:1 with white, at 600

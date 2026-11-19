@@ -24,8 +24,11 @@ UTC.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 
+from django.db.models import Avg, Count, F, Func, IntegerField, OuterRef, Q, Subquery, TextField, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -42,9 +45,14 @@ from .user_settings import settings_for_employee
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
 
-def _range_bounds():
+def _now():
+    """The current instant (aware). One place, so tests can stand the clock at an IST day edge."""
+    return timezone.now()
+
+
+def _range_bounds(now=None):
     """(today_start, week_start, month_start), all in Asia/Kolkata."""
-    now_ist = timezone.now().astimezone(FACTORY_TZ)
+    now_ist = (now or _now()).astimezone(FACTORY_TZ)
     today_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
     month_start = today_start.replace(day=1)
@@ -313,26 +321,349 @@ def visitor_qr(request: Request) -> Response:
     return Response({"token": qr.token, "branchId": branch.id, "branchName": branch.name})
 
 
+# The Visitors page's filters, one meaning for the list, the figures and the file (visitor/records, visitor/summary,
+# visitor/export) and the visit JSON (also the reception desk's). A visit's status is worked out, never stored:
+# checked_out = a check-out was recorded (by HR or a reception desk, from 18 Nov 2026); inside = came today (India time)
+# and not checked out; not_checked_out = an earlier day with no check-out ("Left without check-out").
+VISIT_INSIDE = "inside"
+VISIT_CHECKED_OUT = "checked_out"
+VISIT_NOT_CHECKED_OUT = "not_checked_out"
+VISIT_STATUS_LABELS = {
+    VISIT_INSIDE: "Inside",
+    VISIT_CHECKED_OUT: "Checked out",
+    VISIT_NOT_CHECKED_OUT: "Left without check-out",
+}
+VISIT_SOURCE_LABELS = {
+    VisitorVisit.SOURCE_QR: "QR self check-in",
+    VisitorVisit.SOURCE_HR: "Registered by HR",
+    VisitorVisit.SOURCE_RECEPTION: "Reception desk",
+}
+LONG_STAY = timedelta(hours=2)  # "Inside over 2 h"
+# a check-out can be recorded this long after the check-in (a visitor who came in the evening leaves after midnight;
+# visitor_admin_views._check_out enforces it, the visit JSON's canCheckOut says it)
+CHECK_OUT_WITHIN = timedelta(hours=24)
+MAX_SEARCH_WORDS = 4
+
+
+class VisitFilterError(ValueError):
+    """A filter the Visitors endpoints cannot use; str(e) is the plain message of the 400."""
+
+
+def _day_start(now):
+    """00:00 India time of the day `now` falls on (aware)."""
+    return now.astimezone(FACTORY_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _filter_date(value, name: str):
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise VisitFilterError(f"{name} must be a date like 2026-11-18.") from None
+
+
+def _filter_id(value, name: str):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    if not value.isdigit():
+        raise VisitFilterError(f"{name} must be a number.")
+    return int(value)
+
+
+def visit_filter_params(request: Request) -> dict:
+    """This request's Visitors filters, checked (raises VisitFilterError):
+    from / to (YYYY-MM-DD, India days, inclusive; without either, the old `range` today / week / month applies, month by
+    default), status, source, branchId (only an HR account not bound to a branch may pick one; a bound account always
+    gets its own branch), hostEmployeeId, departmentId (the host's department) and q (up to four words, each must match
+    the visitor's name or phone, the company, the host, the purpose, the vehicle or the badge)."""
+    qp = request.query_params
+    d_from, d_to = _filter_date(qp.get("from"), "from"), _filter_date(qp.get("to"), "to")
+    if d_from and d_to and d_from > d_to:
+        raise VisitFilterError("The start date must be on or before the end date.")
+    status = (qp.get("status") or "").strip() or None
+    if status is not None and status not in VISIT_STATUS_LABELS:
+        raise VisitFilterError("status must be inside, checked_out or not_checked_out.")
+    source = (qp.get("source") or "").strip() or None
+    if source is not None and source not in VISIT_SOURCE_LABELS:
+        raise VisitFilterError("source must be qr, hr or reception.")
+    scope = get_branch_scope(request)
+    return {
+        "from": d_from,
+        "to": d_to,
+        "range": (qp.get("range") or "").strip() or "month",
+        "status": status,
+        "source": source,
+        "branch_id": scope if scope is not None else _filter_id(qp.get("branchId"), "branchId"),
+        "host_id": _filter_id(qp.get("hostEmployeeId"), "hostEmployeeId"),
+        "department_id": _filter_id(qp.get("departmentId"), "departmentId"),
+        "q": " ".join((qp.get("q") or "").split()[:MAX_SEARCH_WORDS]),
+    }
+
+
+def _search_q(term: str) -> Q:
+    return (
+        Q(visitor__name__icontains=term)
+        | Q(visitor__phone__icontains=term)
+        | Q(company__icontains=term)
+        | Q(whom_to_meet__icontains=term)
+        | Q(meeting_employee__first_name__icontains=term)
+        | Q(meeting_employee__last_name__icontains=term)
+        | Q(meeting_employee__employee_code__iexact=term)
+        | Q(purpose__icontains=term)
+        | Q(vehicle_number__icontains=term)
+        | Q(badge_number__iexact=term)
+    )
+
+
+def visits_base(p: dict):
+    """The visits the filters allow before the dates and the status: the branch, the host, the host's department, how
+    the visit was checked in and the search words."""
+    qs = VisitorVisit.objects.all()
+    if p["branch_id"] is not None:
+        qs = qs.filter(branch_id=p["branch_id"])
+    if p["host_id"] is not None:
+        qs = qs.filter(meeting_employee_id=p["host_id"])
+    if p["department_id"] is not None:
+        qs = qs.filter(meeting_employee__department_id=p["department_id"])
+    if p["source"]:
+        qs = qs.filter(source=p["source"])
+    for term in p["q"].split():
+        qs = qs.filter(_search_q(term))
+    return qs
+
+
+def visit_date_q(p: dict) -> Q:
+    """The dates: from / to as India days (inclusive), else the old range (today / week / month)."""
+    if p["from"] is None and p["to"] is None:
+        return Q(visited_at__gte=_range_start(p["range"]))
+    q = Q()
+    if p["from"] is not None:
+        q &= Q(visited_at__gte=datetime.combine(p["from"], time.min, tzinfo=FACTORY_TZ))
+    if p["to"] is not None:
+        q &= Q(visited_at__lt=datetime.combine(p["to"] + timedelta(days=1), time.min, tzinfo=FACTORY_TZ))
+    return q
+
+
+def visit_status_q(status, today_start) -> Q:
+    if status == VISIT_CHECKED_OUT:
+        return Q(checked_out_at__isnull=False)
+    if status == VISIT_INSIDE:
+        return Q(checked_out_at__isnull=True, visited_at__gte=today_start)
+    if status == VISIT_NOT_CHECKED_OUT:
+        return Q(checked_out_at__isnull=True, visited_at__lt=today_start)
+    return Q()
+
+
+def filtered_visits(p: dict, today_start):
+    """Every filter applied (dates and status too), newest first."""
+    return (
+        visits_base(p)
+        .filter(visit_date_q(p) & visit_status_q(p["status"], today_start))
+        .order_by("-visited_at", "-id")
+    )
+
+
+def visit_rows(qs):
+    """What the visit JSON reads, in the same query: the visitor, the branch, the host and the host's department and
+    designation. The host's photo is never read out (the JSON sends a link: photo_links)."""
+    return qs.select_related(
+        "visitor", "branch", "meeting_employee__department", "meeting_employee__designation"
+    ).defer("meeting_employee__photo_url")
+
+
+def with_visit_count(qs, branch_id=None):
+    """Adds visit_count (the visitor's visits, at `branch_id` only when given) as one subquery, not a query per row."""
+    sub = VisitorVisit.objects.filter(visitor_id=OuterRef("visitor_id"))
+    if branch_id is not None:
+        sub = sub.filter(branch_id=branch_id)
+    sub = sub.order_by().values("visitor_id").annotate(n=Count("id")).values("n")
+    return qs.annotate(visit_count=Coalesce(Subquery(sub, output_field=IntegerField()), 0))
+
+
+def visit_status(v: VisitorVisit, today_start) -> str:
+    if v.checked_out_at is not None:
+        return VISIT_CHECKED_OUT
+    if v.visited_at >= today_start:
+        return VISIT_INSIDE
+    return VISIT_NOT_CHECKED_OUT
+
+
+# Time inside, ONE rule for the row, the summary and the file (19 Nov 2026): each visit counts its whole minutes (the
+# seconds dropped: 45 s is 0 min, 1 min 59 s is 1 min), and an average is the mean of those whole minutes rounded half
+# up (0.5 -> 1). The SQL (VisitMinutes, visitor_summary) and the Python (whole_minutes, average_minutes) agree.
+
+
+def whole_minutes(start, end) -> int:
+    """Whole minutes from `start` to `end`, the seconds dropped (never below 0)."""
+    return max(0, int((end - start).total_seconds() // 60))
+
+
+def average_minutes(values) -> int | None:
+    """The mean of whole minutes (ints, or the Decimal / float SQL's AVG gives), rounded half up; None for none."""
+    if isinstance(values, (list, tuple)):
+        if not values:
+            return None
+        mean = Decimal(sum(values)) / Decimal(len(values))
+    elif values is None:
+        return None
+    else:
+        mean = Decimal(str(values))
+    return int(mean.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+class VisitMinutes(Func):
+    """whole_minutes in SQL: FLOOR of the interval's seconds / 60 (never below 0), e.g. inside Avg()."""
+
+    template = "GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (%(expressions)s)) / 60))"
+    output_field = IntegerField()
+
+
+def _minutes_inside(v: VisitorVisit, status: str, now):
+    """Whole minutes from check-in to check-out (or to now while inside); None when the visitor left without one."""
+    if status == VISIT_CHECKED_OUT:
+        end = v.checked_out_at
+    elif status == VISIT_INSIDE:
+        end = now
+    else:
+        return None
+    return whole_minutes(v.visited_at, end)
+
+
+def _phone_digits_expr(field: str):
+    """The digits of a phone column (everything else dropped), for matching however it was typed."""
+    return Func(F(field), Value(r"[^0-9]"), Value(""), Value("g"), function="REGEXP_REPLACE", output_field=TextField())
+
+
+def find_visitor_by_phone(raw_phone: str):
+    """The Visitor with this phone: the exact text first, then the same last 10 digits however it was typed (spaces,
+    +91), like _find_employee_by_phone. None for a blank or too short number."""
+    raw_phone = (raw_phone or "").strip()
+    if not raw_phone:
+        return None
+    exact = Visitor.objects.filter(phone=raw_phone).first()
+    if exact:
+        return exact
+    digits = _digits_only(raw_phone)
+    if len(digits) < 7:
+        return None
+    return (
+        Visitor.objects.annotate(phone_digits=_phone_digits_expr("phone"))
+        .filter(phone_digits__endswith=digits[-10:])
+        .order_by("id")
+        .first()
+    )
+
+
+def mask_phone(phone: str | None) -> str:
+    """98•••••210: the first two and the last three of the (last ten) digits."""
+    digits = _digits_only(phone)[-10:]
+    if len(digits) >= 7:
+        return digits[:2] + "•" * (len(digits) - 5) + digits[-3:]
+    if len(digits) >= 3:
+        return "•" * (len(digits) - 2) + digits[-2:]
+    return "•••" if phone else ""
+
+
 @api_view(["GET"])
 @require_hr
 def visitor_summary(request: Request) -> Response:
-    today_start, week_start, month_start = _range_bounds()
-    qs = scope_to_branch(VisitorVisit.objects, request)
-    return Response({
-        "today": qs.filter(visited_at__gte=today_start).count(),
-        "thisWeek": qs.filter(visited_at__gte=week_start).count(),
-        "thisMonth": qs.filter(visited_at__gte=month_start).count(),
-    })
+    """today / thisWeek / thisMonth (as before) and insideNow / checkedOutToday / longStayNow / repeatThisMonth, for
+    the page's filters except the dates and the status; inRange {visits, checkedOut, avgMinutes} for every filter."""
+    try:
+        p = visit_filter_params(request)
+    except VisitFilterError as e:
+        return Response({"error": str(e)}, status=400)
+    now = _now()
+    today_start, week_start, month_start = _range_bounds(now)
+    base = visits_base(p)
+    inside = Q(checked_out_at__isnull=True, visited_at__gte=today_start)
+    out = base.aggregate(
+        today=Count("id", filter=Q(visited_at__gte=today_start)),
+        thisWeek=Count("id", filter=Q(visited_at__gte=week_start)),
+        thisMonth=Count("id", filter=Q(visited_at__gte=month_start)),
+        insideNow=Count("id", filter=inside),
+        checkedOutToday=Count("id", filter=Q(checked_out_at__gte=today_start)),
+        longStayNow=Count("id", filter=inside & Q(visited_at__lt=now - LONG_STAY)),
+    )
+    # repeat visitors: came this month (these filters) and have two or more visits in all (this branch)
+    branch_visits = VisitorVisit.objects.all()
+    if p["branch_id"] is not None:
+        branch_visits = branch_visits.filter(branch_id=p["branch_id"])
+    out["repeatThisMonth"] = (
+        branch_visits.filter(visitor_id__in=base.filter(visited_at__gte=month_start).values("visitor_id"))
+        .order_by()
+        .values("visitor_id")
+        .annotate(n=Count("id"))
+        .filter(n__gte=2)
+        .count()
+    )
+    in_range = (
+        base.filter(visit_date_q(p) & visit_status_q(p["status"], today_start))
+        .order_by()
+        .aggregate(
+            visits=Count("id"),
+            checkedOut=Count("id", filter=Q(checked_out_at__isnull=False)),
+            avg=Avg(VisitMinutes(F("checked_out_at") - F("visited_at")), filter=Q(checked_out_at__isnull=False)),
+        )
+    )
+    # the rows' own whole minutes, averaged half up (the same rule as minutesInside and the file)
+    in_range["avgMinutes"] = average_minutes(in_range.pop("avg"))
+    out["inRange"] = in_range
+    if (request.query_params.get("options") or "").lower() in ("1", "true"):
+        out["options"] = _visit_filter_options(p["branch_id"])
+    return Response(out)
 
 
-def _visitor_visit_dict(v: VisitorVisit, photos: dict | None = None) -> dict:
+def _visit_filter_options(branch_id) -> dict:
+    """The Visitors page's Host and Department selects (?options=1 on visitor/summary): the employees visitors have come
+    to meet at this branch (any date) and their departments, by name. No HR employee list is needed for it."""
+    qs = VisitorVisit.objects.filter(meeting_employee__isnull=False)
+    if branch_id is not None:
+        qs = qs.filter(branch_id=branch_id)
+    rows = qs.order_by().values(
+        "meeting_employee_id",
+        "meeting_employee__first_name",
+        "meeting_employee__last_name",
+        "meeting_employee__department_id",
+        "meeting_employee__department__name",
+    ).distinct()
+    hosts, departments = {}, {}
+    for r in rows:
+        name = f"{r['meeting_employee__first_name'] or ''} {r['meeting_employee__last_name'] or ''}".strip()
+        hosts[r["meeting_employee_id"]] = {
+            "id": r["meeting_employee_id"],
+            "name": name or f"#{r['meeting_employee_id']}",
+            "department": r["meeting_employee__department__name"],
+        }
+        if r["meeting_employee__department_id"] is not None:
+            departments[r["meeting_employee__department_id"]] = r["meeting_employee__department__name"]
+    return {
+        "hosts": sorted(hosts.values(), key=lambda h: (h["name"].lower(), h["id"])),
+        "departments": [
+            {"id": i, "name": n} for i, n in sorted(departments.items(), key=lambda kv: ((kv[1] or "").lower(), kv[0]))
+        ],
+    }
+
+
+def _visitor_visit_dict(v: VisitorVisit, photos: dict | None = None, *, now=None, today_start=None) -> dict:
     # Full Aadhaar is included here (not just the last-4 preview) -this
     # endpoint is already @require_hr + RBAC-gated on the "outpass_visitors"
     # module (see permission_registry.py), so whoever can load this table at
     # all is already trusted with the data; the UI just defaults to masked
     # so it isn't left on-screen for anyone glancing at a shared monitor.
     # Same trust level applies to reception_views.py's @require_reception_device
-    # endpoint, which calls this same function.
+    # endpoint, which calls this same function. (Files never carry it: visitor_export masks it in the database.)
+    # Keys are only ever added (the reception console and older screens read the first ones). A list passes `now` /
+    # `today_start` once and annotates visit_count (with_visit_count), so a row costs no query of its own.
+    now = now or _now()
+    today_start = today_start or _day_start(now)
+    status = visit_status(v, today_start)
+    visit_count = getattr(v, "visit_count", None)
+    if visit_count is None:
+        visit_count = VisitorVisit.objects.filter(visitor_id=v.visitor_id).count()
     aadhaar = v.visitor.aadhaar_number or ""
     return {
         "id": v.id,
@@ -348,26 +679,52 @@ def _visitor_visit_dict(v: VisitorVisit, photos: dict | None = None) -> dict:
         "meetingEmployee": _employee_contact_json(v.meeting_employee, photos) if v.meeting_employee_id else None,
         "notifiedEmailAt": v.notified_email_at.isoformat() if v.notified_email_at else None,
         "notifiedWhatsappAt": v.notified_whatsapp_at.isoformat() if v.notified_whatsapp_at else None,
+        # from 18 Nov 2026: how it was checked in, its check-out and the desk details
+        "visitorId": v.visitor_id,
+        "branchId": v.branch_id,
+        "source": v.source,
+        "sourceLabel": VISIT_SOURCE_LABELS.get(v.source, v.source),
+        "checkedInBy": v.checked_in_by,
+        "checkedOutAt": v.checked_out_at.isoformat() if v.checked_out_at else None,
+        "checkedOutBy": v.checked_out_by,
+        "checkoutSource": v.checkout_source,
+        "company": v.company,
+        "vehicleNumber": v.vehicle_number,
+        "peopleCount": v.people_count,
+        "idProofType": v.id_proof_type,
+        "badgeNumber": v.badge_number,
+        "notes": v.notes,
+        "status": status,
+        "statusLabel": VISIT_STATUS_LABELS[status],
+        "minutesInside": _minutes_inside(v, status, now),
+        "visitCount": visit_count,
+        # 19 Nov 2026: a check-out may be recorded (none yet, checked in under 24 hours ago): a night visitor whose
+        # status is already "Left without check-out" after midnight can still be checked out
+        "canCheckOut": v.checked_out_at is None and now - v.visited_at < CHECK_OUT_WITHIN,
     }
 
 
 @api_view(["GET"])
 @require_hr
 def visitor_records(request: Request) -> Response:
-    start = _range_start(request.query_params.get("range", "month"))
+    """The Visitors list: range (today / week / month, month by default) as before, or from / to, plus status, branchId,
+    hostEmployeeId, departmentId, source and q (see visit_filter_params); page, pageSize."""
+    try:
+        p = visit_filter_params(request)
+    except VisitFilterError as e:
+        return Response({"error": str(e)}, status=400)
     page, page_size = _paginate_params(request)
-    qs = (
-        scope_to_branch(VisitorVisit.objects, request)
-        .filter(visited_at__gte=start)
-        .select_related("visitor", "branch", "meeting_employee__department", "meeting_employee__designation")
-        .defer("meeting_employee__photo_url")  # the list sends a link to the photo (photo_links), never the picture
-    )
+    now = _now()
+    today_start = _day_start(now)
+    qs = filtered_visits(p, today_start)
     total = qs.count()
     offset = (page - 1) * page_size
-    rows = list(qs[offset:offset + page_size])
+    # visits at the branch chosen (the account's own, or ?branchId= for an account not bound to one), like the summary's
+    # "Repeat" figure, so the column and the tile agree
+    rows = list(with_visit_count(visit_rows(qs), p["branch_id"])[offset:offset + page_size])
     photos = photo_links(v.meeting_employee_id for v in rows)
     return Response({
-        "items": [_visitor_visit_dict(v, photos) for v in rows],
+        "items": [_visitor_visit_dict(v, photos, now=now, today_start=today_start) for v in rows],
         "total": total,
         "page": page,
         "pageSize": page_size,

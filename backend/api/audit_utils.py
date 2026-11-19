@@ -25,11 +25,12 @@ def build_log_entry(
     except Exception:
         pass
     hr_user_id = user.get("hrUserId") if user.get("role", "hr") == "hr" else None
+    device_name, device_branch = _device_actor(request, user)
     return AuditLog(
         user_type=user.get("role", "hr"),
         user_id=user.get("userId") or user.get("employeeId"),
         hr_user_id=hr_user_id if isinstance(hr_user_id, int) else None,
-        user_name=user.get("name") or user.get("username") or "system",
+        user_name=device_name or user.get("name") or user.get("username") or "system",
         action=action,
         module=module,
         record_id=record_id,
@@ -40,8 +41,31 @@ def build_log_entry(
         # Stamped now because it cannot be recovered later -AuditLog has
         # no foreign key to the actor. None for unscoped admins, which is
         # accurate: the action was not taken on behalf of one branch.
-        branch_id=_get_branch(request),
+        branch_id=device_branch if device_name else _get_branch(request),
     )
+
+
+# The device logins that act on their own (a gate monitor, a reception desk): the audit row names the device, as
+# "Gate - <name>" / "Reception desk - <name>", and carries the device's branch (an HR row carries the HR user's).
+_DEVICE_ACTORS = (
+    ("gate_device", "gate_device", "gateName", "Gate"),
+    ("reception_device", "reception_device", "deskName", "Reception desk"),
+)
+
+
+def _device_actor(request, user: dict) -> tuple[str | None, int | None]:
+    """(actor name, branch id) for a gate / reception desk request, else (None, None). The device that
+    auth.require_gate_device / require_reception_device put on the request (its current name), else the token's claim."""
+    role = user.get("role")
+    for device_role, attr, claim, word in _DEVICE_ACTORS:
+        if role != device_role:
+            continue
+        device = getattr(request, attr, None)
+        name = getattr(device, "name", None) or user.get(claim)
+        if not name:
+            return f"{word} #{user.get('deviceId')}", None
+        return f"{word} - {name}", getattr(device, "branch_id", None)
+    return None, None
 
 
 def log_action(

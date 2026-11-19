@@ -218,7 +218,8 @@ DATASETS: dict[str, Dataset] = {
             "visits",
             VisitorVisit,
             "Visitor visits",
-            "One row per visitor visit at the gate (there is no check-out time).",
+            "One row per visitor visit at the gate (check-out is recorded from 18 Nov 2026 for visits checked out by HR "
+            "or reception; it is not in this dataset).",
             (
                 Fld("visited_at", "visited_at", "datetime", "When the visitor arrived."),
                 Fld("purpose", "purpose", "string", "Purpose of the visit."),
@@ -226,7 +227,10 @@ DATASETS: dict[str, Dataset] = {
             ),
             date_field="visited_at",
             branch_path="branch_id",
-            notes=("Visitors have no check-out, so durations and 'inside now' are not available.",),
+            notes=(
+                "Check-out is recorded from 18 Nov 2026 for visits checked out by HR or reception; this dataset has no "
+                "check-out time, so durations and 'inside now' are not available.",
+            ),
         ),
         Dataset(
             "outpass_requests",

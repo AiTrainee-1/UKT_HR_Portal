@@ -43,10 +43,11 @@ const JobApply = lazy(() => import("@/pages/JobApply"));
 const DatabaseOffline = lazy(() => import("@/pages/DatabaseOffline"));
 const OutpassGate = lazy(() => import("@/pages/gate/OutpassGate"));
 const VisitorGate = lazy(() => import("@/pages/gate/VisitorGate"));
-const GateScannerLogin = lazy(() => import("@/pages/gate/GateScannerLogin"));
 const ReceptionLogin = lazy(() => import("@/pages/gate/ReceptionLogin"));
 const ReceptionConsole = lazy(() => import("@/pages/gate/ReceptionConsole"));
-const GateScannerConsole = lazy(() => import("@/pages/gate/GateScannerConsole"));
+const GateMonitorLogin = lazy(() => import("@/pages/gate/monitor/GateMonitorLogin"));
+const GateMonitorConsole = lazy(() => import("@/pages/gate/monitor/GateMonitorConsole"));
+const ReceptionSignIn = lazy(() => import("@/pages/gate/reception/ReceptionSignIn"));
 
 // Managing Director portal (executive analytics; only the account flagged MD gets in -see ProtectedRoute)
 // The MD's copies of the HR pages (Dashboard, Employees, Attendance, ...) with their Insights: one app, see lib/md/embed.ts
@@ -264,12 +265,20 @@ function ProtectedRoute({
   // this just avoids flashing a broken page if a restricted user hits the
   // URL directly (e.g. from a stale bookmark after their access changed).
   const moduleKey = moduleForPath(location);
-  if (!canViewRoute(user, location, moduleKey)) {
+  if (!canViewRoute(user, location, moduleKey) && !opensFirstVisibleTab(user, location)) {
     navigate(hrHome);
     return null;
   }
 
   return <Component />;
+}
+
+// Gate Pass / Visitors / Tea Break keep their tabs in the address and send a hidden tab's address to the first tab the
+// login may see (outpass-visitors/routes.ts resolveGatePath), like ?tab= pages do: so a hidden tab's address only goes to
+// the dashboard when the page itself (/hr/outpass-visitors/<page>) is hidden too.
+function opensFirstVisibleTab(user: Parameters<typeof canViewRoute>[0], location: string): boolean {
+  const match = /^\/hr\/outpass-visitors\/[^/]+(?=\/)/.exec(location);
+  return !!match && canViewRoute(user, match[0], moduleForPath(match[0]));
 }
 
 // A page that has moved: sends the old address to the new one (same sub-page, same ?query and #anchor), replacing the old
@@ -310,13 +319,19 @@ function Router() {
         <Route path="/server-error">{() => <ServerError />}</Route>
         <Route path="/gate/outpass/:token" component={OutpassGate} />
         <Route path="/gate/visitor/:token" component={VisitorGate} />
-        {/* Gate Scanner kiosk -literal /console route must be registered
-          before the :loginToken param route, or "console" would itself be
-          matched as a login token. */}
-        <Route path="/gate-scanner/console" component={GateScannerConsole} />
-        <Route path="/gate-scanner/:loginToken" component={GateScannerLogin} />
-        {/* Reception desk -same literal-before-param ordering as Gate Scanner above. */}
+        {/* Gate Monitor: one shared sign-in for every gate (the username decides the gate) and its console. Outside
+          ProtectedRoute on purpose: nothing here may lead to an HR page. */}
+        <Route path="/gatemonitor/console" component={GateMonitorConsole} />
+        <Route path="/gatemonitor" component={GateMonitorLogin} />
+        {/* The old gate scanner addresses (bookmarked on the kiosks) lead to the gate monitor. The literal /console route
+          must be registered before the :loginToken param route, or "console" would itself be matched as a login token. */}
+        <Route path="/gate-scanner/console">{() => <Redirect to="/gatemonitor/console" replace />}</Route>
+        <Route path="/gate-scanner/:loginToken">
+          {(params) => <Redirect to={`/gatemonitor?gate=${encodeURIComponent(params.loginToken)}`} replace />}
+        </Route>
+        {/* Reception desk -same literal-before-param ordering as above: the shared sign-in, then the old per-desk link. */}
         <Route path="/reception/console" component={ReceptionConsole} />
+        <Route path="/reception-login" component={ReceptionSignIn} />
         <Route path="/reception-login/:loginToken" component={ReceptionLogin} />
 
         {/* ── HR Routes ─────────────────────────────────────────── */}

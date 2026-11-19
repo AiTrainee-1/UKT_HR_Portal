@@ -46,6 +46,7 @@ from .models import (
 )
 from .permission_registry import (
     INHERITS,
+    REQUIRE_EXPLICIT,
     URL_MODULE_MAP,
     URL_PATTERNS,
     all_module_keys,
@@ -65,6 +66,7 @@ API_ALLOWLIST: tuple[tuple[str, str], ...] = (
     (r"auth/.*", "signing in and the current account"),
     (r"shared/[^/]+", "Endpoint Sharing's public call: its own API key, never an HR token"),
     (r"(outpass|visitor)/gate/.*", "the gate QR pages: no login"),
+    (r"gate-monitor/.*", "the gate monitor: its own sign-in and the gate's session (require_gate_device), never HR"),
     (r"connector/.*", "the factory Site Connector program: its own key"),
     (r"co-portal/.*", "the CO portal: its own portal key"),
     (r"my/.*", "employee tokens (mobile app, employee portal)"),
@@ -88,6 +90,22 @@ API_ALLOWLIST: tuple[tuple[str, str], ...] = (
     (r"mobile-app/latest-version", "the app's update check: no login"),
     (r"theme-settings(/update)?", "the portal's colours: ungated before 2026-11-11 (permission-inventory.md, Gaps)"),
 )
+
+
+# API paths added after the frozen snapshot (2026-11-10) under a prefix the old map never had, so there is no old
+# behaviour to keep: BackwardCompatibility compares each as if the old map had given it to the module of the page it
+# belongs to (every role keeps on it exactly the level it has on that page). (pattern, old module)
+NEW_SINCE_SNAPSHOT: tuple[tuple[str, str], ...] = (
+    (r"outpass/in-out(/.*)?", "outpass_visitors"),  # Gate Pass -> In/Out, 2026-11-18
+    (r"visitor/(visits|people|export)(/.*)?", "outpass_visitors"),  # Visitors register / check-out / export, 2026-11-18
+)
+
+
+def new_since_snapshot(path: str) -> str | None:
+    for pattern, module in NEW_SINCE_SNAPSHOT:
+        if re.fullmatch(pattern, path):
+            return module
+    return None
 
 
 def api_paths() -> list[str]:
@@ -237,9 +255,26 @@ class Completeness(SimpleTestCase):
             "salary-slips/7/whatsapp": "salary_slip.send",
             "recruitment/employee-documents/7/upload": "recruitment.documents.employee.extra",
             "mobile-app-logins/7/reset-password": "mobile_app_login.logins.password",
+            "gate-devices/7/reveal-password": "outpass_visitors.outpass.gate_devices.view_password",
+            "gate-devices/7/sign-out": "outpass_visitors.outpass.gate_devices",
+            "gate-devices/records/export": "outpass_visitors.outpass.gate_devices",
+            "outpass/in-out/7": "outpass_visitors.outpass.in_out",
+            "visitor/visits/7/check-out": "outpass_visitors.visitors",
+            "tea-break/records/summary": "outpass_visitors.tea_break.records",
         }
         for path, key in cases.items():
             self.assertEqual(resolve_module(path), key, path)
+
+    def test_the_paths_new_since_the_snapshot_are_honest(self):
+        """Each NEW_SINCE_SNAPSHOT line matches a real path the old map did not know and the new one maps."""
+        paths = api_paths()
+        for pattern, module in NEW_SINCE_SNAPSHOT:
+            hits = [p for p in paths if re.fullmatch(pattern, p)]
+            self.assertTrue(hits, f"stale NEW_SINCE_SNAPSHOT line: {pattern}")
+            for p in hits:
+                self.assertIsNone(old.old_resolve_module(p), f"{p} was mapped on 2026-11-10: compare it as it was")
+                self.assertIsNotNone(resolve_module(p), p)
+                self.assertIn(module, old.old_all_module_keys(), pattern)
 
 
 # ───────────────────────────── nothing changed for existing roles ─────────────────────────────
@@ -255,12 +290,17 @@ class BackwardCompatibility(SimpleTestCase):
 
     def assert_same_levels(self, old_perms: dict, new_perms: dict, label: str):
         for path in self.paths:
-            old_key, new_key = old.old_resolve_module(path), resolve_module(path)
+            old_key, new_key = old.old_resolve_module(path) or new_since_snapshot(path), resolve_module(path)
             self.assertEqual(old_key is None, new_key is None, f"{label}: {path} gated before={old_key} now={new_key}")
             if old_key is None:
                 continue
-            before = old.old_resolve_permission(old_perms, old_key)
             now = resolve_permission(new_perms, new_key)
+            if new_key in REQUIRE_EXPLICIT:
+                # deliberately changed on 2026-11-19 (fail-closed): the password reveals are Hidden unless the role
+                # itself sets them, whatever the page says (ExplicitOnlyKeys below)
+                self.assertEqual(now, new_perms.get(new_key, "hidden"), f"{label}: {path} ({new_key})")
+                continue
+            before = old.old_resolve_permission(old_perms, old_key)
             self.assertEqual(before, now, f"{label}: {path} ({old_key} -> {new_key})")
 
     def test_every_role_shape_keeps_its_level_on_every_api_path(self):
@@ -327,6 +367,46 @@ class BackwardCompatibility(SimpleTestCase):
         self.assertTrue(hr_access.may_approve(acct, "request"))
         self.assertFalse(hr_access.may_approve(acct, "advance"))
         self.assertEqual(hr_access.decision_kind("employee-requests/4/action", "PUT"), "request")
+
+
+class ExplicitOnlyKeys(SimpleTestCase):
+    """2026-11-19: the gate / desk password reveals are Hidden unless set on the role (or the account) itself."""
+
+    GATE = "outpass_visitors.outpass.gate_devices.view_password"
+    DESK = "outpass_visitors.visitors.reception_devices.view_password"
+
+    def test_they_are_the_two_password_reveals_and_the_portal_knows_it(self):
+        self.assertEqual(REQUIRE_EXPLICIT, frozenset({self.GATE, self.DESK}))
+        with open(permission_tree.FRONTEND_JSON, encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(text.count('"explicit": true'), 2)
+
+    def test_nothing_above_them_turns_them_on(self):
+        for perms in (
+            {"outpass_visitors": "edit"},
+            {"outpass_visitors.outpass": "edit", "outpass_visitors.visitors": "edit"},
+            {"outpass_visitors.outpass.gate_devices": "edit", "outpass_visitors.visitors.reception_devices": "edit"},
+        ):
+            self.assertEqual(resolve_permission(perms, self.GATE), "hidden", perms)
+            self.assertEqual(resolve_permission(perms, self.DESK), "hidden", perms)
+        self.assertEqual(resolve_permission({self.GATE: "edit"}, self.GATE), "edit")
+        self.assertEqual(resolve_permission({"outpass_visitors": "edit", self.DESK: "view"}, self.DESK), "view")
+        self.assertEqual(resolve_module("gate-devices/7/reveal-password"), self.GATE)
+
+    def test_the_managing_directors_grant_does_not_include_them(self):
+        perms = effective_permissions(account({}, is_md=True))
+        self.assertEqual(resolve_permission(perms, "outpass_visitors.outpass.gate_devices"), "edit")
+        self.assertEqual(resolve_permission(perms, self.GATE), "hidden")
+        perms = effective_permissions(account({self.GATE: "edit"}, is_md=True))
+        self.assertEqual(resolve_permission(perms, self.GATE), "edit")  # set on the MD's role: given
+
+    def test_an_account_change_on_the_section_takes_them_away_like_every_part(self):
+        acct = account(
+            {"outpass_visitors": "view", self.GATE: "edit"},
+            overrides={"modules": {"outpass_visitors": "edit"}},
+            category="hr_manager",
+        )
+        self.assertEqual(resolve_permission(effective_permissions(acct), self.GATE), "hidden")
 
 
 class PureRules(SimpleTestCase):

@@ -10,10 +10,13 @@ export function GateQrDialog({
   kind,
   token,
   branchName,
+  label = "Gate QR",
 }: {
   kind: "outpass" | "visitor";
   token?: string;
   branchName?: string;
+  /** The button's words ("Visitor QR" on the Visitors page). */
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [qrImage, setQrImage] = useState<string | null>(null);
@@ -40,13 +43,19 @@ export function GateQrDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Button variant="outline" size="sm" className="gap-1.5" disabled={!token} onClick={() => setOpen(true)}>
-        <QrCodeIcon size={14} /> Gate QR
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-11 gap-1.5 sm:h-9"
+        disabled={!token}
+        onClick={() => setOpen(true)}
+      >
+        <QrCodeIcon size={14} /> {label}
       </Button>
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>
-            {kind === "outpass" ? "Outpass" : "Visitor"} Gate QR{branchName ? ` — ${branchName}` : ""}
+            {kind === "outpass" ? "Gate pass" : "Visitor"} QR{branchName ? ` — ${branchName}` : ""}
           </DialogTitle>
         </DialogHeader>
         <div className="flex flex-col items-center gap-3 py-2">
@@ -60,7 +69,7 @@ export function GateQrDialog({
           </Button>
           <p className="text-xs text-muted-foreground text-center max-w-xs">
             This QR is permanent for this branch — print it once and reuse it at the gate. Scanning it opens the{" "}
-            {kind === "outpass" ? "outpass" : "visitor"} form on any phone, no login required.
+            {kind === "outpass" ? "gate pass" : "visitor"} form on any phone, no login required.
           </p>
         </div>
       </DialogContent>

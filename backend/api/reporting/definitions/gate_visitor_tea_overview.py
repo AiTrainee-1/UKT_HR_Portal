@@ -192,13 +192,15 @@ def _run_devices(ctx):
     desks = fetch(ReceptionDevice) if kind != "gate" else []
     gate_ids = [g["id"] for g in gates]
 
+    scans_in_range = OutpassGateScan.objects.filter(gate_id__in=gate_ids).filter(C.in_range("scanned_at", ctx))
     outpass_scans = {
         r["gate_id"]: r["n"]
-        for r in OutpassGateScan.objects.filter(gate_id__in=gate_ids)
-        .filter(C.in_range("scanned_at", ctx))
-        .values("gate_id")
-        .annotate(n=Count("id"))
-        .order_by()
+        for r in scans_in_range.exclude(scan_type="tea").values("gate_id").annotate(n=Count("id")).order_by()
+    }
+    # a tea-break code refused by a gate that does not take tea breaks (scan_type "tea"): counted with the tea scans
+    tea_refused = {
+        r["gate_id"]: r["n"]
+        for r in scans_in_range.filter(scan_type="tea").values("gate_id").annotate(n=Count("id")).order_by()
     }
     tea_out = {
         r["out_gate_id"]: r["n"]
@@ -232,7 +234,12 @@ def _run_devices(ctx):
         }
 
     rows = [
-        row(g, "Gate scanner", outpass_scans.get(g["id"], 0), tea_out.get(g["id"], 0) + tea_in.get(g["id"], 0))
+        row(
+            g,
+            "Gate scanner",
+            outpass_scans.get(g["id"], 0),
+            tea_out.get(g["id"], 0) + tea_in.get(g["id"], 0) + tea_refused.get(g["id"], 0),
+        )
         for g in gates
     ] + [row(d, "Reception desk", None, None) for d in desks]
 
@@ -249,14 +256,15 @@ def _run_devices(ctx):
         {"label": "Outpass scans in period", "value": sum(outpass_scans.values()), "format": "integer"},
         {
             "label": "Tea-break scans in period",
-            "value": sum(tea_out.values()) + sum(tea_in.values()),
+            "value": sum(tea_out.values()) + sum(tea_in.values()) + sum(tea_refused.values()),
             "format": "integer",
         },
     ]
     notes = [
         "Login tokens and password hashes are never included in this report.",
         "Outpass scans = every exit/return QR scan attempt logged at the gate in the period, including denied ones. Tea scans "
-        "= tea-break OUT and IN scans made at the gate. Reception desks do not scan (dash).",
+        "= tea-break OUT and IN scans made at the gate, and tea-break codes it refused (a gate that does not take tea "
+        "breaks). Reception desks do not scan (dash).",
         "A gate that was deleted no longer appears, and its historical scans are not attributed to any device. 'Last login' "
         "is the only activity stamp a device keeps.",
     ]

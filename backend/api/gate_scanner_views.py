@@ -13,24 +13,28 @@ happen to share the word "gate" -see GateDevice's docstring in models.py.
 """
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timedelta
 
-import bcrypt
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from . import gate_qr, whatsapp_notifications
-from .auth import get_hr_display_name, require_gate_device, require_hr
-from .branch_scope import get_branch_scope, scope_to_branch
+from .auth import require_gate_device
 from .clock import FACTORY_TZ
 from .employee_photo import employee_photo_link, photo_links
-from .jwt_utils import sign_token, verify_token
-from .models import Branch, GateDevice, OutpassGateScan, OutpassRequest
+from .gate_credentials import LOGIN_ERRORS, LOGIN_LOCKED, LOGIN_OK, check_gate_login, start_gate_session
+from .gate_records import already_scanned_message
+from .jwt_utils import verify_token
+from .models import GateDevice, OutpassGateScan, OutpassRequest
 from .outpass_visitor_views import _paginate_params
 from .throttles import throttle
+
+# A recognised code of a kind this gate is set not to take (GateDevice.allow_outpass / allow_tea_break): 403.
+NOT_ALLOWED_HERE = OutpassGateScan.RESULT_NOT_ALLOWED_HERE
+NOT_ALLOWED_PASS_MESSAGE = "This gate does not take gate passes."
+NOT_ALLOWED_TEA_MESSAGE = "This gate does not take tea-break scans."
 
 
 def _today_start():
@@ -38,21 +42,6 @@ def _today_start():
     so "today" means the same thing everywhere in this feature."""
     now_ist = timezone.now().astimezone(FACTORY_TZ)
     return now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-def _gate_device_json(gate: GateDevice) -> dict:
-    return {
-        "id": gate.id,
-        "name": gate.name,
-        "branchId": gate.branch_id,
-        "branchName": gate.branch.name if gate.branch_id else None,
-        "username": gate.username,
-        "isActive": gate.is_active,
-        "loginToken": gate.login_token,
-        "createdBy": gate.created_by,
-        "createdAt": gate.created_at.isoformat(),
-        "lastLoginAt": gate.last_login_at.isoformat() if gate.last_login_at else None,
-    }
 
 
 def _gate_scan_employee_payload(req: OutpassRequest) -> dict:
@@ -79,72 +68,8 @@ def _gate_scan_employee_payload(req: OutpassRequest) -> dict:
     }
 
 
-# ── Gate device management -HR portal ───────────────────────────────────────
-
-@api_view(["GET", "POST"])
-@require_hr
-def gate_devices(request: Request) -> Response:
-    if request.method == "GET":
-        qs = scope_to_branch(GateDevice.objects.select_related("branch").order_by("name"), request)
-        return Response([_gate_device_json(g) for g in qs])
-
-    data = request.data
-    name = (data.get("name") or "").strip()
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-    if not name or not username or not password:
-        return Response({"error": "name, username and password are required"}, status=400)
-    if len(password) < 6:
-        return Response({"error": "Password must be at least 6 characters"}, status=400)
-
-    branch_id = get_branch_scope(request) or data.get("branchId")
-    if not branch_id:
-        return Response({"error": "branchId is required"}, status=400)
-    branch = Branch.objects.filter(id=branch_id).first()
-    if not branch:
-        return Response({"error": "Branch not found"}, status=404)
-
-    if GateDevice.objects.filter(username__iexact=username).exists():
-        return Response({"error": "That username is already taken"}, status=409)
-
-    gate = GateDevice.objects.create(
-        name=name,
-        branch=branch,
-        username=username,
-        password_hash=bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=10)).decode(),
-        login_token=uuid.uuid4().hex,
-        created_by=get_hr_display_name(request),
-    )
-    return Response(_gate_device_json(gate), status=201)
-
-
-@api_view(["PUT", "DELETE"])
-@require_hr
-def gate_device_detail(request: Request, pk: int) -> Response:
-    gate = scope_to_branch(GateDevice.objects.all(), request).filter(pk=pk).first()
-    if not gate:
-        return Response({"error": "Gate not found"}, status=404)
-
-    if request.method == "DELETE":
-        gate.delete()
-        return Response(status=204)
-
-    data = request.data
-    if "name" in data:
-        name = (data.get("name") or "").strip()
-        if not name:
-            return Response({"error": "name cannot be empty"}, status=400)
-        gate.name = name
-    if "isActive" in data:
-        gate.is_active = bool(data.get("isActive"))
-    if data.get("password"):
-        password = data["password"]
-        if len(password) < 6:
-            return Response({"error": "Password must be at least 6 characters"}, status=400)
-        gate.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=10)).decode()
-    gate.save()
-    return Response(_gate_device_json(gate))
-
+# Gate device management (HR portal: gate_devices, gate_device_detail, _gate_device_json) lives in gate_admin_views.py
+# since 18 Nov 2026.
 
 # ── Gate device auth -public ─────────────────────────────────────────────────
 
@@ -159,17 +84,18 @@ def gate_login_info(request: Request, login_token: str) -> Response:
 @api_view(["POST"])
 @throttle("login")
 def gate_login(request: Request) -> Response:
-    username = (request.data.get("username") or "").strip()
-    password = request.data.get("password") or ""
-
-    gate = GateDevice.objects.filter(username__iexact=username).first()
-    valid = bool(gate) and gate.is_active and bcrypt.checkpw(password.encode(), gate.password_hash.encode())
-    if not valid:
+    """The old kiosk sign-in (before /gatemonitor; e2e still uses it), same keys {token, gateId, gateName}.
+    Since 18 Nov 2026 it shares gate_credentials.check_gate_login with POST gate-monitor/login: it records the
+    attempt, honours the 5-wrong-tries lock (429) and opens a GateSession (a 30-day token with gsid). A wrong
+    password and a switched-off gate still both answer the old 401."""
+    data = request.data if hasattr(request.data, "get") else {}
+    gate, outcome = check_gate_login(request, data.get("username"), data.get("password"))
+    if outcome == LOGIN_LOCKED:
+        status, message = LOGIN_ERRORS[LOGIN_LOCKED]
+        return Response({"error": message}, status=status)
+    if outcome != LOGIN_OK:
         return Response({"error": "Invalid username or password"}, status=401)
-
-    token = sign_token({"role": "gate_device", "deviceId": gate.id, "gateName": gate.name}, expires_in=timedelta(hours=24))
-    gate.last_login_at = timezone.now()
-    gate.save(update_fields=["last_login_at"])
+    _session, token = start_gate_session(gate, request)
     return Response({"token": token, "gateId": gate.id, "gateName": gate.name})
 
 
@@ -180,9 +106,8 @@ def _resolve_exit_scan(gate: GateDevice, req: OutpassRequest) -> tuple[dict, int
     expires_at = req.approved_at + timedelta(minutes=60) if req.approved_at else None
 
     if req.exited_at:
-        message = "Already exited at " + req.exited_at.strftime("%I:%M %p")
-        if req.exit_gate_id:
-            message += f" via {req.exit_gate.name}"
+        # in India time (the stored message of a scan before 19 Nov 2026 has the UTC clock: gate_records rebuilds it)
+        message = already_scanned_message(False, req.exited_at, req.exit_gate.name if req.exit_gate_id else None)
         OutpassGateScan.objects.create(
             gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_EXIT,
             result=OutpassGateScan.RESULT_ALREADY_SCANNED, message=message,
@@ -232,9 +157,7 @@ def _resolve_return_scan(gate: GateDevice, req: OutpassRequest, generated_at_cla
     now = timezone.now()
 
     if req.entered_at:
-        message = "Already returned at " + req.entered_at.strftime("%I:%M %p")
-        if req.entry_gate_id:
-            message += f" via {req.entry_gate.name}"
+        message = already_scanned_message(True, req.entered_at, req.entry_gate.name if req.entry_gate_id else None)
         OutpassGateScan.objects.create(
             gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_ENTRY,
             result=OutpassGateScan.RESULT_ALREADY_SCANNED, message=message,
@@ -288,8 +211,19 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
     "tea_break" is the permanent per-employee QR from tea_break_views.py::
     tea_break_qr_token -the same gate logins scan all three, deliberately,
     per explicit product decision not to stand up a separate device/login
-    concept just for tea breaks."""
-    qr_token = (qr_token or "").strip()
+    concept just for tea breaks.
+
+    Since 18 Nov 2026 a gate may be set to take only one kind
+    (GateDevice.allow_outpass / allow_tea_break, Manage Gates). A recognised
+    code of a kind the gate does not take is refused with 403
+    {"result": "not_allowed_here", "message"} (plus the employee and pass
+    details the code names) and logged as a denied OutpassGateScan row
+    (RESULT_NOT_ALLOWED_HERE) -for a tea-break code too, so the refusal shows
+    in the gate's records: since 19 Nov 2026 as a denied scan of type "tea"
+    (SCAN_TYPE_TEA; the records show it as a refused tea break, never as an
+    exit; TeaBreakLog only holds breaks that happened). An unreadable code is
+    still "invalid_qr" (with the default type, as before)."""
+    qr_token = qr_token.strip() if isinstance(qr_token, str) else ""
     if not qr_token:
         return {"result": "invalid_qr", "message": "qrToken is required"}, 400
 
@@ -314,6 +248,21 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
         from .tea_break_views import resolve_tea_break_scan
 
         employee = Employee.objects.select_related("department").filter(pk=payload.get("employeeId")).first()
+        if not gate.allow_tea_break:
+            OutpassGateScan.objects.create(
+                gate=gate, employee=employee, scan_type=OutpassGateScan.SCAN_TYPE_TEA,
+                result=OutpassGateScan.RESULT_NOT_ALLOWED_HERE, message=NOT_ALLOWED_TEA_MESSAGE,
+            )
+            body = {"result": NOT_ALLOWED_HERE, "kind": "tea_break", "message": NOT_ALLOWED_TEA_MESSAGE}
+            if employee:
+                body["employee"] = {
+                    "id": employee.id,
+                    "employeeCode": employee.employee_code,
+                    "name": f"{employee.first_name} {employee.last_name}",
+                    "department": employee.department.name if employee.department else None,
+                    "photoUrl": employee_photo_link(employee),
+                }
+            return body, 403
         if not employee:
             message = "This employee no longer exists."
             OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
@@ -324,6 +273,18 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
     req = OutpassRequest.objects.select_related(
         "employee__department", "employee__designation", "exit_gate", "entry_gate"
     ).filter(pk=req_id).first()
+    if not gate.allow_outpass:
+        scan_type = OutpassGateScan.SCAN_TYPE_ENTRY if role == "outpass_return" else OutpassGateScan.SCAN_TYPE_EXIT
+        OutpassGateScan.objects.create(
+            gate=gate, outpass_request=req, employee=req.employee if req else None, scan_type=scan_type,
+            result=OutpassGateScan.RESULT_NOT_ALLOWED_HERE, message=NOT_ALLOWED_PASS_MESSAGE,
+        )
+        body = {
+            "result": NOT_ALLOWED_HERE, "kind": "outpass", "scanType": scan_type, "message": NOT_ALLOWED_PASS_MESSAGE,
+        }
+        if req:
+            body.update(_gate_scan_employee_payload(req))
+        return body, 403
     if not req:
         message = "This Outpass request no longer exists."
         OutpassGateScan.objects.create(gate=gate, result=OutpassGateScan.RESULT_INVALID_QR, message=message)
@@ -337,7 +298,8 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
 @api_view(["POST"])
 @require_gate_device
 def gate_scan(request: Request) -> Response:
-    body, status = resolve_gate_scan(request.gate_device, request.data.get("qrToken"))
+    data = request.data if hasattr(request.data, "get") else {}
+    body, status = resolve_gate_scan(request.gate_device, data.get("qrToken"))
     return Response(body, status=status)
 
 

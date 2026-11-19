@@ -12,6 +12,14 @@ export * from "./compensation";
 export * from "./compensation-settings";
 export * from "./documents";
 export * from "./gate";
+// Gate Pass / Visitors / Tea Break rebuild (2026-11-18): one file per slice, the record row the gate pages share
+export * from "./gate-records";
+export * from "./gate-admin";
+export * from "./gate-monitor";
+export * from "./gate-inout";
+export * from "./visitor-admin";
+export * from "./reception-admin";
+export * from "./tea-break-admin";
 export * from "./geo";
 export * from "./geo-tracking";
 export * from "./geo-day-map";
