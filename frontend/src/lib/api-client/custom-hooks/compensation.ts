@@ -404,6 +404,11 @@ export type CompensationWindow = {
   createdAt: string | null;
   /** HR may remove it (any date since the claim workflow; an older backend: a future date only). */
   canDelete: boolean;
+  /**
+   * Why it cannot be removed, in the server's words, when `canDelete` is false (the month's payroll is done, another
+   * branch's announcement, a View-only role). Null when it can be; absent on an older backend.
+   */
+  deleteBlockedReason?: string | null;
 };
 
 /** POST /api/compensation/windows answers the new announcement plus how many staff had that day's attendance judged again
@@ -507,9 +512,21 @@ export const useDeleteCompensationWindow = () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type HolidayWorkStatus = "pending" | "approved" | "rejected";
-export type HolidayDayKind = "sunday" | "holiday";
+/**
+ * The kind of day off worked: a Sunday, a declared holiday, or (since 2026-11-19) the employee's own OFF SATURDAY (only the
+ * staff whose off day it is can claim it; its `holidayName` is null on the strip and "Off Saturday" on a claim).
+ */
+export type HolidayDayKind = "sunday" | "holiday" | "off_saturday";
 
-export type HolidayWorkEnabled = { master: boolean; holidayWork: boolean; workflow: boolean; canRaise: boolean };
+export type HolidayWorkEnabled = {
+  master: boolean;
+  holidayWork: boolean;
+  workflow: boolean;
+  /** HR may raise a claim now: the switches are on AND the login has Edit on Leave > Holiday work > Claims. */
+  canRaise: boolean;
+  /** Why HR cannot raise right now, in the server's words (null when it can). Absent on an older backend. */
+  raiseProblem?: string | null;
+};
 
 export type HolidayWorkClaim = {
   id: number;
@@ -596,6 +613,8 @@ export type HolidayWorkEligibleEmployee = {
 export type HolidayWorkEligibleResponse = {
   date: string;
   dayKind: HolidayDayKind | null;
+  /** "Sunday" | "Holiday" | "Off Saturday": the server's own word for the day. Absent on an older backend. */
+  kindLabel?: string | null;
   holidayName: string | null;
   /** False for a weekday, a future date or one older than `maxAgeDays`: `message` says why and `employees` is empty. */
   claimable: boolean;

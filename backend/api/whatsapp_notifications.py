@@ -3,9 +3,13 @@ WhatsApp messages the system sends about what happened to an employee's own thin
 
   * Geo Attendance (On-Duty) requests and their punches -approved or rejected
   * Gate movement -an employee recorded going OUT or coming back IN
-  * A visitor arriving to meet an employee (with the visitor's tap-to-call contact card)
+  * A visitor arriving to meet an employee (the visitor's phone number is a line of the message: the official
+    WhatsApp Cloud API starts a conversation with an approved template only, so the old contact card is gone)
 
 Approval decisions for the other workflows (leave, permission, ...) live in whatsapp_approvals.
+
+Each message goes out as its Meta template (whatsapp_catalog: meta_template); every variable is sent on ONE line
+(whatsapp_format.flat), Meta's rule for a template variable.
 
 Everything here is best-effort by design: a failed or switched-off message must never stop the
 approval, gate scan or check-in that raised it, so callers just call these and move on. Every
@@ -21,7 +25,7 @@ from django.utils import timezone
 
 from . import whatsapp_service
 from .whatsapp_approvals import approver_label
-from .whatsapp_format import date_str, duration_str, full_name, pretty_phone, stamp_str, time_str
+from .whatsapp_format import date_str, duration_str, flat, full_name, one_line, pretty_phone, stamp_str, time_str
 
 logger = logging.getLogger(__name__)
 
@@ -48,18 +52,20 @@ def notify_geo_session_approved(session, reviewer_name: str, comment: str | None
     """The employee's Geo Attendance (On-Duty) request got its final approval from HR.
     Restates what they submitted -the destination and when they asked."""
     emp = session.employee
-    comment = (comment or "").strip()
+    comment = one_line(comment)
     return whatsapp_service.send_notification(
         emp,
         "geo_approval",
-        {
-            "employee_name": full_name(emp),
-            "destination": session.destination,
-            "requested_on": stamp_str(session.created_at),
-            "approved_by": reviewer_name or "HR",
-            "note": f"\nNote: {comment}" if comment else "",
-            "comment": comment,
-        },
+        flat(
+            {
+                "employee_name": full_name(emp),
+                "destination": session.destination,
+                "requested_on": stamp_str(session.created_at),
+                "approved_by": reviewer_name or "HR",
+                "note": f"Note: {comment}" if comment else "",
+                "comment": comment,
+            }
+        ),
         dedupe_key=f"geo:{session.id}",
         document_ref_id=session.id,
         related_module="on_duty",
@@ -76,14 +82,16 @@ def notify_geo_session_rejected(
     return whatsapp_service.send_notification(
         emp,
         "geo_rejection",
-        {
-            "employee_name": full_name(emp),
-            "destination": session.destination,
-            "requested_on": stamp_str(session.created_at),
-            "rejected_by": approver_label(reviewer_name, role),
-            "comment": (comment or "").strip(),
-            "punches_note": f"The {voided} punch(es) you recorded under it were not counted." if voided else "",
-        },
+        flat(
+            {
+                "employee_name": full_name(emp),
+                "destination": session.destination,
+                "requested_on": stamp_str(session.created_at),
+                "rejected_by": approver_label(reviewer_name, role),
+                "comment": comment,
+                "punches_note": f"The {voided} punch(es) you recorded under it were not counted." if voided else "",
+            }
+        ),
         dedupe_key=f"geo:{session.id}:rejected",
         document_ref_id=session.id,
         related_module="on_duty",
@@ -108,7 +116,7 @@ def notify_geo_punch_approved(verification, reviewer_name: str, comment: str | N
     return whatsapp_service.send_notification(
         verification.employee,
         "geo_punch_approval",
-        {**_punch_params(verification), "approved_by": reviewer_name or "HR", "comment": (comment or "").strip()},
+        flat({**_punch_params(verification), "approved_by": reviewer_name or "HR", "comment": comment}),
         dedupe_key=f"geopunch:{verification.id}",
         document_ref_id=verification.id,
         related_module="on_duty_punch",
@@ -121,7 +129,7 @@ def notify_geo_punch_rejected(verification, reviewer_name: str, comment: str | N
     return whatsapp_service.send_notification(
         verification.employee,
         "geo_punch_rejection",
-        {**_punch_params(verification), "rejected_by": reviewer_name or "HR", "comment": (comment or "").strip()},
+        flat({**_punch_params(verification), "rejected_by": reviewer_name or "HR", "comment": comment}),
         dedupe_key=f"geopunch:{verification.id}:rejected",
         document_ref_id=verification.id,
         related_module="on_duty_punch",
@@ -145,7 +153,7 @@ def notify_geo_punches_decided(session, decision: str, count: int, reviewer_name
     return whatsapp_service.send_notification(
         session.employee,
         "geo_punch_approval" if approved else "geo_punch_rejection",
-        params,
+        flat(params),
         # A window of a few seconds so a double-click sends once, but a later batch still goes out.
         dedupe_key=f"geopunches:{session.id}:{decision}:{int(time_module.time() // 30)}",
         document_ref_id=session.id,
@@ -184,7 +192,7 @@ def notify_gate_out(req):
     return whatsapp_service.send_notification(
         req.employee,
         "outpass_gate_out",
-        params,
+        flat(params),
         dedupe_key=f"gate:out:{req.id}",
         document_ref_id=req.id,
         related_module="outpass",
@@ -199,7 +207,7 @@ def notify_gate_in(req):
     return whatsapp_service.send_notification(
         req.employee,
         "outpass_gate_in",
-        params,
+        flat(params),
         dedupe_key=f"gate:in:{req.id}",
         document_ref_id=req.id,
         related_module="outpass",
@@ -216,16 +224,18 @@ def notify_gate_record(record):
     return whatsapp_service.send_notification(
         emp,
         "outpass_gate_out",
-        {
-            "employee_name": full_name(emp),
-            "pass_type": "Gate QR form",
-            "destination": record.destination,
-            "date": date_str(record.submitted_at),
-            "gate_out_time": time_str(record.submitted_at),
-            "gate_name": record.branch.name if record.branch_id else "",
-            "status": "Recorded from the gate QR form (not scanned by a guard)",
-            "next_step": "If this wasn't you, please tell HR.",
-        },
+        flat(
+            {
+                "employee_name": full_name(emp),
+                "pass_type": "Gate QR form",
+                "destination": record.destination,
+                "date": date_str(record.submitted_at),
+                "gate_out_time": time_str(record.submitted_at),
+                "gate_name": record.branch.name if record.branch_id else "",
+                "status": "Recorded from the gate QR form (not scanned by a guard)",
+                "next_step": "If this wasn't you, please tell HR.",
+            }
+        ),
         dedupe_key=f"gate:record:{record.id}",
         document_ref_id=record.id,
         related_module="outpass",
@@ -238,8 +248,9 @@ def notify_gate_record(record):
 @best_effort
 def notify_visitor_arrival(visit, host):
     """Tell `host` a visitor has arrived, with everything they need to know and the visitor's
-    contact card to tap and call. Reception's "notified on WhatsApp" time is stamped once the
-    message is really sent (the dispatcher's "visitor_notified" hook)."""
+    phone number (a line of the template: a contact card can't be sent with Meta's templates).
+    Reception's "notified on WhatsApp" time is stamped once the message is really sent (the
+    dispatcher's "visitor_notified" hook)."""
     visitor = visit.visitor
     name = visit.visitor_name or visitor.name  # as given at this visit (per branch, 19 Nov 2026)
     arrived = visit.visited_at or timezone.now()
@@ -247,25 +258,21 @@ def notify_visitor_arrival(visit, host):
     return whatsapp_service.send_notification(
         host,
         "visitor_notification",
-        {
-            "employee_name": full_name(host),
-            "visitor_name": name,
-            "visitor_phone": pretty_phone(visitor.phone, normalized),
-            "purpose": visit.purpose or "",
-            "company": getattr(visitor, "company", "") or "",
-            "host_name": visit.whom_to_meet or full_name(host),
-            "department": host.department.name if host.department_id else "",
-            "visit_date": date_str(arrived),
-            "visit_time": time_str(arrived),
-            "branch": visit.branch.name if visit.branch_id else "",
-            "why_came": visit.why_came or "",
-        },
+        flat(
+            {
+                "employee_name": full_name(host),
+                "visitor_name": name,
+                "visitor_phone": pretty_phone(visitor.phone, normalized),
+                "purpose": visit.purpose or "",
+                "company": getattr(visitor, "company", "") or "",
+                "host_name": visit.whom_to_meet or full_name(host),
+                "department": host.department.name if host.department_id else "",
+                "visit_date": date_str(arrived),
+                "visit_time": time_str(arrived),
+                "branch": visit.branch.name if visit.branch_id else "",
+                "why_came": visit.why_came or "",
+            }
+        ),
         document_ref_id=visit.id,
-        contact={
-            "document_type": "visitor_contact",
-            "first_name": name,
-            "last_name": "",
-            "phone": normalized or visitor.phone,
-        },
         on_sent="visitor_notified",
     )

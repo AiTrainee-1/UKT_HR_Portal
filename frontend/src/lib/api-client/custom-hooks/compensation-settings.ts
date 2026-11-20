@@ -30,10 +30,22 @@ export type CompensationShiftRule = {
 
 /**
  * The claim workflow (2026-11-19): from `from` on, Type 1 allowances, Type 2 OT credits and birthday credits are given only
- * after a claim (by the employee in the apps, or by HR) is approved by the employee's Department Head. Read-only: the
- * server sets the date once (the day the workflow started); days before it keep the old rules. An older backend sends none.
+ * after a claim (by the employee in the apps, or by HR) is approved by the employee's Department Head. The server set the
+ * date once (the day the workflow started); a save may move it LATER only (never earlier than `minFrom`, never cleared), so
+ * days before it keep the old rules. An older backend sends none.
  */
-export type CompensationClaimsInfo = { from: string | null };
+export type CompensationClaimsInfo = {
+  from: string | null;
+  /** "19 Nov 2026": the server's own words for `from`. Absent on an older backend. */
+  fromText?: string | null;
+  /**
+   * The earliest date a save may move `from` to (YYYY-MM-DD): the later of the saved date and today. Absent on an older
+   * backend (which then takes the same rule: never earlier than the saved date or today).
+   */
+  minFrom?: string | null;
+  /** The server's explanation of the date. */
+  help?: string;
+};
 
 /** One entry of the quarters rule's dated history. */
 export type QuarterRuleHistoryEntry = { from: string | null; on: boolean };
@@ -70,7 +82,7 @@ export type CompensationSettings = {
 };
 
 /**
- * What a save sends: the same body minus the three read-only keys. A top-level group that is left out is left alone; the
+ * What a save sends: the same body minus the read-only keys (`claims` only when its date is moved). A top-level group that is left out is left alone; the
  * two rule arrays REPLACE the whole set (a row with an `id` is updated, a row without one is created, an id that is
  * missing is deleted).
  */
@@ -86,6 +98,8 @@ export type CompensationSettingsInput = {
   windows?: { enabled?: boolean };
   holidayWork?: { enabled?: boolean };
   birthday?: { enabled?: boolean; effectiveFrom?: string | null };
+  /** Moves the claims date LATER (the server refuses an earlier date or a blank one with a 400 and its reason). */
+  claims?: { from?: string };
   allowanceRules?: (Omit<CompensationAllowanceRule, "id"> & { id?: number })[];
   shiftRules?: (Omit<CompensationShiftRule, "id"> & { id?: number })[];
 };

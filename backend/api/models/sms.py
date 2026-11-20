@@ -42,6 +42,12 @@ class SmsSettings(models.Model):
     #: before it keep the numbers they have.)
     hourly_cap = models.PositiveIntegerField(default=300)
     daily_cap = models.PositiveIntegerField(default=1500)
+    #: SMS one-time codes on/off (2026-11-20): the SMS channel's own switch, independent of WhatsApp. Either channel
+    #: alone is enough for code sign-in. (otp_channel above is no longer read; migration 0169 turned it into this.)
+    otp_enabled = models.BooleanField(default=False, db_default=False)
+    #: rupees per SMS for the cost estimate (null = the code default) and the monthly budget HR wants to stay under
+    price_per_sms = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+    monthly_budget = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     #: set by the SMS Control page's save only (null until somebody has saved)
     updated_at = models.DateTimeField(null=True, blank=True)
     updated_by = models.ForeignKey(HRUser, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")

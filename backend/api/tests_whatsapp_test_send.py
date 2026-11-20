@@ -1,42 +1,35 @@
 """
-WhatsApp: the development-machine recipient lock, the test message and the connection check (owner 2026-11-17).
+WhatsApp (Meta Cloud API): the development-machine recipient lock, the test message and the connection check.
 
 A development machine allowed to send (WHATSAPP_ALLOW_SENDING=true) sends ONLY to the employees named in
-WHATSAPP_ONLY_TO_EMPLOYEES, checked where every message reaches WAClient (whatsapp_service._post_send) and before the queue
-sends a row (whatsapp_dispatcher); with none named it sends nothing. A real server is unchanged. A local fake WAClient (the
-e2e stack) needs no list.
+WHATSAPP_ONLY_TO_EMPLOYEES, checked where every message reaches Meta (whatsapp_service._guard) and before the queue sends a
+row (whatsapp_dispatcher); with none named it sends nothing. A real server is unchanged. A local fake Graph API (the e2e
+stack) needs no list.
 
-Run via: python manage.py test api.tests_whatsapp_test_send --keepdb
+Run via: python manage.py test api.tests_whatsapp_test_send --noinput
 """
 
+import json
 from unittest import mock
 
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 
 from . import whatsapp_dispatcher, whatsapp_service
 from .jwt_utils import sign_token
-from .models import Employee, HRUser, WhatsAppMessageLog
+from .models import Employee, HRUser, WhatsAppMessageLog, WhatsAppSettings
+from .tests_whatsapp_support import APP_SECRET, META, NO_META, PHONE_NUMBER_ID, TOKEN, VERIFY_TOKEN, WABA_ID
+from .tests_whatsapp_support import FakeMeta, make_template
 
-LIVE = dict(
-    WACLIENT_INSTANCE_ID="INST0000C042",
-    WACLIENT_ACCESS_TOKEN="secret-token",
-    WACLIENT_API_URL="https://api.waclient.com/send",
-    WHATSAPP_ALLOW_SENDING=True,
-)
-POST = "api.whatsapp_service.requests.post"
-GET = "api.whatsapp_service.requests.get"
 DEV = "api.whatsapp_service.local_dev_server"  # True = this is `manage.py runserver` on a laptop
-
-
-def ok_answer(msg_id="WAID1"):
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message": "Success", "message_payload": {"key": {"id": msg_id}}}
-    return r
+LATE_BODY = "Dear {{employee_name}}, you were late on {{date}} by {{late_by}}."
 
 
 class World(TestCase):
     def setUp(self):
         super().setUp()
+        cache.clear()
+        self.meta = FakeMeta.install(self)
         self.me = Employee.objects.create(
             employee_code="T1", first_name="Surya", last_name="M", status="active", phone="9876543210"
         )
@@ -50,18 +43,25 @@ class World(TestCase):
         p = mock.patch(DEV, return_value=True)
         p.start()
         self.addCleanup(p.stop)
+        self.late = make_template(whatsapp_service.template_name_for("late_alert"), LATE_BODY)
+
+    def send(self, to: str):
+        return whatsapp_service.deliver_template(
+            to, "late_alert", {"employee_name": "X", "date": "1 Nov", "late_by": "5m"}
+        )
 
 
-@override_settings(**LIVE, WHATSAPP_ONLY_TO_EMPLOYEES=[])
+@override_settings(**META, WHATSAPP_ONLY_TO_EMPLOYEES=[])
 class NobodyNamedTests(World):
     def test_a_development_machine_with_no_list_sends_nothing(self):
         self.assertIn("WHATSAPP_ONLY_TO_EMPLOYEES", whatsapp_service.sending_block_reason())
-        with mock.patch(POST) as post, self.assertRaises(whatsapp_service.WhatsAppServiceError):
-            whatsapp_service.send_text_message("919876543210", "hi")
-        post.assert_not_called()
+        with self.assertRaises(whatsapp_service.WhatsAppServiceError):
+            self.send("919876543210")
+        self.assertEqual(self.meta.calls, [])
 
-    @override_settings(WACLIENT_API_URL="http://127.0.0.1:8190/send")
+    @override_settings(WHATSAPP_CLOUD_API_BASE="http://127.0.0.1:8190")
     def test_a_local_fake_provider_needs_no_list(self):
+        self.assertTrue(whatsapp_service.provider_is_local())
         self.assertIsNone(whatsapp_service.sending_block_reason())
         self.assertIsNone(whatsapp_service.recipient_block_reason("919123456780"))
 
@@ -72,32 +72,33 @@ class NobodyNamedTests(World):
 
     @override_settings(WHATSAPP_ONLY_TO_EMPLOYEES=["T1"])
     def test_production_ignores_the_list_even_when_it_is_set_by_mistake(self):
-        with mock.patch(DEV, return_value=False), mock.patch(POST, return_value=ok_answer()) as post:
+        with mock.patch(DEV, return_value=False):
             self.assertEqual(whatsapp_service.recipient_codes(), [])
             self.assertIsNone(whatsapp_service.allowed_numbers())
-            whatsapp_service.send_text_message("919123456780", "to anyone eligible")  # T2's number: sent
-            post.assert_called_once()
+            self.send("919123456780")  # T2's number: sent
+            self.assertEqual(len(self.meta.sent), 1)
             body = self.client.get("/api/whatsapp-control/test-message", **self.h).json()
             self.assertIsNone(body["limitedTo"])
 
 
-@override_settings(**LIVE, WHATSAPP_ONLY_TO_EMPLOYEES=["30020", "T1"], DEBUG=True)
+@override_settings(**META, WHATSAPP_ONLY_TO_EMPLOYEES=["30020", "T1"], DEBUG=True)
 class ProductionIsNeverLimitedTests(TestCase):
     """Production (gunicorn / Railway): the lock never applies, even with the variable set and DEBUG on (2026-11-18: the
     variable reached production through Railway and every HoD reminder was skipped)."""
 
     def setUp(self):
         super().setUp()
+        self.meta = FakeMeta.install(self)
         Employee.objects.create(employee_code="T1", first_name="S", last_name="M", status="active", phone="9876543210")
+        make_template(whatsapp_service.template_name_for("late_alert"), LATE_BODY)
 
     def test_not_runserver_means_no_limit_whatever_the_settings(self):
         self.assertFalse(whatsapp_service.local_dev_server())  # the test runner, like gunicorn, is not runserver
         self.assertEqual(whatsapp_service.recipient_codes(), [])
         self.assertIsNone(whatsapp_service.allowed_numbers())
         self.assertIsNone(whatsapp_service.recipient_block_reason("918667516410"))
-        with mock.patch(POST, return_value=ok_answer()) as post:
-            whatsapp_service.send_text_message("918667516410", "a Department Head anywhere")
-        post.assert_called_once()
+        whatsapp_service.deliver_template("918667516410", "late_alert", {"employee_name": "A Department Head"})
+        self.assertEqual(self.meta.last()["to"], "918667516410")
 
     def test_railway_is_never_the_local_server_even_under_runserver(self):
         with (
@@ -110,25 +111,40 @@ class ProductionIsNeverLimitedTests(TestCase):
             self.assertTrue(whatsapp_service.local_dev_server())  # a laptop: the lock applies there
 
 
-@override_settings(**LIVE, WHATSAPP_ONLY_TO_EMPLOYEES=["T1"])
+@override_settings(**META, WHATSAPP_ONLY_TO_EMPLOYEES=["T1"])
 class OnlyTheNamedEmployeeTests(World):
-    def test_only_the_named_employees_number_reaches_waclient(self):
+    def test_only_the_named_employees_number_reaches_meta(self):
         self.assertIsNone(whatsapp_service.sending_block_reason())
-        with mock.patch(POST, return_value=ok_answer()) as post:
-            whatsapp_service.send_text_message("919876543210", "hi me")
-            self.assertEqual(post.call_count, 1)
-            for to in ("919123456780", "120363000000000000@g.us"):
-                with self.assertRaises(whatsapp_service.WhatsAppServiceError) as caught:
-                    whatsapp_service.send_text_message(to, "hi other")
-                self.assertTrue(str(caught.exception).startswith(whatsapp_service.DEV_SAFETY))
-            self.assertEqual(post.call_count, 1)  # nobody else was ever sent to
+        self.send("919876543210")
+        self.assertEqual(len(self.meta.sent), 1)
+        for to in ("919123456780", "120363000000000000@g.us"):
+            with self.assertRaises(whatsapp_service.WhatsAppServiceError) as caught:
+                self.send(to)
+            self.assertFalse(str(caught.exception).startswith(("Send failed", "Could not reach", "Temporary")))
+        self.assertEqual(len(self.meta.sent), 1)  # nobody else was ever sent to
+        with self.assertRaises(whatsapp_service.WhatsAppServiceError) as caught:
+            whatsapp_service.deliver_code("919123456780", "otp_login", "123456")
+        self.assertTrue(str(caught.exception).startswith(whatsapp_service.DEV_SAFETY))
+
+    def test_nothing_is_uploaded_for_a_refused_recipient(self):
+        make_template(whatsapp_service.template_name_for("salary_slip"), "Dear {{employee_name}}.", header="document")
+        with self.assertRaises(whatsapp_service.WhatsAppServiceError):
+            whatsapp_service.deliver_template(
+                "919123456780", "salary_slip", {"employee_name": "R"}, media=(b"%PDF", "s.pdf", "application/pdf")
+            )
+        self.assertEqual(self.meta.uploads, [])
 
     def test_the_queue_skips_anybody_else_without_pausing(self):
         rows = [
             WhatsAppMessageLog.objects.create(
-                employee=e, document_type="late_alert", phone_number=phone, status="queued", kind="automatic"
+                employee=self.other,
+                document_type="late_alert",
+                phone_number="919123456780",
+                status="queued",
+                kind="automatic",
+                payload={"params": {}},
             )
-            for e, phone in ((self.other, "919123456780"), (self.other, "919123456780"), (self.other, "919123456780"))
+            for _ in range(3)
         ]
         s = whatsapp_dispatcher._settings()
         for row in rows:
@@ -137,67 +153,162 @@ class OnlyTheNamedEmployeeTests(World):
             whatsapp_dispatcher._finish(row, WhatsAppMessageLog.STATUS_SKIPPED, reason)
         self.assertFalse(whatsapp_dispatcher.pause_state()[0])  # a refusal here is not a provider failure
 
-    def test_the_test_message_page_offers_only_the_named_employee(self):
+    def test_the_test_message_page_offers_only_the_named_employee_and_each_types_template(self):
         body = self.client.get("/api/whatsapp-control/test-message", **self.h).json()
         self.assertEqual([r["code"] for r in body["recipients"]], ["T1"])
         self.assertEqual(body["limitedTo"], ["T1"])
-        self.assertTrue(any(t["documentType"] == "late_alert" for t in body["types"]))
-        self.assertFalse(any(t["documentType"] == "visitor_contact" for t in body["types"]))
+        late = next(t for t in body["types"] if t["documentType"] == "late_alert")
+        self.assertEqual(
+            (late["template"]["name"], late["template"]["status"], late["template"]["approved"]),
+            (self.late.name, "APPROVED", True),
+        )
+        absent = next(t for t in body["types"] if t["documentType"] == "absent_alert")
+        self.assertEqual((absent["template"]["status"], absent["template"]["approved"]), ("MISSING", False))
 
     def post(self, **body):
         return self.client.post("/api/whatsapp-control/test-message", body, content_type="application/json", **self.h)
 
-    def test_preview_then_send_and_the_real_answer(self):
-        res = self.post(documentType="late_alert", employeeId=self.me.pk, dryRun=True).json()
+    def test_preview_then_send_and_metas_answer(self):
+        res = self.post(
+            documentType="late_alert", employeeId=self.me.pk, dryRun=True, params={"late_by": "7 min"}
+        ).json()
         self.assertEqual((res["status"], res["to"], res["blockReason"]), ("preview", "••••3210", None))
-        self.assertIn("Surya M", res["text"])
-        with mock.patch(POST, return_value=ok_answer("WA-77")) as post:
-            res = self.post(documentType="late_alert", employeeId=self.me.pk, text="Test from the HRMS").json()
-        self.assertEqual((res["status"], res["providerMessageId"]), ("sent", "WA-77"))
-        sent = post.call_args.kwargs["json"]
-        self.assertEqual(
-            (sent["number"], sent["message"], sent["type"]), ("919876543210", "Test from the HRMS", "text")
-        )
+        self.assertEqual(res["template"]["name"], self.late.name)
+        self.assertEqual(res["params"]["employee_name"], "Surya M")
+        self.assertEqual(res["params"]["late_by"], "7 min")
+        self.assertIn("Dear Surya M, you were late", res["text"])
+        self.assertEqual(self.meta.calls, [])
+        res = self.post(documentType="late_alert", employeeId=self.me.pk, params={"late_by": "7 min"}).json()
+        self.assertEqual((res["status"], res["providerMessageId"]), ("sent", "wamid.TEST0001"))
+        sent = self.meta.last()
+        self.assertEqual((sent["to"], sent["template"]), ("919876543210", self.late.name))
+        self.assertEqual(sent["params"]["late_by"], "7 min")
         log = WhatsAppMessageLog.objects.get(pk=res["logId"])
-        self.assertEqual((log.status, log.provider_message_id, log.payload), ("sent", "WA-77", {"test": True}))
+        self.assertEqual(
+            (log.status, log.provider_message_id, log.payload, log.template_name),
+            ("sent", "wamid.TEST0001", {"test": True}, self.late.name),
+        )
 
-    def test_a_refusal_shows_waclients_own_error_without_the_credentials(self):
-        bad = mock.Mock(status_code=401, content=b"x", text="")
-        bad.json.return_value = {"status": "error", "message": "Invalid access token", "access_token": "secret-token"}
-        with mock.patch(POST, return_value=bad):
-            res = self.post(documentType="late_alert", employeeId=self.me.pk).json()
-        self.assertEqual((res["status"], res["httpStatus"]), ("failed", 401))
-        self.assertEqual(res["error"], "Send failed: Invalid access token")
-        self.assertNotIn("secret-token", str(res))
+    def test_free_text_is_refused(self):
+        r = self.post(documentType="late_alert", employeeId=self.me.pk, text="Hello from the HRMS")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("approved templates only", r.json()["error"])
+
+    def test_a_refusal_shows_metas_code_and_words_without_the_token(self):
+        self.meta.fail(132001, f"(#132001) Template name does not exist in the translation {TOKEN}")
+        res = self.post(documentType="late_alert", employeeId=self.me.pk).json()
+        self.assertEqual((res["status"], res["code"], res["httpStatus"]), ("failed", 132001, 400))
+        self.assertTrue(res["error"].endswith("(code 132001)"))
+        self.assertIn("Template name does not exist", res["metaMessage"])
+        self.assertNotIn(TOKEN, json.dumps(res))
         self.assertEqual(WhatsAppMessageLog.objects.get(pk=res["logId"]).status, "failed")
 
+    def test_a_template_that_is_not_approved_blocks_the_test(self):
+        make_template(self.late.name, LATE_BODY, status="PENDING")
+        res = self.post(documentType="late_alert", employeeId=self.me.pk).json()
+        self.assertEqual(res["status"], "blocked")
+        self.assertIn("PENDING", res["error"])
+        self.assertEqual(self.meta.calls, [])
+
+    def test_a_document_template_is_tried_with_a_sample_file(self):
+        slip = make_template(
+            whatsapp_service.template_name_for("salary_slip"),
+            "Dear {{employee_name}}, your slip for {{month_year}}.",
+            header="document",
+        )
+        res = self.post(documentType="salary_slip", employeeId=self.me.pk).json()
+        self.assertEqual(res["status"], "sent")
+        upload = self.meta.uploads[0]
+        self.assertEqual((upload["mime"], upload["filename"]), ("application/pdf", "UK-Textiles-HRMS-test.pdf"))
+        self.assertGreater(upload["size"], 200)
+        self.assertEqual(self.meta.last()["template"], slip.name)
+        self.assertEqual(self.meta.last()["header"]["type"], "document")
+
+    def test_a_code_type_sends_a_random_test_code(self):
+        make_template(whatsapp_service.template_name_for("otp_login"), category="AUTHENTICATION")
+        res = self.post(documentType="otp_login", employeeId=self.me.pk).json()
+        self.assertEqual(res["status"], "sent")
+        self.assertRegex(res["testCode"], r"^\d{6}$")
+        self.assertEqual(self.meta.last()["button"], res["testCode"])
+        log = WhatsAppMessageLog.objects.get(pk=res["logId"])
+        self.assertNotIn(res["testCode"], log.message_text)
+
     def test_another_employee_is_blocked_and_nothing_is_sent(self):
-        with mock.patch(POST) as post:
-            res = self.post(documentType="late_alert", employeeId=self.other.pk).json()
+        res = self.post(documentType="late_alert", employeeId=self.other.pk).json()
         self.assertEqual(res["status"], "blocked")
         self.assertTrue(res["error"].startswith(whatsapp_service.DEV_SAFETY))
-        post.assert_not_called()
+        self.assertEqual(self.meta.calls, [])
         self.assertFalse(WhatsAppMessageLog.objects.exists())
 
     def test_bad_requests(self):
         self.assertEqual(self.post(documentType="nope", employeeId=self.me.pk).status_code, 400)
         self.assertEqual(self.post(documentType="late_alert", employeeId=99999).status_code, 404)
-        self.assertEqual(self.post(documentType="late_alert", employeeId=self.me.pk, text="  ").status_code, 400)
+        self.assertEqual(self.post(documentType="late_alert", employeeId=self.me.pk, params="x").status_code, 400)
+        self.assertEqual(
+            self.post(documentType="late_alert", employeeId=self.me.pk, params={"late_by": "x" * 301}).status_code, 400
+        )
 
-    def test_the_connection_check(self):
-        status = mock.Mock(status_code=200, content=b"x", text="")
-        status.json.return_value = {
-            "status": "success",
-            "data": {"instance_id": "INST0000C042", "connection_state": "connected", "socket_loaded": True},
-        }
-        with mock.patch(GET, return_value=status):
-            body = self.client.get("/api/whatsapp-control/connection", **self.h).json()
-        self.assertEqual((body["provider"]["state"], body["instance"]), ("connected", "…C042"))
-        self.assertEqual(body["machine"]["limitedTo"], ["T1"])
-        self.assertNotIn("INST0000C042", str(body))
-        self.assertNotIn("secret-token", str(body))
-        status.json.return_value = {"status": "success", "data": {"connection_state": "logged_out"}}
-        with mock.patch(GET, return_value=status):
-            body = self.client.get("/api/whatsapp-control/connection", **self.h).json()
+
+@override_settings(**META, WHATSAPP_ONLY_TO_EMPLOYEES=["T1"], BACKEND_PUBLIC_URL="https://api.example.test")
+class ConnectionTests(World):
+    def get(self):
+        return self.client.get("/api/whatsapp-control/connection", **self.h).json()
+
+    def test_the_checklist_names_every_variable_and_never_a_value(self):
+        body = self.get()
+        self.assertEqual(
+            [(e["name"], e["set"]) for e in body["env"] if e["required"]],
+            [
+                ("WHATSAPP_CLOUD_PHONE_NUMBER_ID", True),
+                ("WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID", True),
+                ("WHATSAPP_CLOUD_ACCESS_TOKEN", True),
+                ("WHATSAPP_CLOUD_APP_SECRET", True),
+                ("WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN", True),
+            ],
+        )
+        text = json.dumps(body)
+        for secret in (TOKEN, APP_SECRET, VERIFY_TOKEN, PHONE_NUMBER_ID, WABA_ID):
+            self.assertNotIn(secret, text)
+        self.assertEqual((body["configured"], body["sendingAllowed"], body["tokenOk"]), (True, True, True))
+        self.assertEqual(body["phone"]["qualityRating"], "GREEN")
+        self.assertEqual(body["phone"]["messagingLimitTier"], "TIER_1K")
+        self.assertEqual(body["apiVersion"], "v23.0")
+        self.assertEqual(
+            body["webhook"],
+            {
+                "url": "https://api.example.test/api/whatsapp/webhook/",
+                "verifyTokenSet": True,
+                "appSecretSet": True,
+                "lastWebhookAt": None,
+            },
+        )
+        self.assertEqual(body["devLock"], {"onlyToEmployees": ["T1"]})
+        self.assertEqual(body["blockReasons"], [])
+        self.assertTrue(any("never reached this server" in w for w in body["warnings"]))
+        self.assertEqual(body["templates"], {"approved": 1, "total": 1})
+
+    def test_a_refused_token_and_the_master_switch(self):
+        self.meta.fail(190, "Session has expired", status=401)
+        WhatsAppSettings.get()
+        WhatsAppSettings.objects.filter(pk=1).update(engine_enabled=False)
+        body = self.get()
         self.assertFalse(body["ok"])
-        self.assertIn("logged_out", body["problems"][0])
+        self.assertIs(body["tokenOk"], False)
+        self.assertIsNone(body["phone"])
+        self.assertEqual(body["errorCode"], 190)
+        self.assertTrue(any("refused the access token" in r for r in body["blockReasons"]))
+        self.assertTrue(any("master switch is OFF" in r for r in body["blockReasons"]))
+
+    @override_settings(**NO_META)
+    def test_not_configured(self):
+        body = self.get()
+        self.assertFalse(body["configured"])
+        self.assertIsNone(body["phone"])
+        self.assertIn("WHATSAPP_CLOUD_ACCESS_TOKEN", body["blockReasons"][0])
+        self.assertEqual(self.meta.calls, [])
+        self.assertEqual(body["webhook"]["verifyTokenSet"], False)
+
+    def test_hr_only(self):
+        emp = {"HTTP_AUTHORIZATION": f"Bearer {sign_token({'role': 'employee', 'employeeId': self.me.id})}"}
+        self.assertEqual(self.client.get("/api/whatsapp-control/connection", **emp).status_code, 403)
+        self.assertEqual(self.client.get("/api/whatsapp-control/connection").status_code, 401)

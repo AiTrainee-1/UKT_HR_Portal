@@ -12,6 +12,7 @@ import type {
   CompensationSettings,
   CompensationWindow,
   HolidayWorkEligibleResponse,
+  HolidayWorkEnabled,
   HolidayWorkMonthDay,
   LedgerRow,
   OvertimeConfig,
@@ -56,7 +57,8 @@ export type World = {
   windowsEnabled: boolean;
   /** The claims of every kind (GET /claims lists them, GET /holiday-work the Sunday / holiday ones). */
   claims: CompensationClaim[];
-  holidayEnabled: { master: boolean; holidayWork: boolean; workflow: boolean; canRaise: boolean };
+  /** The switches (and, from a newer server, `raiseProblem`: why HR cannot raise) every holiday-work answer carries. */
+  holidayEnabled: HolidayWorkEnabled;
   eligible: Record<string, HolidayWorkEligibleResponse>;
   /** The Raise strip: the Sundays and holidays of a month, by "YYYY-MM". */
   monthDays: Record<string, HolidayWorkMonthDay[]>;

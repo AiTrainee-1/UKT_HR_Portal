@@ -199,8 +199,8 @@ def set_password(request: Request) -> Response:
             return _error("Sign in to change your password.", 403)
         # First-time setup by someone not signed in: they must confirm the code
         # sent to their registered number first (otp_views.otp_activate). Only
-        # when that can't work (switched off / the active channel not configured) does the old
-        # open setup remain, so no new employee is locked out.
+        # when that can't work (no channel, WhatsApp or SMS, available for activation) does the
+        # old open setup remain, so no new employee is locked out.
         from .otp_service import activation_message, activation_required
 
         if activation_required():

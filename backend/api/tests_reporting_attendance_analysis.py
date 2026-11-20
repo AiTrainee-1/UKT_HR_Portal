@@ -69,6 +69,19 @@ from .payroll_views import _generate_staff_payroll, staff_daily_rate, staff_work
 from .reporting import registry
 from .reporting.runner import run_report
 from .shift_engine import compute_monthly_shift_summary
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
+
+
+# The 2026-11-19 Report Center layout (reporting/layout.py) retired the reports tested here from the catalog: run / export
+# answer 404 for a retired id. Their definitions stay (the MD portal and the gate exports reuse their helpers), so this
+# module keeps guarding their logic through the same endpoints, with every report listed again while it runs.
+def setUpModule():
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
+
 
 MAR = date(2026, 3, 1)
 MONTH = "2026-03"
@@ -451,7 +464,9 @@ class FixtureTests(_Base):
         for rid in REPORT_IDS:
             spec = registry.get_spec(rid)
             self.assertIsNotNone(spec, rid)
-            self.assertEqual(spec.category, "attendance", rid)
+            # the 2026-11-19 layout moved the two shift reports into the new Shift category
+            want = "shift" if rid in ("shift-wise-attendance", "shift-assignment-gaps") else "attendance"
+            self.assertEqual(spec.category, want, rid)
             self.assertTrue(spec.modules, rid)
         fam = {rid: registry.get_spec(rid) for rid in FAMILY}
         self.assertEqual({s.family for s in fam.values()}, {"late-coming"})

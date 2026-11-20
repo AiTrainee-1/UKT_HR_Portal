@@ -29,13 +29,18 @@ import { choose, lastQuery, rowKeys } from "./leave-test-utils";
 // Department Head approves into the balance; an off day gives nothing. The list shows what each birthday gave, with its
 // filters and figures; How it works says so. The year of birth never shows.
 
-const h = vi.hoisted(() => ({ fetch: vi.fn(), toast: vi.fn() }));
+const h = vi.hoisted(() => ({
+  fetch: vi.fn(),
+  toast: vi.fn(),
+  // the signed-in login (null: not an HR role, so every right): a test sets an HR role with its permissions
+  user: { current: null as { role: "hr"; employeeId: null; permissions: Record<string, string> } | null },
+}));
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
 vi.mock("@/contexts/AuthContext", async (original) => ({
   ...(await original<typeof import("@/contexts/AuthContext")>()),
-  useAuth: () => ({ token: "t", user: null }),
+  useAuth: () => ({ token: "t", user: h.user.current }),
 }));
 vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-fetch")>()),
@@ -49,6 +54,7 @@ beforeAll(installBrowserStubs);
 beforeEach(() => {
   vi.clearAllMocks();
   freezeClock();
+  h.user.current = null;
   world = installWorld(h.fetch);
 });
 
@@ -281,6 +287,23 @@ describe("claiming a birthday credit for an employee", () => {
     await waitFor(() => !!q("birthday-claim-error"), "the refusal");
     expect(text(q("birthday-claim-error"))).toContain("no Department Head assigned");
     expect(q("birthday-claim-dialog")).not.toBeNull();
+  });
+
+  it("is greyed out, naming the right, for a role that may change Birthdays but only view the Claims sub-tab", async () => {
+    h.user.current = {
+      role: "hr",
+      employeeId: null,
+      permissions: { compensation: "edit", "compensation.leave.holiday_work.claims": "view" },
+    };
+    await openBirthdays();
+    expect(button("birthday-claim-button-E31").disabled).toBe(true);
+    expect(button("birthday-claim-button-E31").title).toBe(
+      "Needs Edit on Compensation > Leave > Holiday work > Claims",
+    );
+    click(must("birthday-claim-button-E31"));
+    await settle();
+    expect(q("birthday-claim-dialog")).toBeNull();
+    expect(bodiesOf(world, "POST", CLAIMS_API)).toEqual([]);
   });
 
   it("is locked for a View Only role", async () => {

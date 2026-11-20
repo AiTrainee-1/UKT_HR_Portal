@@ -2,13 +2,20 @@
 The WhatsApp send queue's one paced sender (2026-11-06).
 
     send_notification / send_document / bulk sends -> WhatsAppMessageLog row, status "queued"
-    tick() every 10 s (the APScheduler job below, started by apps.py) -> at most ONE message per tick -> WAClient
+    tick() every 10 s (the APScheduler job below, started by apps.py) -> at most ONE message per tick
+        -> whatsapp_service.deliver_template -> Meta WhatsApp Cloud API (since 2026-11-20)
 
-Why: WAClient is an unofficial WhatsApp Web link, and WhatsApp restricts a number for automated,
-high-volume, repetitive messaging (the same text to many people within minutes, several messages a
-day to one person, recipients who never reply). The cure is fewer messages, fewer per person, a
-steady pace, quiet nights and no catch-up bursts. There is deliberately no random jitter: it would
-only disguise the pattern, not change it.
+Why: WhatsApp lowers a number's quality rating, pauses its templates and cuts its messaging limit
+when people block or report it, and automated, high-volume, repetitive messaging (the same text to
+many people within minutes, several messages a day to one person) is what gets reported. The cure
+is fewer messages, fewer per person, a steady pace, quiet nights and no catch-up bursts. There is
+deliberately no random jitter: it would only disguise the pattern, not change it.
+
+Each row goes out as its type's APPROVED Meta template, with the variables kept in payload["params"]
+when it was queued; a document / ID card is uploaded to Meta when its turn comes (the bytes wait in
+WhatsAppMediaAsset, or are built then for a bulk send) and travels in the template's header. A type
+with no Meta template, or whose template is missing here or not approved, is SKIPPED with the reason:
+never a provider failure, so it never pauses the queue.
 
 What one tick does, in order:
 
@@ -16,15 +23,18 @@ What one tick does, in order:
      "expired" ("Too late to be useful: not sent"). It is never sent and never retried.
   2. Nothing is sent while the master switch is off, WhatsApp isn't configured on this machine,
      or it is quiet hours (WhatsAppSettings.quiet_start..quiet_end, IST).
-  3. Circuit breaker: 3 provider failures within 30 minutes (a disconnected or restricted number,
-     an outage) pause sending until 15 minutes after the last failure; then one message is tried,
-     and a failure pauses again. A missing phone number or a switch is not a provider failure.
+  3. Circuit breaker: 3 provider failures within 30 minutes (a restricted number, an outage) pause
+     sending until 15 minutes after the last failure; then one message is tried, and a failure
+     pauses again. An account-level error from Meta (an expired token, a blocked or locked account,
+     a payment problem) pauses at once. A missing phone number, a switch, an unapproved template, or
+     Meta refusing ONE message (a number not on WhatsApp, a template mismatch: "Refused by WhatsApp")
+     is not a provider failure.
   4. Pacing, measured in the database (so it holds across processes and restarts): fewer than
      `max_per_hour` sent in the last 60 minutes, fewer than `max_per_day` sent today, and at least
      `min_gap_seconds` since the last message of ANY kind (a one-time code counts too).
   5. The next row (lowest priority value, then the oldest `send_after` <= now) is taken under a row
-     lock. Per row: switched off since it was queued, or the employee opted out -> skipped; an
-     AUTOMATIC message for an employee who already got `max_per_employee_per_day` automatic
+     lock. Per row: switched off since it was queued, the employee opted out, or its template is not
+     approved -> skipped; an AUTOMATIC message for an employee who already got `max_per_employee_per_day` automatic
      messages today -> skipped ("Daily limit for this employee"); the same employee got the same
      type with the same text in the last 24 hours -> skipped ("Duplicate"). Otherwise it is marked
      "sending", sent, and becomes "sent" (or "failed"). A temporary failure (network error,
@@ -41,6 +51,7 @@ quiet hours do not. The dispatcher itself is tested by calling tick(now=...) dir
 """
 
 import logging
+import re
 from datetime import datetime, time as time_type, timedelta
 
 from django.db import transaction
@@ -48,6 +59,7 @@ from django.db.models import Count, Max, Min, Q
 from django.utils import timezone
 
 from . import whatsapp_catalog as catalog
+from . import whatsapp_cloud as cloud
 from . import whatsapp_service as svc
 from .clock import FACTORY_TZ
 from .scheduler_db import fresh_db_connection
@@ -74,8 +86,10 @@ REASON_DUPLICATE = "Duplicate"
 REASON_CLEARED = "Cleared by HR"
 REASON_QUIET = svc.REASON_QUIET
 REASON_OPTED_OUT = svc.REASON_OPTED_OUT
-# The error texts the provider (or the way to it) produced: what the circuit breaker counts.
-PROVIDER_ERROR_PREFIXES = ("Send failed", "Could not reach WAClient", "Temporary failure")
+REASON_LEGACY = "Queued before WhatsApp moved to the Meta Cloud API (no template variables kept): not sent."
+# The error texts the provider (or the way to it) produced: what the circuit breaker counts. "Refused by WhatsApp"
+# (Meta refused one message: its recipient, its template, its variables) is deliberately not among them.
+PROVIDER_ERROR_PREFIXES = ("Send failed", svc.UNREACHABLE_PREFIX, "Temporary failure")
 TEMPORARY_PREFIX = "Temporary failure (one retry in a minute): "
 
 _SENT_STATUSES = ("sent", "delivered", "read")
@@ -161,22 +175,31 @@ def _provider_failures(now: datetime):
     )
 
 
-# Answers from WAClient that mean the whole account cannot send (not one message): nothing will go until HR acts, so
-# sending stops at the first one instead of after three. Live log 2026-11-06: 1,229 messages were tried against an
-# "inactive" instance and 193 against an expired plan, because nothing stopped the queue. One probe every
-# ACCOUNT_PAUSE after that (a relinked number or a renewed plan starts sending again by itself).
+# Meta error codes that mean the whole account cannot send (not one message): nothing will go until HR acts, so
+# sending stops at the first one instead of after three (live log 2026-11-06, with the old WhatsApp Web link: 1,229 messages were
+# tried against a disconnected number because nothing stopped the queue). One probe every ACCOUNT_PAUSE after that (a
+# new token, a resolved restriction or a fixed payment method starts sending again by itself). The codes are
+# whatsapp_cloud.ACCOUNT_CODES; the error text of a failed row ends "(code N)".
 ACCOUNT_PAUSE = timedelta(minutes=30)
-ACCOUNT_ERRORS = (
-    (
-        ("instance id is inactive", "relogin to your whatsapp"),
-        "WhatsApp is disconnected: the number is logged out of WAClient (WhatsApp may have restricted it). Relink it "
-        "in the WAClient dashboard by scanning the QR code.",
-    ),
-    (
-        ("plan has expired", "extend your plan"),
-        "The WAClient plan has expired: renew it in the WAClient dashboard.",
-    ),
-)
+ACCOUNT_ERRORS = {
+    190: "The WhatsApp access token is invalid or has expired: create a new system-user token in Meta Business "
+    "Settings, set it as WHATSAPP_CLOUD_ACCESS_TOKEN (Railway Variables / backend .env) and restart the backend.",
+    368: "Meta has temporarily blocked this WhatsApp number for policy violations: check WhatsApp Manager -> "
+    "Account quality.",
+    131048: "Meta's spam limit was hit (too many messages blocked or reported): check WhatsApp Manager -> "
+    "Account quality.",
+    131031: "Meta has locked the WhatsApp Business Account: check WhatsApp Manager -> Account quality.",
+    131042: "There is a payment problem on the WhatsApp Business Account: fix the payment method in WhatsApp Manager.",
+    131057: "The WhatsApp Business Account is in maintenance mode at Meta.",
+    133010: "The WhatsApp phone number is not registered with the Cloud API: register it (setup guide, Step 4).",
+}
+_ERROR_CODE = re.compile(r"\(code (\d+)\)\s*$")
+
+
+def error_code(error_message: str) -> int | None:
+    """Meta's error code at the end of a failed row's error text ("... (code 190)"), or None."""
+    match = _ERROR_CODE.search(error_message or "")
+    return int(match.group(1)) if match else None
 
 
 def _account_pause(now: datetime) -> tuple[bool, str | None, datetime | None]:
@@ -194,8 +217,10 @@ def _account_pause(now: datetime) -> tuple[bool, str | None, datetime | None]:
     )
     if last is None:
         return False, None, None
-    error = (last["error_message"] or "").lower()
-    why = next((text for markers, text in ACCOUNT_ERRORS if any(m in error for m in markers)), None)
+    code = error_code(last["error_message"])
+    why = ACCOUNT_ERRORS.get(code) if code in cloud.ACCOUNT_CODES else None
+    if why is None and code in cloud.ACCOUNT_CODES:
+        why = cloud.friendly_error(code)
     if why is None or M.objects.filter(sent_at__gt=last["updated_at"]).exists():
         return False, None, None
     until = last["updated_at"] + ACCOUNT_PAUSE
@@ -206,9 +231,9 @@ def _account_pause(now: datetime) -> tuple[bool, str | None, datetime | None]:
 
 
 def pause_state(now: datetime | None = None) -> tuple[bool, str | None, datetime | None]:
-    """(paused, why, until): the circuit breaker. Paused at once when WAClient says the account itself cannot send
-    (disconnected number, expired plan), and while BREAKER_FAILURES provider failures happened within BREAKER_WINDOW
-    and the last one is less than BREAKER_PAUSE ago."""
+    """(paused, why, until): the circuit breaker. Paused at once when Meta says the account itself cannot send
+    (ACCOUNT_ERRORS: expired token, blocked / locked account, payment), and while BREAKER_FAILURES provider failures
+    happened within BREAKER_WINDOW and the last one is less than BREAKER_PAUSE ago."""
     now = now or timezone.now()
     account = _account_pause(now)
     if account[0]:
@@ -221,7 +246,7 @@ def pause_state(now: datetime | None = None) -> tuple[bool, str | None, datetime
             return (
                 True,
                 f"Paused: {agg['n']} messages failed at WhatsApp in the last {BREAKER_WINDOW.seconds // 60} minutes "
-                f"(a disconnected or restricted number?). Sending tries again at {at}.",
+                f"(a restricted number or an outage at Meta?). Sending tries again at {at}.",
                 until,
             )
     return False, None, None
@@ -286,6 +311,11 @@ def _skip_reason(row, s, now: datetime, *, limits: bool) -> str | None:
         return f"Switched off before it was sent: {off}"
     if row.kind != catalog.KIND_CODE and svc.opted_out(row.employee_id):  # by id: never load the employee's photo
         return REASON_OPTED_OUT
+    if "params" not in (row.payload or {}):
+        return REASON_LEGACY
+    problem = svc.template_problem(row.document_type, s)
+    if problem:
+        return problem
     if not limits:
         return None
     M = _model()
@@ -321,24 +351,52 @@ def _finish(row, status: str, reason: str) -> None:
     row.save(update_fields=["status", "error_message", "updated_at"])
 
 
-def _send_document_row(row):
-    payload = dict(row.payload or {})
-    url = payload.get("media_url")
+def _media_for(row, payload: dict):
+    """The file of a document row, as (bytes, filename, mime type), produced only when the message really goes: the
+    stored bytes (send_document, Attendance Notify), or built now (a bulk send, queue_document)."""
     filename = payload.get("filename") or "document.pdf"
     mime_type = payload.get("mime_type") or "application/pdf"
-    if not url:
-        if not payload.get("build"):
-            raise svc.WhatsAppServiceError("The document of this message is missing.")
+
+    def produce():
+        if payload.get("media_token"):
+            stored = svc.load_media(payload["media_token"])
+            if stored is None:
+                raise svc.WhatsAppServiceError("The document of this message is no longer stored: not sent.")
+            return stored
         try:
             content = svc.build_document(payload["build"], payload.get("build_args") or {})
         except Exception as exc:
             logger.exception("Building the %s document of WhatsApp message %s failed", payload["build"], row.pk)
             raise svc.WhatsAppServiceError(f"The document could not be prepared: {exc}")
-        token = svc._store_media(content, filename, mime_type)
-        url = svc.media_url_for_base(payload.get("base_url") or "", token)
-        payload["media_url"] = url  # a retry sends the same file instead of building it again
+        return content, filename, mime_type
+
+    if payload.get("media_token") or payload.get("build"):
+        return produce
+    return None
+
+
+def _deliver(row) -> "svc.SendResult":
+    """Send one row as its type's template (whatsapp_service.deliver_template). A file uploaded to Meta is remembered in
+    the payload (media_id), so a retry sends the same file without uploading or building it again."""
+    payload = dict(row.payload or {})
+    media = None if payload.get("media_id") else _media_for(row, payload)
+    try:
+        result = svc.deliver_template(
+            row.phone_number,
+            row.document_type,
+            payload.get("params") or {},
+            media=media,
+            media_id=payload.get("media_id") or "",
+            media_filename=payload.get("filename") or "",
+        )
+    except svc.WhatsAppServiceError as exc:
+        if exc.media_id and exc.media_id != payload.get("media_id"):
+            row.payload = {**payload, "media_id": exc.media_id}
+        raise
+    if result.media_id and result.media_id != payload.get("media_id"):
+        payload["media_id"] = result.media_id
         row.payload = payload
-    return svc.send_document_message(row.phone_number, url, filename, row.message_text, mime_type)
+    return result
 
 
 def _mark_visitor_notified(log) -> None:
@@ -353,57 +411,12 @@ def _mark_visitor_notified(log) -> None:
 ON_SENT_HOOKS = {"visitor_notified": _mark_visitor_notified}
 
 
-def _send_contact_card(row, contact: dict, now: datetime) -> None:
-    """The visitor's contact card, right after the visitor message (it is part of it), logged as its own row."""
-    M = _model()
-    name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
-    doc_type = contact.get("document_type", "visitor_contact")
-    off = svc.switch_off_reason(doc_type, row.related_module)
-    card = M.objects.create(
-        employee_id=row.employee_id,
-        document_type=doc_type,
-        document_ref_id=row.document_ref_id,
-        phone_number=row.phone_number,
-        status=M.STATUS_SKIPPED if off else M.STATUS_SENDING,
-        error_message=off or "",
-        message_text=f"Contact card: {name} ({contact.get('phone', '')})",
-        related_module=contact.get("related_module", ""),
-        kind=catalog.kind_of(doc_type),
-        priority=row.priority,
-        attempts=0 if off else 1,
-        payload={"follow_up_of": row.pk},
-    )
-    if off:
-        return
-    try:
-        result = svc.send_contact_message(
-            row.phone_number, contact.get("first_name", ""), contact.get("last_name", ""), contact.get("phone", "")
-        )
-    except svc.WhatsAppServiceError as exc:
-        card.status, card.error_message = M.STATUS_FAILED, str(exc)
-    except Exception as exc:
-        logger.exception("Unexpected error sending WhatsApp contact card")
-        card.status, card.error_message = M.STATUS_FAILED, f"Unexpected error: {exc}"
-    else:
-        card.status = M.STATUS_SENT
-        card.provider_message_id = svc._provider_message_id(result)
-        card.sent_at = now
-    card.save(update_fields=["status", "error_message", "provider_message_id", "sent_at", "updated_at"])
-
-
 def _send(row, *, fixed_now: datetime | None, allow_retry: bool):
     """Send a row already marked "sending" and record the outcome. `fixed_now` stamps the times (tests freeze it);
     None = the real clock after the send."""
     M = _model()
     try:
-        if (
-            row.kind == catalog.KIND_DOCUMENT
-            or (row.payload or {}).get("media_url")
-            or (row.payload or {}).get("build")
-        ):
-            result = _send_document_row(row)
-        else:
-            result = svc.send_text_message(row.phone_number, (row.payload or {}).get("text") or row.message_text)
+        result = _deliver(row)
     except svc.WhatsAppServiceError as exc:
         now = fixed_now or timezone.now()
         retry_at = now + RETRY_AFTER
@@ -418,7 +431,10 @@ def _send(row, *, fixed_now: datetime | None, allow_retry: bool):
     else:
         row.status = M.STATUS_SENT
         row.sent_at = fixed_now or timezone.now()
-        row.provider_message_id = svc._provider_message_id(result)
+        row.provider_message_id = result.wamid
+        row.template_name = result.template_name
+        if result.text:
+            row.message_text = result.text
         row.error_message = ""
     row.save(
         update_fields=[
@@ -428,13 +444,15 @@ def _send(row, *, fixed_now: datetime | None, allow_retry: bool):
             "sent_at",
             "send_after",
             "payload",
+            "template_name",
+            "message_text",
             "updated_at",
         ]
     )
     if row.status == M.STATUS_SENT:
         payload = row.payload or {}
-        if payload.get("contact"):
-            _send_contact_card(row, payload["contact"], row.sent_at)
+        # payload["contact"] (the visitor's contact card of the old WhatsApp Web link) is not sent: Meta's templates carry no
+        # contact card, and the visitor's number is a variable of the visitor message itself.
         hook = ON_SENT_HOOKS.get(payload.get("on_sent") or "")
         if hook is not None:
             try:

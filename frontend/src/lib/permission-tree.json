@@ -448,7 +448,7 @@
                   "key": "attendance.attendance_notify.whatsapp",
                   "label": "WhatsApp",
                   "type": "tab",
-                  "help": "Reports sent to WhatsApp numbers and groups.",
+                  "help": "Reports sent to WhatsApp numbers.",
                   "enforce": "screen"
                 },
                 {
@@ -1753,47 +1753,21 @@
           "enforce": "server"
         },
         {
+          "key": "salary_slip_center",
+          "label": "Salary Slip",
+          "type": "page",
+          "help": "Salary slips, salary statements and bank files for any employee from attendance and salary, without payroll. Edit = Generate and Hold.",
+          "routes": ["/hr/salary-slip"],
+          "inherits": "salary_slip",
+          "enforce": "server"
+        },
+        {
           "key": "reports",
           "label": "Reports",
           "type": "page",
           "help": "The Report Center. Each report also needs view on the pages its data comes from.",
           "enforce": "server",
           "children": [
-            {
-              "key": "reports.payroll",
-              "label": "Payroll & Salary",
-              "type": "tab",
-              "help": "Slips, registers, wages, statutory statements and deductions.",
-              "enforce": "server"
-            },
-            {
-              "key": "reports.attendance",
-              "label": "Attendance",
-              "type": "tab",
-              "help": "Time cards, daily and monthly attendance, late, overtime and shifts.",
-              "enforce": "server"
-            },
-            {
-              "key": "reports.leave",
-              "label": "Leave & Requests",
-              "type": "tab",
-              "help": "Leave, permission, on-duty, missing punch and other requests.",
-              "enforce": "server"
-            },
-            {
-              "key": "reports.gate",
-              "label": "Gate & Visitors",
-              "type": "tab",
-              "help": "Outpass, visitor and tea-break registers.",
-              "enforce": "server"
-            },
-            {
-              "key": "reports.employees",
-              "label": "Employees",
-              "type": "tab",
-              "help": "Master data, headcount, joiners, exits and compliance.",
-              "enforce": "server"
-            },
             {
               "key": "reports.hr",
               "label": "HR Reports",
@@ -1802,18 +1776,40 @@
               "enforce": "server"
             },
             {
-              "key": "reports.finance",
-              "label": "Loans & Bonus",
+              "key": "reports.attendance",
+              "label": "Attendance",
               "type": "tab",
-              "help": "Advances, loans, bonus, increments and promotions.",
+              "help": "Staff and production attendance, time cards, punches, leave, late, misspunch and on-duty.",
               "enforce": "server"
             },
             {
-              "key": "reports.admin",
-              "label": "Administration",
+              "key": "reports.shift",
+              "label": "Shift",
               "type": "tab",
-              "help": "Audit trail and user access reports.",
-              "locked": "Super Admin only"
+              "help": "Assigned and gained shifts, shift changes and shift-wise attendance.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.payroll",
+              "label": "Salary",
+              "type": "tab",
+              "help": "Salary statements, staff and production salary, gained and expected salary, department-wise figures.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.employees",
+              "label": "Employee Details",
+              "type": "tab",
+              "help": "Employee details, fixed salary, monthly shifts, time card and punches.",
+              "enforce": "server"
+            },
+            {
+              "key": "reports.customise",
+              "label": "Customise",
+              "type": "tab",
+              "help": "The report builder: view opens saved custom reports, edit also creates, changes and deletes them.",
+              "routes": ["/hr/reports/customise"],
+              "enforce": "server"
             },
             {
               "key": "reports.md",
@@ -2195,21 +2191,49 @@
           "key": "whatsapp_control",
           "label": "WhatsApp Control",
           "type": "page",
-          "help": "Every WhatsApp message the HRMS sends.",
+          "help": "Every WhatsApp message the HRMS sends, through the official Meta WhatsApp Cloud API.",
           "enforce": "server",
           "children": [
             {
               "key": "whatsapp_control.overview",
               "label": "Overview",
               "type": "tab",
-              "help": "Messages sent, failed and waiting; the send queue.",
+              "help": "Connection health, quality and messaging limit, this month's messages and cost, the send queue.",
               "enforce": "server"
+            },
+            {
+              "key": "whatsapp_control.usage",
+              "label": "Usage & Cost",
+              "type": "tab",
+              "help": "Messages by day, type and Meta pricing category; estimated and projected monthly cost against the budget.",
+              "enforce": "server"
+            },
+            {
+              "key": "whatsapp_control.controls",
+              "label": "Message Controls",
+              "type": "tab",
+              "help": "Switch every WhatsApp message type on or off, and the sending limits and quiet hours.",
+              "enforce": "screen"
+            },
+            {
+              "key": "whatsapp_control.templates",
+              "label": "Templates",
+              "type": "tab",
+              "help": "Create, submit, sync and delete the Meta message templates every message is sent as.",
+              "enforce": "server"
+            },
+            {
+              "key": "whatsapp_control.otp",
+              "label": "OTP",
+              "type": "tab",
+              "help": "One-time sign-in codes by WhatsApp: on or off for sign-in, password reset and activation.",
+              "enforce": "screen"
             },
             {
               "key": "whatsapp_control.messages",
               "label": "Messages",
               "type": "tab",
-              "help": "Every message.",
+              "help": "Every message and its delivery.",
               "enforce": "server"
             },
             {
@@ -2220,31 +2244,17 @@
               "enforce": "server"
             },
             {
-              "key": "whatsapp_control.controls",
-              "label": "Feature Controls",
-              "type": "tab",
-              "help": "Which messages are sent, limits and timing.",
-              "enforce": "screen"
-            },
-            {
-              "key": "whatsapp_control.templates",
-              "label": "Message Text",
-              "type": "tab",
-              "help": "The text of each message.",
-              "enforce": "server"
-            },
-            {
               "key": "whatsapp_control.test",
               "label": "Send a test",
               "type": "tab",
-              "help": "Send one message of any type to an employee at once and see WAClient's answer.",
+              "help": "Send one message of any type to an employee at once and see Meta's answer.",
               "enforce": "server"
             },
             {
               "key": "whatsapp_control.config",
-              "label": "Configuration",
+              "label": "Settings",
               "type": "tab",
-              "help": "The WhatsApp account set-up and the connection check.",
+              "help": "The Meta account set-up check, the webhook, prices and the monthly budget.",
               "enforce": "server"
             }
           ]
@@ -2253,16 +2263,24 @@
           "key": "sms_control",
           "label": "SMS Control",
           "type": "page",
-          "help": "One-time sign-in codes by SMS.",
+          "help": "One-time sign-in codes by SMS (2Factor). SMS is used for codes only.",
           "enforce": "server",
           "children": [
             {
               "key": "sms_control.overview",
               "label": "Overview",
               "type": "tab",
-              "help": "Codes sent and the account balance.",
+              "help": "Status, the account balance and this month's codes.",
               "routes": ["/hr/sms-control/overview"],
               "enforce": "screen"
+            },
+            {
+              "key": "sms_control.usage",
+              "label": "Usage & Cost",
+              "type": "tab",
+              "help": "Codes by day and purpose, delivery and use, estimated and projected monthly cost.",
+              "routes": ["/hr/sms-control/usage"],
+              "enforce": "server"
             },
             {
               "key": "sms_control.settings",
@@ -2273,11 +2291,11 @@
               "enforce": "server",
               "children": [
                 {
-                  "key": "sms_control.settings.channel",
-                  "label": "Channel",
+                  "key": "sms_control.settings.switches",
+                  "label": "OTP Switches",
                   "type": "subtab",
-                  "help": "SMS provider and sender.",
-                  "routes": ["/hr/sms-control/settings/channel"],
+                  "help": "SMS codes on or off, and for which sign-ins.",
+                  "routes": ["/hr/sms-control/settings/switches"],
                   "enforce": "screen"
                 },
                 {
@@ -2289,11 +2307,11 @@
                   "enforce": "screen"
                 },
                 {
-                  "key": "sms_control.settings.switches",
-                  "label": "Switches",
+                  "key": "sms_control.settings.cost",
+                  "label": "Cost",
                   "type": "subtab",
-                  "help": "Which sign-ins use SMS.",
-                  "routes": ["/hr/sms-control/settings/switches"],
+                  "help": "Price per SMS and the monthly budget.",
+                  "routes": ["/hr/sms-control/settings/cost"],
                   "enforce": "screen"
                 }
               ]
@@ -2310,7 +2328,7 @@
               "key": "sms_control.test",
               "label": "Test",
               "type": "tab",
-              "help": "Send a test SMS.",
+              "help": "Send a test code.",
               "routes": ["/hr/sms-control/test"],
               "enforce": "server"
             },
@@ -2318,7 +2336,7 @@
               "key": "sms_control.setup",
               "label": "Setup",
               "type": "tab",
-              "help": "How to set the account up.",
+              "help": "The 2Factor account set-up check.",
               "routes": ["/hr/sms-control/setup"],
               "enforce": "screen"
             }

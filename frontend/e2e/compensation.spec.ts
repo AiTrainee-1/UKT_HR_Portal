@@ -475,25 +475,33 @@ test("Compensation Leave has three subtabs, each with its own notice for its own
   // every kind of claim, counted by status and by kind; a filter is kept in the address
   await expect(page.getByTestId("claim-kpis")).toBeVisible();
   await expect(page.getByTestId("claim-kinds")).toBeVisible();
-  // the five kind tiles never cut their labels off ("SUNDA...", review 2026-11-19), from a phone to a wide screen
+  // the status tiles and the five kind tiles never cut their labels or hints off ("SUNDA...", "1.50 in · 0.5...", review
+  // 2026-11-19), from a 360 px phone to a wide screen
   const viewport = page.viewportSize();
-  for (const width of [390, 768, 1024, 1100, 1280, 1440]) {
+  for (const width of [360, 390, 768, 1024, 1100, 1280, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    // a label may wrap between words, but no word may be wider than its tile (it would be cut or broken mid-word)
-    const cut = await page.getByTestId("claim-kinds").evaluate((row) =>
-      [...row.querySelectorAll<HTMLElement>('[data-testid$="-label"]')].flatMap((label) =>
-        (label.textContent ?? "").split(/\s+/).filter((word) => {
-          const probe = document.createElement("span");
-          probe.style.whiteSpace = "nowrap";
-          probe.textContent = word;
-          label.appendChild(probe);
-          const wide = probe.getBoundingClientRect().width > label.clientWidth + 1;
-          probe.remove();
-          return wide || label.scrollWidth > label.clientWidth + 1;
-        }),
-      ),
-    );
-    expect(cut, `labels cut off at ${width} px`).toEqual([]);
+    for (const tiles of ["claim-kpis", "claim-kinds"]) {
+      // a label or a hint may wrap between words, but no word may be wider than its box (it would be cut or broken
+      // mid-word)
+      const cut = await page.getByTestId(tiles).evaluate((row) =>
+        [...row.querySelectorAll<HTMLElement>('[data-testid$="-label"], [data-testid$="-hint"]')].flatMap((box) =>
+          (box.textContent ?? "")
+            .split(/\s+/)
+            .filter((word) => word !== "")
+            .filter((word) => {
+              const probe = document.createElement("span");
+              probe.style.whiteSpace = "nowrap";
+              probe.textContent = word;
+              box.appendChild(probe);
+              const wide = probe.getBoundingClientRect().width > box.clientWidth + 1;
+              probe.remove();
+              return wide || box.scrollWidth > box.clientWidth + 1;
+            })
+            .map((word) => `${box.dataset.testid}: ${word}`),
+        ),
+      );
+      expect(cut, `${tiles}: labels or hints cut off at ${width} px`).toEqual([]);
+    }
   }
   if (viewport) await page.setViewportSize(viewport);
   await page.getByTestId("claim-kind").selectOption("birthday");

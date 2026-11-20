@@ -15,7 +15,7 @@ from django.core.cache import cache
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from . import twofactor_client
-from .models import AuditLog, Employee, EmployeeOtp, SmsMessageLog, SmsSettings
+from .models import AuditLog, Employee, EmployeeOtp, SmsMessageLog, SmsSettings, WhatsAppSettings
 from .tests_sms_otp import (
     BASE,
     GET,
@@ -195,6 +195,67 @@ class ClientTests(NoNetworkMixin, SimpleTestCase):
             self.assertEqual(error.kind, "bad_response")
 
 
+class BalanceClientTests(NoNetworkMixin, SimpleTestCase):
+    """GET {base}/{key}/BAL/SMS -> {"Status": "Success", "Details": "<credits>"}: a read, parsed tolerantly."""
+
+    def read(self, response=None, side_effect=None, **kw):
+        with mock.patch(GET, return_value=response, side_effect=side_effect) as get:
+            return twofactor_client.balance(**{"api_key": TF_KEY, "base_url": BASE, **kw}), get
+
+    def fail(self, response=None, side_effect=None, **kw):
+        with mock.patch(GET, return_value=response, side_effect=side_effect) as get:
+            with self.assertRaises(twofactor_client.TwoFactorError) as ctx:
+                twofactor_client.balance(**{"api_key": TF_KEY, "base_url": BASE, **kw})
+        return ctx.exception, get
+
+    def test_the_request_is_one_get_of_the_sms_balance(self):
+        credits, get = self.read(FakeResponse(200, {"Status": "Success", "Details": "194"}))
+        self.assertEqual(credits, 194)
+        get.assert_called_once()
+        self.assertEqual(get.call_args.args, (f"{BASE}/{TF_KEY}/BAL/SMS",))
+        self.assertEqual(get.call_args.kwargs["timeout"], (5, 10))
+        self.assertIs(get.call_args.kwargs["allow_redirects"], False)
+
+    def test_the_credits_are_parsed_tolerantly(self):
+        for details, expected in (
+            ("194", 194),
+            (" 1,234 ", 1234),
+            ("194.50", 194.5),
+            ("0", 0),
+            (250, 250),
+            (12.0, 12),
+        ):
+            with self.subTest(details=details):
+                credits, _ = self.read(FakeResponse(200, {"Status": "Success", "Details": details}))
+                self.assertEqual(credits, expected)
+        for details in ("lots", "", None, True, "1e9999", "12 credits", "NaN"):
+            with self.subTest(details=details):
+                error, _ = self.fail(FakeResponse(200, {"Status": "Success", "Details": details}))
+                self.assertEqual(error.kind, "bad_response")
+
+    def test_refusals_and_network_failures_are_our_sentences_without_the_key(self):
+        for response, side_effect, kind in (
+            (tf_error(f"Invalid API Key {TF_KEY}"), None, "auth"),
+            (FakeResponse(500, text="boom"), None, "http"),
+            (FakeResponse(200, text="<html>"), None, "bad_response"),
+            (None, requests.exceptions.ConnectionError(f"/API/V1/{TF_KEY}/BAL/SMS"), "connection"),
+            (None, requests.exceptions.ReadTimeout(f"/API/V1/{TF_KEY}/BAL/SMS"), "timeout"),
+        ):
+            with self.subTest(kind=kind):
+                error, get = self.fail(response, side_effect)
+                self.assertEqual(error.kind, kind)
+                get.assert_called_once()
+                self.assertNotIn(TF_KEY, f"{error.message} {error!r} {error.args}")
+                self.assertIsNone(error.__cause__)
+
+    def test_a_bad_key_or_base_is_refused_before_any_request(self):
+        for kw in ({"api_key": ""}, {"api_key": TF_KEY + "/x"}, {"base_url": "http://2factor.in/API/V1"}):
+            with self.subTest(kw=kw):
+                error, get = self.fail(FakeResponse(200, {"Status": "Success", "Details": "1"}), **kw)
+                self.assertEqual(error.kind, "config")
+                get.assert_not_called()
+
+
 class KeyNeverLeaksTests(NoNetworkMixin, SimpleTestCase):
     """2Factor's API carries the key in the URL path: every place a URL can travel must stay clean."""
 
@@ -304,7 +365,8 @@ class TwoFactorBase(NoNetworkMixin, TestCase):
         self.emp = Employee.objects.create(
             employee_code="E100", first_name="Asha", last_name="Kumar", phone="82200 15110", status="active"
         )
-        self.configure(otp_channel="sms")
+        self.configure(otp_enabled=True)
+        WhatsAppSettings.objects.update_or_create(pk=1, defaults={"otp_enabled": False})  # SMS alone
 
     def configure(self, **values):
         SmsSettings.objects.update_or_create(pk=1, defaults=values)
@@ -332,7 +394,7 @@ class TwoFactorBase(NoNetworkMixin, TestCase):
 
 class RequestOtpTests(TwoFactorBase):
     def test_the_code_goes_through_2factor_and_the_answer_names_sms(self):
-        with mock.patch("api.whatsapp_service.send_notification") as whatsapp:
+        with mock.patch("api.otp_service._send_whatsapp_code") as whatsapp:
             r, code, get = self.request_code()
         self.assertEqual(r.status_code, 200)
         self.assertEqual(
@@ -344,6 +406,7 @@ class RequestOtpTests(TwoFactorBase):
                 "resendAfterSeconds": 60,
                 "channel": "sms",
                 "codeLength": 4,
+                "otherChannels": [],
             },
         )
         whatsapp.assert_not_called()

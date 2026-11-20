@@ -17,7 +17,7 @@ Body (GET, and the PUT answer):
     "windows": {"enabled": false},
     "holidayWork": {"enabled": false},
     "birthday": {"enabled": false, "effectiveFrom": null, "help": "..."},
-    "claims": {"from": "2026-11-19", "fromText": "19 Nov 2026", "help": "..."},
+    "claims": {"from": "2026-11-19", "fromText": "19 Nov 2026", "help": "...", "minFrom": "2026-11-19"},
     "allowanceRules": [{"id": 1, "label": "1 hour", "enabled": true, "minExtraMinutes": 60, "allowanceMinutes": 30,
                         "sortOrder": 1}],
     "shiftRules": [{"id": 5, "label": "Up to 9:00 PM", "enabled": true, "untilMinutes": 1260, "shifts": 0.25,
@@ -25,8 +25,10 @@ Body (GET, and the PUT answer):
     "updatedBy": "Asha", "updatedAt": "2026-10-14T10:00:00+05:30"
   }
 
-`claims` is READ-ONLY (a PUT ignores it): the claim workflow's effective date (CompensationConfig.claims_from, set by
-migration 0166 to the day it ran). From it on a Type 1 allowance applies only after the HOD approves its claim, a staff OT
+`claims.from` is the claim workflow's effective date (CompensationConfig.claims_from, set by migration 0166 to the day it
+ran). A PUT may move it FORWARD only (owner decision 6, 2026-11-19): {"claims": {"from": "YYYY-MM-DD"}} must be on or after
+`claims.minFrom` (the later of the saved date and today, IST); an earlier date or clearing it is a 400 (the days already
+judged by the claim rules keep them); the change is audited. The other `claims` keys are read-only. From it on a Type 1 allowance applies only after the HOD approves its claim, a staff OT
 day's Type 2 credit follows the quarters rule (`shift.quarterRule`: OT minutes / the employee's working shift length in
 quarters, rounded down, at most 1.00; off = the old ladder below) and is claimed, and a birthday is a normal working day
 (not worked = paid birthday leave; worked = one 1.00 credit to claim). Earlier days keep the old rules. The `help` texts
@@ -133,13 +135,66 @@ def _quarter_history_json(config) -> list[dict]:
     return [{"from": e.get("from"), "on": bool(e.get("on"))} for e in as_json(config.ot_quarter_rule_history)]
 
 
+def _claims_min_from(config, today=None):
+    """The earliest date a PUT may move claims_from to: the later of the saved date and today (IST)."""
+    today = today or ist_today()
+    saved = config.claims_from
+    return max(saved, today) if saved else today
+
+
 def _claims_body(config) -> dict:
     day = config.claims_from
     return {
         "from": _date_json(day),
         "fromText": f"{day.day} {day.strftime('%b %Y')}" if day else None,
         "help": CLAIMS_HELP,
+        # the earliest date a PUT accepts for `from` (added 2026-11-19: the date is editable, forward only)
+        "minFrom": _date_json(_claims_min_from(config)),
     }
+
+
+def _apply_claims_from(group: dict, config, today, warnings: list[str]) -> None:
+    """claims.from, forward only (owner decision 6): never cleared, never before the saved date, never in the past (a
+    day already judged by the claim rules keeps them). Unchanged = nothing happens."""
+    if "from" not in group:
+        return
+    raw = group["from"]
+    saved = config.claims_from
+    if raw in (None, ""):
+        if saved is not None:
+            raise SettingsError(
+                "Claims: the claims date cannot be cleared: the days from it on were judged by the claim rules. Choose "
+                "a later date instead."
+            )
+        return
+    try:
+        new = date_type.fromisoformat(str(raw)[:10]) if isinstance(raw, str) and len(raw) >= 10 else None
+    except ValueError:
+        new = None
+    if new is None:
+        raise SettingsError("Claims: the claims date must be a date (YYYY-MM-DD).")
+    if new == saved:
+        return
+    if saved is not None and new < saved:
+        raise SettingsError(
+            f"Claims: the claims date can only move later: it is {saved.isoformat()}, so choose that day or a later "
+            "one (the days from it on keep the claim rules they were judged by)."
+        )
+    if new < today:
+        raise SettingsError(
+            f"Claims: the claims date cannot be in the past: choose today ({today.isoformat()}) or a later day (the days "
+            "before today were already judged)."
+        )
+    config.claims_from = new
+    warnings.append(
+        f"The claims date is now {new.day} {new.strftime('%b %Y')}: until then overtime, birthdays and the late-in "
+        "allowance follow the old automatic rules; from it on they are claimed and approved by the Department Head."
+    )
+    if saved is not None and saved < today:
+        warnings.append(
+            f"The days from {saved.isoformat()} to yesterday were already judged by the claim rules: they keep what is "
+            "stored, but a day among them that is worked out again now follows the old automatic rules."
+        )
 
 
 def settings_body() -> dict:
@@ -612,6 +667,10 @@ def apply_settings(data: dict, actor: str):
     windows = _group(data, "windows")
     holiday_work = _group(data, "holidayWork")
     birthday = _group(data, "birthday")
+    claims = _group(data, "claims")
+
+    if claims is not None:
+        _apply_claims_from(claims, config, today, warnings)
 
     if allowance is not None:
         _apply_dated_feature(

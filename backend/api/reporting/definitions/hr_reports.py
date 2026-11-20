@@ -257,7 +257,7 @@ def _clock(secs: int) -> str:
     return f"{text} (+{day})" if day else text
 
 
-def _punch_secs_of_shift_day(day, by_ref, blocks_cache, manual_e, ruleset) -> list[int] | None:
+def _punch_secs_of_shift_day(day, by_ref, blocks_cache, manual_e, ruleset, employee_id=None) -> list[int] | None:
     """Every stored punch of shift day ``day`` as seconds since that day's midnight (a next-morning closing punch is
     +86400), double taps included, or None when the day holds nothing. From the date the shift-table rules take over a
     night worker's closing punch belongs to the day the shift began (the engine's own resolution); earlier days, and a
@@ -265,7 +265,7 @@ def _punch_secs_of_shift_day(day, by_ref, blocks_cache, manual_e, ruleset) -> li
     if ruleset is None or day in manual_e:
         own = by_ref.get(day) or []
         return sorted(s for s, _ref in own) or None
-    shown = shift_day_punches(ruleset, day, by_ref, manual_e, blocks_cache)
+    shown = shift_day_punches(ruleset, day, by_ref, manual_e, blocks_cache, employee_id=employee_id)
     return [secs for secs, _ref in shown] or None
 
 
@@ -338,7 +338,7 @@ def _punches_run(ctx) -> ReportResult:
             if data_rows >= ctx.row_limit:  # the runner refuses an over-limit export; never build more than it keeps
                 break
             ruleset = judge.ruleset_for(day)
-            punch_secs = _punch_secs_of_shift_day(day, by_ref, blocks_cache, manual_e, ruleset)
+            punch_secs = _punch_secs_of_shift_day(day, by_ref, blocks_cache, manual_e, ruleset, e.id)
             if not punch_secs:  # every punch of this date closes the night before: nothing begins on it
                 continue
             if day in manual_e:

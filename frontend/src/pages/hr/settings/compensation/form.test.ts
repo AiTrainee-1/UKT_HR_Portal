@@ -3,6 +3,8 @@ import type { CompensationSettings } from "@/lib/api-client/custom-hooks";
 import {
   addAllowanceRow,
   addShiftRow,
+  claimsFromProblem,
+  claimsMinFromOf,
   dateAfterSwitch,
   dateNote,
   draftFrom,
@@ -586,5 +588,57 @@ describe("the quarters rule switch", () => {
     expect(validateDraft(noRules, { allowanceFrom: "2026-10-14", birthdayFrom: "" }).shiftTable).toMatch(
       /no rule is switched on/,
     );
+  });
+});
+
+describe("the claims date (it only moves later)", () => {
+  const withClaims = (claims: CompensationSettings["claims"]) => draftFrom({ ...SETTINGS, claims });
+
+  it("is read from the server, blank when an older server does not report it, and counts as a change", () => {
+    expect(fresh().claimsFrom).toBe("");
+    const d = withClaims({ from: "2026-11-19" });
+    expect(d.claimsFrom).toBe("2026-11-19");
+    expect(sameDraft(d, { ...d, claimsFrom: "2026-12-01" })).toBe(false);
+  });
+
+  it("starts where the server says, else at the later of the saved date and today", () => {
+    expect(claimsMinFromOf({ from: "2026-11-19", minFrom: "2026-11-20" }, "2026-11-19")).toBe("2026-11-20");
+    expect(claimsMinFromOf({ from: "2026-11-19" }, "2026-11-25")).toBe("2026-11-25");
+    expect(claimsMinFromOf({ from: "2026-12-01" }, "2026-11-25")).toBe("2026-12-01");
+    expect(claimsMinFromOf(null, "2026-11-25")).toBe("2026-11-25");
+  });
+
+  it("refuses a blank date or one before the earliest, and never an unchanged one", () => {
+    expect(claimsFromProblem("2026-11-19", "2026-11-19", "2026-11-25")).toBeNull();
+    expect(claimsFromProblem("", "2026-11-19", "2026-11-25")).toMatch(/cannot be cleared/);
+    expect(claimsFromProblem("2026-11-22", "2026-11-19", "2026-11-25")).toMatch(/Pick 25 Nov 2026 or later/);
+    expect(claimsFromProblem("2026-11-25", "2026-11-19", "2026-11-25")).toBeNull();
+    expect(claimsFromProblem("2026-13-01", "2026-11-19", "")).toBe("Pick a valid date.");
+    const moved = { ...withClaims({ from: "2026-11-19" }), claimsFrom: "2026-11-01" };
+    const v = validateDraft(moved, { ...SAVED, claimsFrom: "2026-11-19", claimsMinFrom: "2026-11-19" });
+    expect(v.claimsFrom).toMatch(/only move later/);
+    expect(v.ok).toBe(false);
+    expect(v.first).toMatch(/^Claims date:/);
+  });
+
+  it("is sent only when it moved, in its own group", () => {
+    const d = withClaims({ from: "2026-11-19" });
+    expect("claims" in toInput(d, { claimsFrom: "2026-11-19" })).toBe(false);
+    expect("claims" in toInput({ ...d, claimsFrom: "2026-12-01" })).toBe(false); // no saved value given: never sent
+    expect(toInput({ ...d, claimsFrom: "2026-12-01" }, { claimsFrom: "2026-11-19" }).claims).toEqual({
+      from: "2026-12-01",
+    });
+  });
+});
+
+describe("the threshold warning under the quarters rule", () => {
+  it("says the threshold still decides the days before the claims date and with the rule off", () => {
+    const draft = draftFrom({ ...SETTINGS, shift: { ...SETTINGS.shift, minExtraMinutes: 120, quarterRule: true } });
+    expect(warningsFor(draft)).toEqual([
+      "The '2 hours 30 minutes' allowance can never apply to days before the claims date or with the quarters rule off: shift-based compensation starts at 2 hours of extra work there.",
+    ]);
+    expect(warningsFor({ ...draft, quarterRule: false })).toEqual([
+      "The '2 hours 30 minutes' allowance can never apply: shift-based compensation already starts at 2 hours of extra work.",
+    ]);
   });
 });

@@ -3041,11 +3041,12 @@ def _staff_next_morning_json(ps) -> dict:
 def _apply_staff_next_morning(data, ps):
     """Validate and set the three staff next-morning keys of a PUT. Returns ((old, new) audit values | None, problem
     sentence | None); nothing is saved here. Rules: the switch is true / false; the cut-off is "HH:MM" between 00:01 and
-    12:00; the from-date only moves FORWARD (never earlier than the saved one, never cleared once set), so no day already
-    judged by the old grace rule changes.
+    12:00; the from-date only moves FORWARD (never earlier than the saved one, never cleared once set, and a changed one
+    never before today, IST), so no day already judged by either rule changes.
 
     Dated history (staff_next_morning_history, review 2026-11-19): switching the rule on / off or changing the cut-off
-    appends an entry dated TODAY (IST), so every earlier day keeps the rule and the cut-off it was judged by, however often
+    appends an entry dated TODAY (IST) - or the from-date when that is still ahead - replacing any entry dated on or after
+    it, so every earlier day keeps the rule and the cut-off it was judged by, however often
     it is recomputed (the switch and the cut-off used to re-judge every day already decided). Moving the from-date forward
     moves the history's start there. A history never recorded before is first seeded with the rule as it was."""
     from datetime import time as time_type
@@ -3099,17 +3100,32 @@ def _apply_staff_next_morning(data, ps):
                     f"The next-morning cut-off start date can only move forward: it is {saved_from.isoformat()}, so "
                     "choose that day or a later one (earlier days keep the rule they were judged by)."
                 )
+            today = ist_today()
+            if new_from != saved_from and new_from < today:
+                # a past start would re-judge days the rule (or the old one) has already judged
+                return None, (
+                    f"The next-morning cut-off start date cannot be in the past: choose today ({today.isoformat()}) "
+                    "or a later day (days already judged keep the rule they were judged by)."
+                )
         ps.staff_next_morning_from = new_from
     after = _staff_next_morning_json(ps)
     changed = [k for k in keys if before[k] != after[k]]
     if not changed:
         return None, None
     if "staffNextMorningEnabled" in changed or "staffNextMorningCutoff" in changed:
-        # from today on (IST): the days already judged keep the entry in force on them
+        # from today on (IST), or from the rule's own start when that is still ahead (an entry dated today would start
+        # the rule before its from-date); the days already judged keep the entry in force on them, and appended() drops
+        # any entry dated on or after it (a future start's entry would otherwise bring the old values back from its date)
+        start = ist_today()
+        rule_from = ps.staff_next_morning_from
+        if isinstance(rule_from, str):
+            rule_from = date.fromisoformat(rule_from[:10])
+        if rule_from is not None and rule_from > start:
+            start = rule_from
         history = appended(
             history,
             {"enabled": bool(ps.staff_next_morning_enabled), "cutoff": after["staffNextMorningCutoff"]},
-            ist_today(),
+            start,
         )
     if "staffNextMorningFrom" in changed and ps.staff_next_morning_from is not None:
         history = moved_start(history, ps.staff_next_morning_from)

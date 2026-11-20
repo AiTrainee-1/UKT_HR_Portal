@@ -9,10 +9,12 @@ import {
   Wallet,
   Workflow,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { SettingBlock, SettingsSection } from "../kit/SettingBlock";
 import { COMPENSATION_SECTIONS, compensationText } from "../CompensationTab.meta";
 import { prettyDate } from "./form";
-import { notes, type SectionProps } from "./ui";
+import { notes, Problem, type SectionProps } from "./ui";
 import { leavePath, otPath } from "@/pages/hr/compensation/routes";
 
 const block = (id: string) => ({ id, ...compensationText(id) });
@@ -48,10 +50,14 @@ const STEPS = [
 
 /**
  * How compensation is claimed (2026-11-19): one workflow for every kind, from detection to using the balance, and the date
- * it started (read-only: the server sets it once; days before it keep the old rules, so nothing already judged changes).
+ * it started. The server set the date once; HR may move it LATER only (never earlier than `claimsMinFrom`, never blank), so
+ * days before it keep the old rules and nothing already judged changes. It is saved with the rest of the tab. A View-only
+ * role sees the date as text.
  */
-export function ClaimsSection({ claimsFrom }: SectionProps) {
+export function ClaimsSection({ claimsFrom, claimsMinFrom, draft, patch, readOnly, validation }: SectionProps) {
   const from = claimsFrom ? prettyDate(claimsFrom) : null;
+  const error = validation.claimsFrom;
+  const moved = !!claimsFrom && draft.claimsFrom !== claimsFrom && draft.claimsFrom !== "" && !error;
   return (
     <SettingsSection
       id="compensation-claims"
@@ -129,6 +135,7 @@ export function ClaimsSection({ claimsFrom }: SectionProps) {
 
       <SettingBlock
         {...block("claims-from")}
+        labelFor={from && !readOnly ? "compensation-claims-from" : undefined}
         defaultText="The day the claim workflow was installed"
         affects={[
           {
@@ -142,23 +149,49 @@ export function ClaimsSection({ claimsFrom }: SectionProps) {
             to: otPath("type-1"),
           },
         ]}
-        note="Set once by the server and only ever moved forward, so nothing already judged or paid changes."
+        note="Set by the server when the claim workflow was installed. It can only be moved later, never back or cleared, so nothing already judged or paid changes."
       >
-        <div
-          className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5"
-          data-testid="claims-from"
-        >
-          <CheckCircle2 size={16} className="shrink-0 text-emerald-600" aria-hidden="true" />
-          {from ? (
-            <span className="text-sm text-slate-800">
-              Claims apply from <strong data-testid="claims-from-date">{from}</strong>. Read-only.
-            </span>
-          ) : (
-            <span className="text-sm text-slate-700">
-              Not reported by the server yet: the date is set when the claim workflow is installed.
-            </span>
-          )}
-        </div>
+        {from && !readOnly ? (
+          <div className="space-y-1.5" data-testid="claims-from">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                id="compensation-claims-from"
+                type="date"
+                value={draft.claimsFrom}
+                min={claimsMinFrom || undefined}
+                aria-invalid={error ? true : undefined}
+                aria-describedby="compensation-claims-from-help"
+                onChange={(e) => patch({ claimsFrom: e.target.value })}
+                className={cn("w-44", error && "border-red-400")}
+              />
+              {moved && (
+                <span className="text-xs text-slate-600" data-testid="claims-from-moved">
+                  Saved as {from}: from {prettyDate(draft.claimsFrom)} once you save.
+                </span>
+              )}
+            </div>
+            <p id="compensation-claims-from-help" className="text-xs text-slate-500" data-testid="claims-from-help">
+              Can only move later: days before it keep the old automatic rules.
+            </p>
+            {error && <Problem testId="claims-from-error">{error}</Problem>}
+          </div>
+        ) : (
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5"
+            data-testid="claims-from"
+          >
+            <CheckCircle2 size={16} className="shrink-0 text-emerald-600" aria-hidden="true" />
+            {from ? (
+              <span className="text-sm text-slate-800">
+                Claims apply from <strong data-testid="claims-from-date">{from}</strong>. View only.
+              </span>
+            ) : (
+              <span className="text-sm text-slate-700">
+                Not reported by the server yet: the date is set when the claim workflow is installed.
+              </span>
+            )}
+          </div>
+        )}
       </SettingBlock>
     </SettingsSection>
   );

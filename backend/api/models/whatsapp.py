@@ -1,4 +1,4 @@
-"""WhatsApp (WAClient) send log, message wording and media assets."""
+"""WhatsApp (Meta Cloud API) send log, settings, Meta templates, message wording and media assets."""
 
 import datetime
 
@@ -100,6 +100,14 @@ class WhatsAppMessageLog(models.Model):
     # What the dispatcher needs to send it later: a document's media link (or how to build it), a contact card to follow,
     # an on-sent hook, the bulk batch it belongs to. Never a secret.
     payload = models.JSONField(default=dict, blank=True, db_default={}, db_column="payload")
+    # Meta Cloud API (2026-11-20): the approved template the message went out as, and what Meta's webhook reported
+    # back: when it was delivered / read, and how Meta prices it (pricing.category: authentication | utility |
+    # marketing | service; pricing.billable). Blank / null until the webhook says so.
+    template_name = models.TextField(blank=True, default="", db_default="", db_column="template_name")
+    pricing_category = models.TextField(blank=True, default="", db_default="", db_column="pricing_category")
+    billable = models.BooleanField(null=True, blank=True, db_column="billable")
+    delivered_at = models.DateTimeField(null=True, blank=True, db_column="delivered_at")
+    read_at = models.DateTimeField(null=True, blank=True, db_column="read_at")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -188,6 +196,18 @@ class WhatsAppSettings(models.Model):
     quiet_hours_enabled = models.BooleanField(default=True, db_default=True, db_column="quiet_hours_enabled")
     quiet_start = models.TimeField(default=datetime.time(21, 0), db_default=datetime.time(21, 0), db_column="quiet_start")
     quiet_end = models.TimeField(default=datetime.time(7, 0), db_default=datetime.time(7, 0), db_column="quiet_end")
+    # One-time codes by WhatsApp (2026-11-20): WhatsApp's own OTP switch, independent of SMS Control. Either channel
+    # alone is enough for code sign-in; when both are on the apps let the employee choose.
+    otp_enabled = models.BooleanField(default=True, db_default=True, db_column="otp_enabled")
+    # {catalog type key: Meta template name} where HR picked a template other than the default `hrms_<key>`.
+    template_overrides = models.JSONField(default=dict, blank=True, db_default={}, db_column="template_overrides")
+    # {pricing category: rupees per message} HR set for the cost estimate; a missing key uses the code default.
+    price_rates = models.JSONField(default=dict, blank=True, db_default={}, db_column="price_rates")
+    monthly_budget = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True, db_column="monthly_budget"
+    )
+    # When Meta's webhook last reached this server (shows HR whether the webhook is set up).
+    last_webhook_at = models.DateTimeField(null=True, blank=True, db_column="last_webhook_at")
 
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
@@ -245,6 +265,8 @@ class EmployeeOtp(models.Model):
     #: digits in this code: 4 when it was sent by SMS, 6 when by WhatsApp (every row from before the SMS channel: 6).
     #: Stored so a code issued before HR switches the channel still verifies with the length it was issued with.
     code_length = models.SmallIntegerField(default=6, db_default=6, db_column="code_length")
+    #: "whatsapp" | "sms": the channel the code went out on ("" for rows from before 2026-11-20).
+    channel = models.TextField(blank=True, default="", db_default="", db_column="channel")
     expires_at = models.DateTimeField(db_column="expires_at")
     consumed_at = models.DateTimeField(null=True, blank=True, db_column="consumed_at")
     requested_ip = models.TextField(blank=True, default="", db_column="requested_ip")
@@ -258,15 +280,10 @@ class EmployeeOtp(models.Model):
 
 class WhatsAppMessageTemplate(models.Model):
     """
-    Per-document-type message wording, editable from Settings -> WhatsApp.
-    This is business configuration, not a secret (the API credentials stay
-    .env-only, see settings.WACLIENT_*). WAClient's Web API sends over a
-    linked WhatsApp session, so there are no Meta templates to approve: the
-    text is free-form, with {{1}}, {{2}} ... placeholders filled in order
-    from what each send endpoint passes (see whatsapp_service.PLACEHOLDER_HELP).
-    A document type with no row, or a blank message_body, sends the built-in
-    default wording (whatsapp_service.DEFAULT_MESSAGES); is_enabled=False is
-    HR's per-type off switch.
+    RETIRED (2026-11-20): per-document-type free-form wording HR used to edit (the old Settings -> WhatsApp and
+    Message Text editors), from the days of a linked WhatsApp Web session. With the Meta WhatsApp Cloud API the
+    wording IS the approved Meta template (WhatsAppTemplate), so nothing sends this text any more and is_enabled no
+    longer switches a type off (WhatsApp Control -> Message Controls does). Kept, unread, so no migration is needed.
     """
     document_type = models.TextField(unique=True, db_column="document_type")
     message_body = models.TextField(blank=True, default="", db_column="message_body")
@@ -279,14 +296,10 @@ class WhatsAppMessageTemplate(models.Model):
 
 class WhatsAppMediaAsset(models.Model):
     """
-    Short-lived, token-addressed blob store so a document/image WhatsApp
-    message can be sent via WAClient. WAClient's /send only accepts a
-    *public URL* it fetches the file from (no direct upload) -see
-    whatsapp_service.send_document. Every generated PDF/PNG is written here
-    just before sending, exposed read-only at GET /api/whatsapp/media/<token>
-    (whatsapp_views.whatsapp_media, no auth -WAClient's servers fetch it),
-    and pruned lazily (expired rows deleted whenever a new one is created --
-    no separate scheduled job needed given the low daily volume of sends).
+    Short-lived, token-addressed blob store: the file of a queued document / ID card WhatsApp message waits here until
+    the send queue's turn, when whatsapp_dispatcher uploads it to Meta (whatsapp_cloud.upload_media) and sends it in
+    the template's header (whatsapp_service.send_document / queue_to_recipient). Nothing serves it publicly any more.
+    Pruned lazily (expired rows deleted whenever a new one is created); a queued message never outlives its day.
     """
     token = models.CharField(max_length=64, unique=True, db_column="token")
     content = models.BinaryField(db_column="content")
@@ -297,3 +310,40 @@ class WhatsAppMediaAsset(models.Model):
 
     class Meta:
         db_table = "whatsapp_media_asset"
+
+
+class WhatsAppTemplate(models.Model):
+    """A Meta WhatsApp message template (Cloud API), mirrored locally: created from WhatsApp Control -> Templates (or
+    found by a sync with Meta), with Meta's review status. Meta is the source of truth for the wording and the status;
+    this row is what the HRMS last saw. Every business-started message must be sent as an APPROVED template."""
+
+    name = models.TextField(db_column="name")
+    language = models.TextField(default="en", db_column="language")
+    category = models.TextField(default="UTILITY", db_column="category")  # UTILITY | AUTHENTICATION | MARKETING
+    # DRAFT (not submitted yet) | PENDING | APPROVED | REJECTED | PAUSED | DISABLED | IN_APPEAL | ... as Meta says
+    status = models.TextField(default="DRAFT", db_column="status")
+    meta_id = models.TextField(blank=True, default="", db_column="meta_id")
+    parameter_format = models.TextField(default="named", db_column="parameter_format")
+    components = models.JSONField(default=list, blank=True, db_column="components")
+    rejected_reason = models.TextField(blank=True, default="", db_column="rejected_reason")
+    quality_score = models.TextField(blank=True, default="", db_column="quality_score")
+    # the HRMS message type it was made for (whatsapp_catalog key), "" for one made by hand
+    message_type = models.TextField(blank=True, default="", db_column="message_type")
+    last_synced_at = models.DateTimeField(null=True, blank=True, db_column="last_synced_at")
+    created_by = models.ForeignKey(
+        HRUser,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="created_by_id",
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "whatsapp_meta_template"
+        ordering = ["name", "language"]
+        constraints = [
+            models.UniqueConstraint(fields=["name", "language"], name="whatsapp_meta_template_name_language"),
+        ]

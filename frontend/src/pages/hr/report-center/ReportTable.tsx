@@ -25,42 +25,63 @@ function Cell({ column, value }: { column: ReportColumn; value: unknown }) {
   return <>{formatCell(value, column.type)}</>;
 }
 
-/** The result grid: sticky header, sort, quick search, pagination, structural (subtotal/total) rows, totals footer. */
+/** The user's own view of a result: sort, quick search and page size (a new result keeps them). */
+export interface TableView {
+  sort: { key: string; dir: SortDir } | null;
+  needle: string;
+  pageSize: number;
+}
+
+/** The result grid: sticky header, sort, quick search, pagination, structural (subtotal/total) rows, totals footer.
+ *  Keyed on the report, not the run: sort, search and page size stay across runs; a new result starts on page 1.
+ *  `view` / `onViewChange`: the page keeps them instead (the workspace, so they also outlive a run that showed no table:
+ *  no rows, an error, a reload); without them the table keeps its own. */
 export function ReportTable({
   columns,
   rows,
   totals,
   dimmed,
+  view,
+  onViewChange,
 }: {
   columns: ReportColumn[];
   rows: ReportRow[];
   totals: Record<string, number | null> | null;
   dimmed?: boolean;
+  view?: TableView | null;
+  onViewChange?: (view: TableView) => void;
 }) {
-  const [sort, setSort] = useState<{ key: string; dir: SortDir } | null>(null);
-  const [needle, setNeedle] = useState("");
+  const [ownView, setOwnView] = useState<TableView>(() => view ?? { sort: null, needle: "", pageSize: 50 });
+  const current = view ?? ownView;
+  const { sort, needle, pageSize } = current;
+  const update = (patch: Partial<TableView>) => {
+    const next = { ...current, ...patch };
+    setOwnView(next);
+    onViewChange?.(next);
+  };
+  const setSort = (next: TableView["sort"]) => update({ sort: next });
+  const setNeedle = (next: string) => update({ needle: next });
+  const setPageSize = (next: number) => update({ pageSize: next });
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  // A new result (another run) goes back to page 1; sort, search and page size are the user's and stay.
+  const [shownRows, setShownRows] = useState(rows);
+  if (shownRows !== rows) {
+    setShownRows(rows);
+    setPage(1);
+  }
 
-  const searchKeys = useMemo(
-    () => columns.filter((c) => c.type === "text" || c.type === "badge" || c.type === "date").map((c) => c.key),
-    [columns],
-  );
   const searching = needle.trim().length > 0;
 
   const visible = useMemo(() => {
-    // While searching, subtotal rows would misrepresent the filtered list, so they are hidden.
-    let out = searching
-      ? rows.filter(
-          (r) => !r._kind && rowMatches(r, searchKeys.length ? searchKeys : columns.map((c) => c.key), needle),
-        )
-      : rows;
+    // While searching, subtotal rows would misrepresent the filtered list, so they are hidden. The search reads every
+    // column as it is shown (dates as 05-Sep-2026, money as ₹12,34,567.89) as well as the raw value.
+    let out = searching ? rows.filter((r) => !r._kind && rowMatches(r, columns, needle)) : rows;
     if (sort) {
       const col = columns.find((c) => c.key === sort.key);
       if (col) out = sortRows(out, sort.key, sort.dir, col.type);
     }
     return out;
-  }, [rows, columns, searchKeys, needle, searching, sort]);
+  }, [rows, columns, needle, searching, sort]);
 
   const dataRowCount = useMemo(() => visible.filter((r) => !r._kind).length, [visible]);
   const totalPages = Math.max(1, Math.ceil(visible.length / pageSize));
@@ -70,7 +91,7 @@ export function ReportTable({
 
   const toggleSort = (key: string) => {
     setPage(1);
-    setSort((s) => (s?.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : null));
+    setSort(sort?.key !== key ? { key, dir: "asc" } : sort.dir === "asc" ? { key, dir: "desc" } : null);
   };
 
   let zebra = 0;

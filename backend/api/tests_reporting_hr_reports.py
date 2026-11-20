@@ -258,7 +258,7 @@ class CatalogAndAccessTests(_World):
         self.assertEqual(group["label"], "HR Reports")
         self.assertEqual(group["count"], len(HR_REPORT_IDS))
         ids = [c["id"] for c in body["categories"]]
-        self.assertEqual(ids.index("hr"), ids.index("employees") + 1)  # sits beside Employees
+        self.assertEqual(ids[0], "hr")  # the first group since the 2026-11-19 layout (it sat beside Employees before)
         report = next(r for r in body["reports"] if r["id"] == RID)
         self.assertEqual(report["category"], "hr")
         self.assertEqual([c["label"] for c in report["columns"]], LABELS)

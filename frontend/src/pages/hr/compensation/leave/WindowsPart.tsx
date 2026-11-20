@@ -44,7 +44,7 @@ import { NestedTabs } from "@/components/ui/nested-tabs";
 import { LEAVE_NESTED, subPath } from "../routes";
 import { keepOpenNested, useCanOpen } from "../visible";
 import { ErrorNotice, Field, Notice, SwitchOffNotice, useSingleFlight } from "../ui";
-import { WINDOW_KIND_OPTIONS, WINDOW_STATUS_OPTIONS, windowWhen, type WindowWhen } from "./claims-logic";
+import { WINDOW_KIND_OPTIONS, WINDOW_STATUS_OPTIONS, deleteTitle, windowWhen, type WindowWhen } from "./claims-logic";
 import { MonthFilter, OrgFilters } from "./LeaveFilters";
 import { idOf, monthChoice, monthChoiceLabel, pageOf, useLeaveUrl } from "./leave-url";
 import {
@@ -90,8 +90,9 @@ const KIND_INFO = {
  * announced edge, and Late-in / Early-out detection does not run for it. Two nested subtabs: Announce, and the list of
  * Announcements (with their count): one month at a time (the current one first), filtered by kind, department, branch,
  * today-and-upcoming or past, and the reason / who announced it, a page at a time from the server. Any announcement can be
- * deleted: for today or a past day the server checks that day's attendance again, and it refuses when that payroll month
- * is locked. The form and the list share one query, so switching between them is instant.
+ * deleted (an older Compensation Day too): for today or a past day the server checks that day's attendance again. Delete is
+ * greyed out, with the server's reason, on a row the server says cannot be removed (`canDelete`: a locked or Payroll Done
+ * month, another branch's announcement). The form and the list share one query, so switching between them is instant.
  */
 export function WindowsPart({
   featuresOff,
@@ -446,7 +447,7 @@ export function WindowsPart({
             testId="windows-list"
             icon={Users}
             title="Announcements"
-            description={`Who announced each one and how many staff it covers, ${monthChoiceLabel(month)}. Any of them can be deleted.`}
+            description={`Who announced each one and how many staff it covers, ${monthChoiceLabel(month)}. Any of them can be deleted, older Compensation Days too, unless its payroll month is done or it belongs to another branch: Delete then says why.`}
             bodyClassName="space-y-3"
           >
             <FilterBar label="Announcement filters" testId="windows-filters" sticky={false}>
@@ -626,7 +627,8 @@ export function WindowsPart({
 }
 
 /** The columns of the announcements table: the date (with Today / Upcoming / Past), what, why, who it covers, who
- *  announced it, and Delete (not for an older Compensation Day). */
+ *  announced it, and Delete (every kind, an older Compensation Day too: greyed out with the reason where the server says
+ *  it cannot be removed). */
 function windowColumns({
   today,
   onDelete,
@@ -700,22 +702,21 @@ function windowColumns({
       header: <span className="sr-only">Actions</span>,
       align: "right",
       truncate: false,
-      cell: (row) =>
-        row.kind === "day" ? null : (
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className="size-11 text-rose-600 sm:size-9"
-            disabled={paused}
-            aria-label={`Delete the announcement of ${dateLong(row.date)}`}
-            title={paused ? pausedReason : `Delete the announcement of ${dateLong(row.date)}`}
-            onClick={() => onDelete(row)}
-            data-testid={`window-delete-${row.id}`}
-          >
-            <Trash2 size={15} />
-          </Button>
-        ),
+      cell: (row) => (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-11 text-rose-600 sm:size-9"
+          disabled={paused || !row.canDelete}
+          aria-label={`Delete the announcement of ${dateLong(row.date)}`}
+          title={deleteTitle(row, paused, pausedReason)}
+          onClick={() => onDelete(row)}
+          data-testid={`window-delete-${row.id}`}
+        >
+          <Trash2 size={15} />
+        </Button>
+      ),
     },
   ];
 }

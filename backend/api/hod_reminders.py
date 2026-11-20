@@ -5,7 +5,9 @@ Reminders to Department Heads about the requests waiting for their approval (HR 
     a 1-minute job (hod_reminder_scheduler.py) starts a due slot            -> HodReminderRun, unique per (date, slot)
     or HR presses "Send now"                                                 -> HodReminderRun (manual)
     every head with a pending request gets ONE personalised message         -> HodReminderDelivery per head
-        through WhatsApp   whatsapp_service.send_notification (type `hod_pending_reminder`, WhatsApp Control)
+        through WhatsApp   whatsapp_service.send_notification (type `hod_pending_reminder`, WhatsApp Control): the Meta
+                           template hrms_hod_pending_reminder, the pending list on ONE line ("Leave 2, Permission 1")
+                           -the wording HR writes on the Notify tab goes by email and phone notification only
                 email      email_service.send_email          (type `hod_pending_reminder`, Gmail Control)
                 push       an in-app Notification (type + source `hod_pending_reminder`); signals.py pushes it
 
@@ -101,6 +103,28 @@ def pending_list(by_category: dict) -> str:
     """One line per category with a pending count above 0, in the Approvals tab's order: "• Leave Requests: 3"."""
     return "\n".join(
         f"• {line_label(cat.label)}: {by_category[cat.key]}" for cat in CATEGORIES if by_category.get(cat.key)
+    )
+
+
+def pending_line(by_category: dict) -> str:
+    """The pending requests on ONE line, in the Approvals tab's order: "Leave 2, Permission 1" (a WhatsApp template
+    variable may not hold several lines)."""
+    return ", ".join(f"{cat.label} {by_category[cat.key]}" for cat in CATEGORIES if by_category.get(cat.key))
+
+
+def whatsapp_params(*, name: str, by_category: dict, day: date, total: int | None = None) -> dict:
+    """The variables of the Meta template hrms_hod_pending_reminder for one head (whatsapp_catalog), each on one line."""
+    from .whatsapp_format import flat
+
+    if total is None:
+        total = sum(n for n in by_category.values() if n)
+    return flat(
+        {
+            "hod_name": name,
+            "total": str(total),
+            "pending_list": pending_line(by_category),
+            "date": day_text(day),
+        }
     )
 
 
@@ -276,23 +300,12 @@ def channel_status() -> dict:
     """{channel: {available, note}}: whether each channel can deliver at all right now, and if not why (the page shows it
     next to each switch). A head without a phone / email / registered phone is reported per delivery instead."""
     from . import email_service, mobile_messages
-    from . import whatsapp_service as wa
-    from .models import MobileMessageSettings, PayrollSettings, WhatsAppMessageTemplate
+    from .models import MobileMessageSettings, PayrollSettings
 
     def state(problem: str | None, ready: str) -> dict:
         return {"available": problem is None, "note": problem or ready}
 
-    if not wa.has_credentials():
-        wa_problem = "WhatsApp is not set up on this server (the WAClient keys are missing)."
-    elif not wa.sending_allowed():
-        wa_problem = "WhatsApp sending is off on this machine (a development setup)."
-    else:
-        wa_problem = wa.switch_off_reason(SOURCE)
-        if (
-            wa_problem is None
-            and WhatsAppMessageTemplate.objects.filter(document_type=SOURCE, is_enabled=False).exists()
-        ):
-            wa_problem = "This reminder is switched off on the WhatsApp Control page (Message Text)."
+    wa_problem = _whatsapp_problem()
 
     ps = PayrollSettings.get()
     email_problem = email_service.switch_off_reason(SOURCE)
@@ -318,6 +331,18 @@ def channel_status() -> dict:
             "Ready: reaches heads who signed in to the mobile app (it is also kept in the app's notifications).",
         ),
     }
+
+
+def _whatsapp_problem() -> str | None:
+    """Why the reminder can't go by WhatsApp at all right now, or None: the Meta keys, this machine's send rules, WhatsApp
+    Control's switches, and the reminder's Meta template (it must be APPROVED)."""
+    from . import whatsapp_service as wa
+
+    if not wa.has_credentials():
+        return "WhatsApp is not set up on this server (the Meta WhatsApp Cloud API keys are missing)."
+    if not wa.sending_allowed():
+        return "WhatsApp sending is off on this machine (a development setup)."
+    return wa.switch_off_reason(SOURCE) or wa.template_problem(SOURCE)
 
 
 # ─────────────────────────── who gets one ───────────────────────────
@@ -486,7 +511,7 @@ def _send_email(run, d, emp, state: _RoundState) -> tuple[str, str]:
 
 def _send_whatsapp(run, d, emp, state: _RoundState) -> tuple[str, str]:
     from . import whatsapp_service as wa
-    from .models import HodReminderDelivery as D, WhatsAppMessageLog, WhatsAppMessageTemplate
+    from .models import HodReminderDelivery as D, WhatsAppMessageLog
 
     if not wa.has_credentials():
         return D.STATUS_SKIPPED, "WhatsApp not set up"
@@ -495,18 +520,20 @@ def _send_whatsapp(run, d, emp, state: _RoundState) -> tuple[str, str]:
     off = wa.switch_off_reason(SOURCE)
     if off:
         return D.STATUS_SKIPPED, off
-    if WhatsAppMessageTemplate.objects.filter(document_type=SOURCE, is_enabled=False).exists():
-        return D.STATUS_SKIPPED, "This reminder is switched off on the WhatsApp Control page (Message Text)"
+    problem = wa.template_problem(SOURCE)  # the Meta template is missing / pending / rejected: not one row per head
+    if problem:
+        return D.STATUS_SKIPPED, problem
     if not wa.normalize_phone(emp.phone):
         return D.STATUS_SKIPPED, "No phone number"
     if state.whatsapp_failures >= MAX_WHATSAPP_FAILURES:
         return D.STATUS_SKIPPED, f"Held back: WhatsApp failed {MAX_WHATSAPP_FAILURES} times in this round"
     key = dedupe_key(run, d)
     # Queued, not sent from here: the WhatsApp dispatcher paces every message the number sends (whatsapp_dispatcher.py).
+    # The Meta template's variables; the pending list on one line (Notify-tab wording is for email and the phone).
     log = wa.send_notification(
         emp,
         SOURCE,
-        {"message": d.text, "name": d.name, "total": d.pending, "date": day_text(run.run_date)},
+        whatsapp_params(name=d.name, by_category=d.by_category or {}, day=run.run_date, total=d.pending),
         dedupe_key=key,
         document_ref_id=run.pk,
         # its phone notification is the push channel's own (one push per round, and the push switch works alone)

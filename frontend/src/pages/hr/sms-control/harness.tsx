@@ -3,59 +3,93 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mock } from "vitest";
 import { ApiError } from "@/lib/api-client/custom-fetch";
-import type {
-  SmsMessage,
-  SmsMessageStatus,
-  SmsOverview,
-  SmsSettings,
-  SmsTestResult,
-} from "@/lib/api-client/custom-hooks";
+import type { SmsMessage, SmsMessageStatus, SmsTestResult } from "@/lib/api-client/custom-hooks";
 import SmsControl from "../SmsControl";
+import { shiftMonth, thisMonth } from "./logic";
 
-// Shared by the render tests of SMS Control: a fake server behind `customFetch` (the overview, the settings with their stale
-// guard, the messages with their filters, the test endpoint), the page mounted at a real address, and the small DOM helpers
-// the other render tests of the repo use. (The `vi.mock` calls stay in the test file: vitest only hoists them there.)
+// Shared by the render tests of SMS Control: a fake server behind `customFetch` that answers the way
+// backend/api/sms_control_views.py does since 2026-11-20 (the overview with its status block, month, cost and alerts; the
+// usage of a month; the settings with the stale guard, PATCH, the refused `otpChannel` and the refused switch-on while 2Factor
+// is not set up; the messages with their filters; the test by employee code or by number), the page mounted at a real
+// address, and the small DOM helpers the other render tests of the repo use. (The `vi.mock` calls stay in the test file:
+// vitest only hoists them there.)
 
 export type Call = { method: string; url: string; body: Record<string, unknown> };
 
 /** A refusal the way the server sends one: HTTP `status` and a JSON body. */
-export const refusal = (status: number, body: Record<string, unknown>, method = "PUT", url = "/api/sms-control/x") =>
+export const refusal = (status: number, body: Record<string, unknown>, method = "PATCH", url = "/api/sms-control/x") =>
   new ApiError(new Response(JSON.stringify(body), { status }), body, { method, url });
 
-const iso = (day: string, time = "05:30:00") => `2026-10-${day}T${time}Z`;
+const iso = (day: string, time = "05:30:00") => `2026-11-${day}T${time}Z`;
 
-/** What the server says about the balance today: 2Factor offers no balance check this system can use. */
-export const BALANCE_NOTE =
-  "2Factor documents no balance check this system can use safely. Look at the balance in the 2Factor panel.";
+/** This month and the one before it, as the page sees them when the tests run. */
+export const CURRENT = thisMonth();
+export const PREVIOUS = shiftMonth(CURRENT, -1);
 
-export const OVERVIEW: SmsOverview = {
+type Loose = Record<string, unknown>;
+
+/** The overview of a server where SMS codes are on and working, with a budget most of the way used. */
+export const OVERVIEW = {
   provider: "twofactor",
-  channel: "whatsapp",
   configured: true,
   sendingAllowed: true,
-  sendingNote: "",
+  sendingNote: "This server is set up to send SMS.",
+  otpEnabled: true,
+  status: {
+    configured: true,
+    sendingAllowed: true,
+    sendingAllowedNow: true,
+    otpEnabled: true,
+    available: true,
+    purposes: { login: true, reset: true, activate: false },
+    paused: false,
+    pauseReason: null as string | null,
+    devLock: { active: false, onlyToEmployees: [] as string[] },
+  },
   env: { authKey: true, senderId: "UKTHRM", templateName: "UKT_HRMS_OTP", apiBase: "https://2factor.in/API/V1" },
-  balance: { available: null, checkedAt: null, error: BALANCE_NOTE },
+  balance: { credits: 820, available: 820, checkedAt: iso("20"), error: null as string | null },
   today: { sent: 12, failed: 1, blocked: 0 },
-  last7Days: [
-    { date: "2026-10-08", sent: 4, failed: 0 },
-    { date: "2026-10-09", sent: 9, failed: 1 },
-    { date: "2026-10-10", sent: 0, failed: 0 },
-    { date: "2026-10-11", sent: 2, failed: 0 },
-    { date: "2026-10-12", sent: 14, failed: 2 },
-    { date: "2026-10-13", sent: 7, failed: 0 },
-    { date: "2026-10-14", sent: 12, failed: 1 },
-  ],
-  lastSentAt: iso("14"),
+  last7Days: [],
+  lastSentAt: iso("20"),
   limits: { hourlyCap: 100, dailyCap: 500, hourUsed: 12, dayUsed: 40 },
-  circuit: { paused: false, until: null },
+  circuit: { paused: false, until: null as string | null },
+  month: {
+    month: "2026-11",
+    requested: 260,
+    sent: 240,
+    failed: 12,
+    blocked: 8,
+    verified: 180,
+    deliveryRate: 95.2,
+    verifiedRate: 78.3,
+  },
+  cost: {
+    perSms: 0.2,
+    soFar: 48,
+    projected: 72,
+    budget: 60,
+    budgetUsedPct: 80,
+    projectedBudgetPct: 120,
+    currency: "INR",
+    isCurrentMonth: true,
+  },
+  alerts: [
+    {
+      level: "warning",
+      code: "budget_projected",
+      message: "At this pace the month ends at about ₹72.00, over the budget of ₹60.00.",
+    },
+  ] as Loose[] | undefined,
 };
 
-export const SETTINGS: SmsSettings = {
-  otpChannel: "whatsapp",
+export type ServerOverview = typeof OVERVIEW;
+
+/** The settings document as the server sends it. */
+export const SETTINGS = {
+  otpEnabled: true,
   otpLoginEnabled: true,
   otpResetEnabled: true,
-  otpActivateEnabled: true,
+  otpActivateEnabled: false,
   otpExpiryMinutes: 5,
   resendCooldownSeconds: 60,
   maxRequestsPerHour: 5,
@@ -63,11 +97,63 @@ export const SETTINGS: SmsSettings = {
   maxPerPhonePerHour: 5,
   hourlyCap: 100,
   dailyCap: 500,
+  pricePerSms: 0.2 as number,
+  monthlyBudget: 60 as number | null,
+  pricePerSmsDefault: 0.2,
   version: "v1",
-  updatedAt: iso("13", "09:00:00"),
-  updatedBy: "Asha HR",
-  warnings: [],
+  updatedAt: iso("13", "09:00:00") as string | null,
+  updatedBy: "Asha HR" as string | null,
+  warnings: [] as string[],
 };
+
+export type ServerSettings = typeof SETTINGS;
+
+const day = (date: string, sent: number, failed = 0, blocked = 0, verified = 0) => ({
+  date,
+  sent,
+  failed,
+  blocked,
+  verified,
+});
+
+/** The usage of a month: this month (to today) and the one before (whole). */
+export function usageOf(month: string): Loose {
+  const current = month === CURRENT;
+  const days = current
+    ? [day(`${month}-01`, 10, 1, 0, 8), day(`${month}-02`, 6, 0, 2, 5)]
+    : [day(`${month}-05`, 30, 3, 1, 20), day(`${month}-06`, 20, 0, 0, 15)];
+  const sum = (k: "sent" | "failed" | "blocked" | "verified") => days.reduce((n, d) => n + d[k], 0);
+  const sent = sum("sent");
+  return {
+    month,
+    days,
+    totals: {
+      requested: sent + sum("failed") + sum("blocked"),
+      sent,
+      failed: sum("failed"),
+      blocked: sum("blocked"),
+      verified: sum("verified"),
+      deliveryRate: Math.round((sent / (sent + sum("failed"))) * 1000) / 10,
+      verifiedRate: Math.round((sum("verified") / sent) * 1000) / 10,
+    },
+    byPurpose: {
+      login: { sent: sent - 4, failed: sum("failed"), blocked: sum("blocked"), verified: sum("verified") - 2 },
+      reset: { sent: 2, failed: 0, blocked: 0, verified: 2 },
+      activate: { sent: 1, failed: 0, blocked: 0, verified: 0 },
+      test: { sent: 1, failed: 0, blocked: 0, verified: 0 },
+    },
+    cost: {
+      perSms: 0.2,
+      soFar: Math.round(sent * 0.2 * 100) / 100,
+      projected: current ? 99.5 : Math.round(sent * 0.2 * 100) / 100,
+      budget: 60,
+      budgetUsedPct: Math.round(((sent * 0.2) / 60) * 1000) / 10,
+      currency: "INR",
+      isCurrentMonth: current,
+    },
+    balance: { credits: 820, available: 820, checkedAt: iso("20"), error: null },
+  };
+}
 
 const message = (id: number, patch: Partial<SmsMessage>): SmsMessage => ({
   id,
@@ -111,8 +197,8 @@ export const MESSAGES: SmsMessage[] = [
 ];
 
 export type World = {
-  overview: SmsOverview;
-  settings: SmsSettings;
+  overview: ServerOverview;
+  settings: ServerSettings;
   messages: SmsMessage[];
   testReply: SmsTestResult;
   /** The next request whose "METHOD /path" is a key here is answered with that error (once). */
@@ -128,16 +214,20 @@ export type World = {
 
 const copy = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
-/** Makes `fetch` answer like the SMS Control endpoints. The settings PUT enforces `expectedVersion` like the real one. */
-export function installWorld(
-  fetch: Mock,
-  patch: { overview?: Partial<SmsOverview>; settings?: Partial<SmsSettings> } = {},
-): World {
+export type WorldPatch = {
+  overview?: Partial<ServerOverview>;
+  status?: Partial<ServerOverview["status"]>;
+  settings?: Partial<ServerSettings>;
+};
+
+/** Makes `fetch` answer like the SMS Control endpoints. The settings save enforces `expectedVersion` like the real one. */
+export function installWorld(fetch: Mock, patch: WorldPatch = {}): World {
+  const base = copy(OVERVIEW);
   const world: World = {
-    overview: { ...copy(OVERVIEW), ...patch.overview },
+    overview: { ...base, ...patch.overview, status: { ...base.status, ...patch.overview?.status, ...patch.status } },
     settings: { ...copy(SETTINGS), ...patch.settings },
     messages: copy(MESSAGES),
-    testReply: { ok: true, message: "The test SMS was accepted by 2Factor." },
+    testReply: { ok: true, message: "2Factor accepted the test code for ••••••3210." },
     failNext: {},
     calls: [],
     gets: [],
@@ -167,8 +257,12 @@ export function installWorld(
     }
 
     if (method === "GET" && path === "/api/sms-control/overview") return copy(world.overview);
+    if (method === "GET" && path === "/api/sms-control/usage") return usageOf(qs.get("month") || CURRENT);
     if (method === "GET" && path === "/api/sms-control/settings") return copy(world.settings);
-    if (method === "PUT" && path === "/api/sms-control/settings") {
+    if ((method === "PATCH" || method === "PUT") && path === "/api/sms-control/settings") {
+      if ("otpChannel" in body) {
+        throw refusal(400, { error: "SMS and WhatsApp codes are now switched on separately." });
+      }
       if (body.expectedVersion !== undefined && body.expectedVersion !== world.settings.version) {
         throw refusal(400, {
           error: "These settings were changed by someone else. Reload and try again.",
@@ -177,35 +271,38 @@ export function installWorld(
       }
       const { expectedVersion: _expected, ...rest } = body;
       void _expected;
-      // the server refuses SMS while 2Factor is not set up
-      const channel = rest.otpChannel ?? world.settings.otpChannel;
-      if (channel === "sms" && world.settings.otpChannel !== "sms" && !world.overview.configured) {
-        throw refusal(400, { error: "SMS cannot be selected while 2Factor is not configured." });
+      // the server refuses switching SMS codes on while 2Factor is not set up
+      if (rest.otpEnabled === true && !world.settings.otpEnabled && !world.overview.configured) {
+        throw refusal(400, {
+          error:
+            "SMS codes cannot be switched on until 2Factor is configured on the server: missing: TWOFACTOR_API_KEY.",
+        });
       }
+      if (rest.pricePerSms === null) rest.pricePerSms = world.settings.pricePerSmsDefault;
       world.settings = {
         ...world.settings,
-        ...(rest as Partial<SmsSettings>),
+        ...(rest as Partial<ServerSettings>),
         version: `v${nextVersion++}`,
         updatedBy: "You",
-        updatedAt: iso("14", "07:00:00"),
+        updatedAt: iso("20", "07:00:00"),
       };
-      world.overview = { ...world.overview, channel: world.settings.otpChannel };
+      world.overview = {
+        ...world.overview,
+        otpEnabled: world.settings.otpEnabled,
+        status: { ...world.overview.status, otpEnabled: world.settings.otpEnabled },
+      };
       return copy(world.settings);
     }
     if (method === "GET" && path === "/api/sms-control/messages") {
       const status = qs.get("status");
       const purpose = qs.get("purpose");
       const search = (qs.get("search") ?? "").toLowerCase();
-      const from = qs.get("dateFrom");
-      const to = qs.get("dateTo");
       const page = Number(qs.get("page") ?? 1);
       const pageSize = Number(qs.get("pageSize") ?? 25);
       const narrowed = world.messages.filter(
         (m) =>
           (!purpose || m.purpose === purpose) &&
-          (!search || `${m.employeeName ?? ""} ${m.employeeCode ?? ""}`.toLowerCase().includes(search)) &&
-          (!from || m.at.slice(0, 10) >= from) &&
-          (!to || m.at.slice(0, 10) <= to),
+          (!search || `${m.employeeName ?? ""} ${m.employeeCode ?? ""}`.toLowerCase().includes(search)),
       );
       const count = (s: SmsMessageStatus) => narrowed.filter((m) => m.status === s).length;
       const matching = narrowed.filter((m) => !status || m.status === status);

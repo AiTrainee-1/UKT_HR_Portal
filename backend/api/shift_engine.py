@@ -542,6 +542,47 @@ def resolve_day_punch_logs(emp, d: date_type, own_day_logs: list, settings, assi
     return result
 
 
+def staff_night_chain_end(emp, d: date_type, settings, last: date_type) -> date_type:
+    """The last day whose stored verdict a change of `d`'s punches can change, looking FORWARD (the one place the
+    re-judging paths ask: attendance_refresh.refresh_after_punches, overtime.recompute_stale_days and Punch View's
+    _reconcile_days; review 2026-11-19, correctness #7).
+
+    A staff employee: `d` + 1 always (whether `d` is left open decides whose `d` + 1's early punches are), then each
+    following day while the pair (day, next day) is judged by the next-morning rule and the next day has a punch before
+    its cut-off: the day before it may now keep a different number of its own punches, so whose that early punch is may
+    have changed too. At most STAFF_NIGHT_CHAIN_DAYS days past `d` + 1, never after `last` (today). Production employees
+    (no punch-order logic) and `d` on or after `last`: `d`. Two queries at most (the punches after `d` + 1 and, only when
+    there are some, the shift assignments)."""
+    if getattr(emp, "employment_type", None) != "staff" or d >= last:
+        return d
+    end = d + timedelta(days=1)
+    stop = min(last, end + timedelta(days=STAFF_NIGHT_CHAIN_DAYS))
+    if end >= stop:
+        return end
+    from .models import AttendanceLog, EmployeeShiftAssignment
+
+    # `d` itself is a (possibly empty) key, so every later day is read from this map and never queried on its own
+    logs_by_date: dict = {d: []}
+    for log in AttendanceLog.objects.filter(employee=emp, date__gt=end, date__lte=stop).order_by("date", "punch_time"):
+        logs_by_date.setdefault(log.date, []).append(log)
+    if len(logs_by_date) == 1:
+        return end
+    assignments = list(
+        EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=stop)
+        .filter(Q(effective_to__isnull=True) | Q(effective_to__gt=end))
+        .select_related("shift")
+    )
+    night = _StaffNight(emp, d, settings, assignments, logs_by_date)
+    while end < stop:
+        following = end + timedelta(days=1)
+        if not staff_next_morning_applies(settings, end):
+            break
+        if not any(night.is_early(p, following) for p in night.raw(following)):
+            break
+        end = following
+    return end
+
+
 def _get_assignment_for_date(emp, d: date_type, assignments=None):
     """
     Return the active EmployeeShiftAssignment for an employee on a date (or None).

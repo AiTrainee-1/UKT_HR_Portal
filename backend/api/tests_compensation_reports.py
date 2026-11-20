@@ -623,9 +623,14 @@ class HolidayWorkTests(ReportBase):
                 "approvedShifts": 0.5,
                 "pendingShifts": 1.0,
                 "redeemedShifts": 0.25,
+                # final round 2026-11-19: what lowered the balance (no legacy mirror debit here)
+                "countedRedeemedShifts": 0.25,
                 # the balance's credits in the period, every source (review fix 2026-11-19): RP1's approved 0.50
                 "creditedShifts": 0.5,
                 "credits": 1,
+                # final round 2026-11-19: earlier Alternative Day credits of the period (none here)
+                "legacyCredits": 0,
+                "legacyCreditShifts": 0.0,
                 "employees": 3,
             },
         )

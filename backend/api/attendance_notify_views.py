@@ -9,7 +9,6 @@ branch sees and makes automations, lists and runs of its own branch only, and it
 
 from __future__ import annotations
 
-import time
 from datetime import date
 
 from django.db.models import Count, Q
@@ -28,8 +27,6 @@ from .clock import ist_now
 PAGE_SIZE = 25
 PREVIEW_DAYS = 7
 PREVIEW_ROWS = 200
-GROUPS_CACHE_SECONDS = 600
-_groups_cache: dict = {}
 
 
 def _actor(request) -> str:
@@ -276,7 +273,6 @@ def _preview_report(request, fields):
 
 def _warnings(config: dict, report, total_days: int) -> list:
     from .models import AttendanceNotifySettings, WhatsAppSettings
-    from .whatsapp_service import public_base_problem
 
     out = []
     if total_days > PREVIEW_DAYS:
@@ -298,13 +294,10 @@ def _warnings(config: dict, report, total_days: int) -> list:
         r = config.get("recipients") or {}
         if r.get("connected") and not AttendanceNotifySettings.get().connected_number:
             out.append("Set the connected WhatsApp number on this page, or that recipient is skipped.")
-        needs_pdf = config.get("content") in ("detailed", "both") and (
-            config.get("includePhotos") or len(report.rows) > rpt.MAX_TEXT_ROWS
-        )
-        if needs_pdf and public_base_problem(notify._public_base()):
+        if config.get("content") in ("detailed", "both") or config.get("includePhotos"):
             out.append(
-                "The PDF with photos can't be sent from this server: WAClient needs a public address "
-                "(BACKEND_PUBLIC_URL). The text messages still go."
+                "WhatsApp sends the summary line only (an approved template message): the employee list and the PDF "
+                "with photos go by Gmail or Internal Chat."
             )
     if channel == "chat":
         out.append(
@@ -331,24 +324,12 @@ def notify_preview(request: Request) -> Response:
     channel = config["channel"]
     messages: list = []
     html = subject = None
-    prep_pdf = (
-        channel == "whatsapp"
-        and content in ("detailed", "both")
-        and not report.is_empty
-        and (config["includePhotos"] or len(report.rows) > rpt.MAX_TEXT_ROWS)
-    )
-    if channel in ("whatsapp", "chat"):
-        markdown = channel == "whatsapp"
-        for text in rpt.message_parts(report, content, markdown=markdown, pdf_note=prep_pdf):
+    if channel == "whatsapp":
+        # ONE approved template message (hrms_attendance_report) with the counts on one line
+        messages.append({"kind": "text", "text": notify.whatsapp_text(report)})
+    elif channel == "chat":
+        for text in rpt.message_parts(report, content, markdown=False):
             messages.append({"kind": "text", "text": text})
-        if prep_pdf:
-            messages.append(
-                {
-                    "kind": "document",
-                    "text": f"Attendance report – {report.name} ({rpt.days_text(report.days)})",
-                    "filename": rpt.pdf_filename(report),
-                }
-            )
     else:
         ps = PayrollSettings.get()
         params = {
@@ -572,24 +553,11 @@ def notify_recipient_list(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def notify_whatsapp_groups(request: Request) -> Response:
-    """The WhatsApp groups of the linked number (WAClient get_groups), kept for 10 minutes. Reading sends nothing."""
+    """WhatsApp groups are not offered any more: the official WhatsApp Cloud API sends approved templates to individual
+    numbers only. Kept so the page gets a plain answer (supported: false and the reason) instead of an error."""
     from . import whatsapp_service as wa
 
-    cached = _groups_cache.get("v")
-    if cached and request.query_params.get("refresh") != "1" and time.time() - cached["at"] < GROUPS_CACHE_SECONDS:
-        return Response(cached["body"])
-    try:
-        groups = wa.fetch_groups()
-    except wa.WhatsAppServiceError as exc:
-        return Response({"supported": False, "groups": [], "note": str(exc), "fetchedAt": None})
-    body = {
-        "supported": True,
-        "groups": groups,
-        "note": "" if groups else "The linked WhatsApp number is not in any group.",
-        "fetchedAt": timezone.now().astimezone(rpt_tz()).isoformat(),
-    }
-    _groups_cache["v"] = {"at": time.time(), "body": body}
-    return Response(body)
+    return Response({"supported": False, "groups": [], "note": wa.REASON_NO_GROUPS, "fetchedAt": None})
 
 
 @api_view(["GET"])

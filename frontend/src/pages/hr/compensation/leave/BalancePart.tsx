@@ -27,6 +27,7 @@ import { ErrorNotice } from "../ui";
 import { KIND_LABEL, ledgerSourceText, signedShifts } from "./claims-logic";
 import { OrgFilters } from "./LeaveFilters";
 import { claimLink, creditLink, idOf, pageOf, useLeaveUrl, type LeaveUrl } from "./leave-url";
+import { REDEEM_NOW } from "./leave-logic";
 import { RedeemDialog, type RedeemTarget } from "./RedeemDialog";
 import { UseBalanceDialog, type UseBalanceTarget } from "./UseBalanceDialog";
 
@@ -145,13 +146,13 @@ export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedR
               variant="ghost"
               className="h-11 sm:h-8"
               disabled={paused || r.available <= 0}
-              aria-label={`Redeem the balance of ${r.employeeName}`}
+              aria-label={`Redeem now the balance of ${r.employeeName} (HR, without the Department Head)`}
               title={
                 paused
                   ? pausedReason
                   : r.available <= 0
                     ? "Nothing to redeem"
-                    : `Redeem: create a day off for ${r.employeeName} from the balance now, without the Department Head`
+                    : `${REDEEM_NOW}: create a day off for ${r.employeeName} from the balance at once, with no Department Head approval`
               }
               onClick={() =>
                 setRedeeming({
@@ -163,7 +164,7 @@ export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedR
               }
               data-testid={`balance-redeem-${r.employeeCode}`}
             >
-              Redeem
+              {REDEEM_NOW}
             </Button>
           </div>
         ),
@@ -369,11 +370,15 @@ function BalanceDrawer({
               variant="ghost"
               className="h-11 sm:h-9"
               disabled={paused || figures.available <= 0}
-              title={paused ? pausedReason : `Redeem: create a day off for ${who.employeeName} now`}
+              title={
+                paused
+                  ? pausedReason
+                  : `${REDEEM_NOW}: create a day off for ${who.employeeName} from the balance at once, with no Department Head approval`
+              }
               onClick={() => onRedeem(who, figures.available)}
               data-testid="ledger-redeem"
             >
-              Redeem
+              {REDEEM_NOW}
             </Button>
           </>
         )

@@ -15,30 +15,47 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { EMAIL_STATUS_TONE } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
-import { STATUS_LABEL, VIEW_ONLY_TEXT, usage, type Affect, type StepTone } from "./logic";
+import { STATUS_LABEL, VIEW_ONLY_TEXT, type Affect, type Tone } from "./logic";
 
-// The small pieces every tab of SMS Control is made of. They use the portal's colour tokens (bg-card, text-foreground,
-// text-muted-foreground, border) for surfaces and text, and carry a dark variant on the tinted notices, so the page reads in
-// the light and in the dark themes.
+// The pieces every tab of SMS Control is made of, in the look of the portal's other control pages (WhatsApp, Phone Notify):
+// the portal's colour tokens for surfaces and text (bg-card, text-foreground, text-muted-foreground, border), plain palette
+// colours for the tints (no opacity utilities, so the Clean theme draws them as they are), and a dark variant on each tint.
+
+export type { Tone };
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
-export type Tone = "good" | "warn" | "bad" | "info" | "neutral";
-
-const TINT: Record<Tone, string> = {
-  good: "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200",
-  warn: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200",
-  bad: "border-red-200 bg-red-50 text-red-900 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200",
-  info: "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-200",
-  neutral: "border-border bg-muted/30 text-foreground",
+export const TINT: Record<Tone, string> = {
+  good: "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
+  warn: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200",
+  bad: "border-red-200 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-200",
+  info: "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-200",
+  neutral: "border-border bg-muted text-foreground",
 };
 
-const ICON_TINT: Record<Tone, string> = {
+export const ICON_TINT: Record<Tone, string> = {
   good: "text-emerald-600 dark:text-emerald-400",
   warn: "text-amber-600 dark:text-amber-400",
   bad: "text-red-600 dark:text-red-400",
   info: "text-sky-600 dark:text-sky-400",
   neutral: "text-muted-foreground",
+};
+
+export const VALUE_TINT: Record<Tone, string> = {
+  good: "text-emerald-700 dark:text-emerald-400",
+  warn: "text-amber-700 dark:text-amber-400",
+  bad: "text-red-700 dark:text-red-400",
+  info: "text-sky-700 dark:text-sky-400",
+  neutral: "text-foreground",
+};
+
+/** The round icon tile of a card or of the status line: a soft fill in the tone's colour. */
+export const ICON_TILE: Record<Tone, string> = {
+  good: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200",
+  warn: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200",
+  bad: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200",
+  info: "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-200",
+  neutral: "bg-muted text-muted-foreground",
 };
 
 const TONE_ICON: Record<Tone, IconType> = {
@@ -56,14 +73,16 @@ export function Notice({
   role,
   testId,
   className,
+  icon,
 }: {
   tone?: Tone;
   children: ReactNode;
   role?: "alert" | "status";
   testId?: string;
   className?: string;
+  icon?: IconType;
 }) {
-  const Icon = TONE_ICON[tone];
+  const Icon = icon ?? TONE_ICON[tone];
   return (
     <div
       role={role}
@@ -81,7 +100,7 @@ export function Notice({
   );
 }
 
-/** A white card with a heading, an optional line about it, and room for actions on the right. */
+/** A card with a heading, an optional line about it, and room for actions on the right. */
 export function Panel({
   title,
   description,
@@ -102,7 +121,7 @@ export function Panel({
   return (
     <section
       data-testid={testId}
-      className={cn("rounded-2xl border bg-card p-4 text-card-foreground shadow-sm sm:p-5", className)}
+      className={cn("min-w-0 rounded-2xl border bg-card p-4 text-card-foreground shadow-sm sm:p-5", className)}
     >
       {(title || actions) && (
         <header className="mb-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -123,24 +142,8 @@ export function Panel({
   );
 }
 
-const CARD_TINT: Record<Tone, string> = {
-  good: "border-emerald-200 dark:border-emerald-900/60",
-  warn: "border-amber-200 dark:border-amber-900/60",
-  bad: "border-red-200 dark:border-red-900/60",
-  info: "border-sky-200 dark:border-sky-900/60",
-  neutral: "border-border",
-};
-
-const VALUE_TINT: Record<Tone, string> = {
-  good: "text-emerald-700 dark:text-emerald-400",
-  warn: "text-amber-700 dark:text-amber-400",
-  bad: "text-red-700 dark:text-red-400",
-  info: "text-sky-700 dark:text-sky-400",
-  neutral: "text-foreground",
-};
-
-/** One status in a card: a label, the answer in big letters, and a line that says what it means. */
-export function StatusCard({
+/** One figure in a tile: a label with its icon, the figure in big letters, and a line that says what it means. */
+export function StatTile({
   label,
   value,
   sub,
@@ -161,34 +164,73 @@ export function StatusCard({
     <div
       data-testid={testId}
       data-tone={tone}
-      className={cn("min-w-0 rounded-2xl border bg-card p-4 text-card-foreground shadow-sm", CARD_TINT[tone])}
+      className="min-w-0 rounded-2xl border bg-card p-4 text-card-foreground shadow-sm"
     >
-      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <Icon size={13} className="shrink-0" /> {label}
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {label}
+        </p>
+        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg", ICON_TILE[tone])}>
+          <Icon size={14} />
+        </span>
+      </div>
+      <p
+        className={cn("mt-2 break-words text-2xl font-black leading-none tabular-nums", VALUE_TINT[tone])}
+        data-testid={testId ? `${testId}-value` : undefined}
+      >
+        {value}
       </p>
-      <p className={cn("mt-1.5 break-words text-xl font-bold leading-tight tabular-nums", VALUE_TINT[tone])}>{value}</p>
-      {sub && <p className="mt-1 break-words text-xs leading-snug text-muted-foreground">{sub}</p>}
+      {sub && <p className="mt-1.5 break-words text-xs leading-snug text-muted-foreground">{sub}</p>}
       {children}
     </div>
   );
 }
 
-/** A bar for how much of a cap is used. It carries its numbers as text too, so the colour is never the only signal. */
-export function UsageBar({ used, cap, label, testId }: { used: number; cap: number; label: string; testId?: string }) {
-  const { pct, level } = usage(used, cap);
-  const fill = level === "full" ? "bg-red-500" : level === "near" ? "bg-amber-500" : "bg-emerald-500";
+const METER_FILL: Record<Tone, string> = {
+  good: "bg-emerald-500",
+  warn: "bg-amber-500",
+  bad: "bg-red-500",
+  info: "bg-sky-500",
+  neutral: "bg-slate-400",
+};
+
+/** A bar for how much of something is used (a cap, a budget). Its numbers are always in words beside it too, so the colour is
+ *  never the only signal. `pct` is 0 to 100. */
+export function Meter({
+  pct,
+  tone,
+  label,
+  testId,
+  marker,
+}: {
+  pct: number;
+  tone: Tone;
+  label: string;
+  testId?: string;
+  /** A second mark on the bar (the projection), 0 to 100. */
+  marker?: number | null;
+}) {
+  const width = Math.max(0, Math.min(100, pct));
   return (
-    <div className="mt-2" data-testid={testId} data-level={level}>
+    <div className="relative mt-2" data-testid={testId} data-tone={tone}>
       <div
         role="progressbar"
         aria-label={label}
         aria-valuemin={0}
-        aria-valuemax={cap}
-        aria-valuenow={Math.min(used, cap)}
-        className="h-2 overflow-hidden rounded-full bg-muted"
+        aria-valuemax={100}
+        aria-valuenow={Math.round(width)}
+        className="h-2.5 overflow-hidden rounded-full bg-muted"
       >
-        <div className={cn("h-full rounded-full", fill)} style={{ width: `${pct}%` }} />
+        <div className={cn("h-full rounded-full", METER_FILL[tone])} style={{ width: `${width}%` }} />
       </div>
+      {marker !== undefined && marker !== null && (
+        <span
+          aria-hidden="true"
+          title="At this pace"
+          className="absolute -top-0.5 h-3.5 w-0.5 rounded-full bg-foreground"
+          style={{ left: `calc(${Math.max(0, Math.min(100, marker))}% - 1px)` }}
+        />
+      )}
     </div>
   );
 }
@@ -202,9 +244,34 @@ export function StatusPill({ status }: { status: string }) {
   );
 }
 
-const STEP_TONE: Record<StepTone, Tone> = { bad: "bad", warn: "warn", todo: "info", info: "info", done: "good" };
+/** An ON / OFF word beside a switch, so the colour is never the only signal. */
+export function OnOff({ on, className }: { on: boolean; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "text-xs font-bold",
+        on ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
+        className,
+      )}
+    >
+      {on ? "ON" : "OFF"}
+    </span>
+  );
+}
 
-export const stepTone = (tone: StepTone): Tone => STEP_TONE[tone];
+/** "Could not be loaded" with a Try again (it only reads, so a View only role may press it too). */
+export function LoadError({ what, onRetry, testId }: { what: string; onRetry: () => void; testId?: string }) {
+  return (
+    <Notice tone="bad" role="alert" testId={testId}>
+      <div className="flex flex-wrap items-center gap-3">
+        <span>{what} could not be loaded. Check the connection and try again.</span>
+        <Button size="sm" variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
+      </div>
+    </Notice>
+  );
+}
 
 // ── explained settings ────────────────────────────────────────────────────────
 
@@ -218,7 +285,7 @@ export function AffectList({ affects }: { affects: Affect[] }) {
       <ul className="space-y-1">
         {affects.map((a) => (
           <li key={a.where + a.what} className="flex items-start gap-1.5 text-[12px] leading-snug">
-            <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
+            <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground" />
             <span>
               {a.to ? (
                 <Link
@@ -296,7 +363,7 @@ export function Example({ children, testId }: { children: ReactNode; testId?: st
   return (
     <p
       data-testid={testId ?? "setting-example"}
-      className="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-[12px] leading-snug text-muted-foreground"
+      className="rounded-lg border border-dashed bg-muted px-3 py-2 text-[12px] leading-snug text-muted-foreground"
     >
       <span className="font-semibold text-foreground">Example: </span>
       {children}
@@ -411,9 +478,9 @@ export function CopyButton({ text, what, testId }: { text: string; what: string;
       onClick={() => void copy()}
       aria-label={`Copy ${what}`}
       data-testid={testId}
-      className="shrink-0 gap-1.5"
+      className="h-7 shrink-0 gap-1.5 px-2 text-xs"
     >
-      {state === "copied" ? <Check size={13} /> : <Copy size={13} />}
+      {state === "copied" ? <Check size={12} /> : <Copy size={12} />}
       <span aria-live="polite">{state === "copied" ? "Copied" : state === "failed" ? "Press Ctrl+C" : "Copy"}</span>
     </Button>
   );
@@ -423,7 +490,7 @@ export function CopyButton({ text, what, testId }: { text: string; what: string;
 export function CopyLine({ text, what, testId }: { text: string; what: string; testId?: string }) {
   return (
     <div className="flex min-w-0 items-start gap-2" data-testid={testId}>
-      <code className="min-w-0 flex-1 break-all rounded-lg border bg-muted/40 px-2.5 py-1.5 text-[12px] leading-snug">
+      <code className="min-w-0 flex-1 break-all rounded-lg border bg-muted px-2.5 py-1.5 text-[12px] leading-snug">
         {text}
       </code>
       <CopyButton text={text} what={what} />

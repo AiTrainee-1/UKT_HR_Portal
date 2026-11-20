@@ -1125,9 +1125,14 @@ class HodCardTests(HodBase):
         claim = HolidayWorkClaim.objects.create(
             employee=self.asha, work_date=date(2026, 10, 11), shifts=Decimal("0.50"), approval_trail=[]
         )
-        # the work is on record (the approval checks it again: security review 2026-11-19)
+        # the work is on record (the approval checks it again: security review 2026-11-19); set by hand, because the
+        # approval works an automatic day out again from its punches first (verification 2026-11-19) and this one has none
         AttendanceDayRecord.objects.create(
-            employee=self.asha, date=date(2026, 10, 11), status="present", shifts_earned=Decimal("1.00")
+            employee=self.asha,
+            date=date(2026, 10, 11),
+            status="present",
+            shifts_earned=Decimal("1.00"),
+            source="manual",
         )
         CompensationConfig.objects.filter(pk=1).update(holiday_work_enabled=False)
         self.assertTrue(self.approvals(self.hod())["holiday_work"]["canApprove"])

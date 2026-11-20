@@ -320,7 +320,8 @@ describe("Redeem: HR's direct day off, kept", () => {
     await openBalance();
     click(must("balance-redeem-E21"));
     await waitFor(() => !!q("redeem-dialog"), "the dialog");
-    expect(text(q("redeem-dialog"))).toContain("Redeem the balance of Fara Khan");
+    expect(text(q("redeem-dialog"))).toContain("Redeem now (HR, without the Department Head): Fara Khan");
+    expect(text(q("redeem-dialog"))).toContain("it does not go to the Department Head for approval");
     expect(text(q("redeem-balance"))).toBe("1 shift");
     typeInto(input("redeem-date"), "2026-10-15");
     click(must("redeem-shifts-0.5"));
@@ -370,6 +371,19 @@ describe("Redeem: HR's direct day off, kept", () => {
     release();
     await waitFor(() => !q("redeem-dialog"), "the dialog to close");
     expect(bodiesOf(world, "POST", REDEEM)).toHaveLength(1);
+  });
+
+  it("says plainly that HR redeems now, without the Department Head, while Use balance goes to the HOD", async () => {
+    await openBalance(`${BALANCE_PATH}?balemp=21`);
+    expect(text(button("balance-redeem-E21"))).toBe("Redeem now (HR, without the Department Head)");
+    expect(button("balance-redeem-E21").title).toBe(
+      "Redeem now (HR, without the Department Head): create a day off for Fara Khan from the balance at once, with no Department Head approval",
+    );
+    expect(text(button("balance-use-E21"))).toBe("Use balance");
+    expect(button("balance-use-E21").title).toBe("Use balance: send a request for Fara Khan to the Department Head");
+    await waitFor(() => !!q("ledger-table"), "the drawer");
+    expect(text(button("ledger-redeem"))).toBe("Redeem now (HR, without the Department Head)");
+    expect(text(button("ledger-use"))).toBe("Use balance");
   });
 
   it("is not offered for nothing, and the drawer offers it too", async () => {

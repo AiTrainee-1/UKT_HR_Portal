@@ -108,7 +108,7 @@ from .shift_engine import (
 # Permission/Half-Day rewrite (that setting decided the OLD auto-escalation Half-Shift rule, which
 # no longer exists). Kept at the same 60 minutes so this alert's own timing doesn't change.
 ABSENT_ALERT_WINDOW_MINUTES = 60
-from .whatsapp_format import date_str, duration_str, full_name, time_str
+from .whatsapp_format import date_str, duration_str, flat, full_name, time_str
 
 logger = logging.getLogger(__name__)
 
@@ -724,7 +724,7 @@ def evaluate(emp, day: DayData, trace: list | None = None) -> list[Due]:
                         "expected_time": _fmt_time(slot.expected_s),
                         "status": "Punch Not Recorded",
                         "intro": MISSING_TEXT[slot.role],
-                        # Kept for wording HR saved before punches were judged one at a time.
+                        # Kept for a template worded before punches were judged one at a time.
                         "recorded": f"{n} of {len(slots)}",
                         "missing": ", ".join(s.name for s in slots[n:]),
                     },
@@ -840,9 +840,10 @@ def run_attendance_alerts(now: datetime | None = None) -> dict:
                 if item.until_s is not None
                 else None
             )
-            # WhatsApp only: the phone notification of an alert is phone_alerts.py's, with Phone Notify Control's settings
+            # WhatsApp only: the phone notification of an alert is phone_alerts.py's, with Phone Notify Control's settings.
+            # The variables of the alert's Meta template, each on one line.
             log = whatsapp_service.send_notification(
-                emp, item.doc_type, item.params, dedupe_key=key, expires_at=until, announce=False
+                emp, item.doc_type, flat(item.params), dedupe_key=key, expires_at=until, announce=False
             )
             if log is not None and log.status != WhatsAppMessageLog.STATUS_SKIPPED:
                 sent[item.doc_type] += 1

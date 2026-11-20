@@ -1,44 +1,62 @@
 """
-WhatsApp Control page (HR portal -> WhatsApp Control): one place to monitor and
-manage every WhatsApp feature. All endpoints are HR-only and sit under the
-`whatsapp_control` permission module (see permission_registry.URL_MODULE_MAP).
+WhatsApp Control page (HR portal -> WhatsApp Control): one place to run every WhatsApp feature, through the official
+Meta WhatsApp Cloud API (2026-11-20). All endpoints are HR-only and sit under the `whatsapp_control` permission module
+and its tabs (permission_tree.py: overview, usage, controls, templates, otp, messages, employees, test, config).
 
-    GET  /api/whatsapp-control/overview                    totals, today / this month, per-module and per-day counts, config
-    GET  /api/whatsapp-control/messages                    message history (filters + pagination)
-    GET  /api/whatsapp-control/employees                   employee-wise message counts + opt-out
-    PATCH /api/whatsapp-control/employees/<id>/opt-out     opt an employee out of (or back into) WhatsApp messages
-    GET  /api/whatsapp-control/settings                    master switch, feature / per-type switches, timings, queue limits,
-                                                           quiet hours, read-only configuration
-    PUT  /api/whatsapp-control/settings                    change any of those
-    GET  /api/whatsapp-control/queue                       the send queue right now (whatsapp_dispatcher.queue_status)
-    POST /api/whatsapp-control/queue/clear                 every queued message -> skipped ("Cleared by HR")
-    GET  /api/whatsapp-control/templates                   every message type: wording, variables, switch, usage
-    PUT  /api/whatsapp-control/templates/<type>            change wording / per-type switch
-    POST /api/whatsapp-control/templates/<type>/preview    render wording with sample values
+    GET    /api/whatsapp-control/overview                    connection (Meta's view of the number), this month's
+                                                             messages and cost, templates, WhatsApp OTP, the queue, and
+                                                             alerts (whatsapp_usage.overview)
+    GET    /api/whatsapp-control/usage?month=YYYY-MM         per day / Meta pricing category / message type, cost so far
+                                                             and projected (with and without 18% GST), the budget, the
+                                                             rates used, and Meta's own figures (whatsapp_usage.usage)
+    GET    /api/whatsapp-control/messages                    message history (filters + pagination), with the template,
+                                                             pricing category, billable and the delivery / read times
+    GET    /api/whatsapp-control/employees                   employee-wise message counts + opt-out
+    PATCH  /api/whatsapp-control/employees/<id>/opt-out      opt an employee out of (or back into) WhatsApp messages
+    GET    /api/whatsapp-control/settings                    master switch, WhatsApp OTP master, feature / per-type
+                                                             switches, timings, queue limits, quiet hours, template
+                                                             overrides, price per category, monthly budget, set-up
+    PATCH  /api/whatsapp-control/settings                    change any of those (PUT does the same, for older pages)
+    GET    /api/whatsapp-control/queue                       the send queue right now (whatsapp_dispatcher.queue_status)
+    POST   /api/whatsapp-control/queue/clear                 every queued message -> skipped ("Cleared by HR")
+    GET    /api/whatsapp-control/meta-templates              the Meta templates (local mirror) and which types use each
+    POST   /api/whatsapp-control/meta-templates              create a template and submit it to Meta for approval
+    POST   /api/whatsapp-control/meta-templates/sync         pull every template from Meta now
+    POST   /api/whatsapp-control/meta-templates/create-missing   submit a draft for every switched-on type without an
+                                                             approved or pending template
+    GET    /api/whatsapp-control/meta-templates/draft/<type> a ready-to-submit draft for one message type
+    DELETE /api/whatsapp-control/meta-templates/<id>         delete a template at Meta and here
+    (connection and test-message: whatsapp_test_views.py)
 
-What the message types, modules and variables are comes from whatsapp_catalog.py, so a new
-notification appears here without touching this file. Credentials stay in .env and are never
-returned or editable here.
+The old "Message Text" wording endpoints (whatsapp-control/templates..., whatsapp/templates...) are gone: with Meta the
+wording IS the approved template (whatsapp_templates.py).
+
+What the message types, modules and variables are comes from whatsapp_catalog.py, so a new notification appears here
+without touching this file. Credentials stay in .env (Railway Variables on the live server) and are never returned or
+editable here: only their names, set or not.
 """
 
 import re
-from datetime import datetime, time as time_type, timedelta
+from datetime import date, datetime, time as time_type, timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings as dj_settings
 from django.db.models import Count, Exists, F, Max, OuterRef, Q
-from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import whatsapp_catalog as catalog, whatsapp_dispatcher, whatsapp_service
+from . import whatsapp_catalog as catalog, whatsapp_dispatcher, whatsapp_service, whatsapp_templates as templates
+from . import whatsapp_usage as wa_usage
+from .audit_utils import log_action
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .clock import FACTORY_TZ
-from .models import Employee, HRUser, WhatsAppMessageLog, WhatsAppMessageTemplate, WhatsAppOptOut, WhatsAppSettings
+from .models import Employee, HRUser, WhatsAppMessageLog, WhatsAppOptOut, WhatsAppSettings, WhatsAppTemplate
 from .view_common import error_response as _error, paginate
 
+AUDIT_MODULE = "whatsapp_control"
 TYPE_LABELS = {key: t.label for key, t in catalog.TYPES.items()}
 STATUSES = list(WhatsAppMessageLog.STATUSES)
 CATEGORY_OF = {key: t.module for key, t in catalog.TYPES.items()}
@@ -47,7 +65,7 @@ CATEGORIES = catalog.categories()
 # Which workflow a message was raised by, beyond its module ("leave", "on_duty", ...).
 RELATED_LABELS = {**catalog.APPROVAL_MODULES, "on_duty": "On-Duty request", "on_duty_punch": "On-Duty punch"}
 
-# The groups the Feature Controls tab shows, in order.
+# The groups the Message Controls tab shows, in order.
 GROUPS = [
     ("signin", "Employee sign-in", "How employees get into the mobile app and the Employee Web App."),
     ("documents", "Documents", "Salary slips, ID cards and letters HR sends from the Documents pages."),
@@ -67,16 +85,16 @@ GROUPS = [
         "hod",
         "Department Head notifications",
         "What a Department Head is told on WhatsApp about the requests waiting for their approval: a message when a "
-        "request reaches them, and the scheduled reminder of everything still pending (its times and text are set on "
+        "request reaches them, and the scheduled reminder of everything still pending (its times are set on "
         "Requests -> Notify).",
     ),
     ("geo", "Geo Attendance", "Approval and rejection messages for On-Duty requests and their punches."),
-    ("visitors", "Visitors", "Tells an employee who is at reception to meet them, with a tap-to-call contact card."),
+    ("visitors", "Visitors", "Tells an employee who is at reception to meet them, with the visitor's phone number."),
     ("outpass", "Outpass & gate", "Confirms to the employee each time the gate records them going out or coming back."),
     (
         "other",
         "Attendance reports",
-        "The reports scheduled on Attendance -> Attendance Notify, sent to the numbers and groups chosen there.",
+        "The reports scheduled on Attendance -> Attendance Notify, sent to the numbers chosen there.",
     ),
 ]
 
@@ -108,7 +126,8 @@ FEATURES = [
         "password_login_enabled",
         "Password login",
         "signin",
-        "Keep Employee Code + password sign-in available. Turned off only takes effect while WhatsApp OTP is working.",
+        "Keep Employee Code + password sign-in available. Turned off only takes effect while code sign-in (WhatsApp or "
+        "SMS) is working.",
     ),
     (
         "documentNotificationsEnabled",
@@ -185,7 +204,7 @@ FEATURES = [
         "visitor_notification_enabled",
         "Visitor notification",
         "visitors",
-        "Message the employee a visitor came to meet, with the visitor's details and contact card.",
+        "Message the employee a visitor came to meet, with the visitor's details.",
     ),
     (
         "outpassNotificationsEnabled",
@@ -250,6 +269,10 @@ TIMINGS = [
     ),
 ]
 
+# A monthly budget above this (rupees) is a typing mistake.
+MAX_BUDGET = Decimal("1000000000")
+_TEMPLATE_NAME = re.compile(r"^[a-z0-9_]{1,512}$")
+
 
 def _messages_qs(request: Request):
     return scope_to_branch(
@@ -258,18 +281,18 @@ def _messages_qs(request: Request):
 
 
 def _status_counts(qs) -> dict:
-    rows = qs.values("status").annotate(n=Count("id"))
+    rows = qs.order_by().values("status").annotate(n=Count("id"))
     counts = {s: 0 for s in STATUSES}
     for row in rows:
         counts[row["status"]] = counts.get(row["status"], 0) + row["n"]
     counts["total"] = sum(counts.values())
-    # "delivered to WhatsApp" = accepted by the provider and not failed/pending.
+    # "delivered to WhatsApp" = accepted by Meta and not failed/pending.
     counts["accepted"] = counts["sent"] + counts["delivered"] + counts["read"]
     return counts
 
 
-def _message_json(m: WhatsAppMessageLog) -> dict:
-    emp = m.employee  # None for a number or a group that is not an employee (Attendance Notify)
+def _message_json(m: WhatsAppMessageLog, template_categories: dict | None = None) -> dict:
+    emp = m.employee  # None for a number that is not an employee (Attendance Notify)
     module = CATEGORY_OF.get(m.document_type, "other")
     related = RELATED_LABELS.get(m.related_module, "")
     return {
@@ -299,6 +322,16 @@ def _message_json(m: WhatsAppMessageLog) -> dict:
         "sentAt": m.sent_at.isoformat() if m.sent_at else None,
         "expiresAt": m.expires_at.isoformat() if m.expires_at else None,
         "attempts": m.attempts,
+        # Meta Cloud API: the template it went out as, what Meta prices it as (from the delivery receipt, else the
+        # template's / catalog's category), whether Meta charges it (null until the webhook says), delivery and read.
+        "templateName": m.template_name,
+        "pricingCategory": wa_usage.category_of(
+            m.document_type, m.pricing_category, m.template_name, template_categories or {}
+        ),
+        "pricingCategoryFromMeta": bool(m.pricing_category),
+        "billable": m.billable,
+        "deliveredAt": m.delivered_at.isoformat() if m.delivered_at else None,
+        "readAt": m.read_at.isoformat() if m.read_at else None,
         "createdAt": m.created_at.isoformat() if m.created_at else None,
         "updatedAt": m.updated_at.isoformat() if m.updated_at else None,
     }
@@ -306,21 +339,20 @@ def _message_json(m: WhatsAppMessageLog) -> dict:
 
 def _config(request: Request) -> dict:
     base = whatsapp_service._backend_public_base_url(request)
-    instance = dj_settings.WACLIENT_INSTANCE_ID
     s = WhatsAppSettings.get()
     return {
-        "provider": "WAClient (WhatsApp Web API)",
+        "provider": "Meta WhatsApp Cloud API",
         "configured": whatsapp_service.is_configured(),
         # Why nothing can be sent from this server (no credentials, or a development machine), else null.
         "sendingBlockedReason": whatsapp_service.sending_block_reason(),
-        "instanceId": f"…{instance[-4:]}" if instance else None,
-        "apiUrl": dj_settings.WACLIENT_API_URL,
+        "apiVersion": dj_settings.WHATSAPP_CLOUD_API_VERSION,
         "defaultCountryCode": dj_settings.WHATSAPP_DEFAULT_COUNTRY_CODE,
-        # The pause between two messages: since the 2026-11-06 send queue that is its minimum gap (Feature Controls).
+        # The pause between two messages: since the 2026-11-06 send queue that is its minimum gap (Message Controls).
         "sendDelaySeconds": s.min_gap_seconds,
         "publicBaseUrl": base,
         "webhookUrl": f"{base}/api/whatsapp/webhook/",
-        "webhookTokenSet": bool(dj_settings.WHATSAPP_WEBHOOK_TOKEN),
+        "webhookVerifyTokenSet": bool(dj_settings.WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN),
+        "appSecretSet": bool(dj_settings.WHATSAPP_CLOUD_APP_SECRET),
         "backgroundSending": bool(dj_settings.WHATSAPP_ASYNC_SEND),
         "engineEnabled": bool(s.engine_enabled),
     }
@@ -331,73 +363,58 @@ def _day_start(days_back: int = 0) -> datetime:
     return datetime.combine(today, datetime.min.time(), tzinfo=FACTORY_TZ)
 
 
+def _template_categories(names) -> dict[str, str]:
+    names = {n for n in names if n}
+    if not names:
+        return {}
+    return dict(WhatsAppTemplate.objects.filter(name__in=names).values_list("name", "category"))
+
+
 @api_view(["GET"])
 @require_hr
 def whatsapp_overview(request: Request) -> Response:
-    """Totals and breakdowns over the last `days` days (default 30), plus today's and this month's
-    counts whatever the range."""
-    try:
-        days = max(1, min(365, int(request.query_params.get("days", 30))))
-    except ValueError:
-        return _error("days must be a number")
-    since = timezone.now() - timedelta(days=days)
-    everything = _messages_qs(request)
-    qs = everything.filter(created_at__gte=since)
-
-    by_category = {}
-    for category, types in CATEGORIES.items():
-        by_category[category] = _status_counts(qs.filter(document_type__in=types))
-
-    by_type = [
-        {
-            "documentType": row["document_type"],
-            "label": TYPE_LABELS.get(row["document_type"], row["document_type"]),
-            "category": CATEGORY_OF.get(row["document_type"], "other"),
-            "total": row["total"],
-            "failed": row["failed"],
-        }
-        for row in qs.values("document_type")
-        .annotate(total=Count("id"), failed=Count("id", filter=Q(status="failed")))
-        .order_by("-total")
-    ]
-
-    daily_rows = (
-        qs.annotate(day=TruncDate("created_at", tzinfo=FACTORY_TZ))
-        .values("day")
-        .annotate(total=Count("id"), failed=Count("id", filter=Q(status="failed")))
-        .order_by("day")
-    )
-    daily = [{"date": r["day"].isoformat(), "total": r["total"], "failed": r["failed"]} for r in daily_rows]
-
-    failures = [_message_json(m) for m in qs.filter(status="failed")[:8]]
+    """The Overview tab: {connection, month, cost, templates, otp, queue, alerts} (whatsapp_usage.overview), plus the
+    older page's cheap keys (config, today, thisMonth, recentFailures, stalePending, categories, relatedModules)."""
+    qs = _messages_qs(request)
+    data = wa_usage.overview(qs)
+    failed = list(qs.filter(status="failed").order_by("-created_at", "-id")[:8])
+    categories = _template_categories(m.template_name for m in failed)
     cutoff = timezone.now() - timedelta(minutes=10)
-    stale = qs.filter(Q(status="pending", created_at__lt=cutoff) | Q(status="sending", updated_at__lt=cutoff)).count()
     today_start = _day_start()
     month_start = today_start.replace(day=1)
-    return Response(
+    data.update(
         {
-            "days": days,
             "config": _config(request),
-            "totals": _status_counts(qs),
-            "today": _status_counts(everything.filter(created_at__gte=today_start)),
-            "thisMonth": _status_counts(everything.filter(created_at__gte=month_start)),
+            "today": _status_counts(qs.filter(created_at__gte=today_start)),
+            "thisMonth": _status_counts(qs.filter(created_at__gte=month_start)),
+            "recentFailures": [_message_json(m, categories) for m in failed],
+            "stalePending": qs.filter(
+                Q(status="pending", created_at__lt=cutoff) | Q(status="sending", updated_at__lt=cutoff)
+            ).count(),
             "categories": [{"key": key, "label": catalog.MODULES[key]} for key in CATEGORIES],
             "relatedModules": [{"key": key, "label": label} for key, label in RELATED_LABELS.items()],
-            "byCategory": by_category,
-            "byType": by_type,
-            "daily": daily,
-            "recentFailures": failures,
-            "stalePending": stale,
         }
     )
+    return Response(data)
+
+
+@api_view(["GET"])
+@require_hr
+def whatsapp_usage(request: Request) -> Response:
+    """The Usage & Cost tab for one month (?month=YYYY-MM, default this month): see whatsapp_usage.usage."""
+    try:
+        month = wa_usage.parse_month(request.query_params.get("month"))
+    except ValueError:
+        return _error("month must be YYYY-MM, for example 2026-11")
+    return Response(wa_usage.usage(_messages_qs(request), month))
 
 
 @api_view(["GET"])
 @require_hr
 def whatsapp_messages(request: Request) -> Response:
-    """Message history, newest first. Filters: status, category (module), type, related (the
-    workflow, e.g. leave), employeeId, search (name / code / phone), dateFrom, dateTo (YYYY-MM-DD,
-    IST). Without `page` this is a bare array capped like every other list endpoint."""
+    """Message history, newest first. Filters: status, category (module), type, template (Meta template name), related
+    (the workflow, e.g. leave), employeeId, search (name / code / phone), dateFrom, dateTo (YYYY-MM-DD, IST). Without
+    `page` this is a bare array capped like every other list endpoint."""
     q = request.query_params
     qs = _messages_qs(request).order_by("-created_at", "-id")
     if status := q.get("status"):
@@ -410,6 +427,8 @@ def whatsapp_messages(request: Request) -> Response:
         qs = qs.filter(document_type__in=CATEGORIES[category])
     if doc_type := q.get("type"):
         qs = qs.filter(document_type=doc_type)
+    if template := q.get("template"):
+        qs = qs.filter(template_name=template)
     if related := q.get("related"):
         qs = qs.filter(related_module=related)
     if emp_id := q.get("employeeId"):
@@ -424,8 +443,6 @@ def whatsapp_messages(request: Request) -> Response:
             | Q(employee__employee_code__icontains=search)
             | Q(phone_number__icontains=search)
         )
-    from datetime import date
-
     for param, op in (("dateFrom", "gte"), ("dateTo", "lt")):
         if raw := q.get(param):
             try:
@@ -435,7 +452,13 @@ def whatsapp_messages(request: Request) -> Response:
             if op == "lt":
                 d += timedelta(days=1)
             qs = qs.filter(**{f"created_at__{op}": datetime.combine(d, datetime.min.time(), tzinfo=FACTORY_TZ)})
-    return paginate(request, qs, _message_json)
+
+    categories: dict[str, str] = {}
+
+    def prepare(rows) -> None:  # one look-up of the template categories for the whole page
+        categories.update(_template_categories(r.template_name for r in rows))
+
+    return paginate(request, qs, lambda m: _message_json(m, categories), prepare=prepare)
 
 
 def _employees_qs(request: Request):
@@ -495,6 +518,10 @@ def whatsapp_employees(request: Request) -> Response:
     return paginate(request, qs, _employee_json)
 
 
+def _hr_user(request: Request) -> HRUser | None:
+    return HRUser.objects.filter(pk=(getattr(request, "jwt_user", None) or {}).get("hrUserId")).first()
+
+
 @api_view(["PATCH"])
 @require_hr
 def whatsapp_employee_opt_out(request: Request, employee_id: int) -> Response:
@@ -511,7 +538,7 @@ def whatsapp_employee_opt_out(request: Request, employee_id: int) -> Response:
     if not scope_to_branch(Employee.objects, request).filter(pk=employee_id).exists():
         return _error("Employee not found", 404)
     if data["optOut"]:
-        user = HRUser.objects.filter(pk=request.jwt_user.get("hrUserId")).first()
+        user = _hr_user(request)
         WhatsAppOptOut.objects.update_or_create(
             employee_id=employee_id,
             defaults={"reason": reason.strip(), "created_by": (user.full_name or user.username) if user else ""},
@@ -554,6 +581,8 @@ def _settings_json(request: Request, s: WhatsAppSettings) -> dict:
     ]
     return {
         "engineEnabled": bool(s.engine_enabled),
+        # WhatsApp's own OTP switch: off sends no code by WhatsApp. SMS codes are switched on SMS Control, on their own.
+        "otpEnabled": bool(s.otp_enabled),
         "groups": [{"key": key, "title": title, "blurb": blurb} for key, title, blurb in GROUPS],
         "features": features,
         "timings": [
@@ -569,6 +598,14 @@ def _settings_json(request: Request, s: WhatsAppSettings) -> dict:
             "start": s.quiet_start.strftime("%H:%M"),
             "end": s.quiet_end.strftime("%H:%M"),
         },
+        # {message type: Meta template} where HR chose another template than the default (hrms_<type>).
+        "templateOverrides": {k: v for k, v in (s.template_overrides or {}).items() if isinstance(v, str) and v},
+        # Rupees per billable message before GST, per Meta pricing category (HR's, else the India default).
+        "priceRates": wa_usage.rates_json(s),
+        "defaultPriceRates": {k: float(v) for k, v in wa_usage.DEFAULT_RATES.items()},
+        "monthlyBudget": float(s.monthly_budget) if s.monthly_budget is not None else None,
+        "gstRate": float(wa_usage.GST_RATE),
+        "currency": wa_usage.CURRENCY,
         "config": _config(request),
         "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
     }
@@ -597,19 +634,84 @@ def _whole_number(value) -> int | None:
     return None
 
 
-@api_view(["GET", "PUT"])
+def _decimal(value) -> Decimal | None:
+    """A number from JSON (a number or numeric text) as a Decimal, else None. A boolean is not a number here."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        value = str(value)
+    if not isinstance(value, str) or not re.fullmatch(r"\s*\d+(\.\d+)?\s*", value):
+        return None
+    try:
+        return Decimal(value.strip())
+    except InvalidOperation:
+        return None
+
+
+def _template_overrides(raw, s: WhatsAppSettings) -> tuple[dict | None, str | None]:
+    """The new template_overrides after merging HR's {type: name} (a blank name = back to the default), or an error."""
+    if not isinstance(raw, dict):
+        return None, "templateOverrides must be an object: {messageType: templateName}"
+    overrides = {k: v for k, v in (s.template_overrides or {}).items() if isinstance(v, str) and v}
+    for key, name in raw.items():
+        spec = catalog.get(key) if isinstance(key, str) else None
+        if spec is None:
+            return None, f"templateOverrides: unknown message type {key}"
+        if spec.default_template_name is None:
+            return (
+                None,
+                f"templateOverrides: '{spec.label}' is not sent through WhatsApp Cloud API, so it has no template",
+            )
+        if name is None or (isinstance(name, str) and not name.strip()):
+            overrides.pop(key, None)
+            continue
+        if not isinstance(name, str) or not _TEMPLATE_NAME.fullmatch(name.strip()):
+            return None, (
+                f"templateOverrides: the template for '{spec.label}' must be a Meta template name: lowercase letters, "
+                "numbers and underscores"
+            )
+        name = name.strip()
+        if name == spec.default_template_name:
+            overrides.pop(key, None)
+        else:
+            overrides[key] = name
+    return overrides, None
+
+
+def _price_rates(raw, s: WhatsAppSettings) -> tuple[dict | None, str | None]:
+    """The new price_rates after merging HR's {category: rupees} (null = back to the default), or an error."""
+    if not isinstance(raw, dict):
+        return None, "priceRates must be an object: {authentication, utility, marketing, service}"
+    rates = {k: v for k, v in (s.price_rates or {}).items() if k in wa_usage.CATEGORIES}
+    for key, value in raw.items():
+        if key not in wa_usage.CATEGORIES:
+            return None, f"priceRates: unknown pricing category {key} (use {', '.join(wa_usage.CATEGORIES)})"
+        if value is None:
+            rates.pop(key, None)
+            continue
+        rate = _decimal(value)
+        if rate is None or not Decimal("0") <= rate <= wa_usage.MAX_RATE:
+            return None, f"priceRates.{key} must be a number of rupees from 0 to {wa_usage.MAX_RATE}"
+        rates[key] = float(rate.quantize(Decimal("0.0001")))
+    return rates, None
+
+
+@api_view(["GET", "PUT", "PATCH"])
 @require_hr
 def whatsapp_control_settings(request: Request) -> Response:
+    """GET the settings; PATCH (or PUT, the same) changes only the keys sent. Nothing is saved when any value is
+    refused (400 with the reason)."""
     s = WhatsAppSettings.get()
     if request.method == "GET":
         return Response(_settings_json(request, s))
 
     data = request.data if isinstance(request.data, dict) else {}
     updates = {}
-    if "engineEnabled" in data:
-        if not isinstance(data["engineEnabled"], bool):
-            return _error("engineEnabled must be true or false")
-        updates["engine_enabled"] = data["engineEnabled"]
+    for key, field in (("engineEnabled", "engine_enabled"), ("otpEnabled", "otp_enabled")):
+        if key in data:
+            if not isinstance(data[key], bool):
+                return _error(f"{key} must be true or false")
+            updates[field] = data[key]
     for key in data:
         if isinstance(key, str) and key.startswith(TYPE_SWITCH_PREFIX) and key not in TYPE_SWITCHES:
             return _error(f"Unknown message type switch: {key}")
@@ -671,10 +773,41 @@ def whatsapp_control_settings(request: Request) -> Response:
             if not lo <= value <= hi:
                 return _error(f"{label} must be between {lo} and {hi}")
             updates[field] = value
+    if "templateOverrides" in data:
+        overrides, problem = _template_overrides(data["templateOverrides"], s)
+        if problem:
+            return _error(problem)
+        updates["template_overrides"] = overrides
+    if "priceRates" in data:
+        rates, problem = _price_rates(data["priceRates"], s)
+        if problem:
+            return _error(problem)
+        updates["price_rates"] = rates
+    if "monthlyBudget" in data:
+        raw = data["monthlyBudget"]
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            updates["monthly_budget"] = None
+        else:
+            budget = _decimal(raw)
+            if budget is None or not Decimal("0") <= budget <= MAX_BUDGET:
+                return _error("monthlyBudget must be empty (no budget) or a number of rupees from 0 up")
+            updates["monthly_budget"] = budget.quantize(Decimal("0.01"))
+    changed = {}
     for field, value in updates.items():
+        if getattr(s, field) != value:
+            changed[field] = value
         setattr(s, field, value)
     if updates:
         s.save()
+    if changed:
+        log_action(
+            request,
+            "update",
+            AUDIT_MODULE,
+            s.pk,
+            "WhatsApp Control settings changed: " + ", ".join(sorted(changed)),
+            new_values={k: (str(v) if not isinstance(v, (bool, int, list, dict)) else v) for k, v in changed.items()},
+        )
     return Response(_settings_json(request, s))
 
 
@@ -693,130 +826,115 @@ def whatsapp_queue_clear(request: Request) -> Response:
     return Response({"cleared": whatsapp_dispatcher.clear_queue()})
 
 
-def _template_row(
-    document_type: str, t: WhatsAppMessageTemplate | None, usage: dict, settings: WhatsAppSettings
-) -> dict:
-    spec = catalog.get(document_type)
-    stats = usage.get(document_type, {})
-    switch_column = spec.switch if spec else None
-    master_column = catalog.MODULE_SWITCHES.get(spec.module) if spec else None
-    wording = (t.message_body if t else "") or ""
-    module = spec.module if spec else "other"
-    return {
-        "documentType": document_type,
-        "label": TYPE_LABELS.get(document_type, document_type),
-        "description": spec.description if spec else "",
-        "category": module,
-        "categoryLabel": catalog.MODULES.get(module, module),
-        "hasWording": spec.has_wording if spec else True,
-        "messageBody": wording,
-        "defaultMessage": catalog.TYPES[document_type].body if spec else "",
-        "placeholders": catalog.variable_help(document_type),
-        "variables": [{"name": v.name, "help": v.help, "sample": v.sample} for v in spec.variables] if spec else [],
-        "preview": whatsapp_service.render_message(
-            wording.strip() or (spec.body if spec else ""),
-            catalog.sample_params(document_type),
-            spec.variable_names if spec else [],
-        ),
-        "isEnabled": t.is_enabled if t else True,
-        # The switch for this message (Feature Controls), if it has one, and the one for its whole module.
-        # (False also when the type is switched off on its own: its `type:<key>` switch on Feature Controls)
-        "featureEnabled": False
-        if document_type in (settings.disabled_message_types or [])
-        else (bool(getattr(settings, switch_column)) if switch_column else None),
-        "moduleEnabled": bool(getattr(settings, master_column)) if master_column else None,
-        "customised": bool(t and t.message_body.strip()),
-        "updatedAt": t.updated_at.isoformat() if t and t.updated_at else None,
-        "total": stats.get("total", 0),
-        "failed": stats.get("failed", 0),
-        "lastSentAt": stats["last"].isoformat() if stats.get("last") else None,
-    }
+# ── Meta templates (whatsapp_templates.py) ──────────────────────────────────────────
 
 
-@api_view(["GET"])
+def _template_error(exc: templates.TemplateError) -> Response:
+    body = {"error": exc.message}
+    if exc.fields:
+        body["fields"] = exc.fields
+    if exc.code is not None:
+        body["code"] = exc.code
+    return Response(body, status=exc.status)
+
+
+@api_view(["GET", "POST"])
 @require_hr
-def whatsapp_control_templates(request: Request) -> Response:
-    existing = {t.document_type: t for t in WhatsAppMessageTemplate.objects.all()}
-    usage = {
-        row["document_type"]: row
-        for row in _messages_qs(request)
-        .values("document_type")
-        .annotate(total=Count("id"), failed=Count("id", filter=Q(status="failed")), last=Max("created_at"))
-    }
-    s = WhatsAppSettings.get()
-    return Response([_template_row(key, existing.get(key), usage, s) for key in catalog.TYPES])
-
-
-_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*|\d+)\s*\}\}")
-
-
-def _bad_placeholders(document_type: str, body: str) -> list[str]:
-    """Placeholders in `body` this message type doesn't know (a typo would otherwise send blank)."""
-    spec = catalog.get(document_type)
-    if spec is None:
-        return []
-    names = set(spec.variable_names)
-    count = len(names)
-    bad = []
-    for token in _PLACEHOLDER.findall(body):
-        if token.isdigit():
-            ok = 1 <= int(token) <= count
-        else:
-            ok = token in names
-        if not ok and token not in bad:
-            bad.append(token)
-    return bad
-
-
-def _wording_error(document_type: str, body: str) -> str | None:
-    spec = catalog.get(document_type)
-    if spec is None or not body:
-        return None
-    # A one-time code that isn't in the message would be a message nobody can log in with.
-    if spec.must_contain_code and "{{1}}" not in body and "{{code}}" not in body:
-        return "The message must include {{code}} (or {{1}}), where the code goes."
-    bad = _bad_placeholders(document_type, body)
-    if bad:
-        shown = ", ".join("{{" + b + "}}" for b in bad)
-        return f"Unknown placeholder {shown}. You can use: {catalog.variable_help(document_type)}"
-    return None
-
-
-@api_view(["PUT"])
-@require_hr
-def whatsapp_control_template_update(request: Request, document_type: str) -> Response:
-    if document_type not in TYPE_LABELS:
-        return _error(f"Unknown message type: {document_type}")
-    data = request.data
-    t = WhatsAppMessageTemplate.objects.filter(document_type=document_type).first()
-    body = None
-    if "messageBody" in data:
-        body = (data.get("messageBody") or "").strip()
-        problem = _wording_error(document_type, body)
-        if problem:
-            return _error(problem)
-    if t is None:
-        t = WhatsAppMessageTemplate(document_type=document_type)
-    if body is not None:
-        t.message_body = body
-    if "isEnabled" in data:
-        t.is_enabled = bool(data.get("isEnabled"))
-    t.save()
-    return Response(_template_row(document_type, t, {}, WhatsAppSettings.get()))
+def whatsapp_meta_templates(request: Request) -> Response:
+    """GET: {templates, lastSyncedAt, configured, language}. POST: create a template and submit it to Meta. Body:
+    {name, language?, category (UTILITY | AUTHENTICATION), header? ("" | document | image | text), headerText?, body,
+    footer?, examples {variable: example}, messageType?, codeExpirationMinutes? (AUTHENTICATION)}. 400 {error, fields}
+    when it breaks Meta's rules or Meta refuses it (Meta's words included); 201 {template, message, warnings}."""
+    if request.method == "GET":
+        return Response(templates.list_json())
+    data = request.data if isinstance(request.data, dict) else {}
+    checked = templates.validate(data)
+    if not checked.ok:
+        return Response(
+            {"error": checked.first_error(), "fields": checked.errors, "warnings": checked.warnings}, status=400
+        )
+    try:
+        row, message = templates.create(checked.clean, user=_hr_user(request))
+    except templates.TemplateError as exc:
+        return _template_error(exc)
+    log_action(
+        request,
+        "create",
+        AUDIT_MODULE,
+        row.id,
+        f"Submitted the WhatsApp template {row.name} ({row.language}, {row.category}) to Meta: {row.status}",
+    )
+    return Response(
+        {"template": templates.template_json(row), "message": message, "warnings": checked.warnings}, status=201
+    )
 
 
 @api_view(["POST"])
 @require_hr
-def whatsapp_control_template_preview(request: Request, document_type: str) -> Response:
-    """Render wording with sample values, so HR sees how a message will look before saving it."""
-    spec = catalog.get(document_type)
-    if spec is None:
-        return _error(f"Unknown message type: {document_type}")
-    body = (request.data.get("messageBody") or "").strip() or spec.body
-    problem = _wording_error(document_type, body)
+def whatsapp_meta_templates_sync(request: Request) -> Response:
+    """Pull every template from Meta now: {synced, created, updated, deleted, lastSyncedAt, message, templates}."""
+    try:
+        result = templates.sync()
+    except templates.TemplateError as exc:
+        return _template_error(exc)
+    log_action(request, "sync", AUDIT_MODULE, None, f"WhatsApp templates synced from Meta: {result['message']}")
+    return Response({**templates.list_json(), **result})  # the sync's own time wins (even with no templates)
+
+
+@api_view(["POST"])
+@require_hr
+def whatsapp_meta_templates_create_missing(request: Request) -> Response:
+    """Submit a draft for every switched-on message type with neither an approved nor a pending template:
+    {results: [{type, label, name, ok, status, error, message}], created, failed}."""
+    try:
+        results = templates.create_missing(user=_hr_user(request))
+    except templates.TemplateError as exc:
+        return _template_error(exc)
+    names = sorted({r["name"] for r in results if r.get("ok") and r.get("name")})
+    if names:
+        log_action(
+            request,
+            "create",
+            AUDIT_MODULE,
+            None,
+            "Submitted the missing WhatsApp templates to Meta: " + ", ".join(names),
+        )
     return Response(
         {
-            "preview": whatsapp_service.render_message(body, catalog.sample_params(document_type), spec.variable_names),
-            "error": problem,
+            "results": results,
+            "created": len(names),
+            "failed": len({r["name"] for r in results if not r.get("ok")}),
         }
     )
+
+
+@api_view(["GET"])
+@require_hr
+def whatsapp_meta_template_draft(request: Request, type_key: str) -> Response:
+    """A ready-to-submit draft for one message type (whatsapp_templates.draft_for)."""
+    try:
+        return Response(templates.draft_for(type_key))
+    except templates.TemplateError as exc:
+        return _template_error(exc)
+
+
+@api_view(["DELETE"])
+@require_hr
+def whatsapp_meta_template_delete(request: Request, pk: int) -> Response:
+    """Delete one template (one language) at Meta and here: {deleted, name, language, messageTypes, message}."""
+    row = WhatsAppTemplate.objects.filter(pk=pk).first()
+    if row is None:
+        return _error("Template not found", 404)
+    try:
+        result = templates.delete(row)
+    except templates.TemplateError as exc:
+        return _template_error(exc)
+    log_action(
+        request,
+        "delete",
+        AUDIT_MODULE,
+        pk,
+        f"Deleted the WhatsApp template {result['name']} ({result['language']})"
+        + (" at Meta and here" if result["atMeta"] else " (this server only)"),
+    )
+    return Response(result)

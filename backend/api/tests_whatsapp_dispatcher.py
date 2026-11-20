@@ -1,8 +1,9 @@
 """The WhatsApp send queue (2026-11-06): queueing, the paced dispatcher, its limits and the WhatsApp Control API for it.
 
 Every test freezes the clock (django.utils.timezone.now, which auto_now fields use too) at a fixed IST moment and drives
-the dispatcher by calling tick(now=...) directly, so nothing depends on the time of day the suite runs. WAClient is
-mocked; credentials are test values.
+the dispatcher by calling tick(now=...) directly, so nothing depends on the time of day the suite runs. Meta's Graph
+API is faked (tests_whatsapp_support.FakeMeta); credentials are test values. Every type used here has an APPROVED
+template, made explicitly so these tests do not depend on the catalog's Meta values.
 """
 
 from datetime import datetime, time, timedelta
@@ -13,7 +14,6 @@ import requests
 from django.apps import apps as django_apps
 from django.test import TestCase, override_settings
 
-from . import otp_service
 from . import whatsapp_bulk_progress as progress
 from . import whatsapp_catalog as catalog
 from . import whatsapp_dispatcher as disp
@@ -24,18 +24,16 @@ from .models import (
     Employee,
     HRUser,
     SalarySlip,
+    WhatsAppMediaAsset,
     WhatsAppMessageLog,
     WhatsAppOptOut,
     WhatsAppSettings,
 )
+from .tests_whatsapp_support import META, FakeMeta, Resp, make_template
 
 CONFIG = dict(
-    WACLIENT_INSTANCE_ID="INST1234",
-    WACLIENT_ACCESS_TOKEN="tok-test",
-    WHATSAPP_DEFAULT_COUNTRY_CODE="91",
-    WHATSAPP_ALLOW_SENDING=True,
+    META,
     WHATSAPP_ASYNC_SEND=True,  # rows stay queued: the dispatcher is what these tests drive
-    BACKEND_PUBLIC_URL="https://api.example.test",
 )
 NOON = datetime(2026, 11, 6, 12, 0, tzinfo=FACTORY_TZ)  # a Friday
 M = WhatsAppMessageLog
@@ -46,16 +44,16 @@ def _at(iso: str | None):
     return datetime.fromisoformat(iso) if iso else None
 
 
-def _ok(msg_id="WAID1"):
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message_payload": {"key": {"id": msg_id}}}
-    return r
-
-
-def _resp(status_code, body):
-    r = mock.Mock(status_code=status_code, content=b"x", text=str(body))
-    r.json.return_value = body
-    return r
+def templates():
+    """APPROVED templates for every type these tests send."""
+    svc_name = svc.template_name_for
+    make_template(svc_name("outpass_gate_out"), "Dear {{employee_name}}, gate exit to {{destination}} on {{date}}.")
+    make_template(
+        svc_name("approval_approved"), "Dear {{employee_name}}, your {{request_type}} ({{details}}) is approved."
+    )
+    make_template(svc_name("otp_login"), category="AUTHENTICATION")
+    make_template(svc_name("salary_slip"), "Dear {{employee_name}}, your slip for {{month_year}}.", header="document")
+    make_template(svc_name("visitor_notification"), "Dear {{employee_name}}, {{visitor_name}} is at reception.")
 
 
 @override_settings(**CONFIG)
@@ -65,9 +63,8 @@ class QueueBase(TestCase):
         clock = mock.patch("django.utils.timezone.now", side_effect=lambda: self.clock)
         clock.start()
         self.addCleanup(clock.stop)
-        post = mock.patch("api.whatsapp_service.requests.post", return_value=_ok())
-        self.post = post.start()
-        self.addCleanup(post.stop)
+        self.meta = FakeMeta.install(self)
+        templates()
         self.emp = Employee.objects.create(
             employee_code="D1", first_name="Asha", last_name="Kumar", phone="8220015110", status="active"
         )
@@ -122,11 +119,13 @@ class QueueingTests(QueueBase):
         log = self.gate()
         self.assertEqual((log.status, log.kind, log.priority), ("queued", "automatic", 5))
         self.assertEqual(log.expires_at, NOON + timedelta(minutes=30))  # gate messages: fresh for 30 minutes
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         result = self.tick()
         self.assertEqual(result["sent"], 1)
         log = self.reload(log)
-        self.assertEqual((log.status, log.sent_at, log.provider_message_id, log.attempts), ("sent", NOON, "WAID1", 1))
+        self.assertEqual(
+            (log.status, log.sent_at, log.provider_message_id, log.attempts), ("sent", NOON, "wamid.TEST0001", 1)
+        )
 
     def test_kinds_priorities_and_freshness_come_from_the_catalog(self):
         self.assertEqual((catalog.kind_of("otp_login"), catalog.get("otp_login").priority), ("code", 0))
@@ -221,7 +220,7 @@ class QuietHoursTests(QueueBase):
         log = self.approval()
         self.at(hours=9)  # 21:00
         self.assertEqual(self.tick()["state"], "quiet hours")
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         self.assertEqual(self.reload(log).status, "queued")
         self.assertTrue(disp.queue_status(self.clock)["inQuietHours"])
 
@@ -244,14 +243,14 @@ class ExpiryTests(QueueBase):
         self.assertEqual(result["expired"], 1)
         log = self.reload(log)
         self.assertEqual((log.status, log.error_message), ("expired", "Too late to be useful: not sent"))
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
     def test_only_todays_messages_are_ever_sent(self):
         log = self.approval()  # fresh until the end of today
         self.at(hours=20)  # 08:00 tomorrow: after quiet hours, a new day
         self.tick()
         self.assertEqual(self.reload(log).status, "expired")
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
     def test_a_row_raised_yesterday_expires_even_without_an_expiry(self):
         log = self.approval()
@@ -264,57 +263,54 @@ class ExpiryTests(QueueBase):
 class FailureTests(QueueBase):
     def test_a_temporary_failure_is_retried_once_a_minute_later(self):
         log = self.approval()
-        self.post.side_effect = requests.ConnectionError("network down")
+        self.meta.network_error(times=2)
         self.assertEqual(self.tick()["retry"], 1)
         log = self.reload(log)
         self.assertEqual((log.status, log.attempts, log.send_after), ("queued", 1, NOON + timedelta(seconds=60)))
         self.assertTrue(log.error_message.startswith("Temporary failure"))
         self.at(seconds=30)
         self.tick()
-        self.assertEqual(self.post.call_count, 1)  # not before its minute is up
+        self.assertEqual(len(self.meta.calls), 1)  # not before its minute is up
         self.at(seconds=60)
         self.tick()
         log = self.reload(log)
         self.assertEqual((log.status, log.attempts), ("failed", 2))  # the one retry failed too: never again
         self.at(minutes=5)
         self.tick()
-        self.assertEqual(self.post.call_count, 2)
+        self.assertEqual(len(self.meta.calls), 2)
 
     def test_the_retry_can_succeed(self):
         log = self.approval()
-        self.post.side_effect = [_resp(503, {"status": "error", "message": "busy"}), _ok("WAID9")]
+        self.meta.answer(Resp(503, {"error": {"message": "busy", "code": 2}}))
         self.tick()
         self.assertEqual(self.reload(log).status, "queued")
         self.at(seconds=60)
         self.tick()
         log = self.reload(log)
-        self.assertEqual((log.status, log.provider_message_id, log.error_message), ("sent", "WAID9", ""))
+        self.assertEqual((log.status, log.provider_message_id, log.error_message), ("sent", "wamid.TEST0001", ""))
 
     def test_rate_limited_is_temporary(self):
         log = self.approval()
-        self.post.return_value = _resp(429, {"status": "error", "message": "slow down"})
+        self.meta.fail(130429, "Rate limit hit", status=429)
         self.tick()
         self.assertEqual(self.reload(log).status, "queued")
 
     def test_a_rejection_is_never_retried(self):
-        for response in (
-            _resp(400, {"status": "error", "message": "Invalid number"}),
-            _resp(200, {"status": "error", "message": "Instance disconnected"}),
-        ):
-            with self.subTest(response=response.status_code):
-                self.post.reset_mock()
-                self.post.return_value = response
+        for code, prefix in ((131026, "Refused by WhatsApp"), (100, "Send failed"), (132000, "Refused by WhatsApp")):
+            with self.subTest(code=code):
+                self.meta.fail(code, "refused")
                 log = self.approval()
                 self.at(minutes=self.n * 2)
                 self.tick()
                 log = self.reload(log)
                 self.assertEqual((log.status, log.attempts), ("failed", 1))
-                self.assertTrue(log.error_message.startswith("Send failed"))
+                self.assertTrue(log.error_message.startswith(prefix), log.error_message)
+                self.assertTrue(log.error_message.endswith(f"(code {code})"))
 
     def test_no_retry_when_the_message_would_be_stale_by_then(self):
         log = self.gate()  # expires at 12:30
         self.at(minutes=29, seconds=30)
-        self.post.side_effect = requests.Timeout("slow")
+        self.meta.network_error(exc=requests.Timeout("slow"))
         self.tick()
         self.assertEqual(self.reload(log).status, "failed")
 
@@ -359,7 +355,7 @@ class PerEmployeeAndDuplicateTests(QueueBase):
 
 
 class CircuitBreakerTests(QueueBase):
-    def failure(self, minutes_ago, error="Send failed: instance disconnected"):
+    def failure(self, minutes_ago, error="Send failed: Meta refused a parameter of the request. (code 100)"):
         row = M.objects.create(
             employee=self.emp, document_type="approval_approved", phone_number="x", status="failed", error_message=error
         )
@@ -378,27 +374,78 @@ class CircuitBreakerTests(QueueBase):
         self.tick()
         self.assertEqual(self.reload(log).status, "sent")
 
-    def test_a_disconnected_number_pauses_at_the_first_failure_with_what_to_do(self):
-        # live log 2026-11-06: 1,229 messages were tried against an "inactive" WAClient instance
-        self.failure(2, error="Send failed: This instance ID is inactive. Please relogin to your WhatsApp account.")
+    def test_an_expired_token_pauses_at_the_first_failure_with_what_to_do(self):
+        # live log 2026-11-06 (the old WhatsApp Web link): 1,229 messages were tried against a dead connection
+        self.meta.fail(190, "Error validating access token: Session has expired", status=401)
+        first = self.approval()
+        self.tick()
+        self.assertTrue(self.reload(first).error_message.endswith("(code 190)"))
         log = self.approval()
+        self.at(minutes=2)
         self.assertEqual(self.tick()["state"], "paused")
         status = disp.queue_status(self.clock)
-        self.assertIn("WhatsApp is disconnected", status["pausedReason"])
-        self.assertIn("scanning the QR code", status["pausedReason"])
-        self.assertEqual(_at(status["nextSendAt"]), NOON + timedelta(minutes=28))
-        self.post.assert_not_called()
-        self.at(minutes=28)  # 30 minutes after the failure: one probe
+        self.assertIn("access token is invalid or has expired", status["pausedReason"])
+        self.assertIn("WHATSAPP_CLOUD_ACCESS_TOKEN", status["pausedReason"])
+        self.assertEqual(_at(status["nextSendAt"]), NOON + timedelta(minutes=30))
+        self.assertEqual(len(self.meta.calls), 1)
+        self.at(minutes=30)  # 30 minutes after the failure: one probe
         self.tick()
         self.assertEqual(self.reload(log).status, "sent")
 
-    def test_an_expired_plan_pauses_at_once_and_a_later_success_clears_it(self):
-        self.failure(1, error="Send failed: Your plan has expired. Please upgrade or extend your plan.")
-        self.assertIn("WAClient plan has expired", disp.queue_status(self.clock)["pausedReason"])
-        M.objects.create(
-            employee=self.emp, document_type="otp_login", phone_number="x", status="sent", sent_at=NOON
-        )  # a code went out after the failure (plan renewed): no longer paused
+    def test_every_account_level_code_pauses_and_a_later_success_clears_it(self):
+        for code, words in (
+            (368, "blocked this WhatsApp number"),
+            (131048, "spam limit"),
+            (131031, "locked"),
+            (131042, "payment problem"),
+            (133010, "not registered"),
+        ):
+            with self.subTest(code=code):
+                M.objects.all().delete()
+                self.failure(1, error=f"Send failed: whatever Meta said (code {code})")
+                self.assertIn(words, disp.queue_status(self.clock)["pausedReason"])
+                M.objects.create(
+                    employee=self.emp, document_type="otp_login", phone_number="x", status="sent", sent_at=NOON
+                )  # something went out after the failure (the problem was fixed): no longer paused
+                self.assertFalse(disp.queue_status(self.clock)["paused"])
+
+    def test_meta_refusing_single_messages_never_pauses_the_queue(self):
+        # three employees whose numbers are not on WhatsApp are three refusals, not a broken account
+        for minutes_ago in (20, 10, 5):
+            self.failure(minutes_ago, error="Refused by WhatsApp: The message could not be delivered (code 131026)")
+        log = self.approval()
+        self.tick()
+        self.assertEqual(self.reload(log).status, "sent")
         self.assertFalse(disp.queue_status(self.clock)["paused"])
+
+    def test_an_unapproved_template_is_skipped_and_never_pauses(self):
+        make_template(svc.template_name_for("approval_approved"), "Dear {{employee_name}}.", status="PAUSED")
+        rows = [self.approval() for _ in range(4)]
+        for i in range(4):
+            self.at(seconds=30 * i)
+            self.tick()
+        for row in rows:
+            row = self.reload(row)
+            self.assertEqual(row.status, "skipped")
+            self.assertIn("PAUSED at Meta", row.error_message)
+        self.assertEqual(self.meta.calls, [])
+        self.assertFalse(disp.queue_status(self.clock)["paused"])
+
+    def test_a_row_queued_before_the_move_to_meta_is_skipped(self):
+        old = M.objects.create(
+            employee=self.emp,
+            document_type="approval_approved",
+            phone_number="918220015110",
+            status="queued",
+            kind="requested",
+            message_text="old text",
+            payload={"text": "old text"},
+            send_after=NOON,
+        )
+        self.tick()
+        old = self.reload(old)
+        self.assertEqual((old.status, old.error_message), ("skipped", disp.REASON_LEGACY))
+        self.assertEqual(self.meta.calls, [])
 
     def test_an_employee_without_a_phone_is_not_a_provider_failure(self):
         for minutes_ago in (20, 10, 5):
@@ -417,20 +464,16 @@ class SwitchTests(QueueBase):
         self.assertIsNone(self.gate())
         self.assertEqual(self.tick()["state"], "engine off")
         self.assertEqual(self.reload(queued).status, "queued")  # waits (and expires at midnight if never switched on)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
-    def test_with_the_master_switch_off_the_apps_treat_whatsapp_as_unavailable(self):
+    def test_with_the_master_switch_off_whatsapp_is_unavailable_for_codes(self):
+        # otp_service reads this (with the template's approval) to decide whether WhatsApp codes are offered
         self.settings(engine_enabled=False)
-        options = otp_service.login_options()
-        self.assertEqual((options["otpLogin"], options["otpActivate"], options["passwordLogin"]), (False, False, True))
-        self.assertFalse(otp_service.activation_required())  # nobody is locked out of the first-time setup
-        r = self.client.post(
-            "/api/auth/otp/request", {"employeeCode": "D1", "purpose": "login"}, content_type="application/json"
-        )
-        self.assertEqual(r.status_code, 503)
-        self.post.assert_not_called()
+        self.assertFalse(svc.engine_enabled())
+        self.assertIsNone(self.code())
         self.settings(engine_enabled=True)
-        self.assertTrue(otp_service.login_options()["otpLogin"])
+        self.assertTrue(svc.engine_enabled())
+        self.assertTrue(svc.template_approved("otp_login"))
 
     def test_every_type_can_be_switched_off_on_its_own(self):
         self.settings(disabled_message_types=["outpass_gate_out"])
@@ -467,18 +510,34 @@ class OptOutTests(QueueBase):
 
 
 class DocumentAndVisitorTests(QueueBase):
-    def test_a_document_is_queued_with_its_media_link_and_sent_as_a_document(self):
+    def test_a_document_waits_with_its_file_and_is_uploaded_when_its_turn_comes(self):
         log = svc.send_document(None, self.emp, "salary_slip", b"%PDF", "s.pdf", ["Asha", "October 2026"])
         self.assertEqual((log.status, log.kind, log.priority), ("queued", "document", 3))
-        self.assertTrue(log.payload["media_url"].startswith("https://api.example.test/api/whatsapp/media/"))
+        self.assertEqual(log.payload["params"], {"employee_name": "Asha", "month_year": "October 2026"})
+        self.assertEqual(bytes(WhatsAppMediaAsset.objects.get(token=log.payload["media_token"]).content), b"%PDF")
+        self.assertEqual(self.meta.calls, [])  # nothing reaches Meta before the row's turn
         self.tick()
-        body = self.post.call_args.kwargs["json"]
+        self.assertEqual([u["filename"] for u in self.meta.uploads], ["s.pdf"])
         self.assertEqual(
-            (body["type"], body["filename"], body["media_url"]), ("document", "s.pdf", log.payload["media_url"])
+            self.meta.last()["header"], {"type": "document", "document": {"id": "MEDIA0001", "filename": "s.pdf"}}
         )
-        self.assertEqual(self.reload(log).status, "sent")
+        log = self.reload(log)
+        self.assertEqual((log.status, log.payload["media_id"]), ("sent", "MEDIA0001"))
 
-    def test_the_visitor_contact_card_follows_the_message_and_reception_is_stamped(self):
+    def test_a_retry_reuses_the_uploaded_file(self):
+        log = svc.send_document(None, self.emp, "salary_slip", b"%PDF", "s.pdf", ["Asha", "October 2026"])
+        self.meta.answer(Resp(200, {"id": "MEDIA-A"}))
+        self.meta.fail(130429, "Rate limit hit", status=429)
+        self.tick()
+        log = self.reload(log)
+        self.assertEqual((log.status, log.payload["media_id"]), ("queued", "MEDIA-A"))
+        self.at(seconds=60)
+        self.tick()
+        self.assertEqual(self.reload(log).status, "sent")
+        self.assertEqual(self.meta.uploads, [])  # the fake's own upload endpoint was never needed again
+        self.assertEqual(self.meta.last()["header"]["document"]["id"], "MEDIA-A")
+
+    def test_the_visitor_message_is_sent_without_a_contact_card_and_reception_is_stamped(self):
         from .models import VisitorVisit
 
         visit = mock.Mock(id=0)
@@ -494,10 +553,10 @@ class DocumentAndVisitorTests(QueueBase):
             self.assertEqual(log.status, "queued")
             self.tick()
         self.assertEqual(self.reload(log).status, "sent")
-        card = M.objects.get(document_type="visitor_contact")
-        self.assertEqual((card.status, card.payload["follow_up_of"]), ("sent", log.pk))
+        # Meta's templates carry no contact card: the visitor's number is a variable of the visitor message itself
+        self.assertFalse(M.objects.filter(document_type="visitor_contact").exists())
         stamp.assert_called_once_with(pk=77)
-        self.assertEqual(self.post.call_count, 2)
+        self.assertEqual(len(self.meta.calls), 1)
         del visit
 
 
@@ -538,7 +597,8 @@ class BulkTests(QueueBase):
             self.assertEqual(build.call_count, 2)
         snap = self.client.get("/api/salary-slips/bulk-whatsapp-progress", **self.hr).json()
         self.assertEqual((snap["stage"], snap["succeeded"], snap["failed"]), ("completed", 2, 1))
-        self.assertEqual(self.post.call_args.kwargs["json"]["type"], "document")
+        self.assertEqual(self.meta.last()["header"]["type"], "document")
+        self.assertEqual(len(self.meta.uploads), 2)
 
     def test_what_is_left_at_midnight_expires_and_counts_as_not_sent(self):
         with mock.patch("api.salary_slip_views.whatsapp_slip_pdf", return_value=b"%PDF"):
@@ -728,8 +788,7 @@ class ControlApiTests(QueueBase):
         )
         for status in ("sending", "expired", "skipped"):
             self.assertEqual(self.client.get(f"{self.BASE}/messages", {"status": status}, **self.hr).status_code, 200)
-        overview = self.client.get(f"{self.BASE}/overview", **self.hr).json()
-        self.assertEqual(overview["today"]["queued"], 1)
+        self.assertEqual(disp.queue_status(self.clock)["queued"], 1)
 
     def test_only_hr_can_use_the_queue_endpoints(self):
         emp = {"HTTP_AUTHORIZATION": f"Bearer {sign_token({'role': 'employee', 'employeeId': self.emp.id})}"}

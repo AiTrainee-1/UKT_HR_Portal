@@ -338,8 +338,9 @@ def _write_attendance_for_cl(cl: CasualLeaveRequest, reviewer: str) -> None:
 
 
 def _unworked_new_rule_birthday(cl: CasualLeaveRequest) -> bool:
-    """Is the Casual Leave's date the employee's birthday under the NEW birthday rule, with no punch that day? (Then the
-    day is a paid birthday leave whatever happens to the Casual Leave: cl_balance.new_rule_birthdays.)"""
+    """Is the Casual Leave's date the employee's birthday under the NEW birthday rule, not worked (no punch of its own as
+    the attendance engine reads the day) and not already an approved credit? (Then the day is a paid birthday leave
+    whatever happens to the Casual Leave: cl_balance.new_rule_birthdays.)"""
     emp = cl.employee
     return bool(cl_balance.new_rule_birthdays([(emp.pk, emp.date_of_birth, emp.employment_type, cl.date)]))
 

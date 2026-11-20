@@ -4,7 +4,8 @@ notifications, owner 2026-11-17).
 Called wherever the HRMS tells a head that a request reached their step (approval_workflow.notify_hod_of_request for the
 workflow requests, and the On-Duty, Missing Punch and resignation submissions). The message is WhatsApp Control's alone:
 its master switch, the section's switch ("Department Head notifications"), the type's switch ("New request waiting for
-approval"), its wording (Message Text) and this machine's send rules. The head's phone notification about the same
+approval"), its Meta template (hrms_hod_request_waiting, approved on WhatsApp Control -> Templates) and this machine's
+send rules. The head's phone notification about the same
 request is Phone Notify Control's own (approval_waiting), independent of this.
 
 The details come from the same summary the approval / rejection messages use (whatsapp_approvals._BUILDERS), so a leave
@@ -46,20 +47,24 @@ def request_waiting(
     no phone, already queued)."""
     from . import whatsapp_service
     from .whatsapp_approvals import _BUILDERS
+    from .whatsapp_format import flat
 
     try:
         summary = _BUILDERS[workflow](obj) if obj is not None and workflow in _BUILDERS else None
-        params = {
-            "hod_name": _name(head),
-            "employee_name": _name(emp),
-            "employee_code": getattr(emp, "employee_code", "") or "",
-            "request_type": (summary.request_type if summary else request_type) or (what[:1].upper() + what[1:]),
-            "date": (summary.date if summary else date) or "",
-            "time": summary.time if summary else "",
-            "details": (summary.details if summary else details) or "",
-            "reason": summary.reason if summary else "",
-            "requested_on": (summary.requested_on if summary else "") or timezone.localdate().strftime("%d %b %Y"),
-        }
+        # the variables of the Meta template hrms_hod_request_waiting, each on one line
+        params = flat(
+            {
+                "hod_name": _name(head),
+                "employee_name": _name(emp),
+                "employee_code": getattr(emp, "employee_code", "") or "",
+                "request_type": (summary.request_type if summary else request_type) or (what[:1].upper() + what[1:]),
+                "date": (summary.date if summary else date) or "",
+                "time": summary.time if summary else "",
+                "details": (summary.details if summary else details) or "",
+                "reason": summary.reason if summary else "",
+                "requested_on": (summary.requested_on if summary else "") or timezone.localdate().strftime("%d %b %Y"),
+            }
+        )
         ref = getattr(obj, "pk", None)
         if dedupe:
             key = f"hodwait:{workflow}:{dedupe}:{head.pk}"

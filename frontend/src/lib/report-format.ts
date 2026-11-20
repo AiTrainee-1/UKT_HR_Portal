@@ -234,12 +234,20 @@ export function sortRows<T extends Record<string, unknown>>(
   return out;
 }
 
-/** Case-insensitive "contains" match across the visible text of a row. */
-export function rowMatches(row: Record<string, unknown>, keys: string[], needle: string): boolean {
+/**
+ * Case-insensitive "contains" match across a row: every column, as the table SHOWS it (05-Sep-2026, ₹12,34,567.89,
+ * 2h 05m) and as the server sent it (2026-09-05, 1234567.89), so whatever the user reads on screen can be found.
+ */
+export function rowMatches(
+  row: Record<string, unknown>,
+  columns: { key: string; type: ColumnType }[],
+  needle: string,
+): boolean {
   const n = needle.trim().toLowerCase();
   if (!n) return true;
-  return keys.some((k) => {
-    const v = row[k];
-    return v !== null && v !== undefined && String(v).toLowerCase().includes(n);
+  return columns.some(({ key, type }) => {
+    const v = row[key];
+    if (v === null || v === undefined || v === "") return false;
+    return String(v).toLowerCase().includes(n) || formatCell(v, type).toLowerCase().includes(n);
   });
 }

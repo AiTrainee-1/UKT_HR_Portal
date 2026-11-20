@@ -1,14 +1,20 @@
 """
 Employee sign-in and password reset by one-time code (mobile app + Employee Web
-App), delivered by WhatsApp or SMS (the channel HR picks on the SMS Control page).
+App), delivered by WhatsApp (switched on at WhatsApp Control) or SMS (switched on
+at SMS Control): two independent channels, either one alone is enough.
 Public endpoints under /api/auth/ -the employee has no token yet- so
 they are rate limited per IP here, and per employee inside otp_service.
 
-    GET  /api/auth/login-options        which sign-in methods are switched on, the channel: otpChannel, and how many
-                                        digits its codes have: codeLength (sms 4, whatsapp 6)
-    POST /api/auth/otp/request          {employeeCode, purpose: "login"|"reset"|"activate"}
+    GET  /api/auth/login-options        which sign-in methods work right now (never cached):
+                                        {otpLogin, otpReset, otpActivate, passwordLogin,
+                                         otpChannels: {login: ["whatsapp", "sms"], reset: [...], activate: [...]},
+                                         channels: {whatsapp: {name, codeLength: 6}, sms: {name, codeLength: 4}},
+                                         otpChannel, codeLength}   (the last two for older apps: the first channel)
+    POST /api/auth/otp/request          {employeeCode, purpose: "login"|"reset"|"activate", channel?: "whatsapp"|"sms"}
                                         -> {message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel,
-                                            codeLength}
+                                            codeLength, otherChannels}
+                                        no channel: the first available one; a channel that is not available:
+                                        400 {error, code: "channel_unavailable", availableChannels}
     POST /api/auth/otp/login            {employeeCode, otp}
     POST /api/auth/otp/reset-password   {employeeCode, otp, password}
     POST /api/auth/otp/activate         {employeeCode, otp, password}   (first-time password)
@@ -59,10 +65,12 @@ def _otp_error(exc: otp_service.OtpError) -> Response:
 
 @api_view(["GET"])
 def login_options(request: Request) -> Response:
-    """Which sign-in methods the apps should offer, and which channel (`otpChannel`: "sms" | "whatsapp") delivers the
-    codes. OTP is only advertised when it can actually work (switched on AND the active channel configured on this
-    server). See otp_service.login_options."""
-    return Response(otp_service.login_options())
+    """Which sign-in methods the apps should offer, per purpose and channel. A channel is only listed when it can
+    actually work (switched on AND able to deliver from this server). Never cached: a switch HR flips on a Control page
+    must reach the apps at once. See otp_service.login_options."""
+    response = Response(otp_service.login_options())
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 @api_view(["POST"])
@@ -72,11 +80,15 @@ def otp_request(request: Request) -> Response:
     if data is None:
         return _error(_BAD_BODY)
     purpose = str(data.get("purpose") or EmployeeOtp.PURPOSE_LOGIN)
+    channel = data.get("channel")
+    if channel == "":
+        channel = None  # an app that sends an empty channel means "whichever works"
     try:
-        result = otp_service.request_otp(_identifier(data), purpose, _get_ip(request))
+        result = otp_service.request_otp(_identifier(data), purpose, _get_ip(request), channel=channel)
     except otp_service.OtpError as exc:
         return _otp_error(exc)
-    # result: message (names the channel), maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength
+    # result: message (names the channel), maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength,
+    # otherChannels
     return Response(result)
 
 

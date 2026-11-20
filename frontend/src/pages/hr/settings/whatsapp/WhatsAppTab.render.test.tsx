@@ -4,8 +4,9 @@ import WhatsAppTab from "../WhatsAppTab";
 import { WHATSAPP_SETTINGS } from "../WhatsAppTab.meta";
 import { whatsAppRuns } from "./WhatsAppBubble";
 
-// The WhatsApp tab no longer edits anything: every control it had (the status card and 7 message rows) changed the same
-// data as WhatsApp Control. It explains where each part lives and links there; these checks keep it that way.
+// The WhatsApp tab edits nothing: everything WhatsApp (on the Meta WhatsApp Cloud API since 2026-11-20) is set on
+// WhatsApp Control or in the server's environment. It explains where each part lives and links to the right tab of
+// WhatsApp Control; these checks keep it that way, and keep the old provider's name off it.
 
 const HR = { role: "hr", employeeId: null, name: "Test HR", isSuperAdmin: true, permissions: {} };
 
@@ -30,16 +31,19 @@ describe("WhatsApp tab", () => {
     expect(page!.text()).not.toContain("Use default");
   });
 
-  it("links every part to WhatsApp Control", async () => {
+  it("links every part to its tab of WhatsApp Control, and never names the old provider", async () => {
     await open();
     const links = [...page!.container.querySelectorAll<HTMLAnchorElement>('[data-testid^="whatsapp-managed-"] a')];
     expect(links.map((a) => a.getAttribute("href"))).toEqual([
-      "/hr/whatsapp-control",
-      "/hr/whatsapp-control",
-      "/hr/whatsapp-control",
+      "/hr/whatsapp-control?tab=config",
+      "/hr/whatsapp-control?tab=templates",
+      "/hr/whatsapp-control?tab=controls",
+      "/hr/whatsapp-control?tab=usage",
     ]);
-    expect(page!.text()).toContain("WAClient WhatsApp API");
-    expect(page!.text()).toContain("Open the Message Text tab.");
+    expect(page!.text()).toContain("Meta WhatsApp Cloud API");
+    expect(page!.text()).toContain("WHATSAPP_CLOUD_*");
+    expect(page!.text()).toContain("Open the Templates tab.");
+    expect(page!.text()).not.toMatch(/wa ?client|instance id/i);
   });
 
   it("tells a role that cannot open WhatsApp Control to ask an administrator", async () => {

@@ -422,6 +422,7 @@ def hod_reminder_settings(request: Request) -> Response:
 @require_hr
 def hod_reminder_preview(request: Request) -> Response:
     """What each head would get if the reminders went now (a branch login: its own branch's heads). Sends nothing."""
+    from . import whatsapp_service as wa
     from .models import HodReminderSettings
 
     data = request.data if isinstance(request.data, dict) else {}
@@ -433,6 +434,8 @@ def hod_reminder_preview(request: Request) -> Response:
         if error:
             return Response({"error": error}, status=400)
     today = ist_today()
+    # WhatsApp sends the approved Meta template (hrms_hod_pending_reminder), not the wording above: its text per head too
+    choice = wa.template_for(rem.SOURCE)
     messages = [
         {
             "managerId": t.manager.id,
@@ -440,10 +443,13 @@ def hod_reminder_preview(request: Request) -> Response:
             "pending": t.total,
             "byCategory": t.by_category,
             "text": rem.render(template, name=t.name, by_category=t.by_category, total=t.total, day=today),
+            "whatsappText": wa.render_template_text(
+                choice, rem.whatsapp_params(name=t.name, by_category=t.by_category, total=t.total, day=today)
+            ),
         }
         for t in rem.targets(branch_id=get_branch_scope(request))
     ]
-    return Response({"messages": messages})
+    return Response({"messages": messages, "whatsappTemplate": {"name": choice.name, "status": choice.status}})
 
 
 @api_view(["POST"])

@@ -49,7 +49,16 @@ import { BalancePart } from "./BalancePart";
 import { ClaimsPart, claimsParamsOf } from "./ClaimsPart";
 import { CreditsPart } from "./CreditsPart";
 import { OrgFilters } from "./LeaveFilters";
-import { dayCounts, groupWeeks, inMonth, monthOf, previousSunday, stepMonth } from "./claims-logic";
+import {
+  dayCounts,
+  groupWeeks,
+  inMonth,
+  monthOf,
+  previousSunday,
+  stepMonth,
+  stripDayText,
+  stripKindsText,
+} from "./claims-logic";
 import { idOf, useLeaveUrl, type LeaveUrl, type SetLeaveUrl } from "./leave-url";
 import { CLAIM_REASON_MAX, checkClaim, claimPayload, punchSummary, type ClaimSelection } from "./leave-logic";
 
@@ -65,9 +74,13 @@ function useRaiseDraft() {
 }
 type RaiseDraft = ReturnType<typeof useRaiseDraft>;
 
-/** Why raising is paused, from the switches the server reported. */
+/**
+ * Why raising is paused: the master switch first, then the server's own reason (`raiseProblem`: a switch, or the Edit on
+ * Leave > Holiday work > Claims the login lacks), else what the switches it reported say.
+ */
 function pausedReasonOf(featuresOff: boolean, enabled: HolidayWorkEnabled | null | undefined): string {
   if (featuresOff || enabled?.master === false) return PAUSED_MASTER;
+  if (enabled?.raiseProblem) return enabled.raiseProblem;
   if (enabled && !enabled.holidayWork)
     return "Paused: work on Sundays and holidays is switched off in Settings → Compensation";
   return "Paused: the compensation claims approval is switched off in User Management";
@@ -315,7 +328,7 @@ function RaiseClaim({
       testId="claim-form"
       icon={Sun}
       title="Raise a claim for Sunday / holiday work"
-      description="The Sundays and declared holidays of the month, week by week, with how many worked. Pick a day, then the staff who worked; the claims go to each employee's Department Head and nothing is credited until they approve."
+      description="The Sundays, declared holidays and off Saturdays of the month, week by week, with how many worked. Pick a day, then the staff who worked; the claims go to each employee's Department Head and nothing is credited until they approve. An off Saturday lists only the staff whose own day off it is."
     >
       <div className="space-y-4">
         <FilterBar label="Raise filters" testId="raise-filters" sticky={false}>
@@ -386,7 +399,7 @@ function RaiseClaim({
           <>
             <p className="text-sm text-gray-700" data-testid="claim-day">
               <strong>{dateLong(data.date)}</strong> ·{" "}
-              {data.dayKind === "sunday" ? "Sunday" : (data.holidayName ?? "Company holiday")} · {data.counts.worked}{" "}
+              {stripDayText({ kind: data.dayKind ?? "sunday", holidayName: data.holidayName })} · {data.counts.worked}{" "}
               worked, {data.counts.eligible} can be claimed for
               {filtered && <span className="text-muted-foreground"> · {people.length} shown with the filters</span>}
             </p>
@@ -521,6 +534,11 @@ function RaiseClaim({
                 {raise.isPending && <Loader2 size={14} className="mr-2 animate-spin" />}
                 Submit {ticked > 0 ? countOf(ticked, "claim") : "claim"} for HOD approval
               </Button>
+              {!canRaise && !featuresOff && enabled?.raiseProblem && (
+                <p className="text-xs font-medium text-amber-700" data-testid="claim-raise-problem">
+                  {enabled.raiseProblem}
+                </p>
+              )}
               {touched && !check.ok && check.first && (
                 <p className="text-xs font-medium text-red-600" role="alert" data-testid="claim-first-problem">
                   {check.first}
@@ -542,8 +560,9 @@ function RaiseClaim({
 const STEP_BUTTON = "size-11 sm:size-9";
 
 /**
- * The Sundays and declared holidays of one month, week by week, each with how many worked, how many can still be claimed
- * for and the claims already made. Picking a day lists who worked it (below). A day still to come cannot be picked.
+ * The Sundays, declared holidays and off Saturdays (a staff member's own Saturday off) of one month, week by week, each
+ * with how many worked, how many can still be claimed for and the claims already made. Picking a day lists who worked it
+ * (below). A day still to come cannot be picked.
  */
 function MonthStrip({
   month,
@@ -568,8 +587,6 @@ function MonthStrip({
 }) {
   const days = query.data?.days ?? [];
   const weeks = groupWeeks(days);
-  const sundays = days.filter((d) => d.kind === "sunday").length;
-  const holidays = days.length - sundays;
   const worked = days.reduce((n, d) => n + d.worked, 0);
   const toClaim = days.reduce((n, d) => n + d.eligible, 0);
   const waiting = days.reduce((n, d) => n + d.claimed.pending, 0);
@@ -639,8 +656,7 @@ function MonthStrip({
         </Button>
         {query.data && (
           <p className="w-full text-xs text-slate-600 sm:ml-auto sm:w-auto" data-testid="hw-strip-summary">
-            {countOf(sundays, "Sunday")}
-            {holidays > 0 ? ` and ${countOf(holidays, "holiday")}` : ""} · {worked} worked · {toClaim} still to claim
+            {stripKindsText(days)} · {worked} worked · {toClaim} still to claim
             {waiting > 0 ? ` · ${waiting} waiting for HOD` : ""}
           </p>
         )}
@@ -658,7 +674,7 @@ function MonthStrip({
         />
       ) : days.length === 0 ? (
         <p className="text-xs text-muted-foreground" data-testid="hw-strip-empty">
-          No Sunday or declared holiday in {monthYear(month, year)}.
+          No Sunday, declared holiday or off Saturday in {monthYear(month, year)}.
         </p>
       ) : (
         // the weeks side by side (one column each, a holiday in the same week under its Sunday), so the strip reads left to
@@ -698,7 +714,7 @@ function DayButton({
   onPick: (date: string) => void;
 }) {
   const counts = dayCounts(day);
-  const what = day.kind === "holiday" ? (day.holidayName ?? "Company holiday") : "Sunday";
+  const what = stripDayText(day);
   return (
     <button
       type="button"
@@ -714,7 +730,16 @@ function DayButton({
       data-testid={`hw-day-${day.date}`}
     >
       <span className="flex w-full items-center gap-1.5 text-sm font-bold text-slate-900">
-        <CalendarDays size={14} className={day.kind === "holiday" ? "text-amber-600" : "text-indigo-600"} />
+        <CalendarDays
+          size={14}
+          className={
+            day.kind === "holiday"
+              ? "text-amber-600"
+              : day.kind === "off_saturday"
+                ? "text-teal-600"
+                : "text-indigo-600"
+          }
+        />
         {dateLong(day.date)}
       </span>
       <span className="text-[11px] text-slate-500">{what}</span>

@@ -339,8 +339,12 @@ describe("Settings -> Attendance", () => {
       await page!.type("#staff-next-morning-cutoff", "07:00");
       expect(line("next-morning-guard-line")).toContain("Tuesday's cut-off is 06:30, not 07:00");
       expect(line("next-morning-morning-line")).toContain("Monday's last punch: it is before the 06:30 cut-off");
-      // the date only moves later
-      expect(input("staff-next-morning-from-date").min).toBe("2026-11-19");
+      // both early punches end Monday, so its overtime runs to the later one (06:20), as the server measures it
+      expect(line("next-morning-night-line")).toContain(
+        "Monday's overtime: from the 17:30 shift end until 06:20, its last early punch (12 h 50 min)",
+      );
+      // the date only moves later, and never before today (20 Nov): the box starts at today, not the saved 19 Nov
+      expect(input("staff-next-morning-from-date").min).toBe("2026-11-20");
       await page!.type("#staff-next-morning-from-date", "2026-11-10");
       expect(byTestId("next-morning-from-error")?.textContent).toContain("can only be moved later than 19 Nov 2026");
       expect(buttonNamed("Save Attendance Settings")?.disabled).toBe(true);
@@ -350,6 +354,64 @@ describe("Settings -> Attendance", () => {
       await press("Confirm and save");
       expect(puts[0]).toMatchObject({ staffNextMorningEnabled: true, staffNextMorningCutoff: "07:00" });
       expect("staffNextMorningFrom" in puts[0]).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a moved next-morning date at today or later, and shows the server's refusal in its own words", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-25T06:00:00Z"));
+    try {
+      await open({
+        ...SAVED,
+        staffNextMorningEnabled: true,
+        staffNextMorningCutoff: "06:00",
+        staffNextMorningFrom: "2026-11-19",
+      });
+      expect(input("staff-next-morning-from-date").min).toBe("2026-11-25");
+      // later than the saved date, but before today: days already judged would change
+      await page!.type("#staff-next-morning-from-date", "2026-11-22");
+      expect(byTestId("next-morning-from-error")?.textContent).toContain("Pick today or a later date");
+      expect(buttonNamed("Save Attendance Settings")?.disabled).toBe(true);
+      await page!.type("#staff-next-morning-from-date", "2026-11-26");
+      expect(byTestId("next-morning-from-error")).toBeNull();
+      // the server has the last word (its clock may already be on the next day): its sentence is what HR reads
+      page!.unmount();
+      page = await renderMdPage(
+        () => <AttendanceTab />,
+        {
+          "/api/auth/me": { role: "hr", employeeId: null, name: "Test HR", isSuperAdmin: true, permissions: {} },
+          "/api/payroll-settings": (_params, init) => {
+            if (init?.method === "PUT") {
+              puts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+              return {
+                status: 400,
+                body: { error: "The next-morning start date cannot be earlier than today (26 Nov 2026)." },
+              };
+            }
+            return {
+              ...SAVED,
+              staffNextMorningEnabled: true,
+              staffNextMorningCutoff: "06:00",
+              staffNextMorningFrom: "2026-11-19",
+            };
+          },
+          "/api/production-shift-config": PRODUCTION,
+        },
+        { path: "/hr/settings?tab=attendance" },
+      );
+      await page.type("#staff-next-morning-from-date", "2026-11-26");
+      await press("Save Attendance Settings");
+      await press("Confirm and save");
+      expect(puts.at(-1)).toMatchObject({ staffNextMorningFrom: "2026-11-26" });
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Failed to save attendance settings",
+          description: "The next-morning start date cannot be earlier than today (26 Nov 2026).",
+          variant: "destructive",
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }

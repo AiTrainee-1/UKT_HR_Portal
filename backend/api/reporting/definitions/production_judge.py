@@ -107,13 +107,16 @@ def resolve_shift_day(
     d: dt.date,
     by_date: Mapping[dt.date, Sequence[tuple[int, Any]]],
     manual: Iterable[dt.date] = (),
+    employee_id: int | None = None,
 ) -> list[tuple[int, Any]]:
     """The punches of shift day ``d`` once night sessions are resolved: [(seconds since d's midnight, ref)], oldest first.
 
     ``by_date`` is {calendar date: [(seconds since that date's midnight, ref)]}. The engine's own rule: a night session
     only links two days the shift table judges, never a manual (``manual``) day, and only when the closing punch is
-    early enough (production_shift_rules.session_kwargs)."""
-    return psr.resolve_day(by_date, d, **psr.session_kwargs(ruleset, manual))
+    early enough (production_shift_rules.session_kwargs). ``employee_id`` lets the early-arrival guard see the worker's
+    SPECIAL shift, exactly as the engine passes it (attendance_final._production_session_logs); None = the default groups
+    only, which is the same answer for everybody who is not on a special shift."""
+    return psr.resolve_day(by_date, d, **psr.session_kwargs(ruleset, manual, employee_id))
 
 
 def shift_day_punches(
@@ -122,6 +125,7 @@ def shift_day_punches(
     by_ref: Mapping[dt.date, Sequence[tuple[int, Any]]],
     manual: Iterable[dt.date] = (),
     blocks_cache: dict | None = None,
+    employee_id: int | None = None,
 ) -> list[tuple[int, Any]]:
     """EVERY stored punch of shift day ``d`` (double taps included) as (seconds since d's midnight, ref), oldest first.
 
@@ -129,10 +133,10 @@ def shift_day_punches(
     element is the date the punch was stamped on, e.g. ``(date, log id)``. The night-session resolution decides which
     punches belong to the day (a night worker's closing punch made next morning is +86400); each is then expanded to the
     double taps that followed it, so a count of 'stored punches' stays what it says. ``blocks_cache`` may be shared
-    between the days of one employee."""
+    between the days of one employee. ``employee_id``: see resolve_shift_day (pass it whenever the worker is known)."""
     cache = blocks_cache if blocks_cache is not None else {}
     out: list[tuple[int, Any]] = []
-    for secs, ref in resolve_shift_day(ruleset, d, by_ref, manual):
+    for secs, ref in resolve_shift_day(ruleset, d, by_ref, manual, employee_id):
         k = ref[0]
         offset = (k - d).days * 86400
         if k not in cache:

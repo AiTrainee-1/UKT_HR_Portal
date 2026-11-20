@@ -506,11 +506,12 @@ class DeleteTests(LeaveBase):
             cancelled.filter(employee=self.mani).get().message,
         )
 
-    def test_a_legacy_day_exemption_and_an_unknown_id_are_not_windows(self):
+    def test_a_legacy_day_exemption_is_removed_like_a_window_and_an_unknown_id_is_not_found(self):
+        # final round 2026-11-19: an older Compensation Day had no way to be removed once its day came
         legacy = CompensationDayAnnouncement.objects.create(date=date(2026, 10, 20), reason="Festival")
-        self.assertEqual(self.delete(f"{WINDOWS}/{legacy.id}").status_code, 404)
         self.assertEqual(self.delete(f"{WINDOWS}/999999").status_code, 404)
-        self.assertTrue(CompensationDayAnnouncement.objects.filter(pk=legacy.id).exists())
+        self.assertEqual(self.delete(f"{WINDOWS}/{legacy.id}").status_code, 204)
+        self.assertFalse(CompensationDayAnnouncement.objects.filter(pk=legacy.id).exists())
 
     def test_a_branch_scoped_user_cannot_remove_a_company_wide_window(self):
         company = self.announce(day=date(2026, 10, 16))
@@ -628,7 +629,10 @@ class WindowListTests(LeaveBase):
         everything = self.get(kind="all").json()["results"]
         self.assertEqual([w["id"] for w in everything], [b["id"], legacy.id, a["id"]])
         row = next(w for w in everything if w["id"] == legacy.id)
-        self.assertEqual((row["kind"], row["time"], row["canDelete"]), ("day", "13:00", False))
+        # an older Compensation Day can be removed too (final round 2026-11-19)
+        self.assertEqual(
+            (row["kind"], row["time"], row["canDelete"], row["deleteBlockedReason"]), ("day", "13:00", True, None)
+        )
         self.assertEqual([w["id"] for w in self.get(kind="early_out").json()["results"]], [b["id"]])
         self.assertEqual([w["id"] for w in self.get(kind="day").json()["results"]], [legacy.id])
         self.assertEqual(self.get(kind="nonsense").status_code, 400)

@@ -70,3 +70,14 @@ def pretty_phone(raw: str | None, normalized: str | None = None) -> str:
 def join(*parts, sep: str = " - ") -> str:
     """Join the non-empty parts."""
     return sep.join(str(p).strip() for p in parts if p and str(p).strip())
+
+
+def one_line(value) -> str:
+    """The text on ONE line with single spaces: a Meta template variable may hold no new line, no tab and never more than
+    4 spaces in a row. Empty stays empty (whatsapp_cloud sends "-" for it)."""
+    return " ".join(str("" if value is None else value).split())
+
+
+def flat(params: dict) -> dict:
+    """Every value of a message's variables on one line (one_line), the names unchanged."""
+    return {str(k): one_line(v) for k, v in (params or {}).items()}

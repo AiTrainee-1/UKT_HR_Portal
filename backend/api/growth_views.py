@@ -1217,7 +1217,7 @@ def idcard_whatsapp(request: Request) -> Response:
 
     log = whatsapp_service.send_document(
         request, emp, "id_card", png_bytes, f"idcard-{emp.employee_code}.png",
-        body_params=[idcard["name"]], mime_type="image/png",
+        body_params={"employee_name": idcard["name"]}, mime_type="image/png",
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
     if not whatsapp_service.accepted(log):

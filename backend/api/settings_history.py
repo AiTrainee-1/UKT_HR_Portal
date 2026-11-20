@@ -3,7 +3,8 @@
 A rule whose switch or value must never change days already judged keeps a HISTORY next to its live fields: a list of
 entries {"from": "YYYY-MM-DD" | None, ...values} (None = from the very beginning). The value in force on a day is the
 entry with the latest `from` on or before that day; a day before every entry keeps the OLD rule. Every change made in
-Settings appends an entry dated today (IST): days before today keep what they were judged by, even when recomputed.
+Settings appends an entry dated today (IST) - or the rule's own later start date when that is still in the future - and
+drops any entry dated on or after it: days before it keep what they were judged by, even when recomputed.
 
     PayrollSettings.staff_next_morning_history   [{"from", "enabled", "cutoff": "HH:MM"}]  (shift_engine)
     CompensationConfig.ot_quarter_rule_history   [{"from", "on"}]                           (Type 2 quarters rule)
@@ -50,9 +51,15 @@ def entry_on(history, day: date) -> dict | None:
 
 
 def appended(history, values: dict, today: date) -> list[dict]:
-    """A copy of `history` with a new entry {"from": today, **values}; an entry already dated today is replaced (the
-    last change of a day is the one in force from that day)."""
-    kept = [e for e in entries(history) if as_date(e.get("from")) != today]
+    """A copy of `history` with a new entry {"from": today, **values}. Every entry dated on or after `today` is dropped
+    (the last change of a day is the one in force from that day, and a later-dated entry - e.g. the start a future
+    "applies from" date created - would otherwise bring the old values back from its date on); entries from the very
+    beginning (no date) and earlier ones are kept."""
+    kept = []
+    for entry in entries(history):
+        start = as_date(entry.get("from"))
+        if start is None or start < today:
+            kept.append(entry)
     kept.append({"from": today.isoformat(), **values})
     return entries(kept)
 

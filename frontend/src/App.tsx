@@ -99,8 +99,10 @@ const ProductionPayrollBiweekly = lazy(() => import("@/pages/hr/ProductionPayrol
 const ProductionPayrollMonthly = lazy(() => import("@/pages/hr/ProductionPayrollMonthly"));
 const ProductionEmployees = lazy(() => import("@/pages/hr/ProductionEmployees"));
 const Settlement = lazy(() => import("@/pages/hr/Settlement"));
+const SalarySlipCenter = lazy(() => import("@/pages/hr/SalarySlipCenter"));
 const Compensation = lazy(() => import("@/pages/hr/Compensation"));
 const Reports = lazy(() => import("@/pages/hr/Reports"));
+const CustomReportBuilder = lazy(() => import("@/pages/hr/report-center/customise/CustomReportBuilderPage"));
 const UserManagement = lazy(() => import("@/pages/hr/UserManagement"));
 const ManagerDetail = lazy(() => import("@/pages/hr/ManagerDetail"));
 const AccountManagement = lazy(() => import("@/pages/hr/AccountManagement"));
@@ -479,6 +481,13 @@ function Router() {
         </Route>
         <Route path="/hr/settlement">{() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/reports">{() => <ProtectedRoute component={Reports} allowedRoles={["hr"]} />}</Route>
+        {/* Report Center -> Customise: the report builder (a new report, or a saved one; running it stays /hr/reports) */}
+        <Route path="/hr/reports/customise/new">
+          {() => <ProtectedRoute component={CustomReportBuilder} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/reports/customise/:id/edit">
+          {() => <ProtectedRoute component={CustomReportBuilder} allowedRoles={["hr"]} />}
+        </Route>
         <Route path="/hr/user-management">
           {() => <ProtectedRoute component={UserManagement} allowedRoles={["hr"]} />}
         </Route>
@@ -534,7 +543,10 @@ function Router() {
         </Route>
         <Route path="/hr/settings">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/settings/:tab">{() => <ProtectedRoute component={Settings} allowedRoles={["hr"]} />}</Route>
-        <Route path="/hr/salary-slip">{() => <Redirect to="/hr/payroll" />}</Route>
+        {/* Salary Slip (2026-11-20): slips for any employee, independent of payroll; gated by `salary_slip_center` */}
+        <Route path="/hr/salary-slip">
+          {() => <ProtectedRoute component={SalarySlipCenter} allowedRoles={["hr"]} />}
+        </Route>
         <Route path="/hr/notifications">
           {() => <ProtectedRoute component={HrNotifications} allowedRoles={["hr"]} />}
         </Route>

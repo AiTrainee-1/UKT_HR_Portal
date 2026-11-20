@@ -180,17 +180,18 @@ class EventsReachThePhoneTests(TestCase):
         self.assertNotIn("*", n.message)
 
     def test_whatsapp_controls_wording_never_reaches_the_phone_and_the_phones_never_reaches_whatsapp(self):
-        from .models import PushTemplate, WhatsAppMessageTemplate
+        from .models import PushTemplate
+        from .tests_whatsapp_support import make_template
 
-        WhatsAppMessageTemplate.objects.create(
-            document_type="late_alert", message_body="*WA ONLY*\nWA text {{late_by}}"
-        )
+        # WhatsApp's wording is its approved Meta template (WhatsApp Control -> Templates)
+        make_template("hrms_late_alert", "*WA ONLY* WA text {{late_by}}")
         PushTemplate.objects.create(key="late_alert", title="PHONE ONLY", body="Phone text {{late_by}}")
         whatsapp_service.send_notification(self.emp, "late_alert", {"late_by": "15 minutes"}, dedupe_key="late:x")
         n = Notification.objects.get(employee=self.emp)
         self.assertEqual((n.title, n.message), ("PHONE ONLY", "Phone text 15 minutes"))
-        text, _ = whatsapp_service._message_for("late_alert", {"late_by": "15 minutes"})
-        self.assertEqual(text, "*WA ONLY*\nWA text 15 minutes")
+        choice = whatsapp_service.template_for("late_alert")
+        text = whatsapp_service.render_template_text(choice, {"late_by": "15 minutes"})
+        self.assertEqual(text, "*WA ONLY* WA text 15 minutes")
 
     def test_it_also_goes_out_when_hr_switched_the_whatsapp_message_off(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"outpass_notifications_enabled": False})

@@ -1,14 +1,31 @@
 """
 The catalog of every WhatsApp message the HRMS can send.
 
-    HRMS module -> notification service -> TEMPLATE (this file) -> queue -> provider -> employee
+    HRMS module -> notification service -> TYPE (this file) -> queue -> Meta template -> employee
 
 One entry per message type says what it is called, which HRMS module it belongs
 to, which switch on the WhatsApp Control page turns it off, its default wording
 and which {{variables}} that wording may use. Everything else -the control page,
-the template editor, the message log, the on/off checks, the send queue- reads this
+the template drafts, the message log, the on/off checks, the send queue- reads this
 catalog, so adding a new notification is one entry here plus one call to
 `whatsapp_service.send_notification` from the module that raises it.
+
+Meta WhatsApp Cloud API (2026-11-20, whatsappintegrationsetup.md §7.2). A business may start a WhatsApp conversation
+with an APPROVED Meta template only, so every type also names the template it goes out as:
+
+  meta_template   "" = `hrms_<key>`; a name where the guide's table gives another one (hrms_otp, hrms_document,
+                  hrms_punch_reminder, hrms_visitor_at_reception, hrms_gate_out, hrms_gate_in); "-" = never sent
+                  through Meta (the description says why). HR can point a type at another approved template
+                  (WhatsAppSettings.template_overrides).
+  meta_header     "document" for the PDFs, "image" for the ID card: the file travels in the template's header.
+  meta_category   UTILITY for everything about an employee's own work; AUTHENTICATION for the three one-time codes,
+                  which share ONE copy-code template `hrms_otp` (Meta writes its words itself).
+
+The default wording below is what WhatsApp Control's "Create template" drafts start from (the sign-off becomes the
+template's footer), and what the message log shows when this server does not have the approved template's text. Meta
+rules it follows: it never starts or ends with a variable, has fixed text around every variable, and each variable is
+ONE line (a caller passes single-line values; whatsapp_cloud.sanitize_param flattens anything else). A template cannot
+drop a line, so an empty optional value is sent as "-".
 
 Each type also says how the send queue treats it (whatsapp_dispatcher.py):
 
@@ -22,19 +39,19 @@ Each type also says how the send queue treats it (whatsapp_dispatcher.py):
   freshness   minutes after it was raised that it is still worth sending (None: until the end of the
               day). Nothing is ever sent after the end of the day it was raised on (IST).
 
-Wording uses {{name}} placeholders. Older types also accept the numbered form
-({{1}}, {{2}} ...) that HR's already-saved wording was written with: the number is
-the variable's position in `variables`, so the ORDER of a legacy type's
-variables must never change (append new ones at the end).
+Wording uses {{name}} placeholders. The numbered form ({{1}}, {{2}} ...) still works (a
+positional template HR made by hand at Meta): the number is the variable's position in
+`variables`, so the ORDER of a type's variables must never change (append new ones at the end).
 
-A line whose placeholders are all empty is dropped when a message is rendered,
-so optional details ("Note: {{comment}}") simply vanish when there is nothing to
-say instead of leaving an empty label behind.
+When the catalog wording itself is rendered (the log of a message whose template text this
+server does not have), a line whose placeholders are all empty is dropped, so optional
+details ("Note: {{comment}}") vanish instead of leaving an empty label behind.
 
 The default wordings were reviewed on 2026-11-06 to look like a company writing to its own
 staff, not a bulk sender: short, plain, no emojis or capitals, no motivational lines, signed
 "- UK Textiles HR", no link in an automatic message (only the Geo punch decisions carry a map
-link). Wording HR saved on the Message Text tab is never touched.
+link). The wording HR once saved on the old Message Text tab is no longer sent: with Meta the
+wording IS the approved template.
 
 No message carries a link to the Employee Web App (the owner does not want one), and the
 placeholder that used to hold it is gone: see RETIRED_VARIABLES for how wording HR saved
@@ -131,7 +148,7 @@ class MessageType:
     switch: str | None = None
     # A one-time code that is missing from the wording would be a message nobody can log in with.
     must_contain_code: bool = False
-    # Messages with no editable wording (a contact card carries no text).
+    # A type with no wording of its own, so no template draft (the retired visitor contact card).
     has_wording: bool = True
     description: str = ""
     # The send queue (module docstring). Filled in by _add from the module when not given.
@@ -141,10 +158,25 @@ class MessageType:
     fresh_minutes: int | None = None
     # A WhatsAppSettings column holding the freshness in minutes instead (a punch reminder: its lead window).
     fresh_setting: str | None = None
+    # Meta WhatsApp Cloud API (2026-11-20). Every business-started message goes out as an APPROVED Meta template.
+    # meta_template: the template's name ("" = the default f"hrms_{key}"; "-" = this type is not sent through Meta at
+    # all, e.g. the retired visitor contact card); HR may point a type at another template (WhatsAppSettings.
+    # template_overrides). meta_header: "" | "document" | "image" (a document / photo travels in the template's header).
+    # meta_category: UTILITY for everything about an employee's own work, AUTHENTICATION for the one-time codes.
+    meta_template: str = ""
+    meta_header: str = ""
+    meta_category: str = "UTILITY"
 
     @property
     def variable_names(self) -> list[str]:
         return [v.name for v in self.variables]
+
+    @property
+    def default_template_name(self) -> str | None:
+        """The Meta template this type is sent as unless HR chose another one; None = not sent through Meta."""
+        if self.meta_template == "-":
+            return None
+        return self.meta_template or f"hrms_{self.key}"
 
 
 def V(name: str, help: str, sample: str) -> Variable:
@@ -170,13 +202,14 @@ SIGN = "- UK Textiles HR"
 # "link" was the Employee Web App address of the request in the two approval messages.
 RETIRED_VARIABLES = frozenset({"link"})
 
-# ── Documents (the wording is a caption; the file itself is attached) ─────────
+# ── Documents (the wording is a caption; the file travels in the template's header) ─────────
 
 _add(
     key="salary_slip",
     label="Salary Slip",
     module="documents",
     description="The salary slip PDF, sent with a short caption.",
+    meta_header="document",
     body=f"*Salary Slip*\n\nDear {{{{employee_name}}}},\nYour salary slip for {{{{month_year}}}} is attached.\n\n{SIGN}",
     variables=(V("employee_name", "Employee name", "Asha Kumar"), V("month_year", "Month and year", "August 2026")),
 )
@@ -185,6 +218,7 @@ _add(
     label="ID Card",
     module="documents",
     description="The employee ID card image, sent with a short caption.",
+    meta_header="image",
     body=f"*Employee ID Card*\n\nDear {{{{employee_name}}}},\nYour employee ID card is attached.\n\n{SIGN}",
     variables=(V("employee_name", "Employee name", "Asha Kumar"),),
 )
@@ -193,6 +227,7 @@ _add(
     label="Offer Letter",
     module="documents",
     description="The offer letter PDF, sent with a short caption.",
+    meta_header="document",
     body=(
         f"*Offer Letter*\n\nDear {{{{employee_name}}}},\nYour offer letter for the position of {{{{designation}}}} "
         f"is attached.\n\n{SIGN}"
@@ -207,6 +242,7 @@ _add(
     label="Experience Letter",
     module="documents",
     description="The experience letter PDF, sent with a short caption.",
+    meta_header="document",
     body=f"*Experience Letter*\n\nDear {{{{employee_name}}}},\nYour experience letter is attached.\n\n{SIGN}",
     variables=(V("employee_name", "Employee name", "Asha Kumar"),),
 )
@@ -215,6 +251,7 @@ _add(
     label="Resignation Letter",
     module="documents",
     description="The resignation letter PDF, sent with a short caption.",
+    meta_header="document",
     body=(
         f"*Resignation Letter*\n\nDear {{{{employee_name}}}},\nYour resignation letter is attached.\n"
         f"Last working day: {{{{last_working_day}}}}\n\n{SIGN}"
@@ -228,7 +265,12 @@ _add(
     key="other",
     label="Other Document",
     module="documents",
-    description="Any other employee document HR sends from the Documents page.",
+    description=(
+        "Any other employee document HR sends from the Documents page (a photo of a document goes as a one-page PDF: "
+        "a document header carries files, not pictures)."
+    ),
+    meta_template="hrms_document",
+    meta_header="document",
     body=f"*Document*\n\nDear {{{{employee_name}}}},\nYour {{{{document_category}}}} document is attached.\n\n{SIGN}",
     variables=(
         V("employee_name", "Employee name", "Asha Kumar"),
@@ -237,11 +279,16 @@ _add(
 )
 
 # ── OTP & login (the code is never stored in the history; sent at once, never queued) ───
+# All three go as ONE Meta AUTHENTICATION template, `hrms_otp` (category Authentication -> Copy code): Meta writes its
+# text itself ("123456 is your verification code. For your security, do not share this code. This code expires in 5
+# minutes.") and the code is both its body parameter and its copy button's. The wording below is only what the log and
+# a hand-made (non-authentication) template HR points a type at would use.
 
 _CODE_VARS = (
     V("code", "The 6-digit code (keep it in the text)", "123456"),
     V("minutes", "Minutes until the code expires", "5"),
 )
+OTP_TEMPLATE = "hrms_otp"
 _add(
     key="otp_login",
     label="Login OTP",
@@ -249,6 +296,8 @@ _add(
     description="The code an employee enters to sign in to the apps.",
     switch="otp_login_enabled",
     must_contain_code=True,
+    meta_template=OTP_TEMPLATE,
+    meta_category="AUTHENTICATION",
     body="{{1}} is your UK Textiles HRMS login code. It expires in {{2}} minutes.\n\nNever share this code with anyone.",
     variables=_CODE_VARS,
 )
@@ -259,6 +308,8 @@ _add(
     description="The code that confirms a forgotten-password reset.",
     switch="otp_reset_enabled",
     must_contain_code=True,
+    meta_template=OTP_TEMPLATE,
+    meta_category="AUTHENTICATION",
     body=(
         "{{1}} is your UK Textiles HRMS password reset code. It expires in {{2}} minutes.\n\n"
         "If you didn't ask to reset your password, ignore this message and tell HR."
@@ -272,6 +323,8 @@ _add(
     description="The code that confirms a new employee before they choose a first password.",
     switch="otp_activate_enabled",
     must_contain_code=True,
+    meta_template=OTP_TEMPLATE,
+    meta_category="AUTHENTICATION",
     body=(
         "{{1}} is your UK Textiles HRMS account activation code. It expires in {{2}} minutes.\n\n"
         "Enter it in the app to set your password. Never share this code with anyone."
@@ -347,6 +400,7 @@ _add(
     ),
     switch="four_punch_alert_enabled",
     fresh_setting="four_punch_lead_minutes",
+    meta_template="hrms_punch_reminder",
     body=(
         "*Punch Reminder*\n\n"
         "Dear {{employee_name}},\n"
@@ -434,27 +488,36 @@ _add(
 
 # ── Approvals: one Approved and one Rejected wording for every workflow ────────
 
-# Attendance Notify (owner 2026-11-17, /hr/attendance/attendance-notify): the attendance reports HR schedules (Absent, CL,
-# On Leave, Permission, Compensation counts and the employee list, and a PDF with photos). They go to numbers HR typed
-# in and to WhatsApp groups, not to an employee, through the same paced queue as everything else. Module "other": no
-# module switch, so the attendance alerts' switch does not stop them; their own switch does.
+# Attendance Notify (owner 2026-11-17, /hr/attendance/attendance-notify): the attendance reports HR schedules. They go to
+# numbers HR typed in, not to an employee, through the same paced queue as everything else. Module "other": no module
+# switch, so the attendance alerts' switch does not stop them; their own switch does.
+# With Meta (2026-11-20) a report is ONE template message per number: the counts on one line ("Absent 4, CL 2, On Leave
+# 1"). The employee list and the PDF with photos go by Gmail or the internal chat; WhatsApp groups can't be reached by a
+# template, so a group recipient is skipped with the reason.
 _add(
     key="attendance_report",
     label="Attendance Report (Attendance Notify)",
     module="other",
     kind=KIND_DOCUMENT,
-    # the text is built by Attendance Notify (counts and the employee list), not from a wording saved here
-    has_wording=False,
     description=(
-        "The attendance reports scheduled on Attendance -> Attendance Notify (summary counts, the employee list and a "
-        "PDF with photos), sent to the numbers and groups chosen there."
+        "The attendance reports scheduled on Attendance -> Attendance Notify, sent to the numbers chosen there: the "
+        "report's name, its date and the counts on one line (the employee list and the PDF go by Gmail or chat)."
     ),
-    body="{{message}}",
+    body=(
+        "*Attendance Report*\n\n"
+        "Report: {{report_title}}\n"
+        "Date: {{date}}\n"
+        "Summary: {{summary}}\n\n"
+        "The employee list is in the UK Textiles HRMS.\n"
+        f"{SIGN}"
+    ),
     variables=(
+        V("report_title", "The automation's name, the employees it covers and the branch", "Morning absentees (Staff)"),
+        V("date", "The report's date or dates, with the time for a report about today", "17 Nov 2026, as of 09:30"),
         V(
-            "message",
-            "The report as built by Attendance Notify",
-            "*Attendance report - 17 Nov 2026*\nStaff\n\nAbsent: 4\nCL: 2\nOn Leave: 1\nPermission: 3\nCompensation: 0",
+            "summary",
+            "Each category's count on one line, and how many employees are in the report",
+            "Absent 4, CL 2, On Leave 1 (7 of 250 employees)",
         ),
     ),
 )
@@ -508,9 +571,6 @@ _add(
     ),
     variables=_APPROVAL_VARS,
 )
-# The reminder to a Department Head about the requests waiting for their approval (HR Requests page -> Notify,
-# hod_reminders.py). Its wording is written on the Notify tab (the same text goes by WhatsApp, email and phone
-# notification), so the message here is just that text; wording saved here can wrap it.
 # ── Department Heads (2026-11-17): what a head is told about the requests that wait for THEM ──────────────────────
 
 # A request reached a Department Head's step (submitted, or passed on to them): whatsapp_hod.request_waiting, called
@@ -550,6 +610,10 @@ _add(
         V("requested_on", "When it was submitted", "24 Sep 2026"),
     ),
 )
+# The reminder to a Department Head about the requests waiting for their approval (HR Requests page -> Notify,
+# hod_reminders.py): it keeps the schedule and the recipients set there. The wording HR writes on that tab goes by email
+# and phone notification; WhatsApp sends this approved template, with the pending list on one line
+# ("Leave 2, Permission 1": a template variable cannot hold several lines).
 _add(
     key="hod_pending_reminder",
     label="HoD Pending Approvals Reminder",
@@ -557,19 +621,19 @@ _add(
     kind=KIND_AUTOMATIC,
     description=(
         "Reminds a Department Head of the requests waiting for their approval, at the times HR set on Requests -> "
-        "Notify. The text itself is written on that tab."
+        "Notify, with the pending requests on one line (Leave 2, Permission 1)."
     ),
-    body="{{message}}",
+    body=(
+        "*Pending Approvals*\n\n"
+        "Dear {{hod_name}},\n"
+        "You have {{total}} request(s) waiting for your approval as of {{date}}: {{pending_list}}.\n"
+        "Kindly review and approve them in the UK Textiles app at the earliest.\n"
+        f"{SIGN}"
+    ),
     variables=(
-        V(
-            "message",
-            "The reminder written on Requests -> Notify, filled in for this Department Head",
-            "Dear Suresh Kumar,\nYou currently have some pending requests awaiting your approval in the UK Textiles "
-            "HRMS application.\nPending requests:\n• Leave Requests: 3\n• Permission Requests: 1\nKindly review and "
-            "approve the pending requests at the earliest.\nRegards,\nHR Team – UKT",
-        ),
-        V("name", "The Department Head's name", "Suresh Kumar"),
+        V("hod_name", "The Department Head's name", "Suresh Kumar"),
         V("total", "How many requests are waiting for them", "4"),
+        V("pending_list", "The pending requests by kind, on one line", "Leave 3, Permission 1"),
         V("date", "Today's date", "04 Nov 2026"),
     ),
 )
@@ -598,7 +662,7 @@ _add(
         V("destination", "The destination they requested", "Tirupur Dyeing Unit"),
         V("requested_on", "When they requested it", "25 Sep 2026, 9:10 AM"),
         V("approved_by", "Who approved it", "Meena"),
-        V("note", "The approver's note, already worded as a line (older wording)", "\nNote: Take the van"),
+        V("note", "The approver's note with its label (older wording)", "Note: Take the van"),
         V("comment", "The approver's note", "Take the van"),
     ),
 )
@@ -659,7 +723,7 @@ _add(
         V("time", "Punch time", "9:12 AM"),
         V("location", "A map link to where it was captured", "https://maps.google.com/?q=11.1,77.3"),
         V("approved_by", "Who approved it", "Meena"),
-        V("comment", "The approver's note", ""),
+        V("comment", "The approver's note, if given", "Location confirmed"),
     ),
 )
 _add(
@@ -698,8 +762,11 @@ _add(
     key="visitor_notification",
     label="Visitor Notification",
     module="visitors",
-    description="Tells an employee who has arrived at reception to meet them, and why.",
+    description=(
+        "Tells an employee who has arrived at reception to meet them, and why, with the visitor's phone number."
+    ),
     fresh_minutes=30,
+    meta_template="hrms_visitor_at_reception",
     body=(
         "*Visitor at Reception*\n\n"
         "Dear {{employee_name}},\n"
@@ -729,13 +796,19 @@ _add(
         V("why_came", "Why they came, as written on the form", "Vendor"),
     ),
 )
+# Retired with the Meta WhatsApp Cloud API (2026-11-20): a template message cannot carry a contact card, and a business
+# may start a conversation with a template only. Kept so older log rows still have a name.
 _add(
     key="visitor_contact",
     label="Visitor Contact Card",
     module="visitors",
-    description="The visitor's contact card, sent right after the visitor message so the employee can tap to call.",
+    description=(
+        "No longer sent: the official WhatsApp Cloud API can't start a conversation with a contact card. The visitor's "
+        "phone number is a line of the Visitor Notification instead."
+    ),
     has_wording=False,
     fresh_minutes=30,
+    meta_template="-",
     body="",
 )
 
@@ -761,6 +834,7 @@ _add(
     module="outpass",
     description="Sent when the gate records an employee going out (a verified outpass scan, or a gate QR form entry).",
     fresh_minutes=30,
+    meta_template="hrms_gate_out",
     body=(
         "*Gate Exit Recorded*\n\n"
         "Dear {{employee_name}},\n"
@@ -783,6 +857,7 @@ _add(
     module="outpass",
     description="Sent when the gate records an employee coming back in, with the time they were out.",
     fresh_minutes=30,
+    meta_template="hrms_gate_in",
     body=(
         "*Gate Return Recorded*\n\n"
         "Dear {{employee_name}},\n"

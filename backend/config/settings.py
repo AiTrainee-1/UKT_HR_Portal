@@ -341,26 +341,38 @@ if not JWT_SECRET:
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 
-# WAClient (WhatsApp Web API) credentials -.env only, same rule as ADMIN_*
-# above: never stored in the database, never editable from the UI. See
-# api/whatsapp_service.py for how these are consumed. The instance ID and
-# access token come from the WAClient dashboard (app.waclient.com); the
-# instance is the WhatsApp number linked there by QR code.
-WACLIENT_INSTANCE_ID = os.environ.get("WACLIENT_INSTANCE_ID", "").strip()
-WACLIENT_ACCESS_TOKEN = os.environ.get("WACLIENT_ACCESS_TOKEN", "").strip()
-WACLIENT_API_URL = os.environ.get("WACLIENT_API_URL", "https://api.waclient.com/send").strip()
-# Contact cards (the visitor's "tap to call" card) go to a sibling endpoint of /send.
-WACLIENT_CONTACT_API_URL = (
-    os.environ.get("WACLIENT_CONTACT_API_URL", "").strip()
-    or (WACLIENT_API_URL[: -len("/send")] if WACLIENT_API_URL.endswith("/send") else WACLIENT_API_URL) + "/send_contact"
-)
-# `manage.py test` must never send a real WhatsApp message: a developer's .env
-# holds live credentials, and several tests create employees with real-looking
-# phone numbers and exercise the notification paths. Blank credentials make every
-# send fail as "not configured" (the tests that need the API mock it explicitly).
+# Meta WhatsApp Cloud API (2026-11-20) -.env only, same rule as ADMIN_* above: never stored in the
+# database, never editable from the UI, never returned by an endpoint (WhatsApp Control -> Settings shows only whether
+# each one is set). See api/whatsapp_cloud.py (the Graph API client) and whatsappintegrationsetup.md (where each value
+# comes from in Meta Business / the developer app).
+#   PHONE_NUMBER_ID / BUSINESS_ACCOUNT_ID  the sending number's id and the WhatsApp Business Account (WABA) id
+#   ACCESS_TOKEN       the permanent system-user token (secret)
+#   APP_SECRET         the app's secret (App settings -> Basic): checks the webhook's X-Hub-Signature-256 (secret)
+#   WEBHOOK_VERIFY_TOKEN  a random string also typed into the app's webhook settings (Meta's one-time verification)
+#   API_VERSION        the Graph API version, e.g. v23.0;  TEMPLATE_LANGUAGE  the templates' language code, e.g. en
+#   API_BASE           https://graph.facebook.com (host only). Tests and the e2e stack point it at a local fake
+#                      (frontend/e2e/fake-meta.mjs); plain http is refused for anything but a local address.
+WHATSAPP_CLOUD_API_BASE = (
+    os.environ.get("WHATSAPP_CLOUD_API_BASE", "").strip() or "https://graph.facebook.com"
+).rstrip("/")
+WHATSAPP_CLOUD_API_VERSION = os.environ.get("WHATSAPP_CLOUD_API_VERSION", "").strip() or "v23.0"
+WHATSAPP_CLOUD_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_CLOUD_PHONE_NUMBER_ID", "").strip()
+WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID = os.environ.get("WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID", "").strip()
+WHATSAPP_CLOUD_ACCESS_TOKEN = os.environ.get("WHATSAPP_CLOUD_ACCESS_TOKEN", "").strip()
+WHATSAPP_CLOUD_APP_SECRET = os.environ.get("WHATSAPP_CLOUD_APP_SECRET", "").strip()
+WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN = os.environ.get("WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN", "").strip()
+WHATSAPP_CLOUD_TEMPLATE_LANGUAGE = os.environ.get("WHATSAPP_CLOUD_TEMPLATE_LANGUAGE", "").strip() or "en"
+# Optional: the Meta app's id. Only WhatsApp Control -> Templates uses it, to upload the sample file a document / ID card
+# template needs (Resumable Upload API); blank = the app the access token belongs to (GET /app). See whatsapp_templates.py.
+WHATSAPP_CLOUD_APP_ID = os.environ.get("WHATSAPP_CLOUD_APP_ID", "").strip()
+# `manage.py test` must never reach Meta: a developer's .env holds live credentials, and several tests create employees
+# with real-looking phone numbers and exercise the notification paths. A blank token makes every send fail as "not
+# configured", and blank webhook secrets refuse every webhook call (the tests that need them set them and mock HTTP).
 if len(sys.argv) > 1 and sys.argv[1] == "test":
-    WACLIENT_INSTANCE_ID = ""
-    WACLIENT_ACCESS_TOKEN = ""
+    WHATSAPP_CLOUD_ACCESS_TOKEN = ""
+    WHATSAPP_CLOUD_APP_SECRET = ""
+    WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN = ""
+    WHATSAPP_CLOUD_APP_ID = ""  # the template tests set it themselves
 WHATSAPP_DEFAULT_COUNTRY_CODE = os.environ.get("WHATSAPP_DEFAULT_COUNTRY_CODE", "91").strip()
 # No longer read (2026-11-06): the pause between WhatsApp messages is the send queue's min_gap_seconds, set on the
 # WhatsApp Control page (whatsapp_dispatcher.py). Kept so an existing .env that sets it changes nothing.
@@ -374,8 +386,8 @@ WHATSAPP_ALLOW_SENDING = (_allow_sending in ("1", "true", "yes")) if _allow_send
 # LOCAL DEVELOPMENT ONLY: the only employees (by employee code, comma separated) a development machine may send WhatsApp
 # to (2026-11-17). REQUIRED on a development machine that is allowed to send (WHATSAPP_ALLOW_SENDING=true while DEBUG is
 # on or under runserver): with no list, such a machine sends nothing. Every send (notifications, documents, codes, test
-# messages, Attendance Notify numbers and groups) is checked against these employees' phone numbers at the moment it would
-# reach WAClient. IGNORED everywhere except `manage.py runserver` (whatsapp_service.local_dev_server): production
+# messages, Attendance Notify numbers) is checked against these employees' phone numbers at the moment it would reach
+# Meta. IGNORED everywhere except `manage.py runserver` (whatsapp_service.local_dev_server): production
 # (gunicorn / waitress / Railway) always messages every eligible employee, even if this variable is set there.
 WHATSAPP_ONLY_TO_EMPLOYEES = [
     c.strip() for c in os.environ.get("WHATSAPP_ONLY_TO_EMPLOYEES", "").split(",") if c.strip()
@@ -391,8 +403,8 @@ if len(sys.argv) > 1 and sys.argv[1] == "test":
     EMAIL_ALLOW_SENDING = False
 
 # SMS one-time codes (api/twofactor_client.py, api/sms_service.py): 2Factor.in carries the codes (login, forgot password,
-# account activation) when HR picks the SMS channel on the SMS Control page. The API key and the template name are
-# .env-only, same rule as WACLIENT_* above: never stored in the database, never returned by any endpoint, never in a log.
+# account activation) while HR has SMS codes switched on (SMS Control); SMS is used for nothing else. The API key and the
+# template name are .env-only: never stored in the database, never returned by any endpoint, never in a log.
 # NOTE: 2Factor's API puts the API key in the URL path, so the client redacts it everywhere (see twofactor_client.py).
 TWOFACTOR_API_KEY = os.environ.get("TWOFACTOR_API_KEY", "").strip()
 # The approved DLT template's NAME (2Factor panel -> SMS -> Templates). 2Factor replaces XXXX in its text with our code.
@@ -407,12 +419,19 @@ SMS_COUNTRY_CODE = os.environ.get("SMS_COUNTRY_CODE", "").strip() or WHATSAPP_DE
 # server, never on a development machine; true / false forces it).
 _allow_sms = os.environ.get("SMS_ALLOW_SENDING", "").strip().lower()
 SMS_ALLOW_SENDING = (_allow_sms in ("1", "true", "yes")) if _allow_sms else None
+# LOCAL DEVELOPMENT ONLY (2026-11-20): the only employees (employee codes, comma separated) `manage.py runserver` may text,
+# exactly like WHATSAPP_ONLY_TO_EMPLOYEES. REQUIRED on a development machine that is allowed to send (SMS_ALLOW_SENDING=true):
+# with no list such a machine sends nothing (a local fake 2Factor of the e2e stack is exempt). Every code and test SMS is
+# checked against these employees' numbers right before it would reach 2Factor. IGNORED everywhere except runserver
+# (sms_service.local_dev_server): production texts every employee who asks for a code, even if this is set there.
+SMS_ONLY_TO_EMPLOYEES = [c.strip() for c in os.environ.get("SMS_ONLY_TO_EMPLOYEES", "").split(",") if c.strip()]
 # `manage.py test` must never send a real SMS: a developer's .env may hold the live key. Blank credentials make every
 # send "not configured" (the tests that need the send path set them and mock the HTTP call explicitly).
 if len(sys.argv) > 1 and sys.argv[1] == "test":
     TWOFACTOR_API_KEY = ""
     TWOFACTOR_TEMPLATE_NAME = ""
     SMS_ALLOW_SENDING = False
+    SMS_ONLY_TO_EMPLOYEES = []  # tests set it themselves (a developer's .env names their own employee)
 # Upper guard on how many AUTOMATIC attendance alerts the alert job may QUEUE (since 2026-11-06 the real pacing is the
 # send queue's: WhatsApp Control -> limits, whatsapp_dispatcher.py). A crowd who share a punch time (a hundred people on
 # the same shift) is queued over the reminder window (15 minutes by default) instead of in one burst: each minute's
@@ -424,8 +443,6 @@ if len(sys.argv) > 1 and sys.argv[1] == "test":
 WHATSAPP_ALERTS_MAX_PER_RUN = int(os.environ.get("WHATSAPP_ALERTS_MAX_PER_RUN", "8") or 0)
 WHATSAPP_ALERTS_MAX_PER_HOUR = int(os.environ.get("WHATSAPP_ALERTS_MAX_PER_HOUR", "200") or 0)
 WHATSAPP_ALERTS_MAX_PER_DAY = int(os.environ.get("WHATSAPP_ALERTS_MAX_PER_DAY", "700") or 0)
-# Optional shared secret for the WAClient webhook URL (?token=...). Empty = open.
-WHATSAPP_WEBHOOK_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_TOKEN", "").strip()
 
 # True (the default): every WhatsApp message but a one-time code is QUEUED and sent by the paced dispatcher
 # (whatsapp_dispatcher.py: gap, hourly / daily / per-employee caps, quiet hours, today-only expiry), so nobody waits on
@@ -439,12 +456,10 @@ if len(sys.argv) > 1 and sys.argv[1] == "test":
 # .env that sets it changes nothing.
 WHATSAPP_MIN_SEND_GAP_SECONDS = float(os.environ.get("WHATSAPP_MIN_SEND_GAP_SECONDS", "1") or 0)
 
-# Optional override for the public origin WAClient's servers use to fetch a
-# document/image media asset (whatsapp_service._media_url) -only needed if
-# the backend sits behind a proxy/tunnel where the request's own Host header
-# isn't the real public one. Mirrors FRONTEND_URL's identical fallback
-# pattern (see growth_views._public_base_url); left unset, the request's own
-# origin is used, which is correct for this project's on-premise Nginx setup.
+# Optional override for this backend's public origin (the WhatsApp webhook address WhatsApp Control shows, absolute
+# employee photo links) -only needed if the backend sits behind a proxy/tunnel where the request's own Host header
+# isn't the real public one. Mirrors FRONTEND_URL's identical fallback pattern (see growth_views._public_base_url);
+# left unset, the request's own origin is used, which is correct for this project's on-premise Nginx setup.
 BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "").strip()
 
 # Security headers -safe defaults regardless of DEBUG/HTTPS setup.

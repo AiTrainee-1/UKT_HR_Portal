@@ -141,8 +141,9 @@ class ReadTests(SettingsBase):
         self.assertEqual(b["windows"], {"enabled": False})
         self.assertEqual(b["holidayWork"], {"enabled": False})
         self.assertEqual(plain(b["birthday"]), {"enabled": False, "effectiveFrom": None})
-        # the claim workflow: its effective date (read-only) and the plain explanations
-        self.assertEqual(set(b["claims"]), {"from", "fromText", "help"})
+        # the claim workflow: its effective date (forward only: minFrom, the earliest a PUT accepts) and the plain
+        # explanations
+        self.assertEqual(set(b["claims"]), {"from", "fromText", "help", "minFrom"})
         self.assertEqual(b["claims"]["from"], str(base.OLD_RULES_UNTIL))
         for group, key in (("allowance", "help"), ("birthday", "help"), ("shift", "quarterRuleHelp")):
             self.assertTrue(b[group][key].startswith("From the claims date on"), group)

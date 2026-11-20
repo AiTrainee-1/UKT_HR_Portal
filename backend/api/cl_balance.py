@@ -127,10 +127,11 @@ def new_rule_birthdays(candidates) -> set[tuple[int, date]]:
     """{(employee id, date)} of the (employee id, date of birth, employment type, date) candidates whose date is the
     employee's birthday under the NEW birthday rule (compensation_engine.birthday_rule: master + birthday switch on,
     on/after the birthday effective date and CompensationConfig.claims_from, active staff, not before joining, not an off
-    day) AND that was not worked: nobody punched that day (correctness review 2026-11-19). A Casual Leave on such a day
-    is a paid birthday leave and uses no balance; on a WORKED birthday it counts like any Casual Leave (the worked
+    day) AND that was not worked (compensation_effects.worked_days: the day's punches as the attendance engine reads them,
+    or a manual presence row) AND that gave no approved birthday credit. A Casual Leave on such a day is a paid birthday
+    leave and uses no balance; on a WORKED birthday (or one already credited) it counts like any Casual Leave (the worked
     birthday gives its own credit to claim instead). No query unless a date of birth matches a candidate date (then the
-    switches, those employees and their punches of those days are read)."""
+    switches, those employees, their punches of those days and their birthday claims are read)."""
     from .compensation_rules import is_birthday
 
     matched = [
@@ -156,16 +157,24 @@ def new_rule_birthdays(candidates) -> set[tuple[int, date]]:
     }
     if not new_rule:
         return set()
-    from .models import AttendanceLog
+    from .compensation_effects import worked_days
+    from .models import HolidayWorkClaim
 
-    worked = set(
-        AttendanceLog.objects.filter(
-            employee_id__in={emp_id for emp_id, _d in new_rule}, date__in={d for _e, d in new_rule}
-        )
-        .values_list("employee_id", "date")
-        .distinct()
+    # "worked" the way the attendance engine reads the day (verification 2026-11-19, correctness #1 / #2): a birthday
+    # whose only punch closes the previous night is NOT worked (paid birthday leave, so its Casual Leave is free); a
+    # Casual Leave day the employee then came in on IS worked
+    worked = worked_days([(employees[emp_id], d) for emp_id, d in new_rule])
+    # a birthday already turned into an APPROVED credit (worked, then its punches were corrected away) is never also a
+    # free Casual Leave day: one benefit per birthday (the same check as attendance_final._approved_birthday_credit)
+    credited = set(
+        HolidayWorkClaim.objects.filter(
+            kind=HolidayWorkClaim.KIND_BIRTHDAY,
+            status=HolidayWorkClaim.STATUS_APPROVED,
+            employee_id__in={emp_id for emp_id, _d in new_rule},
+            work_date__in={d for _e, d in new_rule},
+        ).values_list("employee_id", "work_date")
     )
-    return new_rule - worked
+    return new_rule - worked - credited
 
 
 def is_hr_edit_cl(cl) -> bool:

@@ -5,6 +5,7 @@ import { DataTable, type DataColumn } from "./DataTable";
 import { DateRangeFilter } from "./DateRangeFilter";
 import { DetailDrawer, DrawerFields, DrawerSection } from "./DetailDrawer";
 import { SearchFilter } from "./FilterBar";
+import { StatTile } from "./StatTile";
 import { StatusChip, toneOf } from "./StatusChip";
 import { TimeBar } from "./TimeBar";
 
@@ -323,5 +324,42 @@ describe("StatusChip and TimeBar", () => {
     rerender(createElement(TimeBar, { minutes: 9, allowed: 15, running: true, testId: "bar" }));
     expect(el.querySelector('[data-testid="bar"]')!.getAttribute("data-tone")).toBe("amber");
     expect(text(el.querySelector('[data-testid="bar"]'))).toBe("9 min so far");
+  });
+});
+
+describe("StatTile", () => {
+  const Icon = ({ size }: { size?: number; className?: string }) => <svg width={size} height={size} />;
+
+  it("cuts a long label and hint with an ellipsis by default, the hint under its own test id", () => {
+    const el = mount(<StatTile label="Waiting for HOD" value={4} hint="1.50 in · 0.50 out" icon={Icon} testId="t" />);
+    expect(el.querySelector('[data-testid="t-label"]')!.className).toContain("truncate");
+    const hint = el.querySelector('[data-testid="t-hint"]')!;
+    expect(text(hint)).toBe("1.50 in · 0.50 out");
+    expect(hint.className).toContain("truncate");
+    expect(el.querySelector('[aria-hidden="true"]')!.className).not.toContain("max-sm:size-6");
+  });
+
+  it("wraps the label and the hint when asked, with a smaller icon and plain letter spacing on a phone", () => {
+    const el = mount(
+      <StatTile
+        label="Waiting for HOD"
+        value={4}
+        hint="1.50 in · 0.50 out"
+        icon={Icon}
+        wrapLabel
+        wrapHint
+        testId="t"
+      />,
+    );
+    const label = el.querySelector('[data-testid="t-label"]')!;
+    expect(label.className).not.toContain("truncate");
+    expect(label.className).toContain("break-words");
+    expect(label.className).toContain("max-sm:tracking-normal");
+    expect(el.querySelector('[aria-hidden="true"]')!.className).toContain("max-sm:size-6");
+    const hint = el.querySelector('[data-testid="t-hint"]')!;
+    expect(hint.className).not.toContain("truncate");
+    expect(hint.className).toContain("break-words");
+    // the hint may go onto its own line under the number
+    expect(hint.parentElement!.className).toContain("flex-wrap");
   });
 });

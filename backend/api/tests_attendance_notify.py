@@ -1,7 +1,8 @@
 """
 Attendance Notify (owner 2026-11-17): the report (from the Report Log's own day engine), validation, the schedule and its
-exactly-once slots, sending through WhatsApp (numbers and groups, the paced queue), Gmail (To / CC / BCC, photos, PDF)
-and the internal chat, retries, and the API.
+exactly-once slots, sending through WhatsApp (ONE approved Meta template per number with the counts on one line, the
+paced queue; groups refused / skipped: Meta's templates cannot reach them), Gmail (To / CC / BCC, photos, PDF) and the
+internal chat, retries, and the API. Meta's Graph API is always faked (FakeMeta).
 
 Run via: python manage.py test api.tests_attendance_notify --keepdb
 """
@@ -36,27 +37,20 @@ from .models import (
     ShiftTemplate,
     WhatsAppMessageLog,
 )
+from .tests_whatsapp_caller_support import assert_template_variables, sent_text
+from .tests_whatsapp_support import META, NO_META, FakeMeta, approve_templates
 
 DAY = date(2026, 11, 10)  # a Tuesday
 NEXT_MORNING = datetime(2026, 11, 11, 9, 31)  # naive IST
 ALL = list(rpt.CATEGORIES)
 
 SENDING = dict(
-    WACLIENT_INSTANCE_ID="INST1",
-    WACLIENT_ACCESS_TOKEN="tok",
-    WHATSAPP_ALLOW_SENDING=True,
+    **META,
     EMAIL_ALLOW_SENDING=True,
     WHATSAPP_SEND_DELAY_SECONDS=0,
-    WHATSAPP_DEFAULT_COUNTRY_CODE="91",
     BACKEND_PUBLIC_URL="https://api.example.com",
 )
 SMTP = "api.email_service.smtplib.SMTP"
-
-
-def _wa_ok():
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message_payload": {"key": {"id": "WAID"}}}
-    return r
 
 
 def bearer(user) -> dict:
@@ -238,9 +232,12 @@ class ValidationTests(World):
         self.bad("recipients", channel="email", recipients={"cc": ["a@b.in"]})
         self.bad("recipients", channel="chat", recipients={"channelIds": [999999]})
 
-    def test_groups_email_and_chat(self):
-        f = self.ok(recipients={"groups": [{"id": "120363001@g.us", "name": "HO"}]})
-        self.assertEqual(f["recipients"]["groups"], [{"id": "120363001@g.us", "name": "HO"}])
+    def test_groups_are_refused_email_and_chat(self):
+        # Meta's templates cannot reach a WhatsApp group: a group is refused with the reason, numbers still work
+        with self.assertRaises(notify.Invalid) as ctx:
+            self.ok(recipients={"numbers": ["9876543210"], "groups": [{"id": "120363001@g.us", "name": "HO"}]})
+        self.assertEqual((ctx.exception.field, str(ctx.exception)), ("recipients", notify.GROUPS_REFUSED))
+        self.assertEqual(self.ok()["recipients"]["groups"], [])
         f = self.ok(channel="email", recipients={"to": ["a@b.in", "A@b.in"], "cc": ["c@d.in"], "bcc": ["e@f.in"]})
         self.assertEqual((f["recipients"]["to"], f["recipients"]["cc"]), (["a@b.in"], ["c@d.in"]))
         ch = ChatChannel.get_company_channel(None)
@@ -295,9 +292,8 @@ class ScheduleTests(World):
 class SendTests(World):
     def setUp(self):
         super().setUp()
-        self.post = mock.patch("requests.post", return_value=_wa_ok())
-        self.wa = self.post.start()
-        self.addCleanup(self.post.stop)
+        self.meta = FakeMeta.install(self)  # Meta's Graph API, faked: nothing leaves the machine
+        approve_templates("attendance_report")
         smtp = mock.patch(SMTP)
         self.smtp = smtp.start()
         self.addCleanup(smtp.stop)
@@ -325,39 +321,69 @@ class SendTests(World):
         status = notify.process_run(run.pk)
         return run, status
 
-    def test_whatsapp_numbers_and_groups_through_the_queue(self):
-        a = self.automation(
-            "whatsapp",
-            {"numbers": [{"value": "9876543210", "label": "HR"}], "groups": [{"id": "120363001@g.us", "name": "HO"}]},
-        )
+    def test_whatsapp_one_template_message_per_number_through_the_queue(self):
+        a = self.automation("whatsapp", {"numbers": [{"value": "9876543210", "label": "HR"}]})
         run, status = self.go(a)
         self.assertEqual(status, "done", list(run.deliveries.values_list("status", "note")))
-        bodies = [c.kwargs["json"] for c in self.wa.call_args_list]
-        self.assertEqual({b.get("number") for b in bodies if "number" in b}, {"919876543210"})
-        self.assertEqual({b.get("chat_id") for b in bodies if "chat_id" in b}, {"120363001@g.us"})
+        self.assertEqual(len(self.meta.sent), 1)  # the summary, once: no list, no second part
+        sent = self.meta.last()
+        self.assertEqual((sent["to"], sent["template"]), ("919876543210", "hrms_attendance_report"))
+        assert_template_variables(self, sent, "attendance_report")
+        self.assertEqual(sent["params"]["report_title"], "Absentees (All employees)")
+        self.assertEqual(sent["params"]["date"], "10 Nov 2026")
+        self.assertEqual(
+            sent["params"]["summary"],
+            "Absent 2, CL 1, On Leave 1, On Duty 1, Permission 1, Compensation 0 (6 of 6 employees)",
+        )
         logs = WhatsAppMessageLog.objects.filter(document_ref_id=run.pk)
-        self.assertEqual(logs.count(), 4)  # summary + list, to each
-        self.assertTrue(all(log.employee_id is None for log in logs))
-        self.assertEqual(set(logs.values_list("recipient_label", flat=True)), {"HR", "HO"})
+        self.assertEqual(logs.count(), 1)
+        log = logs.get()
+        self.assertIsNone(log.employee_id)
+        self.assertEqual((log.recipient_label, log.template_name), ("HR", "hrms_attendance_report"))
+        self.assertEqual(log.message_text, sent_text(sent))
         self.assertEqual(set(run.deliveries.values_list("status", flat=True)), {"sent"})
         # exactly once: the same key again queues nothing new
         d = run.deliveries.first()
         again = wa.queue_to_recipient(
             d.recipient, "x", recipient_label="HR", dedupe_key=notify.dedupe_key(run, d, 0), document_ref_id=run.pk
         )
-        self.assertEqual(again.pk, logs.order_by("id").first().pk)
-        self.assertEqual(WhatsAppMessageLog.objects.filter(document_ref_id=run.pk).count(), 4)
+        self.assertEqual(again.pk, log.pk)
+        self.assertEqual(WhatsAppMessageLog.objects.filter(document_ref_id=run.pk).count(), 1)
 
-    def test_whatsapp_photos_go_as_one_pdf_and_the_connected_number(self):
+    def test_a_group_an_older_automation_still_lists_is_skipped_with_the_reason(self):
+        a = self.automation("whatsapp", {"numbers": [{"value": "9876543210", "label": "HR"}]})
+        a.recipients = {**a.recipients, "groups": [{"id": "120363001@g.us", "name": "HO"}]}  # saved before 2026-11-20
+        a.save()
+        self.assertIn("1 group (not sent)", notify.recipient_summary("whatsapp", a.recipients))
+        run, status = self.go(a)
+        self.assertEqual(status, "partial")
+        group = run.deliveries.get(kind="group")
+        self.assertEqual((group.status, group.note), ("skipped", wa.REASON_NO_GROUPS))
+        self.assertEqual(run.deliveries.get(kind="number").status, "sent")
+        self.assertEqual([m["to"] for m in self.meta.sent], ["919876543210"])
+        self.assertFalse(WhatsAppMessageLog.objects.filter(phone_number="120363001@g.us").exists())
+
+    def test_whatsapp_sends_no_pdf_the_photos_go_by_gmail_and_the_connected_number_gets_the_summary(self):
         AttendanceNotifySettings.objects.update_or_create(pk=1, defaults={"connected_number": "9000000001"})
         a = self.automation("whatsapp", {"connected": True}, includePhotos=True, content="detailed")
         run, status = self.go(a)
         self.assertEqual(status, "done")
-        kinds = [c.kwargs["json"]["type"] for c in self.wa.call_args_list]
-        self.assertEqual(kinds, ["text", "document"])
-        doc = self.wa.call_args_list[-1].kwargs["json"]
-        self.assertTrue(doc["media_url"].startswith("https://api.example.com/api/whatsapp/media/"))
+        self.assertEqual(self.meta.templates_sent, ["hrms_attendance_report"])
+        self.assertEqual(self.meta.uploads, [])  # a template carries the summary line, not a file
+        self.assertEqual(self.meta.last()["to"], "919000000001")
         self.assertEqual(run.deliveries.get().kind, "connected")
+
+    def test_without_an_approved_template_the_number_is_skipped_with_the_reason(self):
+        approve_templates("attendance_report", status="REJECTED")
+        self.assertFalse(notify.channel_status()["whatsapp"]["available"])
+        self.assertIn("hrms_attendance_report", notify.channel_status()["whatsapp"]["note"])
+        a = self.automation("whatsapp", {"numbers": [{"value": "9876543210", "label": "HR"}]})
+        run, status = self.go(a)
+        self.assertEqual(status, "skipped")
+        d = run.deliveries.get()
+        self.assertEqual(d.status, "skipped")
+        self.assertIn("hrms_attendance_report", d.note)
+        self.assertEqual(self.meta.sent, [])
 
     def test_connected_number_not_set_is_skipped(self):
         a = self.automation("whatsapp", {"connected": True, "numbers": [{"value": "9876543210"}]})
@@ -495,6 +521,31 @@ class ApiTests(World):
         kept = AttendanceNotifyRun.objects.get()
         self.assertEqual((kept.automation_id, kept.automation_name), (None, "Renamed"))
 
+    def test_a_whatsapp_preview_is_the_one_template_message(self):
+        approve_templates("attendance_report")
+        res = self.client.post(
+            f"{self.URL}/preview",
+            self.body(
+                channel="whatsapp",
+                reportType="custom",
+                dateFrom=str(DAY),
+                content="both",
+                includePhotos=True,
+                recipients={"numbers": ["9876543210"]},
+            ),
+            content_type="application/json",
+            **self.h,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual(len(body["messages"]), 1)
+        text = body["messages"][0]["text"]
+        self.assertTrue(text.startswith("*Attendance Report*"), text)
+        self.assertIn("Report: Morning absentees (Staff)", text)
+        self.assertIn("Date: 10 Nov 2026", text)
+        self.assertIn("Summary: Absent 1, CL 1 (", text)
+        self.assertTrue(any("summary line only" in w for w in body["warnings"]))
+
     def test_preview_snapshot_lists_settings_and_channels(self):
         res = self.client.post(
             f"{self.URL}/preview",
@@ -534,9 +585,10 @@ class ApiTests(World):
         self.assertEqual(s.json()["connectedNumber"], "919876543210")
         names = [c["name"] for c in self.client.get(f"{self.URL}/chat-channels", **self.h).json()["items"]]
         self.assertIn("Company (no branch)", names)
-        with override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN=""):
-            groups = self.client.get(f"{self.URL}/whatsapp-groups", {"refresh": "1"}, **self.h).json()
-        self.assertFalse(groups["supported"])
+        for config in (NO_META, META):  # never offered, configured or not: Meta's templates cannot reach a group
+            with override_settings(**config):
+                groups = self.client.get(f"{self.URL}/whatsapp-groups", {"refresh": "1"}, **self.h).json()
+            self.assertEqual(groups, {"supported": False, "groups": [], "note": wa.REASON_NO_GROUPS, "fetchedAt": None})
 
     def test_a_branch_login_sees_its_own_automations(self):
         from .models import Role
@@ -549,9 +601,12 @@ class ApiTests(World):
         self.assertEqual(items, [])
 
     @override_settings(**SENDING)
-    def test_whatsapp_control_lists_a_message_to_a_group(self):
-        with mock.patch("requests.post", return_value=_wa_ok()):
-            wa.queue_to_recipient("120363001@g.us", "hello", recipient_label="HO group", dedupe_key="t:1")
+    def test_whatsapp_control_lists_a_refused_message_to_a_group(self):
+        meta = FakeMeta.install(self)
+        approve_templates("attendance_report")
+        log = wa.queue_to_recipient("120363001@g.us", "hello", recipient_label="HO group", dedupe_key="t:1")
+        self.assertEqual((log.status, log.error_message), ("skipped", wa.REASON_NO_GROUPS))
+        self.assertEqual(meta.sent, [])
         res = self.client.get("/api/whatsapp-control/messages", **self.h)
         self.assertEqual(res.status_code, 200, res.content)
         body = res.json()

@@ -197,13 +197,13 @@ const heading = (text: string) => `main :is(h1, h2):has-text("${text}")`;
 const OTHER_PAGES: PageSpec[] = [
   { name: "reports: catalog", path: "/hr/reports", ready: 'a[href*="?report="]' },
   {
-    name: "reports: employee master",
-    path: "/hr/reports?report=employee-master&run=1",
+    name: "reports: employee overall details",
+    path: "/hr/reports?report=employee-overall-details&run=1",
     ready: '[data-testid="report-show"]',
   },
   {
-    name: "reports: audit log (date ranges)",
-    path: "/hr/reports?report=audit-log",
+    name: "reports: leave report (date ranges)",
+    path: "/hr/reports?report=leave-report",
     ready: '[data-testid="report-show"]',
   },
   { name: "recruitment dashboard", path: "/hr/recruitment/dashboard", ready: heading("Recruitment Dashboard") },
@@ -346,7 +346,7 @@ test("Report Center: one brand tile for every category, grey dots, flat tags", a
 test("Report Center: the downloads are neutral buttons, the quick ranges small chips, the drop-downs wear the field's border", async ({
   page,
 }) => {
-  await open(page, "clean", "/hr/reports?report=audit-log");
+  await open(page, "clean", "/hr/reports?report=leave-report");
   await expect(page.getByTestId("report-show")).toBeVisible();
   for (const id of ["report-download-pdf", "report-download-xlsx"]) {
     const button = `[data-testid="${id}"]`;
@@ -379,7 +379,7 @@ test("Report Center: the downloads are neutral buttons, the quick ranges small c
 });
 
 test("Report Center: a report with rows has neutral download buttons", async ({ page }) => {
-  await open(page, "clean", "/hr/reports?report=employee-master&run=1");
+  await open(page, "clean", "/hr/reports?report=employee-overall-details&run=1");
   await expect(page.locator('[data-slot="table-row"], tbody tr').first()).toBeVisible();
   for (const id of ["report-download-pdf", "report-download-xlsx"]) {
     await expect(page.getByTestId(id)).toBeEnabled();
@@ -487,7 +487,7 @@ test("the same pages in the default theme keep the look they always had", async 
     parseFloat((await styleOf(page, 'a[href^="#cat-"]', ["border-top-left-radius"]))["border-top-left-radius"]),
   ).toBeGreaterThan(1000);
 
-  await open(page, "default", "/hr/reports?report=audit-log");
+  await open(page, "default", "/hr/reports?report=leave-report");
   await expect(page.getByTestId("report-show")).toBeVisible();
   expect(
     parseFloat(

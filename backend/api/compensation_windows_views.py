@@ -45,8 +45,10 @@ The list (GET) filters, all optional and combined with AND (the old parameters k
   * status: upcoming (today and later), past (before today) or all (the default); `upcoming=1` still means upcoming;
   * page / pageSize: only when either is sent, the answer is that page of the list (pageSize 1 to 200, default 25) and
     also carries `total`, `page`, `pageSize`; without them the old `limit` (default 200, at most 500) applies as before.
-`canDelete` on each row: a late-in / early-out window, of any date, the caller may edit Compensation, its month is not
-finalized, and (for a branch-scoped user) it is their own branch's.
+`canDelete` on each row: a late-in / early-out window or an older Compensation Day (kind "day"), of any date, the caller
+may edit Compensation, its month is not finalized, and (for a branch-scoped user) it is their own branch's;
+`deleteBlockedReason` says why not (null when it can). DELETE /api/compensation/windows/<id> removes a "day" row the same
+way as a window (payroll-lock check, attendance re-derived for today / a past day, covered staff told, audited).
 
 The legacy /api/compensation/leave-days routes are untouched: they keep creating and listing the old "day exemption" kind.
 Both routes read and write the same table, so rows made here also appear in the legacy list (with no `kind` field there).
@@ -88,6 +90,9 @@ KIND_LABEL = {
     CompensationDayAnnouncement.KIND_DAY: "Day exemption",
 }
 WINDOW_KINDS = (CompensationDayAnnouncement.KIND_LATE_IN, CompensationDayAnnouncement.KIND_EARLY_OUT)
+# What DELETE /api/compensation/windows/<id> removes: the windows and the older "Compensation Day" (day exemption) rows,
+# which nothing else could remove once their day had come (verification 2026-11-19)
+DELETABLE_KINDS = (*WINDOW_KINDS, CompensationDayAnnouncement.KIND_DAY)
 
 
 def announce_month(today: date) -> tuple[date, date]:
@@ -231,12 +236,21 @@ def window_json(
     covers = covers_count(ann, table)
     if locked is None:
         locked = locked_months()
-    deletable = (
-        may_edit
-        and ann.kind in WINDOW_KINDS
-        and (ann.date.year, ann.date.month) not in locked
-        and owns(ann, scope_branch)
-    )
+    blocked = None
+    if not may_edit:
+        blocked = "You can view Compensation but not change it."
+    elif ann.kind not in DELETABLE_KINDS:
+        blocked = "This announcement cannot be removed."
+    elif (ann.date.year, ann.date.month) in locked:
+        from .payroll_month_workflow import month_label
+
+        blocked = (
+            f"Payroll for {month_label(ann.date.month, ann.date.year)} is done, so this announcement can no longer be "
+            "removed."
+        )
+    elif not owns(ann, scope_branch):
+        blocked = "This announcement belongs to the whole company or another branch: only its owner can remove it."
+    deletable = blocked is None
     return {
         "id": ann.id,
         "date": ann.date.isoformat(),
@@ -255,6 +269,8 @@ def window_json(
         "announcedBy": ann.announced_by,
         "createdAt": ann.created_at.isoformat() if ann.created_at else None,
         "canDelete": deletable,
+        # why canDelete is false (a plain sentence for the button's title), null when it is true (added 2026-11-19)
+        "deleteBlockedReason": blocked,
     }
 
 
@@ -548,7 +564,7 @@ def compensation_window_detail(request: Request, pk: int) -> Response:
     ann = (
         CompensationDayAnnouncement.objects.select_related("branch", "department")
         .prefetch_related("employees")
-        .filter(pk=pk, kind__in=WINDOW_KINDS)
+        .filter(pk=pk, kind__in=DELETABLE_KINDS)
         .first()
     )
     if ann is None:

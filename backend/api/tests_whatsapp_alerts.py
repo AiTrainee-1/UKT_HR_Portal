@@ -1,4 +1,6 @@
-"""Automatic WhatsApp attendance alerts, punch reminders and Geo Attendance messages. WAClient is always mocked.
+"""Automatic WhatsApp attendance alerts, punch reminders and Geo Attendance messages. Meta's Graph API is always faked
+(FakeMeta): every alert goes out as its approved template (approve_templates: the catalog wording as the template body),
+and Expo pushes made on the way are answered by their own fake.
 
 Punches in these tests are written through the SAME path the biometric device uses
 (biometric_sync._ingest_punches), which also writes the legacy Attendance presence row for everyone who punches. Tests
@@ -12,6 +14,7 @@ from unittest import mock
 
 from django.conf import settings
 from django.core.management import call_command
+import requests
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
@@ -39,6 +42,8 @@ from .models import (
     WhatsAppSettings,
 )
 from .shift_engine import _t2s
+from .tests_whatsapp_caller_support import assert_template_variables, sent_texts
+from .tests_whatsapp_support import META, NO_META, FakeMeta, approve_templates, make_template
 from .whatsapp_alerts import (
     QUOTES,
     collapse_taps,
@@ -51,12 +56,7 @@ from .whatsapp_alerts import (
     slot_is_pending,
 )
 
-CONFIG = dict(
-    WACLIENT_INSTANCE_ID="INST1234",
-    WACLIENT_ACCESS_TOKEN="tok",
-    WHATSAPP_DEFAULT_COUNTRY_CODE="91",
-    WHATSAPP_SEND_DELAY_SECONDS=0,
-)
+CONFIG = dict(**META, WHATSAPP_SEND_DELAY_SECONDS=0)
 
 WED = date(2026, 9, 23)  # an ordinary working Wednesday
 SAT = date(2026, 9, 26)
@@ -73,10 +73,25 @@ def hm(text: str) -> time:
     return time(*parts)
 
 
-def _ok(msg_id="WAID"):
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message_payload": {"key": {"id": msg_id}}}
-    return r
+def _expo_ok(*_args, **kwargs):
+    messages = kwargs.get("json") or []
+    data = [{"status": "ok", "id": f"t{i}"} for i in range(len(messages) if isinstance(messages, list) else 1)]
+    return mock.Mock(ok=True, status_code=200, json=lambda: {"data": data})
+
+
+def install_fakes(test) -> FakeMeta:
+    """Meta's Graph API (FakeMeta, every catalog type's template approved) and Expo's push API, both on requests.post:
+    routed by address. Sets test.meta and test.expo."""
+    test.meta = FakeMeta.install(test)
+    approve_templates()
+    test.expo = mock.Mock(side_effect=_expo_ok)
+    meta_post = requests.post.side_effect  # FakeMeta's handler (requests.post is FakeMeta's patch now)
+
+    def route(url, *args, **kwargs):
+        return (test.expo if "exp.host" in str(url) else meta_post)(url, *args, **kwargs)
+
+    requests.post.side_effect = route
+    return test.meta
 
 
 def _switches(**kw):
@@ -104,9 +119,7 @@ class AlertBase(TestCase):
         self.shift = self.make_shift("Day", "09:00", "18:00", grace=15, lunch_out="13:00", lunch_minutes=60)
         self.emp = self.make_employee("A1", "Asha", "Kumar")
         _switches()
-        patcher = mock.patch("api.whatsapp_service.requests.post", return_value=_ok())
-        self.post = patcher.start()
-        self.addCleanup(patcher.stop)
+        install_fakes(self)
 
     def make_shift(self, name, start, end, grace=15, lunch_out=None, lunch_minutes=60):
         return ShiftTemplate.objects.create(
@@ -150,7 +163,10 @@ class AlertBase(TestCase):
         return run_attendance_alerts(now=at(d, h, m))
 
     def sent_texts(self):
-        return [c.kwargs["json"]["message"] for c in self.post.call_args_list]
+        """What each employee read, in order: the approved template's body with the variables Meta was given."""
+        for record in self.meta.sent:
+            assert_template_variables(self, record)
+        return sent_texts(self.meta)
 
     def logs(self, doc_type=None):
         qs = WhatsAppMessageLog.objects.all()
@@ -170,9 +186,9 @@ class MasterSwitchTests(AlertBase):
             missing_punch_alert_enabled=False,
         )
         self.assertEqual(self.run_at(WED, 10), {})
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
-    @override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN="")
+    @override_settings(**NO_META)
     def test_nothing_happens_when_whatsapp_is_not_configured(self):
         self.assertEqual(self.run_at(WED, 10), {})
         self.assertFalse(self.logs().exists())
@@ -189,7 +205,7 @@ class MasterSwitchTests(AlertBase):
         WhatsAppSettings.objects.filter(pk=1).update(attendance_alerts_enabled=False)
         for h, m in ((8, 55), (9, 41), (9, 20), (10, 0), (18, 30)):
             self.assertEqual(self.run_at(WED, h, m), {})
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
 
 class HelperTests(SimpleTestCase):
@@ -396,7 +412,7 @@ class ThirtyZeroTwentyRegressionTests(AlertBase):
             "Due right now: late_alert (late)",
         ):
             self.assertIn(expected, text)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         self.assertFalse(self.logs().exists())
         # once it has gone out the trace says so
         self.run_at(SAT, 9, 20)
@@ -461,7 +477,7 @@ class AbsentAlertTests(AlertBase):
         ):
             self.assertIn(expected, text)
         self.assertNotIn("marked as *Absent*", text)
-        self.assertEqual(self.post.call_args.kwargs["json"]["number"], "919000000001")
+        self.assertEqual(self.meta.last()["to"], "919000000001")
 
     def test_each_employee_is_judged_against_their_own_shift(self):
         early = self.make_shift("Early", "06:00", "14:00", grace=10)
@@ -474,13 +490,13 @@ class AbsentAlertTests(AlertBase):
     def test_sent_exactly_once_per_day_however_often_the_job_runs(self):
         for m in (0, 1, 2, 5, 10, 15, 20, 45):
             self.run_at(WED, 10, m)
-        self.assertEqual(self.post.call_count, 1)
+        self.assertEqual(len(self.meta.sent), 1)
         self.assertEqual(self.logs("absent_alert").get().dedupe_key, f"absent:{WED.isoformat()}:{self.emp.id}")
 
     def test_not_sent_again_the_next_day_is_a_new_message(self):
         self.run_at(WED, 10)
         self.run_at(date(2026, 9, 24), 10)
-        self.assertEqual(self.post.call_count, 2)
+        self.assertEqual(len(self.meta.sent), 2)
 
     def test_not_sent_once_the_shift_is_over(self):
         self.assertEqual(self.run_at(WED, 18, 0), {})
@@ -783,8 +799,9 @@ class LateAlertTests(AlertBase):
         self.assertEqual(self.run_at(WED, 10), {})
 
 
-# The punch reminder's default wording before 2026-11-06. HR's own saved wording may still look like this: every variable
-# (greeting, action, quote, closing ...) is still filled in, so these tests run with it saved on the Message Text tab.
+# The punch reminder's default wording before 2026-11-06. A template HR made at Meta may still look like this: every
+# variable (greeting, action, quote, closing ...) is still filled in, so these tests run with it as the APPROVED template
+# of the reminder (hrms_punch_reminder).
 LEGACY_REMINDER_WORDING = (
     "{{greeting}}, {{employee_name}} \U0001f31f\n\n"
     "Just a friendly reminder: {{action}}\n\n"
@@ -798,16 +815,17 @@ LEGACY_REMINDER_WORDING = (
 
 class PunchReminderTests(AlertBase):
     """A friendly heads-up 5 minutes before each punch is expected, only if that punch is still missing. Run with the
-    pre-2026-11-06 wording saved by HR, which uses every variable the reminder offers."""
+    pre-2026-11-06 wording as the approved Meta template, which uses every variable the reminder offers."""
 
     def setUp(self):
         super().setUp()
         _switches(absent_alert_enabled=False, late_alert_enabled=False, missing_punch_alert_enabled=False)
-        WhatsAppMessageTemplate.objects.create(document_type="four_punch_alert", message_body=LEGACY_REMINDER_WORDING)
+        make_template("hrms_punch_reminder", LEGACY_REMINDER_WORDING, message_type="four_punch_alert")
 
     def test_the_default_wording_is_short_and_plain(self):
-        WhatsAppMessageTemplate.objects.all().delete()
+        approve_templates("four_punch_alert")  # the template as WhatsApp Control drafts it: the catalog wording
         self.assertEqual(self.run_at(WED, 8, 55), {"four_punch_alert": 1})
+        self.assertEqual(self.meta.last()["template"], "hrms_punch_reminder")
         self.assertEqual(
             self.sent_texts()[0],
             "*Punch Reminder*\n\nDear Asha Kumar,\nYour Morning check-in (1 of 4) is due at 9:00 AM, in 5 minutes. "
@@ -841,7 +859,7 @@ class PunchReminderTests(AlertBase):
             WhatsAppMessageLog.objects.all().delete()
             AttendanceLog.objects.all().delete()
             Attendance.objects.all().delete()
-            self.post.reset_mock()
+            self.meta.sent.clear()
             self.punch(self.emp, WED, *punches)
             self.assertEqual(self.run_at(WED, h, m), {"four_punch_alert": 1}, name)
             text = self.sent_texts()[0]
@@ -879,7 +897,7 @@ class PunchReminderTests(AlertBase):
     def test_sent_once_however_often_the_job_runs(self):
         for m in range(55, 60):
             self.run_at(WED, 8, m)
-        self.assertEqual(self.post.call_count, 1)
+        self.assertEqual(len(self.meta.sent), 1)
         self.assertEqual(self.tags_sent(), ["four1"])
 
     def test_not_sent_after_the_punch_time_has_passed(self):
@@ -1142,12 +1160,8 @@ class MissingPunchAlertTests(AlertBase):
         )
         self.assertEqual(self.run_at(WED, 9, 30), {})
 
-    def test_wording_hr_saved_before_punches_were_judged_one_by_one_still_works(self):
-        from .models import WhatsAppMessageTemplate
-
-        WhatsAppMessageTemplate.objects.create(
-            document_type="missing_punch_alert", message_body="{{employee_name}}: {{recorded}} in, {{missing}} to go"
-        )
+    def test_a_template_using_the_variables_from_before_punches_were_judged_one_by_one_still_gets_them(self):
+        make_template("hrms_missing_punch_alert", "{{employee_name}}: {{recorded}} in, {{missing}} to go")
         self.punch(self.emp, WED, "09:00")
         self.run_at(WED, 13, 20)
         self.assertEqual(self.sent_texts(), ["Asha Kumar: 1 of 4 in, Lunch-out, Lunch-in, Evening check-out to go"])
@@ -1245,7 +1259,7 @@ class EnvironmentGuardTests(AlertBase):
         self.assertFalse(whatsapp_service.is_configured())
         self.assertIn("development setup", whatsapp_service.sending_block_reason())
         self.assertEqual(self.run_at(WED, 10), {})
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         self.assertFalse(self.logs().exists())
 
     @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=False)
@@ -1253,14 +1267,14 @@ class EnvironmentGuardTests(AlertBase):
         self.assertTrue(whatsapp_service.sending_allowed())
         self.assertIsNone(whatsapp_service.sending_block_reason())
         self.assertTrue(self.run_at(WED, 10))
-        self.assertTrue(self.post.called)
+        self.assertTrue(self.meta.sent)
 
     @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=False)
     def test_running_under_runserver_counts_as_development(self):
         with mock.patch("api.whatsapp_service.sys.argv", ["manage.py", "runserver"]):
             self.assertFalse(whatsapp_service.sending_allowed())
             self.assertEqual(self.run_at(WED, 10), {})
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
     def test_it_can_be_forced_either_way(self):
         with override_settings(WHATSAPP_ALLOW_SENDING=True, DEBUG=True):
@@ -1272,17 +1286,17 @@ class EnvironmentGuardTests(AlertBase):
     @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=True)
     def test_even_a_direct_send_is_refused_at_the_last_step(self):
         with self.assertRaises(whatsapp_service.WhatsAppServiceError):
-            whatsapp_service._post_send({"type": "text", "number": "919000000001", "message": "hi"})
-        self.post.assert_not_called()
+            whatsapp_service.deliver_template("919000000001", "absent_alert", {"employee_name": "Asha"})
+        self.assertEqual(self.meta.calls, [])  # not even an upload or a lookup reached Meta
 
     @override_settings(WHATSAPP_ALLOW_SENDING=None, DEBUG=True)
     def test_a_person_sending_by_hand_is_told_why_it_didnt_go(self):
-        _phone, text, failed = whatsapp_service._precheck(self.emp, "absent_alert", None, None, {})
+        _phone, text, _choice, failed = whatsapp_service._precheck(self.emp, "absent_alert", None, None, {})
         self.assertIsNone(text)
         self.assertIn("development setup", failed.error_message)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
-    @override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN="")
+    @override_settings(**NO_META)
     def test_missing_credentials_still_say_so(self):
         self.assertIn("not configured", whatsapp_service.sending_block_reason())
 
@@ -1392,7 +1406,7 @@ class ProviderFailureBreakerTests(AlertBase):
         with self.assertLogs("api.whatsapp_alerts", level="WARNING") as captured:
             self.assertEqual(self.run_at(WED, 10), {})
         self.assertIn("paused", "\n".join(captured.output))
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
     def test_two_are_not_enough(self):
         self.failed(2)
@@ -1430,7 +1444,7 @@ class AlertsAreQueuedTests(AlertBase):
             self.assertEqual(self.run_at(WED, 10, 0), {"absent_alert": 1})
         log = self.logs("absent_alert").get()
         self.assertEqual((log.status, log.kind), ("queued", "automatic"))
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         # due at 10:00 (9:00 + the 60-minute window), useful for an hour after that
         self.assertEqual(log.expires_at, datetime.combine(WED, time(11, 0), tzinfo=FACTORY_TZ))
         # the next minute's run does not queue it again
@@ -1464,7 +1478,7 @@ class FifteenMinuteLeadTests(AlertBase):
         self.assertIn("in 15 minutes", self.sent_texts()[0])
         for m in range(46, 60):
             self.run_at(WED, 8, m)
-        self.assertEqual(self.post.call_count, 1)  # once, however many minutes the window lasts
+        self.assertEqual(len(self.meta.sent), 1)  # once, however many minutes the window lasts
         self.assertEqual(self.run_at(WED, 9, 0), {})
 
     def test_the_lunch_reminder_starts_a_quarter_of_an_hour_ahead_too(self):
@@ -1518,25 +1532,26 @@ class DeliveryAndLoggingTests(AlertBase):
         super().setUp()
         _switches(late_alert_enabled=False, four_punch_alert_enabled=False, missing_punch_alert_enabled=False)
 
-    def test_a_sent_alert_is_logged_with_its_text_and_provider_id(self):
+    def test_a_sent_alert_is_logged_with_its_text_template_and_wamid(self):
         self.run_at(WED, 10)
         log = self.logs("absent_alert").get()
-        self.assertEqual((log.status, log.provider_message_id, log.phone_number), ("sent", "WAID", "919000000001"))
+        sent = self.meta.last()
+        self.assertEqual(
+            (log.status, log.provider_message_id, log.phone_number, log.template_name),
+            ("sent", sent["id"], "919000000001", "hrms_absent_alert"),
+        )
+        self.assertTrue(log.provider_message_id.startswith("wamid."))
         self.assertIn("Asha Kumar", log.message_text)
+        self.assertEqual(log.message_text, self.sent_texts()[0])
 
     def test_a_provider_error_is_logged_and_not_retried_all_day(self):
-        self.post.return_value = mock.Mock(
-            status_code=200,
-            content=b"x",
-            text="",
-            json=lambda: {"status": "error", "message": "Instance not connected"},
-        )
+        self.meta.fail(131026, "Message undeliverable", times=5)
         self.run_at(WED, 10)
         self.run_at(WED, 10, 5)
         log = self.logs("absent_alert").get()
         self.assertEqual(log.status, "failed")
-        self.assertIn("Instance not connected", log.error_message)
-        self.assertEqual(self.post.call_count, 1)
+        self.assertIn("131026", log.error_message)
+        self.assertEqual(len([c for c in self.meta.calls if c["path"].endswith("/messages")]), 1)
 
     def test_an_employee_without_a_phone_gets_a_failed_row_not_a_send(self):
         Employee.objects.filter(pk=self.emp.pk).update(phone="")
@@ -1544,28 +1559,46 @@ class DeliveryAndLoggingTests(AlertBase):
         log = self.logs("absent_alert").get()
         self.assertEqual(log.status, "failed")
         self.assertIn("No phone number", log.error_message)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
     def test_the_reservation_is_what_makes_a_message_exactly_once(self):
         first = whatsapp_service.send_notification(self.emp, "absent_alert", ["A", "d", "t"], dedupe_key="k:1")
         second = whatsapp_service.send_notification(self.emp, "absent_alert", ["A", "d", "t"], dedupe_key="k:1")
         self.assertIsNotNone(first)
         self.assertIsNone(second)
-        self.assertEqual(self.post.call_count, 1)
+        self.assertEqual(len(self.meta.sent), 1)
 
-    def test_a_type_switched_off_in_message_settings_is_skipped_silently(self):
-        from .models import WhatsAppMessageTemplate
-
-        WhatsAppMessageTemplate.objects.create(document_type="absent_alert", is_enabled=False)
+    def test_a_type_switched_off_on_whatsapp_control_is_skipped_silently(self):
+        WhatsAppSettings.objects.filter(pk=1).update(disabled_message_types=["absent_alert"], absent_alert_enabled=True)
         self.assertEqual(self.run_at(WED, 10), {})
         self.assertFalse(self.logs().exists())
 
-    def test_hr_can_reword_an_alert(self):
-        from .models import WhatsAppMessageTemplate
+    def test_the_retired_message_text_switch_no_longer_decides(self):
+        # the old Message Text tab's "off" (and its wording) are not read any more: WhatsApp Control's switches decide
+        WhatsAppMessageTemplate.objects.create(document_type="absent_alert", is_enabled=False, message_body="{{1}}?")
+        self.assertEqual(self.run_at(WED, 10), {"absent_alert": 1})
+        self.assertEqual(self.meta.last()["template"], "hrms_absent_alert")
 
-        WhatsAppMessageTemplate.objects.create(document_type="absent_alert", message_body="{{1}}, where are you?")
+    def test_an_alert_whose_template_is_not_approved_is_logged_skipped_and_nothing_reaches_meta(self):
+        approve_templates("absent_alert", status="PENDING")
         self.run_at(WED, 10)
-        self.assertEqual(self.sent_texts(), ["Asha Kumar, where are you?"])
+        self.run_at(WED, 10, 5)
+        log = self.logs("absent_alert").get()  # once a day, like a sent one
+        self.assertEqual(log.status, "skipped")
+        self.assertIn("hrms_absent_alert", log.error_message)
+        self.assertEqual(self.meta.sent, [])
+
+    def test_hr_can_reword_an_alert_with_another_approved_template(self):
+        make_template(
+            "hrms_absent_short", "Dear {{employee_name}}, where are you? Your shift began at {{shift_start}}."
+        )
+        s = WhatsAppSettings.get()
+        s.template_overrides = {"absent_alert": "hrms_absent_short"}
+        s.save()
+        self.run_at(WED, 10)
+        self.assertEqual(self.meta.last()["template"], "hrms_absent_short")
+        self.assertEqual(self.meta.last()["params"], {"employee_name": "Asha Kumar", "shift_start": "9:00 AM"})
+        self.assertEqual(sent_texts(self.meta), ["Dear Asha Kumar, where are you? Your shift began at 9:00 AM."])
 
 
 @override_settings(**CONFIG)
@@ -1575,15 +1608,15 @@ class GeoApprovalTests(TestCase):
             employee_code="G1", first_name="Ravi", last_name="Nair", phone="9111111111", status="active"
         )
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"geo_approval_enabled": True})
-        patcher = mock.patch("api.whatsapp_service.requests.post", return_value=_ok("GEO1"))
-        self.post = patcher.start()
-        self.addCleanup(patcher.stop)
+        install_fakes(self)
         self.session = OnDutySession.objects.create(
             employee=self.emp, destination="ABC Traders, Coimbatore", status="pending_hr"
         )
 
     def texts(self):
-        return [c.kwargs["json"]["message"] for c in self.post.call_args_list]
+        for record in self.meta.sent:
+            assert_template_variables(self, record)
+        return sent_texts(self.meta)
 
     def test_final_approval_confirms_with_what_the_employee_submitted(self):
         resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", "Carry the sample bag")
@@ -1592,14 +1625,15 @@ class GeoApprovalTests(TestCase):
         for expected in ("Ravi Nair", "approved", "ABC Traders, Coimbatore", "Priya (HR)", "Carry the sample bag"):
             self.assertIn(expected, text)
         self.assertIn(self.session.created_at.astimezone(FACTORY_TZ).strftime("%d %b %Y"), text)
-        self.assertEqual(self.post.call_args.kwargs["json"]["number"], "919111111111")
+        self.assertEqual(self.meta.last()["to"], "919111111111")
         log = WhatsAppMessageLog.objects.get(document_type="geo_approval")
         self.assertEqual((log.status, log.document_ref_id, log.employee_id), ("sent", self.session.id, self.emp.id))
         self.assertEqual(log.dedupe_key, f"geo:{self.session.id}")
 
-    def test_no_note_line_when_the_approver_left_no_comment(self):
+    def test_a_dash_for_the_note_when_the_approver_left_no_comment(self):
         resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", None)
-        self.assertNotIn("Note:", self.texts()[0])
+        self.assertIn("Note: -\n", self.texts()[0])  # a template can't drop the line: "-" for nothing
+        self.assertEqual(self.meta.last()["template"], "hrms_geo_approval")
 
     def test_rejection_by_hr_says_so_with_the_request_details_and_reason(self):
         resolve_on_duty_session_hr(self.session, "rejected", "Priya", "Not needed today")
@@ -1640,17 +1674,17 @@ class GeoApprovalTests(TestCase):
         self.session.status = OnDutySession.STATUS_PENDING_HOD
         self.session.save()
         resolve_on_duty_session_hod(self.session, "approved", "Suresh", None)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
     def test_the_switch_covers_rejections_too(self):
         WhatsAppSettings.objects.filter(pk=1).update(geo_approval_enabled=False)
         resolve_on_duty_session_hr(self.session, "rejected", "Priya", None)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
     def test_the_switch_off_sends_nothing_but_the_approval_still_happens(self):
         WhatsAppSettings.objects.filter(pk=1).update(geo_approval_enabled=False)
         resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", None)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         self.session.refresh_from_db()
         self.assertEqual(self.session.status, OnDutySession.STATUS_ACTIVE)
 
@@ -1661,12 +1695,7 @@ class GeoApprovalTests(TestCase):
         self.assertEqual(self.session.status, OnDutySession.STATUS_ACTIVE)
 
     def test_a_delivery_failure_is_logged_and_the_approval_still_happens(self):
-        self.post.return_value = mock.Mock(
-            status_code=200,
-            content=b"x",
-            text="",
-            json=lambda: {"status": "error", "message": "Instance not connected"},
-        )
+        self.meta.fail(131026, "Message undeliverable")
         resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", None)
         self.assertEqual(WhatsAppMessageLog.objects.get().status, "failed")
         self.session.refresh_from_db()
@@ -1676,7 +1705,7 @@ class GeoApprovalTests(TestCase):
         resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", None)
         with self.assertRaises(ApprovalError):  # the pipeline refuses a second decision on an approved request
             resolve_on_duty_session_hr(self.session, "approved", "Priya (HR)", None)
-        self.assertEqual(self.post.call_count, 1)
+        self.assertEqual(len(self.meta.sent), 1)
 
     def _punch(self):
         self.session.status = OnDutySession.STATUS_ACTIVE
@@ -1724,7 +1753,7 @@ class GeoApprovalTests(TestCase):
             photo="on_duty_punch_verifications/y.jpg",
         )
         resolve_on_duty_punch_hr(v2, "approved", "Priya (HR)", None, notify=False)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
 
 class BirthdayAlertTests(AlertBase):

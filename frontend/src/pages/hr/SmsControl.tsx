@@ -12,10 +12,12 @@ import OverviewTab from "./sms-control/OverviewTab";
 import SettingsTab from "./sms-control/SettingsTab";
 import SetupTab from "./sms-control/SetupTab";
 import TestTab from "./sms-control/TestTab";
+import UsageTab from "./sms-control/UsageTab";
 import { LockContext } from "./sms-control/ui";
 import {
   SETTINGS_SECTIONS,
   SMS_BASE,
+  SMS_OWN_KEYS,
   SMS_TABS,
   cleanSmsPath,
   readSmsPath,
@@ -45,13 +47,18 @@ function onTabKeys(event: KeyboardEvent<HTMLDivElement>) {
 }
 
 /**
- * SMS Control: login, password-reset and activation codes can go by SMS (through 2Factor) instead of WhatsApp, and this is where HR sees
- * and controls that. One page with its tabs in the path (/hr/sms-control/overview, /settings/limits, /messages, /test, /setup):
- * a path that stops early, or names an unknown tab, is replaced by the first one the role may open, and only the tab on screen
- * is rendered, so a tab that is not open asks the server for nothing. Each tab and Settings section has its own permission key
- * (`sms_control.test`, `sms_control.settings.limits`; each follows the one above it while unset): the route guard (App.tsx)
- * turns away the address of a hidden one, this page offers only the ones the role may open, and one the role has as View Only
- * can be looked at but not changed.
+ * SMS Control: the one place SMS is controlled in the HRMS. SMS is used ONLY for one-time codes (sign-in, password reset,
+ * first-time activation) through 2Factor.in, with its own on/off switch: WhatsApp codes are switched on WhatsApp Control and
+ * work on their own, and either one is enough. A change applies at once everywhere, the apps included (they ask the server
+ * which code channels work before every code).
+ *
+ * One page with its tabs in the path (/hr/sms-control/overview, /usage, /settings/switches, /messages, /test, /setup): a path
+ * that stops early, or names an unknown tab, is replaced by the first one the role may open (the retired
+ * /settings/channel opens /settings/switches), and only the tab on screen is rendered, so a tab that is not open asks the
+ * server for nothing. Each tab and Settings section has its own permission key (`sms_control.usage`,
+ * `sms_control.settings.cost`; each follows the one above it while unset): the route guard (App.tsx) turns away the address
+ * of a hidden one, this page offers only the ones the role may open, and one the role has as View Only can be looked at but
+ * not changed.
  */
 export default function SmsControl() {
   const { user } = useAuth();
@@ -81,14 +88,15 @@ export default function SmsControl() {
     <HrLayout>
       <div className="space-y-5" data-testid="sms-control-page">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             {/* the title sits on the layout's own light background, not on a themed surface: a fixed dark ink, as on the
                 WhatsApp and Gmail Control pages */}
             <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900">
               <MessageSquareText size={22} className="text-sky-600" /> SMS Control
             </h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              Send login, password-reset and activation codes by SMS through 2Factor, and see that it is working
+              One-time sign-in codes by SMS through 2Factor: switch them on or off, set the limits, and see the usage
+              and the cost. SMS is used for codes only.
             </p>
           </div>
           <RefreshButton />
@@ -107,6 +115,7 @@ export default function SmsControl() {
                 value={current}
                 testId="sms-subtabs"
                 landing={(next) => (next === "settings" ? visible.sections[0] : undefined)}
+                ownKeys={SMS_OWN_KEYS}
               />
             </div>
 
@@ -117,6 +126,7 @@ export default function SmsControl() {
                 data-testid={`sms-panel-${current}`}
               >
                 {current === "overview" && <OverviewTab />}
+                {current === "usage" && <UsageTab />}
                 {current === "settings" && nested && (
                   <SettingsTab section={nested} readOnly={readOnly} sections={visible.sections} />
                 )}

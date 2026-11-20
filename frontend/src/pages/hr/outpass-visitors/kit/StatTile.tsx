@@ -41,6 +41,7 @@ export function StatTile({
   testId,
   className,
   wrapLabel = false,
+  wrapHint = false,
 }: {
   label: string;
   /** A number is grouped the Indian way (1,240); a string is shown as it is; nothing is a dash. */
@@ -57,8 +58,13 @@ export function StatTile({
   /** The tile's test id; the number carries `<testId>-value`. */
   testId?: string;
   className?: string;
-  /** The label wraps onto a second line instead of being cut with an ellipsis (narrow tiles in a row of many). */
+  /**
+   * The label wraps onto a second line instead of being cut with an ellipsis (narrow tiles in a row of many). On a phone
+   * (below 640 px) the icon is smaller and the letters are not spaced out, so a word fits a 360 px screen whole.
+   */
   wrapLabel?: boolean;
+  /** The hint wraps (onto its own line under the number when it has to) instead of being cut with an ellipsis. */
+  wrapHint?: boolean;
 }) {
   const shown = typeof value === "number" ? fmtCount(value) : (value ?? NONE);
   const body = (
@@ -67,7 +73,7 @@ export function StatTile({
         <p
           className={cn(
             "min-w-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500",
-            wrapLabel ? "break-words leading-snug" : "truncate",
+            wrapLabel ? "break-words leading-snug max-sm:tracking-normal" : "truncate",
           )}
           data-testid={testId ? `${testId}-label` : undefined}
         >
@@ -75,14 +81,18 @@ export function StatTile({
         </p>
         {Icon && (
           <span
-            className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg", ICON_TONE[tone])}
+            className={cn(
+              "flex size-8 shrink-0 items-center justify-center rounded-lg",
+              wrapLabel && "max-sm:size-6",
+              ICON_TONE[tone],
+            )}
             aria-hidden="true"
           >
             <Icon size={16} />
           </span>
         )}
       </div>
-      <div className="mt-1 flex min-w-0 items-baseline gap-2">
+      <div className={cn("mt-1 flex min-w-0 items-baseline gap-2", wrapHint && "flex-wrap gap-y-0.5")}>
         {loading ? (
           <Skeleton className="h-7 w-16" />
         ) : (
@@ -93,7 +103,14 @@ export function StatTile({
             {shown}
           </span>
         )}
-        {hint && !loading && <span className="min-w-0 truncate text-xs text-slate-500">{hint}</span>}
+        {hint && !loading && (
+          <span
+            className={cn("min-w-0 text-xs text-slate-500", wrapHint ? "break-words leading-snug" : "truncate")}
+            data-testid={testId ? `${testId}-hint` : undefined}
+          >
+            {hint}
+          </span>
+        )}
       </div>
     </>
   );

@@ -24,9 +24,9 @@ stored day as it is.
 A 29 February birthday is celebrated on the 28th in a year that has no 29th. Each row says whether the person BENEFITS:
 the master and Birthday switches are on, the day is on or after the feature's effective date (nothing is retroactive) and it
 is a working day for them (a Sunday or a declared holiday is a day off already). A row that does not benefit says why. The
-day's attendance (`attendanceStatus`, `applied`) comes from the stored day record: `applied` is true once the engine has
-marked that day `compensation_kind="birthday"` (paid birthday leave); before that (a day not computed yet) it is
-null/false, never guessed. `outcome` / `outcomeLabel` / `message` / `claim` / `claimable` say what the birthday gives
+day's attendance (`attendanceStatus`) comes from the stored day record; `applied` is true when the birthday IS a paid
+birthday leave: the outcome says paid_leave, or (old rule) the engine marked the day `compensation_kind="birthday"` and HR
+did not set it by hand for less than a full day; before that (a day not computed yet) it is false, never guessed. `outcome` / `outcomeLabel` / `message` / `claim` / `claimable` say what the birthday gives
 (compensation_effects.birthday_outcomes): paid_leave, credit_claimable, credit_pending, credit_approved, credit_rejected,
 upcoming, off_day, not_eligible or old_rule.
 """
@@ -34,6 +34,7 @@ upcoming, off_day, not_eligible or old_rule.
 from __future__ import annotations
 
 from collections import defaultdict
+from decimal import Decimal
 
 from django.db.models import Q
 from rest_framework.decorators import api_view
@@ -102,6 +103,14 @@ def _claim_json(claim: dict | None) -> dict | None:
     }
 
 
+def _marker_trusted(record) -> bool:
+    """The stored day carries the engine's birthday marker and is not a day set by hand that pays less than a full day
+    (compensation_effects._birthday_from_day reads the marker the same way)."""
+    if record is None or record.compensation_kind != "birthday":
+        return False
+    return not (record.source == "manual" and Decimal(record.shifts_earned or 0) < Decimal("1.00"))
+
+
 def birthday_rows(
     request: Request, start, end, department_id=None, branch_id=None, q=None, today=None, refresh: bool = False
 ) -> list[dict]:
@@ -166,7 +175,10 @@ def birthday_rows(
                 "benefits": benefits,
                 "reason": why or None,
                 "attendanceStatus": record.status if record else None,
-                "applied": bool(record and record.compensation_kind == "birthday"),
+                # paid birthday leave by the outcome (the same reading as the employee's page), never the raw marker
+                # alone: a day set by hand that pays less than a full day keeps a stale marker (verification 2026-11-19)
+                "applied": value == effects.BIRTHDAY_PAID_LEAVE
+                or (value == effects.BIRTHDAY_OLD_RULE and _marker_trusted(record)),
                 "compensationKind": (record.compensation_kind or None) if record else None,
                 "firstPunch": _hhmm(record.first_punch) if record else None,
                 "lastPunch": _hhmm(record.last_punch) if record else None,
@@ -217,7 +229,7 @@ def compensation_birthdays(request: Request) -> Response:
         q=(q.get("q") or "").strip() or None,
         today=ist_today(),
         # only a login that may change Compensation works a missing / stale birthday out (a view-only list never writes)
-        refresh=can_edit_compensation(request),
+        refresh=can_edit_compensation(request, "compensation.leave.birthdays"),
     )
     # the counts by outcome are of the whole period (before the outcome filter), for the page's tiles
     outcome_counts = {key: 0 for key in OUTCOME_LABELS}

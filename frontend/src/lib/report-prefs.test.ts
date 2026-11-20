@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_RECENT,
   _resetPrefsCache,
-  getLastQuery,
+  getLastFilters,
   getPrefs,
   pushRecent,
-  setLastQuery,
+  setLastFilters,
   toggleFavorite,
 } from "./report-prefs";
 
@@ -48,12 +48,32 @@ describe("recents", () => {
 });
 
 describe("last used filters", () => {
-  it("round-trips per report", () => {
-    expect(getLastQuery("a")).toBeNull();
-    setLastQuery("a", "period=2026-09");
-    setLastQuery("b", "dateFrom=2026-09-01");
-    expect(getLastQuery("a")).toBe("period=2026-09");
-    expect(getLastQuery("b")).toBe("dateFrom=2026-09-01");
+  it("round-trips per report and forgets on null", () => {
+    expect(getLastFilters("a")).toBeNull();
+    setLastFilters("a", { query: "departmentIds=3", relative: { period: "lastMonth" } });
+    setLastFilters("b", { query: "", relative: { dateRange: "week" } });
+    expect(getLastFilters("a")).toEqual({ query: "departmentIds=3", relative: { period: "lastMonth" } });
+    expect(getLastFilters("b")).toEqual({ query: "", relative: { dateRange: "week" } });
+    setLastFilters("a", null);
+    expect(getLastFilters("a")).toBeNull();
+    expect(localStorage.getItem("hr_reports_last:a")).toBeNull();
+  });
+
+  it("reads an entry from before relative dates as a plain query (its dates are ignored when restoring)", () => {
+    localStorage.setItem("hr_reports_last:old", "period=2026-09&departmentIds=3");
+    expect(getLastFilters("old")).toEqual({ query: "period=2026-09&departmentIds=3", relative: {} });
+  });
+
+  it("survives a damaged entry", () => {
+    localStorage.setItem("hr_reports_last:bad", "{not json");
+    expect(getLastFilters("bad")).toBeNull();
+    localStorage.setItem(
+      "hr_reports_last:odd",
+      JSON.stringify({ query: 5, relative: { period: 1, year: "thisYear" } }),
+    );
+    expect(getLastFilters("odd")).toEqual({ query: "", relative: { year: "thisYear" } });
+    localStorage.setItem("hr_reports_last:nul", JSON.stringify({ relative: null }));
+    expect(getLastFilters("nul")).toEqual({ query: "", relative: {} });
   });
 });
 
@@ -72,10 +92,14 @@ describe("resilience", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("full");
     });
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
     _resetPrefsCache();
     expect(() => toggleFavorite("a")).not.toThrow();
     expect(getPrefs().favorites).toEqual(["a"]);
-    expect(getLastQuery("a")).toBeNull();
-    expect(() => setLastQuery("a", "x=1")).not.toThrow();
+    expect(getLastFilters("a")).toBeNull();
+    expect(() => setLastFilters("a", { query: "x=1", relative: {} })).not.toThrow();
+    expect(() => setLastFilters("a", null)).not.toThrow();
   });
 });

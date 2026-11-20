@@ -2,13 +2,14 @@ import type { ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type {
-  DateRangeValue,
-  FilterValue,
-  FilterValues,
-  NamedOption,
-  ReportCatalog,
-  ReportFilter,
+import {
+  offersAny,
+  type DateRangeValue,
+  type FilterValue,
+  type FilterValues,
+  type NamedOption,
+  type ReportCatalog,
+  type ReportFilter,
 } from "@/lib/report-center";
 import { DateRangeFilter } from "./filters/DateRangeFilter";
 import { EmployeeMultiPicker } from "./filters/EmployeeMultiPicker";
@@ -22,14 +23,29 @@ const ANY = "__any__";
 const asList = (v: FilterValue): string[] => (Array.isArray(v) ? v.map(String) : v ? String(v).split(",") : []);
 const toOptions = (list: NamedOption[]) => list.map((o) => ({ value: String(o.id), label: o.name }));
 
-function Field({ filter, className, children }: { filter: ReportFilter; className?: string; children: ReactNode }) {
+function Field({
+  filter,
+  className,
+  invalid,
+  children,
+}: {
+  filter: ReportFilter;
+  className?: string;
+  invalid?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <div className={className}>
+    <div
+      className={`${className ?? ""} ${invalid ? "rounded-lg bg-amber-50 p-1.5 ring-2 ring-amber-400" : ""}`}
+      data-filter={filter.key}
+      data-invalid={invalid ? "true" : undefined}
+    >
       <label className="mb-1 block text-xs font-semibold text-gray-600">
         {filter.label}
         {filter.required && <span className="ml-0.5 text-red-500">*</span>}
       </label>
       {children}
+      {invalid && <p className="mt-1 text-[11px] font-semibold text-amber-800">Change this filter</p>}
       {filter.help && <p className="mt-1 text-[11px] text-muted-foreground">{filter.help}</p>}
     </div>
   );
@@ -69,11 +85,14 @@ export function ReportFilterBar({
   values,
   onChange,
   options,
+  invalidKey = null,
 }: {
   filters: ReportFilter[];
   values: FilterValues;
   onChange: (key: string, value: FilterValue) => void;
   options: ReportCatalog["options"];
+  /** The filter a refused run points at: highlighted until it is changed. */
+  invalidKey?: string | null;
 }) {
   const departmentIds = asList(values.department);
   // Staff and production have departments and designations of their own (lib/departments.ts): with the report's
@@ -101,13 +120,13 @@ export function ReportFilterBar({
         switch (f.kind) {
           case "period":
             return (
-              <Field key={f.key} filter={f} className="lg:col-span-2">
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key} className="lg:col-span-2">
                 <PeriodPicker value={String(v ?? "")} onChange={(x) => onChange(f.key, x)} />
               </Field>
             );
           case "year":
             return (
-              <Field key={f.key} filter={f}>
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key}>
                 <Input
                   type="number"
                   aria-label={f.label}
@@ -121,7 +140,7 @@ export function ReportFilterBar({
             );
           case "dateRange":
             return (
-              <Field key={f.key} filter={f} className="sm:col-span-2 lg:col-span-2">
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key} className="sm:col-span-2 lg:col-span-2">
                 <DateRangeFilter
                   value={(v as DateRangeValue) ?? { dateFrom: "", dateTo: "" }}
                   maxDays={f.maxDays}
@@ -141,7 +160,7 @@ export function ReportFilterBar({
             const opts = f.kind === "branch" ? toOptions(list) : orgOptions(f.kind);
             const sel = asList(v);
             return (
-              <Field key={f.key} filter={f}>
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key}>
                 <MultiSelectFilter
                   label={f.label}
                   options={opts}
@@ -168,7 +187,7 @@ export function ReportFilterBar({
           }
           case "employee":
             return (
-              <Field key={f.key} filter={f} className="sm:col-span-2 lg:col-span-2">
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key} className="sm:col-span-2 lg:col-span-2">
                 <EmployeeMultiPicker
                   label={f.label}
                   value={asList(v)}
@@ -179,13 +198,13 @@ export function ReportFilterBar({
             );
           case "employmentType":
             return (
-              <Field key={f.key} filter={f}>
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key}>
                 <SingleSelect filter={f} value={String(v ?? "")} onChange={(x) => changeType(f.key, x)} includeAny />
               </Field>
             );
           case "employeeStatus":
             return (
-              <Field key={f.key} filter={f}>
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key}>
                 <SingleSelect
                   filter={f}
                   value={String(v ?? "active")}
@@ -197,7 +216,7 @@ export function ReportFilterBar({
           case "select": {
             if (f.multi) {
               return (
-                <Field key={f.key} filter={f}>
+                <Field key={f.key} filter={f} invalid={invalidKey === f.key}>
                   <MultiSelectFilter
                     label={f.label}
                     options={f.options ?? []}
@@ -209,19 +228,25 @@ export function ReportFilterBar({
               );
             }
             return (
-              <Field key={f.key} filter={f}>
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key}>
                 <SingleSelect
                   filter={f}
                   value={String(v ?? "")}
                   onChange={(x) => onChange(f.key, x)}
-                  includeAny={!f.required}
+                  includeAny={offersAny(f)}
                 />
               </Field>
             );
           }
-          case "boolean":
+          case "boolean": {
+            const invalid = invalidKey === f.key;
             return (
-              <div key={f.key} className="flex flex-col justify-end pb-1">
+              <div
+                key={f.key}
+                className={`flex flex-col justify-end pb-1 ${invalid ? "rounded-lg bg-amber-50 p-1.5 ring-2 ring-amber-400" : ""}`}
+                data-filter={f.key}
+                data-invalid={invalid ? "true" : undefined}
+              >
                 <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
                   <Checkbox
                     checked={v === true}
@@ -233,9 +258,10 @@ export function ReportFilterBar({
                 {f.help && <p className="mt-1 pl-6 text-[11px] leading-snug text-muted-foreground">{f.help}</p>}
               </div>
             );
+          }
           case "number":
             return (
-              <Field key={f.key} filter={f}>
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key}>
                 <Input
                   type="number"
                   aria-label={f.label}
@@ -249,7 +275,7 @@ export function ReportFilterBar({
             );
           case "text":
             return (
-              <Field key={f.key} filter={f}>
+              <Field key={f.key} filter={f} invalid={invalidKey === f.key}>
                 <Input
                   aria-label={f.label}
                   value={String(v ?? "")}

@@ -8,8 +8,11 @@ import { extraMinutesOf, THRESHOLD, ALLOWANCE_MINUTES, type CompensationDraft } 
 import {
   allowanceFor,
   allowanceLimit,
+  allowanceUnderQuarters,
   dayWords,
+  EXAMPLE_LUNCH,
   EXAMPLE_SHIFT,
+  EXAMPLE_WORK_MINUTES,
   judgeFirstPunch,
   payForShifts,
   QUARTER_EXAMPLE_SHIFT,
@@ -55,15 +58,24 @@ const PUNCH_RESULT: Record<FirstPunch, { text: string; tone: "good" | "info" | "
 
 /**
  * Type 1 worked out with the rows on screen: how long somebody worked past the shift end (try your own number), the
- * allowance that earns, and what that does to the next morning's first punch.
+ * allowance that earns, and what that does to the next morning's first punch. With the quarters rule on, a day earns the
+ * allowance only while its overtime is less than a quarter of the shift (2 hours of the example's 8): from a quarter on it
+ * is Type 2's, and the Type 2 threshold does not decide (it applies only before the claims date or with the rule off).
  */
 export function Type1Example({ draft }: { draft: CompensationDraft }) {
   const [extraText, setExtraText] = useState("120");
   const extra = parseNumber(extraText, { min: 1, max: 1440, decimals: 0 });
   const rules = allowanceValues(draft);
   const threshold = parseNumber(draft.shiftMinExtra, THRESHOLD).value ?? 150;
-  const beyond = extra.value !== null && extra.value > threshold;
-  const found = extra.value === null ? null : allowanceFor(extra.value, rules, threshold);
+  const quarters = draft.quarterRule === true;
+  const quarter = EXAMPLE_WORK_MINUTES / 4;
+  const found =
+    extra.value === null
+      ? null
+      : quarters
+        ? allowanceUnderQuarters(extra.value, rules, EXAMPLE_WORK_MINUTES)
+        : { ...allowanceFor(extra.value, rules, threshold), type2: extra.value > threshold };
+  const beyond = found?.type2 === true;
   const allowance = found?.minutes ?? 0;
   const rule = found && found.rule !== null ? rules[found.rule] : null;
   const { start, grace } = EXAMPLE_SHIFT;
@@ -77,7 +89,11 @@ export function Type1Example({ draft }: { draft: CompensationDraft }) {
   return (
     <PreviewCard
       title="Worked example"
-      scenario={`${SHIFT_TEXT}. Try how long the employee works after the shift ends (not saved).`}
+      scenario={
+        quarters
+          ? `${SHIFT_TEXT} and a ${formatShort(EXAMPLE_LUNCH)} lunch: ${formatShort(EXAMPLE_WORK_MINUTES)} of work, so a quarter of the shift is ${formatShort(quarter)}. Try how long the employee works after the shift ends (not saved).`
+          : `${SHIFT_TEXT}. Try how long the employee works after the shift ends (not saved).`
+      }
       testId="type1-example"
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -108,7 +124,9 @@ export function Type1Example({ draft }: { draft: CompensationDraft }) {
               rule
                 ? `Allowance ${allowance} minutes (row "${ruleName(rule)}")`
                 : beyond
-                  ? `No allowance: more than ${formatShort(threshold)} of extra work is Type 2's`
+                  ? quarters
+                    ? `No allowance: a quarter of the shift (${formatShort(quarter)}) or more is Type 2's under the quarters rule`
+                    : `No allowance: more than ${formatShort(threshold)} of extra work is Type 2's`
                   : "No allowance: less than the smallest row that is on"
             }
             tone={rule ? "info" : "neutral"}

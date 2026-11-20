@@ -11,7 +11,7 @@ Modules (each only imports from ones listed before it):
   recruitment  Jobs, applicants, resignations, headcount, resume screening and employee documents.
   system       Document/ID-card settings, stored files and backups.
   chat         Chat channels, messages and reactions.
-  whatsapp     WhatsApp (WAClient) send log, message wording and media assets.
+  whatsapp     WhatsApp (Meta Cloud API) send log, settings, Meta templates and media assets.
   mail         Email (Gmail / SMTP) send log, feature switches and wording.
   gate         Outpass, gate scanners, visitors, reception and tea break.
   md_assistant The MD portal's AI assistant: settings, conversations, daily usage.
@@ -19,6 +19,8 @@ Modules (each only imports from ones listed before it):
   sms          SMS one-time codes through 2Factor: the settings row and the send log.
   geo_tracking On-Duty Geo-Tracking: settings, tracks, points, events, derived segments, devices and consents.
   hod_reminders Reminders to Department Heads about pending approvals: the schedule, the rounds and each delivery.
+  report_center Report Center -> Customise: the reports HR builds and saves (data source, fields, filters, sort).
+  salary_slip_center HR -> Payroll -> Salary Slip: standalone salary slips (no payroll) and the page's own Hold switch.
 """
 
 from .core import (
@@ -148,6 +150,7 @@ from .whatsapp import (
     WhatsAppMessageTemplate,
     WhatsAppOptOut,
     WhatsAppSettings,
+    WhatsAppTemplate,
 )
 from .mail import (
     EmailMessageLog,
@@ -207,3 +210,5 @@ from .attendance_notify import (
     AttendanceNotifyRun,
     AttendanceNotifySettings,
 )
+from .report_center import SavedCustomReport
+from .salary_slip_center import StandaloneSalaryHold, StandaloneSalarySlip

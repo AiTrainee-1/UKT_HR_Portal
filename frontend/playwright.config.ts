@@ -37,17 +37,22 @@ const backendEnv = {
   ADMIN_PASSWORD: "",
   DJANGO_SECRET_KEY: "e2e-only-django-secret",
   ALLOWED_HOSTS: "localhost,127.0.0.1",
-  // WhatsApp goes to a local fake (e2e/fake-waclient.mjs), never to WAClient: dummy credentials
+  // WhatsApp goes to a local fake of Meta's WhatsApp Cloud API (e2e/fake-meta.mjs), never to Meta: dummy credentials
   // override whatever real ones backend/.env holds, and the API address can't leave the machine.
-  // A dev-mode backend (DEBUG) refuses to send WhatsApp unless told otherwise; here it sends only to the local fake.
+  // A dev-mode backend (DEBUG) refuses to send WhatsApp unless told otherwise; here it sends only to the local fake, so
+  // the development recipient lock (WHATSAPP_ONLY_TO_EMPLOYEES in backend/.env) is blanked: a local fake needs none.
   WHATSAPP_ALLOW_SENDING: "true",
-  WACLIENT_INSTANCE_ID: "e2e-instance",
-  WACLIENT_ACCESS_TOKEN: "e2e-token",
-  WACLIENT_API_URL: `http://127.0.0.1:${FAKE_PORT}/send`,
-  WHATSAPP_SEND_DELAY_SECONDS: "0",
-  WHATSAPP_MIN_SEND_GAP_SECONDS: "0",
+  WHATSAPP_ONLY_TO_EMPLOYEES: "",
+  WHATSAPP_CLOUD_API_BASE: `http://127.0.0.1:${FAKE_PORT}`,
+  WHATSAPP_CLOUD_API_VERSION: "v23.0",
+  WHATSAPP_CLOUD_PHONE_NUMBER_ID: "100000000000001",
+  WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID: "200000000000002",
+  WHATSAPP_CLOUD_ACCESS_TOKEN: "e2e-meta-access-token",
+  WHATSAPP_CLOUD_APP_SECRET: "e2e-meta-app-secret",
+  WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN: "e2e-meta-verify-token",
+  WHATSAPP_CLOUD_TEMPLATE_LANGUAGE: "en",
   // The e2e stack delivers each WhatsApp message as soon as it is queued (no pacing, caps or quiet hours), so a spec can
-  // read the fake WAClient right after the action. The queue itself is tested in backend/api/tests_whatsapp_dispatcher.py.
+  // read the fake right after the action. The queue itself is tested in backend/api/tests_whatsapp_dispatcher.py.
   WHATSAPP_ASYNC_SEND: "false",
   // SMS goes to a local fake of 2Factor (e2e/fake-twofactor.mjs), never to 2Factor: dummy credentials override whatever real
   // ones backend/.env holds (none of them looks like a placeholder, or the server would treat SMS as not set up), and the API
@@ -58,6 +63,9 @@ const backendEnv = {
   TWOFACTOR_SENDER_ID: "E2ETFX",
   TWOFACTOR_API_BASE: `http://127.0.0.1:${FAKE_TWOFACTOR_PORT}/API/V1`,
   SMS_ALLOW_SENDING: "true",
+  // backend/.env names the developer's own employee for local runserver testing; the e2e stack texts the fake 2Factor
+  // only, which needs no recipient list (an empty variable wins over .env).
+  SMS_ONLY_TO_EMPLOYEES: "",
   // Same for email: a dev-mode backend refuses to send unless told otherwise. Nothing can leave the machine, because
   // the only SMTP account the tests save points at 127.0.0.1:9 (gmail-control.spec.ts); until then SMTP isn't set up.
   EMAIL_ALLOW_SENDING: "true",
@@ -93,11 +101,11 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "node e2e/fake-waclient.mjs",
+      command: "node e2e/fake-meta.mjs",
       url: `http://127.0.0.1:${FAKE_PORT}/health`,
       reuseExistingServer: reuse,
       timeout: 30_000,
-      env: { FAKE_WACLIENT_PORT: String(FAKE_PORT) },
+      env: { FAKE_META_PORT: String(FAKE_PORT) },
     },
     {
       command: "node e2e/fake-twofactor.mjs",

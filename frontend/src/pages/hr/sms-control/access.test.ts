@@ -23,8 +23,11 @@ const everyPath = [
   ...SMS_TABS.map((t) => smsTabPath(t.value)),
   ...SETTINGS_SECTIONS.map((s) => smsTabPath("settings", s.value)),
   smsPath("messages", undefined, "status=failed&page=2"),
+  smsPath("usage", undefined, "month=2026-10"),
   `${SMS_BASE}/nope`,
   `${SMS_BASE}/settings/nope`,
+  // the retired Channel section (until 2026-11-20): the page sends it on to OTP Switches
+  `${SMS_BASE}/settings/channel`,
 ];
 
 type User = Parameters<typeof canViewRoute>[0];

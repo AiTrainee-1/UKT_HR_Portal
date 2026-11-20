@@ -121,6 +121,7 @@ describe("pageHasRefresh", () => {
       "/hr/outpass-visitors/tea-break/rule",
       "/hr/geo-attendance",
       "/hr/missing-punch",
+      "/hr/salary-slip",
     ]) {
       expect(pageHasRefresh(path), path).toBe(false);
     }

@@ -29,6 +29,7 @@ from rest_framework.response import Response
 from .view_common import error_response as _error
 from .audit_utils import log_action
 from .auth import require_hr
+from .clock import ist_today
 from .branch_scope import scope_to_branch
 from .device_health import device_health
 from .models import Attendance, AttendanceLog, Employee, UnmatchedPunch
@@ -590,11 +591,17 @@ def _reconcile_days(employee_ids: set[int], days: set, exported_range, pairs: se
     try:
         from .attendance_final import compute_range_records
         from .models import PayrollSettings
+        from .shift_engine import staff_night_chain_end
 
         settings = PayrollSettings.get()
+        today = ist_today()
         for emp in Employee.objects.filter(pk__in=employee_ids).order_by("pk"):
             try:
-                compute_range_records(emp, lo, hi, settings)
+                # staff: on past the last touched day along the next-morning chain (a deleted / moved punch can leave a
+                # day open or closed, which decides whose the next morning's early punch is; review 2026-11-19, #7). The
+                # background pass cannot notice a deletion or a move: no new punch time appears.
+                end = max(hi, staff_night_chain_end(emp, hi, settings, today))
+                compute_range_records(emp, lo, end, settings)
                 out["daysRefreshed"] += 1
             except Exception:  # noqa: BLE001 - one employee's surprise never undoes the import
                 out["refreshSkipped"] = True

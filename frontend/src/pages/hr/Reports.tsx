@@ -35,7 +35,8 @@ export default function Reports() {
               <BarChart3 size={22} className="text-sky-700" /> Reports
             </h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              Payroll, attendance, leave, gate and employee reports - filter, view, and download as PDF or Excel.
+              HR, attendance, shift, salary and employee reports, plus your own custom reports - filter, view, and
+              download as PDF or Excel.
             </p>
           </div>
           <div className="flex items-center gap-2">

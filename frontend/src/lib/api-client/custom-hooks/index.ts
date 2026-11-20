@@ -38,6 +38,8 @@ export * from "./production-shifts";
 export * from "./shared-endpoints";
 export * from "./payroll-insights";
 export * from "./payroll-month";
+// The standalone Salary Slip page (/hr/salary-slip, 2026-11-20): slips for any employee, statement, bank file, Hold
+export * from "./salary-slip-center";
 export * from "./recruitment";
 export * from "./reports";
 export * from "./requests";

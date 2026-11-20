@@ -193,7 +193,7 @@ export function normalizeClaim(value: unknown): CompensationClaim {
     designation: str(raw.designation),
     employmentType: str(raw.employmentType),
     workDate,
-    dayKind: (raw.dayKind === "holiday" ? "holiday" : "sunday") as HolidayDayKind,
+    dayKind: (raw.dayKind === "holiday" || raw.dayKind === "off_saturday" ? raw.dayKind : "sunday") as HolidayDayKind,
     holidayName: str(raw.holidayName),
     shifts: num(raw.shifts),
     reason: str(raw.reason) ?? "",
@@ -500,6 +500,8 @@ export const useCompensationLedger = (params: LedgerParams) =>
 export type HolidayWorkMonthDay = {
   date: string;
   kind: HolidayDayKind;
+  /** "Sunday" | "Holiday" | "Off Saturday": the server's own word for the day. Absent on an older backend. */
+  kindLabel?: string | null;
   holidayName: string | null;
   /** "Week 2" (the server's own label). */
   weekLabel: string;
@@ -530,7 +532,8 @@ export const useHolidayWorkMonth = (params: HolidayWorkMonthParams) =>
         const claimed = obj(d.claimed);
         return {
           date: str(d.date) ?? "",
-          kind: d.kind === "holiday" ? "holiday" : "sunday",
+          kind: d.kind === "holiday" || d.kind === "off_saturday" ? d.kind : "sunday",
+          kindLabel: str(d.kindLabel),
           holidayName: str(d.holidayName),
           weekLabel: str(d.weekLabel) ?? "",
           worked: num(d.worked),

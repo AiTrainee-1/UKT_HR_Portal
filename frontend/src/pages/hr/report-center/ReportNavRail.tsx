@@ -54,7 +54,7 @@ export function ReportNavRail({
         const s = categoryStyle(category.id);
         return (
           <div key={category.id}>
-            <p className="mb-1 flex items-center gap-1.5 px-2 text-[10px] font-bold uppercase tracking-wider text-gray-400">
+            <p className="mb-1 flex items-center gap-1.5 px-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
               <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
               {category.label}
             </p>

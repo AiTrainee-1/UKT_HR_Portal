@@ -332,6 +332,13 @@ describe("the staff next-morning cut-off", () => {
       /today or a later date/,
     );
     expect(nextMorningErrors({ ...newSaved, nextMorningFrom: "2026-11-20" }, "", "2026-11-20")).toEqual({});
+    // a moved date: later than the saved one is not enough, it must not be before today either (the server refuses it)
+    expect(
+      nextMorningErrors({ ...newSaved, nextMorningFrom: "2026-11-15" }, "2026-11-10", "2026-11-20").nextMorningFrom,
+    ).toMatch(/today or a later date/);
+    expect(nextMorningErrors({ ...newSaved, nextMorningFrom: "2026-11-20" }, "2026-11-10", "2026-11-20")).toEqual({});
+    // an unchanged date in the past is fine: nothing moves
+    expect(nextMorningErrors({ ...newSaved, nextMorningFrom: "2026-11-10" }, "2026-11-10", "2026-11-20")).toEqual({});
     // an older server: nothing to check
     expect(validateStaff({ ...saved, nextMorningCutoff: "nonsense" }, access, context)).toEqual({});
     expect(firstError(validateStaff({ ...newSaved, nextMorningCutoff: "13:00" }, newAccess, context))).toMatch(

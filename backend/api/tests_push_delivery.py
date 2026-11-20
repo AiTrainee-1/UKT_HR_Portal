@@ -35,6 +35,7 @@ from .models import (
     WhatsAppMessageLog,
 )
 from .tests_whatsapp_alerts import WED, AlertBase, _switches, at
+from .tests_whatsapp_support import NO_META
 
 EXPO = "api.signals.requests.post"
 
@@ -369,14 +370,8 @@ class PhoneAlertJobTests(AlertBase):
     def setUp(self):
         super().setUp()
         PushToken.objects.create(employee=self.emp, token="ExponentPushToken[alert]")
-        # AlertBase patched requests.post for WhatsApp; the same function carries the Expo pushes, so answer each its own way
-        whatsapp_answer = self.post.return_value
-
-        def route(*args, **kwargs):
-            url = args[0] if args else kwargs.get("url", "")
-            return expo_ok(**kwargs) if "exp.host" in url else whatsapp_answer
-
-        self.post.side_effect = route
+        # AlertBase fakes Meta's Graph API (self.meta) and Expo (self.expo) on the one requests.post, routed by address
+        self.expo.side_effect = expo_ok
 
     def phone(self, h, m=0):
         from . import phone_alerts
@@ -384,14 +379,12 @@ class PhoneAlertJobTests(AlertBase):
         return phone_alerts.run_phone_alerts(now=at(WED, h, m))
 
     def whatsapp_calls(self):
-        return [
-            c for c in self.post.call_args_list if "exp.host" not in (c.args[0] if c.args else c.kwargs.get("url", ""))
-        ]
+        return list(self.meta.sent)
 
     def absent_notes(self):
         return Notification.objects.filter(employee=self.emp, source="absent_alert")
 
-    @override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN="")
+    @override_settings(**NO_META)
     def test_the_phone_gets_the_alert_once_with_whatsapp_not_configured(self):
         self.assertEqual(self.phone(10, 0).get("absent_alert"), 1)
         self.assertFalse(WhatsAppMessageLog.objects.exists())

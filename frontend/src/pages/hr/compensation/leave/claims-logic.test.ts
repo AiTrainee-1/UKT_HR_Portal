@@ -14,16 +14,22 @@ import {
   claimStatusText,
   dayCounts,
   groupWeeks,
+  DELETE_BLOCKED,
+  deleteTitle,
   inMonth,
   ledgerSourceText,
+  offDayText,
   outcomeOf,
   overtimeText,
   previousSunday,
   raisedByText,
   signedShifts,
   stepMonth,
+  stripDayText,
+  stripKindsText,
   windowWhen,
 } from "./claims-logic";
+import { pendingHint } from "./ClaimsPart";
 import { switchQuery } from "@/components/ui/subtab-nav";
 import { LEAVE_OWN_KEYS, claimLink, creditLink, balanceLink, monthChoice, monthChoiceLabel } from "./leave-url";
 import { checkUseBalance } from "./UseBalanceDialog";
@@ -305,5 +311,85 @@ describe("reading what the server sends", () => {
       claim: { id: 3007, kind: "use_balance", status: "approved" },
       counted: false,
     });
+  });
+});
+
+describe("an off Saturday (an employee's own Saturday off, claimable like a Sunday)", () => {
+  const day = (over: Partial<HolidayWorkMonthDay>): HolidayWorkMonthDay => ({
+    date: "2026-10-10",
+    kind: "sunday",
+    holidayName: null,
+    weekLabel: "Week 2",
+    worked: 0,
+    eligible: 0,
+    claimed: { pending: 0, approved: 0 },
+    ...over,
+  });
+
+  it("is named Off Saturday everywhere, never a company holiday", () => {
+    expect(offDayText("off_saturday", "Off Saturday")).toBe("Off Saturday");
+    expect(offDayText("sunday", null)).toBe("Sunday");
+    expect(offDayText("holiday", "Diwali")).toBe("Holiday: Diwali");
+    expect(offDayText("holiday", null)).toBe("Holiday");
+    expect(stripDayText(day({ kind: "off_saturday" }))).toBe("Off Saturday");
+    expect(stripDayText(day({ kind: "holiday", holidayName: null }))).toBe("Company holiday");
+    expect(stripDayText(day({ kind: "holiday", holidayName: "Diwali" }))).toBe("Diwali");
+    expect(claimDateDetail(claim(1, { dayKind: "off_saturday", holidayName: "Off Saturday" }))).toBe("Off Saturday");
+    expect(claimDateDetail(claim(1, { dayKind: "holiday", holidayName: "Diwali" }))).toBe("Holiday: Diwali");
+    expect(claimDateDetail(claim(1))).toBe("Sunday");
+  });
+
+  it("is counted apart in the strip's summary", () => {
+    const sun = day({ kind: "sunday" });
+    expect(stripKindsText([sun, sun])).toBe("2 Sundays");
+    expect(stripKindsText([sun, day({ kind: "holiday" })])).toBe("1 Sunday and 1 holiday");
+    expect(stripKindsText([sun, day({ kind: "off_saturday" })])).toBe("1 Sunday and 1 off Saturday");
+    expect(
+      stripKindsText([sun, day({ kind: "holiday" }), day({ kind: "off_saturday" }), day({ kind: "off_saturday" })]),
+    ).toBe("1 Sunday, 1 holiday and 2 off Saturdays");
+  });
+
+  it("is kept by the readers of the server's answers (an older reader turned it into a Sunday)", () => {
+    const read = normalizeClaim({ id: 1, kind: "holiday_work", dayKind: "off_saturday", holidayName: "Off Saturday" });
+    expect(read.dayKind).toBe("off_saturday");
+    expect(normalizeClaim({ id: 2, dayKind: "holiday" }).dayKind).toBe("holiday");
+    expect(normalizeClaim({ id: 3 }).dayKind).toBe("sunday");
+  });
+});
+
+describe("the waiting tile's hint", () => {
+  const summary = (pendingCreditShifts: number | null, pendingUseShifts: number | null, pendingShifts = 0) => ({
+    byStatus: {},
+    byKind: {},
+    pendingShifts,
+    approvedShifts: 0,
+    creditedShifts: 0,
+    pendingCreditShifts,
+    pendingUseShifts,
+  });
+
+  it("writes both numbers the same way, with two decimals, and says none when no credit waits", () => {
+    expect(pendingHint(summary(1, 0.5))).toBe("1.00 in · 0.50 out");
+    expect(pendingHint(summary(1.5, 0.5))).toBe("1.50 in · 0.50 out");
+    expect(pendingHint(summary(0, 0.5))).toBe("none in · 0.50 out");
+    expect(pendingHint(summary(1.75, 0))).toBe("1.75 shifts to add");
+    // an older backend: the one total
+    expect(pendingHint(summary(null, null, 2))).toBe("2 shifts");
+    expect(pendingHint(undefined)).toBe("0 shifts");
+  });
+});
+
+describe("an announcement that cannot be removed", () => {
+  it("says why on its Delete: the pause, the server's reason, or a plain sentence", () => {
+    const row = { date: "2026-10-10", canDelete: false, deleteBlockedReason: "Payroll for October 2026 is done." };
+    expect(deleteTitle(row, false, "Paused")).toBe("Payroll for October 2026 is done.");
+    expect(deleteTitle({ ...row, deleteBlockedReason: null }, false, "Paused")).toBe(DELETE_BLOCKED);
+    expect(deleteTitle({ ...row, deleteBlockedReason: undefined }, false, "Paused")).toBe(
+      "This announcement cannot be removed.",
+    );
+    expect(deleteTitle(row, true, "Paused")).toBe("Paused");
+    expect(deleteTitle({ ...row, canDelete: true }, false, "Paused")).toBe(
+      "Delete the announcement of Sat, 10 Oct 2026",
+    );
   });
 });

@@ -17,6 +17,7 @@ import {
   decisionLine,
   kindText,
   monthOf as monthOfIso,
+  offDayText,
   raisedByText,
 } from "./claims-logic";
 import { balanceLink, creditLink } from "./leave-url";
@@ -68,7 +69,7 @@ function sourceFields(claim: CompensationClaim): { label: string; value: ReactNo
         { label: "Worked on", value: dateLong(claim.workDate) },
         {
           label: "Day",
-          value: claim.dayKind === "holiday" ? `Holiday${claim.holidayName ? `: ${claim.holidayName}` : ""}` : "Sunday",
+          value: offDayText(claim.dayKind, claim.holidayName),
         },
       ];
     case "ot_allowance":

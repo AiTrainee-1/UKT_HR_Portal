@@ -84,9 +84,11 @@ def _int_or_none(raw) -> int | None:
     return value if 0 < value <= _MAX_ID else None
 
 
-def can_edit_compensation(request) -> bool:
+def can_edit_compensation(request, *keys: str) -> bool:
     """Whether the caller's role may CHANGE Compensation (a super administrator always may). Reading must never write: the
-    OT list brings detection up to date only for a login that could also assign, so a view-only role triggers no write."""
+    OT list brings detection up to date only for a login that could also assign, so a view-only role triggers no write.
+    `keys`: the page's own permission keys (e.g. "compensation.leave.birthdays"), which must be Edit too: a role with Edit
+    on Compensation but View on that page reads it without writing (verification 2026-11-19)."""
     from .models import HRUser
     from .permission_registry import effective_permissions, resolve_permission
 
@@ -96,7 +98,20 @@ def can_edit_compensation(request) -> bool:
         return False
     if hr.is_super_admin:
         return True
-    return resolve_permission(effective_permissions(hr), "compensation") == "edit"
+    perms = effective_permissions(hr)
+    return all(resolve_permission(perms, key) == "edit" for key in ("compensation", *keys))
+
+
+def _quarter_credit(rec: OvertimeRecord, config=None) -> Decimal | None:
+    """The Type 2 credit of `rec` by the quarters rule (compensation_claims.ot_credit) when the rule decides that day
+    (compensation_effects.quarter_rule_applies), Decimal("0.00") below a quarter; None when the old ladder decides (the
+    detection's suggested shifts)."""
+    from . import compensation_effects as effects
+    from .compensation_claims import ot_credit
+
+    if not effects.quarter_rule_applies(rec.employee, rec.date, config=config):
+        return None
+    return ot_credit(rec)
 
 
 def _assignments_by_employee(employee_ids, start: date_type, end: date_type) -> dict[int, list]:
@@ -225,7 +240,11 @@ def _ot_dict(
         "otMinutes": r.ot_minutes,
         "otType": r.ot_type,
         "allowanceMinutes": r.allowance_minutes or 0,
-        "suggestedShifts": _shifts_json(r.suggested_shifts),
+        # under the quarters rule the suggestion IS the quarters credit (null below a quarter: nothing to pay or claim),
+        # the same value HR's Pay defaults to (verification 2026-11-19); else the detection's ladder suggestion
+        "suggestedShifts": (
+            info.get("creditShifts") if info.get("creditRule") == "quarters" else _shifts_json(r.suggested_shifts)
+        ),
         "shifts": _shifts_json(r.shifts),
         "claimDate": str(r.claim_date) if r.claim_date else None,
         "status": r.status,
@@ -591,11 +610,20 @@ def _assign_one(
                 ),
             }
 
+        # under the quarters rule the credit IS the quarters credit (compensation_claims.ot_credit): below a quarter the
+        # day is not Type 2, so there is nothing to pay; never the detection's old ladder suggestion (verification
+        # 2026-11-19)
+        quarter_credit = _quarter_credit(rec, config)
+        if quarter_credit is not None and quarter_credit <= 0:
+            return {
+                "ok": False,
+                "reason": f"{who}: the overtime is below a quarter of the shift, so it is not Type 2: there is nothing to pay.",
+            }
         raw_shifts = item.get("shifts")
         if raw_shifts in (None, ""):
             raw_shifts = batch_shifts
         if raw_shifts in (None, ""):
-            shifts = rec.suggested_shifts
+            shifts = quarter_credit if quarter_credit is not None else rec.suggested_shifts
             if shifts is None:
                 return {"ok": False, "reason": f"{who}: choose the shifts to assign (0.25, 0.50, 0.75 or 1)."}
         else:
@@ -781,13 +809,15 @@ def overtime_announce(request: Request) -> Response:
             if comp_type == OvertimeRecord.TYPE_RELAXATION and config.claims_apply_on(rec.date):
                 continue  # under the claim rules its credit is the employee's claim, never a direct HR credit
             if rec.ot_type == OvertimeRecord.OT_TYPE_SHIFT:
-                if rec.suggested_shifts is None or not config.shift_enabled:
-                    continue
+                quarter_credit = _quarter_credit(rec, config)
+                shifts = quarter_credit if quarter_credit is not None else rec.suggested_shifts
+                if not shifts or not config.shift_enabled:
+                    continue  # nothing to give (below a quarter under the quarters rule: not Type 2)
                 if comp_type == OvertimeRecord.TYPE_RELAXATION and not config.relaxation_enabled:
                     continue
                 if comp_type == OvertimeRecord.TYPE_PAY and not config.pay_enabled:
                     continue
-                rec.shifts = rec.suggested_shifts
+                rec.shifts = shifts
             rec.status = OvertimeRecord.STATUS_ANNOUNCED
             rec.compensation_type = comp_type
             rec.announced_by = actor

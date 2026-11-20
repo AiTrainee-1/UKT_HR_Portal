@@ -1,32 +1,15 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { renderMdPage, type RenderedPage } from "@/pages/md/testing/renderMdPage";
-import ConfigTab from "./ConfigTab";
-import { connection } from "./test-fixtures";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderMdPage, type Fixtures, type RenderedPage } from "@/pages/md/testing/renderMdPage";
+import WhatsAppControl from "../WhatsAppControl";
+import { ADMIN, connectionFixture, hrWith, pageFixtures, settingsServer } from "./test-fixtures";
 
-// The Setup tab of WhatsApp Control. No WhatsApp message carries a link to the Employee Web App any more, so this tab
-// must not ask for a portal address (the EMPLOYEE_PORTAL_URL setting is gone) or report link previews (the preview card is
-// gone). These checks keep it that way, including against a server that is still on the older release and sends both.
+// Settings: the Meta set-up check (each environment variable set or missing, by name only, never a value; the number at
+// Meta; whether Meta took the token), the webhook URL to paste into Meta with the verify token and app secret set or not
+// and when Meta last called, the development lock, and the prices per pricing category and the monthly budget.
 
-const CONFIG = {
-  provider: "WAClient (WhatsApp Web API)",
-  configured: true,
-  instanceId: "…1234",
-  apiUrl: "https://api.waclient.test/send",
-  defaultCountryCode: "91",
-  sendDelaySeconds: 2,
-  publicBaseUrl: "https://api.example.test",
-  webhookUrl: "https://api.example.test/api/whatsapp/webhook/",
-  webhookTokenSet: false,
-  backgroundSending: true,
-};
-
-const settings = (config: Record<string, unknown>) => ({
-  groups: [],
-  features: [],
-  timings: [],
-  config,
-  updatedAt: null,
-});
+vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
+vi.mock("@/components/PageRefreshBar", () => ({ RefreshButton: () => null }));
 
 let page: RenderedPage | undefined;
 afterEach(() => {
@@ -34,48 +17,126 @@ afterEach(() => {
   page = undefined;
 });
 
-const open = async (config: Record<string, unknown>) => {
+const open = async (
+  opts: { server?: ReturnType<typeof settingsServer>; me?: Record<string, unknown>; extra?: Fixtures } = {},
+) => {
+  const server = opts.server ?? settingsServer();
   page = await renderMdPage(
-    () => <ConfigTab />,
-    { "/api/whatsapp-control/settings": settings(config), "/api/whatsapp-control/connection": connection() },
-    { path: "/hr/whatsapp-control" },
+    WhatsAppControl,
+    { ...pageFixtures(server), "/api/auth/me": opts.me ?? ADMIN, ...opts.extra },
+    { path: "/hr/whatsapp-control?tab=config" },
   );
-  return page;
+  return { page, server };
 };
 
-describe("WhatsApp Control setup tab", () => {
-  it("shows the connection and the webhook, and nothing about a portal address or link previews", async () => {
-    await open(CONFIG);
-    const text = page!.text();
-    expect(text).toContain("Setup checklist");
-    expect(text).toContain("WAClient credentials are set on the server");
-    expect(text).toContain("Documents can be downloaded by WAClient");
-    expect(text).toContain("Webhook is protected with a token");
-    expect(page!.container.querySelector('[data-testid="webhook-url"]')!.textContent).toBe(CONFIG.webhookUrl);
-    for (const gone of ["Employee Web App", "EMPLOYEE_PORTAL_URL", "View request", "Link previews", "link preview"]) {
-      expect(text).not.toContain(gone);
-    }
-    expect(text).toContain("Delivery");
+const el = (selector: string) => document.body.querySelector<HTMLElement>(selector);
+
+describe("the Meta set-up check", () => {
+  it("lists every environment variable as set or missing, by name only", async () => {
+    await open();
+    const env = el('[data-testid="wa-env"]')!;
+    expect(el('[data-testid="wa-env-WHATSAPP_CLOUD_ACCESS_TOKEN"]')!.textContent).toContain("Set");
+    expect(el('[data-testid="wa-env-WHATSAPP_CLOUD_ACCESS_TOKEN"]')!.textContent).toContain("secret");
+    expect(el('[data-testid="wa-env-WHATSAPP_CLOUD_APP_SECRET"]')!.textContent).toContain("Missing");
+    // an optional variable left unset is not an error: the server uses its default
+    const base = el('[data-testid="wa-env-WHATSAPP_CLOUD_API_BASE"]')!.textContent;
+    expect(base).toContain("Optional");
+    expect(base).not.toContain("Missing");
+    expect(env.querySelectorAll("li")).toHaveLength(7);
+    expect(page!.text()).not.toMatch(/wa ?client/i);
   });
 
-  it("ignores a portal address and a link-preview flag sent by a server still on the older release", async () => {
-    await open({ ...CONFIG, employeePortalUrl: "https://employee.example.test", linkPreview: true });
-    const text = page!.text();
-    expect(text).not.toContain("employee.example.test");
-    expect(text).not.toContain("Link previews");
-    expect(text).not.toContain("Employee Web App");
+  it("shows Meta's answer about the number (snake_case read as well) and the token", async () => {
+    await open();
+    const phone = el('[data-testid="wa-connection-phone"]')!.textContent!;
+    expect(phone).toContain("+91 98765 43210");
+    expect(phone).toContain("UK Textiles");
+    expect(phone).toContain("High");
+    expect(phone).toContain("2,000 people / 24 h");
+    expect(phone).toContain("Connected");
+    expect(phone).toContain("standard");
+    const verdict = el('[data-testid="wa-connection-verdict"]')!.textContent!;
+    expect(verdict).toContain("Token accepted by Meta");
+    expect(verdict).toContain("Graph API v23.0");
+    expect(el('[data-testid="wa-connection-devlock"]')!.textContent).toContain("employee 30020");
   });
 
-  it("lists exactly three setup checks: credentials, documents and the webhook token", async () => {
-    await open(CONFIG);
-    expect(page!.container.querySelectorAll('[data-testid="wa-setup-checklist"] > li')).toHaveLength(3);
+  it("checks again on demand, and shows Meta's error and why nothing is sent", async () => {
+    let calls = 0;
+    const bad = {
+      ...connectionFixture(),
+      tokenOk: false,
+      error: "190: the access token has expired",
+      sendingAllowed: false,
+    };
+    bad.blockReasons = ["WhatsApp sending is off on this development machine."] as never;
+    await open({
+      extra: {
+        "/api/whatsapp-control/connection": () => {
+          calls += 1;
+          return bad;
+        },
+      },
+    });
+    expect(el('[data-testid="wa-connection-meta-error"]')!.textContent).toContain("expired");
+    expect(el('[data-testid="wa-connection-block"]')!.textContent).toContain("development machine");
+    expect(el('[data-testid="wa-connection-verdict"]')!.textContent).toContain("Token refused by Meta");
+    await page!.click('[data-testid="wa-connection-recheck"]');
+    expect(calls).toBe(2);
+  });
+});
+
+describe("the webhook", () => {
+  it("gives the URL to paste into Meta and says what is set and when Meta last called", async () => {
+    await open();
+    expect(el('[data-testid="wa-webhook-url"]')!.textContent).toContain(
+      "https://hrms.example.test/api/whatsapp/webhook/",
+    );
+    const hook = el('[data-testid="wa-webhook"]')!.textContent!;
+    expect(hook).toContain("Verify tokenSet");
+    expect(hook).toContain("App secret (signature check)Missing");
+    expect(el('[data-testid="wa-webhook-last"]')!.textContent).toContain("Never");
+    expect(hook).toContain("message_template_status_update");
+  });
+});
+
+describe("prices and the monthly budget", () => {
+  it("shows the saved rates (a Decimal sent as text too) with GST, and saves only what changed", async () => {
+    const { server } = await open();
+    expect((el('[data-testid="wa-rate-authentication"]') as HTMLInputElement).value).toBe("0.115");
+    expect((el('[data-testid="wa-budget"]') as HTMLInputElement).value).toBe("500");
+    expect(el('[data-testid="wa-prices-save"]')!.hasAttribute("disabled")).toBe(true);
+    await page!.type('[data-testid="wa-rate-utility"]', "0.12");
+    await page!.type('[data-testid="wa-budget"]', "750");
+    await page!.click('[data-testid="wa-prices-save"]');
+    expect(server.patches).toEqual([
+      { priceRates: { authentication: 0.115, utility: 0.12, marketing: 0.8631, service: 0 }, monthlyBudget: 750 },
+    ]);
   });
 
-  it("opens with the connection check above the setup checklist", async () => {
-    await open(CONFIG);
-    const panel = page!.container.querySelector('[data-testid="wa-connection"]')!;
-    const checklist = page!.container.querySelector('[data-testid="wa-setup-checklist"]')!;
-    expect(panel.compareDocumentPosition(checklist) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(page!.requests()).toContain("/api/whatsapp-control/connection");
+  it("clears the budget with an empty field, and refuses a bad price", async () => {
+    const { server } = await open();
+    await page!.type('[data-testid="wa-rate-marketing"]', "abc");
+    expect(el('[data-testid="wa-rate-error-marketing"]')!.textContent).toContain("Numbers only");
+    expect(el('[data-testid="wa-prices-save"]')!.hasAttribute("disabled")).toBe(true);
+    await page!.type('[data-testid="wa-rate-marketing"]', "0.8631");
+    await page!.type('[data-testid="wa-budget"]', "");
+    await page!.click('[data-testid="wa-prices-save"]');
+    expect(server.patches).toEqual([{ monthlyBudget: null }]);
+  });
+
+  it("shows the server's refusal", async () => {
+    const server = settingsServer();
+    server.refuse(400, { error: "priceRates.utility must be between 0 and 100" });
+    await open({ server });
+    await page!.type('[data-testid="wa-rate-utility"]', "0.2");
+    await page!.click('[data-testid="wa-prices-save"]');
+    expect(el('[data-testid="wa-prices-error"]')!.textContent).toContain("between 0 and 100");
+  });
+
+  it("locks the prices on a View-only tab", async () => {
+    await open({ me: hrWith({ whatsapp_control: "edit", "whatsapp_control.config": "view" }) });
+    expect((el('[data-testid="wa-rate-utility"]') as HTMLInputElement).disabled).toBe(true);
+    expect((el('[data-testid="wa-budget"]') as HTMLInputElement).disabled).toBe(true);
   });
 });

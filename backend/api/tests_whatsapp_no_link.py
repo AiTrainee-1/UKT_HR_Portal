@@ -4,7 +4,8 @@ The owner does not want the link, so: the two approval messages lost their "View
 placeholder, the preview card ("link" type) that used to be sent for the gate messages and the approvals is gone, the
 EMPLOYEE_PORTAL_URL / WHATSAPP_LINK_PREVIEW settings and their display on the WhatsApp Control page are gone, and wording
 HR saved earlier that still names {{link}} is cleaned by migration 0130 and, if it ever reaches the renderer anyway, loses
-the whole line instead of printing the placeholder.
+the whole line instead of printing the placeholder. With the Meta Cloud API (2026-11-20) a message is an approved
+template whose variables are the catalog's, so no variable can carry the link either.
 
 Run via: python manage.py test api.tests_whatsapp_no_link -v 2
 """
@@ -14,7 +15,6 @@ import inspect
 import re
 from datetime import timedelta
 from pathlib import Path
-from unittest import mock
 
 from django.apps import apps as live_apps
 from django.conf import settings
@@ -22,29 +22,16 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from . import whatsapp_catalog as catalog, whatsapp_notifications, whatsapp_service as svc
-from .jwt_utils import sign_token
-from .models import Employee, HRUser, OutpassRequest, WhatsAppMessageTemplate
+from .models import Employee, OutpassRequest, WhatsAppMessageTemplate
+from .tests_whatsapp_support import META, FakeMeta, approve_templates
 
 migration = importlib.import_module("api.migrations.0130_whatsapp_strip_portal_link")
 
-CONFIG = dict(
-    WACLIENT_INSTANCE_ID="INST1234",
-    WACLIENT_ACCESS_TOKEN="tok-secret",
-    WHATSAPP_DEFAULT_COUNTRY_CODE="91",
-    BACKEND_PUBLIC_URL="https://api.example.test",
-)
-BASE = "/api/whatsapp-control"
 # The only URLs a message may still carry: the map link in the two Geo punch messages (it shows where the punch was
 # captured; it is not the Employee Web App).
 MAP_LINK_VARIABLES = {("geo_punch_approval", "location"), ("geo_punch_rejection", "location")}
 
 OLD_LINK_LINE = "🔗 View request: {{link}}"
-
-
-def _ok():
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message_payload": {"key": {"id": "WAID"}}}
-    return r
 
 
 class CatalogueTests(SimpleTestCase):
@@ -110,7 +97,11 @@ class CatalogueTests(SimpleTestCase):
         self.assertFalse(hasattr(settings, "WHATSAPP_LINK_PREVIEW"))
         self.assertFalse(hasattr(whatsapp_notifications, "portal_link"))
         self.assertNotIn("link_url", inspect.signature(svc.send_notification).parameters)
-        self.assertEqual(list(inspect.signature(svc.send_text_message).parameters), ["to_phone", "text"])
+        self.assertEqual(
+            list(inspect.signature(svc.deliver_template).parameters),
+            ["to", "document_type", "params", "media", "media_id", "media_filename", "choice"],
+        )
+        self.assertFalse(hasattr(svc, "send_text_message"))  # Meta delivers approved templates only: no free text
         # the send queue's sender is handed a row and nothing else (no link, no preview card)
         from . import whatsapp_dispatcher
 
@@ -155,78 +146,6 @@ class RenderTests(SimpleTestCase):
 
     def test_a_blank_gap_left_by_the_dropped_line_does_not_double_up(self):
         self.assertEqual(svc.render_message("A\n\n{{link}}\n\nB", {}), "A\n\nB")
-
-
-@override_settings(**CONFIG)
-class EditorTests(TestCase):
-    """The template editors refuse {{link}} through the existing unknown-placeholder check."""
-
-    def setUp(self):
-        admin = HRUser.objects.create(username="nl_admin", password_hash="x", is_super_admin=True)
-        self.hr = {"HTTP_AUTHORIZATION": f"Bearer {sign_token({'role': 'hr', 'hrUserId': admin.id})}"}
-
-    def put(self, path, body):
-        return self.client.put(f"{BASE}/{path}", body, content_type="application/json", **self.hr)
-
-    def post(self, path, body):
-        return self.client.post(f"{BASE}/{path}", body, content_type="application/json", **self.hr)
-
-    def test_saving_wording_with_the_link_placeholder_is_refused_and_nothing_is_saved(self):
-        for key in ("approval_approved", "approval_rejected"):
-            r = self.put(f"templates/{key}", {"messageBody": f"Hello {{{{employee_name}}}}\n{OLD_LINK_LINE}"})
-            self.assertEqual(r.status_code, 400, key)
-            self.assertIn("{{link}}", r.json()["error"])
-            self.assertNotIn("portal", r.json()["error"].lower())  # not listed among what HR can use
-        self.assertFalse(WhatsAppMessageTemplate.objects.exists())
-
-    def test_the_other_wording_editor_refuses_it_too(self):
-        r = self.client.put(
-            "/api/whatsapp/templates/salary_slip",
-            {"messageBody": "Slip for {{month_year}} {{link}}"},
-            content_type="application/json",
-            **self.hr,
-        )
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("{{link}}", r.json()["error"])
-
-    def test_the_same_wording_without_the_link_saves(self):
-        r = self.put("templates/approval_approved", {"messageBody": "Hello {{employee_name}}, {{reason}}"})
-        self.assertEqual(r.status_code, 200)
-
-    def test_the_preview_flags_it_and_shows_the_message_without_the_line(self):
-        r = self.post(
-            "templates/approval_approved/preview",
-            {"messageBody": f"Approved by {{{{approver}}}}\n{OLD_LINK_LINE}\nBye"},
-        )
-        body = r.json()
-        self.assertIn("{{link}}", body["error"])
-        self.assertEqual(body["preview"], "Approved by Meena (HR)\nBye")
-
-    def test_the_variables_the_editor_offers_do_not_include_the_link(self):
-        rows = {r["documentType"]: r for r in self.client.get(f"{BASE}/templates", **self.hr).json()}
-        for key in ("approval_approved", "approval_rejected"):
-            row = rows[key]
-            self.assertNotIn("link", [v["name"] for v in row["variables"]])
-            self.assertNotIn("{{link}}", row["placeholders"])
-            self.assertNotIn("{{link", row["defaultMessage"])
-            self.assertNotIn("View request", row["defaultMessage"])
-            self.assertNotIn("View request", row["preview"])
-
-    def test_a_stored_old_body_still_previews_cleanly_in_the_list(self):
-        WhatsAppMessageTemplate.objects.create(
-            document_type="approval_rejected", message_body=f"No: {{{{comment}}}}\n{OLD_LINK_LINE}"
-        )
-        rows = {r["documentType"]: r for r in self.client.get(f"{BASE}/templates", **self.hr).json()}
-        self.assertEqual(rows["approval_rejected"]["preview"], "No: Get well soon")
-
-    def test_the_control_page_config_no_longer_reports_a_portal_address_or_link_previews(self):
-        config = self.client.get(f"{BASE}/settings", **self.hr).json()["config"]
-        self.assertNotIn("employeePortalUrl", config)
-        self.assertNotIn("linkPreview", config)
-        overview = self.client.get(f"{BASE}/overview", **self.hr).json()["config"]
-        self.assertNotIn("employeePortalUrl", overview)
-        self.assertNotIn("linkPreview", overview)
-        self.assertIn("backgroundSending", overview)  # the rest of the block is still there
 
 
 class StripLinkLinesTests(SimpleTestCase):
@@ -336,14 +255,13 @@ class MigrationTests(TestCase):
         migration.forwards(live_apps, None)
         body = WhatsAppMessageTemplate.objects.get(document_type="approval_approved").message_body
         self.assertEqual(body, "Hello {{employee_name}}\n\nBye")
-        from .whatsapp_control_views import _wording_error
-
-        self.assertIsNone(_wording_error("approval_approved", body))
+        self.assertEqual(svc.render_message(body, {"employee_name": "Asha"}), "Hello Asha\n\nBye")
 
 
-@override_settings(**CONFIG)
+@override_settings(**META)
 class GateSenderTests(TestCase):
-    """The gate messages used to be sent as a preview card for the portal's outpass page; now they are plain text."""
+    """The gate messages used to be sent as a preview card for the portal's outpass page; now they are templates whose
+    variables carry no address."""
 
     def test_gate_out_and_in_are_sent_as_plain_text_without_a_url(self):
         emp = Employee.objects.create(
@@ -360,14 +278,15 @@ class GateSenderTests(TestCase):
             exited_at=timezone.now() - timedelta(minutes=30),
             entered_at=timezone.now(),
         )
-        with mock.patch("api.whatsapp_service.requests.post", return_value=_ok()) as post:
-            whatsapp_notifications.notify_gate_out(req)
-            whatsapp_notifications.notify_gate_in(req)
-        payloads = [c.kwargs["json"] for c in post.call_args_list]
-        self.assertEqual(len(payloads), 2)
-        for payload in payloads:
-            self.assertEqual(payload["type"], "text")
-            self.assertNotIn("url", payload)
-            self.assertNotIn("http", payload["message"])
-        self.assertIn("Gate Exit Recorded", payloads[0]["message"])
-        self.assertIn("Gate Return Recorded", payloads[1]["message"])
+        meta = FakeMeta.install(self)
+        approve_templates("outpass_gate_out", "outpass_gate_in")
+        whatsapp_notifications.notify_gate_out(req)
+        whatsapp_notifications.notify_gate_in(req)
+        self.assertEqual(
+            meta.templates_sent, [svc.template_name_for("outpass_gate_out"), svc.template_name_for("outpass_gate_in")]
+        )
+        for sent in meta.sent:
+            self.assertEqual(sent["body"]["type"], "template")
+            self.assertIsNone(sent["header"])
+            for value in sent["params"].values():
+                self.assertNotIn("http", value)

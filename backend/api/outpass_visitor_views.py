@@ -202,9 +202,9 @@ def _send_visitor_email(visit: VisitorVisit, emp: Employee) -> None:
 
 
 def _send_visitor_whatsapp(visit: VisitorVisit, emp: Employee) -> None:
-    """The visitor message (name, contact, purpose, department, date and time) plus the
-    visitor's contact card to tap and call. Queued, so the visitor's check-in never waits on
-    WhatsApp; the Reception "notified" time is stamped once it is really sent."""
+    """The visitor message (name, phone number, purpose, department, date and time), the
+    approved Meta template hrms_visitor_at_reception. Queued, so the visitor's check-in never
+    waits on WhatsApp; the Reception "notified" time is stamped once it is really sent."""
     from . import whatsapp_notifications
 
     whatsapp_notifications.notify_visitor_arrival(visit, emp)

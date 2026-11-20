@@ -168,10 +168,16 @@ def scope(
 
 
 def resolve_default(spec_filter: FilterSpec, today: date) -> Any:
-    """Turn a FilterSpec default (literal or token) into what the UI should pre-fill."""
+    """Turn a FilterSpec default (literal or token) into what the UI should pre-fill.
+
+    Literal values are kept as they are: a month "2026-09", a range {"dateFrom", "dateTo"}, a list of ids. Only a saved
+    Customise report gives those (reporting/custom/specs.py: its saved filter values are its defaults); every
+    registered report uses the tokens."""
     d = spec_filter.default
     kind = spec_filter.kind
     if kind == F_PERIOD:
+        if isinstance(d, str) and parse_period(d):
+            return d.strip()
         if d == "lastMonth":
             first = today.replace(day=1) - timedelta(days=1)
             return f"{first.year}-{first.month:02d}"
@@ -179,9 +185,11 @@ def resolve_default(spec_filter: FilterSpec, today: date) -> Any:
     if kind == F_YEAR:
         return int(d) if isinstance(d, int) else today.year
     if kind == F_DATE_RANGE:
+        if isinstance(d, dict):
+            return {"dateFrom": str(d.get("dateFrom") or ""), "dateTo": str(d.get("dateTo") or "")}
         return _range_default(d, today)
     if kind in (F_DEPARTMENT, F_DESIGNATION, F_BRANCH, F_EMPLOYEE):
-        return []
+        return [int(i) for i in d] if isinstance(d, (list, tuple)) else []
     if kind == F_BOOLEAN:
         return bool(d)
     return d

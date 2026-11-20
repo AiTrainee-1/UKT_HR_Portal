@@ -1,0 +1,29 @@
+/* Clean Professional theme: the icon chip at the top of an open report. The theme gives the catalog's chips and section
+   headings the brand's soft tile instead of one colour per category (themes/clean/areas/settings-reports.css, "4. Report
+   Center"); this chip sits in neither, so it kept its emerald / sky / amber. Same scope as every Clean rule. */
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-report-chip] {
+  background-color: var(--clean-primary-soft);
+  color: hsl(var(--primary));
+  --tw-ring-color: var(--clean-line);
+}
+
+/* The report builder (customise/): its header chip and the data source chips carry data-report-chip too. The step
+   numbers and the dashed "Create custom report" tile of the catalog take the same soft tile and the theme's line. */
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-step-badge] {
+  background-color: var(--clean-primary-soft);
+  color: hsl(var(--primary));
+  --tw-ring-color: var(--clean-line);
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-create-tile] {
+  border-color: var(--clean-line);
+  background-color: transparent;
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-create-tile]:hover {
+  border-color: var(--clean-n-400);
+  background-color: var(--clean-primary-soft);
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) [data-create-tile] > span:first-child {
+  background-color: var(--clean-primary-soft);
+  color: hsl(var(--primary));
+  box-shadow: none;
+}

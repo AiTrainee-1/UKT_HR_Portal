@@ -266,7 +266,7 @@ class RaiseClaimTests(HolidayWorkBase):
     def test_a_working_day_is_refused(self):
         r = self.post({"employeeId": self.asha.id, "workDate": "2026-10-12", "shifts": 1, "reason": "x"})
         self.assertEqual(r.status_code, 400)
-        self.assertIn("neither a Sunday nor a declared holiday", r.json()["error"])
+        self.assertIn("neither a Sunday, a declared holiday nor an off Saturday", r.json()["error"])
 
     def test_a_date_that_has_not_happened_yet_is_refused(self):
         r = self.post({"employeeId": self.asha.id, "workDate": "2026-10-18", "shifts": 1, "reason": "x"})
@@ -588,7 +588,7 @@ class EligibleTests(HolidayWorkBase):
     def test_a_weekday_has_nobody_to_claim_for(self):
         body = self.eligible("2026-10-12")
         self.assertEqual((body["dayKind"], body["claimable"], body["employees"]), (None, False, []))
-        self.assertIn("neither a Sunday nor a declared holiday", body["message"])
+        self.assertIn("neither a Sunday, a declared holiday nor an off Saturday", body["message"])
 
     def test_a_holiday_and_a_too_old_date(self):
         holiday = self.eligible("2026-10-02")

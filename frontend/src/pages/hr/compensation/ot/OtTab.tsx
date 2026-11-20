@@ -22,7 +22,7 @@ import {
 import type { CompensationUrl } from "../logic";
 import { NestedTabs } from "@/components/ui/nested-tabs";
 import { OT_NESTED, OT_SUBS, OT_SUB_LABEL, pagePath, subPath, type OtSub } from "../routes";
-import { keepOpenNested, openDefaultNested, useCanOpen } from "../visible";
+import { keepOpenNested, openDefaultNested, useCanOpen, useClaimRight } from "../visible";
 import { SwitchOffNotice } from "../ui";
 import { LegacySection } from "./LegacySection";
 import { Type1How, Type1Section } from "./Type1Section";
@@ -76,6 +76,9 @@ export default function OtTab({
   // the claim workflow's start date: the OT list may name it, the Compensation settings always do (a newer server)
   const rules = useCompensationConfig();
   const claimsFrom = claimsFromOf(config?.claimsFrom, rules.data?.claims?.from);
+  // with the quarters rule on, the threshold decides only the days before the claims date (and days with the rule off)
+  const quarterRule = rules.data?.shift?.quarterRule === true;
+  const claimsFromText = claimsFrom ? dateShort(claimsFrom) : (rules.data?.claims?.fromText ?? null);
 
   const groups = useMemo(() => groupOt(rows), [rows]);
   const kpis = useMemo(() => otKpis(rows, claimsFrom), [rows, claimsFrom]);
@@ -95,8 +98,10 @@ export default function OtTab({
 
   const modes = assignModes(config);
   const pause = type2Pause(config, featuresOff);
-  const pause1 = claimPause(config, featuresOff, 1);
-  const pause2 = claimPause(config, featuresOff, 2);
+  // "Claim for employee" needs Edit on Leave > Holiday work > Claims (the server's POST /compensation/claims checks it)
+  const claimRight = useClaimRight();
+  const pause1 = claimPause(config, featuresOff, 1, claimRight.reason);
+  const pause2 = claimPause(config, featuresOff, 2, claimRight.reason);
   const loading = query.isLoading;
   const masterOn = !featuresOff && config?.masterEnabled !== false;
   const filtersOn = (url.otq ? 1 : 0) + (url.otdept ? 1 : 0) + (sub === "type-1" && type1Status !== "all" ? 1 : 0);
@@ -361,8 +366,11 @@ export default function OtTab({
           {query.data && (
             <p className="px-1 text-[11px] text-muted-foreground" data-testid="ot-footnote">
               {countOf(rows.length, "record")} in {MONTH_NAMES[month - 1]} {year}. Type 2 threshold:{" "}
-              {formatDuration(config?.shiftMinExtraMinutes ?? 150)} past the shift end.
-              {claimsFrom ? ` Claims apply from ${dateShort(claimsFrom)}; earlier days keep the old rules.` : ""} Staff
+              {formatDuration(config?.shiftMinExtraMinutes ?? 150)} past the shift end
+              {quarterRule
+                ? `, used only for days before ${claimsFromText ?? "the claims date"} or with the quarters rule off; from then Type 2 starts at a quarter of the employee's shift`
+                : ""}
+              .{claimsFrom ? ` Claims apply from ${dateShort(claimsFrom)}; earlier days keep the old rules.` : ""} Staff
               only: production employees are never listed.
             </p>
           )}

@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { NestedTabs } from "@/components/ui/nested-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -10,11 +9,11 @@ import {
   useUpdateSmsSettings,
   type SmsSettings,
 } from "@/lib/api-client/custom-hooks";
-import ChannelSection from "./ChannelSection";
+import CostSection from "./CostSection";
 import LimitsSection from "./LimitsSection";
 import SwitchesSection from "./SwitchesSection";
 import {
-  CHANNEL_LABEL,
+  INDEPENDENT_TEXT,
   PROVIDER_NAME,
   STALE_TEXT,
   buildInput,
@@ -22,21 +21,29 @@ import {
   failureText,
   formatWhen,
   sectionDirty,
+  validateCost,
   validateLimits,
   withSection,
   type SectionProps,
   type SettingsDraft,
 } from "./logic";
 import { SETTINGS_SECTIONS, SMS_BASE, type SettingsSectionKey } from "./routes";
-import { ConfirmDialog, Notice } from "./ui";
+import { ConfirmDialog, LoadError, Notice } from "./ui";
 
 const SECTIONS: readonly SettingsSectionKey[] = SETTINGS_SECTIONS.map((s) => s.value);
 
+const SAVED_TITLE: Record<SettingsSectionKey, string> = {
+  switches: "SMS code switches saved",
+  limits: "Limits saved",
+  cost: "Price and budget saved",
+};
+
 /**
- * Settings: the channel, the limits and the switches, one section at a time (the nested tabs are in the path). The form lives
- * HERE, above the sections, so what was typed in one is still there after a look at another. Each section has its own Save,
- * which sends the saved values with that section's fields changed, and the `version` the form was started from: a copy that
- * somebody else has outdated is refused (and the form is kept until HR chooses to reload). Switching the channel asks first.
+ * Settings: the SMS code switches, the limits, and the price and budget, one section at a time (the nested tabs are in the
+ * path). The form lives HERE, above the sections, so what was typed in one is still there after a look at another. Each
+ * section has its own Save, which sends only that section's fields and the `version` the form was started from: a copy that
+ * somebody else has outdated is refused (and the form is kept until HR chooses to reload). Switching SMS codes on or off asks
+ * first, because it decides what every employee is offered from the next code on.
  */
 export default function SettingsTab({
   section,
@@ -72,7 +79,7 @@ export default function SettingsTab({
   const [savingSection, setSavingSection] = useState<SettingsSectionKey | null>(null);
   const [errors, setErrors] = useState<Partial<Record<SettingsSectionKey, string>>>({});
   const [stale, setStale] = useState(false);
-  const [confirmingChannel, setConfirmingChannel] = useState(false);
+  const [confirmingMaster, setConfirmingMaster] = useState(false);
   const [confirmingReload, setConfirmingReload] = useState(false);
 
   if (query.isLoading || (data && !draft)) {
@@ -85,38 +92,30 @@ export default function SettingsTab({
   }
 
   if (query.isError || !data || !draft || !saved) {
-    return (
-      <Notice tone="bad" role="alert" testId="sms-settings-error">
-        <div className="flex flex-wrap items-center gap-3">
-          <span>The SMS settings could not be loaded. Check the connection and try again.</span>
-          <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
-            Try again
-          </Button>
-        </div>
-      </Notice>
-    );
+    return <LoadError what="The SMS settings" onRetry={() => void query.refetch()} testId="sms-settings-error" />;
   }
 
   const anyDirty = SECTIONS.some((s) => sectionDirty(s, draft, saved));
-  const ready = overview.data ? overview.data.configured : null;
+  const configured = overview.data ? overview.data.configured : null;
 
   const patch = (change: Partial<SettingsDraft>) => setDraft((d) => (d ? { ...d, ...change } : d));
 
   const save = async (which: SettingsSectionKey) => {
-    setConfirmingChannel(false);
+    setConfirmingMaster(false);
     setSavingSection(which);
     setErrors((e) => ({ ...e, [which]: undefined }));
     setStale(false);
     try {
-      const result = await update.mutateAsync(buildInput(data, draft, which, baseVersion));
+      const result = await update.mutateAsync(buildInput(draft, which, baseVersion, data));
       setDraft((d) => (d ? withSection(which, d, draftFrom(result)) : draftFrom(result)));
       setBaseVersion(result.version);
+      const masterChanged = which === "switches" && result.otpEnabled !== data.otpEnabled;
       toast({
-        title: which === "channel" ? `Codes now go by ${CHANNEL_LABEL[result.otpChannel]}` : "Settings saved",
+        title: masterChanged ? (result.otpEnabled ? "SMS codes are on" : "SMS codes are off") : SAVED_TITLE[which],
         description:
-          (result.warnings?.length ?? 0) > 0
-            ? `Saved, with a warning: ${(result.warnings ?? []).join(" ")}`
-            : "The change applies from the next code that is asked for.",
+          result.warnings.length > 0
+            ? `Saved, with a warning: ${result.warnings.join(" ")}`
+            : "It applies at once, in the apps too: they ask the server before every code.",
       });
     } catch (err) {
       const staleCopy = isStaleSettingsError(err);
@@ -131,9 +130,10 @@ export default function SettingsTab({
 
   const requestSave = (which: SettingsSectionKey) => {
     if (which === "limits" && validateLimits(draft).first !== null) return;
-    // switching the channel decides what every employee receives: say so and ask first
-    if (which === "channel" && draft.otpChannel !== saved.otpChannel) {
-      setConfirmingChannel(true);
+    if (which === "cost" && validateCost(draft).first !== null) return;
+    // switching SMS codes on or off decides what every employee is offered: say so and ask first
+    if (which === "switches" && draft.otpEnabled !== saved.otpEnabled) {
+      setConfirmingMaster(true);
       return;
     }
     void save(which);
@@ -169,7 +169,7 @@ export default function SettingsTab({
     onReload: () => (anyDirty ? setConfirmingReload(true) : void reload()),
   });
 
-  const toSms = draft.otpChannel === "sms";
+  const turningOn = draft.otpEnabled;
 
   return (
     <div className="space-y-4" data-testid="sms-settings">
@@ -178,11 +178,11 @@ export default function SettingsTab({
           Last saved {data.updatedBy ? `by ${data.updatedBy} ` : ""}on {formatWhen(data.updatedAt)}.
         </p>
       )}
-      {(data.warnings?.length ?? 0) > 0 && (
+      {data.warnings.length > 0 && (
         <Notice tone="warn" testId="sms-settings-warnings">
           <p className="font-semibold">The server points out:</p>
           <ul className="list-disc space-y-0.5 pl-5">
-            {(data.warnings ?? []).map((w) => (
+            {data.warnings.map((w) => (
               <li key={w}>{w}</li>
             ))}
           </ul>
@@ -196,40 +196,48 @@ export default function SettingsTab({
         testId="sms-settings-nested"
         label="Sections of Settings"
       >
-        {section === "channel" && <ChannelSection {...common("channel")} ready={ready} />}
+        {section === "switches" && <SwitchesSection {...common("switches")} configured={configured} />}
         {section === "limits" && <LimitsSection {...common("limits")} />}
-        {section === "switches" && <SwitchesSection {...common("switches")} channel={data.otpChannel} />}
+        {section === "cost" && (
+          <CostSection
+            {...common("cost")}
+            month={overview.data ?? null}
+            defaultPrice={data.pricePerSmsDefault ?? undefined}
+          />
+        )}
       </NestedTabs>
 
       <ConfirmDialog
-        open={confirmingChannel}
-        title={toSms ? "Send codes by SMS?" : "Send codes by WhatsApp again?"}
-        confirmLabel={toSms ? "Yes, use SMS" : "Yes, use WhatsApp"}
-        onConfirm={() => void save("channel")}
-        onCancel={() => setConfirmingChannel(false)}
-        testId="sms-channel-confirm"
+        open={confirmingMaster}
+        title={turningOn ? "Switch SMS codes on?" : "Switch SMS codes off?"}
+        confirmLabel={turningOn ? "Yes, switch on" : "Yes, switch off"}
+        onConfirm={() => void save("switches")}
+        onCancel={() => setConfirmingMaster(false)}
+        testId="sms-master-confirm"
       >
-        {toSms ? (
+        {turningOn ? (
           <>
             <p>
-              From the next code on, employees get their login, password-reset and activation codes as an SMS from{" "}
-              {PROVIDER_NAME} instead of on WhatsApp. WhatsApp keeps sending every other message.
+              From the next code on, employees can get one-time codes by SMS from {PROVIDER_NAME}, for the uses switched
+              on below. Each SMS costs a little.
             </p>
-            {ready === false && (
+            {configured === false && (
               <p className="font-semibold text-amber-700 dark:text-amber-400">
-                {PROVIDER_NAME} is not set up on the server yet, so employees will get no code options until it is.
-                Password sign-in keeps working.
+                {PROVIDER_NAME} is not set up on the server yet, so the apps will offer no SMS until it is.
               </p>
             )}
-            <p>Codes already sent on WhatsApp work until they expire. You can switch back at any time.</p>
+            <p>{INDEPENDENT_TEXT}</p>
           </>
         ) : (
           <>
             <p>
-              From the next code on, codes go by WhatsApp again, as before. Your SMS limits and switches are kept for
-              later.
+              No SMS will be sent from the next code on, and the apps stop offering SMS at once. Codes already sent work
+              until they expire.
             </p>
-            <p>Codes already sent by SMS work until they expire.</p>
+            <p>
+              If WhatsApp codes are on (WhatsApp Control), employees keep getting codes there. If they are off too,
+              employees sign in with their password. Nobody is locked out.
+            </p>
           </>
         )}
       </ConfirmDialog>

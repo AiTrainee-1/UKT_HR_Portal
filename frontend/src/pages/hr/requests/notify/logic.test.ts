@@ -255,29 +255,41 @@ describe("runs", () => {
 });
 
 describe("whatsappSwitchFix", () => {
-  it("points a switch on WhatsApp Control at the Department Head section of Feature Controls", () => {
+  it("points a switch on WhatsApp Control at the Department Head section of Message Controls", () => {
     for (const note of [
       "'HoD Pending Approvals Reminder' is switched off on the WhatsApp Control page.",
       "Department Heads notifications are switched off on the WhatsApp Control page.",
     ]) {
       const fix = whatsappSwitchFix(note)!;
       expect(fix.href, note).toBe("/hr/whatsapp-control?tab=controls");
+      expect(fix.label).toBe("Open Message Controls");
       expect(fix.text).toContain("Department Head notifications section switch");
       expect(fix.text).toContain("“HoD Pending Approvals Reminder”");
+      expect(fix.text).toContain("WhatsApp Control → Message Controls");
     }
   });
 
-  it("names the engine when the master switch is off, and Message Text when the text is switched off there", () => {
+  it("names the engine when the master switch is off", () => {
     expect(
       whatsappSwitchFix("WhatsApp sending is switched off (master switch) on the WhatsApp Control page.")!.text,
     ).toContain("WhatsApp engine (master switch)");
-    expect(whatsappSwitchFix("This reminder is switched off on the WhatsApp Control page (Message Text).")!.href).toBe(
-      "/hr/whatsapp-control?tab=templates",
-    );
   });
 
-  it("has nothing to say about a reason that is not a switch", () => {
-    expect(whatsappSwitchFix("WhatsApp is not set up on this server (the WAClient keys are missing).")).toBeNull();
+  it("points a missing or unapproved Meta template (and an older run's Message Text note) at Templates", () => {
+    for (const note of [
+      "No approved Meta template (hrms_hod_pending_reminder) for this message.",
+      "The template hrms_hod_pending_reminder is not approved on the WhatsApp Control page.",
+      "This reminder is switched off on the WhatsApp Control page (Message Text).",
+    ]) {
+      const fix = whatsappSwitchFix(note)!;
+      expect(fix.href, note).toBe("/hr/whatsapp-control?tab=templates");
+      expect(fix.label).toBe("Open Templates");
+      expect(fix.text).toContain("hrms_hod_pending_reminder");
+    }
+  });
+
+  it("has nothing to say about a reason that is not a switch or a template", () => {
+    expect(whatsappSwitchFix("WhatsApp is not set up on this server (the Meta keys are missing).")).toBeNull();
     expect(whatsappSwitchFix("No phone number")).toBeNull();
     expect(whatsappSwitchFix("")).toBeNull();
     expect(whatsappSwitchFix(undefined)).toBeNull();

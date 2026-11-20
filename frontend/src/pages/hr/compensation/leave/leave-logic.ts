@@ -236,8 +236,10 @@ export function decisionText(claim: Pick<HolidayWorkClaim, "status" | "reviewedB
   return `${claim.status === "approved" ? "Approved" : "Rejected"}${who}${when}`;
 }
 
+/** "Sunday", "Off Saturday" (an employee's own Saturday off: never a company holiday), "Holiday: Diwali", "Company holiday". */
 export function dayKindText(claim: Pick<HolidayWorkClaim, "dayKind" | "holidayName">): string {
   if (claim.dayKind === "sunday") return "Sunday";
+  if (claim.dayKind === "off_saturday") return "Off Saturday";
   return claim.holidayName ? `Holiday: ${claim.holidayName}` : "Company holiday";
 }
 
@@ -264,6 +266,12 @@ export function entrySourceText(entry: Pick<BalanceEntry, "source" | "type">): s
       return entry.type === "credit" ? "Added" : "Used";
   }
 }
+
+/**
+ * HR's own direct redeem, kept beside "Use balance" (which goes to the Department Head): its name says plainly that HR
+ * does it at once, with no Department Head approval.
+ */
+export const REDEEM_NOW = "Redeem now (HR, without the Department Head)";
 
 export type RedeemForm = { date: string; shifts: ShiftsValue | null };
 export type RedeemCheck = {

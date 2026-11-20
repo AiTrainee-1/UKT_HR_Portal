@@ -8,6 +8,7 @@ Run via: python manage.py test api.tests_comp_fix_r -v 2
 from datetime import date, time
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest import mock
 
 from django.test import SimpleTestCase, TestCase
 
@@ -54,7 +55,10 @@ def _pay_record(emp, day, shifts, *, ot_type="shift", announced_at=ANNOUNCED):
 
 class _ReportCenter(TestCase):
     def run_report(self, report_id, **params):
-        r = self.client.get(f"/api/reports/run/{report_id}", params, **_headers(self.admin))
+        # The overtime reports were retired from the catalog on 2026-11-19 (reporting/layout.py): their logic is still
+        # guarded here, so list them for the duration of the call.
+        with mock.patch("api.reporting.views.is_listed", return_value=True):
+            r = self.client.get(f"/api/reports/run/{report_id}", params, **_headers(self.admin))
         self.assertEqual(r.status_code, 200, r.content[:300])
         return r.json()
 

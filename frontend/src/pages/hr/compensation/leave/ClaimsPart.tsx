@@ -93,14 +93,18 @@ export const KIND_TILE_LABEL: Record<ClaimKind, string> = {
   use_balance: "Day off",
 };
 
-/** "1.75 shifts" or, when days off wait too, "1.75 in · 0.50 out" (older backends: the one total). */
+/**
+ * The hint of the "Waiting for HOD" tile. When days off wait too, the credits waiting to go in and the days off waiting to
+ * come out, both with two decimals: "1.00 in · 0.50 out", or "none in · 0.50 out" when only days off wait. With no day
+ * off waiting: "1.75 shifts to add". An older backend sends only the one total: "2 shifts".
+ */
 export function pendingHint(summary: ClaimsSummary | undefined): string {
   if (!summary) return "0 shifts";
   const credit = summary.pendingCreditShifts;
   const use = summary.pendingUseShifts;
   if (credit === null || use === null) return `${fmtShifts(summary.pendingShifts)} shifts`;
   if (use <= 0) return `${fmtShifts(credit)} shifts to add`;
-  return `${fmtShifts(credit)} in · ${fmtShifts(use)} out`;
+  return `${credit > 0 ? credit.toFixed(2) : "none"} in · ${use.toFixed(2)} out`;
 }
 
 const KIND_TONE: Record<ClaimKind, TileTone> = {
@@ -277,11 +281,14 @@ export function ClaimsPart({
     [canWithdraw, pausedReason, setLu],
   );
 
+  // three tiles side by side on a tablet, two on a phone: the label and the hint wrap instead of being cut off
   const statusTile = (status: "pending" | "approved" | "rejected", label: string, hint: string, icon: typeof Sun) => (
     <StatTile
       label={label}
+      wrapLabel
       value={summary?.byStatus[status] ?? 0}
       hint={hint}
+      wrapHint
       icon={icon}
       tone={STATUS_TONE[status]}
       loading={query.isLoading}

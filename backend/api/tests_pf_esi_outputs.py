@@ -26,6 +26,17 @@ from .payroll_views import _generate_production_payroll
 from .pf_esi_coverage_export import SUMMARY_LINES
 from .salary_slip_bulk_pdf import build_bulk_salary_slip_pdf
 from .tests_payroll_engine import MONTH, YEAR, _configure, _day, _present_all, _rule
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
+
+
+def setUpModule():
+    # the Report Center twin (pf-esi-coverage) is retired from the catalog since 2026-11-20 (reporting/layout.py)
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
+
 
 EXPORT = "/api/pf-esi/coverage/export"
 SLIPS = "/api/salary-slips"

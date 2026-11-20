@@ -54,6 +54,19 @@ from .models import (
 from .payroll_views import _build_working_days, _generate_production_payroll, _generate_staff_payroll
 from .permission_registry import all_module_keys
 from .reporting import registry
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
+
+
+# The 2026-11-19 Report Center layout (reporting/layout.py) retired the reports tested here from the catalog: run / export
+# answer 404 for a retired id. Their definitions stay (the MD portal and the gate exports reuse their helpers), so this
+# module keeps guarding their logic through the same endpoints, with every report listed again while it runs.
+def setUpModule():
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
+
 
 MONTH, YEAR = 2, 2026
 WORKING_DAYS = _build_working_days(MONTH, YEAR, False, set())  # 24 Mon-Sat days

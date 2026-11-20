@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { renderMdPage, type RenderedPage } from "@/pages/md/testing/renderMdPage";
-import OverviewTab from "./OverviewTab";
 import QueueCard from "./QueueCard";
 
 // Today's queue on the WhatsApp Control Overview: what waits, what went out against the limits, why sending is held
@@ -125,40 +124,5 @@ describe("Today's queue card", () => {
       { path: "/hr/whatsapp-control" },
     );
     expect(el('[data-testid="wa-queue-card"]')!.textContent).toContain("isn't available");
-  });
-});
-
-const counts = { pending: 0, sent: 0, delivered: 0, read: 0, failed: 0, total: 0, accepted: 0 };
-
-describe("the Overview tab", () => {
-  it("shows today's queue above today's and this month's numbers", async () => {
-    page = await renderMdPage(
-      () => <OverviewTab onOpenCategory={() => {}} onOpenFailures={() => {}} onOpenConfig={() => {}} />,
-      {
-        ...queueServer().fixtures,
-        // the switched-off banner and the Department Head card read the switches and the message types
-        "/api/whatsapp-control/settings": { engineEnabled: true, groups: [], features: [], timings: [], config: {} },
-        "/api/whatsapp-control/templates": [],
-        "/api/whatsapp-control/overview": {
-          days: 30,
-          config: { configured: true },
-          totals: counts,
-          today: counts,
-          thisMonth: counts,
-          categories: [{ key: "otp", label: "OTP & Login" }],
-          relatedModules: [],
-          byCategory: { otp: counts },
-          byType: [],
-          daily: [],
-          recentFailures: [],
-          stalePending: 0,
-        },
-      },
-      { path: "/hr/whatsapp-control" },
-    );
-    const card = el('[data-testid="wa-queue-card"]')!;
-    const today = el('[data-testid="period-today"]')!;
-    expect(card.compareDocumentPosition(today) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(page.text()).toContain("Today's queue");
   });
 });

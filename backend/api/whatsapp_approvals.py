@@ -12,7 +12,9 @@ The workflow's approve/reject code then makes ONE call:
 
 To cover a new approval workflow add a builder with `@register("key")` here and
 the key to `whatsapp_catalog.APPROVAL_MODULES` -nothing else changes (the switches on the
-WhatsApp Control page, the log and the template editor pick it up from the catalog).
+WhatsApp Control page and the log pick it up from the catalog). Every workflow goes out as the
+same two Meta templates (hrms_approval_approved / hrms_approval_rejected); the variables are
+sent on one line each (Meta's rule for a template variable).
 
 Geo Attendance (On-Duty) and its punches have their own wording -see whatsapp_notifications.
 
@@ -29,6 +31,7 @@ from typing import Callable
 from . import whatsapp_service
 from .whatsapp_format import (
     date_str as _date,
+    flat as _flat,
     full_name as _name,
     join as _join,
     stamp_str as _stamp,
@@ -292,17 +295,21 @@ def notify_decision(module: str, obj, decision: str, *, approver: str = "", role
         approved = decision == "approved"
         comment = (comment or "").strip()
         details = _join(summary.details, summary.next_step, sep=". ") if approved else summary.details
-        params = {
-            "employee_name": _name(summary.employee),
-            "request_type": summary.request_type,
-            "date": summary.date,
-            "time": summary.time,
-            "details": details,
-            "approver": approver_label(approver, role),
-            "comment": comment,
-            "requested_on": summary.requested_on,
-            "reason": summary.reason,
-        }
+        # the variables of the Meta template (hrms_approval_approved / _rejected), each on one line: a reason or a
+        # comment typed over several lines is joined into one
+        params = _flat(
+            {
+                "employee_name": _name(summary.employee),
+                "request_type": summary.request_type,
+                "date": summary.date,
+                "time": summary.time,
+                "details": details,
+                "approver": approver_label(approver, role),
+                "comment": comment,
+                "requested_on": summary.requested_on,
+                "reason": summary.reason,
+            }
+        )
         return whatsapp_service.send_notification(
             summary.employee,
             "approval_approved" if approved else "approval_rejected",

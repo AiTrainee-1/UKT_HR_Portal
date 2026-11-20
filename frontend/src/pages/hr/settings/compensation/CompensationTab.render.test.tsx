@@ -91,6 +91,9 @@ function makeServer(initial: CompensationSettings) {
         const change = body[group];
         if (change) Object.assign(now[group], change);
       }
+      // the claims date only moves later (the server refuses an earlier or a blank one; see `refuse`)
+      const claims = body.claims as { from?: string } | undefined;
+      if (claims?.from) now.claims = { ...now.claims, from: claims.from, minFrom: claims.from };
       if (body.allowanceRules) {
         now.allowanceRules = body.allowanceRules.map((r) => ({ ...r, id: r.id ?? server.nextId++ }));
       }
@@ -901,22 +904,78 @@ describe("Settings -> Compensation: the claim workflow and the quarters rule", (
     claims: { from: "2026-11-19" },
   };
 
-  it("explains the claim workflow step by step, and shows the date claims started, read-only", async () => {
-    await open(withClaims);
+  it("explains the claim workflow step by step, and shows the date claims started as a date that only moves later", async () => {
+    await open({ ...withClaims, claims: { from: "2026-11-19", minFrom: "2026-11-19" } });
     const steps = qa('[data-testid="claims-steps"] li').map((li) => (li.textContent ?? "").replace(/\s+/g, " "));
     expect(steps.map((t) => t.split(".")[0])).toEqual(["1", "2", "3", "4", "5"]);
     expect(steps[0]).toContain("Detected");
     expect(steps[2]).toContain("Approved by the HOD");
     expect(steps[4]).toContain("Used on another day");
-    expect(text('[data-testid="claims-from-date"]')).toBe("19 Nov 2026");
-    // read-only: nothing to type or switch there
-    expect(q('[data-testid="claims-from"] input, [data-testid="claims-from"] button')).toBeNull();
+    // an editor: a date box, never earlier than the server's minFrom, with what moving it means
+    expect(value("#compensation-claims-from")).toBe("2026-11-19");
+    expect((q("#compensation-claims-from") as HTMLInputElement).min).toBe("2026-11-19");
+    expect((q("#compensation-claims-from") as HTMLInputElement).disabled).toBe(false);
+    expect(text('[data-testid="claims-from-help"]')).toBe(
+      "Can only move later: days before it keep the old automatic rules.",
+    );
     expect(q('[data-testid="link-claims-approval-workflow"]')?.getAttribute("href")).toBe(
       "/hr/user-management?tab=approvals",
     );
     // the other sections name the date too
     expect(text('[data-testid="setting-shift-quarter-rule"]')).toContain("Applies to days from 19 Nov 2026");
     expect(text('[data-testid="setting-birthday-enabled"]')).toContain("This applies from 19 Nov 2026");
+  });
+
+  it("moves the claims date later with the same Save, sending it only when it changed", async () => {
+    await open({ ...withClaims, claims: { from: "2026-11-19", minFrom: "2026-11-19" } });
+    // an earlier date is refused on screen, and nothing can be saved
+    await page!.type("#compensation-claims-from", "2026-11-10");
+    expect(text('[data-testid="claims-from-error"]')).toContain("Pick 19 Nov 2026 or later");
+    expect(saveButton().disabled).toBe(true);
+    expect(saveBar().textContent).toContain("Fix this first: Claims date:");
+    // so is a blank one
+    await page!.type("#compensation-claims-from", "");
+    expect(text('[data-testid="claims-from-error"]')).toContain("cannot be cleared");
+    // later is fine
+    await page!.type("#compensation-claims-from", "2026-12-01");
+    expect(q('[data-testid="claims-from-error"]')).toBeNull();
+    expect(text('[data-testid="claims-from-moved"]')).toContain("Saved as 19 Nov 2026: from 1 Dec 2026 once you save");
+    await press("Save Compensation Settings");
+    expect(server.puts[0].claims).toEqual({ from: "2026-12-01" });
+    expect(server.current.claims?.from).toBe("2026-12-01");
+    expect(value("#compensation-claims-from")).toBe("2026-12-01");
+    expect(saveBar().dataset.dirty).toBe("false");
+    // another change leaves the date out
+    await page!.type("#compensation-shift-threshold", "160");
+    await press("Save Compensation Settings");
+    expect("claims" in server.puts[1]).toBe(false);
+  });
+
+  it("starts the claims date box at today when an older server sends no minFrom, and shows the server's refusal", async () => {
+    // saved 1 Oct, today 14 Oct: the earliest is today
+    await open({ ...withClaims, claims: { from: "2026-10-01" } });
+    expect((q("#compensation-claims-from") as HTMLInputElement).min).toBe("2026-10-14");
+    await page!.type("#compensation-claims-from", "2026-10-05");
+    expect(text('[data-testid="claims-from-error"]')).toContain("Pick 14 Oct 2026 or later");
+    await page!.type("#compensation-claims-from", "2026-10-20");
+    server.refuse = {
+      status: 400,
+      error: "The claims date can only move later: pick 21 Oct 2026 or later (payroll for October 2026 is done).",
+    };
+    await press("Save Compensation Settings");
+    expect(server.puts[0].claims).toEqual({ from: "2026-10-20" });
+    expect(text('[data-testid="compensation-save-error"]')).toBe(
+      "The claims date can only move later: pick 21 Oct 2026 or later (payroll for October 2026 is done).",
+    );
+    expect(value("#compensation-claims-from")).toBe("2026-10-20");
+    expect(saveBar().dataset.dirty).toBe("true");
+  });
+
+  it("shows the claims date as text to a view-only role", async () => {
+    await open(withClaims, { readOnly: true });
+    expect(text('[data-testid="claims-from-date"]')).toBe("19 Nov 2026");
+    expect(q('[data-testid="claims-from"] input, [data-testid="claims-from"] button')).toBeNull();
+    expect(q("#compensation-claims-from")).toBeNull();
   });
 
   it("says so when the server does not report the date yet", async () => {
@@ -968,6 +1027,41 @@ describe("Settings -> Compensation: the claim workflow and the quarters rule", (
     });
     // the read-only date is never sent
     expect("claims" in server.puts[0]).toBe(false);
+  });
+
+  it("gives the Type 1 example's allowance only below a quarter of the shift while the quarters rule is on", async () => {
+    await open(withClaims);
+    // the example names the lunch the quarter is worked out from: 9:00 AM to 5:30 PM less 30 min = 8 h, a quarter is 2 h
+    expect(text('[data-testid="type1-example"]')).toContain(
+      "and a 30 min lunch: 8 h of work, so a quarter of the shift is 2 h",
+    );
+    // 2 hours of extra work is a quarter: Type 2's, although it is under the 2 h 30 threshold
+    expect(text('[data-testid="type1-allowance-line"]')).toContain(
+      "No allowance: a quarter of the shift (2 h) or more is Type 2's under the quarters rule",
+    );
+    expect(text('[data-testid="type1-example"]')).not.toContain("Allowance 60 minutes");
+    expect(q('[data-testid="type1-limit-note"]')).toBeNull();
+    // a minute less is still the allowance's
+    await page!.type("#type1-try-extra", "119");
+    expect(text('[data-testid="type1-allowance-line"]')).toContain('Allowance 30 minutes (row "1 hour 30 minutes")');
+    await page!.type("#type1-try-extra", "150");
+    expect(text('[data-testid="type1-allowance-line"]')).toContain("a quarter of the shift (2 h) or more is Type 2's");
+    // switched off: the threshold decides again
+    await page!.click("#compensation-quarter-switch");
+    expect(text('[data-testid="type1-allowance-line"]')).toContain('Allowance 60 minutes (row "2 hours 30 minutes")');
+    expect(text('[data-testid="type1-example"]')).not.toContain("lunch");
+    await page!.type("#type1-try-extra", "151");
+    expect(text('[data-testid="type1-allowance-line"]')).toContain(
+      "No allowance: more than 2 h 30 min of extra work is Type 2's",
+    );
+  });
+
+  it("words the threshold warning for the days it still decides while the quarters rule is on", async () => {
+    await open(withClaims);
+    await page!.type("#compensation-shift-threshold", "120");
+    expect(text('[data-testid="allowance-warning"]')).toBe(
+      "The '2 hours 30 minutes' allowance can never apply to days before the claims date or with the quarters rule off: shift-based compensation starts at 2 hours of extra work there.",
+    );
   });
 
   it("says the threshold decides only before the claims date while the quarters rule is on", async () => {

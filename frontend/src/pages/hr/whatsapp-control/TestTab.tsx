@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle,
   Check,
-  Clock3,
   Eye,
   FlaskConical,
   Loader2,
@@ -17,24 +15,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import {
   useWhatsAppTestMessage,
   useWhatsAppTestOptions,
   whatsAppErrorMessage,
-  type WhatsAppTestInput,
   type WhatsAppTestRecipient,
   type WhatsAppTestResult,
   type WhatsAppTestType,
 } from "@/lib/api-client/custom-hooks";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import { cn } from "@/lib/utils";
-import { TEST_TEXT_MAX, employeeCodesText, groupTestTypes, recipientLabel } from "./logic";
-import { Notice, Panel, RawJson } from "./kit";
-import { WhatsAppText, useDebounced } from "./shared";
+import { Fact, Notice, Panel, RawJson, TemplateStatusChip, WhatsAppPreview } from "./kit";
+import { employeeCodesText, groupTestTypes, metaErrorHelp, recipientLabel } from "./logic";
+import { useDebounced } from "./shared";
 
-const FIELD = "border-slate-300 bg-white text-gray-900 placeholder:text-gray-400";
+const SELECT =
+  "h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring";
 
 /** One employee who can receive the test: a row to pick (or the picked one, with a way to change it). */
 function RecipientRow({ r, picked, onPick }: { r: WhatsAppTestRecipient; picked: boolean; onPick?: () => void }) {
@@ -48,26 +44,28 @@ function RecipientRow({ r, picked, onPick }: { r: WhatsAppTestRecipient; picked:
       data-testid={`wa-test-recipient-${r.id}`}
       className={cn(
         "flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors",
-        picked ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-white hover:border-emerald-300",
-        blocked && "cursor-not-allowed opacity-70 hover:border-slate-200",
+        picked
+          ? "border-emerald-400 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950"
+          : "bg-card hover:border-emerald-300",
+        blocked && "cursor-not-allowed opacity-70 hover:border-border",
         !onPick && "cursor-default",
       )}
     >
       <span
         className={cn(
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-          picked ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-500",
+          picked ? "bg-emerald-600 text-white" : "bg-muted text-muted-foreground",
         )}
       >
         {picked ? <Check size={15} /> : <UserRound size={15} />}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold text-gray-900">{r.name}</span>
-        <span className="block text-[11px] text-gray-500">
+        <span className="block truncate text-sm font-semibold">{r.name}</span>
+        <span className="block text-[11px] text-muted-foreground">
           {r.code} · {r.phone ?? "no phone"}
         </span>
         {(r.blockedReason || !r.hasPhone) && (
-          <span className="mt-0.5 block text-[11px] font-medium text-amber-700">
+          <span className="mt-0.5 block text-[11px] font-medium text-amber-700 dark:text-amber-300">
             {r.blockedReason ?? "No phone number on file"}
           </span>
         )}
@@ -76,67 +74,35 @@ function RecipientRow({ r, picked, onPick }: { r: WhatsAppTestRecipient; picked:
   );
 }
 
-/** The message as the employee's phone shows it: their chat with the company number, the message as an outgoing bubble. */
-function ChatPreview({
-  recipient,
-  text,
-  state,
-}: {
-  recipient: WhatsAppTestRecipient | null;
-  text: string | null;
-  state: "empty" | "preview" | "sent" | "failed" | "blocked";
-}) {
+/** The template and parameters the preview would send, as Meta receives them. */
+function TemplateFacts({ preview }: { preview: WhatsAppTestResult }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200" data-testid="wa-test-chat" data-state={state}>
-      <div className="flex items-center gap-2.5 bg-[#008069] px-3 py-2 text-white">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1f9b82]">
-          <UserRound size={16} />
-        </span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{recipient?.name ?? "Employee"}</p>
-          <p className="text-[11px] text-[#d1f4cc]">{recipient?.phone ?? "WhatsApp"}</p>
+    <div className="rounded-xl border bg-muted/40 px-3 py-1" data-testid="wa-test-template">
+      <Fact label="Template">
+        <code className="font-mono text-xs" data-testid="wa-test-template-name">
+          {preview.templateName ?? "—"}
+        </code>
+        {preview.language && <span className="ml-1.5 text-xs text-muted-foreground">({preview.language})</span>}
+      </Fact>
+      {preview.header && <Fact label="Attachment">{preview.header === "image" ? "Photo" : "Document (PDF)"}</Fact>}
+      {preview.params.length > 0 && (
+        <div className="border-t py-2" data-testid="wa-test-params">
+          <p className="mb-1 text-[13px] text-muted-foreground">Parameters</p>
+          <dl className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+            {preview.params.map((p, i) => (
+              <div key={`${p.name}-${i}`} className="contents">
+                <dt className="truncate font-mono text-muted-foreground">{p.name ? `{{${p.name}}}` : `#${i + 1}`}</dt>
+                <dd className="min-w-0 break-words">{p.value || "—"}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
-      </div>
-      <div className="min-h-40 bg-[#efeae2] px-3 py-4">
-        {text === null ? (
-          <p className="mx-auto max-w-xs rounded-lg bg-[#fff5c4] px-3 py-2 text-center text-[11px] leading-snug text-[#54656f]">
-            Pick a message type and who gets it, then press Preview. Nothing is sent until you confirm.
-          </p>
-        ) : (
-          <div
-            className="relative ml-auto w-fit max-w-[88%] rounded-lg rounded-tr-none bg-[#d9fdd3] px-2.5 pb-1 pt-1.5 text-[13px] leading-snug text-[#111b21] shadow-sm"
-            data-testid="wa-test-bubble"
-          >
-            <span
-              aria-hidden
-              className="absolute -right-2 top-0 h-0 w-0 border-r-8 border-t-8 border-r-transparent border-t-[#d9fdd3]"
-            />
-            <span className="whitespace-pre-wrap break-words">
-              {text.trim() ? <WhatsAppText text={text} /> : <i className="text-[#667781]">(empty)</i>}
-            </span>
-            <span className="float-right ml-3 mt-1.5 flex items-center gap-0.5 text-[10px] text-[#667781]">
-              {state === "sent" ? (
-                <>
-                  now <Check size={13} />
-                </>
-              ) : state === "failed" || state === "blocked" ? (
-                <>
-                  not sent <AlertCircle size={12} className="text-red-600" />
-                </>
-              ) : (
-                <>
-                  preview <Clock3 size={11} />
-                </>
-              )}
-            </span>
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }
 
-/** What happened to a real send: green sent, red failed (WAClient's own error and answer), amber held back here. */
+/** What happened to a real send: Meta's message id, or its error code and sentence, or this machine's rule. */
 function TestOutcome({ result }: { result: WhatsAppTestResult }) {
   const who = result.employee ? recipientLabel(result.employee) : (result.to ?? "the employee");
   if (result.status === "sent") {
@@ -144,12 +110,12 @@ function TestOutcome({ result }: { result: WhatsAppTestResult }) {
       <div className="space-y-2" data-testid="wa-test-result" data-status="sent">
         <Notice tone="good" title={`Sent to ${who}`} role="status">
           <p>
-            WAClient accepted it
+            Meta accepted it
             {result.providerMessageId && (
               <>
                 {" "}
                 (message id{" "}
-                <code className="rounded bg-white px-1 py-0.5 text-[11px]" data-testid="wa-test-provider-id">
+                <code className="break-all rounded bg-card px-1 py-0.5 text-[11px]" data-testid="wa-test-provider-id">
                   {result.providerMessageId}
                 </code>
                 )
@@ -157,13 +123,19 @@ function TestOutcome({ result }: { result: WhatsAppTestResult }) {
             )}
             . It should arrive in a few seconds.
           </p>
-          <p className="mt-1 text-emerald-800">
+          {result.testCode && (
+            <p className="mt-1" data-testid="wa-test-code-sent">
+              The test code sent is <code className="rounded bg-card px-1 py-0.5 font-mono">{result.testCode}</code>: it
+              signs nobody in.
+            </p>
+          )}
+          <p className="mt-1">
             It is saved on the Messages tab{result.logId !== null ? ` (#${result.logId})` : ""}; Delivered and Read show
-            there when WhatsApp reports them.
+            there when Meta reports them.
           </p>
         </Notice>
         {result.providerResponse !== null && (
-          <RawJson summary="WAClient's answer" value={result.providerResponse} testId="wa-test-provider-response" />
+          <RawJson summary="Meta's answer" value={result.providerResponse} testId="wa-test-provider-response" />
         )}
       </div>
     );
@@ -171,35 +143,44 @@ function TestOutcome({ result }: { result: WhatsAppTestResult }) {
   if (result.status === "blocked") {
     return (
       <div data-testid="wa-test-result" data-status="blocked">
-        <Notice tone="warn" title="Not sent: this machine's rules held it back" role="alert">
+        <Notice tone="warn" title="Not sent: held back before it reached Meta" role="alert">
           {result.error ?? "No reason was given."}
         </Notice>
       </div>
     );
   }
+  const help = metaErrorHelp(result.errorCode);
   return (
     <div className="space-y-2" data-testid="wa-test-result" data-status="failed">
-      <Notice tone="bad" title={`WAClient did not send it to ${who}`} role="alert">
+      <Notice tone="bad" title={`Meta did not send it to ${who}`} role="alert">
         <p className="font-semibold" data-testid="wa-test-error">
           {result.error ?? "No reason was given."}
         </p>
-        {result.httpStatus !== null && (
-          <p className="mt-0.5" data-testid="wa-test-http">
-            HTTP {result.httpStatus}
+        {(result.errorCode !== null || result.httpStatus !== null) && (
+          <p className="mt-0.5 text-xs" data-testid="wa-test-code">
+            {result.errorCode !== null ? `Meta error ${result.errorCode}` : ""}
+            {result.errorCode !== null && result.httpStatus !== null ? " · " : ""}
+            {result.httpStatus !== null ? `HTTP ${result.httpStatus}` : ""}
+          </p>
+        )}
+        {help && (
+          <p className="mt-1 text-xs" data-testid="wa-test-help">
+            {help}
           </p>
         )}
       </Notice>
       {result.providerResponse !== null && (
-        <RawJson summary="WAClient's answer" value={result.providerResponse} testId="wa-test-provider-response" />
+        <RawJson summary="Meta's answer" value={result.providerResponse} testId="wa-test-provider-response" />
       )}
     </div>
   );
 }
 
 /**
- * Send a test: one message of any type to one employee, sent at once (not queued), with WAClient's real answer. The
- * message is previewed first (a dry run: nothing is sent), can be edited, and is sent only after an in-page confirmation.
- * A test ignores the switches, quiet hours and pacing, but never this machine's safety rules (the server enforces them).
+ * Send a test: one message of any type to one employee, sent at once (not queued) as its approved Meta template, with
+ * Meta's real answer. It is previewed first (a dry run: the template, its parameters and the text, nothing sent) and
+ * sent only after an in-page confirmation. A test ignores the switches, quiet hours and pacing, but never this machine's
+ * safety rules (the server enforces them).
  */
 export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
   const [search, setSearch] = useState("");
@@ -212,8 +193,6 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
   const [documentType, setDocumentType] = useState("");
   const [recipient, setRecipient] = useState<WhatsAppTestRecipient | null>(null);
   const [preview, setPreview] = useState<WhatsAppTestResult | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState<WhatsAppTestResult | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -234,8 +213,6 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
   const startOver = () => {
     asked.current = "";
     setPreview(null);
-    setEditing(false);
-    setDraft("");
     setConfirming(false);
     setResult(null);
     setProblem(null);
@@ -260,10 +237,7 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
       { documentType, employeeId: recipient.id, dryRun: true },
       {
         onSuccess: (r) => {
-          if (asked.current !== key) return;
-          setPreview(r);
-          setDraft(r.text);
-          setEditing(false);
+          if (asked.current === key) setPreview(r);
         },
         onError: (e) =>
           setProblem(
@@ -275,9 +249,6 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
     );
   };
 
-  const edited = !!preview && editing && draft.trim() !== preview.text.trim();
-  const tooLong = draft.length > TEST_TEXT_MAX;
-  const empty = editing && draft.trim() === "";
   const blockReason = base.data?.blockReason ?? preview?.blockReason ?? null;
   const why = viewOnly
     ? "View only: you can preview a test, but your role can't send one."
@@ -285,28 +256,25 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
       ? "Nothing can be sent: see the reason above."
       : !preview
         ? "Preview the message first."
-        : empty
-          ? "The message cannot be empty."
-          : tooLong
-            ? `The message can be at most ${TEST_TEXT_MAX} characters.`
-            : null;
+        : null;
   const canSend = why === null && !sender.isPending;
 
   const send = () => {
     if (!recipient || !preview || !canSend) return;
-    const body: WhatsAppTestInput = { documentType, employeeId: recipient.id };
-    if (edited) body.text = draft;
     setProblem(null);
-    sender.mutate(body, {
-      onSuccess: (r) => {
-        setResult(r);
-        setConfirming(false);
+    sender.mutate(
+      { documentType, employeeId: recipient.id },
+      {
+        onSuccess: (r) => {
+          setResult(r);
+          setConfirming(false);
+        },
+        onError: (e) => {
+          setConfirming(false);
+          setProblem(`The test was not sent: ${whatsAppErrorMessage(e, "try again.")}`);
+        },
       },
-      onError: (e) => {
-        setConfirming(false);
-        setProblem(`The test was not sent: ${whatsAppErrorMessage(e, "try again.")}`);
-      },
-    });
+    );
   };
 
   if (base.isError && !base.data) {
@@ -318,17 +286,15 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
   }
   if (!base.data) return <Skeleton className="h-96 rounded-2xl" />;
 
-  const shownText = preview ? (editing ? draft : preview.text) : null;
-  const chatState = result ? result.status : preview ? "preview" : "empty";
   const searchHits = term ? (found.data?.recipients ?? []) : [];
 
   return (
     <div className="space-y-4" data-testid="wa-test-tab">
       <Notice tone="info" icon={FlaskConical} title="A test goes out at once, to one employee" testId="wa-test-rules">
-        It skips the queue and ignores the switches, quiet hours and the sending limits, so you can check the connection
-        even while a message is switched off. It never skips this machine's own safety rules (the WAClient keys, the
-        development-machine lock, the employees it may message). Documents are tried as their text only: no file is
-        attached. Every test is saved on the Messages tab.
+        It skips the queue and ignores the switches, quiet hours and sending limits, so you can check a template even
+        while its message is switched off. It never skips this machine's safety rules (the Meta keys, the
+        development-machine lock, the employees it may message), and it needs the type's template to be approved by
+        Meta. Every test is saved on the Messages tab and counts towards the month's cost.
       </Notice>
 
       {base.data.blockReason && (
@@ -347,204 +313,175 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
         <Panel
           title="1. What and to whom"
           icon={MessageCircle}
-          description="The message's real wording, filled with sample values and the employee's own name."
+          description="The type's Meta template, filled with sample values and the employee's own name."
           testId="wa-test-form"
         >
-          <div className="space-y-1.5">
-            <Label htmlFor="wa-test-type" className="text-xs font-semibold text-gray-700">
-              Message type
-            </Label>
-            <select
-              id="wa-test-type"
-              value={documentType}
-              onChange={(e) => pickType(e.target.value)}
-              className={cn("h-9 w-full rounded-md border px-2 text-sm shadow-sm", FIELD)}
-              data-testid="wa-test-type"
-            >
-              <option value="">Choose a message type…</option>
-              {groups.map((g) => (
-                <optgroup key={g.module} label={g.label}>
-                  {g.types.map((t) => (
-                    <option key={t.documentType} value={t.documentType}>
-                      {t.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            {type && type.variables.length > 0 && (
-              <p className="text-[11px] leading-snug text-gray-500" data-testid="wa-test-samples">
-                Sample values:{" "}
-                {type.variables
-                  .filter((v) => v.name !== "employee_name")
-                  .map((v) => `${v.name} = ${v.sample}`)
-                  .join(" · ") || "only the employee's name"}
-                .
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-1.5" data-view-safe>
-            <p className="text-xs font-semibold text-gray-700">Send it to</p>
-            {limitedTo ? (
-              <>
-                <Notice tone="warn" testId="wa-test-limited">
-                  This machine may only message {employeeCodesText(limitedTo)} (WHATSAPP_ONLY_TO_EMPLOYEES), so{" "}
-                  {allowed.length === 1 ? "they are the only one who can get a test here." : "only they are listed."}
-                </Notice>
-                {allowed.length === 0 ? (
-                  <p className="text-xs text-red-700">
-                    None of those employees is active in your branches, so no test can be sent from here.
-                  </p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {allowed.map((r) => (
-                      <RecipientRow
-                        key={r.id}
-                        r={r}
-                        picked={recipient?.id === r.id}
-                        onPick={allowed.length > 1 ? () => pickRecipient(r) : undefined}
-                      />
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="wa-test-type" className="text-xs font-semibold">
+                Message type
+              </Label>
+              <select
+                id="wa-test-type"
+                value={documentType}
+                onChange={(e) => pickType(e.target.value)}
+                className={SELECT}
+                data-testid="wa-test-type"
+              >
+                <option value="">Choose a message type…</option>
+                {groups.map((g) => (
+                  <optgroup key={g.module} label={g.label}>
+                    {g.types.map((t) => (
+                      <option key={t.documentType} value={t.documentType}>
+                        {t.label}
+                      </option>
                     ))}
-                  </div>
-                )}
-              </>
-            ) : recipient ? (
-              <div className="flex items-center gap-2">
-                <div className="min-w-0 flex-1">
-                  <RecipientRow r={recipient} picked />
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 shrink-0 gap-1 text-xs"
-                  onClick={() => pickRecipient(null)}
-                  data-testid="wa-test-change-recipient"
+                  </optgroup>
+                ))}
+              </select>
+              {type && (type.templateName || type.templateStatus) && (
+                <p
+                  className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground"
+                  data-testid="wa-test-type-template"
                 >
-                  <X size={12} /> Change
-                </Button>
-              </div>
-            ) : (
-              <>
-                <div className="relative">
-                  <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-gray-400" />
-                  <Input
-                    type="search"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search by name or employee code"
-                    className={cn("pl-8", FIELD)}
-                    aria-label="Search employees"
-                    data-testid="wa-test-search"
-                  />
-                </div>
-                {term === "" ? (
-                  <p className="text-[11px] text-gray-500">
-                    Type a name or code to find the employee (up to 20 shown).
-                  </p>
-                ) : found.isFetching && searchHits.length === 0 ? (
-                  <p className="text-[11px] text-gray-500">Searching…</p>
-                ) : searchHits.length === 0 ? (
-                  <p className="text-[11px] text-gray-500">No active employee matches "{term}".</p>
-                ) : (
-                  <div className="max-h-72 space-y-1.5 overflow-y-auto pr-0.5" data-testid="wa-test-hits">
-                    {searchHits.map((r) => (
-                      <RecipientRow key={r.id} r={r} picked={false} onPick={() => pickRecipient(r)} />
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+                  Sent as <code className="font-mono">{type.templateName ?? "its template"}</code>
+                  {type.templateStatus && <TemplateStatusChip status={type.templateStatus} />}
+                </p>
+              )}
+            </div>
 
-          <Button
-            onClick={runPreview}
-            disabled={!documentType || !recipient || previewer.isPending}
-            variant="outline"
-            className="w-full gap-1.5 sm:w-auto"
-            data-testid="wa-test-preview"
-          >
-            {previewer.isPending ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
-            {preview ? "Preview again" : "Preview"}
-          </Button>
+            <div className="space-y-1.5" data-view-safe>
+              <p className="text-xs font-semibold">Send it to</p>
+              {limitedTo ? (
+                <>
+                  <Notice tone="warn" testId="wa-test-limited">
+                    This machine may only message {employeeCodesText(limitedTo)} (WHATSAPP_ONLY_TO_EMPLOYEES), so{" "}
+                    {allowed.length === 1 ? "they are the only one who can get a test here." : "only they are listed."}
+                  </Notice>
+                  {allowed.length === 0 ? (
+                    <p className="text-xs text-red-700 dark:text-red-300">
+                      None of those employees is active in your branches, so no test can be sent from here.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {allowed.map((r) => (
+                        <RecipientRow
+                          key={r.id}
+                          r={r}
+                          picked={recipient?.id === r.id}
+                          onPick={allowed.length > 1 ? () => pickRecipient(r) : undefined}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : recipient ? (
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <RecipientRow r={recipient} picked />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 gap-1 text-xs"
+                    onClick={() => pickRecipient(null)}
+                    data-testid="wa-test-change-recipient"
+                  >
+                    <X size={12} /> Change
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="relative">
+                    <Search size={14} className="pointer-events-none absolute left-2.5 top-2.5 text-muted-foreground" />
+                    <Input
+                      type="search"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search by name or employee code"
+                      className="pl-8"
+                      aria-label="Search employees"
+                      data-testid="wa-test-search"
+                    />
+                  </div>
+                  {term === "" ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      Type a name or code to find the employee (up to 20 shown).
+                    </p>
+                  ) : found.isFetching && searchHits.length === 0 ? (
+                    <p className="text-[11px] text-muted-foreground">Searching…</p>
+                  ) : searchHits.length === 0 ? (
+                    <p className="text-[11px] text-muted-foreground">No active employee matches "{term}".</p>
+                  ) : (
+                    <div className="max-h-72 space-y-1.5 overflow-y-auto pr-0.5" data-testid="wa-test-hits">
+                      {searchHits.map((r) => (
+                        <RecipientRow key={r.id} r={r} picked={false} onPick={() => pickRecipient(r)} />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <Button
+              onClick={runPreview}
+              disabled={!documentType || !recipient || previewer.isPending}
+              variant="outline"
+              className="w-full gap-1.5 sm:w-auto"
+              data-testid="wa-test-preview"
+            >
+              {previewer.isPending ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
+              {preview ? "Preview again" : "Preview"}
+            </Button>
+          </div>
         </Panel>
 
         <Panel
           title="2. Check it, then send"
           icon={Send}
-          description="Exactly what the employee will get. Nothing is sent until you confirm."
+          description="Exactly what Meta is asked to send. Nothing goes out until you confirm."
           testId="wa-test-send-panel"
         >
-          <ChatPreview recipient={preview?.employee ?? recipient} text={shownText} state={chatState} />
+          <div className="space-y-3">
+            {preview ? (
+              <>
+                <WhatsAppPreview body={preview.text} header={preview.header} testId="wa-test-bubble" />
+                <TemplateFacts preview={preview} />
+              </>
+            ) : (
+              <p
+                className="rounded-xl border border-dashed px-4 py-8 text-center text-sm text-muted-foreground"
+                data-testid="wa-test-empty"
+              >
+                Pick a message type and who gets it, then press Preview.
+              </p>
+            )}
 
-          {problem && (
-            <Notice tone="bad" testId="wa-test-problem" role="alert">
-              {problem}
-            </Notice>
-          )}
+            {problem && (
+              <Notice tone="bad" testId="wa-test-problem" role="alert">
+                {problem}
+              </Notice>
+            )}
 
-          {preview && (
-            <>
-              {preview.blockReason && !base.data.blockReason && (
-                <Notice tone="warn" title="This test would not be sent" testId="wa-test-preview-block">
-                  {preview.blockReason}
-                </Notice>
-              )}
+            {preview?.blockReason && !base.data.blockReason && (
+              <Notice tone="warn" title="This test would not be sent" testId="wa-test-preview-block">
+                {preview.blockReason}
+              </Notice>
+            )}
 
-              <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <Label htmlFor="wa-test-edit" className="text-xs font-semibold text-gray-900">
-                      Edit text
-                    </Label>
-                    <p className="text-[11px] text-gray-500">
-                      {editing
-                        ? "Your text is sent instead of the message's own wording."
-                        : "Off: the message's own wording is sent."}
-                    </p>
-                  </div>
-                  <Switch
-                    id="wa-test-edit"
-                    checked={editing}
-                    onCheckedChange={(on) => {
-                      setEditing(on);
-                      if (!on) setDraft(preview.text);
-                    }}
-                    aria-label="Edit text"
-                    data-testid="wa-test-edit"
-                  />
-                </div>
-                {editing && (
-                  <div className="space-y-1">
-                    <Textarea
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      rows={8}
-                      className={cn("font-sans text-[13px]", FIELD)}
-                      aria-label="Message text"
-                      data-testid="wa-test-text"
-                    />
-                    <p
-                      className={cn("text-right text-[11px]", tooLong ? "font-semibold text-red-700" : "text-gray-400")}
-                    >
-                      {draft.length} / {TEST_TEXT_MAX}
-                      {edited ? " · edited" : ""}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {confirming && recipient ? (
+            {preview &&
+              (confirming && recipient ? (
                 <div
-                  className="space-y-2 rounded-xl border-2 border-amber-300 bg-amber-50 p-3"
+                  className="space-y-2 rounded-xl border-2 border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950"
                   data-testid="wa-test-confirm-box"
                   role="alertdialog"
                   aria-label="Confirm the test"
                 >
-                  <p className="text-sm font-bold text-amber-950">Send this to {recipientLabel(recipient)} now?</p>
-                  <p className="text-xs text-amber-900">
-                    It goes out at once from the company WhatsApp number{edited ? ", with your edited text" : ""}. A
-                    sent message can't be called back.
+                  <p className="text-sm font-bold">Send this to {recipientLabel(recipient)} now?</p>
+                  <p className="text-xs">
+                    It goes out at once from the company WhatsApp number as{" "}
+                    <code className="font-mono">{preview.templateName ?? "its template"}</code>. A sent message can't be
+                    called back.
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <Button
@@ -582,16 +519,15 @@ export default function TestTab({ viewOnly = false }: { viewOnly?: boolean }) {
                     <Send size={14} /> Send test message
                   </Button>
                   {why && (
-                    <p className="text-[11px] text-gray-500" data-testid="wa-test-why">
+                    <p className="text-[11px] text-muted-foreground" data-testid="wa-test-why">
                       {why}
                     </p>
                   )}
                 </div>
-              )}
-            </>
-          )}
+              ))}
 
-          {result && <TestOutcome result={result} />}
+            {result && <TestOutcome result={result} />}
+          </div>
         </Panel>
       </div>
     </div>

@@ -1,333 +1,550 @@
-import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { PillTabs } from "@/components/ui/pill-tabs";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
-import { AlertTriangle, CheckCheck, CheckCircle2, Clock, Eye, MessageCircle, Send, XCircle } from "lucide-react";
+import type { ReactNode } from "react";
 import {
-  useWhatsAppOverview,
-  type WhatsAppCategory,
-  type WhatsAppCounts,
-  type WhatsAppMessage,
-} from "@/lib/api-client/custom-hooks";
-import { HodStatusCard, SwitchedOffBanner } from "./OverviewNotices";
-import QueueCard from "./QueueCard";
-import { CATEGORY_HELP, MessageDetailDialog, StatCard, StatusPill, fmtDateTime } from "./shared";
+  ArrowRight,
+  BadgeCheck,
+  CheckCheck,
+  Clock3,
+  FileCheck2,
+  Gauge,
+  KeyRound,
+  ListChecks,
+  MessageCircle,
+  Moon,
+  PauseCircle,
+  PowerOff,
+  Send,
+  ShieldCheck,
+  SignalHigh,
+  Webhook,
+  XCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useWhatsAppOverview, whatsAppErrorMessage, type WhatsAppOverview } from "@/lib/api-client/custom-hooks";
+import { cn } from "@/lib/utils";
+import { Chip, Dot, Kpi, Meter, Notice, Panel, TemplateStatusChip, VALUE_TINT } from "./kit";
+import {
+  alertTab,
+  alertTone,
+  budgetState,
+  connectionVerdict,
+  formatCount,
+  formatInr,
+  formatPct,
+  numberStatusInfo,
+  plural,
+  qualityInfo,
+  sortAlerts,
+  tierInfo,
+  webhookHealth,
+  type Tone,
+} from "./logic";
+import type { WaAccess, WaTab } from "./tabs";
 
-const RANGES = [
-  { value: "7", label: "7 days" },
-  { value: "30", label: "30 days" },
-  { value: "90", label: "90 days" },
-];
+const GST = 0.18;
 
-function PeriodCard({ title, counts }: { title: string; counts: WhatsAppCounts }) {
-  const reached = counts.delivered + counts.read;
-  const rate = counts.total ? Math.round((reached / counts.total) * 100) : 0;
-  const cells = [
-    { label: "Total", value: counts.total, tone: "text-slate-800" },
-    { label: "Sent", value: counts.sent, tone: "text-blue-700" },
-    { label: "Delivered", value: reached, tone: "text-green-700" },
-    { label: "Failed", value: counts.failed, tone: counts.failed ? "text-red-600" : "text-gray-400" },
-    { label: "Pending", value: counts.pending, tone: counts.pending ? "text-amber-600" : "text-gray-400" },
-  ];
-  return (
-    <div className="rounded-2xl border bg-white p-4" data-testid={`period-${title.toLowerCase().replace(/\s+/g, "-")}`}>
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="text-sm font-bold text-gray-800">{title}</p>
-        <p className="text-[11px] text-gray-400">{counts.total ? `${rate}% delivered` : "nothing sent yet"}</p>
-      </div>
-      <div className="mt-2 grid grid-cols-5 gap-2 text-center">
-        {cells.map((c) => (
-          <div key={c.label}>
-            <p className={`text-xl font-black tabular-nums ${c.tone}`}>{c.value}</p>
-            <p className="text-[10px] text-gray-500">{c.label}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function CategoryCard({
-  category,
-  label,
-  counts,
-  onOpen,
+/** A link-like button to another tab, offered only when the role may open that tab. */
+function GoLink({
+  tab,
+  access,
+  go,
+  children,
+  testId,
 }: {
-  category: WhatsAppCategory;
-  label: string;
-  counts: WhatsAppCounts;
-  /** Opens the Messages tab on this module; left out when Messages is hidden for the role. */
-  onOpen?: () => void;
+  tab: WaTab;
+  access: WaAccess;
+  go: (tab: WaTab) => void;
+  children: ReactNode;
+  testId?: string;
 }) {
-  const ok = counts.accepted;
-  const pct = counts.total ? Math.round((ok / counts.total) * 100) : 0;
+  if (!access.canOpen(tab)) return null;
   return (
     <button
-      onClick={onOpen}
-      disabled={!onOpen}
-      className="text-left rounded-2xl border bg-white p-4 hover:shadow-md transition-shadow disabled:cursor-default disabled:hover:shadow-none"
+      type="button"
+      onClick={() => go(tab)}
+      data-testid={testId}
+      className="inline-flex items-center gap-1 text-xs font-semibold text-sky-700 underline-offset-2 hover:underline dark:text-sky-300"
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="text-sm font-bold text-gray-800">{label}</p>
-        <p className="text-2xl font-black tabular-nums">{counts.total}</p>
-      </div>
-      <p className="text-[11px] text-gray-400 mt-0.5 min-h-[28px]">{CATEGORY_HELP[category] ?? ""}</p>
-      <div className="mt-2 h-1.5 rounded-full bg-red-100 overflow-hidden" title={`${pct}% accepted`}>
-        <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
-      </div>
-      <p className="mt-1.5 text-[11px] text-gray-500">
-        {counts.delivered + counts.read} delivered · {counts.sent} sent ·{" "}
-        <span className={counts.failed ? "text-red-600 font-semibold" : ""}>{counts.failed} failed</span>
-        {counts.pending ? ` · ${counts.pending} pending` : ""}
-      </p>
+      {children} <ArrowRight size={11} />
     </button>
   );
 }
 
-export default function OverviewTab({
-  onOpenCategory,
-  onOpenFailures,
-  onOpenConfig,
-  onOpenControls,
-  canReadTypes = true,
+function HealthFact({
+  icon: Icon,
+  label,
+  children,
+  help,
+  testId,
 }: {
-  /** The shortcuts into another tab; the page leaves one out when that tab is hidden for the role. */
-  onOpenCategory?: (category: WhatsAppCategory) => void;
-  onOpenFailures?: () => void;
-  onOpenConfig?: () => void;
-  onOpenControls?: () => void;
-  /** The Message Text tab (its per-type list says which messages can go) is open to the role. */
-  canReadTypes?: boolean;
+  icon: typeof Gauge;
+  label: string;
+  children: ReactNode;
+  help?: string;
+  testId: string;
 }) {
-  const [days, setDays] = useState(30);
-  const { data, isLoading } = useWhatsAppOverview(days);
-  const [selected, setSelected] = useState<WhatsAppMessage | null>(null);
+  return (
+    <div className="min-w-0 rounded-xl border bg-card px-3 py-2.5" title={help} data-testid={testId}>
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <Icon size={12} className="shrink-0" /> {label}
+      </p>
+      <p className="mt-1 truncate text-sm font-semibold">{children}</p>
+    </div>
+  );
+}
 
-  if (isLoading || !data) {
+/** The hero: the business number and its health on the left, this month's spend against the budget on the right. */
+function Hero({ data, access, go }: { data: WhatsAppOverview; access: WaAccess; go: (tab: WaTab) => void }) {
+  const c = data.connection;
+  const verdict = connectionVerdict(c);
+  const quality = qualityInfo(c.qualityRating);
+  const tier = tierInfo(c.messagingLimitTier);
+  const status = numberStatusInfo(c.status);
+  const hook = webhookHealth(c.lastWebhookAt);
+  const budget = budgetState(data.cost.soFar, data.cost.projected, data.cost.budget);
+  const meterTone: Tone = budget.level === "over" ? "bad" : budget.level === "near" ? "warn" : "good";
+
+  return (
+    <section
+      className="overflow-hidden rounded-3xl border bg-card text-card-foreground shadow-sm"
+      data-testid="wa-hero"
+      data-verdict={verdict.tone}
+    >
+      <div className="grid lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        <div className="min-w-0 bg-gradient-to-br from-emerald-50 via-card to-card p-5 sm:p-6 dark:from-emerald-950">
+          <div className="flex flex-wrap items-start gap-3.5">
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-sm">
+              <MessageCircle size={24} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Business number · Meta WhatsApp Cloud API
+              </p>
+              <p
+                className="mt-0.5 break-words text-2xl font-bold tabular-nums leading-tight"
+                data-testid="wa-hero-number"
+              >
+                {c.displayNumber ?? (c.configured ? "Number not read yet" : "Not connected")}
+              </p>
+              <p className="mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground">
+                {c.verifiedName ? (
+                  <>
+                    <BadgeCheck size={14} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    {c.verifiedName}
+                  </>
+                ) : (
+                  "Verified name not known"
+                )}
+              </p>
+            </div>
+            <Chip tone={verdict.tone} testId="wa-hero-verdict">
+              {verdict.label}
+            </Chip>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            <HealthFact icon={SignalHigh} label="Quality" help={quality.help} testId="wa-hero-quality">
+              <Dot tone={quality.tone}>{quality.label}</Dot>
+            </HealthFact>
+            <HealthFact
+              icon={Gauge}
+              label="Messaging limit"
+              help="How many different people the number may start a chat with in any 24 hours (Meta raises it as quality stays high)."
+              testId="wa-hero-tier"
+            >
+              {tier.label}
+            </HealthFact>
+            <HealthFact icon={ShieldCheck} label="Number status" testId="wa-hero-status">
+              <Dot tone={status.tone}>{status.label}</Dot>
+            </HealthFact>
+            <HealthFact
+              icon={Webhook}
+              label="Webhook"
+              help="When Meta last sent a delivery receipt or a template update to this server."
+              testId="wa-hero-webhook"
+            >
+              <Dot tone={hook.tone}>{hook.label}</Dot>
+            </HealthFact>
+          </div>
+
+          {!c.configured && (
+            <Notice
+              tone="bad"
+              className="mt-4"
+              title="WhatsApp is not set up on this server"
+              testId="wa-hero-not-configured"
+              action={
+                access.canOpen("config") ? (
+                  <Button size="sm" variant="outline" onClick={() => go("config")} className="h-8 text-xs">
+                    Open Settings
+                  </Button>
+                ) : undefined
+              }
+            >
+              Nothing is sent until the Meta Cloud API keys are in the server's environment. The Settings tab lists
+              which ones are missing.
+            </Notice>
+          )}
+          {c.configured && c.blockReasons.length > 0 && (
+            <Notice tone="warn" className="mt-4" title="Sending is held back" testId="wa-hero-blocked">
+              <ul className="list-disc space-y-0.5 pl-4">
+                {c.blockReasons.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            </Notice>
+          )}
+        </div>
+
+        <div className="min-w-0 border-t p-5 sm:p-6 lg:border-l lg:border-t-0" data-testid="wa-hero-cost">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Spent this month · estimate
+          </p>
+          <p className="mt-1 text-3xl font-bold tabular-nums leading-tight" data-testid="wa-hero-spent">
+            {formatInr(data.cost.soFar)}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{formatInr(data.cost.soFar * (1 + GST))} with 18% GST</p>
+
+          <div className="mt-5 space-y-2">
+            {budget.level === "none" ? (
+              <p className="text-xs text-muted-foreground" data-testid="wa-hero-no-budget">
+                No monthly budget is set.{" "}
+                <GoLink tab="config" access={access} go={go}>
+                  Set one
+                </GoLink>
+              </p>
+            ) : (
+              <>
+                <Meter
+                  pct={budget.usedPct ?? 0}
+                  markPct={budget.projectedPct}
+                  tone={meterTone}
+                  label="Share of the monthly budget spent"
+                  testId="wa-hero-budget-meter"
+                />
+                <div className="flex flex-wrap justify-between gap-x-3 text-xs text-muted-foreground">
+                  <span>
+                    <b className={cn("tabular-nums", VALUE_TINT[meterTone])}>{formatPct(budget.usedPct)}</b> of{" "}
+                    {formatInr(data.cost.budget)}
+                  </span>
+                  <span>The mark: where the month ends</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="mt-5 flex items-end justify-between gap-3 rounded-2xl bg-muted px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Projected month</p>
+              <p className="text-xl font-bold tabular-nums" data-testid="wa-hero-projected">
+                {formatInr(data.cost.projected)}
+              </p>
+              <p className="text-[11px] text-muted-foreground">{formatInr(data.cost.projected * (1 + GST))} with GST</p>
+            </div>
+            {budget.projectedOver && (
+              <Chip tone="warn" testId="wa-hero-over-budget">
+                Over budget
+              </Chip>
+            )}
+          </div>
+          <div className="mt-3">
+            <GoLink tab="usage" access={access} go={go} testId="wa-hero-usage-link">
+              See usage and cost
+            </GoLink>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Kpis({ data, onOpenFailures }: { data: WhatsAppOverview; onOpenFailures?: () => void }) {
+  const m = data.month;
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="wa-kpis">
+      <Kpi
+        label="Sent this month"
+        value={formatCount(m.sent)}
+        sub={
+          m.queued || m.skipped
+            ? `${formatCount(m.queued)} waiting · ${formatCount(m.skipped)} skipped`
+            : "accepted by Meta"
+        }
+        icon={Send}
+        testId="wa-kpi-sent"
+      />
+      <Kpi
+        label="Delivered"
+        value={formatPct(m.deliveryRate)}
+        sub={`${formatCount(m.delivered + m.read)} reached the phone`}
+        tone={
+          m.deliveryRate === null ? "neutral" : m.deliveryRate >= 90 ? "good" : m.deliveryRate >= 75 ? "warn" : "bad"
+        }
+        icon={CheckCheck}
+        testId="wa-kpi-delivered"
+      />
+      <Kpi
+        label="Read"
+        value={formatPct(m.readRate)}
+        sub={`${formatCount(m.read)} opened (blue ticks)`}
+        tone="info"
+        icon={ListChecks}
+        testId="wa-kpi-read"
+      />
+      <Kpi
+        label="Failed"
+        value={formatCount(m.failed)}
+        sub={m.failed ? "not re-sent automatically" : "nothing failed"}
+        tone={m.failed ? "bad" : "neutral"}
+        icon={XCircle}
+        testId="wa-kpi-failed"
+      >
+        {m.failed > 0 && onOpenFailures && (
+          <button
+            type="button"
+            onClick={onOpenFailures}
+            className="mt-1.5 inline-flex items-center gap-1 text-xs font-semibold text-sky-700 underline-offset-2 hover:underline dark:text-sky-300"
+            data-testid="wa-kpi-failed-link"
+          >
+            See the failures <ArrowRight size={11} />
+          </button>
+        )}
+      </Kpi>
+    </div>
+  );
+}
+
+function Alerts({ data, access, go }: { data: WhatsAppOverview; access: WaAccess; go: (tab: WaTab) => void }) {
+  const alerts = sortAlerts(data.alerts);
+  return (
+    <Panel
+      title="Needs your attention"
+      description="What stops messages going out, or costs more than it should."
+      icon={ShieldCheck}
+      testId="wa-alerts"
+    >
+      {alerts.length === 0 ? (
+        <Notice tone="good" testId="wa-alerts-none">
+          Nothing needs your attention: every check is fine.
+        </Notice>
+      ) : (
+        <ul className="space-y-2">
+          {alerts.map((a, i) => {
+            const tab = alertTab(a);
+            return (
+              <li key={`${a.code}-${i}`}>
+                <Notice
+                  tone={alertTone(a.level)}
+                  testId={`wa-alert-${a.code || i}`}
+                  action={
+                    tab && access.canOpen(tab) ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 gap-1 px-2 text-xs"
+                        onClick={() => go(tab)}
+                        data-testid={`wa-alert-go-${a.code || i}`}
+                      >
+                        Fix <ArrowRight size={11} />
+                      </Button>
+                    ) : undefined
+                  }
+                >
+                  {a.message}
+                </Notice>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+function TemplatesCard({ data, access, go }: { data: WhatsAppOverview; access: WaAccess; go: (tab: WaTab) => void }) {
+  const t = data.templates;
+  const missing = t.missingForEnabledTypes;
+  return (
+    <Panel
+      title="Templates"
+      description="Every message goes out as a template Meta approved."
+      icon={FileCheck2}
+      testId="wa-templates-summary"
+      actions={
+        <GoLink tab="templates" access={access} go={go}>
+          Manage
+        </GoLink>
+      }
+    >
+      <div className="grid grid-cols-3 gap-2 text-center">
+        {(
+          [
+            ["Approved", t.approved, "good"],
+            ["In review", t.pending, "warn"],
+            ["Rejected", t.rejected, t.rejected ? "bad" : "neutral"],
+          ] as const
+        ).map(([label, n, tone]) => (
+          <div
+            key={label}
+            className="rounded-xl bg-muted px-2 py-2.5"
+            data-testid={`wa-templates-${label.toLowerCase().replace(" ", "-")}`}
+          >
+            <p className={cn("text-xl font-bold tabular-nums", VALUE_TINT[tone])}>{formatCount(n)}</p>
+            <p className="text-[11px] text-muted-foreground">{label}</p>
+          </div>
+        ))}
+      </div>
+      {missing.length > 0 ? (
+        <Notice tone="warn" className="mt-3" testId="wa-templates-missing">
+          <b>{plural(missing.length, "switched-on message type")}</b> {missing.length === 1 ? "has" : "have"} no
+          approved template, so {missing.length === 1 ? "it is" : "they are"} skipped:{" "}
+          {missing
+            .slice(0, 4)
+            .map((m) => m.label)
+            .join(", ")}
+          {missing.length > 4 ? ` and ${missing.length - 4} more` : ""}.
+        </Notice>
+      ) : (
+        <p className="mt-3 text-xs text-muted-foreground">Every switched-on message type has a template.</p>
+      )}
+    </Panel>
+  );
+}
+
+function OtpCard({ data, access, go }: { data: WhatsAppOverview; access: WaAccess; go: (tab: WaTab) => void }) {
+  const o = data.otp;
+  const tone: Tone = !o.enabled ? "neutral" : o.available ? "good" : "warn";
+  return (
+    <Panel
+      title="Sign-in codes"
+      icon={KeyRound}
+      testId="wa-otp-summary"
+      actions={
+        <GoLink tab="otp" access={access} go={go}>
+          OTP settings
+        </GoLink>
+      }
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm">
+          WhatsApp codes are{" "}
+          <b className={VALUE_TINT[tone]} data-testid="wa-otp-summary-state">
+            {!o.enabled ? "OFF" : o.available ? "working" : "ON, but not available"}
+          </b>
+        </p>
+        {o.enabled && <TemplateStatusChip status={o.templateStatus} />}
+      </div>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        {o.enabled && !o.available
+          ? "Employees get no WhatsApp code until the code template is approved and sending is allowed. SMS codes, where switched on, still work."
+          : "SMS codes are set on SMS Control and work on their own: either one is enough."}
+      </p>
+    </Panel>
+  );
+}
+
+function TodayCard({ data, access, go }: { data: WhatsAppOverview; access: WaAccess; go: (tab: WaTab) => void }) {
+  const q = data.queue;
+  if (!q) return null;
+  return (
+    <Panel
+      title="Today"
+      icon={Clock3}
+      testId="wa-today"
+      actions={
+        <GoLink tab="controls" access={access} go={go}>
+          Queue and limits
+        </GoLink>
+      }
+    >
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-xl bg-muted px-2 py-2.5">
+          <p className="text-xl font-bold tabular-nums">{formatCount(q.queued)}</p>
+          <p className="text-[11px] text-muted-foreground">waiting</p>
+        </div>
+        <div className="rounded-xl bg-muted px-2 py-2.5">
+          <p className="text-xl font-bold tabular-nums">
+            {formatCount(q.sentToday)}
+            {q.limits.maxPerDay > 0 && (
+              <span className="text-xs font-semibold text-muted-foreground"> / {formatCount(q.limits.maxPerDay)}</span>
+            )}
+          </p>
+          <p className="text-[11px] text-muted-foreground">sent</p>
+        </div>
+        <div className="rounded-xl bg-muted px-2 py-2.5">
+          <p className={cn("text-xl font-bold tabular-nums", q.failedToday ? VALUE_TINT.bad : "")}>
+            {formatCount(q.failedToday)}
+          </p>
+          <p className="text-[11px] text-muted-foreground">failed</p>
+        </div>
+      </div>
+      <div className="mt-3 space-y-2">
+        {!q.engineEnabled && (
+          <Notice tone="bad" icon={PowerOff} testId="wa-today-engine-off">
+            The WhatsApp engine is <b>OFF</b>: nothing is sent.
+          </Notice>
+        )}
+        {q.paused && (
+          <Notice tone="warn" icon={PauseCircle} testId="wa-today-paused">
+            <b>Sending is paused.</b> {q.pausedReason || "The server gave no reason."}
+          </Notice>
+        )}
+        {q.inQuietHours && (
+          <Notice tone="info" icon={Moon} testId="wa-today-quiet">
+            Quiet hours: nothing automatic goes out right now. Sign-in codes still go.
+          </Notice>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+/** The Overview: one hero (the number's health and the month's spend), the month in four numbers, what needs
+ *  attention, and short cards for templates, sign-in codes and today's queue. Refreshes every minute. */
+export default function OverviewTab({
+  access,
+  go,
+  onOpenFailures,
+}: {
+  access: WaAccess;
+  go: (tab: WaTab) => void;
+  /** Opens Messages filtered to the failures (only offered when the role may open Messages). */
+  onOpenFailures?: () => void;
+}) {
+  const { data, isLoading, error } = useWhatsAppOverview();
+
+  if (isLoading) {
     return (
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 rounded-2xl" />
+      <div className="space-y-4" data-testid="wa-overview-loading">
+        <Skeleton className="h-72 rounded-3xl" />
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-28 rounded-2xl" />
           ))}
         </div>
-        <Skeleton className="h-64 rounded-2xl" />
       </div>
     );
   }
-
-  const t = data.totals;
-  const maxDaily = Math.max(1, ...data.daily.map((d) => d.total));
+  if (!data) {
+    return (
+      <Notice tone="bad" role="alert" testId="wa-overview-error" title="The overview could not be loaded">
+        {whatsAppErrorMessage(error, "Try Refresh in a moment.")}
+      </Notice>
+    );
+  }
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <p className="text-xs text-gray-500">
-          Everything sent through the HRMS in the last {days} days. Refreshes every 30 seconds.
-        </p>
-        <PillTabs size="sm" items={RANGES} value={String(days)} onChange={(v) => setDays(Number(v))} />
-      </div>
-
-      {!data.config.configured && (
-        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-          <span>
-            WhatsApp isn't configured on this server, so nothing can be sent.{" "}
-            {onOpenConfig && (
-              <button className="underline font-semibold" onClick={onOpenConfig}>
-                See what's missing
-              </button>
-            )}
-          </span>
-        </div>
-      )}
-      {data.stalePending > 0 && (
-        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-          <Clock size={14} className="mt-0.5 shrink-0" />
-          <span>
-            {data.stalePending} message{data.stalePending === 1 ? "" : "s"} have been Pending for over 10 minutes. That
-            usually means the server restarted mid-send; they can be safely ignored.
-          </span>
-        </div>
-      )}
-
-      <SwitchedOffBanner canReadTypes={canReadTypes} onOpenControls={onOpenControls} />
-      <HodStatusCard onOpenControls={onOpenControls} />
-
-      <QueueCard />
-
-      <div className="grid sm:grid-cols-2 gap-3">
-        <PeriodCard title="Today" counts={data.today} />
-        <PeriodCard title="This month" counts={data.thisMonth} />
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-        <StatCard
-          label="Total"
-          value={t.total}
-          sub="messages"
-          icon={MessageCircle}
-          color="bg-slate-100 text-slate-800"
-        />
-        <StatCard
-          label="Sent"
-          value={t.sent}
-          sub="accepted, not yet confirmed"
-          icon={Send}
-          color="bg-blue-50 text-blue-800"
-        />
-        <StatCard
-          label="Delivered"
-          value={t.delivered}
-          sub="reached the phone"
-          icon={CheckCircle2}
-          color="bg-green-50 text-green-800"
-        />
-        <StatCard label="Read" value={t.read} sub="opened" icon={CheckCheck} color="bg-purple-50 text-purple-800" />
-        <StatCard label="Pending" value={t.pending} sub="in flight" icon={Clock} color="bg-amber-50 text-amber-800" />
-        <StatCard
-          label="Failed"
-          value={t.failed}
-          sub="see reasons below"
-          icon={XCircle}
-          color="bg-red-50 text-red-800"
-        />
-      </div>
-
-      <div>
-        <p className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-2">By module</p>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {data.categories.map((c) => (
-            <CategoryCard
-              key={c.key}
-              category={c.key}
-              label={c.label}
-              counts={data.byCategory[c.key]}
-              onOpen={onOpenCategory ? () => onOpenCategory(c.key) : undefined}
-            />
-          ))}
+    <div className="space-y-4" data-testid="wa-overview">
+      <Hero data={data} access={access} go={go} />
+      <Kpis data={data} onOpenFailures={onOpenFailures} />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <Alerts data={data} access={access} go={go} />
+        <div className="space-y-4">
+          <TemplatesCard data={data} access={access} go={go} />
+          <OtpCard data={data} access={access} go={go} />
+          <TodayCard data={data} access={access} go={go} />
         </div>
       </div>
-
-      <div className="grid lg:grid-cols-2 gap-4">
-        <Card className="border-0 text-gray-900 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold text-gray-900">Activity</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {data.daily.length === 0 ? (
-              <p className="text-xs text-gray-400 py-6 text-center">No messages in this period.</p>
-            ) : (
-              <div className="flex items-end gap-1 h-32" role="img" aria-label="Messages per day">
-                {data.daily.map((d) => (
-                  <div
-                    key={d.date}
-                    className="flex-1 min-w-[6px] flex flex-col justify-end"
-                    title={`${d.date}: ${d.total} sent, ${d.failed} failed`}
-                  >
-                    <div className="bg-red-400 rounded-t-sm" style={{ height: `${(d.failed / maxDaily) * 100}%` }} />
-                    <div
-                      className="bg-emerald-500"
-                      style={{
-                        height: `${((d.total - d.failed) / maxDaily) * 100}%`,
-                        minHeight: d.total - d.failed ? 2 : 0,
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex items-center justify-between text-[10px] text-gray-400 mt-1.5">
-              <span>{data.daily[0]?.date}</span>
-              <span className="flex items-center gap-3">
-                <span className="flex items-center gap-1">
-                  <i className="inline-block w-2 h-2 rounded-sm bg-emerald-500" /> OK
-                </span>
-                <span className="flex items-center gap-1">
-                  <i className="inline-block w-2 h-2 rounded-sm bg-red-400" /> Failed
-                </span>
-              </span>
-              <span>{data.daily[data.daily.length - 1]?.date}</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-0 text-gray-900 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold text-gray-900">By message type</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {data.byType.length === 0 ? (
-              <p className="text-xs text-gray-400 py-6 text-center">Nothing sent yet.</p>
-            ) : (
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-left text-gray-400">
-                    <th className="font-semibold pb-1">Type</th>
-                    <th className="font-semibold pb-1 text-right">Sent</th>
-                    <th className="font-semibold pb-1 text-right">Failed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.byType.map((r) => (
-                    <tr key={r.documentType} className="border-t">
-                      <td className="py-1.5">{r.label}</td>
-                      <td className="py-1.5 text-right tabular-nums">{r.total}</td>
-                      <td
-                        className={`py-1.5 text-right tabular-nums ${r.failed ? "text-red-600 font-semibold" : "text-gray-400"}`}
-                      >
-                        {r.failed}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="border-0 text-gray-900 shadow-sm">
-        <CardHeader className="pb-2 flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-sm font-bold text-gray-900">Recent failures</CardTitle>
-          {data.recentFailures.length > 0 && onOpenFailures && (
-            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={onOpenFailures}>
-              View all failures
-            </Button>
-          )}
-        </CardHeader>
-        <CardContent>
-          {data.recentFailures.length === 0 ? (
-            <p className="text-xs text-gray-400 py-4 text-center flex items-center justify-center gap-1.5">
-              <CheckCircle2 size={14} className="text-emerald-500" /> No failed messages in this period.
-            </p>
-          ) : (
-            <ul className="divide-y">
-              {data.recentFailures.map((m) => (
-                <li key={m.id}>
-                  <button
-                    onClick={() => setSelected(m)}
-                    className="w-full text-left py-2 flex items-start gap-3 hover:bg-slate-50 rounded-lg px-2"
-                  >
-                    <StatusPill status={m.status} />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-gray-800">
-                        {m.employeeName} · {m.typeLabel}
-                      </p>
-                      <p className="text-[11px] text-red-700 truncate">{m.error || "No reason recorded"}</p>
-                    </div>
-                    <span className="text-[10px] text-gray-400 shrink-0">{fmtDateTime(m.createdAt)}</span>
-                    <Eye size={12} className="text-gray-300 mt-0.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
-
-      <MessageDetailDialog message={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

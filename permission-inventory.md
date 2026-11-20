@@ -269,14 +269,12 @@ the Django URL list (592 API paths). The tables below are generated from the per
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Reports | Page | `compensation.reports` | /hr/compensation/reports | shares: compensation/reports (also History's) | Screen only |  |
 | Settlement | Page | `settlement` | - | advances | Server | existing key |
 | Reports | Page | `reports` | - | reports | Server | existing key |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Payroll & Salary | Tab | `reports.payroll` | - | checked inside the view | Server (view check) |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Attendance | Tab | `reports.attendance` | - | checked inside the view | Server (view check) |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Leave & Requests | Tab | `reports.leave` | - | checked inside the view | Server (view check) |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Gate & Visitors | Tab | `reports.gate` | - | checked inside the view | Server (view check) |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Employees | Tab | `reports.employees` | - | checked inside the view | Server (view check) |  |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ HR Reports | Tab | `reports.hr` | - | checked inside the view | Server (view check) |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Loans & Bonus | Tab | `reports.finance` | - | checked inside the view | Server (view check) |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Administration | Tab | `reports.admin` | - | - | Locked: Super Admin only |  |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Attendance | Tab | `reports.attendance` | - | checked inside the view | Server (view check) |  |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Shift | Tab | `reports.shift` | - | checked inside the view | Server (view check) | new 2026-11-19 |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Salary | Tab | `reports.payroll` | - | checked inside the view | Server (view check) | was "Payroll & Salary" |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Employee Details | Tab | `reports.employees` | - | checked inside the view | Server (view check) | was "Employees" |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Customise | Tab | `reports.customise` | /hr/reports/customise | reports/custom (and checked inside the view) | Server | new 2026-11-19: view opens saved custom reports, edit also builds, changes and deletes them |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Executive (MD) | Tab | `reports.md` | - | - | Locked: Managing Director only |  |
 
 ### Recruitment
@@ -479,7 +477,7 @@ These switch what one list shows, not what the role may reach. They follow the p
 | Bulk upload | Staff / Production switch | picks the template, not a page |
 | Attendance Search, Punch View, Report Log, Outpass / Visitors / Tea Break, Compensation History | day / week / month / custom period pills | date filters |
 | Requests -> Other requests | request-type filter | a filter; each type has its own approval switch |
-| Report Center | the 157 individual reports | each report needs its group (a key) and View on the pages its data comes from (`reporting/access.py`) |
+| Report Center | the 44 listed reports (`reporting/layout.py`, since 2026-11-19; the other registered reports are retired) and the saved Customise reports | each report needs its group (a key) and View on the pages its data comes from (`reporting/access.py`) |
 | User Management -> Approval Workflow Control | Leave & attendance / Requests / Recruitment & payroll groups | headings of one settings list |
 | Settings -> Company Documents | Offer / Experience / Salary Slip / Resignation letter picker | each letter has a key (it is a sub-tab in the tree) |
 

@@ -66,13 +66,14 @@ from .company_documents_views import (
 )
 from .otp_views import login_options, otp_activate, otp_login, otp_request, otp_reset_password
 from .whatsapp_control_views import (
-    whatsapp_control_settings, whatsapp_control_template_preview, whatsapp_control_template_update,
-    whatsapp_control_templates,
+    whatsapp_control_settings,
     whatsapp_employee_opt_out, whatsapp_employees, whatsapp_messages, whatsapp_overview,
-    whatsapp_queue, whatsapp_queue_clear,
+    whatsapp_queue, whatsapp_queue_clear, whatsapp_usage,
+    whatsapp_meta_templates, whatsapp_meta_templates_sync, whatsapp_meta_templates_create_missing,
+    whatsapp_meta_template_draft, whatsapp_meta_template_delete,
 )
 from .support_contact_views import support_contact
-from .sms_control_views import sms_messages, sms_overview, sms_settings, sms_test
+from .sms_control_views import sms_messages, sms_overview, sms_settings, sms_test, sms_usage
 from .shared_endpoint_views import shared_endpoint
 from . import shared_endpoint_admin_views as shared_admin
 from .email_control_views import (
@@ -82,9 +83,7 @@ from .email_control_views import (
 )
 from .hr_requests_views import hr_requests
 from .hr_activity_views import hr_activity
-from .whatsapp_views import (
-    whatsapp_status, whatsapp_templates, whatsapp_template_update, whatsapp_media, whatsapp_webhook,
-)
+from .whatsapp_views import whatsapp_webhook
 from .branch_summary_views import branches_summary
 from .org_structure_views import (
     departments_overview, department_employees,
@@ -167,6 +166,9 @@ from .reports_views import (
     settlement_report, new_joinings_report,
 )
 from .reporting.views import reports_catalog, reports_run, reports_export, reports_options
+from .reporting.custom.views import (
+    custom_datasets, custom_preview, custom_saved, custom_saved_detail, custom_saved_duplicate,
+)
 from .outpass_visitor_views import (
     outpass_qr, outpass_summary, outpass_records, outpass_gate_info, outpass_gate_submit,
     visitor_qr, visitor_summary, visitor_records, visitor_gate_info,
@@ -731,18 +733,15 @@ urlpatterns = [
     path("idcard/whatsapp", idcard_whatsapp),
     path("idcard-settings", idcard_settings_view),
 
-    # ── WhatsApp (Settings → WhatsApp) ──────────────────────────────────────
-    path("whatsapp/status", whatsapp_status),
-    path("whatsapp/templates", whatsapp_templates),
-    path("whatsapp/templates/<str:document_type>", whatsapp_template_update),
-    path("whatsapp/media/<str:token>", whatsapp_media),
-    # Both spellings: the webhook URL is registered with the trailing-slash form, and APPEND_SLASH
-    # cannot redirect a POST.
+    # ── WhatsApp: Meta's webhook (whatsapp_views.whatsapp_webhook) ─────────────
+    # Both spellings: the webhook URL is registered with the trailing-slash form, and APPEND_SLASH cannot redirect a
+    # POST. (The old wording endpoints whatsapp/templates... are retired: the wording IS the approved Meta template.)
     path("whatsapp/webhook", whatsapp_webhook),
     path("whatsapp/webhook/", whatsapp_webhook),
 
     # ── WhatsApp Control page (HR portal) ────────────────────────────────────
     path("whatsapp-control/overview", whatsapp_overview),
+    path("whatsapp-control/usage", whatsapp_usage),
     path("whatsapp-control/messages", whatsapp_messages),
     path("whatsapp-control/employees", whatsapp_employees),
     path("whatsapp-control/employees/<int:employee_id>/opt-out", whatsapp_employee_opt_out),
@@ -753,12 +752,17 @@ urlpatterns = [
     # Send a test / Connection check (whatsapp_test_views.py)
     path("whatsapp-control/test-message", whatsapp_test_message),
     path("whatsapp-control/connection", whatsapp_connection),
-    path("whatsapp-control/templates", whatsapp_control_templates),
-    path("whatsapp-control/templates/<str:document_type>/preview", whatsapp_control_template_preview),
-    path("whatsapp-control/templates/<str:document_type>", whatsapp_control_template_update),
+    # Meta message templates (whatsapp_templates.py). The old "Message Text" wording endpoints
+    # (whatsapp-control/templates...) are retired.
+    path("whatsapp-control/meta-templates", whatsapp_meta_templates),
+    path("whatsapp-control/meta-templates/sync", whatsapp_meta_templates_sync),
+    path("whatsapp-control/meta-templates/create-missing", whatsapp_meta_templates_create_missing),
+    path("whatsapp-control/meta-templates/draft/<str:type_key>", whatsapp_meta_template_draft),
+    path("whatsapp-control/meta-templates/<int:pk>", whatsapp_meta_template_delete),
 
     # SMS Control page (HR portal): one-time codes by SMS through 2Factor
     path("sms-control/overview", sms_overview),
+    path("sms-control/usage", sms_usage),
     path("sms-control/settings", sms_settings),
     path("sms-control/messages", sms_messages),
     path("sms-control/test", sms_test),
@@ -1025,6 +1029,13 @@ urlpatterns = [
     path("reports/options/<str:source>",        reports_options),
     path("reports/run/<str:report_id>",         reports_run),
     path("reports/export/<str:report_id>",      reports_export),
+    # Report Center -> Customise, the report builder (api/reporting/custom/; permission reports.customise). A saved
+    # report runs / exports through reports/run|export/custom-<id> above.
+    path("reports/custom/datasets",                     custom_datasets),
+    path("reports/custom/preview",                      custom_preview),
+    path("reports/custom/saved",                        custom_saved),
+    path("reports/custom/saved/<int:pk>",               custom_saved_detail),
+    path("reports/custom/saved/<int:pk>/duplicate",     custom_saved_duplicate),
 
     # ── Managing Director portal (every view behind @require_md; see api/md_portal/) ──
     path("md/", include("api.md_portal.urls")),
@@ -1039,4 +1050,6 @@ urlpatterns = [
     # ── HR Requests page: HoD's (pending with each Department Head) and Notify (reminders) ──
     path("", include("api.urls_hod_reminders")),
     path("", include("api.urls_attendance_notify")),
+    # ── HR -> Payroll -> Salary Slip: standalone slips, statement and bank file (no payroll; api/salary_slip_center/) ──
+    path("salary-slip-center/", include("api.salary_slip_center.urls")),
 ]

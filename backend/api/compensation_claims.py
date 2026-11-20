@@ -142,6 +142,19 @@ CLAIM_STATUS_LABELS = {
 
 OPEN = HolidayWorkClaim.OPEN_STATUSES
 
+# Holiday work on the employee's OWN off day that is neither a Sunday nor a declared holiday: an off Saturday (the shift
+# assignment's saturday_off; owner decision 4: working a day off is ordinary holiday work).
+OFF_SATURDAY = "off_saturday"
+OFF_SATURDAY_LABEL = "Off Saturday"
+
+# What the reason a Department Head reads starts with, for every kind but holiday work (claim_json for_role="hod").
+HOD_REASON_PREFIX = {
+    HolidayWorkClaim.KIND_OT_ALLOWANCE: "OT late-in allowance (nothing is added to the balance)",
+    HolidayWorkClaim.KIND_OT_SHIFT: "OT shift credit",
+    HolidayWorkClaim.KIND_BIRTHDAY: "Birthday credit",
+    HolidayWorkClaim.KIND_USE_BALANCE: "Use of compensation balance (a day off taken from the balance)",
+}
+
 
 class ClaimError(Exception):
     """A claim refused with a plain sentence. `code` is the machine-readable reason the apps branch on (not_eligible,
@@ -464,10 +477,16 @@ def _check(employee: Employee, kind: str, target, ctx: Context) -> dict:
         if day is None:
             raise ClaimError("invalid", "date must be a date (YYYY-MM-DD).")
         if day_kind(day, holiday_names(day, day)) is None:
-            raise ClaimError(
-                "not_eligible",
-                f"{date_text(day)} is neither a Sunday nor a declared holiday, so there is no holiday work to claim.",
-            )
+            # the employee's own off Saturday is a day off too: working it is holiday work (owner decision 4)
+            from .compensation_engine import is_off_day
+
+            if not (day.weekday() == 5 and is_off_day(employee, day)):
+                whose = "your" if ctx.for_employee else f"{full_name(employee)}'s"
+                raise ClaimError(
+                    "not_eligible",
+                    f"{date_text(day)} is neither a Sunday, a declared holiday nor {whose} off Saturday, so there is no "
+                    "holiday work to claim.",
+                )
         err = _window_error(day, ctx)
         if err:
             raise err
@@ -839,17 +858,21 @@ def create_claim(
 
 
 def hod_dedupe(claim: HolidayWorkClaim) -> str:
-    """What the Department Head's "waiting for your approval" message is about: the employee, the kind and the date
-    (security review 2026-11-19), so raising, withdrawing and raising the same claim again tells the head ONCE (WhatsApp
-    and the phone notice alike). A claim raised again after a REJECTION is news, so the count of rejected claims of that
-    employee, kind and date is part of the key."""
+    """What the Department Head's "waiting for your approval" message is about: the employee, the kind, the date and the
+    amount (security review 2026-11-19), so raising, withdrawing and raising the SAME claim again tells the head ONCE
+    (WhatsApp and the phone notice alike), while a claim raised again with different figures (shifts / minutes) is told
+    again: the head's only message must not keep the old figures (verification 2026-11-19). A claim raised again after a
+    REJECTION is news, so the count of rejected claims of that employee, kind and date is part of the key."""
     rejected = HolidayWorkClaim.objects.filter(
         employee_id=claim.employee_id,
         kind=claim.kind,
         work_date=claim.work_date,
         status=HolidayWorkClaim.STATUS_REJECTED,
     ).count()
-    return f"{claim.employee_id}:{claim.kind}:{claim.work_date.isoformat()}:r{rejected}"
+    shifts = Decimal(claim.shifts or 0).quantize(Decimal("0.01"))
+    return (
+        f"{claim.employee_id}:{claim.kind}:{claim.work_date.isoformat()}:{shifts}:{int(claim.minutes or 0)}:r{rejected}"
+    )
 
 
 def _notify_employee_raised(claim: HolidayWorkClaim) -> None:
@@ -864,6 +887,38 @@ def _notify_employee_raised(claim: HolidayWorkClaim) -> None:
 
 
 # ─────────────────────────── the Department Head's decision ───────────────────────────
+
+
+def _refresh_evidence(claim: HolidayWorkClaim) -> None:
+    """The approval refreshes its own evidence (verification 2026-11-19, security #1): work the claim's day out again
+    (attendance_final.compute_range_records: never a manual day) and, for the OT kinds, bring the employee's OT row of
+    that day in step with it (overtime.sync_overtime with prune: a day that no longer qualifies loses its undecided row,
+    which sets the claim's overtime_record to NULL), so an approval never credits what a corrected punch removed, even
+    before the 15-minute detection job or an HR list ran. decide runs it BEFORE its own transaction, exactly like a
+    detection pass (so what it finds stays, even when the approval is then refused); the checks under the decision's locks
+    read the result. A Payroll Done month is left alone: its attendance can no longer change. Each step is its own
+    transaction / savepoint and never raises (the checks then judge what is stored)."""
+    effects = _effects()
+    day = claim.work_date
+    if effects.month_locked(day):
+        return
+    from .attendance_final import compute_range_records
+    from .models import PayrollSettings
+    from .overtime import sync_overtime
+
+    settings = PayrollSettings.get()
+    try:
+        with transaction.atomic():
+            compute_range_records(claim.employee, day, day, settings)
+    except Exception:
+        logger.exception("Working out the day of claim %s again failed", claim.pk)
+    if claim.kind not in HolidayWorkClaim.OT_KINDS:
+        return
+    try:
+        with transaction.atomic():
+            sync_overtime(day, day, settings=settings, employee_ids=[claim.employee_id], prune=True)
+    except Exception:
+        logger.exception("Bringing the OT row of claim %s in step failed", claim.pk)
 
 
 def _approval_problem(claim: HolidayWorkClaim) -> str | None:
@@ -881,7 +936,12 @@ def _approval_problem(claim: HolidayWorkClaim) -> str | None:
             f"{what} cannot be approved right now: it would not change the attendance. Ask HR to switch them on, or "
             "reject it."
         )
+    # (decide refreshed the evidence first: _refresh_evidence, the day worked out again and its OT row brought in step)
     if kind in HolidayWorkClaim.OT_KINDS:
+        # a prune sets the claim's overtime_record to NULL in the database, not on this in-memory row
+        claim.overtime_record_id = (
+            HolidayWorkClaim.objects.filter(pk=claim.pk).values_list("overtime_record_id", flat=True).first()
+        )
         if claim.overtime_record_id is None:
             return (
                 "The overtime behind this claim is no longer on record (the punches were corrected), so it cannot be "
@@ -895,11 +955,6 @@ def _approval_problem(claim: HolidayWorkClaim) -> str | None:
         )
         if record is None:
             return "The overtime behind this claim is no longer on record, so it cannot be approved. Reject it instead."
-        if kind == HolidayWorkClaim.KIND_OT_SHIFT and record.status != OvertimeRecord.STATUS_DETECTED:
-            return (
-                "HR already decided this overtime (assigned or paid), so it cannot be credited as well. Reject this "
-                "claim instead."
-            )
         if kind == HolidayWorkClaim.KIND_OT_ALLOWANCE and record.status == OvertimeRecord.STATUS_REJECTED:
             return "HR decided this overtime is not compensated, so it cannot be approved. Reject this claim instead."
         wanted = (
@@ -907,11 +962,18 @@ def _approval_problem(claim: HolidayWorkClaim) -> str | None:
             if kind == HolidayWorkClaim.KIND_OT_ALLOWANCE
             else OvertimeRecord.OT_TYPE_SHIFT
         )
+        # the kind first: a Type 2 row that became a Type 1 allowance after a punch correction (status auto) changed, HR
+        # did not decide it (verification 2026-11-19)
         if record.ot_type != wanted:
             return (
                 f"The overtime of {date_text(record.date)} changed since the claim was raised (the punches were "
                 "corrected) and is no longer what was claimed, so it cannot be approved. Reject it; a new claim can be "
                 "raised for what the day shows now."
+            )
+        if kind == HolidayWorkClaim.KIND_OT_SHIFT and record.status != OvertimeRecord.STATUS_DETECTED:
+            return (
+                "HR already decided this overtime (assigned or paid), so it cannot be credited as well. Reject this "
+                "claim instead."
             )
         if kind == HolidayWorkClaim.KIND_OT_SHIFT:
             credit = ot_credit(record)
@@ -938,7 +1000,9 @@ def _approval_problem(claim: HolidayWorkClaim) -> str | None:
             )
     if kind == HolidayWorkClaim.KIND_BIRTHDAY:
         effects = _effects()
-        outcome = effects.birthday_outcome(claim.employee, claim.work_date, refresh=True) or {}
+        # the attendance alone decides here: a credit kind stays decidable with the master / birthday switch off, like
+        # holiday work and OT credits (verification 2026-11-19, security #2)
+        outcome = effects.birthday_outcome(claim.employee, claim.work_date, refresh=True, ignore_switches=True) or {}
         if (outcome.get("base") or outcome.get("outcome")) != effects.BIRTHDAY_CREDIT_CLAIMABLE:
             return (
                 "The attendance no longer shows the birthday as worked"
@@ -1071,6 +1135,18 @@ def decide(
     from . import whatsapp_approvals
 
     claim_id = claim.pk if isinstance(claim, HolidayWorkClaim) else int(claim)
+    if decision == HolidayWorkClaim.STATUS_APPROVED:
+        waiting = (
+            HolidayWorkClaim.objects.select_related("employee")
+            .filter(
+                pk=claim_id,
+                status=HolidayWorkClaim.STATUS_PENDING,
+                kind__in=(*HolidayWorkClaim.OT_KINDS, HolidayWorkClaim.KIND_HOLIDAY_WORK),
+            )
+            .first()
+        )
+        if waiting is not None:
+            _refresh_evidence(waiting)
     with transaction.atomic():
         emp_id = HolidayWorkClaim.objects.filter(pk=claim_id).values_list("employee_id", flat=True).first()
         if emp_id is None:
@@ -1183,10 +1259,21 @@ def claim_json(
     names = holidays if holidays is not None else holiday_names(work_date, work_date)
     kind = claim.kind or HolidayWorkClaim.KIND_HOLIDAY_WORK
     found_kind = day_kind(work_date, names)
+    holiday_name = names.get(work_date)
     if kind == HolidayWorkClaim.KIND_HOLIDAY_WORK:
-        day = found_kind or ("sunday" if work_date.weekday() == 6 else "holiday")
+        # a holiday-work claim on a Saturday that is no declared holiday is work on the employee's own off Saturday
+        weekday = work_date.weekday()
+        day = found_kind or ("sunday" if weekday == 6 else OFF_SATURDAY if weekday == 5 else "holiday")
+        if day == OFF_SATURDAY:
+            # older app builds show the holiday name for every day that is not a Sunday
+            holiday_name = OFF_SATURDAY_LABEL
     else:
         day = found_kind or "working"
+    reason = claim.reason
+    if for_role == "hod" and kind in HOD_REASON_PREFIX:
+        # older HOD app builds read every row as Sunday / holiday work ("approving adds <shifts> to the balance"): the
+        # reason they show says what the claim really is (verification 2026-11-19, old app builds)
+        reason = f"{HOD_REASON_PREFIX[kind]}: {reason}" if reason else HOD_REASON_PREFIX[kind]
     entry = _ledger_entry(claim)
     applies_on = None
     if kind == HolidayWorkClaim.KIND_OT_ALLOWANCE:
@@ -1201,9 +1288,9 @@ def claim_json(
         "workDate": work_date.isoformat(),
         "date": work_date.isoformat(),
         "dayKind": day,
-        "holidayName": names.get(work_date),
+        "holidayName": holiday_name,
         "shifts": float(claim.shifts),
-        "reason": claim.reason,
+        "reason": reason,
         "status": claim.status,
         "statusLabel": status_label(claim, applies_on),
         "requestedBy": claim.requested_by,

@@ -125,6 +125,11 @@ def run_report(request, spec: ReportSpec, query, purpose: str = "screen") -> Run
     """Parse + validate filters, run the report, normalise. Raises ReportParamError on bad input."""
     from .access import hr_display_name
 
+    prepare = getattr(spec, "run_inputs", None)
+    if prepare is not None:
+        # a saved Customise report: its saved filter values fill the parameters the request leaves out
+        # (custom/build.SavedReportSpec)
+        spec, query = prepare(query, request)
     params = parse_params(spec, query)
     limit = limit_for(spec, purpose)
     ctx = ReportContext(request=request, spec=spec, params=params, row_limit=limit + 1, purpose=purpose)

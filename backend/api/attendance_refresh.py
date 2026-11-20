@@ -60,9 +60,10 @@ def window(today: date | None = None) -> tuple[date, date]:
 
 def refresh_after_punches(pairs) -> int:
     """Re-judge the stored days of these just-saved punches: `pairs` is an iterable of (employee id, punch date). Each
-    employee's days from the day before their earliest punch to their latest one - for staff to the day AFTER it (the
-    next-morning rule: a day's punch count decides whose the next morning's early punch is) - never after today, at
-    most MAX_INLINE_DAYS back, are worked out again in one call. Returns how many employees were re-judged."""
+    employee's days from the day before their earliest punch to their latest one - for staff to the day AFTER it and on
+    along the next-morning chain (a day's punch count decides whose the next morning's early punch is;
+    shift_engine.staff_night_chain_end) - never after today, at most MAX_INLINE_DAYS back, are worked out again in one
+    call. Returns how many employees were re-judged."""
     from .attendance_final import compute_range_records
     from .models import Employee, PayrollSettings
 
@@ -79,15 +80,21 @@ def refresh_after_punches(pairs) -> int:
         days[int(employee_id)].add(punch_date)
     if not days:
         return 0
-    # Staff: one day FORWARD too. Under the next-morning rule a new punch on D can change whether D is left open (an
-    # odd count), and so which day D+1's early punch belongs to (correctness review 2026-11-19).
-    staff = set(Employee.objects.filter(pk__in=list(days), employment_type="staff").values_list("pk", flat=True))
+    if len(days) > INLINE_MAX_EMPLOYEES:
+        logger.info("New punches of %s employee(s) left to the background attendance refresh", len(days))
+        return 0
+    # Staff: FORWARD too. Under the next-morning rule a new punch on D can change whether D is left open (an odd count),
+    # and so which day D+1's early punch belongs to - and, while the following days have early punches of their own,
+    # theirs in turn (shift_engine.staff_night_chain_end; correctness review 2026-11-19).
+    settings = PayrollSettings.get()
+    employees = {emp.pk: emp for emp in Employee.objects.filter(pk__in=list(days)).order_by("pk")}
     spans = {
         emp_id: (
             max(min(ds) - timedelta(days=1), floor),
-            min(max(ds) + timedelta(days=1 if emp_id in staff else 0), today),
+            min(_forward_end(employees[emp_id], max(ds), settings, today), today),
         )
         for emp_id, ds in days.items()
+        if emp_id in employees
     }
     spans = {emp_id: span for emp_id, span in spans.items() if span[0] <= span[1]}
     employee_days = sum((hi - lo).days + 1 for lo, hi in spans.values())
@@ -96,10 +103,10 @@ def refresh_after_punches(pairs) -> int:
             "%s new-punch day(s) of %s employee(s) left to the background attendance refresh", employee_days, len(spans)
         )
         return 0
-    settings = PayrollSettings.get()
     done = 0
-    for emp in Employee.objects.filter(pk__in=list(spans)).order_by("pk"):
-        lo, hi = spans[emp.pk]
+    for emp_id in sorted(spans):
+        emp = employees[emp_id]
+        lo, hi = spans[emp_id]
         try:
             with transaction.atomic():
                 compute_range_records(emp, lo, hi, settings)
@@ -110,6 +117,18 @@ def refresh_after_punches(pairs) -> int:
                 "Re-judging the attendance of employee %s (%s to %s) after new punches failed", emp.pk, lo, hi
             )
     return done
+
+
+def _forward_end(emp, day: date, settings, today: date) -> date:
+    """The last day a change of `day`'s punches can re-judge (shift_engine.staff_night_chain_end: staff look forward
+    along the next-morning chain); never raises - on a surprise, staff keep the plain day after."""
+    from .shift_engine import staff_night_chain_end
+
+    try:
+        return staff_night_chain_end(emp, day, settings, today)
+    except Exception:
+        logger.exception("Following the next-morning chain of employee %s after %s failed", emp.pk, day)
+        return day + timedelta(days=1) if emp.employment_type == "staff" else day
 
 
 def refresh_stale(today: date | None = None) -> int:

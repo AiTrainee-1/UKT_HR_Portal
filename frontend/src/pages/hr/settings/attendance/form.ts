@@ -175,7 +175,8 @@ export function dayText(iso: string): string {
 
 /**
  * What is wrong with the next-morning cut-off: a morning clock time (after midnight, up to noon), and a start date that only
- * moves later (days already judged keep the old rule): never before the saved date, and a newly set one is today or later.
+ * moves later (days already judged keep the old rule): a changed date is never before the saved date, nor before today (the
+ * server refuses both).
  */
 export function nextMorningErrors(
   d: Pick<StaffDraft, "nextMorningEnabled" | "nextMorningCutoff" | "nextMorningFrom">,
@@ -196,7 +197,7 @@ export function nextMorningErrors(
     errors.nextMorningFrom = "Pick a valid date.";
   } else if (savedFrom && from < savedFrom) {
     errors.nextMorningFrom = `The date can only be moved later than ${dayText(savedFrom)}: days before it keep the old rule.`;
-  } else if (!savedFrom && today && from < today) {
+  } else if (today && from < today) {
     errors.nextMorningFrom = "Pick today or a later date: days already judged are not changed.";
   }
   return errors;

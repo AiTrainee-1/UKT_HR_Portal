@@ -326,7 +326,7 @@ ATTENDANCE = N(
         "page",
         "Attendance reports (Absent, CL, On Leave, Permission, Compensation) sent on a schedule through WhatsApp, Gmail "
         "and the internal chat.",
-        N("attendance.attendance_notify.whatsapp", "WhatsApp", "tab", "Reports sent to WhatsApp numbers and groups."),
+        N("attendance.attendance_notify.whatsapp", "WhatsApp", "tab", "Reports sent to WhatsApp numbers."),
         N("attendance.attendance_notify.gmail", "Gmail", "tab", "Reports emailed from the company Gmail account."),
         N("attendance.attendance_notify.chat", "Internal Chat", "tab", "Reports posted in the internal chat channels."),
         N(
@@ -1236,23 +1236,55 @@ COMPENSATION = N(
 
 SETTLEMENT = N("settlement", "Settlement", "page", "Salary advances and term loans, and their repayment.")
 
-_REPORT_GROUPS = (
-    ("payroll", "Payroll & Salary", "Slips, registers, wages, statutory statements and deductions."),
-    ("attendance", "Attendance", "Time cards, daily and monthly attendance, late, overtime and shifts."),
-    ("leave", "Leave & Requests", "Leave, permission, on-duty, missing punch and other requests."),
-    ("gate", "Gate & Visitors", "Outpass, visitor and tea-break registers."),
-    ("employees", "Employees", "Master data, headcount, joiners, exits and compliance."),
-    ("hr", "HR Reports", "Ready-made HR registers (time card, punching, strength, salary statement ...)."),
-    ("finance", "Loans & Bonus", "Advances, loans, bonus, increments and promotions."),
+# HR -> Payroll -> Salary Slip (/hr/salary-slip, api/salary_slip_center/): standalone slips worked out from attendance and
+# salary, no payroll needed (owner 2026-11-20). Until a role sets it, it follows Staff Payroll -> Payslip, so whoever
+# handles payslips today finds the page.
+SALARY_SLIP_CENTER = N(
+    "salary_slip_center",
+    "Salary Slip",
+    "page",
+    "Salary slips, salary statements and bank files for any employee from attendance and salary, without payroll. "
+    "Edit = Generate and Hold.",
+    api=["salary-slip-center"],
+    routes=["/hr/salary-slip"],
+    inherits="salary_slip",
 )
+
+_REPORT_GROUPS = (
+    ("hr", "HR Reports", "Ready-made HR registers (time card, punching, strength, salary statement ...)."),
+    (
+        "attendance",
+        "Attendance",
+        "Staff and production attendance, time cards, punches, leave, late, misspunch and on-duty.",
+    ),
+    ("shift", "Shift", "Assigned and gained shifts, shift changes and shift-wise attendance."),
+    (
+        "payroll",
+        "Salary",
+        "Salary statements, staff and production salary, gained and expected salary, department-wise figures.",
+    ),
+    ("employees", "Employee Details", "Employee details, fixed salary, monthly shifts, time card and punches."),
+    (
+        "customise",
+        "Customise",
+        "The report builder: view opens saved custom reports, edit also creates, changes and deletes them.",
+    ),
+)
+
+# What a report group has of its own besides the view check: Customise has the report builder's pages
+# (/hr/reports/customise/new and /hr/reports/customise/<id>/edit; running a saved report stays /hr/reports) and its API
+# (reports/custom/...: GET = view, a save / change / copy / delete = edit; reporting/custom/views.py).
+_REPORT_EXTRA: dict[str, dict] = {"customise": {"routes": ["/hr/reports/customise"], "api": ["reports/custom"]}}
 
 REPORTS = N(
     "reports",
     "Reports",
     "page",
     "The Report Center. Each report also needs view on the pages its data comes from.",
-    *(N(f"reports.{k}", label, "tab", help, viewCheck=True) for k, label, help in _REPORT_GROUPS),
-    N("reports.admin", "Administration", "tab", "Audit trail and user access reports.", locked=SUPER_ADMIN_ONLY),
+    *(
+        N(f"reports.{k}", label, "tab", help, viewCheck=True, **_REPORT_EXTRA.get(k, {}))
+        for k, label, help in _REPORT_GROUPS
+    ),
     N(
         "reports.md",
         "Executive (MD)",
@@ -1561,15 +1593,47 @@ WHATSAPP_CONTROL = N(
     "whatsapp_control",
     "WhatsApp Control",
     "page",
-    "Every WhatsApp message the HRMS sends.",
+    "Every WhatsApp message the HRMS sends, through the official Meta WhatsApp Cloud API.",
     N(
         "whatsapp_control.overview",
         "Overview",
         "tab",
-        "Messages sent, failed and waiting; the send queue.",
-        api=["whatsapp-control/queue"],
+        "Connection health, quality and messaging limit, this month's messages and cost, the send queue.",
+        api=["whatsapp-control/overview", "whatsapp-control/queue"],
     ),
-    N("whatsapp_control.messages", "Messages", "tab", "Every message.", api=["whatsapp-control/messages"]),
+    N(
+        "whatsapp_control.usage",
+        "Usage & Cost",
+        "tab",
+        "Messages by day, type and Meta pricing category; estimated and projected monthly cost against the budget.",
+        api=["whatsapp-control/usage"],
+    ),
+    N(
+        "whatsapp_control.controls",
+        "Message Controls",
+        "tab",
+        "Switch every WhatsApp message type on or off, and the sending limits and quiet hours.",
+    ),
+    N(
+        "whatsapp_control.templates",
+        "Templates",
+        "tab",
+        "Create, submit, sync and delete the Meta message templates every message is sent as.",
+        api=["whatsapp-control/meta-templates"],
+    ),
+    N(
+        "whatsapp_control.otp",
+        "OTP",
+        "tab",
+        "One-time sign-in codes by WhatsApp: on or off for sign-in, password reset and activation.",
+    ),
+    N(
+        "whatsapp_control.messages",
+        "Messages",
+        "tab",
+        "Every message and its delivery.",
+        api=["whatsapp-control/messages"],
+    ),
     N(
         "whatsapp_control.employees",
         "Employees",
@@ -1577,26 +1641,18 @@ WHATSAPP_CONTROL = N(
         "Per employee, and opting out.",
         api=["whatsapp-control/employees"],
     ),
-    N("whatsapp_control.controls", "Feature Controls", "tab", "Which messages are sent, limits and timing."),
-    N(
-        "whatsapp_control.templates",
-        "Message Text",
-        "tab",
-        "The text of each message.",
-        api=["whatsapp-control/templates"],
-    ),
     N(
         "whatsapp_control.test",
         "Send a test",
         "tab",
-        "Send one message of any type to an employee at once and see WAClient's answer.",
+        "Send one message of any type to an employee at once and see Meta's answer.",
         api=["whatsapp-control/test-message"],
     ),
     N(
         "whatsapp_control.config",
-        "Configuration",
+        "Settings",
         "tab",
-        "The WhatsApp account set-up and the connection check.",
+        "The Meta account set-up check, the webhook, prices and the monthly budget.",
         api=["whatsapp-control/connection"],
     ),
 )
@@ -1610,19 +1666,33 @@ SMS_CONTROL = N(
     "sms_control",
     "SMS Control",
     "page",
-    "One-time sign-in codes by SMS.",
-    N("sms_control.overview", "Overview", "tab", "Codes sent and the account balance.", routes=[_sms("overview")]),
+    "One-time sign-in codes by SMS (2Factor). SMS is used for codes only.",
+    N(
+        "sms_control.overview",
+        "Overview",
+        "tab",
+        "Status, the account balance and this month's codes.",
+        routes=[_sms("overview")],
+    ),
+    N(
+        "sms_control.usage",
+        "Usage & Cost",
+        "tab",
+        "Codes by day and purpose, delivery and use, estimated and projected monthly cost.",
+        routes=[_sms("usage")],
+        api=["sms-control/usage"],
+    ),
     N(
         "sms_control.settings",
         "Settings",
         "tab",
         "How codes are sent.",
         N(
-            "sms_control.settings.channel",
-            "Channel",
+            "sms_control.settings.switches",
+            "OTP Switches",
             "subtab",
-            "SMS provider and sender.",
-            routes=[_sms("settings/channel")],
+            "SMS codes on or off, and for which sign-ins.",
+            routes=[_sms("settings/switches")],
         ),
         N(
             "sms_control.settings.limits",
@@ -1632,11 +1702,11 @@ SMS_CONTROL = N(
             routes=[_sms("settings/limits")],
         ),
         N(
-            "sms_control.settings.switches",
-            "Switches",
+            "sms_control.settings.cost",
+            "Cost",
             "subtab",
-            "Which sign-ins use SMS.",
-            routes=[_sms("settings/switches")],
+            "Price per SMS and the monthly budget.",
+            routes=[_sms("settings/cost")],
         ),
         routes=[_sms("settings")],
         api=["sms-control/settings"],
@@ -1649,8 +1719,8 @@ SMS_CONTROL = N(
         routes=[_sms("messages")],
         api=["sms-control/messages"],
     ),
-    N("sms_control.test", "Test", "tab", "Send a test SMS.", routes=[_sms("test")], api=["sms-control/test"]),
-    N("sms_control.setup", "Setup", "tab", "How to set the account up.", routes=[_sms("setup")]),
+    N("sms_control.test", "Test", "tab", "Send a test code.", routes=[_sms("test")], api=["sms-control/test"]),
+    N("sms_control.setup", "Setup", "tab", "The 2Factor account set-up check.", routes=[_sms("setup")]),
 )
 
 GMAIL_CONTROL = N(
@@ -1940,7 +2010,7 @@ GROUPS: list[dict] = [
     {
         "id": "payroll",
         "label": "Payroll",
-        "children": [STAFF_PAYROLL, PRODUCTION_PAYROLL, COMPENSATION, SETTLEMENT, REPORTS],
+        "children": [STAFF_PAYROLL, PRODUCTION_PAYROLL, COMPENSATION, SETTLEMENT, SALARY_SLIP_CENTER, REPORTS],
     },
     {"id": "recruitment", "label": "Recruitment", "children": [RECRUITMENT]},
     {

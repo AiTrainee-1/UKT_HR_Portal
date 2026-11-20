@@ -1437,7 +1437,10 @@ def hod_decide_holiday_work(m: DepartmentManager, pk: int, data, actor: str, req
     if claim is None:
         if HolidayWorkClaim.objects.filter(pk=pk).exists():
             return Response({"error": "This request is not in your approval scope"}, status=403)
-        return Response({"error": "Holiday-work claim not found"}, status=404)
+        # a withdrawn claim is deleted, so "not found" is (nearly always) a claim withdrawn before this click: the same
+        # answer as the in-flight race below, so the apps that key on code "withdrawn" say the same thing (verification
+        # 2026-11-19)
+        return Response({"error": "This claim was withdrawn (or no longer exists).", "code": "withdrawn"}, status=404)
 
     status_val = data.get("status")
     if status_val not in ["approved", "rejected"] and approval.is_pending("holiday_work", claim):

@@ -733,7 +733,7 @@ def resignation_whatsapp(request: Request, pk: int) -> Response:
 
     log = whatsapp_service.send_document(
         request, emp, "resignation_letter", pdf_bytes, f"resignation_acceptance_{emp.employee_code}_{r.id}.pdf",
-        body_params=[emp_name, last_working],
+        body_params={"employee_name": emp_name, "last_working_day": last_working},
         document_ref_id=r.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
     if not whatsapp_service.accepted(log):

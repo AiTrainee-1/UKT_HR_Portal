@@ -28,6 +28,7 @@ from .models import (
     AttendanceDayRecord,
     AttendanceLog,
     CasualLeaveRequest,
+    CompensationConfig,
     CompensationLedger,
     Department,
     DepartmentManager,
@@ -656,6 +657,10 @@ class ClaimSettingsTests(ClaimsEngineBase):
             self.assertEqual(body["claims"]["from"], "2026-03-01")
             self.assertTrue(body["shift"]["quarterRule"])
             self.assertIn("quarters", body["shift"]["quarterRuleHelp"])
+        # the claims date moves forward only (final round 2026-11-19): a later date is saved, an earlier one refused
+        patch = mock.patch("api.compensation_settings_views.ist_today", return_value=date(2026, 3, 20))
+        patch.start()
+        self.addCleanup(patch.stop)
         r = self.client.put(
             "/api/compensation/settings",
             {"shift": {"quarterRule": False}, "claims": {"from": "2027-01-01"}},
@@ -664,8 +669,16 @@ class ClaimSettingsTests(ClaimsEngineBase):
         )
         self.assertEqual(r.status_code, 200, r.content)
         self.assertFalse(r.json()["shift"]["quarterRule"])
-        self.assertEqual(r.json()["claims"]["from"], "2026-03-01")  # read-only
+        self.assertEqual(r.json()["claims"]["from"], "2027-01-01")
         self.assertTrue(any("quarters rule" in w for w in r.json()["warnings"]))
+        r = self.client.put(
+            "/api/compensation/settings",
+            {"claims": {"from": "2026-12-01"}},
+            content_type="application/json",
+            **self.headers,
+        )
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual(CompensationConfig.get().claims_from, date(2027, 1, 1))
         r = self.client.put(
             "/api/compensation/settings",
             {"shift": {"quarterRule": "no"}},
@@ -675,6 +688,11 @@ class ClaimSettingsTests(ClaimsEngineBase):
         self.assertEqual(r.status_code, 400)
 
     def test_the_staff_next_morning_keys(self):
+        # the API dates every change by the IST day (and refuses a from-date before it): pinned inside March 2026
+        today = date(2026, 3, 20)
+        patch = mock.patch("api.clock.ist_today", return_value=today)
+        patch.start()
+        self.addCleanup(patch.stop)
         body = self.client.get("/api/payroll-settings", **self.headers).json()
         self.assertEqual(
             (body["staffNextMorningEnabled"], body["staffNextMorningCutoff"], body["staffNextMorningFrom"]),
@@ -682,21 +700,30 @@ class ClaimSettingsTests(ClaimsEngineBase):
         )
         r = self.put_payroll(staffNextMorningCutoff="07:15")
         self.assertEqual((r.status_code, r.json()["staffNextMorningCutoff"]), (200, "07:15"))
+        # the 07:15 cut-off applies from the day it was set; before it, from the start, 06:00 stands
+        self.assertEqual(
+            r.json()["staffNextMorningHistory"],
+            [
+                {"from": "2026-03-01", "enabled": True, "cutoff": "06:00"},
+                {"from": today.isoformat(), "enabled": True, "cutoff": "07:15"},
+            ],
+        )
         for bad in ("12:01", "00:00", "7", "25:00", None):
             self.assertEqual(self.put_payroll(staffNextMorningCutoff=bad).status_code, 400, bad)
         self.assertEqual(self.put_payroll(staffNextMorningFrom="2026-02-01").status_code, 400)  # only forward
+        self.assertEqual(self.put_payroll(staffNextMorningFrom="2026-03-10").status_code, 400)  # never into the past
         self.assertEqual(self.put_payroll(staffNextMorningFrom=None).status_code, 400)  # never cleared
         r = self.put_payroll(staffNextMorningFrom="2026-04-01")
         self.assertEqual((r.status_code, r.json()["staffNextMorningFrom"]), (200, "2026-04-01"))
         self.assertEqual(self.put_payroll(staffNextMorningEnabled="yes").status_code, 400)
         self.assertEqual(self.put_payroll(staffNextMorningEnabled=False).json()["staffNextMorningEnabled"], False)
         r = self.put_payroll(staffNextMorningEnabled=True)
-        # back on: the start date stays; the dated history says from when (today) - no earlier day is re-judged
+        # back on: the start date stays; while it is still ahead every change is dated from it (an entry dated today
+        # would start the rule before its from-date) and replaces the entries from that date on
         self.assertEqual(r.json()["staffNextMorningFrom"], "2026-04-01")
-        history = r.json()["staffNextMorningHistory"]
-        # the 07:15 cut-off applies from the day it was set; before it, from the start, 06:00 stands
-        self.assertEqual(history[0], {"from": "2026-04-01", "enabled": True, "cutoff": "06:00"})
-        self.assertEqual(history[-1], {"from": ist_today().isoformat(), "enabled": True, "cutoff": "07:15"})
+        self.assertEqual(
+            r.json()["staffNextMorningHistory"], [{"from": "2026-04-01", "enabled": True, "cutoff": "07:15"}]
+        )
         from .models import AuditLog
 
         self.assertTrue(AuditLog.objects.filter(record_description__icontains="next-morning").exists())

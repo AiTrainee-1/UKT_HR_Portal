@@ -1,246 +1,247 @@
 """
-WhatsApp Settings (Settings -> WhatsApp tab)
-================================================
-Two things, deliberately kept separate:
-  1. Credential status -read-only, sourced from settings.WACLIENT_* (.env),
-     never editable here. Mirrors how the Backup tab shows pgDumpAvailable
-     as a read-only capability flag rather than an input.
-  2. Message wording per document type -genuinely editable, stored in
-     WhatsAppMessageTemplate. This is business configuration, not a secret.
+WhatsApp: Meta's webhook
+========================
 
-Also serves the public, unauthenticated media endpoint (whatsapp_media)
-WAClient's servers fetch document/image attachments from, and the webhook
-WAClient calls with delivery/read receipts -see whatsapp_service.send_document
-/ WhatsAppMediaAsset.
+The webhook (2026-11-20, Meta WhatsApp Cloud API) is how Meta tells this server what happened:
+
+    GET  /api/whatsapp/webhook/   Meta's one-time verification: hub.mode=subscribe and hub.verify_token equal to
+                                  WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN -> 200 with hub.challenge as plain text; else 403.
+    POST /api/whatsapp/webhook/   events, signed: X-Hub-Signature-256 = "sha256=" + HMAC-SHA256(WHATSAPP_CLOUD_APP_SECRET,
+                                  the RAW body), compared in constant time. Missing or wrong -> 403 and nothing is read.
+                                  A signed body always gets 200 (Meta retries anything else for days), even when an
+                                  event in it cannot be processed.
+
+What a signed POST does (entry[].changes[] by `field`):
+  * messages / statuses[]       the message (WhatsAppMessageLog by provider_message_id = the wamid) moves sent ->
+                                delivered -> read (never backwards; delivered_at / read_at from Meta's timestamp), or to
+                                failed with Meta's error in plain words; pricing {billable, category} is recorded for
+                                the usage and cost figures.
+  * messages / messages[]       an employee's reply. A text "STOP" from an employee's registered number opts them out
+                                (WhatsAppOptOut, reason "Replied STOP"). Nothing else is stored: the text is never logged.
+  * message_template_status_update   the template's row (WhatsAppTemplate) takes Meta's new status (APPROVED,
+                                REJECTED with the reason, PAUSED, DISABLED ...); a template this server did not know is
+                                added (a later Sync fills in its text).
+  * message_template_quality_update  the template's quality score.
+  * phone_number_quality_update, account_update, others   only noted in the log (a summary without personal data).
+Every signed POST stamps WhatsAppSettings.last_webhook_at (WhatsApp Control shows whether the webhook is set up).
+
+The body holds employees' phone numbers and message texts, so it never reaches the logs: only a summary of what arrived
+(_webhook_summary). The WhatsApp Control page's Settings tab shows the webhook address to paste into Meta.
+
+The old per-type wording endpoints (whatsapp/templates..., the Settings -> WhatsApp editor) were retired on 2026-11-20:
+with Meta the wording IS the approved template (WhatsApp Control -> Templates, whatsapp_templates.py).
 """
 
+import json
 import logging
 import re
+from datetime import datetime, timezone as dt_timezone
 
-from django.conf import settings as dj_settings
 from django.http import HttpResponse
 from django.utils import timezone
-from rest_framework.decorators import api_view, parser_classes
-from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.request import Request
-from rest_framework.response import Response
+from django.views.decorators.csrf import csrf_exempt
 
-from . import whatsapp_catalog, whatsapp_service
-from .view_common import error_response as _error
-from .auth import require_hr
-from .models import WhatsAppMediaAsset, WhatsAppMessageLog, WhatsAppMessageTemplate
+from . import whatsapp_cloud, whatsapp_service
+from .models import (
+    Employee,
+    WhatsAppMessageLog,
+    WhatsAppOptOut,
+    WhatsAppSettings,
+    WhatsAppTemplate,
+)
 
 logger = logging.getLogger(__name__)
 
-# Settings -> WhatsApp edits the wording of the documents HR sends (and the visitor message);
-# every other message type is managed on the WhatsApp Control page.
-DOCUMENT_TYPES = list(whatsapp_catalog.types_in("documents")) + list(whatsapp_catalog.types_in("visitors"))
-DOCUMENT_TYPES = [key for key in DOCUMENT_TYPES if whatsapp_catalog.get(key).has_wording]
+# ── Meta's webhook ───────────────────────────────────────────────────────────────────
 
-
-@api_view(["GET"])
-@require_hr
-def whatsapp_status(request: Request) -> Response:
-    instance = dj_settings.WACLIENT_INSTANCE_ID
-    return Response(
-        {
-            "configured": whatsapp_service.is_configured(),
-            # Enough to recognise which instance is wired up, not enough to use it.
-            "instanceId": f"…{instance[-4:]}" if instance else None,
-        }
-    )
-
-
-def _template_json(document_type: str, t: WhatsAppMessageTemplate | None) -> dict:
-    return {
-        "documentType": document_type,
-        "messageBody": (t.message_body if t else "") or "",
-        "defaultMessage": whatsapp_service.DEFAULT_MESSAGES.get(document_type, ""),
-        "placeholders": whatsapp_service.PLACEHOLDER_HELP.get(document_type, ""),
-        "isEnabled": t.is_enabled if t else True,
-    }
-
-
-@api_view(["GET"])
-@require_hr
-def whatsapp_templates(request: Request) -> Response:
-    """One row per document type, always all DOCUMENT_TYPES represented
-    (even if never customised) so the Settings UI can render a fixed set of
-    rows without guessing what's missing."""
-    existing = {t.document_type: t for t in WhatsAppMessageTemplate.objects.all()}
-    return Response([_template_json(doc_type, existing.get(doc_type)) for doc_type in DOCUMENT_TYPES])
-
-
-@api_view(["PUT"])
-@require_hr
-def whatsapp_template_update(request: Request, document_type: str) -> Response:
-    if document_type not in DOCUMENT_TYPES:
-        return _error(f"Unknown document type: {document_type}")
-
-    from .whatsapp_control_views import _wording_error
-
-    data = request.data
-    if "messageBody" in data:
-        problem = _wording_error(document_type, (data.get("messageBody") or "").strip())
-        if problem:
-            return _error(problem)
-    t, _ = WhatsAppMessageTemplate.objects.get_or_create(document_type=document_type)
-    if "messageBody" in data:
-        t.message_body = (data.get("messageBody") or "").strip()
-    if "isEnabled" in data:
-        t.is_enabled = bool(data.get("isEnabled"))
-    t.save()
-    return Response(_template_json(document_type, t))
-
-
-@api_view(["GET"])
-def whatsapp_media(request: Request, token: str):
-    """Public, unauthenticated -this is the URL WAClient's own servers fetch
-    a document/image attachment from (see whatsapp_service._media_url), so
-    it can't require the HR bearer token. The token itself is the only
-    credential: a random 32-byte urlsafe string, unguessable, and the row
-    is pruned (see whatsapp_service._store_media) well before it could
-    realistically be brute-forced."""
-    asset = WhatsAppMediaAsset.objects.filter(token=token).first()
-    if not asset or asset.expires_at < timezone.now():
-        return Response({"error": "Not found or expired"}, status=404)
-
-    response = HttpResponse(bytes(asset.content), content_type=asset.mime_type)
-    response["Content-Disposition"] = f'inline; filename="{asset.filename}"'
-    return response
-
-
-# ── WAClient webhook (delivery / read receipts) ──────────────────────────────
-
-# Later states never get overwritten by earlier ones: events can arrive out of
-# order or more than once.
+# Later states never get overwritten by earlier ones: events can arrive out of order or more than once.
 _STATUS_RANK = {"sent": 0, "delivered": 1, "read": 2}
+_FINAL_FAILED = "failed"
+_SAFE_WORD = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+_STOP_WORDS = frozenset({"stop"})
+REASON_STOP = "Replied STOP"
 
-# WhatsApp (Baileys) numeric message states, as sent by Web-API gateways.
-_NUMERIC_STATUS = {0: "failed", 1: "sent", 2: "sent", 3: "delivered", 4: "read", 5: "read"}
+
+def _when(timestamp) -> datetime:
+    try:
+        return datetime.fromtimestamp(int(timestamp), tz=dt_timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return timezone.now()
 
 
-def _normalize_status(value) -> str | None:
-    """Map whatever WAClient reports to sent / delivered / read / failed.
-    Accepts Baileys numbers (3 = delivered, 4 = read ...) and names such as
-    DELIVERY_ACK, delivered, READ, played, SERVER_ACK, error."""
-    if isinstance(value, bool):
+def _failure_text(errors) -> str:
+    error = errors[0] if isinstance(errors, list) and errors and isinstance(errors[0], dict) else {}
+    code = error.get("code")
+    details = (error.get("error_data") or {}).get("details") if isinstance(error.get("error_data"), dict) else None
+    exc = whatsapp_cloud.MetaApiError(code, details or error.get("message") or error.get("title") or "Delivery failed")
+    prefix = whatsapp_service.REFUSED_PREFIX if exc.message_level else whatsapp_service.SEND_FAILED_PREFIX
+    return f"{prefix}{exc}"[:1000]
+
+
+def _apply_status(status: dict) -> None:
+    """One statuses[] entry onto its message(s)."""
+    wamid = str(status.get("id") or "")
+    new = str(status.get("status") or "").lower()
+    if not wamid or new not in ("sent", "delivered", "read", "failed"):
+        return
+    pricing = status.get("pricing") if isinstance(status.get("pricing"), dict) else {}
+    at = _when(status.get("timestamp"))
+    for log in WhatsAppMessageLog.objects.filter(provider_message_id=wamid):
+        changed: list[str] = []
+        if pricing:
+            category = str(pricing.get("category") or "").lower()
+            if category and log.pricing_category != category:
+                log.pricing_category = category
+                changed.append("pricing_category")
+            if isinstance(pricing.get("billable"), bool) and log.billable is not pricing["billable"]:
+                log.billable = pricing["billable"]
+                changed.append("billable")
+        if new == _FINAL_FAILED:
+            if log.status != _FINAL_FAILED:
+                log.status = _FINAL_FAILED
+                log.error_message = _failure_text(status.get("errors"))
+                changed += ["status", "error_message"]
+        elif log.status in _STATUS_RANK or log.status in ("sending", "pending"):
+            if _STATUS_RANK[new] > _STATUS_RANK.get(log.status, -1):
+                log.status = new
+                changed.append("status")
+            if new in ("delivered", "read") and log.delivered_at is None:
+                log.delivered_at = at
+                changed.append("delivered_at")
+            if new == "read" and log.read_at is None:
+                log.read_at = at
+                changed.append("read_at")
+        if changed:
+            log.save(update_fields=[*dict.fromkeys(changed), "updated_at"])
+
+
+def _employee_by_number(number: str):
+    """The active employee whose registered phone is this WhatsApp number (digits with the country code), or None."""
+    digits = "".join(ch for ch in str(number or "") if ch.isdigit())
+    if len(digits) < 10:
         return None
-    if isinstance(value, int):
-        return _NUMERIC_STATUS.get(value)
-    if not isinstance(value, str):
-        return None
-    v = value.strip().lower()
-    if v.isdigit():
-        return _NUMERIC_STATUS.get(int(v))
-    if "deliver" in v:
-        return "delivered"
-    if "read" in v or "played" in v:
-        return "read"
-    if "error" in v or "fail" in v:
-        return "failed"
-    if "server_ack" in v or v in ("sent", "pending"):
-        return "sent"
+    tail = digits[-10:]
+    for emp_id, phone in Employee.objects.filter(phone__isnull=False).exclude(phone="").values_list("id", "phone"):
+        cleaned = "".join(ch for ch in str(phone or "") if ch.isdigit())
+        if cleaned.endswith(tail) and whatsapp_service.normalize_phone(phone) == digits:
+            return emp_id
     return None
 
 
-def _status_updates(node):
-    """Yield (message_id, status) for every message-status update found
-    anywhere in a webhook payload.
-
-    WAClient's webhook body isn't publicly documented, so this doesn't rely
-    on one shape. It walks the JSON and recognises the two forms gateways
-    like this use: {"key": {"id": ...}, "update": {"status": ...}} /
-    {"key": {"id": ...}, "status": ...}, and a flat {"id": ..., "status": ...}
-    (also message_id / messageId). Anything else is simply not an update.
-    """
-    if isinstance(node, list):
-        for item in node:
-            yield from _status_updates(item)
+def _employee_wrote(message: dict) -> None:
+    """An inbound message. Only a STOP is acted on (an opt-out); its text is never stored or logged."""
+    if str(message.get("type") or "") != "text":
         return
-    if not isinstance(node, dict):
+    body = str(((message.get("text") or {}) if isinstance(message.get("text"), dict) else {}).get("body") or "")
+    if body.strip().lower() not in _STOP_WORDS:
         return
-
-    key = node.get("key")
-    msg_id = None
-    if isinstance(key, dict) and key.get("id"):
-        msg_id = key["id"]
-    else:
-        msg_id = node.get("message_id") or node.get("messageId") or (node.get("id") if "status" in node else None)
-
-    if msg_id:
-        raw_status = None
-        update = node.get("update")
-        if isinstance(update, dict) and "status" in update:
-            raw_status = update["status"]
-        elif "status" in node:
-            raw_status = node["status"]
-        status = _normalize_status(raw_status)
-        if status:
-            yield str(msg_id), status
-
-    for value in node.values():
-        if isinstance(value, (dict, list)):
-            yield from _status_updates(value)
+    emp_id = _employee_by_number(message.get("from"))
+    if emp_id is None:
+        return
+    _, created = WhatsAppOptOut.objects.get_or_create(
+        employee_id=emp_id, defaults={"reason": REASON_STOP, "created_by": "WhatsApp (employee replied STOP)"}
+    )
+    if created:
+        logger.info("WhatsApp: employee %s opted out by replying STOP", emp_id)
 
 
-def _apply_message_event(payload) -> None:
-    """Fold delivery events into WhatsAppMessageLog.status."""
-    for msg_id, new_status in _status_updates(payload):
-        logger.warning("WhatsApp event: id=%s status=%s", msg_id, new_status)
-        for log in WhatsAppMessageLog.objects.filter(provider_message_id=msg_id):
-            if new_status == "failed":
-                log.status = "failed"
-                log.error_message = log.error_message or "Delivery failed"
-            elif _STATUS_RANK.get(new_status, -1) > _STATUS_RANK.get(log.status, 0):
-                log.status = new_status
-            else:
+def _template_status(value: dict) -> None:
+    name = str(value.get("message_template_name") or "").strip()
+    if not name:
+        return
+    language = str(value.get("message_template_language") or "").strip() or whatsapp_cloud.template_language()
+    meta_id = str(value.get("message_template_id") or "").strip()
+    event = str(value.get("event") or "").strip().upper()
+    if not event:
+        return
+    reason = str(value.get("reason") or "").strip()
+    row = (WhatsAppTemplate.objects.filter(meta_id=meta_id).first() if meta_id else None) or (
+        WhatsAppTemplate.objects.filter(name=name, language=language).first()
+    )
+    if row is None:
+        row = WhatsAppTemplate(name=name, language=language, meta_id=meta_id)
+    row.status = event
+    if meta_id:
+        row.meta_id = meta_id
+    row.rejected_reason = reason if reason and reason.upper() != "NONE" and event in ("REJECTED", "DISABLED") else ""
+    row.save()
+
+
+def _template_quality(value: dict) -> None:
+    name = str(value.get("message_template_name") or "").strip()
+    meta_id = str(value.get("message_template_id") or "").strip()
+    score = str(value.get("new_quality_score") or "").strip().upper()
+    if not score or not (name or meta_id):
+        return
+    rows = WhatsAppTemplate.objects.filter(meta_id=meta_id) if meta_id else WhatsAppTemplate.objects.none()
+    if not rows.exists() and name:
+        language = str(value.get("message_template_language") or "").strip()
+        rows = WhatsAppTemplate.objects.filter(name=name, **({"language": language} if language else {}))
+    rows.update(quality_score=score, updated_at=timezone.now())
+
+
+def _process(payload) -> None:
+    if not isinstance(payload, dict):
+        return
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict):
                 continue
-            log.save(update_fields=["status", "error_message"])
-
-
-# Lists inside a webhook body that hold one entry per message.
-_MESSAGE_LISTS = ("message_echoes", "messages", "statuses")
-_SAFE_WORD = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
-
-
-def _walk(node):
-    """Every dict anywhere inside a JSON value."""
-    if isinstance(node, dict):
-        yield node
-        for value in node.values():
-            yield from _walk(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _walk(value)
+            field = change.get("field")
+            value = change.get("value") if isinstance(change.get("value"), dict) else {}
+            try:
+                if field == "messages":
+                    for status in value.get("statuses") or []:
+                        if isinstance(status, dict):
+                            _apply_status(status)
+                    for message in value.get("messages") or []:
+                        if isinstance(message, dict):
+                            _employee_wrote(message)
+                elif field == "message_template_status_update":
+                    _template_status(value)
+                elif field == "message_template_quality_update":
+                    _template_quality(value)
+                elif field in ("phone_number_quality_update", "account_update", "phone_number_name_update"):
+                    event = value.get("event")
+                    logger.warning(
+                        "WhatsApp account event: %s %s",
+                        field,
+                        event if isinstance(event, str) and _SAFE_WORD.match(event) else "-",
+                    )
+            except Exception:
+                logger.exception("A WhatsApp webhook event (%s) could not be processed", field)
 
 
 def _webhook_summary(payload) -> tuple[str, bool]:
-    """A one-line description of a webhook body that contains none of its data, and whether its
-    shape was recognised.
+    """A one-line description of a webhook body that contains none of its data, and whether its shape was recognised.
 
-    Webhook bodies carry employees' phone numbers and the full text of the messages sent to them,
-    so the body itself must never reach the logs. Only things from a fixed vocabulary are printed:
-    the event field name, how many messages of each kind it holds, their type (text, image...) and
-    delivery statuses. An unrecognised body is described by the names of its top-level keys, never
-    their values, which is enough to tell what WAClient started sending.
-    """
-    fields, counts, types = set(), {}, set()
-    for node in _walk(payload):
-        field = node.get("field")
-        if isinstance(field, str) and _SAFE_WORD.match(field):
-            fields.add(field)
-        for kind in _MESSAGE_LISTS:
-            items = node.get(kind)
-            if not isinstance(items, list):
+    Webhook bodies carry employees' phone numbers and the text of the messages they send, so the body itself must never
+    reach the logs. Only things from a fixed vocabulary are printed: the event field names, how many statuses / messages
+    it holds, the message types (text, button ...) and the delivery statuses. An unrecognised body is described by the
+    names of its top-level keys, never their values."""
+    fields, counts, types, statuses = set(), {}, set(), set()
+    entries = payload.get("entry") if isinstance(payload, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
+        for change in (entry.get("changes") if isinstance(entry, dict) else None) or []:
+            if not isinstance(change, dict):
                 continue
-            counts[kind] = counts.get(kind, 0) + len(items)
-            for item in items:
-                kind_of_message = item.get("type") if isinstance(item, dict) else None
-                if isinstance(kind_of_message, str) and _SAFE_WORD.match(kind_of_message):
-                    types.add(kind_of_message)
-    statuses = {status for _, status in _status_updates(payload)}
-
+            field = change.get("field")
+            if isinstance(field, str) and _SAFE_WORD.match(field):
+                fields.add(field)
+            value = change.get("value") if isinstance(change.get("value"), dict) else {}
+            for kind in ("statuses", "messages"):
+                items = value.get(kind)
+                if not isinstance(items, list):
+                    continue
+                counts[kind] = counts.get(kind, 0) + len(items)
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    word = item.get("status") if kind == "statuses" else item.get("type")
+                    if isinstance(word, str) and _SAFE_WORD.match(word):
+                        (statuses if kind == "statuses" else types).add(word.lower())
     parts = []
     if fields:
         parts.append("fields=" + ",".join(sorted(fields)))
@@ -251,7 +252,6 @@ def _webhook_summary(payload) -> tuple[str, bool]:
         parts.append("statuses=" + ",".join(sorted(statuses)))
     if parts:
         return " ".join(parts), True
-
     keys = (
         sorted(k for k in payload if isinstance(k, str) and _SAFE_WORD.match(k))[:10]
         if isinstance(payload, dict)
@@ -260,34 +260,38 @@ def _webhook_summary(payload) -> tuple[str, bool]:
     return f"body_type={type(payload).__name__} keys={','.join(keys) or '-'}", False
 
 
-@api_view(["GET", "POST", "HEAD", "OPTIONS"])
-@parser_classes([JSONParser, FormParser, MultiPartParser])
-def whatsapp_webhook(request: Request) -> Response:
-    """Public callback URL for WAClient (set as the webhook URL on the instance).
-
-    Always answers 200 -even for an empty or unrecognised body, and even if
-    processing an event fails- so the sender never sees an error and retries
-    or disables the callback. If WHATSAPP_WEBHOOK_TOKEN is set, the URL must
-    carry it as ?token=...; a wrong token is a 403.
-
-    What is logged is a summary with no personal data (see _webhook_summary), never the body.
-    A recognised event is logged at INFO, so it stays quiet in production; a body whose shape is
-    not recognised is a WARNING, since it may mean WAClient changed its format.
-    """
-    expected = dj_settings.WHATSAPP_WEBHOOK_TOKEN
-    if expected and request.query_params.get("token") != expected:
-        return _error("Forbidden", 403)
-
-    if request.method == "POST":
-        try:
-            # Reading the body can itself raise (non-JSON content type, bad JSON).
-            body = request.data
-            summary, recognised = _webhook_summary(body)
-            if recognised:
-                logger.info("WhatsApp webhook: %s", summary)
-            else:
-                logger.warning("WhatsApp webhook in an unrecognised shape: %s", summary)
-            _apply_message_event(body)
-        except Exception:
-            logger.exception("WAClient webhook event could not be processed")
-    return Response({"status": "ok"})
+@csrf_exempt
+def whatsapp_webhook(request) -> HttpResponse:
+    """Meta's webhook (see the module docstring). Public: no login, no JWT; the verify token (GET) and the signature
+    (POST) are the only credentials."""
+    if request.method == "GET":
+        q = request.GET
+        if q.get("hub.mode") == "subscribe" and whatsapp_cloud.verify_token_matches(q.get("hub.verify_token")):
+            return HttpResponse(q.get("hub.challenge", ""), content_type="text/plain")
+        return HttpResponse("Forbidden", status=403, content_type="text/plain")
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    raw = request.body  # the RAW bytes: the signature is over exactly these
+    if not whatsapp_cloud.verify_signature(raw, request.headers.get("X-Hub-Signature-256")):
+        logger.warning("WhatsApp webhook: refused a POST without a valid signature")
+        return HttpResponse("Forbidden", status=403, content_type="text/plain")
+    try:
+        WhatsAppSettings.get()
+        WhatsAppSettings.objects.filter(pk=1).update(last_webhook_at=timezone.now())
+    except Exception:
+        logger.exception("WhatsApp webhook: could not record when it was last received")
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        logger.warning("WhatsApp webhook: a signed body that is not JSON")
+        return HttpResponse(status=200)
+    summary, recognised = _webhook_summary(payload)
+    if recognised:
+        logger.info("WhatsApp webhook: %s", summary)
+    else:
+        logger.warning("WhatsApp webhook in an unrecognised shape: %s", summary)
+    try:
+        _process(payload)
+    except Exception:
+        logger.exception("WhatsApp webhook event could not be processed")
+    return HttpResponse(status=200)

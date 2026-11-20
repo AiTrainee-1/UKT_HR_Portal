@@ -10,6 +10,9 @@
 //                       recorded with authkey = the key from the path, code and templateId (the template NAME);
 //                       answers 200 {"Status": "Success", "Details": "<session id>"}
 //
+//   GET  /API/V1/<api key>/BAL/SMS     the SMS credits left: 200 {"Status": "Success", "Details": "<credits>"} (set with
+//                                       POST /balance {"credits": 120}; default 500). Not recorded: it sends nothing.
+//
 //   GET  /last-code?mobile=9000000001   the code of the newest ACCEPTED request to that number (404 when there is none):
 //                                       {"code", "mobile", "templateId", "id", "receivedAt"}
 //   GET  /requests[?mobile=...]         everything recorded so far, oldest first (a request that was answered with an error
@@ -25,6 +28,7 @@ const PORT = Number(process.env.FAKE_TWOFACTOR_PORT ?? 8192);
 let requests = [];
 let failures = [];
 let counter = 0;
+let credits = 500;
 
 const json = (res, status, body) => {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -50,6 +54,14 @@ const server = http.createServer((req, res) => {
       /* fall through with an empty body */
     }
     const path = url.pathname;
+
+    if (req.method === "GET" && /\/[^/]+\/BAL\/SMS$/.test(path)) {
+      return json(res, 200, { Status: "Success", Details: String(credits) });
+    }
+    if (req.method === "POST" && path === "/balance") {
+      credits = Number(body.credits ?? 500);
+      return json(res, 200, { ok: true });
+    }
 
     const call = req.method === "GET" ? /\/([^/]+)\/SMS\/\+?(\d+)\/(\d+)(?:\/([^/]+))?$/.exec(path) : null;
     if (call) {
@@ -95,6 +107,7 @@ const server = http.createServer((req, res) => {
     if (req.method === "POST" && path === "/reset") {
       requests = [];
       failures = [];
+      credits = 500;
       return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && path === "/fail-next") {

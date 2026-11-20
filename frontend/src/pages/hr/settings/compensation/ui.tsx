@@ -17,8 +17,10 @@ export type SectionProps = {
   validation: Validation;
   /** Today in India, YYYY-MM-DD. */
   today: string;
-  /** The claim workflow's start date (read-only, set by the server); null when the server does not report it. */
+  /** The claim workflow's SAVED start date (the server's); null when the server does not report it. */
   claimsFrom?: string | null;
+  /** The earliest date the claims date may be moved to (YYYY-MM-DD): it only moves later. */
+  claimsMinFrom?: string;
   /** When the quarters rule was on / off (read-only, oldest first); empty when never changed or not reported. */
   quarterRuleHistory?: QuarterRuleHistoryEntry[];
 };

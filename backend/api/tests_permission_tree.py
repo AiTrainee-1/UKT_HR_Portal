@@ -98,6 +98,8 @@ API_ALLOWLIST: tuple[tuple[str, str], ...] = (
 NEW_SINCE_SNAPSHOT: tuple[tuple[str, str], ...] = (
     (r"outpass/in-out(/.*)?", "outpass_visitors"),  # Gate Pass -> In/Out, 2026-11-18
     (r"visitor/(visits|people|export)(/.*)?", "outpass_visitors"),  # Visitors register / check-out / export, 2026-11-18
+    # Payroll -> Salary Slip (standalone slips), 2026-11-20: follows Staff Payroll -> Payslip until a role sets it
+    (r"salary-slip-center(/.*)?", "salary_slip"),
 )
 
 

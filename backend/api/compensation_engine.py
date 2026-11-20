@@ -382,31 +382,35 @@ def _extra_from_punches(emp, p: date_type, settings, assignments, logs_by_date=N
 
 def allowance_for_arrival(emp, d: date_type, ctx: CompContext, settings, prefetch=None):
     """The Type 1 allowance (AllowanceGrant) the arrival on working day `d` may use, or None. The OT day is the previous
-    WORKING day (Sundays, company holidays and an off Saturday in between do not count); both days must be on or after
-    the feature's effective-from date.
+    WORKING day (Sundays, company holidays and an off Saturday in between do not count).
 
     An OT day on/after CompensationConfig.claims_from gives an allowance only through an APPROVED ot_allowance claim for
     it (the minutes the claim carries; ctx.allowance_claims, no query here); a granted claim follows the master switch
-    only (the allowance switch and its rules stop NEW allowances, not granted ones). An earlier OT day keeps the old
-    automatic rule: the allowance its extra work earns, where extra work beyond the Type 2 threshold is Type 2's."""
+    only: the allowance switch, its rules and its effective-from date (which switching it off and on again moves to that
+    day) stop NEW automatic allowances, not granted ones (review 2026-11-19, correctness #11c). An earlier OT day keeps
+    the old automatic rule: both days on or after the feature's effective-from date, the allowance its extra work earns,
+    where extra work beyond the Type 2 threshold is Type 2's."""
     if not (ctx.master and ctx.config is not None):
         return None
     if not ctx.allowance_on and not ctx.allowance_claims:
         return None  # nothing granted in the range and the automatic rule is off: no query below
     effective = ctx.config.allowance_effective_from
     assignments = (prefetch or {}).get("assignments")
-    if effective and d < effective:
-        return None
+    if effective and d < effective and not ctx.allowance_claims:
+        return None  # only the automatic rule could apply, and not this early: no query below
     if is_off_day(emp, d, assignments):
         return None
     p = rules.previous_working_day(d, lambda day: is_off_day(emp, day, assignments))
-    if p is None or (effective and p < effective):
+    if p is None:
         return None
     if ctx.config.claims_apply_on(p):
         claimed = ctx.allowance_claims.get((emp.pk, p))
         if claimed is None or claimed[0] <= 0:
             return None
         return AllowanceGrant(minutes=claimed[0], source_date=p, extra=claimed[1])
+    # the old automatic rule (an OT day before claims_from): its own switch, rules and effective-from date
+    if effective and (d < effective or p < effective):
+        return None
     if not ctx.allowance_on:
         return None
     extra = previous_day_extra(emp, p, settings, prefetch, ctx)

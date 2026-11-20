@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { AlertTriangle, Moon } from "lucide-react";
+import { Gauge, Moon } from "lucide-react";
 import {
   useUpdateWhatsAppControlSettings,
   whatsAppErrorMessage,
@@ -13,6 +12,7 @@ import {
   type WhatsAppQueueLimit,
   type WhatsAppQuietHours,
 } from "@/lib/api-client/custom-hooks";
+import { Notice, Panel } from "./kit";
 import { changedLimits, crossesMidnight, limitError, quietHoursChanged, quietHoursError } from "./logic";
 
 const NO_QUIET_HOURS: WhatsAppQuietHours = { enabled: false, start: "21:00", end: "07:00" };
@@ -23,9 +23,12 @@ const draftOf = (limits: WhatsAppQueueLimit[]) => Object.fromEntries(limits.map(
 export default function SendingLimits({
   limits,
   quietHours,
+  locked = false,
 }: {
   limits: WhatsAppQueueLimit[];
   quietHours: WhatsAppQuietHours | undefined;
+  /** View only: everything shown, nothing editable. */
+  locked?: boolean;
 }) {
   const { toast } = useToast();
   const update = useUpdateWhatsAppControlSettings();
@@ -73,16 +76,13 @@ export default function SendingLimits({
   };
 
   return (
-    <Card className="border-0 shadow-sm" data-testid="wa-sending-limits">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-bold">Sending limits</CardTitle>
-        <p className="text-xs text-gray-500">
-          Fewer, slower messages keep the company's WhatsApp number from being restricted. Every message except a
-          one-time login code waits its turn in one queue and goes out within these limits; anything not sent the same
-          day expires instead of going out late, and a failed message is never re-sent automatically.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <Panel
+      title="Sending limits"
+      icon={Gauge}
+      testId="wa-sending-limits"
+      description="Fewer, steadier messages keep the number's quality high and its Meta messaging limit growing. Every message except a sign-in code waits its turn in one queue and goes out within these limits; anything not sent the same day expires instead of going out late, and a failed message is never re-sent automatically."
+    >
+      <div className="space-y-4">
         {limits.length > 0 && (
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {limits.map((l) => {
@@ -103,17 +103,18 @@ export default function SendingLimits({
                       step={1}
                       value={draft[l.key] ?? ""}
                       aria-invalid={Boolean(error)}
+                      disabled={locked}
                       className={`w-28 ${error ? "border-red-400 focus-visible:ring-red-300" : ""}`}
                       onChange={(e) => edit(() => setDraft((prev) => ({ ...prev, [l.key]: e.target.value })))}
                     />
-                    <span className="text-xs text-gray-500">{l.unit}</span>
+                    <span className="text-xs text-muted-foreground">{l.unit}</span>
                   </div>
                   {error ? (
                     <p className="text-[10px] text-red-600" data-testid={`wa-limit-error-${l.key}`}>
                       {error}
                     </p>
                   ) : (
-                    <p className="text-[10px] text-gray-400">
+                    <p className="text-[10px] text-muted-foreground">
                       {l.min}–{l.max} {l.unit}
                     </p>
                   )}
@@ -124,26 +125,27 @@ export default function SendingLimits({
         )}
 
         {quietHours && (
-          <div className="rounded-xl border p-3 space-y-3" data-testid="wa-quiet-hours">
+          <div className="space-y-3 rounded-xl border bg-muted/40 p-3" data-testid="wa-quiet-hours">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
+                <p className="flex items-center gap-1.5 text-sm font-semibold">
                   <Moon size={13} className="text-indigo-500" /> Quiet hours
                 </p>
-                <p className="text-xs text-gray-500 mt-0.5">
+                <p className="mt-0.5 text-xs text-muted-foreground">
                   Nothing automatic goes out between these times: messages raised then are held back, and anything that
-                  can't go out the same day is never sent. One-time login codes still go.
+                  can't go out the same day is never sent. Sign-in codes still go.
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0 pt-0.5">
                 <span
-                  className={`text-xs font-bold w-8 text-right ${quiet.enabled ? "text-emerald-600" : "text-gray-400"}`}
+                  className={`w-8 text-right text-xs font-bold ${quiet.enabled ? "text-emerald-600" : "text-muted-foreground"}`}
                 >
                   {quiet.enabled ? "ON" : "OFF"}
                 </span>
                 <Switch
                   checked={quiet.enabled}
                   onCheckedChange={(enabled) => edit(() => setQuiet((q) => ({ ...q, enabled })))}
+                  disabled={locked}
                   aria-label="Quiet hours"
                   data-testid="wa-quiet-hours-switch"
                 />
@@ -159,6 +161,7 @@ export default function SendingLimits({
                   data-testid="wa-quiet-start"
                   type="time"
                   value={quiet.start}
+                  disabled={locked}
                   className="w-32"
                   onChange={(e) => edit(() => setQuiet((q) => ({ ...q, start: e.target.value.slice(0, 5) })))}
                 />
@@ -172,11 +175,12 @@ export default function SendingLimits({
                   data-testid="wa-quiet-end"
                   type="time"
                   value={quiet.end}
+                  disabled={locked}
                   className="w-32"
                   onChange={(e) => edit(() => setQuiet((q) => ({ ...q, end: e.target.value.slice(0, 5) })))}
                 />
               </div>
-              {crossesMidnight(quiet) && <p className="text-[11px] text-gray-400 pb-2">Runs overnight.</p>}
+              {crossesMidnight(quiet) && <p className="pb-2 text-[11px] text-muted-foreground">Runs overnight.</p>}
             </div>
             {quietError && (
               <p className="text-[10px] text-red-600" data-testid="wa-quiet-hours-error">
@@ -187,21 +191,16 @@ export default function SendingLimits({
         )}
 
         {serverError && (
-          <div
-            role="alert"
-            data-testid="wa-limits-error"
-            className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800"
-          >
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>{serverError}</span>
-          </div>
+          <Notice tone="bad" role="alert" testId="wa-limits-error">
+            {serverError}
+          </Notice>
         )}
 
         <div className="flex items-center gap-2">
           <Button
             size="sm"
             onClick={save}
-            disabled={!dirty || invalid || update.isPending}
+            disabled={locked || !dirty || invalid || update.isPending}
             data-testid="wa-save-limits"
           >
             {update.isPending ? "Saving…" : "Save sending limits"}
@@ -212,7 +211,7 @@ export default function SendingLimits({
             </Button>
           )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </Panel>
   );
 }

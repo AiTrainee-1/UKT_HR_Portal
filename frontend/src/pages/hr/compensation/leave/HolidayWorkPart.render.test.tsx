@@ -58,6 +58,7 @@ afterEach(() => {
 });
 
 const RAISE_API = "/api/compensation/holiday-work";
+const SUNDAY_DATE = "2026-10-11";
 const CLAIMS_API = "/api/compensation/claims";
 const MONTH_API = "/api/compensation/holiday-work/month";
 const HOLIDAY = "/hr/compensation/compensation-leave/holiday-work";
@@ -439,6 +440,30 @@ describe("the claims of every kind", () => {
     expect(text(q("claim-kpi-kind-use_balance-value"))).toBe("1");
   });
 
+  it("let the status tiles' labels and hints wrap instead of being cut off on a phone", async () => {
+    await openClaims();
+    for (const status of ["pending", "approved", "rejected"]) {
+      const label = must(`claim-kpi-${status}-label`);
+      expect(label.className, status).not.toContain("truncate");
+      expect(label.className, status).toContain("break-words");
+      const hint = must(`claim-kpi-${status}-hint`);
+      expect(hint.className, status).not.toContain("truncate");
+      expect(hint.className, status).toContain("break-words");
+    }
+    expect(text(q("claim-kpi-pending-hint"))).toBe("1.50 in · 0.50 out");
+    expect(text(q("claim-kpi-approved-hint"))).toBe("1.50 shifts credited");
+  });
+
+  it("shrink the kind tiles' icons and letter spacing below 640 px, so a 360 px phone keeps each word whole", async () => {
+    await openClaims();
+    for (const kind of ["holiday_work", "ot_allowance", "ot_shift", "birthday", "use_balance"]) {
+      expect(must(`claim-kpi-kind-${kind}`).querySelector('[aria-hidden="true"]')!.className, kind).toContain(
+        "max-sm:size-6",
+      );
+      expect(must(`claim-kpi-kind-${kind}-label`).className, kind).toContain("max-sm:tracking-normal");
+    }
+  });
+
   it("label the kind tiles with short full words that wrap instead of being cut off", async () => {
     await openClaims();
     const labels = ["holiday_work", "ot_allowance", "ot_shift", "birthday", "use_balance"].map((kind) => {
@@ -688,6 +713,95 @@ describe("withdrawing a claim", () => {
         description: expect.stringContaining("already approved"),
       }),
     );
+  });
+});
+
+describe("who may raise", () => {
+  it("greys out Submit with the server's reason when the login lacks Edit on Claims, and says so beside it", async () => {
+    world.holidayEnabled = {
+      master: true,
+      holidayWork: true,
+      workflow: true,
+      canRaise: false,
+      raiseProblem: "Raising a claim needs Edit on Compensation > Leave > Holiday work > Claims.",
+    };
+    await openSunday();
+    click(must("claim-select-E21"));
+    click(must("claim-shifts-E21-1"));
+    typeInto(area("claim-reason"), "Dispatch rush");
+    expect(button("claim-submit").disabled).toBe(true);
+    expect(button("claim-submit").title).toBe(
+      "Raising a claim needs Edit on Compensation > Leave > Holiday work > Claims.",
+    );
+    expect(text(q("claim-raise-problem"))).toBe(
+      "Raising a claim needs Edit on Compensation > Leave > Holiday work > Claims.",
+    );
+    // the switches are on: no switched-off notice claims otherwise
+    expect(q("holiday-off")).toBeNull();
+    expect(q("holiday-workflow-off")).toBeNull();
+    click(must("claim-submit"));
+    await settle();
+    expect(bodiesOf(world, "POST", RAISE_API)).toEqual([]);
+  });
+
+  it("raises as before when the server says HR may (no reason shown)", async () => {
+    world.holidayEnabled = { ...world.holidayEnabled, canRaise: true, raiseProblem: null };
+    await openSunday();
+    click(must("claim-select-E21"));
+    expect(button("claim-submit").disabled).toBe(false);
+    expect(q("claim-raise-problem")).toBeNull();
+  });
+});
+
+describe("an off Saturday", () => {
+  const OFF_SATURDAY = "2026-10-10";
+
+  it("is a day of the strip of its own: named Off Saturday (never a company holiday) and counted apart", async () => {
+    world.monthDays["2026-10"] = [
+      ...world.monthDays["2026-10"].slice(0, 2),
+      {
+        date: OFF_SATURDAY,
+        kind: "off_saturday",
+        kindLabel: "Off Saturday",
+        holidayName: null,
+        weekLabel: "Week 2",
+        worked: 2,
+        eligible: 2,
+        claimed: { pending: 0, approved: 0 },
+      },
+      ...world.monthDays["2026-10"].slice(2),
+    ];
+    world.eligible[OFF_SATURDAY] = {
+      ...world.eligible[SUNDAY_DATE],
+      date: OFF_SATURDAY,
+      dayKind: "off_saturday",
+      kindLabel: "Off Saturday",
+      holidayName: null,
+    };
+    await openRaise();
+    expect(text(q(`hw-day-${OFF_SATURDAY}`))).toContain("Off Saturday");
+    expect(text(q(`hw-day-${OFF_SATURDAY}`))).not.toContain("holiday");
+    expect(text(q("hw-strip-summary"))).toBe(
+      "4 Sundays, 1 holiday and 1 off Saturday · 8 worked · 5 still to claim · 1 waiting for HOD",
+    );
+    click(must(`hw-day-${OFF_SATURDAY}`));
+    await waitFor(() => text(q("claim-day")).includes("Sat, 10 Oct 2026"), "who worked the off Saturday");
+    expect(text(q("claim-day"))).toContain("Sat, 10 Oct 2026 · Off Saturday ·");
+    expect(text(q("claim-day"))).not.toContain("Company holiday");
+  });
+
+  it("is named Off Saturday on a claim and in its drawer", async () => {
+    world.claims[0] = {
+      ...world.claims[0],
+      workDate: OFF_SATURDAY,
+      dayKind: "off_saturday",
+      holidayName: "Off Saturday",
+    };
+    await openClaims(`${CLAIMS_PATH}?hclaim=3001`);
+    await waitFor(() => !!q("claim-drawer-source"), "the drawer");
+    // the line under the date names the day
+    expect(text(rowOf("claims-table", 3001))).toContain("10 Oct 2026Off Saturday");
+    expect(text(q("claim-drawer-source"))).toContain("DayOff Saturday");
   });
 });
 

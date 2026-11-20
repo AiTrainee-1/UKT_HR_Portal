@@ -1,4 +1,5 @@
-"""WhatsApp messages for approval decisions across every HRMS workflow. WAClient is always mocked."""
+"""WhatsApp messages for approval decisions across every HRMS workflow. Meta's Graph API is always faked (FakeMeta):
+every decision goes out as the approved template hrms_approval_approved / hrms_approval_rejected."""
 
 from datetime import date, time
 from unittest import mock
@@ -25,28 +26,13 @@ from .models import (
     WhatsAppMessageTemplate,
     WhatsAppSettings,
 )
+from .tests_whatsapp_caller_support import assert_template_variables, sent_texts
+from .tests_whatsapp_support import META, NO_META, FakeMeta, approve_templates, make_template
 
-CONFIG = dict(
-    WACLIENT_INSTANCE_ID="INST1234",
-    WACLIENT_ACCESS_TOKEN="tok",
-    WHATSAPP_DEFAULT_COUNTRY_CODE="91",
-)
 THU = date(2026, 9, 24)
 
 
-def _ok(msg_id="WAID"):
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message_payload": {"key": {"id": msg_id}}}
-    return r
-
-
-def _error(text="Instance not connected"):
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "error", "message": text}
-    return r
-
-
-@override_settings(**CONFIG)
+@override_settings(**META)
 class ApprovalBase(TestCase):
     def setUp(self):
         hr = HRUser.objects.create(username="wa_hr", password_hash="x", is_super_admin=True, full_name="Meena")
@@ -54,30 +40,35 @@ class ApprovalBase(TestCase):
         self.emp = Employee.objects.create(
             employee_code="E1", first_name="Asha", last_name="Kumar", phone="8220015110", status="active"
         )
-        patcher = mock.patch("api.whatsapp_service.requests.post", return_value=_ok())
-        self.post = patcher.start()
-        self.addCleanup(patcher.stop)
+        self.meta = FakeMeta.install(self)  # Meta's Graph API, faked: nothing leaves the machine
+        approve_templates("approval_approved", "approval_rejected", "otp_login", "absent_alert")
 
     def call(self, method, path, body):
         return getattr(self.client, method)(path, body, content_type="application/json", **self.hr)
 
     def payloads(self):
-        return [c.kwargs["json"] for c in self.post.call_args_list]
+        """What was POSTed to Meta's /messages, one body per message."""
+        return [m["body"] for m in self.meta.sent]
 
     def texts(self):
-        return [p["message"] for p in self.payloads()]
+        return sent_texts(self.meta)
 
     def one(self, doc_type):
         return WhatsAppMessageLog.objects.get(document_type=doc_type)
 
     def assert_plain_text_without_links(self):
-        """Every message sent so far is a plain WAClient text: no preview card, no address, no "View request"."""
+        """Every message sent so far is an approved template with its variables only: no free text, no preview card,
+        no address, no "View request", and every variable on one line."""
         self.assertTrue(self.payloads())
-        for payload in self.payloads():
-            self.assertEqual(payload["type"], "text")
-            self.assertEqual(sorted(payload), ["access_token", "instance_id", "message", "number", "type"])
+        for record in self.meta.sent:
+            payload = record["body"]
+            self.assertEqual(payload["type"], "template")
+            self.assertEqual(sorted(payload), ["messaging_product", "recipient_type", "template", "to", "type"])
+            self.assertIn(payload["template"]["name"], ("hrms_approval_approved", "hrms_approval_rejected"))
+            assert_template_variables(self, record)
+        for text in self.texts():
             for banned in ("http", "www.", "portal", "View request", "🔗", "{{"):
-                self.assertNotIn(banned, payload["message"])
+                self.assertNotIn(banned, text)
 
 
 class EveryWorkflowTests(ApprovalBase):
@@ -94,7 +85,8 @@ class EveryWorkflowTests(ApprovalBase):
             self.assertIn(piece, text)
         log = self.one("approval_approved")
         self.assertEqual((log.related_module, log.status, log.employee_id), (module, "sent", self.emp.id))
-        self.assertEqual(self.payloads()[0]["number"], "918220015110")
+        self.assertEqual(self.payloads()[0]["to"], "918220015110")
+        self.assertEqual(log.template_name, "hrms_approval_approved")
         self.assert_plain_text_without_links()
 
     def check_rejected(self, module, text, *expected):
@@ -229,7 +221,7 @@ class EveryWorkflowTests(ApprovalBase):
     def test_a_status_that_is_neither_approved_nor_rejected_sends_nothing(self):
         er = EmployeeRequest.objects.create(employee=self.emp, request_type="general", subject="Hi", description="x")
         self.call("put", f"/api/employee-requests/{er.id}/action", {"status": "in_review"})
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
     def test_every_workflow_in_the_catalog_has_a_builder_and_vice_versa(self):
         self.assertEqual(set(whatsapp_approvals._BUILDERS), set(catalog.APPROVAL_MODULES))
@@ -273,7 +265,7 @@ class DepartmentHeadDecisionTests(ApprovalBase):
             employee=self.emp, date=THU, punch_time=time(9, 5), punch_type="IN", reason="Forgot"
         )
         resolve_missing_punch_hod(req, "approved", "Suresh Raj", None)
-        self.post.assert_not_called()  # HR still has to decide
+        self.assertEqual(self.meta.sent, [])  # HR still has to decide
         req2 = MissingPunchRequest.objects.create(
             employee=self.emp, date=date(2026, 9, 25), punch_time=time(9, 5), punch_type="IN", reason="Forgot"
         )
@@ -289,7 +281,7 @@ class DepartmentHeadDecisionTests(ApprovalBase):
             content_type="application/json",
             **self.hod_auth,
         )
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         r2 = ResignationRequest.objects.create(employee=self.emp, reason="Moving", status="pending")
         self.client.patch(
             f"/api/manager/resignations/{r2.id}/action",
@@ -312,27 +304,47 @@ class SwitchesAndSafetyTests(ApprovalBase):
     def test_the_approval_master_switch_turns_every_workflow_off(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"approval_notifications_enabled": False})
         self.assertEqual(self.approve(self.leave()).status_code, 200)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         self.assertFalse(WhatsAppMessageLog.objects.exists())
 
     def test_one_workflow_can_be_switched_off_without_touching_the_others(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"disabled_approval_modules": ["leave"]})
         self.approve(self.leave())
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         perm = EmployeePermission.objects.create(employee=self.emp, date=THU)
         self.call("put", f"/api/permissions/{perm.id}", {"status": "approved"})
         self.assertEqual(len(self.texts()), 1)
         self.assertEqual(self.one("approval_approved").related_module, "permission")
 
-    def test_each_wording_can_be_switched_off_or_reworded(self):
+    def test_the_old_saved_wording_is_ignored_and_hr_can_point_the_type_at_another_approved_template(self):
+        # what HR once saved on the retired Message Text tab (and its "off" switch) no longer decides anything
         WhatsAppMessageTemplate.objects.create(
-            document_type="approval_approved", message_body="Hi {{employee_name}}: {{request_type}} OK"
+            document_type="approval_approved", message_body="Hi {{employee_name}}: OK", is_enabled=False
         )
         self.approve(self.leave())
-        self.assertEqual(self.texts(), ["Hi Asha Kumar: Leave OK"])
-        WhatsAppMessageTemplate.objects.filter(document_type="approval_approved").update(is_enabled=False)
+        self.assertEqual(self.meta.last()["template"], "hrms_approval_approved")
+        self.assertIn("*Request Approved*", self.texts()[0])
+        # WhatsApp Control -> Templates: another approved template for this type
+        make_template("hrms_leave_ok", "Hi {{employee_name}}: your {{request_type}} is approved.")
+        s = WhatsAppSettings.get()
+        s.template_overrides = {"approval_approved": "hrms_leave_ok"}
+        s.save()
         self.approve(self.leave())
-        self.assertEqual(len(self.texts()), 1)
+        self.assertEqual(self.meta.last()["template"], "hrms_leave_ok")
+        self.assertEqual(self.meta.last()["params"], {"employee_name": "Asha Kumar", "request_type": "Leave"})
+        self.assertEqual(self.texts()[1], "Hi Asha Kumar: your Leave is approved.")
+        self.assertEqual(WhatsAppMessageLog.objects.order_by("-id").first().template_name, "hrms_leave_ok")
+
+    def test_a_template_that_is_not_approved_skips_the_message_with_the_reason(self):
+        approve_templates("approval_approved", status="REJECTED")
+        leave = self.leave()
+        self.assertEqual(self.approve(leave).status_code, 200)
+        log = self.one("approval_approved")
+        self.assertEqual(log.status, "skipped")
+        self.assertIn("hrms_approval_approved", log.error_message)
+        self.assertEqual(self.meta.sent, [])
+        leave.refresh_from_db()
+        self.assertEqual(leave.status, "approved")
 
     def test_the_same_decision_is_announced_once(self):
         leave = self.leave()
@@ -352,19 +364,30 @@ class SwitchesAndSafetyTests(ApprovalBase):
         self.assertTrue(self.texts()[0].endswith("\n- UK Textiles HR"))
         self.assertIn("Reason: Clash\n\nPlease contact HR", self.texts()[1])
 
-    def test_the_text_sender_is_given_only_the_number_and_the_text(self):
-        with mock.patch("api.whatsapp_service.send_text_message", return_value={"status": "success"}) as sender:
-            self.approve(self.leave())
-        sender.assert_called_once()
-        self.assertEqual(len(sender.call_args.args), 2)
-        self.assertEqual(sender.call_args.args[0], "918220015110")
-        self.assertEqual(sender.call_args.kwargs, {})
+    def test_meta_is_given_only_the_number_the_template_and_its_variables(self):
+        leave = self.leave()
+        leave.reason = "Fever\nand a cold"
+        leave.save()
+        self.call("patch", f"/api/leave-requests/{leave.id}/status", {"status": "approved", "hrComment": "Get\twell"})
+        body = self.meta.last()["body"]
+        self.assertEqual(body["to"], "918220015110")
+        self.assertEqual(body["template"]["name"], "hrms_approval_approved")
+        self.assertEqual(body["template"]["language"], {"code": "en"})
+        self.assertEqual([c["type"] for c in body["template"]["components"]], ["body"])
+        params = self.meta.last()["params"]
+        self.assertEqual(params["comment"], "Get well")
+        self.assertTrue(params["details"].endswith(" - Fever and a cold"), params["details"])
+        self.assertNotIn("reason", params)  # only the variables the approved template has go to Meta
+        self.assertEqual(params["time"], "-")  # a leave has no time: a template can't drop the line
+        self.assert_plain_text_without_links()
 
     def test_a_refused_message_is_not_sent_again_in_another_form(self):
-        self.post.side_effect = [_error("Instance not connected"), _ok("WA2")]
+        self.meta.fail(131026, "Message undeliverable")
         self.approve(self.leave())
-        self.assertEqual(len(self.payloads()), 1)
-        self.assertEqual(self.one("approval_approved").status, "failed")
+        self.assertEqual(len([c for c in self.meta.calls if c["path"].endswith("/messages")]), 1)
+        log = self.one("approval_approved")
+        self.assertEqual(log.status, "failed")
+        self.assertIn("131026", log.error_message)
 
     def test_wording_saved_with_the_old_link_placeholder_never_reaches_the_employee(self):
         WhatsAppMessageTemplate.objects.create(
@@ -374,18 +397,19 @@ class SwitchesAndSafetyTests(ApprovalBase):
             ),
         )
         self.approve(self.leave())
-        self.assertEqual(self.texts(), ["Hi Asha Kumar: Leave OK\nBye"])
+        self.assertNotIn("link", self.meta.last()["params"])
+        self.assertNotIn("Bye", self.texts()[0])
         self.assert_plain_text_without_links()
 
     def test_a_whatsapp_outage_is_logged_and_the_approval_still_happens(self):
-        self.post.return_value = _error("Instance not connected")
+        self.meta.fail(190, "Error validating access token: Session has expired", status=401)
         leave = self.leave()
         self.assertEqual(self.approve(leave).status_code, 200)
         leave.refresh_from_db()
         self.assertEqual(leave.status, "approved")
         log = self.one("approval_approved")
         self.assertEqual(log.status, "failed")
-        self.assertIn("Instance not connected", log.error_message)
+        self.assertIn("190", log.error_message)
 
     def test_a_crash_in_the_messaging_code_never_breaks_the_approval(self):
         leave = self.leave()
@@ -399,9 +423,9 @@ class SwitchesAndSafetyTests(ApprovalBase):
         leave = self.leave()
         self.assertEqual(self.approve(leave).status_code, 200)
         self.assertIn("No phone number", self.one("approval_approved").error_message)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
-    @override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN="")
+    @override_settings(**NO_META)
     def test_nothing_is_attempted_when_whatsapp_is_not_configured(self):
         self.assertEqual(self.approve(self.leave()).status_code, 200)
         self.assertFalse(WhatsAppMessageLog.objects.exists())
@@ -424,19 +448,21 @@ class BackgroundDeliveryTests(ApprovalBase):
         ):  # whatever the hour of the run
             log = whatsapp_approvals.notify_decision("leave", self.emp_leave(), "approved", approver="Meena", role="hr")
             self.assertEqual((log.status, log.kind), ("queued", "requested"))
-            self.post.assert_not_called()
+            self.assertEqual(self.meta.sent, [])
             whatsapp_dispatcher.tick()
         log.refresh_from_db()
-        self.assertEqual((log.status, log.provider_message_id), ("sent", "WAID"))
+        self.assertEqual((log.status, log.provider_message_id), ("sent", self.meta.last()["id"]))
+        self.assertEqual(self.meta.last()["template"], "hrms_approval_approved")
 
     @override_settings(WHATSAPP_ASYNC_SEND=True)
     def test_codes_are_sent_at_once_and_the_alert_job_queues(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"absent_alert_enabled": True})
         code = whatsapp_service.send_notification(self.emp, "otp_login", ["123456", "5"], log_params=["*", "5"])
         self.assertEqual(code.status, "sent")
+        self.assertEqual((self.meta.last()["template"], self.meta.last()["button"]), ("hrms_otp", "123456"))
         alert = whatsapp_service.send_notification(self.emp, "absent_alert", ["A", "d", "t"], asynchronous=False)
         self.assertIn(alert.status, ("queued", "skipped"))  # "asynchronous" is ignored; skipped only in quiet hours
-        self.assertEqual(self.post.call_count, 1)
+        self.assertEqual(len(self.meta.sent), 1)
 
     def test_a_message_left_pending_by_a_restart_is_marked_failed(self):
         from datetime import timedelta

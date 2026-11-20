@@ -34,6 +34,29 @@ def _leave_with_name(record: LeaveRequest, cfg: approval.Config | None = None) -
     return data
 
 
+def _unworked_birthdays_in(record: LeaveRequest) -> set:
+    """The new-rule, unworked birthdays (cl_balance.new_rule_birthdays) the leave's date range covers: at most one a
+    year. Empty for anything that cannot be read (no date of birth, a bad date): the balance is then used as before."""
+    from . import cl_balance
+    from .compensation_shared import birthdays_between
+
+    emp = getattr(record, "employee", None) or Employee.objects.filter(pk=record.employee_id).first()
+    if emp is None or emp.date_of_birth is None:
+        return set()
+    try:
+        start = date.fromisoformat(str(record.start_date)[:10])
+        end = date.fromisoformat(str(record.end_date or record.start_date)[:10])
+    except ValueError:
+        return set()
+    if end < start or (end - start).days > 366:
+        return set()
+    candidates = [
+        (emp.pk, emp.date_of_birth, emp.employment_type, day)
+        for day in birthdays_between(emp.date_of_birth, start, end)
+    ]
+    return cl_balance.new_rule_birthdays(candidates) if candidates else set()
+
+
 def _deduct_leave_balance(record: LeaveRequest) -> None:
     """Use up the days of an approved leave from the employee's balance for the year (the specific leave type's row
     when the request names one)."""
@@ -46,6 +69,11 @@ def _deduct_leave_balance(record: LeaveRequest) -> None:
         year = int(record.start_date[:4])
     except Exception:
         year = ist_today().year
+    # Owner decision 4 (2026-11-19): approved leave on a new-rule birthday that was not worked is a PAID BIRTHDAY LEAVE and
+    # uses no leave balance, exactly like a Casual Leave on it (cl_balance.new_rule_birthdays decides both).
+    days = max(Decimal("0"), days - Decimal(len(_unworked_birthdays_in(record))))
+    if days <= 0:
+        return
     qs = LeaveBalance.objects.filter(employee_id=record.employee_id, year=year)
     if record.leave_type_ref_id:
         qs = qs.filter(leave_type_id=record.leave_type_ref_id)

@@ -14,7 +14,9 @@ Pinned here:
     announce), the push switch working with WhatsApp off, every channel's "skipped" reason, exactly-once under a restart,
     the unique (date, slot) of a scheduled round.
 
-No real WhatsApp / email / push leaves: WAClient, SMTP and Expo are mocked in every test that could reach them.
+No real WhatsApp / email / push leaves: Meta's Graph API (FakeMeta), SMTP and Expo are mocked in every test that could
+reach them. WhatsApp sends the approved template hrms_hod_pending_reminder (the pending list on one line); the Notify
+wording goes by email and push.
 
 Run: DATABASE_URL= DB_TEST_NAME=uktex_test_hodrem python manage.py test api.tests_hod_reminders --noinput
 """
@@ -64,26 +66,19 @@ from .models import (
     WhatsAppSettings,
 )
 from .notification_targets import target_for
+from .tests_whatsapp_caller_support import assert_template_variables, sent_text
+from .tests_whatsapp_support import META, NO_META, FakeMeta, approve_templates
 
-# Expo (signals.py) and WAClient (whatsapp_service.py) both call requests.post: one patch, routed by address.
+# Expo (signals.py) and Meta's Graph API (whatsapp_cloud.py) both call requests.post: one patch, routed by address.
 POST = "requests.post"
 SMTP = "api.email_service.smtplib.SMTP"
 LAUNCH = "api.hod_reminders.launch"
 
 SENDING = dict(
-    WACLIENT_INSTANCE_ID="INST1",
-    WACLIENT_ACCESS_TOKEN="tok",
-    WHATSAPP_ALLOW_SENDING=True,
+    **META,
     EMAIL_ALLOW_SENDING=True,
     WHATSAPP_SEND_DELAY_SECONDS=0,
-    WHATSAPP_DEFAULT_COUNTRY_CODE="91",
 )
-
-
-def _wa_ok():
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message_payload": {"key": {"id": "WAID"}}}
-    return r
 
 
 def _expo_ok(*_args, **kwargs):
@@ -133,7 +128,9 @@ class _World(TestCase):
         approval.clear_cache()
         self.addCleanup(approval.clear_cache)
         self.expo = mock.Mock(side_effect=_expo_ok)
-        self.wa = mock.Mock(return_value=_wa_ok())
+        self.meta = FakeMeta()  # answers like Meta's Graph API and records each message (not patched on its own here)
+        self.wa = mock.Mock(side_effect=self.meta._handler("POST"))
+        approve_templates("hod_pending_reminder")
 
         def route(url, *args, **kwargs):
             return (self.expo if "exp.host" in url else self.wa)(url, *args, **kwargs)
@@ -657,6 +654,19 @@ class PreviewTests(_World):
         self.assertFalse(WhatsAppMessageLog.objects.exists())
         self.assertFalse(HodReminderRun.objects.exists())
 
+    def test_the_whatsapp_text_is_the_approved_template_with_the_list_on_one_line(self):
+        self.standard_requests()
+        body = self.post(self.URL, {"template": "Hello {{name}} ({{total}})\n{{pendingList}}"}).json()
+        self.assertEqual(body["whatsappTemplate"], {"name": "hrms_hod_pending_reminder", "status": "APPROVED"})
+        first = body["messages"][0]
+        self.assertTrue(first["text"].startswith("Hello Suresh Test (4)"))  # email / push: HR's wording
+        self.assertIn("Dear Suresh Test,", first["whatsappText"])  # WhatsApp: the template
+        self.assertIn(
+            "4 request(s) waiting for your approval as of", first["whatsappText"]
+        )  # one line, not HR's bullets
+        self.assertIn(": Leave 1, Permission 1, Casual Leave 1, Missing Punch 1.", first["whatsappText"])
+        self.assertNotIn("•", first["whatsappText"])
+
     def test_a_view_only_login_may_preview_and_a_branch_login_sees_its_branch(self):
         self.standard_requests()
         viewer = self.role_user("pviewer", {"requests": "view"}, branch=self.south)
@@ -724,12 +734,25 @@ class SendTests(_World):
         )
         self.assertEqual(suresh["pending"], 4)
         self.assertEqual(suresh["byCategory"]["casual_leave"], 1)
-        # WhatsApp: the new catalogue type, keyed to the round, the Notify text
+        # WhatsApp: the catalogue type, keyed to the round, as the approved Meta template with the list on one line
         log = WhatsAppMessageLog.objects.get(employee=self.suresh)
         self.assertEqual(log.document_type, "hod_pending_reminder")
         self.assertEqual(log.dedupe_key, f"hodrem:{run['id']}:{self.m.id}")
-        self.assertEqual(log.message_text, suresh["text"])
-        self.assertEqual(self.wa.call_args.kwargs["json"]["number"], "919876500001")
+        sent = self.meta.last()
+        self.assertEqual((sent["to"], sent["template"]), ("919876500001", "hrms_hod_pending_reminder"))
+        self.assertEqual(
+            sent["params"],
+            {
+                "hod_name": "Suresh Test",
+                "total": "4",
+                "pending_list": "Leave 1, Permission 1, Casual Leave 1, Missing Punch 1",
+                "date": sent["params"]["date"],
+            },
+        )
+        assert_template_variables(self, sent)
+        self.assertEqual(log.message_text, sent_text(sent))
+        self.assertIn("You have 4 request(s) waiting for your approval as of", log.message_text)
+        self.assertEqual(log.template_name, "hrms_hod_pending_reminder")
         # email: the new email type, with the subject and the text's line breaks kept in the HTML
         email = EmailMessageLog.objects.get(employee=self.suresh)
         self.assertEqual((email.email_type, email.status), ("hod_pending_reminder", "sent"))
@@ -790,6 +813,19 @@ class SendTests(_World):
         self.assertFalse(Notification.objects.exists())
         self.expo.assert_not_called()
 
+    def test_without_an_approved_meta_template_whatsapp_is_skipped_with_the_reason(self):
+        approve_templates("hod_pending_reminder", status="PENDING")
+        self.assertFalse(rem.channel_status()["whatsapp"]["available"])
+        self.assertIn("hrms_hod_pending_reminder", rem.channel_status()["whatsapp"]["note"])
+        run = self.send({"channels": {"whatsapp": True, "email": False, "push": True}})
+        rem.process_run(run["id"])
+        suresh = self.deliveries(run["id"])["Suresh Test"]
+        self.assertEqual(suresh["whatsapp"]["status"], "skipped")
+        self.assertIn("PENDING", suresh["whatsapp"]["note"])
+        self.assertEqual(suresh["push"]["status"], "sent")  # the other channels go on
+        self.wa.assert_not_called()
+        self.assertFalse(WhatsAppMessageLog.objects.exists())  # no row per head for the same reason
+
     def test_channel_switches_and_set_up_are_respected(self):
         settings_row = MobileMessageSettings.get()
         settings_row.disabled_types = ["hod_pending_reminder"]
@@ -797,7 +833,7 @@ class SendTests(_World):
         ps = PayrollSettings.get()
         ps.smtp_password = ""
         ps.save()
-        with override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN=""):
+        with override_settings(**NO_META):
             run = self.send()
             rem.process_run(run["id"])
         suresh = self.deliveries(run["id"])["Suresh Test"]
@@ -906,6 +942,7 @@ class ScheduleTests(_World):
         self.assertEqual(run.hods, 2)
         self.assertEqual(WhatsAppMessageLog.objects.count(), 1)  # Suresh (Ravi has no phone)
         self.assertIn("Dear Suresh Test", WhatsAppMessageLog.objects.get().message_text)
+        self.assertEqual(self.meta.templates_sent, ["hrms_hod_pending_reminder"])
         self.assertEqual(rem.run_scheduled(at(MON, 10, 4)), [])
         self.assertEqual(rem.run_scheduled(at(MON, 10, 12)), [])
         self.assertEqual(HodReminderRun.objects.count(), 1)

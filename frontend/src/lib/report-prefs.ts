@@ -3,6 +3,7 @@
 // blocked or full, and the page must work without it.
 
 import { useSyncExternalStore } from "react";
+import type { RememberedFilters } from "./report-center";
 
 const FAVORITES_KEY = "hr_reports_favorites";
 const RECENT_KEY = "hr_reports_recent";
@@ -69,17 +70,43 @@ export function pushRecent(id: string): void {
   commit({ favorites, recents: [id, ...recents.filter((r) => r !== id)].slice(0, MAX_RECENT) });
 }
 
-/** The last filter query string used for a report (e.g. "period=2026-09&departmentIds=3"), or null. */
-export function getLastQuery(reportId: string): string | null {
+/**
+ * What was remembered of a report's last run (lib/report-center.ts rememberFilters), or null. Before 2026-11-19 the
+ * whole query string was stored, fixed dates included; such an entry still restores its scope filters (restoreFilters
+ * ignores everything else in it), but never its months or dates.
+ */
+export function getLastFilters(reportId: string): RememberedFilters | null {
+  let raw: string | null;
   try {
-    return localStorage.getItem(LAST_PREFIX + reportId);
+    raw = localStorage.getItem(LAST_PREFIX + reportId);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  if (!raw.startsWith("{")) return { query: raw, relative: {} };
+  try {
+    const parsed = JSON.parse(raw) as { query?: unknown; relative?: unknown };
+    const relative: Record<string, string> = {};
+    if (parsed.relative && typeof parsed.relative === "object") {
+      for (const [k, v] of Object.entries(parsed.relative)) if (typeof v === "string") relative[k] = v;
+    }
+    return { query: typeof parsed.query === "string" ? parsed.query : "", relative };
   } catch {
     return null;
   }
 }
 
-export function setLastQuery(reportId: string, query: string): void {
-  writeRaw(LAST_PREFIX + reportId, query);
+/** Remembers a report's last run; null forgets it (the run matched the defaults, or the user pressed Reset). */
+export function setLastFilters(reportId: string, remembered: RememberedFilters | null): void {
+  if (remembered) {
+    writeRaw(LAST_PREFIX + reportId, JSON.stringify(remembered));
+    return;
+  }
+  try {
+    localStorage.removeItem(LAST_PREFIX + reportId);
+  } catch {
+    /* storage unavailable - nothing was remembered either */
+  }
 }
 
 function subscribe(listener: () => void): () => void {

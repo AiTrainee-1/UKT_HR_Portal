@@ -8,9 +8,13 @@ WhatsApp, Gmail and the internal chat.
     or HR presses "Run now"                                                     -> AttendanceNotifyRun (manual)
     every recipient of the run                                                  -> AttendanceNotifyDelivery
 
-    WhatsApp  whatsapp_service.queue_to_recipient: one message per text part (+ a PDF with photos) per number / group,
-              through the shared paced queue (its gap, caps, quiet hours and switches keep the number safe), each with
-              the exactly-once key "attnotify:<run>:<delivery>:<attempt>:<part>"
+    WhatsApp  whatsapp_service.queue_to_recipient: ONE message per number, the approved Meta template
+              hrms_attendance_report (the report's name, its date and the counts on one line: "Absent 4, CL 2"),
+              through the shared paced queue (its gap, caps, quiet hours and switches keep the number safe), with the
+              exactly-once key "attnotify:<run>:<delivery>:<attempt>:0". The employee list and the PDF with photos go
+              by Gmail or the internal chat: a template carries neither. WhatsApp groups can't be reached by the
+              official WhatsApp Cloud API: new ones are refused, and a group an older automation still lists is
+              skipped with the reason.
     Gmail     email_service.send_email("attendance_report"): ONE email to every To / CC / BCC address (HTML with
               inline photos, or plain text; a PDF when asked)
     Chat      a ChatMessage in each chosen channel (sender "Attendance Notify"), text + a card the HR chat page draws
@@ -51,7 +55,6 @@ FREQUENCIES = ("daily", "weekly", "once")
 CONTENTS = ("summary", "detailed", "both")
 MAX_TIMES = 6
 MAX_NUMBERS = 25
-MAX_GROUPS = 10
 MAX_ADDRESSES = 50
 MAX_CHAT_CHANNELS = 20
 NAME_MAX = 120
@@ -62,6 +65,10 @@ UNCLAIMED_AFTER = timedelta(minutes=1)
 RETRY_AFTER = timedelta(minutes=5)
 MAX_ATTEMPTS = 3
 QUEUED_NOTE = "Queued for WhatsApp: it leaves within the day's sending limits (WhatsApp Control -> Messages)."
+GROUPS_REFUSED = (
+    "WhatsApp groups can't be messaged through the official WhatsApp Cloud API: remove the group and add individual "
+    "WhatsApp numbers instead."
+)
 
 _TIME = re.compile(r"^(\d{1,2}):(\d{2})$")
 _EMAIL = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
@@ -145,26 +152,14 @@ def _clean_recipients(channel: str, raw, branch_id) -> dict:
             if phone not in seen:
                 seen.add(phone)
                 numbers.append({"value": phone, "label": label})
-        groups, gseen = [], set()
-        from .whatsapp_service import is_group_id
-
-        for item in raw.get("groups") or []:
-            gid = (item.get("id") if isinstance(item, dict) else item) or ""
-            if not is_group_id(str(gid)):
-                raise Invalid(f"'{gid}' is not a WhatsApp group.", "recipients")
-            if gid not in gseen:
-                gseen.add(gid)
-                groups.append(
-                    {"id": gid, "name": str((item.get("name") if isinstance(item, dict) else "") or gid)[:120]}
-                )
+        if raw.get("groups"):  # Meta's templates cannot reach a group (whatsapp_service.REASON_NO_GROUPS)
+            raise Invalid(GROUPS_REFUSED, "recipients")
         if len(numbers) > MAX_NUMBERS:
             raise Invalid(f"Add at most {MAX_NUMBERS} numbers to one automation.", "recipients")
-        if len(groups) > MAX_GROUPS:
-            raise Invalid(f"Choose at most {MAX_GROUPS} groups.", "recipients")
         connected = bool(raw.get("connected"))
-        if not (numbers or groups or connected or list_ids):
-            raise Invalid("Add at least one WhatsApp number or group.", "recipients")
-        return {"connected": connected, "numbers": numbers, "groups": groups, "listIds": list_ids}
+        if not (numbers or connected or list_ids):
+            raise Invalid("Add at least one WhatsApp number.", "recipients")
+        return {"connected": connected, "numbers": numbers, "groups": [], "listIds": list_ids}
     if channel == "email":
         out = {}
         total = 0
@@ -347,8 +342,8 @@ def recipient_summary(channel: str, recipients: dict) -> str:
         n, g = len(r.get("numbers") or []), len(r.get("groups") or [])
         if n:
             parts.append(f"{n} number{'s' if n != 1 else ''}")
-        if g:
-            parts.append(f"{g} group{'s' if g != 1 else ''}")
+        if g:  # an older automation's groups: skipped at every run (not reachable with Meta's templates)
+            parts.append(f"{g} group{'s' if g != 1 else ''} (not sent)")
     elif channel == "email":
         for key, label in (("to", "To"), ("cc", "CC"), ("bcc", "BCC")):
             if r.get(key):
@@ -558,13 +553,13 @@ def channel_status() -> dict:
         return {"available": problem is None, "note": problem or ready}
 
     if not wa.has_credentials():
-        wa_problem = "WhatsApp is not set up on this server (the WAClient keys are missing)."
+        wa_problem = "WhatsApp is not set up on this server (the Meta WhatsApp Cloud API keys are missing)."
     elif not wa.sending_allowed():
         wa_problem = (
             "WhatsApp sending is off on this machine (a development setup): runs are recorded, nothing is sent."
         )
     else:
-        wa_problem = wa.switch_off_reason(SOURCE)
+        wa_problem = wa.switch_off_reason(SOURCE) or wa.template_problem(SOURCE)
     ps = PayrollSettings.get()
     email_problem = email_service.switch_off_reason(SOURCE)
     if email_problem is None and email_service.smtp_missing_reason(ps):
@@ -576,7 +571,10 @@ def channel_status() -> dict:
     if email_problem is None:
         email_problem = email_service.daily_limit_reason()
     return {
-        "whatsapp": state(wa_problem, "Ready: sent from the company WhatsApp number through the paced queue."),
+        "whatsapp": state(
+            wa_problem,
+            "Ready: the summary goes from the company WhatsApp number (an approved template) through the paced queue.",
+        ),
         "email": state(email_problem, "Ready: sent from the company Gmail account."),
         "chat": state(None, "Ready: posted in the chosen chat channels as 'Attendance Notify'."),
     }
@@ -589,10 +587,31 @@ def dedupe_key(run, d, part: int) -> str:
     return f"attnotify:{run.pk}:{d.pk}:{d.attempts}:{part}"
 
 
-def _public_base() -> str:
-    from django.conf import settings as dj_settings
+def whatsapp_params(report) -> dict:
+    """The variables of the Meta template hrms_attendance_report (whatsapp_catalog), each on one line: report_title
+    "Morning absentees (Staff, Tirupur)", date "17 Nov 2026, as of 09:30", summary "Absent 4, CL 2, On Leave 1 (7 of 250
+    employees)"."""
+    from .whatsapp_format import flat
 
-    return (getattr(dj_settings, "BACKEND_PUBLIC_URL", "") or "").rstrip("/")
+    scope = [rpt.TYPE_LABELS.get(report.employee_type, "All employees")]
+    if report.branch:
+        scope.append(report.branch)
+    title = f"{report.name} ({', '.join(scope)})" if report.name else ", ".join(scope)
+    when = rpt.days_text(report.days)
+    if report.as_of:
+        when = f"{when}, as of {report.as_of}"
+    counts = ", ".join(f"{rpt.LABELS[c]} {report.counts.get(c, 0)}" for c in report.categories)
+    people = f"{report.employees} of {report.total_employees} employees"
+    summary = f"{counts} ({people})" if counts else people
+    return flat({"report_title": title, "date": when, "summary": summary})
+
+
+def whatsapp_text(report) -> str:
+    """What the WhatsApp message reads like: the template's text (the catalog's wording when this server does not have
+    the approved template yet) with this report's variables."""
+    from . import whatsapp_service as wa
+
+    return wa.render_template_text(wa.template_for(SOURCE), whatsapp_params(report))
 
 
 class _Prepared:
@@ -607,12 +626,9 @@ class _Prepared:
 
     @property
     def wants_pdf(self) -> bool:
+        # only email attaches it: a WhatsApp template carries the summary line, not a file
         if self.config.get("channel") == "email":
             return bool(self.config.get("attachPdf"))
-        if self.config.get("channel") == "whatsapp":
-            detailed = self.content in ("detailed", "both") and not self.report.is_empty
-            too_long = len(self.report.rows) > rpt.MAX_TEXT_ROWS
-            return detailed and (bool(self.config.get("includePhotos")) or too_long)
         return False
 
     def pdf(self) -> bytes:
@@ -624,35 +640,25 @@ class _Prepared:
 
 
 def _send_whatsapp(prep: _Prepared, d) -> tuple[str, str]:
+    """ONE message per number: the Meta template hrms_attendance_report with the report's summary on one line."""
     from . import whatsapp_service as wa
     from .models import AttendanceNotifyDelivery as D
 
+    if d.kind == "group" or wa.is_group_id(d.recipient or ""):
+        return D.STATUS_SKIPPED, wa.REASON_NO_GROUPS
     if not d.recipient:
         return D.STATUS_SKIPPED, "No number: set the connected WhatsApp number on the Attendance Notify page."
-    texts = rpt.message_parts(prep.report, prep.content, pdf_note=prep.wants_pdf)
-    logs = []
-    for i, text in enumerate(texts):
-        logs.append(
-            wa.queue_to_recipient(
-                d.recipient,
-                text,
-                recipient_label=d.label or d.recipient,
-                dedupe_key=dedupe_key(prep.run, d, i),
-                document_ref_id=prep.run.pk,
-            )
+    params = whatsapp_params(prep.report)
+    logs = [
+        wa.queue_to_recipient(
+            d.recipient,
+            params["summary"],
+            recipient_label=d.label or d.recipient,
+            dedupe_key=dedupe_key(prep.run, d, 0),
+            document_ref_id=prep.run.pk,
+            params=params,
         )
-    if prep.wants_pdf:
-        logs.append(
-            wa.queue_to_recipient(
-                d.recipient,
-                f"Attendance report – {prep.report.name} ({rpt.days_text(prep.report.days)})",
-                recipient_label=d.label or d.recipient,
-                dedupe_key=dedupe_key(prep.run, d, len(texts)),
-                document_ref_id=prep.run.pk,
-                document=(prep.pdf(), rpt.pdf_filename(prep.report), "application/pdf"),
-                base_url=_public_base(),
-            )
-        )
+    ]
     d.whatsapp_log_ids = [log.pk for log in logs if log is not None]
     d.save(update_fields=["whatsapp_log_ids", "updated_at"])
     return whatsapp_outcome(logs)

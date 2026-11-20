@@ -1,7 +1,8 @@
 """
-Shift, production-shift and biometric-device reports (category "attendance"):
-shift-roster, shift-wise-attendance, shift-assignment-gaps, production-shift-register and
-device-sync-health.
+Shift, production-shift and biometric-device reports: shift-roster, production-shift-register and device-sync-health
+(category "attendance"), shift-wise-attendance and shift-assignment-gaps (category "shift", listed in the Report
+Center's Shift group since the 2026-11-19 cleanup; both read join dates with the spreadsheet-serial decoder, see
+Roster's ``decode_join``).
 
 Shift facts come from ``EmployeeShiftAssignment`` -> ``ShiftTemplate`` with the engine's own rule
 (the assignment with the latest ``effective_from`` covering the day wins; a custom start / end on
@@ -294,7 +295,7 @@ def _uncovered_days(assignments, start: date, end: date) -> tuple[int, date | No
 def _gaps_run(ctx):
     d_from, d_to = ctx.date_from, ctx.date_to
     want = ctx.params.get("issue")
-    roster = Roster(ctx, d_from, d_to)
+    roster = Roster(ctx, d_from, d_to, decode_join=True)
     people_by_id = people(ctx)
     per_emp: dict[int, list] = defaultdict(list)
     for a in _assignments(ctx, d_from, d_to):
@@ -383,7 +384,7 @@ register(
         id="shift-assignment-gaps",
         title="Shift Assignment Gaps",
         description="Employees with no shift, overnight or overlapping assignments and shift templates that do not fit the employee.",
-        category="attendance",
+        category="shift",
         icon="TriangleAlert",
         tags=("shift", "gap", "data quality", "no shift", "overnight", "overlap"),
         modules=SHIFT_MODULES,
@@ -445,7 +446,7 @@ def _shift_labels(names: dict) -> dict:
 def _shiftwise_run(ctx):
     d_from, d_to = ctx.date_from, ctx.date_to
     name_text = (ctx.params.get("shift") or "").lower()
-    roster = Roster(ctx, d_from, d_to)
+    roster = Roster(ctx, d_from, d_to, decode_join=True)
     people_by_id = people(ctx)
 
     # Grouped by the shift TEMPLATE, not its name: two branches may each own a shift called "General" (timings differ
@@ -517,7 +518,7 @@ def _shiftwise_run(ctx):
         )
     if sub_note:
         notes.append(sub_note)
-    notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to))
+    notes.extend(coverage_notes(ctx, people_by_id, d_from, d_to, roster))
     return ReportResult(rows=rows, summary=summary, notes=notes, totals=grand)
 
 
@@ -526,7 +527,7 @@ register(
         id="shift-wise-attendance",
         title="Shift-wise Attendance Summary",
         description="Present, half-day, absent, leave and late counts grouped by shift and day, with strength %.",
-        category="attendance",
+        category="shift",
         icon="Layers",
         tags=("shift", "shift wise", "strength", "attendance summary"),
         modules=SHIFT_MODULES,

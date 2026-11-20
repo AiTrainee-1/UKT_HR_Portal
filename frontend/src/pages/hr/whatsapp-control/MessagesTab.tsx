@@ -1,30 +1,34 @@
-import { useEffect, useState } from "react";
-import { Input } from "@/components/ui/input";
+import { useEffect, useState, type ReactNode } from "react";
+import { Check, CheckCheck, Search, X, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PillTabs } from "@/components/ui/pill-tabs";
-import { Skeleton } from "@/components/ui/skeleton";
 import DataPagination from "@/components/ui/DataPagination";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { PillTabs } from "@/components/ui/pill-tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, X } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   useWhatsAppMessages,
-  useWhatsAppOverview,
   type WhatsAppCategory,
   type WhatsAppMessage,
   type WhatsAppMessageStatus,
 } from "@/lib/api-client/custom-hooks";
+import { cn } from "@/lib/utils";
+import { deliveryTicks, pricingLabel } from "./logic";
 import {
   CATEGORIES,
+  KIND_HELP,
   KindTag,
-  MessageDetailDialog,
-  categoryLabel,
-  reasonTone,
   STATUS_HELP,
   STATUS_LABEL,
   STATUS_ORDER,
   StatusPill,
+  WORKFLOWS,
+  categoryLabel,
   fmtDateTime,
+  reasonLabel,
+  reasonTone,
   useDebounced,
 } from "./shared";
 
@@ -38,8 +42,112 @@ const STATUS_TABS = [
   ...STATUS_ORDER.map((s) => ({ value: s, label: STATUS_LABEL[s] })),
 ];
 
-/** The history table with its filters. Used on the Messages tab, and (locked to one
- *  employee, filters hidden) inside the Employees tab's detail dialog. */
+/** WhatsApp's own ticks: one grey (sent), two grey (delivered), two blue (read), a red cross (failed). */
+export function DeliveryTicks({ status }: { status: string }) {
+  const t = deliveryTicks(status);
+  const label = STATUS_LABEL[status as WhatsAppMessageStatus] ?? status;
+  if (t === "none") return null;
+  return (
+    <span className="inline-flex items-center" title={label} aria-label={label} data-testid="wa-ticks" data-ticks={t}>
+      {t === "sent" && <Check size={14} className="text-slate-400" />}
+      {t === "delivered" && <CheckCheck size={14} className="text-slate-400" />}
+      {t === "read" && <CheckCheck size={14} className="text-sky-500" />}
+      {t === "failed" && <XCircle size={13} className="text-red-500" />}
+    </span>
+  );
+}
+
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[120px_1fr] gap-3 py-1.5 text-sm">
+      <span className="pt-0.5 text-xs font-semibold text-muted-foreground">{label}</span>
+      <div className="min-w-0 break-words">{children}</div>
+    </div>
+  );
+}
+
+/** Everything about one message: who, which template, what Meta charged it as, when it was sent, delivered and read. */
+export function MessageDetailDialog({ message, onClose }: { message: WhatsAppMessage | null; onClose: () => void }) {
+  if (!message) return null;
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-lg" data-testid="wa-message-detail" aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            {message.typeLabel} <StatusPill status={message.status} />
+          </DialogTitle>
+        </DialogHeader>
+        <div className="divide-y">
+          <Row label="Employee">
+            {message.employeeName} <span className="text-muted-foreground">({message.employeeCode})</span>
+          </Row>
+          <Row label="Module">{message.relatedLabel || message.categoryLabel}</Row>
+          <Row label="Status">
+            <span className="text-muted-foreground">
+              {STATUS_HELP[message.status as WhatsAppMessageStatus] ?? message.status}
+            </span>
+          </Row>
+          <Row label="Sent to">{message.phone ? `+${message.phone}` : "—"}</Row>
+          {message.templateName && (
+            <Row label="Template">
+              <code className="font-mono text-xs">{message.templateName}</code>
+            </Row>
+          )}
+          {(message.pricingCategory || message.billable !== null) && (
+            <Row label="Charged as">
+              {pricingLabel(message.pricingCategory)}
+              {message.billable === true && <span className="text-muted-foreground"> · billable</span>}
+              {message.billable === false && <span className="text-muted-foreground"> · free</span>}
+            </Row>
+          )}
+          <Row label="Created">{fmtDateTime(message.createdAt)}</Row>
+          {message.sentAt && <Row label="Sent">{fmtDateTime(message.sentAt)}</Row>}
+          {message.deliveredAt && <Row label="Delivered">{fmtDateTime(message.deliveredAt)}</Row>}
+          {message.readAt && <Row label="Read">{fmtDateTime(message.readAt)}</Row>}
+          {message.expiresAt && ["queued", "sending", "expired"].includes(message.status) && (
+            <Row label={message.status === "expired" ? "Expired at" : "Expires"}>{fmtDateTime(message.expiresAt)}</Row>
+          )}
+          <Row label="Trigger">
+            {message.automatic ? (
+              <Badge variant="outline" className="text-[10px]">
+                Automatic
+              </Badge>
+            ) : (
+              <span>Sent by {message.sentBy ?? "HR"}</span>
+            )}
+            {message.kind && (
+              <span className="ml-2 text-xs text-muted-foreground">
+                {KIND_HELP[message.kind as keyof typeof KIND_HELP] ?? message.kind}
+              </span>
+            )}
+          </Row>
+          {typeof message.attempts === "number" && message.attempts > 0 && (
+            <Row label="Attempts">{message.attempts}</Row>
+          )}
+          {message.error && (
+            <Row label={reasonLabel(message.status)}>
+              <span className={reasonTone(message.status)}>{message.error}</span>
+            </Row>
+          )}
+          {message.providerMessageId && (
+            <Row label="Meta message id">
+              <code className="break-all text-xs">{message.providerMessageId}</code>
+            </Row>
+          )}
+        </div>
+        <div>
+          <p className="mb-1 text-xs font-semibold text-muted-foreground">Message</p>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-emerald-100 bg-emerald-50 p-3 font-sans text-xs text-gray-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-50">
+            {message.messageText || "The text of this message wasn't recorded."}
+          </pre>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The history table with its filters. Used on the Messages tab, and (locked to one employee, filters hidden) inside the
+ *  Employees tab's detail dialog. */
 export function MessageList({
   preset,
   employeeId,
@@ -60,17 +168,12 @@ export function MessageList({
   const [selected, setSelected] = useState<WhatsAppMessage | null>(null);
   const debouncedSearch = useDebounced(search);
 
-  // A shortcut from another tab ("View all failures", a category card) re-seeds the filters.
+  // A shortcut from another tab re-seeds the filters.
   useEffect(() => {
     setStatus(preset?.status ?? "");
     setCategory(preset?.category ?? "");
     setPage(1);
   }, [preset?.status, preset?.category]);
-
-  // The modules and workflows HR can filter by come from the server's catalog.
-  const overview = useWhatsAppOverview(30).data;
-  const modules = overview?.categories ?? CATEGORIES.map((key) => ({ key, label: categoryLabel(key) }));
-  const workflows = overview?.relatedModules ?? [];
 
   const { data, isLoading, isFetching } = useWhatsAppMessages({
     status,
@@ -94,110 +197,107 @@ export function MessageList({
   const filtered = Boolean(status || category || related || debouncedSearch || dateFrom || dateTo);
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-3 flex-wrap">
+    <div className="space-y-3" data-testid="wa-message-list">
+      <div className="max-w-full overflow-x-auto" data-view-safe="">
         <PillTabs
           size="sm"
-          className="flex-wrap h-auto"
+          className="h-auto flex-wrap"
           items={STATUS_TABS}
           value={status || "all"}
           onChange={(v) => reset(setStatus)(v === "all" ? "" : (v as WhatsAppMessageStatus))}
         />
-        {!compact && (
-          <>
-            <Select
-              value={category || "all"}
-              onValueChange={(v) => reset(setCategory)(v === "all" ? "" : (v as WhatsAppCategory))}
-            >
-              <SelectTrigger className="h-8 w-44 text-xs" aria-label="Module">
-                <SelectValue placeholder="All modules" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All modules</SelectItem>
-                {modules.map((c) => (
-                  <SelectItem key={c.key} value={c.key}>
-                    {c.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={related || "all"} onValueChange={(v) => reset(setRelated)(v === "all" ? "" : v)}>
-              <SelectTrigger className="h-8 w-44 text-xs" aria-label="Workflow">
-                <SelectValue placeholder="All workflows" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All workflows</SelectItem>
-                {workflows.map((w) => (
-                  <SelectItem key={w.key} value={w.key}>
-                    {w.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="relative">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <Input
-                value={search}
-                onChange={(e) => reset(setSearch)(e.target.value)}
-                placeholder="Search name, code or phone"
-                className="h-8 w-56 pl-8 text-xs"
-                aria-label="Search messages"
-              />
-            </div>
-            <div className="flex items-center gap-1.5 text-xs text-gray-500">
-              <Input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => reset(setDateFrom)(e.target.value)}
-                className="h-8 w-36 text-xs"
-                aria-label="From date"
-              />
-              to
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => reset(setDateTo)(e.target.value)}
-                className="h-8 w-36 text-xs"
-                aria-label="To date"
-              />
-            </div>
-            {filtered && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 text-xs gap-1"
-                onClick={() => {
-                  setStatus("");
-                  setCategory("");
-                  setRelated("");
-                  setSearch("");
-                  setDateFrom("");
-                  setDateTo("");
-                  setPage(1);
-                }}
-              >
-                <X size={12} /> Clear
-              </Button>
-            )}
-          </>
-        )}
       </div>
+      {!compact && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={category || "all"} onValueChange={(v) => reset(setCategory)(v === "all" ? "" : v)}>
+            <SelectTrigger className="h-8 w-44 text-xs" aria-label="Module">
+              <SelectValue placeholder="All modules" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All modules</SelectItem>
+              {CATEGORIES.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {categoryLabel(c)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={related || "all"} onValueChange={(v) => reset(setRelated)(v === "all" ? "" : v)}>
+            <SelectTrigger className="h-8 w-44 text-xs" aria-label="Workflow">
+              <SelectValue placeholder="All workflows" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All workflows</SelectItem>
+              {WORKFLOWS.map((w) => (
+                <SelectItem key={w.key} value={w.key}>
+                  {w.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="relative w-full sm:w-56">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => reset(setSearch)(e.target.value)}
+              placeholder="Search name, code or phone"
+              className="h-8 pl-8 text-xs"
+              aria-label="Search messages"
+            />
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => reset(setDateFrom)(e.target.value)}
+              className="h-8 w-36 text-xs"
+              aria-label="From date"
+            />
+            to
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => reset(setDateTo)(e.target.value)}
+              className="h-8 w-36 text-xs"
+              aria-label="To date"
+            />
+          </div>
+          {filtered && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1 text-xs"
+              onClick={() => {
+                setStatus("");
+                setCategory("");
+                setRelated("");
+                setSearch("");
+                setDateFrom("");
+                setDateTo("");
+                setPage(1);
+              }}
+            >
+              <X size={12} /> Clear filters
+            </Button>
+          )}
+        </div>
+      )}
       {status && (
-        <p className="text-[11px] text-gray-500 -mt-1" data-testid="whatsapp-status-help">
-          <b className="text-gray-700">{STATUS_LABEL[status]}:</b> {STATUS_HELP[status]}
+        <p className="-mt-1 text-[11px] text-muted-foreground" data-testid="whatsapp-status-help">
+          <b className="text-foreground">{STATUS_LABEL[status]}:</b> {STATUS_HELP[status]}
           {status === "skipped" && " The rule that held it back is shown with each message."}
         </p>
       )}
 
-      <div className="rounded-xl border bg-white overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead className="bg-slate-50 text-gray-500">
+      <div className="overflow-x-auto rounded-xl border bg-card">
+        <table className="w-full min-w-[760px] text-xs">
+          <thead className="bg-muted text-muted-foreground">
             <tr className="text-left">
               <th className="px-3 py-2 font-semibold">When</th>
               {!employeeId && <th className="px-3 py-2 font-semibold">Employee</th>}
-              <th className="px-3 py-2 font-semibold">Mobile</th>
               <th className="px-3 py-2 font-semibold">Message type</th>
-              <th className="px-3 py-2 font-semibold">Module</th>
+              <th className="px-3 py-2 font-semibold">Template</th>
+              <th className="px-3 py-2 font-semibold">Charged as</th>
               <th className="px-3 py-2 font-semibold">Status</th>
               <th className="px-3 py-2 font-semibold">Message / reason</th>
             </tr>
@@ -206,14 +306,14 @@ export function MessageList({
             {isLoading ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={i} className="border-t">
-                  <td colSpan={8} className="px-3 py-2">
+                  <td colSpan={7} className="px-3 py-2">
                     <Skeleton className="h-5 w-full" />
                   </td>
                 </tr>
               ))
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-10 text-center text-gray-400">
+                <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
                   {filtered ? "No messages match these filters." : "No WhatsApp messages have been sent yet."}
                 </td>
               </tr>
@@ -221,40 +321,57 @@ export function MessageList({
               rows.map((m) => (
                 <tr
                   key={m.id}
-                  className="border-t hover:bg-slate-50 cursor-pointer"
+                  className="cursor-pointer border-t hover:bg-muted"
                   onClick={() => setSelected(m)}
                   data-testid="whatsapp-message-row"
                 >
-                  <td className="px-3 py-2 whitespace-nowrap text-gray-600">{fmtDateTime(m.createdAt)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{fmtDateTime(m.createdAt)}</td>
                   {!employeeId && (
                     <td className="px-3 py-2">
-                      <p className="font-semibold text-gray-800">{m.employeeName}</p>
-                      <p className="text-[10px] text-gray-400">{m.employeeCode}</p>
+                      <p className="font-semibold">{m.employeeName}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {m.employeeCode}
+                        {m.phone ? ` · +${m.phone}` : ""}
+                      </p>
                     </td>
                   )}
-                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{m.phone ? `+${m.phone}` : "—"}</td>
                   <td className="px-3 py-2">
-                    <span className="font-medium text-gray-700">{m.typeLabel}</span>
-                    {m.kind ? (
-                      <KindTag kind={m.kind} />
+                    <span className="font-medium">{m.typeLabel}</span>
+                    {m.kind ? <KindTag kind={m.kind} /> : null}
+                    <p className="text-[10px] text-muted-foreground" data-testid="whatsapp-message-module">
+                      {m.relatedLabel || m.categoryLabel}
+                    </p>
+                  </td>
+                  <td className="px-3 py-2">
+                    {m.templateName ? (
+                      <code className="font-mono text-[11px]" data-testid="whatsapp-message-template">
+                        {m.templateName}
+                      </code>
                     ) : (
-                      m.automatic && (
-                        <Badge variant="outline" className="ml-1.5 text-[9px] px-1 py-0">
-                          Auto
-                        </Badge>
-                      )
+                      <span className="text-muted-foreground">—</span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap" data-testid="whatsapp-message-module">
-                    {m.relatedLabel}
+                  <td
+                    className="whitespace-nowrap px-3 py-2 text-muted-foreground"
+                    data-testid="whatsapp-message-pricing"
+                  >
+                    {pricingLabel(m.pricingCategory)}
+                    {m.billable === true && (
+                      <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] font-bold text-amber-800 dark:bg-amber-900 dark:text-amber-100">
+                        ₹
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2">
-                    <StatusPill status={m.status} />
+                    <span className="inline-flex items-center gap-1.5">
+                      <StatusPill status={m.status} />
+                      <DeliveryTicks status={m.status} />
+                    </span>
                   </td>
-                  <td className="px-3 py-2 max-w-[300px] text-gray-500">
+                  <td className="max-w-[280px] px-3 py-2 text-muted-foreground">
                     <p className="truncate">{m.messageText.split("\n")[0]}</p>
                     {m.error && (
-                      <p className={`truncate ${reasonTone(m.status)}`} title={m.error}>
+                      <p className={cn("truncate", reasonTone(m.status))} title={m.error}>
                         {m.error}
                       </p>
                     )}
@@ -277,7 +394,7 @@ export function MessageList({
         }}
         totalItems={data?.total}
       />
-      {isFetching && !isLoading && <p className="text-[10px] text-gray-400">Refreshing…</p>}
+      {isFetching && !isLoading && <p className="text-[10px] text-muted-foreground">Refreshing…</p>}
 
       <MessageDetailDialog message={selected} onClose={() => setSelected(null)} />
     </div>

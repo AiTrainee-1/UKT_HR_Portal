@@ -1,6 +1,8 @@
 """
-The 2Factor.in HTTP client: one function, `send_otp`, that sends ONE one-time-code SMS and says whether 2Factor accepted it.
-The only SMS provider of the HRMS; sms_service.py is the pipeline around it (caps, breaker, log).
+The 2Factor.in HTTP client: `send_otp`, the ONLY send there is (ONE one-time-code SMS through the approved OTP template,
+says whether 2Factor accepted it), and `balance`, a read of the SMS credits left. There is deliberately no call that sends
+free text, promotions or bulk SMS: SMS in the HRMS is for one-time codes only. The only SMS provider of the HRMS;
+sms_service.py is the pipeline around it (caps, breaker, log) and the only module that imports this one.
 
 Which 2Factor API, and why
 --------------------------
@@ -32,7 +34,8 @@ Documentation used (read 2026-10-17):
   https://2factor.in/API/DOCS/SMS_OTP.html                 (the endpoint pattern)
   https://documenter.getpostman.com/view/301893/TWDamFGh   (2Factor API Documentation: the custom-OTP call with the
                                                             template name, the phone format, the response bodies)
-No balance call is documented: nothing is called (sms_service.balance says where to look).
+The balance (2026-11-20): GET {TWOFACTOR_API_BASE}/{api_key}/BAL/SMS answers {"Status": "Success", "Details": "<credits>"}
+(the best known form; the answer is parsed tolerantly and anything else is a TwoFactorError; sms_service caches it).
 Not confirmed by the documentation: whether the XXXX placeholder is replaced when the code has fewer / more than 4
 characters (the documentation only says the code must be 4 to 6 characters): use the SMS Control page's test message
 once after setting 2Factor up and read the SMS that arrives.
@@ -230,22 +233,10 @@ def _session_id(value) -> str:
     return text if _ID_OK.match(text) else ""
 
 
-def send_otp(*, api_key: str, template_name: str, mobile: str, code: str, base_url: str) -> str:
-    """Send one code through the custom-OTP call. `mobile` is the number in international format without '+'. Returns
-    2Factor's session id ("" if it gave none) when 2Factor accepted it; raises TwoFactorError for every other outcome.
-    Never retries."""
-    problem = base_url_problem(base_url)
-    if problem:
-        raise TwoFactorError("config", problem)
-    if not api_key or not template_name or not mobile or not code:
-        raise TwoFactorError("config", "SMS is not set up on this server.")
-    problem = key_problem(api_key) or template_problem(template_name)
-    if problem:
-        raise TwoFactorError("config", problem)
-    if not _PHONE_OK.match(mobile) or not _CODE_OK.match(str(code)):
-        raise TwoFactorError("config", "The mobile number or the code is not in a shape 2Factor accepts.")
-    secrets = (api_key,)
-    url = f"{base_url.rstrip('/')}/{api_key}/SMS/+{mobile}/{code}/{template_name}"
+def _get_json(url: str, secrets: tuple[str, ...]) -> tuple[int, dict]:
+    """ONE GET to 2Factor (the URL carries the key): (HTTP status, the JSON object it answered). Raises TwoFactorError for a
+    network failure, a cut-off answer, or an answer that is not a JSON object. Never retries, never follows a redirect,
+    reads at most MAX_RESPONSE_BYTES, and never lets a `requests` exception (which quotes the URL) out."""
     try:
         response = requests.get(
             url,
@@ -286,8 +277,78 @@ def send_otp(*, api_key: str, template_name: str, mobile: str, code: str, base_u
         if status >= 500 or status in (401, 403, 429):
             raise _classify(status, "", secrets)
         raise TwoFactorError("bad_response", "2Factor sent a reply this system could not understand.", status)
+    return status, data
 
-    outcome = str(data.get("Status", "")).strip().lower()
-    if outcome == "success" and 200 <= status < 300:
+
+def _succeeded(status: int, data: dict) -> bool:
+    return str(data.get("Status", "")).strip().lower() == "success" and 200 <= status < 300
+
+
+def _refusal(status: int, data: dict, secrets: tuple[str, ...]) -> TwoFactorError:
+    return _classify(status, str(data.get("Details") or data.get("Message") or ""), secrets)
+
+
+def _check_key_and_base(api_key: str, base_url: str) -> None:
+    problem = base_url_problem(base_url)
+    if problem:
+        raise TwoFactorError("config", problem)
+    if not api_key:
+        raise TwoFactorError("config", "SMS is not set up on this server.")
+    problem = key_problem(api_key)
+    if problem:
+        raise TwoFactorError("config", problem)
+
+
+def send_otp(*, api_key: str, template_name: str, mobile: str, code: str, base_url: str) -> str:
+    """Send one code through the custom-OTP call. `mobile` is the number in international format without '+', `code` 4
+    to 6 digits (nothing else can be sent: there is no free text). Returns 2Factor's session id ("" if it gave none) when
+    2Factor accepted it; raises TwoFactorError for every other outcome. Never retries."""
+    _check_key_and_base(api_key, base_url)
+    if not template_name or not mobile or not code:
+        raise TwoFactorError("config", "SMS is not set up on this server.")
+    problem = template_problem(template_name)
+    if problem:
+        raise TwoFactorError("config", problem)
+    if not _PHONE_OK.match(mobile) or not _CODE_OK.match(str(code)):
+        raise TwoFactorError("config", "The mobile number or the code is not in a shape 2Factor accepts.")
+    secrets = (api_key,)
+    status, data = _get_json(f"{base_url.rstrip('/')}/{api_key}/SMS/+{mobile}/{code}/{template_name}", secrets)
+    if _succeeded(status, data):
         return _session_id(data.get("Details"))
-    raise _classify(status, str(data.get("Details") or data.get("Message") or ""), secrets)
+    raise _refusal(status, data, secrets)
+
+
+_CREDITS = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+
+def parse_credits(value) -> int | float | None:
+    """2Factor's balance 'Details' as a number: 194, "194", " 1,234 ", "194.50" (a bool, a word or anything else: None)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = value
+    else:
+        text = str(value or "").strip().replace(",", "")
+        if not _CREDITS.match(text) or len(text) > 20:
+            return None
+        number = float(text)
+    if number != number or number in (float("inf"), float("-inf")):  # NaN / infinity
+        return None
+    return int(number) if float(number).is_integer() else round(float(number), 2)
+
+
+def balance(*, api_key: str, base_url: str) -> int | float:
+    """The SMS OTP credits left on the 2Factor account: GET {base}/{api_key}/BAL/SMS -> {"Status": "Success", "Details":
+    "<credits>"}. A read only: nothing is sent. Raises TwoFactorError for every other outcome (the key is never in it).
+    Never retries."""
+    _check_key_and_base(api_key, base_url)
+    secrets = (api_key,)
+    status, data = _get_json(f"{base_url.rstrip('/')}/{api_key}/BAL/SMS", secrets)
+    if not _succeeded(status, data):
+        raise _refusal(status, data, secrets)
+    credits = parse_credits(data.get("Details"))
+    if credits is None:
+        raise TwoFactorError(
+            "bad_response", "2Factor answered the balance check with something that is not a number.", status
+        )
+    return credits

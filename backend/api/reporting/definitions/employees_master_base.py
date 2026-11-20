@@ -112,15 +112,37 @@ def clean(value) -> str | None:
 # treated as unreadable so date arithmetic on it (probation end, casual-leave date) can never overflow.
 MIN_JOIN_YEAR, MAX_JOIN_YEAR = 1950, 2100
 
+# A spreadsheet date that went in as its serial number: '45640', or '01-01-45640' (a dd-mm prefix with the serial where
+# the year should be). Excel counts days from 30-Dec-1899. The production employees' bulk upload stored every join date
+# this way, so the text reads as year 4564 to a plain date parser.
+_EXCEL_SERIAL = re.compile(r"^(?:\d{1,2}[-/.]\d{1,2}[-/.])?(\d{5})$")
+_EXCEL_EPOCH = date(1899, 12, 30)
 
-def join_date_of(emp) -> tuple[date | None, str]:
-    """(date, state): Employee.join_date is TEXT, so it may be empty, junk or absurd. state = ok|missing|unreadable."""
+
+def excel_serial_date(raw) -> date | None:
+    """The date a spreadsheet serial stands for ('01-01-45640' / '45640' -> 2024-12-14), or None for any other text or a
+    serial outside MIN_JOIN_YEAR..MAX_JOIN_YEAR."""
+    m = _EXCEL_SERIAL.match((raw or "").strip())
+    if not m:
+        return None
+    d = _EXCEL_EPOCH + timedelta(days=int(m.group(1)))
+    return d if MIN_JOIN_YEAR <= d.year <= MAX_JOIN_YEAR else None
+
+
+def join_date_of(emp, *, decode_serial: bool = False) -> tuple[date | None, str]:
+    """(date, state): Employee.join_date is TEXT, so it may be empty, junk or absurd. state = ok|missing|unreadable,
+    and with ``decode_serial`` also "serial": the text was a spreadsheet serial number ('01-01-45640') and the date is
+    the one it stands for. Off by default, so the reports that print the stored text as unreadable keep doing so."""
     raw = (emp.join_date or "").strip()
     if not raw:
         return None, "missing"
     parsed = parse_date(raw)
     if parsed and MIN_JOIN_YEAR <= parsed.year <= MAX_JOIN_YEAR:
         return parsed, "ok"
+    if decode_serial:
+        decoded = excel_serial_date(raw)
+        if decoded is not None:
+            return decoded, "serial"
     return None, "unreadable"
 
 

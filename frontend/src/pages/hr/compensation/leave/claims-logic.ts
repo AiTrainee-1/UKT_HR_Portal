@@ -4,12 +4,14 @@ import type {
   ClaimKind,
   ClaimOvertime,
   CompensationClaim,
+  CompensationWindow,
+  HolidayDayKind,
   HolidayWorkMonthDay,
   LedgerRow,
 } from "@/lib/api-client/custom-hooks";
 import { waitingText } from "@/lib/approval-workflow";
 import type { KitTone } from "@/pages/hr/outpass-visitors/kit";
-import { addDays, dateLong, dateShort, fmtShifts, minutesText, parseIso, shiftsText } from "../logic";
+import { addDays, countOf, dateLong, dateShort, fmtShifts, minutesText, parseIso, shiftsText } from "../logic";
 
 // Pure helpers of the one claim workflow (Compensation Leave B: Raise, Claims, Balance, Credits) and of the birthday
 // outcomes (C) and the announcements list (A): the words for each kind and status, the source of a claim in a sentence, the
@@ -76,6 +78,23 @@ export const DATE_LABEL: Record<ClaimKind, string> = {
   use_balance: "Day off",
 };
 
+/** The word for an employee's own Saturday off: worked, it is claimed like a Sunday (never a "company holiday"). */
+export const OFF_SATURDAY = "Off Saturday";
+
+/**
+ * The day a Sunday / holiday work claim (or a day of the Raise strip) was worked on: "Sunday", "Off Saturday",
+ * "Holiday: Diwali", or `holidayFallback` for a holiday with no name.
+ */
+export function offDayText(
+  kind: HolidayDayKind | null | undefined,
+  holidayName: string | null | undefined,
+  holidayFallback = "Holiday",
+): string {
+  if (kind === "off_saturday") return OFF_SATURDAY;
+  if (kind === "holiday") return holidayName ? `Holiday: ${holidayName}` : holidayFallback;
+  return "Sunday";
+}
+
 /** "17:30 to 02:10 next day, 8 h 40 min past the shift end". */
 export function overtimeText(o: ClaimOvertime | null | undefined): string | null {
   if (!o) return null;
@@ -89,7 +108,7 @@ export function overtimeText(o: ClaimOvertime | null | undefined): string | null
 export function claimDateDetail(claim: CompensationClaim): string {
   switch (claim.kind) {
     case "holiday_work":
-      return claim.dayKind === "holiday" ? `Holiday${claim.holidayName ? `: ${claim.holidayName}` : ""}` : "Sunday";
+      return offDayText(claim.dayKind, claim.holidayName);
     case "ot_allowance":
     case "ot_shift":
       return overtimeText(claim.overtime) ?? "Overtime";
@@ -177,6 +196,23 @@ export const inMonth = (iso: string | null | undefined, month: number, year: num
   const d = parseIso(iso);
   return !!d && d.month === month && d.year === year;
 };
+
+/** What a day of the strip is: "Sunday", "Off Saturday", or the holiday's name ("Company holiday" when it has none). */
+export function stripDayText(day: Pick<HolidayWorkMonthDay, "kind" | "holidayName">): string {
+  if (day.kind === "holiday") return day.holidayName ?? "Company holiday";
+  return day.kind === "off_saturday" ? OFF_SATURDAY : "Sunday";
+}
+
+/** "4 Sundays", "4 Sundays and 1 holiday", "4 Sundays, 1 holiday and 2 off Saturdays": the days of the strip by kind. */
+export function stripKindsText(days: readonly Pick<HolidayWorkMonthDay, "kind">[]): string {
+  const count = (kind: HolidayDayKind) => days.filter((d) => d.kind === kind).length;
+  const parts = [
+    countOf(count("sunday"), "Sunday"),
+    count("holiday") > 0 ? countOf(count("holiday"), "holiday") : null,
+    count("off_saturday") > 0 ? countOf(count("off_saturday"), "off Saturday") : null,
+  ].filter((p): p is string => p !== null);
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+}
 
 /** "3 worked · 2 can be claimed" and "1 waiting · 2 approved" for a day of the strip. */
 export function dayCounts(day: HolidayWorkMonthDay): { worked: string; claims: string } {
@@ -279,3 +315,17 @@ export const WINDOW_STATUS_OPTIONS = [
   { value: "upcoming", label: "Today and upcoming" },
   { value: "past", label: "Past" },
 ];
+
+/** Why Delete is greyed out on a row the server will not let HR remove, when it does not say. */
+export const DELETE_BLOCKED = "This announcement cannot be removed.";
+
+/** The tooltip of a row's Delete: the pause, else why the server will not let it be removed, else what it does. */
+export function deleteTitle(
+  row: Pick<CompensationWindow, "date" | "canDelete" | "deleteBlockedReason">,
+  paused: boolean,
+  pausedReason: string,
+): string {
+  if (paused) return pausedReason;
+  if (!row.canDelete) return row.deleteBlockedReason?.trim() || DELETE_BLOCKED;
+  return `Delete the announcement of ${dateLong(row.date)}`;
+}

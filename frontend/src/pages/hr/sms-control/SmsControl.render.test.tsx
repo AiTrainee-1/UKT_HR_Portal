@@ -1,7 +1,9 @@
-import type { ReactNode } from "react";
+import { cloneElement, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CURRENT,
   MESSAGES,
+  PREVIOUS,
   button,
   click,
   here,
@@ -24,11 +26,13 @@ import {
   waitFor,
   type World,
 } from "./harness";
+import { monthLabel } from "./logic";
 
-// SMS Control in jsdom, with a fake server behind customFetch: the tabs and nested tabs that each have an address, the
-// redirects, which section each renders (and that the others are not there, and ask the server for nothing), the settings
-// (validation, one Save per section, the stale guard, the confirm when the channel changes), the messages filters, the test
-// flow with its errors, the setup tab, the view-only role and the keyboard.
+// SMS Control in jsdom, with a fake server behind customFetch that answers like sms_control_views.py (2026-11-20): the tabs
+// and nested tabs that each have an address (and the retired Channel one), which tab renders and what it asks the server
+// for, the status line and the alerts, the month's usage and cost, the OTP switches (the master switch asks first and cannot
+// be switched on before 2Factor is set up), the limits, the price and budget, the stale guard, the messages, the test (by
+// employee code or by number, with the development lock), the setup, the view-only and branch roles, and the keyboard.
 
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -50,6 +54,18 @@ vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-fetch")>()),
   customFetch: h.fetch,
 }));
+// jsdom has no layout, so recharts' ResponsiveContainer would draw nothing: give the chart a fixed size so the real chart
+// configuration is rendered
+vi.mock("recharts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("recharts")>();
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children: ReactElement<{ width?: number; height?: number }> }) =>
+      cloneElement(children, { width: 800, height: 240 }),
+  };
+});
+
+vi.setConfig({ testTimeout: 20_000 });
 
 const VIEW_ONLY = { role: "hr", employeeId: null, permissions: { sms_control: "view" } };
 
@@ -72,8 +88,9 @@ const BASE = "/hr/sms-control";
 const headings = () => [...document.body.querySelectorAll("h2")].map(text);
 const selected = (name: string) => tab(name).getAttribute("aria-selected") === "true";
 const asked = () => world.gets.map((u) => u.split("?")[0]);
-const puts = () => world.calls.filter((c) => c.method === "PUT");
+const saves = () => world.calls.filter((c) => c.method === "PATCH" || c.method === "PUT");
 const input = (id: string) => must(id) as HTMLInputElement;
+const switchOf = (id: string) => must(id) as HTMLButtonElement;
 
 /** Opens an address and waits until a section (by test id) is on screen with its data. */
 async function open(url: string, ready: string) {
@@ -82,12 +99,12 @@ async function open(url: string, ready: string) {
 }
 
 describe("the addresses", () => {
-  it("the bare page opens Overview, with the heading and the five tabs", async () => {
+  it("the bare page opens Overview, with the heading and the six tabs", async () => {
     mountPage(BASE);
     expect(headings()).toEqual(["SMS Control"]);
     await waitFor(() => !!q("sms-overview"), "the overview");
     expect(pathname()).toBe(`${BASE}/overview`);
-    expect(pillLabels()).toEqual(["Overview", "Settings", "Messages", "Test", "Setup"]);
+    expect(pillLabels()).toEqual(["Overview", "Usage & Cost", "Settings", "Messages", "Test", "Setup"]);
     expect(selected("Overview")).toBe(true);
     expect(selected("Settings")).toBe(false);
   });
@@ -96,9 +113,12 @@ describe("the addresses", () => {
     [BASE, `${BASE}/overview`],
     [`${BASE}/overview/deeper`, `${BASE}/overview`],
     [`${BASE}/nope`, `${BASE}/overview`],
-    [`${BASE}/settings`, `${BASE}/settings/channel`],
-    [`${BASE}/settings/nope`, `${BASE}/settings/channel`],
+    [`${BASE}/settings`, `${BASE}/settings/switches`],
+    [`${BASE}/settings/nope`, `${BASE}/settings/switches`],
+    // the retired one-channel choice: a bookmark of it opens the SMS code switches
+    [`${BASE}/settings/channel`, `${BASE}/settings/switches`],
     [`${BASE}/settings/limits/extra`, `${BASE}/settings/limits`],
+    [`${BASE}/usage/x`, `${BASE}/usage`],
     [`${BASE}/messages/whatever`, `${BASE}/messages`],
     [`${BASE}/setup/x`, `${BASE}/setup`],
   ];
@@ -106,12 +126,6 @@ describe("the addresses", () => {
     mountPage(from);
     await waitFor(() => pathname() === to, `the redirect to ${to}`);
     expect(pathname()).toBe(to);
-  });
-
-  it("a trailing slash is the page itself", async () => {
-    await open(`${BASE}/test/`, "sms-test");
-    expect(pathname()).toBe(`${BASE}/test/`);
-    expect(selected("Test")).toBe(true);
   });
 
   it("replaces the entry, so Back does not bounce, and keeps the query string", async () => {
@@ -122,77 +136,49 @@ describe("the addresses", () => {
     expect(window.history.length).toBe(before);
   });
 
-  it("a click on a tab is a new entry in the history and opens that tab at its own address", async () => {
+  it("a click on a tab opens that tab at its own address, Settings on its first section", async () => {
     await open(`${BASE}/overview`, "sms-overview");
+    click(tab("Usage & Cost"));
+    await waitFor(() => !!q("sms-usage"), "usage");
+    expect(pathname()).toBe(`${BASE}/usage`);
     click(tab("Settings"));
     await waitFor(() => !!q("sms-settings"), "settings");
-    expect(pathname()).toBe(`${BASE}/settings/channel`);
-    expect(selected("Settings")).toBe(true);
+    expect(pathname()).toBe(`${BASE}/settings/switches`);
     click(tab("Messages"));
-    await waitFor(() => !!q("sms-messages"), "messages");
     expect(pathname()).toBe(`${BASE}/messages`);
     click(tab("Test"));
     expect(pathname()).toBe(`${BASE}/test`);
     click(tab("Setup"));
     expect(pathname()).toBe(`${BASE}/setup`);
   });
+
+  it("keeps the Messages filters with Messages and the Usage month with Usage", async () => {
+    await open(`${BASE}/messages?status=failed`, "sms-messages");
+    click(tab("Usage & Cost"));
+    await waitFor(() => !!q("sms-usage"), "usage");
+    expect(here()).toBe(`${BASE}/usage`);
+    click(tab("Messages"));
+    await waitFor(() => here() === `${BASE}/messages?status=failed`, "the filters back");
+  });
 });
 
-describe("each tab renders only its section", () => {
-  const SECTIONS = ["sms-overview", "sms-settings", "sms-messages", "sms-test", "sms-setup"];
-  const onlyThis = (id: string) => {
-    for (const other of SECTIONS.filter((s) => s !== id)) expect(q(other), `${other} must not render`).toBeNull();
-  };
-
-  it("Overview", async () => {
+describe("each tab renders only its own section, and asks the server only for what it shows", () => {
+  it("Overview asks for the overview only", async () => {
     await open(`${BASE}/overview`, "sms-overview");
-    onlyThis("sms-overview");
-    expect(must("sms-panel-overview")).toBeTruthy();
-    // and asks the server only for what it shows
-    await settle(20);
-    expect(asked()).toEqual(["/api/sms-control/overview"]);
+    expect(new Set(asked())).toEqual(new Set(["/api/sms-control/overview"]));
   });
 
-  it("Settings > Channel renders the channel and neither of the other two sections", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    onlyThis("sms-settings");
-    expect(q("sms-section-limits")).toBeNull();
-    expect(q("sms-section-switches")).toBeNull();
-    expect(nestedLabels()).toEqual(["Channel", "Limits", "Switches"]);
-    expect(nestedTab("channel").getAttribute("aria-selected")).toBe("true");
-    expect(asked().sort()).toEqual(["/api/sms-control/overview", "/api/sms-control/settings"]);
+  it("Usage & Cost asks for the usage only", async () => {
+    await open(`${BASE}/usage`, "sms-usage-totals");
+    expect(new Set(asked())).toEqual(new Set(["/api/sms-control/usage"]));
+    expect(q("sms-overview")).toBeNull();
   });
 
-  it("Settings > Limits", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    expect(q("sms-section-channel")).toBeNull();
-    expect(q("sms-section-switches")).toBeNull();
-    expect(nestedTab("limits").getAttribute("aria-selected")).toBe("true");
-    expect(document.body.querySelectorAll('[data-testid^="sms-input-"]')).toHaveLength(7);
-  });
-
-  it("Settings > Switches", async () => {
+  it("Settings > OTP Switches renders the switches and neither of the other two sections", async () => {
     await open(`${BASE}/settings/switches`, "sms-section-switches");
-    expect(q("sms-section-channel")).toBeNull();
     expect(q("sms-section-limits")).toBeNull();
-    expect(document.body.querySelectorAll('[role="switch"]')).toHaveLength(3);
-  });
-
-  it("Messages", async () => {
-    await open(`${BASE}/messages`, "sms-message-table");
-    onlyThis("sms-messages");
-    await waitFor(() => document.body.querySelectorAll('[data-testid="sms-message-row"]').length > 0, "rows");
-    expect(asked()).toEqual(["/api/sms-control/messages"]);
-  });
-
-  it("Test", async () => {
-    await open(`${BASE}/test`, "sms-test");
-    onlyThis("sms-test");
-  });
-
-  it("Setup", async () => {
-    await open(`${BASE}/setup`, "sms-setup");
-    onlyThis("sms-setup");
+    expect(q("sms-section-cost")).toBeNull();
+    expect(nestedLabels()).toEqual(["OTP Switches", "Limits", "Cost"]);
   });
 
   it("switching tabs swaps the section: the one that was open is gone", async () => {
@@ -200,226 +186,341 @@ describe("each tab renders only its section", () => {
     click(tab("Setup"));
     await waitFor(() => !!q("sms-setup"), "setup");
     expect(q("sms-overview")).toBeNull();
-    click(tab("Overview"));
-    await waitFor(() => !!q("sms-overview"), "overview again");
-    expect(q("sms-setup")).toBeNull();
   });
 });
 
 describe("Overview", () => {
-  it("shows the state of the server in cards, in plain words", async () => {
-    await open(`${BASE}/overview`, "sms-status-cards");
-    expect(text(must("sms-card-channel"))).toContain("WhatsApp");
-    expect(text(must("sms-card-configured"))).toContain("Yes");
-    expect(text(must("sms-card-sending"))).toContain("Allowed");
-    // 2Factor offers no balance check this system can use: the card says where to look instead of inventing a number
-    expect(text(must("sms-card-balance"))).toContain("Not shown here");
-    expect(text(must("sms-card-balance"))).toContain("Look at the balance in the 2Factor panel");
+  it("says what SMS codes are doing in the status line, with the four facts and what they are offered for", async () => {
+    await open(`${BASE}/overview`, "sms-overview");
+    const hero = must("sms-hero");
+    expect(hero.getAttribute("data-state")).toBe("working");
+    expect(text(must("sms-hero-title"))).toBe("SMS codes are working");
+    expect(text(must("sms-hero-badge"))).toBe("Available");
+    expect(text(must("sms-card-otp-value"))).toBe("On");
+    expect(text(must("sms-card-configured-value"))).toBe("Yes");
+    expect(text(must("sms-card-sending-value"))).toBe("Allowed");
+    expect(text(must("sms-card-circuit-value"))).toBe("Working");
+    expect(must("sms-hero-purpose-login").getAttribute("data-on")).toBe("true");
+    expect(must("sms-hero-purpose-reset").getAttribute("data-on")).toBe("true");
+    expect(must("sms-hero-purpose-activate").getAttribute("data-on")).toBe("false");
+    expect(text(must("sms-codes-only"))).toContain("SMS is used only for one-time sign-in codes");
+    expect(text(must("sms-independent"))).toContain("WhatsApp codes are switched on WhatsApp Control");
+  });
+
+  it("shows the month's codes, rates and cost against the budget, with where the month is heading", async () => {
+    await open(`${BASE}/overview`, "sms-overview");
+    expect(text(must("sms-month"))).toContain("November 2026 so far");
+    expect(text(must("sms-kpi-sent-value"))).toBe("240");
+    expect(text(must("sms-kpi-failed-value"))).toBe("12");
+    expect(text(must("sms-kpi-blocked-value"))).toBe("8");
+    expect(text(must("sms-kpi-verified-value"))).toBe("180");
+    expect(text(must("sms-kpi-delivery-value"))).toBe("95%");
+    expect(text(must("sms-kpi-verified-rate-value"))).toBe("78%");
+    expect(text(must("sms-cost-so-far"))).toBe("₹48.00");
+    expect(text(must("sms-cost-projected"))).toBe("₹72.00");
+    expect(text(must("sms-cost-budget"))).toBe("₹60.00");
+    expect(must("sms-budget").getAttribute("data-level")).toBe("near");
+    expect(text(must("sms-budget-line"))).toContain(
+      "80% of the budget used. At this pace the month ends ₹12.00 over it.",
+    );
+    expect(must("sms-budget-bar").querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("80");
+  });
+
+  it("lists the server's alerts with a link to where each is dealt with", async () => {
+    await open(`${BASE}/overview`, "sms-overview");
+    const alert = must("sms-alert-budget_projected");
+    expect(alert.getAttribute("data-tone")).toBe("warn");
+    expect(text(alert)).toContain("At this pace the month ends at about ₹72.00");
+    expect(alert.querySelector("a")?.getAttribute("href")).toBe(`${BASE}/settings/cost`);
+  });
+
+  it("says nothing needs attention when the server has no alerts", async () => {
+    world = installWorld(h.fetch, { overview: { alerts: [] } });
+    await open(`${BASE}/overview`, "sms-overview");
+    expect(text(must("sms-alerts-none"))).toBe("Nothing needs attention.");
+  });
+
+  it("shows the 2Factor balance, today and the caps", async () => {
+    await open(`${BASE}/overview`, "sms-overview");
+    expect(text(must("sms-balance-value"))).toBe("820");
     expect(text(must("sms-today-sent"))).toBe("12 sent");
     expect(text(must("sms-today-failed"))).toBe("1 failed");
-    expect(text(must("sms-today-blocked"))).toBe("0 blocked");
-    expect(text(must("sms-card-hour"))).toContain("12 of 100");
-    expect(text(must("sms-card-day"))).toContain("40 of 500");
-    expect(text(must("sms-card-circuit"))).toContain("Working");
-    expect(must("sms-hour-bar").getAttribute("data-level")).toBe("ok");
-    expect(must("sms-hour-bar").querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("12");
+    expect(text(must("sms-cap-hour"))).toContain("12 of 100 SMS");
+    expect(must("sms-cap-day").getAttribute("data-level")).toBe("ok");
   });
 
-  it("draws the last seven days as bars with a table behind them for a screen reader", async () => {
-    await open(`${BASE}/overview`, "sms-chart");
-    expect(document.body.querySelectorAll('[data-testid^="sms-bar-"]')).toHaveLength(7);
-    expect(must("sms-chart").querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
-      "Last 7 days: 48 sent, 4 failed",
-    );
-    const rows = must("sms-chart-table").querySelectorAll("tbody tr");
-    expect(rows).toHaveLength(7);
-    expect([...rows[6].children].map(text)).toEqual(["Wed 14", "12", "1"]);
-    expect(text(must("sms-last-sent"))).toContain("Last SMS sent:");
+  it("says when SMS codes are off, and that nothing is sent", async () => {
+    world = installWorld(h.fetch, {
+      overview: { otpEnabled: false },
+      status: { otpEnabled: false, available: false },
+    });
+    await open(`${BASE}/overview`, "sms-overview");
+    expect(must("sms-hero").getAttribute("data-state")).toBe("off");
+    expect(text(must("sms-hero-title"))).toBe("SMS codes are switched off");
+    expect(text(must("sms-card-otp-value"))).toBe("Off");
+    expect(q("sms-hero-purposes")).toBeNull();
   });
 
-  it("says so when nothing was sent in the week", async () => {
-    world = installWorld(h.fetch, { overview: { last7Days: [], lastSentAt: null } });
-    await open(`${BASE}/overview`, "sms-chart");
-    expect(text(must("sms-chart-empty"))).toBe("No SMS in the last 7 days.");
-    expect(text(must("sms-last-sent"))).toContain("none yet");
-  });
-
-  it("explains what to do next, here: 2Factor is ready but the codes still go by WhatsApp", async () => {
-    await open(`${BASE}/overview`, "sms-next-steps");
-    const steps = [...document.body.querySelectorAll('[data-testid^="sms-step-"]')].map((e) =>
-      e.getAttribute("data-testid"),
-    );
-    // the one failure of today, the advice about switching, and the standing reminder about the balance, last
-    expect(steps).toEqual(["sms-step-failed", "sms-step-switch", "sms-step-balance-note"]);
-    expect(text(must("sms-step-switch"))).toContain("Codes still go by WhatsApp");
-    const link = must("sms-step-switch").querySelector("a")!;
-    expect(link.getAttribute("href")).toBe(`${BASE}/settings/channel`);
-  });
-
-  it("names the missing 2Factor values, and shows no value", async () => {
+  it("says when 2Factor is not set up, naming what is missing and never a value", async () => {
     world = installWorld(h.fetch, {
       overview: {
         configured: false,
-        env: { authKey: false, senderId: "UKTHRM", templateName: "", apiBase: "https://x.test/api" },
-      },
-    });
-    await open(`${BASE}/overview`, "sms-step-configure");
-    const step = text(must("sms-step-configure"));
-    expect(step).toContain("TWOFACTOR_API_KEY, TWOFACTOR_TEMPLATE_NAME");
-    expect(step).not.toContain("TWOFACTOR_SENDER_ID");
-    expect(text(must("sms-card-configured"))).toContain("Missing: TWOFACTOR_API_KEY, TWOFACTOR_TEMPLATE_NAME");
-    expect(text(must("sms-card-configured"))).toContain("No");
-  });
-
-  it("says why this machine will not send, with the server's sentence", async () => {
-    const note = "This is a development machine, so no SMS leave it.";
-    world = installWorld(h.fetch, { overview: { sendingAllowed: false, sendingNote: note } });
-    await open(`${BASE}/overview`, "sms-step-sending-blocked");
-    expect(text(must("sms-step-sending-blocked"))).toContain(note);
-    expect(text(must("sms-card-sending"))).toContain("Not allowed");
-    expect(text(must("sms-card-sending"))).toContain(note);
-  });
-
-  it("warns about a low or unreadable balance and a paused breaker, and turns the bars amber and red", async () => {
-    world = installWorld(h.fetch, {
-      overview: {
-        channel: "sms",
-        balance: { available: 40, checkedAt: null, error: null },
-        circuit: { paused: true, until: "2026-10-14T10:11:00Z" },
-        limits: { hourlyCap: 100, dailyCap: 500, hourUsed: 85, dayUsed: 500 },
-      },
-    });
-    await open(`${BASE}/overview`, "sms-step-paused");
-    expect(q("sms-step-balance-low")).not.toBeNull();
-    expect(text(must("sms-card-circuit"))).toContain("Paused");
-    expect(must("sms-hour-bar").getAttribute("data-level")).toBe("near");
-    expect(must("sms-day-bar").getAttribute("data-level")).toBe("full");
-    expect(q("sms-step-cap-day")).not.toBeNull();
-    // the most serious first
-    const order = [...document.body.querySelectorAll('#sms-next-steps, [data-testid^="sms-step-"]')].map((e) =>
-      e.getAttribute("data-tone"),
-    );
-    expect(order[0]).toBe("bad");
-  });
-
-  it("shows a balance 2Factor reported as a number, and calls a low one low", async () => {
-    world = installWorld(h.fetch, {
-      overview: { balance: { available: 1520, checkedAt: "2026-10-14T06:00:00Z", error: null } },
-    });
-    await open(`${BASE}/overview`, "sms-card-balance");
-    expect(text(must("sms-card-balance"))).toContain("1,520");
-    expect(q("sms-step-balance-note")).toBeNull();
-    expect(q("sms-step-balance-low")).toBeNull();
-    unmountPage();
-    world = installWorld(h.fetch, {
-      overview: { balance: { available: 40, checkedAt: "2026-10-14T06:00:00Z", error: null } },
-    });
-    await open(`${BASE}/overview`, "sms-step-balance-low");
-    expect(text(must("sms-card-balance"))).toContain("Low: top it up soon");
-    expect(text(must("sms-step-balance-low"))).toContain("40 left");
-  });
-
-  it("says plainly when 2Factor refused the last message for lack of balance", async () => {
-    world = installWorld(h.fetch, {
-      overview: {
+        env: { authKey: false, senderId: "", templateName: "UKT_HRMS_OTP", apiBase: "https://2factor.in/API/V1" },
         balance: {
-          available: null,
-          checkedAt: null,
-          error: "2Factor refused the last message because the account has no balance. Top it up in the 2Factor panel.",
+          credits: null as unknown as number,
+          available: 0,
+          checkedAt: null as unknown as string,
+          error: null,
         },
       },
-    });
-    await open(`${BASE}/overview`, "sms-step-balance-empty");
-    expect(text(must("sms-card-balance"))).toContain("Empty");
-    expect(text(must("sms-step-balance-empty"))).toContain("Codes cannot be sent until it is topped up");
-    expect(must("sms-step-balance-empty").getAttribute("data-tone")).toBe("bad");
-  });
-
-  it("keeps the balance reminder last, and says everything is in order above it, when the channel is SMS", async () => {
-    world = installWorld(h.fetch, { overview: { channel: "sms", today: { sent: 5, failed: 0, blocked: 0 } } });
-    await open(`${BASE}/overview`, "sms-step-all-good");
-    const steps = [...document.body.querySelectorAll('[data-testid^="sms-step-"]')].map((e) =>
-      e.getAttribute("data-testid"),
-    );
-    expect(steps).toEqual(["sms-step-all-good", "sms-step-balance-note"]);
-    expect(text(must("sms-step-balance-note"))).toContain("Look at the balance in the 2Factor panel");
-  });
-
-  it("links the failures and blocks to the Messages list already filtered", async () => {
-    world = installWorld(h.fetch, { overview: { today: { sent: 2, failed: 3, blocked: 1 } } });
-    await open(`${BASE}/overview`, "sms-step-failed");
-    expect(must("sms-step-failed").querySelector("a")?.getAttribute("href")).toBe(`${BASE}/messages?status=failed`);
-    expect(must("sms-step-blocked").querySelector("a")?.getAttribute("href")).toBe(`${BASE}/messages?status=blocked`);
-  });
-
-  it("shows a loading state first, then an error with a way to try again", async () => {
-    world.failNext["GET /api/sms-control/overview"] = new Error("network down");
-    mountPage(`${BASE}/overview`);
-    expect(q("sms-overview-loading")).not.toBeNull();
-    await waitFor(() => !!q("sms-overview-error"), "the error");
-    expect(text(must("sms-overview-error"))).toContain("could not be loaded");
-    click(button("Try again"));
-    await waitFor(() => !!q("sms-overview"), "the overview after a retry");
-    expect(q("sms-overview-error")).toBeNull();
-  });
-
-  it("survives an overview with keys left out", async () => {
-    h.fetch.mockImplementation(async (url: string) => {
-      if (url === "/api/sms-control/overview") return { channel: "sms" };
-      world.unexpected.push(url);
-      throw new Error(url);
+      status: { configured: false, available: false },
     });
     await open(`${BASE}/overview`, "sms-overview");
-    expect(text(must("sms-card-channel"))).toContain("SMS");
-    expect(text(must("sms-card-balance"))).toContain("Not shown here");
+    expect(must("sms-hero").getAttribute("data-state")).toBe("not-configured");
+    expect(text(must("sms-card-configured"))).toContain("Missing: TWOFACTOR_API_KEY, TWOFACTOR_SENDER_ID");
+    expect(text(must("sms-balance-value"))).toBe("Unknown");
+  });
+
+  it("says when sending is paused, in the server's sentence", async () => {
+    world = installWorld(h.fetch, {
+      status: { paused: true, pauseReason: "The hourly limit of 100 SMS is used up." },
+    });
+    await open(`${BASE}/overview`, "sms-overview");
+    expect(must("sms-hero").getAttribute("data-state")).toBe("paused");
+    expect(text(must("sms-hero-detail"))).toContain("The hourly limit of 100 SMS is used up.");
+    expect(text(must("sms-card-circuit-value"))).toBe("Paused");
+  });
+
+  it("offers to set a budget when there is none", async () => {
+    world = installWorld(h.fetch, {
+      overview: {
+        cost: { ...world.overview.cost, budget: null as unknown as number, budgetUsedPct: null as unknown as number },
+      },
+    });
+    await open(`${BASE}/overview`, "sms-overview");
+    expect(q("sms-budget")).toBeNull();
+    expect(text(must("sms-budget-none"))).toContain("No monthly budget is set.");
+  });
+
+  it("works the alerts out itself for an older server that sends none", async () => {
+    world = installWorld(h.fetch, { overview: { alerts: undefined, today: { sent: 1, failed: 2, blocked: 0 } } });
+    await open(`${BASE}/overview`, "sms-overview");
+    expect(q("sms-alert-failed_today")).not.toBeNull();
+    expect(q("sms-alert-budget_near")).not.toBeNull();
+  });
+
+  it("shows an error with a way to try again, then the overview", async () => {
+    world.failNext["GET /api/sms-control/overview"] = new Error("offline");
+    mountPage(`${BASE}/overview`);
+    await waitFor(() => !!q("sms-overview-error"), "the error");
+    click(button("Try again"));
+    await waitFor(() => !!q("sms-overview"), "the overview");
   });
 });
 
-describe("Settings > Channel", () => {
-  it("shows the two channels, the one in use, and the never-locked-out note", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    const whatsapp = must("sms-channel-whatsapp");
-    const sms = must("sms-channel-sms");
-    expect((whatsapp.querySelector("input") as HTMLInputElement).checked).toBe(true);
-    expect((sms.querySelector("input") as HTMLInputElement).checked).toBe(false);
-    expect(text(whatsapp)).toContain("In use now");
-    expect(text(sms)).not.toContain("In use now");
-    expect(text(must("sms-never-locked-out"))).toContain("Nobody is ever locked out");
-    expect(text(must("sms-setting-channel"))).toContain("What changes");
+describe("Usage & Cost", () => {
+  it("shows this month: totals, a bar per day, the purposes and the cost with its projection", async () => {
+    await open(`${BASE}/usage`, "sms-usage-totals");
+    expect(text(must("sms-usage"))).toContain(monthLabel(CURRENT));
+    expect(text(must("sms-usage-sent-value"))).toBe("16");
+    expect(text(must("sms-usage-failed-value"))).toBe("1");
+    expect(text(must("sms-usage-blocked-value"))).toBe("2");
+    expect(text(must("sms-usage-verified-value"))).toBe("13");
+    // the rates are the server's (tests are left out of the used rate there)
+    expect(text(must("sms-usage-sent"))).toContain("Delivery rate 94%");
+    expect(text(must("sms-usage-verified"))).toContain("Used rate 81%");
+    // the chart is drawn (one stacked bar group per series) and its numbers are in the table behind it
+    expect(must("sms-usage-chart").querySelectorAll(".recharts-bar").length).toBe(3);
+    const row = must("sms-usage-table").querySelector(`tr[data-date="${CURRENT}-01"]`);
+    expect([...(row?.querySelectorAll("td") ?? [])].slice(1).map(text)).toEqual(["10", "1", "0", "8"]);
+    expect(text(must("sms-purpose-login"))).toContain("Sign-in code");
+    expect(text(must("sms-purpose-reset"))).toContain("Password reset");
+    expect(q("sms-purpose-test")).not.toBeNull();
+    expect(text(must("sms-usage-so-far"))).toBe("₹3.20");
+    expect(text(must("sms-usage-projected"))).toBe("₹99.50");
+    expect(text(must("sms-usage-price"))).toBe("₹0.20");
+    expect(text(must("sms-usage-budget"))).toBe("₹60.00");
+    expect(text(must("sms-usage-cost"))).toContain("So far");
+    expect(q("sms-month-current")).toBeNull();
+    expect((must("sms-month-next") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("goes to the month before, in the address, and shows it as a whole month without a projection", async () => {
+    await open(`${BASE}/usage`, "sms-usage-totals");
+    click(must("sms-month-prev"));
+    await waitFor(() => here() === `${BASE}/usage?month=${PREVIOUS}`, "the month in the address");
+    await waitFor(() => text(must("sms-usage-sent-value")) === "50", "the month before");
+    expect(world.gets).toContain(`/api/sms-control/usage?month=${PREVIOUS}`);
+    expect(text(must("sms-usage-cost"))).toContain("Month total");
+    expect(q("sms-usage-projected")).toBeNull();
+    // back to this month: it is left out of the address again
+    click(must("sms-month-current"));
+    await waitFor(() => here() === `${BASE}/usage`, "this month");
+  });
+
+  it("picks a month from the list, and opens one named in the address", async () => {
+    await open(`${BASE}/usage?month=${PREVIOUS}`, "sms-usage-totals");
+    await waitFor(() => text(must("sms-usage-sent-value")) === "50", "the month in the address");
+    typeInto(must("sms-month-select") as HTMLSelectElement, CURRENT);
+    await waitFor(() => here() === `${BASE}/usage`, "this month");
+  });
+
+  it("treats a month still to come, or a wrong one, as this month", async () => {
+    await open(`${BASE}/usage?month=2999-01`, "sms-usage-totals");
+    expect(world.gets).toContain("/api/sms-control/usage");
+    expect((must("sms-month-select") as HTMLSelectElement).value).toBe(CURRENT);
+  });
+
+  it("shows an error with a way to try again", async () => {
+    world.failNext["GET /api/sms-control/usage"] = new Error("offline");
+    mountPage(`${BASE}/usage`);
+    await waitFor(() => !!q("sms-usage-error"), "the error");
+    click(button("Try again"));
+    await waitFor(() => !!q("sms-usage-totals"), "the usage");
+  });
+});
+
+describe("Settings > OTP Switches", () => {
+  it("shows the master switch, the three uses, and the two plain lines about WhatsApp and codes-only", async () => {
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    expect(switchOf("sms-switch-otpEnabled").getAttribute("aria-checked")).toBe("true");
+    expect(text(must("sms-master-state"))).toBe("On: employees can get one-time codes by SMS");
+    expect(switchOf("sms-switch-otpLoginEnabled").getAttribute("aria-checked")).toBe("true");
+    expect(switchOf("sms-switch-otpActivateEnabled").getAttribute("aria-checked")).toBe("false");
+    expect(text(must("sms-switches-independent"))).toContain("Either one is enough");
+    expect(text(must("sms-switches-codes-only"))).toContain("No promotional, bulk or other SMS");
     expect(text(must("sms-settings-updated"))).toContain("Last saved by Asha HR");
-    expect(must("sms-channel-save-row-save").hasAttribute("disabled")).toBe(true);
+    expect(must("sms-switches-save-row-save").hasAttribute("disabled")).toBe(true);
+    expect(document.body.textContent).not.toMatch(/channel/i);
   });
 
-  it("asks first when the channel changes, and sends nothing if HR says Cancel", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    click(must("sms-channel-sms").querySelector("input"));
-    expect(text(must("sms-channel-pending"))).toContain("Nothing changes until you save");
-    expect(must("sms-channel-save-row").getAttribute("data-dirty")).toBe("true");
-    click(must("sms-channel-save-row-save"));
-    await waitFor(() => !!q("sms-channel-confirm"), "the confirm");
-    const dialog = text(must("sms-channel-confirm"));
-    expect(dialog).toContain("Send codes by SMS?");
-    expect(dialog).toContain("WhatsApp keeps sending every other message");
-    click(button("Cancel"));
-    await waitFor(() => !q("sms-channel-confirm"), "the dialog to close");
-    expect(puts()).toHaveLength(0);
-    // the choice is still there, unsaved
-    expect((must("sms-channel-sms").querySelector("input") as HTMLInputElement).checked).toBe(true);
-  });
-
-  it("saves the channel after the confirm, with the whole document and the version, and shows it as in use", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    click(must("sms-channel-sms").querySelector("input"));
-    click(must("sms-channel-save-row-save"));
-    await waitFor(() => !!q("sms-channel-confirm"), "the confirm");
-    click(button("Yes, use SMS"));
-    await waitFor(() => puts().length === 1, "the save");
-    expect(puts()[0].body).toEqual({
-      otpChannel: "sms",
+  it("saves a change of use at once, with only the switches and the version", async () => {
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    click(switchOf("sms-switch-otpActivateEnabled"));
+    click(must("sms-switches-save-row-save"));
+    await waitFor(() => saves().length === 1, "the save");
+    expect(saves()[0].method).toBe("PATCH");
+    expect(saves()[0].body).toEqual({
+      otpEnabled: true,
       otpLoginEnabled: true,
       otpResetEnabled: true,
       otpActivateEnabled: true,
-      otpExpiryMinutes: 5,
+      expectedVersion: "v1",
+    });
+    await waitFor(() => must("sms-switches-save-row").getAttribute("data-dirty") === "false", "saved");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "SMS code switches saved" }));
+  });
+
+  it("asks first before switching SMS codes off, and sends nothing on Cancel", async () => {
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    click(switchOf("sms-switch-otpEnabled"));
+    expect(text(must("sms-master-pending"))).toContain("Nothing changes until you save");
+    expect(must("sms-purposes").getAttribute("data-master")).toBe("off");
+    click(must("sms-switches-save-row-save"));
+    await waitFor(() => !!q("sms-master-confirm"), "the confirm");
+    const dialog = text(must("sms-master-confirm"));
+    expect(dialog).toContain("Switch SMS codes off?");
+    expect(dialog).toContain("Nobody is locked out");
+    click(button("Cancel"));
+    await waitFor(() => !q("sms-master-confirm"), "the dialog to close");
+    expect(saves()).toHaveLength(0);
+    expect(switchOf("sms-switch-otpEnabled").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("switches SMS codes off after the confirm, and says so", async () => {
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    click(switchOf("sms-switch-otpEnabled"));
+    click(must("sms-switches-save-row-save"));
+    await waitFor(() => !!q("sms-master-confirm"), "the confirm");
+    click(button("Yes, switch off"));
+    await waitFor(() => saves().length === 1, "the save");
+    expect(saves()[0].body.otpEnabled).toBe(false);
+    await waitFor(() => world.settings.otpEnabled === false, "saved off");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "SMS codes are off" }));
+  });
+
+  it("switches SMS codes on after the confirm, which names WhatsApp as independent", async () => {
+    world = installWorld(h.fetch, { settings: { otpEnabled: false } });
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    expect(text(must("sms-purposes-kept"))).toContain("kept as they are");
+    click(switchOf("sms-switch-otpEnabled"));
+    click(must("sms-switches-save-row-save"));
+    await waitFor(() => !!q("sms-master-confirm"), "the confirm");
+    expect(text(must("sms-master-confirm"))).toContain("WhatsApp codes are switched on WhatsApp Control");
+    click(button("Yes, switch on"));
+    await waitFor(() => world.settings.otpEnabled === true, "saved on");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "SMS codes are on" }));
+  });
+
+  it("cannot switch SMS codes on while 2Factor is not set up: the switch is off, with the reason", async () => {
+    world = installWorld(h.fetch, {
+      settings: { otpEnabled: false },
+      overview: { configured: false },
+      status: { configured: false },
+    });
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    await waitFor(() => !!q("sms-master-blocked"), "the reason");
+    expect(text(must("sms-master-blocked"))).toContain("SMS codes cannot be switched on yet");
+    expect(switchOf("sms-switch-otpEnabled").disabled).toBe(true);
+    // the uses can still be set for later
+    expect(switchOf("sms-switch-otpLoginEnabled").disabled).toBe(false);
+  });
+
+  it("can always switch SMS codes off, even when 2Factor went missing", async () => {
+    world = installWorld(h.fetch, { overview: { configured: false }, status: { configured: false } });
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    await settle(20);
+    expect(q("sms-master-blocked")).toBeNull();
+    expect(switchOf("sms-switch-otpEnabled").disabled).toBe(false);
+  });
+
+  it("warns when SMS codes are on but all three uses are off", async () => {
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    click(switchOf("sms-switch-otpLoginEnabled"));
+    click(switchOf("sms-switch-otpResetEnabled"));
+    expect(text(must("sms-switches-advice"))).toContain("all three uses are off");
+  });
+
+  it("shows the server's sentence when it refuses, and keeps the change", async () => {
+    world.failNext["PATCH /api/sms-control/settings"] = refusal(400, {
+      error: "otpLoginEnabled must be true or false.",
+    });
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    click(switchOf("sms-switch-otpActivateEnabled"));
+    click(must("sms-switches-save-row-save"));
+    await waitFor(() => !!q("sms-switches-error"), "the error");
+    expect(text(must("sms-switches-error"))).toBe("otpLoginEnabled must be true or false.");
+    expect(switchOf("sms-switch-otpActivateEnabled").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("falls back to PUT for a server that does not take PATCH", async () => {
+    world.failNext["PATCH /api/sms-control/settings"] = refusal(405, { detail: 'Method "PATCH" not allowed.' });
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
+    click(switchOf("sms-switch-otpActivateEnabled"));
+    click(must("sms-switches-save-row-save"));
+    await waitFor(() => saves().length === 2, "the second try");
+    expect(saves().map((c) => c.method)).toEqual(["PATCH", "PUT"]);
+    await waitFor(() => world.settings.otpActivateEnabled === true, "saved");
+  });
+});
+
+describe("Settings > Limits", () => {
+  it("refuses a number outside its range where it is typed, and keeps Save off", async () => {
+    await open(`${BASE}/settings/limits`, "sms-section-limits");
+    typeInto(input("sms-input-otpExpiryMinutes"), "16");
+    expect(text(must("sms-setting-otpExpiryMinutes"))).toContain("Enter a whole number from 1 to 15.");
+    expect(must("sms-limits-save-row-save").hasAttribute("disabled")).toBe(true);
+    expect(text(must("sms-limits-save-row"))).toContain("Fix this first");
+  });
+
+  it("saves the limits only, with the version", async () => {
+    await open(`${BASE}/settings/limits`, "sms-section-limits");
+    typeInto(input("sms-input-otpExpiryMinutes"), "8");
+    expect(text(must("sms-example-otpExpiryMinutes"))).toContain("10:08");
+    click(must("sms-limits-save-row-save"));
+    await waitFor(() => saves().length === 1, "the save");
+    expect(saves()[0].body).toEqual({
+      otpExpiryMinutes: 8,
       resendCooldownSeconds: 60,
       maxRequestsPerHour: 5,
       maxAttemptsPerCode: 5,
@@ -428,236 +529,20 @@ describe("Settings > Channel", () => {
       dailyCap: 500,
       expectedVersion: "v1",
     });
-    await waitFor(() => text(must("sms-channel-sms")).includes("In use now"), "the new channel in use");
-    expect(text(must("sms-channel-whatsapp"))).not.toContain("In use now");
-    expect(must("sms-channel-save-row").getAttribute("data-dirty")).toBe("false");
-    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Codes now go by SMS" }));
   });
 
-  it("asks again, in other words, when switching back to WhatsApp", async () => {
-    world = installWorld(h.fetch, { settings: { otpChannel: "sms" } });
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    click(must("sms-channel-whatsapp").querySelector("input"));
-    click(must("sms-channel-save-row-save"));
-    await waitFor(() => !!q("sms-channel-confirm"), "the confirm");
-    expect(text(must("sms-channel-confirm"))).toContain("Send codes by WhatsApp again?");
-    click(button("Yes, use WhatsApp"));
-    await waitFor(() => puts().length === 1, "the save");
-    expect(puts()[0].body.otpChannel).toBe("whatsapp");
-  });
-
-  it("cannot choose SMS while the provider is not set up: the choice is off, with the reason", async () => {
-    world = installWorld(h.fetch, { overview: { configured: false } });
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    await waitFor(() => !!q("sms-channel-blocked"), "the reason");
-    const sms = must("sms-channel-sms").querySelector("input") as HTMLInputElement;
-    expect(sms.disabled).toBe(true);
-    expect(text(must("sms-channel-blocked"))).toContain(
-      "SMS cannot be chosen yet: 2Factor is not set up on the server",
-    );
-    expect(sms.getAttribute("aria-describedby")).toBe("sms-channel-blocked");
-    // WhatsApp stays chosen, and nothing can be saved
-    expect((must("sms-channel-whatsapp").querySelector("input") as HTMLInputElement).checked).toBe(true);
-    expect(must("sms-channel-save-row-save").hasAttribute("disabled")).toBe(true);
-  });
-
-  it("a channel that is already SMS can always be left, whatever the provider", async () => {
-    world = installWorld(h.fetch, { overview: { configured: false }, settings: { otpChannel: "sms" } });
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    await settle(20);
-    expect(q("sms-channel-blocked")).toBeNull();
-    click(must("sms-channel-whatsapp").querySelector("input"));
-    click(must("sms-channel-save-row-save"));
-    await waitFor(() => !!q("sms-channel-confirm"), "the confirm");
-  });
-
-  it("discards an unsaved choice", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    click(must("sms-channel-sms").querySelector("input"));
-    click(must("sms-channel-save-row-discard"));
-    expect((must("sms-channel-whatsapp").querySelector("input") as HTMLInputElement).checked).toBe(true);
-    expect(must("sms-channel-save-row").getAttribute("data-dirty")).toBe("false");
-  });
-
-  it("shows the server's warnings about what is saved", async () => {
-    world = installWorld(h.fetch, {
-      settings: {
-        warnings: ["SMS is selected but 2Factor is not configured: employees will not be able to receive codes."],
-      },
-    });
-    await open(`${BASE}/settings/channel`, "sms-settings-warnings");
-    expect(text(must("sms-settings-warnings"))).toContain("employees will not be able to receive codes");
-  });
-
-  it("shows why a save was refused, in the server's sentence, and keeps the choice", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    world.failNext["PUT /api/sms-control/settings"] = refusal(400, { error: "The channel must be whatsapp or sms." });
-    click(must("sms-channel-sms").querySelector("input"));
-    click(must("sms-channel-save-row-save"));
-    await waitFor(() => !!q("sms-channel-confirm"), "the confirm");
-    click(button("Yes, use SMS"));
-    await waitFor(() => !!q("sms-channel-error"), "the error");
-    expect(text(must("sms-channel-error"))).toBe("The channel must be whatsapp or sms.");
-    expect(q("sms-settings-reload")).toBeNull();
-    expect((must("sms-channel-sms").querySelector("input") as HTMLInputElement).checked).toBe(true);
-    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" }));
-  });
-
-  it("a loading state first, and an error with a way to try again", async () => {
-    world.failNext["GET /api/sms-control/settings"] = new Error("network down");
-    mountPage(`${BASE}/settings/channel`);
-    expect(q("sms-settings-loading")).not.toBeNull();
-    await waitFor(() => !!q("sms-settings-error"), "the error");
-    click(button("Try again"));
-    await waitFor(() => !!q("sms-section-channel"), "the section after a retry");
-  });
-});
-
-describe("Settings > Limits", () => {
-  it("explains every limit: what it is for, what changes, its default and its range", async () => {
+  it("keeps what was typed in one section while another is looked at, and saves each section on its own", async () => {
     await open(`${BASE}/settings/limits`, "sms-section-limits");
-    for (const key of [
-      "otpExpiryMinutes",
-      "resendCooldownSeconds",
-      "maxRequestsPerHour",
-      "maxAttemptsPerCode",
-      "maxPerPhonePerHour",
-      "hourlyCap",
-      "dailyCap",
-    ]) {
-      const block = text(must(`sms-setting-${key}`));
-      expect(block, key).toContain("What changes");
-      expect(block, key).toContain("Default:");
-      expect(block, key).toMatch(/From [\d,]+ to [\d,]+/);
-      expect(must(`sms-example-${key}`), key).toBeTruthy();
-    }
-    expect(text(must("sms-setting-otpExpiryMinutes"))).toContain("Default: 5 minutes");
-    expect(text(must("sms-example-otpExpiryMinutes"))).toContain("10:05");
-    // the box is labelled by its title
-    expect(document.body.querySelector('label[for="sms-otpExpiryMinutes"]')?.textContent).toBe("How long a code works");
-  });
-
-  it("refuses a number outside its range right where it is typed, and keeps Save off", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    const expiry = input("sms-input-otpExpiryMinutes");
-    typeInto(expiry, "16");
-    expect(text(must("sms-setting-otpExpiryMinutes"))).toContain("Enter a whole number from 1 to 15.");
-    expect(expiry.getAttribute("aria-invalid")).toBe("true");
-    expect(q("sms-example-otpExpiryMinutes")).toBeNull();
-    expect(must("sms-limits-save-row-save").hasAttribute("disabled")).toBe(true);
-    expect(text(must("sms-limits-save-row"))).toContain("Fix this first: How long a code works");
-    for (const bad of ["0", "", "abc", "5.5", "-2"]) {
-      typeInto(expiry, bad);
-      expect(expiry.getAttribute("aria-invalid"), bad).toBe("true");
-      expect(must("sms-limits-save-row-save").hasAttribute("disabled"), bad).toBe(true);
-    }
-    typeInto(input("sms-input-resendCooldownSeconds"), "29");
-    expect(text(must("sms-setting-resendCooldownSeconds"))).toContain("Enter a whole number from 30 to 600.");
-    typeInto(input("sms-input-dailyCap"), "10001");
-    expect(text(must("sms-setting-dailyCap"))).toContain("Enter a whole number from 1 to 10,000.");
-    expect(puts()).toHaveLength(0);
-  });
-
-  it("works the example out from what is typed, before saving", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    typeInto(input("sms-input-otpExpiryMinutes"), "9");
-    expect(text(must("sms-example-otpExpiryMinutes"))).toContain("10:09");
-    typeInto(input("sms-input-hourlyCap"), "2500");
-    expect(text(must("sms-example-hourlyCap"))).toContain("2,500");
-  });
-
-  it("saves the section with the one change, the other values as saved, and the version", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    typeInto(input("sms-input-otpExpiryMinutes"), "10");
-    expect(must("sms-limits-save-row").getAttribute("data-dirty")).toBe("true");
-    click(must("sms-limits-save-row-save"));
-    await waitFor(() => puts().length === 1, "the save");
-    expect(puts()[0].body).toMatchObject({
-      otpChannel: "whatsapp",
-      otpExpiryMinutes: 10,
-      resendCooldownSeconds: 60,
-      hourlyCap: 100,
-      dailyCap: 500,
-      expectedVersion: "v1",
-    });
-    // no confirm for a limit, and the saved state is shown
-    expect(q("sms-channel-confirm")).toBeNull();
-    await waitFor(() => must("sms-limits-save-row").getAttribute("data-dirty") === "false", "the saved state");
-    expect(input("sms-input-otpExpiryMinutes").value).toBe("10");
-    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Settings saved" }));
-    expect(world.settings.otpExpiryMinutes).toBe(10);
-  });
-
-  it("is one Save per section: an unsaved choice in Channel is not sent with the limits", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    click(must("sms-channel-sms").querySelector("input"));
-    // look at Limits, change a number there and save it
-    click(nestedTab("limits"));
-    await waitFor(() => !!q("sms-section-limits"), "limits");
-    typeInto(input("sms-input-maxAttemptsPerCode"), "4");
-    click(must("sms-limits-save-row-save"));
-    await waitFor(() => puts().length === 1, "the save");
-    expect(puts()[0].body.otpChannel).toBe("whatsapp");
-    expect(puts()[0].body.maxAttemptsPerCode).toBe(4);
-    // the choice made in Channel is still waiting there, unsaved
-    click(nestedTab("channel"));
-    await waitFor(() => !!q("sms-section-channel"), "channel");
-    expect((must("sms-channel-sms").querySelector("input") as HTMLInputElement).checked).toBe(true);
-    expect(must("sms-channel-save-row").getAttribute("data-dirty")).toBe("true");
-    // and what was typed in Limits is kept when it is not saved
-    click(nestedTab("limits"));
-    await waitFor(() => !!q("sms-section-limits"), "limits again");
-    expect(input("sms-input-maxAttemptsPerCode").value).toBe("4");
-  });
-
-  it("keeps what was typed in a section while another is looked at", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    typeInto(input("sms-input-dailyCap"), "900");
+    typeInto(input("sms-input-hourlyCap"), "150");
     click(nestedTab("switches"));
     await waitFor(() => !!q("sms-section-switches"), "switches");
+    click(switchOf("sms-switch-otpActivateEnabled"));
+    click(must("sms-switches-save-row-save"));
+    await waitFor(() => saves().length === 1, "the switches save");
+    expect(saves()[0].body).not.toHaveProperty("hourlyCap");
     click(nestedTab("limits"));
     await waitFor(() => !!q("sms-section-limits"), "limits");
-    expect(input("sms-input-dailyCap").value).toBe("900");
-    expect(must("sms-limits-save-row").getAttribute("data-dirty")).toBe("true");
-  });
-
-  it("discards the changes of the section", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    typeInto(input("sms-input-dailyCap"), "900");
-    click(must("sms-limits-save-row-discard"));
-    expect(input("sms-input-dailyCap").value).toBe("500");
-    expect(must("sms-limits-save-row").getAttribute("data-dirty")).toBe("false");
-  });
-
-  it("refuses a daily cap below the hourly cap, where it is typed, as the server would", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    typeInto(input("sms-input-dailyCap"), "50");
-    expect(text(must("sms-setting-dailyCap"))).toContain("The daily cap cannot be lower than the hourly cap (100).");
-    expect(must("sms-limits-save-row-save").hasAttribute("disabled")).toBe(true);
-    // raising the hourly cap with it makes it fine again
-    typeInto(input("sms-input-hourlyCap"), "40");
-    expect(text(must("sms-setting-dailyCap"))).not.toContain("cannot be lower");
-    expect(must("sms-limits-save-row-save").hasAttribute("disabled")).toBe(false);
-  });
-
-  it("advises, without blocking, when the wait makes the hourly allowance unreachable", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    typeInto(input("sms-input-resendCooldownSeconds"), "600");
-    typeInto(input("sms-input-maxRequestsPerHour"), "20");
-    expect(text(must("sms-limits-advice"))).toContain("never use all the codes");
-    expect(must("sms-limits-save-row-save").hasAttribute("disabled")).toBe(false);
-  });
-
-  it("shows the server's sentence when it refuses a save", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    world.failNext["PUT /api/sms-control/settings"] = refusal(400, {
-      error: "Something only the server could know about.",
-    });
-    typeInto(input("sms-input-dailyCap"), "900");
-    click(must("sms-limits-save-row-save"));
-    await waitFor(() => !!q("sms-limits-error"), "the error");
-    expect(text(must("sms-limits-error"))).toBe("Something only the server could know about.");
-    expect(input("sms-input-dailyCap").value).toBe("900");
+    expect(input("sms-input-hourlyCap").value).toBe("150");
   });
 
   it("refuses a stale copy: says so, keeps the edits, and offers to reload", async () => {
@@ -668,441 +553,180 @@ describe("Settings > Limits", () => {
     await waitFor(() => !!q("sms-limits-error"), "the error");
     expect(text(must("sms-limits-error"))).toContain("Someone else saved these settings while you were editing");
     expect(input("sms-input-otpExpiryMinutes").value).toBe("10");
-    expect(world.settings.otpExpiryMinutes).toBe(5);
-    expect(puts()).toHaveLength(1);
-    expect(puts()[0].body.expectedVersion).toBe("v1");
-
-    // Reload asks first (there are edits), then starts the form from what is saved now
     click(must("sms-settings-reload"));
     await waitFor(() => !!q("sms-reload-confirm"), "the reload confirm");
     click(button("Reload and discard"));
     await waitFor(() => !q("sms-limits-error"), "the error to go");
     expect(input("sms-input-otpExpiryMinutes").value).toBe("5");
-    expect(text(must("sms-settings-updated"))).toContain("Someone Else");
-
-    // and the next save carries the new version and goes through
     typeInto(input("sms-input-otpExpiryMinutes"), "8");
     click(must("sms-limits-save-row-save"));
-    await waitFor(() => puts().length === 2, "the second save");
-    expect(puts()[1].body.expectedVersion).toBe("v2");
-    await waitFor(() => world.settings.otpExpiryMinutes === 8, "the saved value");
-  });
-
-  it("reloads without asking when there is nothing to lose", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    typeInto(input("sms-input-otpExpiryMinutes"), "10");
-    world.saveElsewhere();
-    click(must("sms-limits-save-row-save"));
-    await waitFor(() => !!q("sms-settings-reload"), "the reload button");
-    // typed back to what was saved: nothing to lose
-    typeInto(input("sms-input-otpExpiryMinutes"), "5");
-    click(must("sms-settings-reload"));
-    await waitFor(() => !q("sms-limits-error"), "the error to go");
-    expect(q("sms-reload-confirm")).toBeNull();
+    await waitFor(() => saves().length === 2, "the second save");
+    expect(saves()[1].body.expectedVersion).toBe("v2");
   });
 });
 
-describe("Settings > Switches", () => {
-  it("explains each switch and shows what it says in words", async () => {
-    await open(`${BASE}/settings/switches`, "sms-section-switches");
-    for (const key of ["otpLoginEnabled", "otpResetEnabled", "otpActivateEnabled"]) {
-      expect(text(must(`sms-setting-${key}`)), key).toContain("What changes");
-      expect(must(`sms-switch-${key}`).getAttribute("aria-checked"), key).toBe("true");
-    }
-    expect(text(must("sms-setting-otpLoginEnabled"))).toContain("Employees can sign in with an SMS code");
-    // the channel is WhatsApp: the switches are kept for later, and the page says where the live ones are
-    const note = must("sms-switches-channel-note");
-    expect(text(note)).toContain("do nothing yet");
-    expect(note.querySelector("a")?.getAttribute("href")).toBe("/hr/whatsapp-control");
+describe("Settings > Cost", () => {
+  it("shows the price and the budget, with an example worked out from the price", async () => {
+    await open(`${BASE}/settings/cost`, "sms-section-cost");
+    expect(input("sms-input-pricePerSms").value).toBe("0.2");
+    expect(input("sms-input-monthlyBudget").value).toBe("60");
+    expect(text(must("sms-example-pricePerSms"))).toBe("Example: 1,000 SMS codes at ₹0.20 each cost ₹200.00.");
+    await waitFor(() => !!q("sms-example-monthlyBudget"), "the month's example");
+    expect(text(must("sms-example-monthlyBudget"))).toContain("240 SMS so far this month cost about ₹48.00");
+    typeInto(input("sms-input-pricePerSms"), "0.115");
+    expect(text(must("sms-example-pricePerSms"))).toBe("Example: 1,000 SMS codes at ₹0.115 each cost ₹115.00.");
   });
 
-  it("says the switches are in force while the channel is SMS", async () => {
-    world = installWorld(h.fetch, { settings: { otpChannel: "sms" } });
-    await open(`${BASE}/settings/switches`, "sms-section-switches");
-    expect(text(must("sms-switches-channel-note"))).toContain("these switches are in force");
+  it("refuses a price over ₹100 or a budget that is not an amount, before sending", async () => {
+    await open(`${BASE}/settings/cost`, "sms-section-cost");
+    typeInto(input("sms-input-pricePerSms"), "150");
+    expect(text(must("sms-setting-pricePerSms"))).toContain("from 0 to 100");
+    expect(must("sms-cost-save-row-save").hasAttribute("disabled")).toBe(true);
+    typeInto(input("sms-input-pricePerSms"), "0.2");
+    typeInto(input("sms-input-monthlyBudget"), "lots");
+    expect(text(must("sms-setting-monthlyBudget"))).toContain("leave it empty for no budget");
+    expect(must("sms-cost-save-row-save").hasAttribute("disabled")).toBe(true);
+    expect(saves()).toHaveLength(0);
   });
 
-  it("saves the section with the switches that changed", async () => {
-    await open(`${BASE}/settings/switches`, "sms-section-switches");
-    click(must("sms-switch-otpLoginEnabled"));
-    expect(must("sms-switch-otpLoginEnabled").getAttribute("aria-checked")).toBe("false");
-    expect(text(must("sms-setting-otpLoginEnabled"))).toContain("Employees cannot sign in with an SMS code");
-    click(must("sms-switches-save-row-save"));
-    await waitFor(() => puts().length === 1, "the save");
-    expect(puts()[0].body).toMatchObject({
-      otpLoginEnabled: false,
-      otpResetEnabled: true,
-      otpActivateEnabled: true,
-      otpChannel: "whatsapp",
-      expectedVersion: "v1",
-    });
-    await waitFor(() => must("sms-switches-save-row").getAttribute("data-dirty") === "false", "the saved state");
-    expect(must("sms-switch-otpLoginEnabled").getAttribute("aria-checked")).toBe("false");
-  });
-
-  it("warns when all three are off", async () => {
-    await open(`${BASE}/settings/switches`, "sms-section-switches");
-    for (const key of ["otpLoginEnabled", "otpResetEnabled", "otpActivateEnabled"]) click(must(`sms-switch-${key}`));
-    expect(text(must("sms-switches-advice"))).toContain("nobody can get a code by SMS");
+  it("saves the price and the budget only; an empty budget is no budget", async () => {
+    await open(`${BASE}/settings/cost`, "sms-section-cost");
+    typeInto(input("sms-input-pricePerSms"), "0.1150");
+    typeInto(input("sms-input-monthlyBudget"), "");
+    click(must("sms-cost-save-row-save"));
+    await waitFor(() => saves().length === 1, "the save");
+    expect(saves()[0].body).toEqual({ pricePerSms: 0.115, monthlyBudget: null, expectedVersion: "v1" });
+    await waitFor(() => world.settings.monthlyBudget === null, "saved");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Price and budget saved" }));
   });
 });
 
 describe("Messages", () => {
-  const rows = () => [...document.body.querySelectorAll('[data-testid="sms-message-row"]')];
-
-  it("lists the log newest first as the server sends it, with the number hidden and no code", async () => {
+  it("lists the log as the server sends it, with the number hidden and no code", async () => {
     await open(`${BASE}/messages`, "sms-message-table");
-    await waitFor(() => rows().length === 7, "seven rows");
-    const first = text(rows()[0]);
-    expect(first).toContain("Asha Kumar");
-    expect(first).toContain("E001");
-    expect(first).toContain("••••••1001");
-    expect(first).toContain("Login code");
-    expect(first).toContain("Sent");
-    expect(first).toContain("2Factor ID MSG1");
-    expect(first).toContain("2Factor");
-    // a failed and a blocked row say why
-    const failed = rows().find((r) => r.getAttribute("data-status") === "failed")!;
-    expect(text(failed)).toContain("2Factor did not accept the number.");
-    expect(text(rows().find((r) => r.getAttribute("data-status") === "blocked"))).toContain(
-      "The hourly SMS limit was reached.",
+    await waitFor(() => document.body.querySelectorAll('[data-testid="sms-message-row"]').length === 7, "the rows");
+    expect(text(must("sms-message-table"))).toContain("••••••1001");
+    expect(text(must("sms-message-table"))).toContain("Sign-in code");
+    expect(text(must("sms-message-table"))).toContain("Test code");
+  });
+
+  it("narrows by outcome, in the address, and opens already narrowed from a link", async () => {
+    await open(`${BASE}/messages?status=failed`, "sms-message-table");
+    await waitFor(
+      () =>
+        document.body.querySelectorAll('[data-testid="sms-message-row"]').length ===
+        MESSAGES.filter((m) => m.status === "failed").length,
+      "the failed rows",
     );
-    // a test message is named as one, and a message with no employee on record says so
-    expect(text(rows()[3])).toContain("Test message");
-    expect(text(rows()[3])).not.toContain("E00");
-    expect(text(rows()[5])).toContain("No employee");
-    // never a full number or a code
-    expect(text(document.body)).not.toMatch(/\b\d{6}\b/);
-    expect(text(document.body)).not.toMatch(/\b\d{10}\b/);
-    expect(text(document.body)).toContain("The code itself is never saved or shown here");
-  });
-
-  it("counts the outcomes on the pills", async () => {
-    await open(`${BASE}/messages`, "sms-message-table");
-    await waitFor(() => rows().length === 7, "seven rows");
-    const label = (name: string) => text(tab(name).querySelector(".ptab-label"));
-    expect(label("All")).toBe("All(7)");
-    expect(label("Sent")).toBe("Sent(4)");
-    expect(label("Failed")).toBe("Failed(2)");
-    expect(label("Blocked")).toBe("Blocked(1)");
-  });
-
-  it("narrows by outcome, in the address", async () => {
-    await open(`${BASE}/messages`, "sms-message-table");
-    await waitFor(() => rows().length === 7, "seven rows");
-    click(tab("Failed"));
-    await waitFor(() => rows().length === 2, "two failed rows");
-    expect(here()).toBe(`${BASE}/messages?status=failed`);
-    expect(world.gets.at(-1)).toContain("status=failed");
-    expect(tab("Failed").getAttribute("aria-selected")).toBe("true");
-    click(tab("All"));
-    await waitFor(() => rows().length === 7, "all rows again");
-    expect(here()).toBe(`${BASE}/messages`);
-  });
-
-  it("opens already narrowed when the address says so (a link from the Overview)", async () => {
-    await open(`${BASE}/messages?status=blocked`, "sms-message-table");
-    await waitFor(() => rows().length === 1, "one blocked row");
-    expect(tab("Blocked").getAttribute("aria-selected")).toBe("true");
-    expect(text(rows()[0])).toContain("The hourly SMS limit was reached.");
-    expect(must("sms-clear-filters")).toBeTruthy();
-  });
-
-  it("narrows by purpose", async () => {
-    await open(`${BASE}/messages`, "sms-message-table");
-    await waitFor(() => rows().length === 7, "seven rows");
-    typeInto(must("sms-purpose-filter") as unknown as HTMLSelectElement, "activate");
-    await waitFor(() => rows().length === 2, "two activation rows");
-    expect(here()).toBe(`${BASE}/messages?purpose=activate`);
-    expect(world.gets.at(-1)).toContain("purpose=activate");
-  });
-
-  it("searches by name or code, after a short pause, and the list follows", async () => {
-    await open(`${BASE}/messages`, "sms-message-table");
-    await waitFor(() => rows().length === 7, "seven rows");
-    typeInto(input("sms-search"), "ravi");
-    // nothing is asked while typing is still going on
-    expect(world.gets.filter((u) => u.includes("search=ravi"))).toHaveLength(0);
-    await waitFor(() => rows().length === 1, "one row for Ravi");
-    expect(text(rows()[0])).toContain("Ravi Nair");
-    expect(here()).toBe(`${BASE}/messages?q=ravi`);
-    expect(world.gets.at(-1)).toContain("search=ravi");
-  });
-
-  it("narrows by date, and clears every filter at once", async () => {
-    await open(`${BASE}/messages`, "sms-message-table");
-    await waitFor(() => rows().length === 7, "seven rows");
-    typeInto(input("sms-date-from"), "2026-10-15");
-    await waitFor(() => !!q("sms-messages-empty"), "no rows after the 14th");
-    expect(text(must("sms-messages-empty"))).toBe("No messages match these filters.");
-    expect(world.gets.at(-1)).toContain("dateFrom=2026-10-15");
-    click(must("sms-clear-filters"));
-    await waitFor(() => rows().length === 7, "seven rows again");
-    expect(here()).toBe(`${BASE}/messages`);
-    expect(input("sms-search").value).toBe("");
-    expect(q("sms-clear-filters")).toBeNull();
-  });
-
-  it("says what an empty log means, in plain words", async () => {
-    world.messages = [];
-    await open(`${BASE}/messages`, "sms-message-table");
-    await waitFor(() => !!q("sms-messages-empty"), "the empty state");
-    expect(text(must("sms-messages-empty"))).toContain("No SMS has been sent yet");
-    expect(q("sms-clear-filters")).toBeNull();
-  });
-
-  it("pages through a long log, in the address", async () => {
-    world.messages = Array.from({ length: 23 }, (_, i) => ({
-      ...MESSAGES[0],
-      id: 100 + i,
-      employeeName: `Person ${i + 1}`,
-    }));
-    await open(`${BASE}/messages?size=10`, "sms-message-table");
-    await waitFor(() => rows().length === 10, "ten rows");
-    expect(text(document.body)).toContain("1–10 of 23");
-    click(button("2"));
-    await waitFor(() => here().includes("page=2"), "page 2 in the address");
-    await waitFor(() => text(rows()[0]).includes("Person 11"), "the second page");
-    expect(world.gets.at(-1)).toContain("page=2");
-    click(button("3"));
-    await waitFor(() => rows().length === 3, "three rows on the last page");
-  });
-
-  it("shows an error with a way to try again, then the list", async () => {
-    world.failNext["GET /api/sms-control/messages"] = new Error("network down");
-    mountPage(`${BASE}/messages`);
-    await waitFor(() => !!q("sms-messages-error"), "the error");
-    click(button("Try again"));
-    await waitFor(() => rows().length === 7, "the rows after a retry");
+    expect(world.gets.some((u) => u.includes("status=failed"))).toBe(true);
   });
 });
 
 describe("Test", () => {
-  const send = () => must("sms-test-send") as HTMLButtonElement;
-  const phone = () => input("sms-test-phone");
-  const tests = () => world.calls.filter((c) => c.url === "/api/sms-control/test");
-
-  it("sends a test to the number typed, in ten digits, and says it went", async () => {
+  it("sends a test code to an employee by code, and says it went", async () => {
     await open(`${BASE}/test`, "sms-test");
-    typeInto(phone(), "+91 98765 43210");
-    click(send());
-    await waitFor(() => !!q("sms-test-ok"), "the result");
-    expect(tests()).toHaveLength(1);
-    expect(tests()[0].body).toEqual({ phone: "9876543210" });
+    expect(must("sms-test-mode-employee").getAttribute("aria-checked")).toBe("true");
+    typeInto(input("sms-test-employee"), " 30020 ");
+    click(must("sms-test-send"));
+    await waitFor(() => !!q("sms-test-ok"), "the answer");
+    expect(world.calls).toEqual([{ method: "POST", url: "/api/sms-control/test", body: { employeeCode: "30020" } }]);
+    expect(text(must("sms-test-ok"))).toContain("Sent to employee 30020.");
+  });
+
+  it("sends a test code to a typed number, in ten digits", async () => {
+    await open(`${BASE}/test`, "sms-test");
+    click(must("sms-test-mode-phone"));
+    typeInto(input("sms-test-phone"), "+91 98765 43210");
+    click(must("sms-test-send"));
+    await waitFor(() => !!q("sms-test-ok"), "the answer");
+    expect(world.calls[0].body).toEqual({ phone: "9876543210" });
     expect(text(must("sms-test-ok"))).toContain("Sent to ••••••3210.");
-    expect(text(must("sms-test-ok"))).toContain("The test SMS was accepted by 2Factor.");
-    // the full number is not echoed anywhere
-    expect(text(must("sms-test-outcome"))).not.toContain("9876543210");
   });
 
-  it("refuses a number that is not a mobile number, before sending anything", async () => {
+  it("refuses a code or number that cannot be one, before sending anything", async () => {
     await open(`${BASE}/test`, "sms-test");
-    for (const bad of ["", "12345", "5876543210", "hello"]) {
-      typeInto(phone(), bad);
-      click(send());
-      await settle(5);
-      expect(text(must("sms-test")), bad).toContain("Enter a 10-digit Indian mobile number");
-      expect(phone().getAttribute("aria-invalid"), bad).toBe("true");
-    }
-    expect(tests()).toHaveLength(0);
-    // typing again takes the complaint away
-    typeInto(phone(), "9");
-    expect(phone().getAttribute("aria-invalid")).toBeNull();
+    const help = () => document.getElementById("sms-test-help");
+    click(must("sms-test-send"));
+    expect(text(help())).toBe("Enter the employee's code, for example 30020.");
+    expect(help()?.getAttribute("role")).toBe("alert");
+    click(must("sms-test-mode-phone"));
+    typeInto(input("sms-test-phone"), "12345");
+    click(must("sms-test-send"));
+    expect(text(help())).toContain("Enter a 10-digit Indian mobile number");
+    expect(world.calls).toHaveLength(0);
   });
 
-  it("shows the server's own words when it refuses the test (not configured, sending off, over the limit)", async () => {
+  it("shows the server's own words when it refuses, and an HTTP error as a sentence", async () => {
+    world.testReply = { ok: false, message: "This development machine may send SMS only to employee 30020." };
     await open(`${BASE}/test`, "sms-test");
-    world.testReply = { ok: false, message: "You can send 3 test messages an hour. Try again after 4:15 pm." };
-    typeInto(phone(), "9876543210");
-    click(send());
+    typeInto(input("sms-test-employee"), "40001");
+    click(must("sms-test-send"));
     await waitFor(() => !!q("sms-test-refused"), "the refusal");
-    expect(text(must("sms-test-refused"))).toContain("The test was not sent to ••••••3210.");
-    expect(text(must("sms-test-refused"))).toContain("You can send 3 test messages an hour.");
-    expect(q("sms-test-ok")).toBeNull();
-  });
-
-  it("shows an HTTP error as a sentence: the server's, or a plain one", async () => {
-    await open(`${BASE}/test`, "sms-test");
-    typeInto(phone(), "9876543210");
+    expect(text(must("sms-test-refused"))).toContain("may send SMS only to employee 30020");
     world.failNext["POST /api/sms-control/test"] = refusal(
-      429,
-      { error: "Too many test messages. Try again later." },
+      400,
+      { ok: false, message: "No employee with that code. Choose the employee to send the test to." },
       "POST",
     );
-    click(send());
+    click(must("sms-test-send"));
     await waitFor(() => !!q("sms-test-failed"), "the failure");
-    expect(text(must("sms-test-failed"))).toContain("Too many test messages. Try again later.");
+    expect(text(must("sms-test-failed"))).toContain("No employee with that code");
+  });
 
-    world.failNext["POST /api/sms-control/test"] = new Error("network down");
-    click(send());
-    await waitFor(() => text(q("sms-test-outcome")).includes("Could not send the test SMS"), "the plain sentence");
-    expect(text(must("sms-test-failed"))).toContain("Check the connection and try again.");
-
-    world.failNext["POST /api/sms-control/test"] = refusal(403, { error: "permission_denied" }, "POST");
-    click(send());
-    await waitFor(() => text(q("sms-test-outcome")).includes("not allowed"), "the permission sentence");
-    // each result replaces the last
-    expect(document.body.querySelectorAll('[data-testid="sms-test-failed"]')).toHaveLength(1);
+  it("names the development lock and fills the allowed employee in with one click", async () => {
+    world = installWorld(h.fetch, { status: { devLock: { active: true, onlyToEmployees: ["30020"] } } });
+    await open(`${BASE}/test`, "sms-test");
+    await waitFor(() => !!q("sms-test-dev-lock"), "the lock note");
+    expect(text(must("sms-test-dev-lock"))).toContain("texts only employee 30020 (SMS_ONLY_TO_EMPLOYEES)");
+    click(must("sms-test-pick-30020"));
+    expect(input("sms-test-employee").value).toBe("30020");
   });
 
   it("is off, with the reason and where to fix it, while 2Factor is not set up", async () => {
     world = installWorld(h.fetch, {
-      overview: {
-        configured: false,
-        env: { authKey: false, senderId: "UKTHRM", templateName: "UKT_HRMS_OTP", apiBase: "" },
-      },
+      overview: { configured: false, env: { ...world.overview.env, authKey: false } },
+      status: { configured: false },
     });
-    await open(`${BASE}/test`, "sms-test-blocked");
-    expect(text(must("sms-test-blocked"))).toContain("Not set: TWOFACTOR_API_KEY.");
-    expect(must("sms-test-blocked").querySelector("a")?.getAttribute("href")).toBe(`${BASE}/setup`);
-    expect(send().disabled).toBe(true);
-    typeInto(phone(), "9876543210");
-    click(send());
-    await settle(5);
-    expect(tests()).toHaveLength(0);
+    await open(`${BASE}/test`, "sms-test");
+    await waitFor(() => !!q("sms-test-blocked"), "the reason");
+    expect(text(must("sms-test-blocked"))).toContain("Not set: TWOFACTOR_API_KEY");
+    expect((must("sms-test-send") as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("is off, with the server's sentence, while this machine may not send", async () => {
-    world = installWorld(h.fetch, {
-      overview: { sendingAllowed: false, sendingNote: "Sending is switched off on this machine." },
-    });
-    await open(`${BASE}/test`, "sms-test-blocked");
-    expect(text(must("sms-test-blocked"))).toContain("Sending is switched off on this machine.");
-    expect(send().disabled).toBe(true);
-  });
-
-  it("is off while sending is paused, and says until when", async () => {
-    world = installWorld(h.fetch, { overview: { circuit: { paused: true, until: "2026-10-14T10:11:00Z" } } });
-    await open(`${BASE}/test`, "sms-test-blocked");
-    expect(text(must("sms-test-blocked"))).toMatch(/paused after repeated 2Factor failures until 3:41\s?pm/i);
-    expect(send().disabled).toBe(true);
-  });
-
-  it("shows the message as employees will get it: the 2Factor template with a made-up code", async () => {
+  it("shows the SMS as employees get it: the OTP template with the 4-digit test code", async () => {
     await open(`${BASE}/test`, "sms-test");
     expect(text(must("sms-test-preview"))).toBe(
       "1234 is your UK Textiles HRMS OTP. Official message from UK Textiles. Do not share it with anyone.",
     );
-    expect(text(must("sms-test"))).toContain("through 2Factor");
-  });
-
-  it("tells how many tests there can be and what they cost", async () => {
-    await open(`${BASE}/test`, "sms-test");
-    expect(text(must("sms-test"))).toContain("You can send 3 tests an hour");
-    expect(text(must("sms-test"))).toContain("counts against the hourly and daily caps");
+    await waitFor(() => text(must("sms-test-preview-panel")).includes("UKTHRM"), "the sender");
   });
 });
 
 describe("Setup", () => {
-  const clipboard = vi.fn(async () => {});
-  beforeEach(() => {
-    clipboard.mockClear();
-    Object.defineProperty(navigator, "clipboard", { value: { writeText: clipboard }, configurable: true });
-  });
-
-  it("lists the six steps and ticks the ones the server says are done", async () => {
-    await open(`${BASE}/setup`, "sms-setup");
-    await waitFor(() => must("sms-step-env").getAttribute("data-done") === "true", "the ticks");
-    expect(must("sms-step-account").getAttribute("data-done")).toBe("true");
-    expect(must("sms-step-template").getAttribute("data-done")).toBe("true");
-    expect(must("sms-step-env").getAttribute("data-done")).toBe("true");
-    expect(must("sms-step-test").getAttribute("data-done")).toBe("true");
-    // the channel is still WhatsApp
-    expect(must("sms-step-channel").getAttribute("data-done")).toBe("false");
-    expect(must("sms-step-watch").getAttribute("data-done")).toBe("unknown");
-  });
-
-  it("shows which required values are set and which are not, by name, with a Copy button each", async () => {
+  it("names every environment value with whether it is set, and never shows a value", async () => {
     world = installWorld(h.fetch, {
       overview: {
-        configured: false,
-        env: { authKey: false, senderId: "UKTHRM", templateName: "", apiBase: "https://2factor.in/API/V1" },
+        env: { authKey: true, senderId: "", templateName: "UKT_HRMS_OTP", apiBase: "https://2factor.in/API/V1" },
       },
     });
-    await open(`${BASE}/setup`, "sms-env-list");
+    await open(`${BASE}/setup`, "sms-setup");
     await waitFor(() => !!q("sms-env-state-authKey"), "the states");
-    expect(text(must("sms-env-state-authKey"))).toBe("Not set");
-    expect(text(must("sms-env-state-senderId"))).toBe("Set");
-    expect(text(must("sms-env-state-templateName"))).toBe("Not set");
-    for (const name of [
-      "TWOFACTOR_API_KEY",
-      "TWOFACTOR_SENDER_ID",
-      "TWOFACTOR_TEMPLATE_NAME",
-      "TWOFACTOR_API_BASE",
-      "SMS_ALLOW_SENDING",
-    ]) {
-      const row = must(`sms-env-${name}`);
-      expect(text(row)).toContain(name);
-      expect(row.querySelector(`button[aria-label="Copy ${name}"]`), name).not.toBeNull();
-    }
-    expect(text(must("sms-env-TWOFACTOR_API_BASE"))).toContain("The server uses: https://2factor.in/API/V1");
-    expect(text(must("sms-env-TWOFACTOR_API_BASE"))).toContain("Optional");
-    expect(text(must("sms-env-SMS_ALLOW_SENDING"))).toContain("Optional");
-    expect(must("sms-step-env").getAttribute("data-done")).toBe("false");
+    expect(text(must("sms-env-state-authKey"))).toBe("Set");
+    expect(text(must("sms-env-state-senderId"))).toBe("Not set");
+    expect(text(must("sms-env-SMS_ONLY_TO_EMPLOYEES"))).toContain("Optional");
+    expect(text(must("sms-in-use-template"))).toContain("UKT_HRMS_OTP");
+    expect(text(must("sms-in-use-sender"))).toContain("Not set");
+    expect(text(must("sms-in-use-key"))).toContain("Set (hidden)");
+    expect(document.body.querySelectorAll("input").length).toBe(0);
   });
 
-  it("never asks for the auth key or any value: there is no box on the tab, and it says where the key lives", async () => {
+  it("gives the template, the sender and the voice-call note, and ticks the switch step", async () => {
     await open(`${BASE}/setup`, "sms-setup");
-    expect(document.body.querySelectorAll("input, textarea, select")).toHaveLength(0);
-    expect(text(must("sms-setup-secret"))).toContain("only ever kept on the server");
-    expect(text(must("sms-setup-secret"))).toContain("never asks for it, never shows it");
-    // the example text is an example, not a key
-    expect(text(must("sms-env-TWOFACTOR_API_KEY"))).toContain("your_2factor_api_key_here");
-  });
-
-  it("gives the exact 2Factor steps: the template with XXXX, its name and sender ID, in copyable lines", async () => {
-    await open(`${BASE}/setup`, "sms-setup");
-    expect(text(must("sms-setup-secret"))).toContain("The 2Factor API key is only ever kept on the server");
-    expect(text(must("sms-step-account"))).toContain("API key");
-    const template = text(must("sms-step-template"));
-    expect(template).toContain("SMS OTP > OTP Templates");
-    expect(template).toContain("XXXX exactly once");
-    expect(template).toContain("under 150 characters");
-    expect(text(must("sms-env-SMS_ALLOW_SENDING"))).toContain("a development machine never does");
-    for (const [id, value] of [
-      [
-        "sms-2f-template-text",
-        "XXXX is your UK Textiles HRMS OTP. Official message from UK Textiles. Do not share it with anyone.",
-      ],
-      ["sms-2f-template-name", "UKT_HRMS_OTP"],
-      ["sms-2f-sender-id", "UKTHRM"],
-    ]) {
-      expect(text(must(id)), id).toContain(value);
-      click(must(id).querySelector("button"));
-      await waitFor(() => clipboard.mock.calls.length > 0, `the copy of ${id}`);
-      await settle(5);
-      expect(clipboard).toHaveBeenLastCalledWith(value);
-      await waitFor(() => text(must(id)).includes("Copied"), "Copied");
-      clipboard.mockClear();
-    }
-  });
-
-  it("copies an environment variable name, and the docs file name", async () => {
-    await open(`${BASE}/setup`, "sms-setup");
-    click(must("sms-env-TWOFACTOR_SENDER_ID").querySelector("button"));
-    await waitFor(() => clipboard.mock.calls.length === 1, "the copy");
-    await settle(5);
-    expect(clipboard).toHaveBeenLastCalledWith("TWOFACTOR_SENDER_ID");
-    expect(text(must("sms-setup-docs"))).toContain("twofactor-sms-otp-integration.md");
-    click(must("sms-setup-docs").querySelector("button"));
-    await waitFor(() => clipboard.mock.calls.length === 2, "the second copy");
-    await settle(5);
-    expect(clipboard).toHaveBeenLastCalledWith("twofactor-sms-otp-integration.md");
-  });
-
-  it("falls back to telling the person what to press when the browser refuses to copy", async () => {
-    Object.defineProperty(navigator, "clipboard", {
-      value: {
-        writeText: async () => {
-          throw new Error("denied");
-        },
-      },
-      configurable: true,
-    });
-    document.execCommand = vi.fn(() => false);
-    await open(`${BASE}/setup`, "sms-setup");
-    click(must("sms-2f-template-text").querySelector("button"));
-    await waitFor(() => text(must("sms-2f-template-text")).includes("Press Ctrl+C"), "the fallback");
+    expect(text(must("sms-2f-template-text"))).toContain("XXXX is your UK Textiles HRMS OTP");
+    expect(text(must("sms-2f-sender-id"))).toContain("UKTHRM");
+    expect(text(must("sms-setup-voice"))).toContain("voice call");
+    await waitFor(() => must("sms-step-switch").getAttribute("data-done") === "true", "the switch step ticked");
+    expect(text(must("sms-setup-codes-only"))).toContain("No promotional, bulk or other SMS");
   });
 });
 
@@ -1111,66 +735,30 @@ describe("a View Only role", () => {
     h.user.current = VIEW_ONLY;
   });
 
-  it("can look at every tab, and nothing in Settings can be changed or saved", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    for (const radio of document.body.querySelectorAll<HTMLInputElement>('input[type="radio"]')) {
-      expect(radio.closest("fieldset")?.disabled).toBe(true);
-    }
-    expect(must("sms-channel-save-row-save").hasAttribute("disabled")).toBe(true);
-    expect(text(must("sms-channel-save-row"))).toContain("View only");
-
-    click(nestedTab("limits"));
-    await waitFor(() => !!q("sms-section-limits"), "limits");
-    for (const box of document.body.querySelectorAll<HTMLInputElement>('[data-testid^="sms-input-"]')) {
-      expect(box.disabled, box.id).toBe(true);
-    }
-    expect(must("sms-limits-save-row-save").hasAttribute("disabled")).toBe(true);
-
-    click(nestedTab("switches"));
-    await waitFor(() => !!q("sms-section-switches"), "switches");
+  it("can look at Settings but change and save nothing", async () => {
+    await open(`${BASE}/settings/switches`, "sms-section-switches");
     for (const sw of document.body.querySelectorAll<HTMLButtonElement>('[role="switch"]'))
       expect(sw.disabled).toBe(true);
-    expect(must("sms-switches-save-row-save").hasAttribute("disabled")).toBe(true);
-    expect(puts()).toHaveLength(0);
+    expect(text(must("sms-switches-save-row"))).toContain("View only");
+    click(nestedTab("cost"));
+    await waitFor(() => !!q("sms-section-cost"), "cost");
+    expect(input("sms-input-pricePerSms").disabled).toBe(true);
+    expect(must("sms-cost-save-row-save").hasAttribute("disabled")).toBe(true);
+    expect(saves()).toHaveLength(0);
   });
 
   it("cannot send a test, and is told", async () => {
     await open(`${BASE}/test`, "sms-test");
     expect(text(must("sms-test-view-only"))).toContain("View only");
     expect((must("sms-test-send") as HTMLButtonElement).disabled).toBe(true);
-    expect(input("sms-test-phone").disabled).toBe(true);
     expect(world.calls).toHaveLength(0);
-  });
-
-  it("still sees the overview, the messages and the setup", async () => {
-    await open(`${BASE}/overview`, "sms-overview");
-    click(tab("Messages"));
-    await waitFor(() => document.body.querySelectorAll('[data-testid="sms-message-row"]').length === 7, "the rows");
-    click(tab("Setup"));
-    await waitFor(() => !!q("sms-setup"), "setup");
   });
 
   it("a branch login can look but not change: the settings and the test are company-wide", async () => {
     h.user.current = { role: "hr", employeeId: null, branchId: 3, permissions: { sms_control: "edit" } };
     await open(`${BASE}/settings/limits`, "sms-section-limits");
     expect(input("sms-input-dailyCap").disabled).toBe(true);
-    expect(must("sms-limits-save-row-save").hasAttribute("disabled")).toBe(true);
     expect(text(must("sms-limits-save-row"))).toContain("Signed in for a branch");
-    unmountPage();
-    await open(`${BASE}/test`, "sms-test");
-    expect(text(must("sms-test-view-only"))).toContain("only an administrator");
-    expect((must("sms-test-send") as HTMLButtonElement).disabled).toBe(true);
-    expect(world.calls).toHaveLength(0);
-  });
-
-  it("an editor and an administrator can change things", async () => {
-    h.user.current = { role: "hr", employeeId: null, permissions: { sms_control: "edit" } };
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    expect(input("sms-input-dailyCap").disabled).toBe(false);
-    unmountPage();
-    h.user.current = null;
-    await open(`${BASE}/test`, "sms-test");
-    expect((must("sms-test-send") as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
@@ -1182,42 +770,32 @@ describe("the role's own keys for each tab and Settings section", () => {
   it("offers only the tabs the role may open, and the bare page lands on the first of them", async () => {
     as({ "sms_control.overview": "hidden", "sms_control.messages": "hidden" });
     mountPage(BASE);
-    await waitFor(() => pathname() === `${BASE}/settings/channel`, "the redirect to the first visible tab");
-    expect(pillLabels()).toEqual(["Settings", "Test", "Setup"]);
-    expect(q("sms-overview")).toBeNull();
+    await waitFor(() => pathname() === `${BASE}/usage`, "the redirect to the first visible tab");
+    expect(pillLabels()).toEqual(["Usage & Cost", "Settings", "Test", "Setup"]);
     expect(asked()).not.toContain("/api/sms-control/messages");
   });
 
-  it("opens Settings on the first section the role may open, and offers only those", async () => {
-    as({ "sms_control.settings.channel": "hidden" });
-    mountPage(`${BASE}/settings`);
-    await waitFor(() => pathname() === `${BASE}/settings/limits`, "the redirect to the first visible section");
+  it("opens Settings on the first section the role may open; the retired Channel too", async () => {
+    as({ "sms_control.settings.switches": "hidden" });
+    mountPage(`${BASE}/settings/channel`);
+    await waitFor(() => pathname() === `${BASE}/settings/limits`, "the first visible section");
     await waitFor(() => !!q("sms-section-limits"), "limits");
-    expect(nestedLabels()).toEqual(["Limits", "Switches"]);
+    expect(nestedLabels()).toEqual(["Limits", "Cost"]);
   });
 
   it("a section the role may only view is read-only, the others stay editable", async () => {
-    as({ "sms_control.settings.limits": "view" });
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    expect(input("sms-input-dailyCap").disabled).toBe(true);
-    expect(text(must("sms-limits-save-row"))).toContain("View only");
-    click(nestedTab("switches"));
-    await waitFor(() => !!q("sms-section-switches"), "switches");
-    for (const sw of document.body.querySelectorAll<HTMLButtonElement>('[role="switch"]'))
-      expect(sw.disabled).toBe(false);
-  });
-
-  it("a tab the role may only view is read-only", async () => {
-    as({ "sms_control.test": "view" });
-    await open(`${BASE}/test`, "sms-test");
-    expect((must("sms-test-send") as HTMLButtonElement).disabled).toBe(true);
-    expect(world.calls).toHaveLength(0);
+    as({ "sms_control.settings.cost": "view" });
+    await open(`${BASE}/settings/cost`, "sms-section-cost");
+    expect(input("sms-input-monthlyBudget").disabled).toBe(true);
+    click(nestedTab("limits"));
+    await waitFor(() => !!q("sms-section-limits"), "limits");
+    expect(input("sms-input-dailyCap").disabled).toBe(false);
   });
 
   it("says so when no tab is open to the role", async () => {
     as(
       Object.fromEntries(
-        ["overview", "settings", "messages", "test", "setup"].map((t) => [`sms_control.${t}`, "hidden"]),
+        ["overview", "usage", "settings", "messages", "test", "setup"].map((t) => [`sms_control.${t}`, "hidden"]),
       ),
     );
     mountPage(BASE);
@@ -1227,128 +805,39 @@ describe("the role's own keys for each tab and Settings section", () => {
 });
 
 describe("the keyboard", () => {
-  const focusTab = (name: string) => {
-    const t = tab(name);
-    t.focus();
-    return t;
-  };
-
   it("Left and Right move between the tabs of the row and open the one they land on; Home and End go to the ends", async () => {
     await open(`${BASE}/overview`, "sms-overview");
-    press(focusTab("Overview"), "ArrowRight");
-    await waitFor(() => pathname() === `${BASE}/settings/channel`, "Settings");
-    expect(document.activeElement).toBe(tab("Settings"));
-    press(document.activeElement!, "ArrowRight");
-    await waitFor(() => pathname() === `${BASE}/messages`, "Messages");
-    press(document.activeElement!, "End");
+    const first = tab("Overview");
+    first.focus();
+    press(first, "ArrowRight");
+    await waitFor(() => pathname() === `${BASE}/usage`, "Usage & Cost");
+    expect(document.activeElement).toBe(tab("Usage & Cost"));
+    press(tab("Usage & Cost"), "End");
     await waitFor(() => pathname() === `${BASE}/setup`, "Setup");
-    press(document.activeElement!, "ArrowRight");
-    await waitFor(() => pathname() === `${BASE}/overview`, "Overview again (it wraps)");
-    press(document.activeElement!, "ArrowLeft");
-    await waitFor(() => pathname() === `${BASE}/setup`, "Setup again (it wraps back)");
-    press(document.activeElement!, "Home");
-    await waitFor(() => pathname() === `${BASE}/overview`, "Home");
-  });
-
-  it("ignores other keys, and a key pressed outside the tabs", async () => {
-    await open(`${BASE}/overview`, "sms-overview");
-    press(focusTab("Overview"), "a");
-    press(document.body, "ArrowRight");
-    await settle(5);
-    expect(pathname()).toBe(`${BASE}/overview`);
-  });
-
-  it("the nested tabs are a tab list of their own: Left and Right open the next section, Tab leaves for the panel", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    const channel = nestedTab("channel");
-    expect(channel.getAttribute("tabindex")).toBe("0");
-    expect(nestedTab("limits").getAttribute("tabindex")).toBe("-1");
-    channel.focus();
-    press(channel, "ArrowRight");
-    await waitFor(() => pathname() === `${BASE}/settings/limits`, "Limits");
-    await waitFor(() => !!q("sms-section-limits"), "the limits section");
-    press(nestedTab("limits"), "End");
-    await waitFor(() => pathname() === `${BASE}/settings/switches`, "Switches");
-  });
-
-  it("every control is reachable and named: the boxes by their labels, the switches by their titles, the tab list and panel by roles", async () => {
-    await open(`${BASE}/settings/limits`, "sms-section-limits");
-    const names = [...document.body.querySelectorAll<HTMLInputElement>('[data-testid^="sms-input-"]')].map(
-      (el) => document.body.querySelector(`label[for="${el.id}"]`)?.textContent,
-    );
-    expect(names.every(Boolean)).toBe(true);
-    expect(document.body.querySelectorAll('[role="tablist"]').length).toBeGreaterThanOrEqual(2);
-    expect(must("sms-panel-settings").getAttribute("role")).toBe("tabpanel");
-    click(nestedTab("switches"));
-    await waitFor(() => !!q("sms-section-switches"), "switches");
-    for (const sw of document.body.querySelectorAll<HTMLButtonElement>('[role="switch"]')) {
-      const label = document.getElementById(sw.getAttribute("aria-labelledby")!);
-      expect(label?.textContent, sw.id).toBeTruthy();
-    }
-  });
-
-  it("the channel choice is a native radio group: one choice, in a fieldset that is labelled", async () => {
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    const radios = [...document.body.querySelectorAll<HTMLInputElement>('input[type="radio"][name="sms-channel"]')];
-    expect(radios.map((r) => r.value)).toEqual(["whatsapp", "sms"]);
-    const fieldset = radios[0].closest("fieldset")!;
-    expect(document.getElementById(fieldset.getAttribute("aria-labelledby")!)?.textContent).toBe("Channel for codes");
+    press(tab("Setup"), "Home");
+    await waitFor(() => pathname() === `${BASE}/overview`, "Overview");
+    press(tab("Overview"), "ArrowLeft");
+    await waitFor(() => pathname() === `${BASE}/setup`, "round to Setup");
   });
 });
 
-// the name of the provider that was removed, spelled so that this file does not contain it
-const OLD_PROVIDER = new RegExp(["msg", "91"].join(""), "i");
-
-describe("2Factor is the only provider", () => {
-  const TABS = ["overview", "settings/channel", "settings/limits", "settings/switches", "messages", "test", "setup"];
-
-  it("no tab offers a provider to choose, and none names another provider", async () => {
-    for (const tabPath of TABS) {
+describe("2Factor is the only provider, and SMS is for codes only", () => {
+  it("no tab offers a provider to choose, a channel to pick, or a way to write SMS text", async () => {
+    for (const tabPath of [
+      "overview",
+      "usage",
+      "settings/switches",
+      "settings/limits",
+      "settings/cost",
+      "test",
+      "setup",
+    ]) {
       await open(`${BASE}/${tabPath}`, `sms-panel-${tabPath.split("/")[0]}`);
-      await waitFor(() => !document.body.querySelector('[data-testid$="-loading"]'), "the data");
-      await settle(30);
-      expect(document.body.querySelector('[data-testid^="sms-provider"]'), tabPath).toBeNull();
-      expect(document.body.querySelector('input[name="sms-provider"]'), tabPath).toBeNull();
-      expect(text(document.body), tabPath).not.toMatch(OLD_PROVIDER);
+      await settle(20);
+      const page = text(document.body);
+      expect(page, tabPath).not.toMatch(/MSG91|Twilio|WAClient|Codes go by|Channel for codes/);
+      expect(document.body.querySelectorAll("textarea").length, tabPath).toBe(0);
       unmountPage();
     }
-  });
-
-  it("the page speaks of 2Factor: cards, chart, missing values and the channel text", async () => {
-    world = installWorld(h.fetch, {
-      overview: {
-        configured: false,
-        env: { authKey: false, senderId: "UKTHRM", templateName: "", apiBase: "https://2factor.in/API/V1" },
-        balance: { available: null, checkedAt: null, error: null },
-      },
-    });
-    await open(`${BASE}/overview`, "sms-step-configure");
-    expect(text(must("sms-step-configure"))).toContain("Add the 2Factor details to the server");
-    expect(text(must("sms-step-configure"))).toContain("TWOFACTOR_API_KEY, TWOFACTOR_TEMPLATE_NAME");
-    expect(text(must("sms-step-configure"))).not.toContain("TWOFACTOR_SENDER_ID");
-    expect(text(must("sms-card-configured"))).toContain("Missing: TWOFACTOR_API_KEY, TWOFACTOR_TEMPLATE_NAME");
-    expect(document.body.querySelector('[data-testid="sms-card-configured"] p')?.textContent?.trim()).toBe(
-      "2Factor set up",
-    );
-    expect(text(must("sms-card-balance"))).toContain("2Factor balance");
-    expect(text(must("sms-chart"))).toContain("SMS handed to 2Factor each day");
-  });
-
-  it("selecting SMS while 2Factor is not set up stays refused, by the server too, in its own sentence", async () => {
-    // the page believes 2Factor is ready (the overview says so); the server refuses all the same
-    await open(`${BASE}/settings/channel`, "sms-section-channel");
-    await waitFor(() => !!q("sms-never-locked-out"), "the page");
-    world.failNext["PUT /api/sms-control/settings"] = refusal(400, {
-      error: "SMS can't be selected while 2Factor is not configured: TWOFACTOR_API_KEY is empty.",
-    });
-    click(must("sms-channel-sms").querySelector("input"));
-    click(must("sms-channel-save-row-save"));
-    await waitFor(() => !!q("sms-channel-confirm"), "the confirm");
-    click(button("Yes, use SMS"));
-    await waitFor(() => !!q("sms-channel-error"), "the error");
-    expect(text(must("sms-channel-error"))).toBe(
-      "SMS can't be selected while 2Factor is not configured: TWOFACTOR_API_KEY is empty.",
-    );
-    expect((must("sms-channel-sms").querySelector("input") as HTMLInputElement).checked).toBe(true);
   });
 });

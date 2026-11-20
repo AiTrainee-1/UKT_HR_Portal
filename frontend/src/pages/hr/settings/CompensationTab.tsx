@@ -10,6 +10,7 @@ import { TabContents } from "./attendance/TabContents";
 import { useDraft } from "./attendance/useDraft";
 import { saveErrorText } from "./payroll/form";
 import {
+  claimsMinFromOf,
   dateAfterSwitch,
   draftFrom,
   sameDraft,
@@ -59,9 +60,10 @@ function stamp(iso: string): string {
 /**
  * Settings -> Compensation (staff only): every compensation feature, its rules and its own switch in one place, just like
  * the Late-In and Early-Out switches. It starts with how compensation is claimed (detect, claim, the Department Head
- * approves, the balance, used on another day) and the read-only date the claims started. Everything else is one form with
- * one Save: the five features (OT Detection Type 1 and Type 2, and Compensation Leave A, B and C), their dates, the
- * quarters rule and the editable rule tables. The master switch is only shown here; it has one home on the Payroll tab.
+ * approves, the balance, used on another day) and the date the claims started (it only moves later). Everything is one
+ * form with one Save: the claims date, the five features (OT Detection Type 1 and Type 2, and Compensation Leave A, B and
+ * C), their dates, the quarters rule and the editable rule tables. The master switch is only shown here; it has one home
+ * on the Payroll tab.
  */
 export default function CompensationTab({ readOnly = false }: { readOnly?: boolean }) {
   const { toast } = useToast();
@@ -71,14 +73,21 @@ export default function CompensationTab({ readOnly = false }: { readOnly?: boole
 
   const saved = useMemo(() => (data ? draftFrom(data) : null), [data]);
   const { draft, setDraft, update: patchDraft, dirty, discard } = useDraft(saved, sameDraft);
+  const today = useMemo(() => todayIst(), []);
+  // the claims date only moves later: to the server's minFrom, or (an older server) the later of the saved date and today
+  const claimsMinFrom = claimsMinFromOf(data?.claims, today);
   const validation = useMemo(
     () =>
       draft
-        ? validateDraft(draft, { allowanceFrom: saved?.allowanceFrom ?? "", birthdayFrom: saved?.birthdayFrom ?? "" })
+        ? validateDraft(draft, {
+            allowanceFrom: saved?.allowanceFrom ?? "",
+            birthdayFrom: saved?.birthdayFrom ?? "",
+            claimsFrom: saved?.claimsFrom ?? "",
+            claimsMinFrom,
+          })
         : null,
-    [draft, saved],
+    [draft, saved, claimsMinFrom],
   );
-  const today = useMemo(() => todayIst(), []);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -139,8 +148,9 @@ export default function CompensationTab({ readOnly = false }: { readOnly?: boole
     masterOn: data.masterEnabled === true,
     validation,
     today,
-    // read-only, set by the server once (the claim workflow's start); an older server does not report it
+    // the claim workflow's saved start (an older server does not report it); the form's own copy is draft.claimsFrom
     claimsFrom: data.claims?.from ?? null,
+    claimsMinFrom,
     // read-only: when the quarters rule was switched (each change applies from the day it was saved)
     quarterRuleHistory: data.shift.quarterRuleHistory ?? [],
   };
@@ -150,7 +160,7 @@ export default function CompensationTab({ readOnly = false }: { readOnly?: boole
     setSaving(true);
     setSaveError(null);
     try {
-      const { settings, warnings } = await update.mutateAsync(toInput(draft));
+      const { settings, warnings } = await update.mutateAsync(toInput(draft, { claimsFrom: saved?.claimsFrom ?? "" }));
       setDraft(draftFrom(settings));
       setServerWarnings(warnings);
       toast({

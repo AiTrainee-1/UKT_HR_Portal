@@ -50,6 +50,11 @@ export type CompensationDraft = {
   holidayWorkEnabled: boolean;
   birthdayEnabled: boolean;
   birthdayFrom: string;
+  /**
+   * The date the claim workflow applies from (YYYY-MM-DD; blank when the server does not report it). It only moves later:
+   * days before it keep the old automatic rules.
+   */
+  claimsFrom: string;
 };
 
 export const LABEL_MAX = 80;
@@ -112,6 +117,7 @@ export function draftFrom(s: CompensationSettings): CompensationDraft {
     holidayWorkEnabled: s.holidayWork?.enabled === true,
     birthdayEnabled: birthday.enabled === true,
     birthdayFrom: birthday.effectiveFrom ?? "",
+    claimsFrom: s.claims?.from ?? "",
   };
 }
 
@@ -179,6 +185,7 @@ export function sameDraft(a: CompensationDraft, b: CompensationDraft): boolean {
     a.holidayWorkEnabled === b.holidayWorkEnabled &&
     a.birthdayEnabled === b.birthdayEnabled &&
     a.birthdayFrom === b.birthdayFrom &&
+    a.claimsFrom === b.claimsFrom &&
     a.allowanceRules.length === b.allowanceRules.length &&
     a.allowanceRules.every((r, i) => sameAllowanceRow(r, b.allowanceRules[i])) &&
     a.shiftRules.length === b.shiftRules.length &&
@@ -205,6 +212,33 @@ export function isIsoDate(text: string): boolean {
 export function prettyDate(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   return m ? formatDay({ year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) }) : iso;
+}
+
+/**
+ * The earliest date the claims date may be moved to: the server's `claims.minFrom` when it sends it, else the later of the
+ * saved date and today (an older backend; it refuses anything earlier the same way).
+ */
+export function claimsMinFromOf(
+  claims: { from?: string | null; minFrom?: string | null } | null | undefined,
+  today: string,
+): string {
+  if (claims?.minFrom) return claims.minFrom;
+  const from = claims?.from ?? "";
+  return from > today ? from : today;
+}
+
+/**
+ * What is wrong with a changed claims date (null when nothing is): it cannot be cleared, and it only moves later, to the
+ * earliest date the server takes or after it. An unchanged date is never a problem.
+ */
+export function claimsFromProblem(value: string, saved: string, minFrom: string): string | null {
+  if (value === saved) return null;
+  if (value === "") return "The claims date cannot be cleared. Pick a date.";
+  if (!isIsoDate(value)) return "Pick a valid date.";
+  if (minFrom && value < minFrom) {
+    return `Pick ${prettyDate(minFrom)} or later: the claims date can only move later, so days already judged keep their rules.`;
+  }
+  return null;
 }
 
 export type DateNote = { kind: "none" | "today" | "future" | "past"; text: string };
@@ -238,6 +272,8 @@ export function dateNote(from: string, today: string): DateNote {
 export type RowErrors = Partial<Record<"label" | "extra" | "allowance" | "until" | "shifts" | "order", string>>;
 
 export type Validation = {
+  /** The claims date: cleared, or moved earlier than the server takes. */
+  claimsFrom: string | null;
   allowanceFrom: string | null;
   birthdayFrom: string | null;
   allowanceRows: RowErrors[];
@@ -266,7 +302,13 @@ const dateProblem = (text: string, saved: string): string | null => {
  */
 export function validateDraft(
   draft: CompensationDraft,
-  saved: { allowanceFrom: string; birthdayFrom: string },
+  saved: {
+    allowanceFrom: string;
+    birthdayFrom: string;
+    /** The saved claims date ("" when not reported) and the earliest date it may move to (claimsMinFromOf). */
+    claimsFrom?: string;
+    claimsMinFrom?: string;
+  },
 ): Validation {
   // Type 1 rows
   const allowanceRows: RowErrors[] = draft.allowanceRules.map(() => ({}));
@@ -346,10 +388,16 @@ export function validateDraft(
 
   const allowanceFrom = dateProblem(draft.allowanceFrom, saved.allowanceFrom);
   const birthdayFrom = dateProblem(draft.birthdayFrom, saved.birthdayFrom);
+  const claimsFrom = claimsFromProblem(
+    draft.claimsFrom,
+    saved.claimsFrom ?? draft.claimsFrom,
+    saved.claimsMinFrom ?? "",
+  );
 
   const rowText = (what: string, rows: RowErrors[]) =>
     rows.flatMap((e, i) => Object.values(e).map((msg) => `${what}, rule ${i + 1}: ${msg}`));
   const problems = [
+    claimsFrom && `Claims date: ${claimsFrom}`,
     allowanceFrom && `Type 1 start date: ${allowanceFrom}`,
     allowanceTable,
     ...rowText("Type 1", allowanceRows),
@@ -361,6 +409,7 @@ export function validateDraft(
   ].filter((p): p is string => typeof p === "string" && p !== "");
 
   return {
+    claimsFrom,
     allowanceFrom,
     birthdayFrom,
     allowanceRows,
@@ -376,7 +425,9 @@ export function validateDraft(
 
 /**
  * Things that are allowed but probably not meant (never block a save): an allowance row that asks for more extra work than
- * Type 2 starts at can never apply (the server says the same after a save, in the same words).
+ * Type 2 starts at can never apply (the server says the same after a save, in the same words). With the quarters rule on
+ * the threshold decides only days before the claims date (and days with the rule off), so the warning says so: from the
+ * claims date Type 2 starts at a quarter of each employee's own shift instead.
  */
 export function warningsFor(draft: CompensationDraft): string[] {
   if (!draft.allowanceEnabled) return [];
@@ -385,17 +436,25 @@ export function warningsFor(draft: CompensationDraft): string[] {
   return draft.allowanceRules.flatMap((r) => {
     const extra = extraMinutesOf(r);
     if (!r.enabled || extra === null || extra <= threshold) return [];
+    const name = r.label.trim() || formatDuration(extra);
     return [
-      `The '${r.label.trim() || formatDuration(extra)}' allowance can never apply: shift-based compensation already starts at ${formatDuration(threshold)} of extra work.`,
+      draft.quarterRule === true
+        ? `The '${name}' allowance can never apply to days before the claims date or with the quarters rule off: shift-based compensation starts at ${formatDuration(threshold)} of extra work there.`
+        : `The '${name}' allowance can never apply: shift-based compensation already starts at ${formatDuration(threshold)} of extra work.`,
     ];
   });
 }
 
 // ── what is sent ──
 
-/** The save request. Call it only for a draft that passes validateDraft. */
-export function toInput(draft: CompensationDraft): CompensationSettingsInput {
+/**
+ * The save request. Call it only for a draft that passes validateDraft. The claims date is sent only when it was changed
+ * from `saved.claimsFrom` (the server moves it forward only, and an unchanged date needs no check).
+ */
+export function toInput(draft: CompensationDraft, saved?: { claimsFrom?: string }): CompensationSettingsInput {
+  const claimsMoved = !!saved && draft.claimsFrom !== "" && draft.claimsFrom !== (saved.claimsFrom ?? "");
   return {
+    ...(claimsMoved ? { claims: { from: draft.claimsFrom } } : {}),
     allowance: {
       enabled: draft.allowanceEnabled,
       ...(draft.allowanceFrom ? { effectiveFrom: draft.allowanceFrom } : {}),

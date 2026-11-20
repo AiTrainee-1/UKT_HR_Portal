@@ -184,7 +184,7 @@ describe("the list of announcements", () => {
     expect(must("windows-kpi-late").getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("steps to the previous month, where an older Compensation Day is named as such and cannot be deleted", async () => {
+  it("steps to the previous month, where an older Compensation Day is named as such and can be deleted too", async () => {
     await openWindows();
     click(must("windows-month-prev"));
     expect(params()).toMatchObject({ wmonth: "9", wyear: "2026" });
@@ -193,7 +193,9 @@ describe("the list of announcements", () => {
     const older = text(rowOf("windows-table", 899));
     expect(older).toContain("Compensation Day (older kind)");
     expect(older).toContain("Whole day exempt from Late / Permission");
-    expect(q("window-delete-899")).toBeNull();
+    // the server removes an older Compensation Day the same way now (canDelete says so): the page does not hide it
+    expect(button("window-delete-899").disabled).toBe(false);
+    expect(button("window-delete-899").title).toBe("Delete the announcement of Sun, 20 Sep 2026");
     click(must("windows-month-next"));
     // (October is already in the cache: it is shown again without asking)
     await waitFor(() => rowKeys("windows-table").join() === "901,900", "back to October");
@@ -400,6 +402,50 @@ describe("deleting", () => {
     await openWindows();
     expect(q("window-delete-901")).not.toBeNull(); // upcoming
     expect(q("window-delete-900")).not.toBeNull(); // past
+  });
+
+  it("is greyed out with the server's reason on a row it says cannot be removed, and never asks", async () => {
+    world.windows = [
+      windowOf(901),
+      windowOf(900, {
+        date: "2026-10-10",
+        canDelete: false,
+        deleteBlockedReason: "Payroll for October 2026 is done, so this announcement can no longer be removed.",
+      }),
+      windowOf(902, { date: "2026-10-12", canDelete: false }),
+    ];
+    await openWindows();
+    expect(button("window-delete-901").disabled).toBe(false);
+    expect(button("window-delete-900").disabled).toBe(true);
+    expect(button("window-delete-900").title).toBe(
+      "Payroll for October 2026 is done, so this announcement can no longer be removed.",
+    );
+    // no reason from the server (an older one): a plain sentence
+    expect(button("window-delete-902").disabled).toBe(true);
+    expect(button("window-delete-902").title).toBe("This announcement cannot be removed.");
+    click(must("window-delete-900"));
+    await settle();
+    expect(q("window-delete-dialog")).toBeNull();
+    expect(world.writes).toEqual([]);
+  });
+
+  it("names another branch's announcement and a View-only role as the server words them", async () => {
+    world.windows = [
+      windowOf(901, {
+        canDelete: false,
+        deleteBlockedReason:
+          "This announcement belongs to the whole company or another branch: only its owner can remove it.",
+      }),
+      windowOf(903, {
+        date: "2026-10-22",
+        canDelete: false,
+        deleteBlockedReason: "You can view Compensation but not change it.",
+      }),
+    ];
+    await openWindows();
+    expect(button("window-delete-901").title).toContain("only its owner can remove it");
+    expect(button("window-delete-903").title).toBe("You can view Compensation but not change it.");
+    expect(button("window-delete-903").disabled).toBe(true);
   });
 
   it("asks first, saying the day's attendance is checked again and a locked payroll month refuses it, then deletes", async () => {

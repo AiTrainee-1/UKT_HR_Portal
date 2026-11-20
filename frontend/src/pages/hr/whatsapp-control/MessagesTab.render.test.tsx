@@ -3,24 +3,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { renderMdPage, type RenderedPage } from "@/pages/md/testing/renderMdPage";
 import MessagesTab from "./MessagesTab";
 
-// The Messages tab and the sending queue: the queue's statuses (Queued, Sending, Expired, Skipped) can be filtered on and
-// read as badges with a plain explanation; a skipped message shows the rule that held it back, and the kind is tagged.
-
-const counts = { pending: 0, sent: 0, delivered: 0, read: 0, failed: 0, total: 0, accepted: 0 };
-const OVERVIEW = {
-  days: 30,
-  config: { configured: true },
-  totals: counts,
-  today: counts,
-  thisMonth: counts,
-  categories: [{ key: "attendance", label: "Attendance" }],
-  relatedModules: [],
-  byCategory: { attendance: counts },
-  byType: [],
-  daily: [],
-  recentFailures: [],
-  stalePending: 0,
-};
+// The Messages tab: the queue's statuses and Meta's delivery ones can be filtered on and read as badges with a plain
+// explanation, each row carries WhatsApp's ticks, the Meta template it went out as and what Meta charges it as; a skipped
+// message shows the rule that held it back. The tab reads only the messages (no overview, which another tab guards).
 
 const message = (id: number, status: string, extra: Record<string, unknown> = {}) => ({
   id,
@@ -54,8 +39,19 @@ const MESSAGES = [
   message(1, "queued"),
   message(2, "sending"),
   message(3, "expired", { error: "Not sent by the end of its day." }),
-  message(4, "skipped", { error: "Asha has No WhatsApp on." }),
-  message(5, "sent", { kind: "code", sentAt: "2026-11-06T09:00:05+05:30", attempts: 1 }),
+  message(4, "skipped", { error: "No approved Meta template (hrms_late_alert)." }),
+  message(5, "sent", { kind: "code", sentAt: "2026-11-06T09:00:05+05:30", attempts: 1, templateName: "hrms_otp" }),
+  message(6, "read", {
+    templateName: "hrms_late_alert",
+    pricingCategory: "utility",
+    billable: true,
+    providerMessageId: "wamid.HBgM",
+    sentAt: "2026-11-06T09:01:00+05:30",
+    deliveredAt: "2026-11-06T09:01:04+05:30",
+    readAt: "2026-11-06T09:30:00+05:30",
+  }),
+  message(7, "delivered", { template: "hrms_absent_alert", category: "utility" }),
+  message(8, "failed", { error: "131026: not a WhatsApp number", templateName: "hrms_late_alert" }),
 ];
 
 let page: RenderedPage | undefined;
@@ -68,14 +64,13 @@ const open = async () => {
   page = await renderMdPage(
     () => <MessagesTab />,
     {
-      "/api/whatsapp-control/overview": OVERVIEW,
       "/api/whatsapp-control/messages": (params) => {
         const status = params.get("status");
         const items = status ? MESSAGES.filter((m) => m.status === status) : MESSAGES;
         return { items, total: items.length, page: 1, pageSize: 25 };
       },
     },
-    { path: "/hr/whatsapp-control" },
+    { path: "/hr/whatsapp-control?tab=messages" },
   );
   return page;
 };
@@ -90,38 +85,48 @@ async function clickEl(target: HTMLElement) {
   await page!.settle();
 }
 
-describe("WhatsApp Control messages and the sending queue", () => {
-  it("offers the queue's statuses in the filter", async () => {
+describe("WhatsApp Control messages", () => {
+  it("offers the queue's and Meta's statuses in the filter, and asks only for the messages", async () => {
     await open();
     const labels = tabs().map((t) => t.querySelector(".ptab-label")?.textContent);
-    expect(labels).toEqual([
-      "All",
-      "Queued",
-      "Sending",
-      "Pending",
-      "Sent",
-      "Delivered",
-      "Read",
-      "Failed",
-      "Expired",
-      "Skipped",
-    ]);
+    expect(labels).toEqual(["All", "Queued", "Sending", "Sent", "Delivered", "Read", "Failed", "Expired", "Skipped"]);
+    expect(
+      page!.requests().every((r) => r.startsWith("/api/whatsapp-control/messages") || r.startsWith("/api/auth/me")),
+    ).toBe(true);
   });
 
-  it("shows every queue status as a badge with its plain explanation", async () => {
+  it("shows every status as a badge with its plain explanation, and WhatsApp's ticks", async () => {
     await open();
-    expect(rows()).toHaveLength(5);
+    expect(rows()).toHaveLength(8);
     const badge = (status: string) => el(`[data-testid="whatsapp-message-row"] [data-status="${status}"]`)!;
     expect(badge("queued").textContent).toBe("Queued");
     expect(badge("queued").title).toBe("Waiting its turn in the sending queue.");
-    expect(badge("sending").textContent).toBe("Sending");
     expect(badge("expired").title).toBe("Too late to be useful, so it was never sent.");
-    expect(badge("skipped").title).toBe("Blocked by a rule, so it was never sent.");
-    // The kind is tagged quietly.
+    expect(badge("skipped").title).toContain("no approved template");
+    const ticks = Array.from(document.body.querySelectorAll<HTMLElement>('[data-testid="wa-ticks"]')).map(
+      (t) => t.dataset.ticks,
+    );
+    // queued / sending / expired / skipped carry none
+    expect(ticks).toEqual(["sent", "read", "delivered", "failed"]);
     const kinds = Array.from(document.body.querySelectorAll('[data-testid="whatsapp-message-kind"]')).map(
       (k) => k.textContent,
     );
-    expect(kinds).toEqual(["Auto", "Auto", "Auto", "Auto", "Code"]);
+    expect(kinds).toContain("Code");
+  });
+
+  it("shows the Meta template and the pricing category, under either name the server uses", async () => {
+    await open();
+    const templates = Array.from(document.body.querySelectorAll('[data-testid="whatsapp-message-template"]')).map(
+      (t) => t.textContent,
+    );
+    expect(templates).toEqual(["hrms_otp", "hrms_late_alert", "hrms_absent_alert", "hrms_late_alert"]);
+    const pricing = Array.from(document.body.querySelectorAll('[data-testid="whatsapp-message-pricing"]')).map(
+      (t) => t.textContent,
+    );
+    // the read one is utility and billable (₹), the delivered one sent its category as `category`
+    expect(pricing[5]).toBe("Utility₹");
+    expect(pricing[6]).toBe("Utility");
+    expect(pricing[0]).toBe("—");
   });
 
   it("filters to Skipped, explains it, and shows the rule that held each message back", async () => {
@@ -129,11 +134,9 @@ describe("WhatsApp Control messages and the sending queue", () => {
     await clickEl(statusTab("Skipped"));
     expect(page!.requests().some((r) => r.includes("status=skipped"))).toBe(true);
     expect(rows()).toHaveLength(1);
-    expect(el('[data-testid="whatsapp-status-help"]')!.textContent).toContain(
-      "Blocked by a rule, so it was never sent.",
-    );
+    expect(el('[data-testid="whatsapp-status-help"]')!.textContent).toContain("Held back by a rule");
     const reason = Array.from(rows()[0].querySelectorAll("p")).find(
-      (p) => p.textContent === "Asha has No WhatsApp on.",
+      (p) => p.textContent === "No approved Meta template (hrms_late_alert).",
     )!;
     expect(reason.className).toContain("text-orange-700");
     expect(reason.className).not.toContain("text-red-700");
@@ -144,12 +147,11 @@ describe("WhatsApp Control messages and the sending queue", () => {
     await clickEl(rows()[3]);
     const dialog = el('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Skipped because");
-    expect(dialog.textContent).toContain("Asha has No WhatsApp on.");
+    expect(dialog.textContent).toContain("No approved Meta template (hrms_late_alert).");
     expect(dialog.textContent).not.toContain("Failure reason");
-    expect(dialog.textContent).toContain("Blocked by a rule, so it was never sent.");
   });
 
-  it("shows when a queued message expires, and when a sent one went out", async () => {
+  it("shows when a queued message expires, and a read one's template, charge, ticks' times and Meta id", async () => {
     await open();
     await clickEl(rows()[0]);
     expect(el('[role="dialog"]')!.textContent).toContain("Expires");
@@ -157,12 +159,15 @@ describe("WhatsApp Control messages and the sending queue", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     await page!.settle();
-    await clickEl(rows()[4]);
-    const dialog = el('[role="dialog"]')!;
-    const rowLabels = Array.from(dialog.querySelectorAll("span")).map((s) => s.textContent);
-    expect(rowLabels).toContain("Sent");
-    expect(rowLabels).toContain("Attempts");
-    expect(dialog.textContent).toContain("A one-time login code");
+    await clickEl(rows()[5]);
+    const dialog = el('[data-testid="wa-message-detail"]')!;
+    const labels = Array.from(dialog.querySelectorAll("span")).map((s) => s.textContent);
+    expect(labels).toEqual(
+      expect.arrayContaining(["Template", "Charged as", "Sent", "Delivered", "Read", "Meta message id"]),
+    );
+    expect(dialog.textContent).toContain("hrms_late_alert");
+    expect(dialog.textContent).toContain("Utility · billable");
+    expect(dialog.textContent).toContain("wamid.HBgM");
     expect(dialog.textContent).not.toContain("Expires");
   });
 });

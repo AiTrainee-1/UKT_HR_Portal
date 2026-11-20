@@ -1,4 +1,4 @@
-import { canViewRoute, useAuth } from "@/contexts/AuthContext";
+import { canViewRoute, permissionLevel, useAuth } from "@/contexts/AuthContext";
 import { moduleForPath } from "@/lib/permission-modules";
 import {
   COMPENSATION_PAGES,
@@ -22,6 +22,26 @@ export type CanOpen = (path: string) => boolean;
 export function useCanOpen(): CanOpen {
   const { user } = useAuth();
   return (path: string) => canViewRoute(user, path.split("?")[0], moduleForPath(path.split("?")[0]));
+}
+
+/** Leave > Sunday & holiday work > Claims: the address whose key decides who may raise a claim for an employee. */
+export const CLAIMS_ROUTE = subPath("leave", "holiday-work", "", "claims");
+
+/** Its permission key (compensation.leave.holiday_work.claims): the server checks the same key on POST /compensation/claims. */
+export const CLAIMS_KEY = moduleForPath(CLAIMS_ROUTE) ?? "compensation";
+
+/** Why "Claim for employee" is greyed out for a login without that right. */
+export const CLAIM_RIGHT_NEEDED = "Needs Edit on Compensation > Leave > Holiday work > Claims";
+
+/**
+ * May the signed-in login raise a claim for an employee (from OT Type 1, OT Type 2 or Birthdays)? Only with Edit on the
+ * Claims sub-tab, whichever page the button is on: the server refuses anybody else with a 403. `reason` is null when it
+ * may, else the right it needs (for the button's tooltip).
+ */
+export function useClaimRight(): { canClaim: boolean; reason: string | null } {
+  const { user } = useAuth();
+  const canClaim = permissionLevel(user, CLAIMS_KEY) === "edit";
+  return { canClaim, reason: canClaim ? null : CLAIM_RIGHT_NEEDED };
 }
 
 /** The subtabs of a page the login may open, in order. */

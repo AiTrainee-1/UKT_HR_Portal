@@ -14,14 +14,15 @@ import { useToast } from "@/hooks/use-toast";
 import { useRedeemBalance, type ShiftsValue } from "@/lib/api-client/custom-hooks";
 import { errorMessage, fmtShifts, shiftsText } from "../logic";
 import { ErrorNotice, Field, Notice, ShiftsPicker, useSingleFlight } from "../ui";
-import { checkRedeem, redeemSummary, type RedeemForm } from "./leave-logic";
+import { REDEEM_NOW, checkRedeem, redeemSummary, type RedeemForm } from "./leave-logic";
 
 export type RedeemTarget = { employeeId: number; employeeName: string; employeeCode: string; balance: number };
 
 /**
- * Redeem: HR takes part of an employee's compensation balance as a day off on a date (employees never redeem themselves).
- * The shifts cannot be more than the balance, and the server refuses a day that cannot take them (a Sunday, a holiday, a
- * day already fully paid): its sentence is shown as it is.
+ * Redeem now (HR, without the Department Head): HR takes part of an employee's compensation balance as a day off on a date
+ * at once, with no approval (kept beside "Use balance", which asks the Department Head). The shifts cannot be more than the
+ * balance, and the server refuses a day that cannot take them (a Sunday, a holiday, a day already fully paid): its
+ * sentence is shown as it is.
  */
 export function RedeemDialog({
   target,
@@ -78,11 +79,14 @@ function RedeemForm({ target, onClose }: { target: RedeemTarget; onClose: () => 
       noValidate
     >
       <DialogHeader>
-        <DialogTitle>Redeem the balance of {target.employeeName}</DialogTitle>
+        <DialogTitle>
+          {REDEEM_NOW}: {target.employeeName}
+        </DialogTitle>
         <DialogDescription>
           <span className="font-mono">{target.employeeCode}</span> has{" "}
           <strong data-testid="redeem-balance">{shiftsText(target.balance)}</strong> to take. Choose the day and how
-          much of it is taken.
+          much of it is taken. HR records it at once: it does not go to the Department Head for approval (Use balance
+          asks the Department Head instead).
         </DialogDescription>
       </DialogHeader>
 

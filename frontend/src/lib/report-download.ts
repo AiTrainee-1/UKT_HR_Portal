@@ -23,6 +23,33 @@ export class ReportDownloadError extends Error {
   }
 }
 
+/** Row ceilings per output, as the catalog sends them (lib/report-center.ts ExportLimits). */
+type Limits = { screen: number; xlsx: number; pdf: number };
+
+/**
+ * Why a file cannot be made from the rows on screen, in plain words, or null when it can (or when the limits are not
+ * known, in which case the server has the last word). `dataRows` excludes subtotal and total lines; `truncated` means
+ * the screen itself was cut at its own ceiling, so the real count is only known to be above it.
+ */
+export function exportBlockReason(
+  format: ReportFileFormat,
+  dataRows: number,
+  truncated: boolean,
+  limits: Limits | undefined,
+): string | null {
+  if (!limits) return null;
+  const max = format === "pdf" ? limits.pdf : limits.xlsx;
+  const over = dataRows > max || (truncated && limits.screen >= max);
+  if (!over) return null;
+  const n = max.toLocaleString("en-IN");
+  if (format === "pdf") {
+    return limits.xlsx > max
+      ? `Too many rows for one PDF (it holds up to ${n}). Download Excel instead, or narrow the filters.`
+      : `Too many rows for one PDF (it holds up to ${n}). Narrow the filters (dates, department, employees).`;
+  }
+  return `Too many rows for one Excel file (it holds up to ${n}). Narrow the filters (dates, department, employees).`;
+}
+
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }

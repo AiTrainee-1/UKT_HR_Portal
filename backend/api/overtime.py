@@ -329,14 +329,35 @@ def sync_overtime(
             to_create.sort(key=lambda row: (row.employee_id, row.date))
             OvertimeRecord.objects.bulk_create(to_create, ignore_conflicts=True)
             result.created = len(to_create)
-        # Always in primary-key order, so two passes that overlap can never wait on each other's rows.
+        # Lock the rows this pass changes or removes FIRST, then look for approved claims with a NEW statement: under
+        # READ COMMITTED a statement that waited for a row lock still judges its NOT EXISTS(approved claim) subquery by
+        # its own older snapshot, so a claim approved while it waited (the approval holds that row's lock: an
+        # ot_allowance approval never writes the row) would be missed; a statement started after the lock sees it
+        # (verification 2026-11-19). Always in primary-key order, so two passes that overlap never wait on each other.
+        touched = sorted({row.pk for row, _changed in to_update} | set(stale))
+        frozen: set = set()
+        if touched:
+            list(
+                OvertimeRecord.objects.select_for_update()
+                .filter(pk__in=touched)
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
+            frozen = set(
+                HolidayWorkClaim.objects.filter(
+                    overtime_record_id__in=touched, status=HolidayWorkClaim.STATUS_APPROVED
+                ).values_list("overtime_record_id", flat=True)
+            )
         for row, changed in sorted(to_update, key=lambda pair: pair[0].pk):
+            if row.pk in frozen:
+                continue  # its claim was approved after the snapshot: the row is decided now
             # Conditional on the row STILL being undecided: an assignment or rejection committed after the snapshot
             # above makes this match nothing, and the HR decision stands.
             # A claim approved after the snapshot freezes the row too.
             result.updated += (
                 OvertimeRecord.objects.filter(pk=row.pk, status__in=UNDECIDED).exclude(_has_claim()).update(**changed)
             )
+        stale = [pk for pk in stale if pk not in frozen]
         if stale:
             victims = list(
                 OvertimeRecord.objects.select_for_update()
@@ -392,7 +413,13 @@ def recompute_stale_days(
     computed (or that has punches and no stored day at all), for the days in [date_from, date_to]. A day's OT comes from
     its stored record, and a record is only ever written when somebody looks at that day: this is what makes the rows
     exist without anyone looking. Only those days are touched: a quiet roster costs two queries. A day HR set by hand
-    (source manual) is never recomputed. Returns how many employees were recomputed.
+    (source manual) is never recomputed, nor is a staff day of a Payroll Done month (payroll_month_workflow.is_locked,
+    read once per month; review 2026-11-19, security #3 / correctness #10): this pass runs for the employee's own GET,
+    the OT job and the attendance refresh, and a finalized month's attendance must not move under its payroll. Returns
+    how many employees were recomputed.
+
+    For staff the next-morning chain is followed past the day after a new punch (shift_engine.staff_night_chain_end):
+    while the following days have early punches of their own, whose they are may change too (correctness #7).
 
     `employment_types`: staff only for the OT job; the attendance refresh pass (attendance_refresh.py) passes production
     too, so every stored day follows its punches whatever the OT switches say."""
@@ -423,7 +450,14 @@ def recompute_stale_days(
             employee_id__in={k[0] for k in latest_punch}, date__gte=date_from, date__lte=date_to
         ).values("employee_id", "date", "updated_at", "source")
     }
+    def stale(emp_id, day, latest) -> bool:
+        record = stored.get((emp_id, day))
+        return record is None or (record["source"] != "manual" and record["updated_at"] < latest)
+
     dirty: dict[int, set] = {}
+    # staff employee -> (the latest punch day whose next-morning chain may run past the day after it, the newest punch
+    # of such days): one chain walk per employee covers every earlier one (they all run through the same days)
+    chains: dict[int, tuple] = {}
     for (emp_id, punch_day), latest in latest_punch.items():
         # a punch stamped after midnight can belong to the day before it, so it makes both days stale; for staff the day
         # AFTER it too when that day has punches or a record (the next-morning rule: this day's punch count decides whose
@@ -432,27 +466,90 @@ def recompute_stale_days(
         next_day = punch_day + timedelta(days=1)
         if kinds.get(emp_id) == "staff" and ((emp_id, next_day) in latest_punch or (emp_id, next_day) in stored):
             candidates.append(next_day)
+            after = next_day + timedelta(days=1)
+            if after <= date_to and (emp_id, after) in latest_punch and stale(emp_id, next_day, latest):
+                start, newest = chains.get(emp_id, (punch_day, latest))
+                chains[emp_id] = (max(start, punch_day), max(newest, latest))
         for day in candidates:
-            if not date_from <= day <= date_to:
+            if date_from <= day <= date_to and stale(emp_id, day, latest):
+                dirty.setdefault(emp_id, set()).add(day)
+    if settings is None and (dirty or chains):
+        settings = PayrollSettings.get()
+    if chains:
+        from .shift_engine import staff_night_chain_end
+
+        for emp in Employee.objects.filter(pk__in=list(chains)):
+            start, newest = chains[emp.pk]
+            try:
+                end = staff_night_chain_end(emp, start, settings, date_to)
+            except Exception:
+                logger.exception("Following the next-morning chain of employee %s after %s failed", emp.pk, start)
                 continue
-            record = stored.get((emp_id, day))
-            if record is not None and (record["source"] == "manual" or record["updated_at"] >= latest):
-                continue
-            dirty.setdefault(emp_id, set()).add(day)
+            day = start + timedelta(days=2)
+            while day <= end:
+                if day >= date_from and stale(emp.pk, day, newest):
+                    dirty.setdefault(emp.pk, set()).add(day)
+                day += timedelta(days=1)
+    locked = _drop_locked_staff_days(dirty, kinds)
     if not dirty:
         return 0
-    if settings is None:
-        settings = PayrollSettings.get()
     done = 0
     for emp in Employee.objects.filter(pk__in=list(dirty)).order_by("pk"):
         days = dirty[emp.pk]
         try:
-            compute_range_records(emp, min(days), max(days), settings)
+            for lo, hi in _open_runs(days, locked if kinds.get(emp.pk) == "staff" else ()):
+                compute_range_records(emp, lo, hi, settings)
             done += 1
         except Exception:
             # one broken employee never stops the rest (and never breaks the page that asked)
             logger.exception("Re-deriving the attendance of employee %s (%s to %s) failed", emp.pk, min(days), max(days))
     return done
+
+
+def _drop_locked_staff_days(dirty: dict, kinds: dict) -> set:
+    """Remove (in place) from `dirty` ({employee id: {date}}) the staff days of a Payroll Done month - the staff payroll
+    month lock (payroll_month_workflow.is_locked) is read once per month; production days are never locked by it - and
+    every employee left with nothing. Returns the locked (year, month) pairs found."""
+    from .payroll_month_workflow import is_locked
+
+    months = {(d.year, d.month) for emp_id, days in dirty.items() if kinds.get(emp_id) == "staff" for d in days}
+    locked = {(year, month) for year, month in months if is_locked(month, year)}
+    if locked:
+        for emp_id in list(dirty):
+            if kinds.get(emp_id) != "staff":
+                continue
+            dirty[emp_id] = {d for d in dirty[emp_id] if (d.year, d.month) not in locked}
+            if not dirty[emp_id]:
+                del dirty[emp_id]
+    return locked
+
+
+def _open_runs(days, locked) -> list[tuple]:
+    """(first, last) spans covering `days` (none of them in a locked month) that never cross a month in `locked`: a
+    range recompute rewrites every day between its ends, so two open months on either side of a locked one are done
+    apart."""
+    runs: list[list] = []
+    for day in sorted(days):
+        if runs and not _locked_month_between(runs[-1][1], day, locked):
+            runs[-1][1] = day
+        else:
+            runs.append([day, day])
+    return [(lo, hi) for lo, hi in runs]
+
+
+def _locked_month_between(a: date_type, b: date_type, locked) -> bool:
+    """Is a month strictly between a's month and b's month (a <= b) in `locked`?"""
+    if not locked:
+        return False
+    year, month = a.year, a.month
+    while True:
+        month += 1
+        if month == 13:
+            year, month = year + 1, 1
+        if (year, month) >= (b.year, b.month):
+            return False
+        if (year, month) in locked:
+            return True
 
 
 def refresh_employee_overtime(emp, today: date_type | None = None, settings=None) -> SyncResult | None:

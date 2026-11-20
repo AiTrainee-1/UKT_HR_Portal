@@ -50,6 +50,19 @@ from .permission_registry import all_module_keys
 from .reporting import registry
 from .reporting.definitions import requests_permission_duty_checks as checks
 from .reporting.definitions import requests_permission_duty_permissions as perms_mod
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
+
+
+# The 2026-11-19 Report Center layout (reporting/layout.py) retired the reports tested here from the catalog: run / export
+# answer 404 for a retired id. Their definitions stay (the MD portal and the gate exports reuse their helpers), so this
+# module keeps guarding their logic through the same endpoints, with every report listed again while it runs.
+def setUpModule():
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
+
 
 UTC = dt_timezone.utc
 

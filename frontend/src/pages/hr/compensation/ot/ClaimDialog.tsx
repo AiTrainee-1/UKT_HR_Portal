@@ -15,6 +15,7 @@ import { useRaiseOtClaims, type OtClaimKind, type OvertimeRow, type ShiftsValue 
 import { formatDuration } from "@/pages/hr/settings/compensation/time";
 import { dateShort, shiftsText } from "../logic";
 import { ErrorNotice, Field, Notice, PersonCell, ShiftsPicker, useSingleFlight } from "../ui";
+import { useClaimRight } from "../visible";
 import {
   OT_CLAIM_REASON_MAX,
   checkOtClaim,
@@ -70,6 +71,8 @@ function ClaimForm({ kind, rows: chosen, onOpenChange, onClaimed }: Omit<Props, 
   const [touched, setTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const check = useMemo(() => checkOtClaim(kind, rows, reason), [kind, rows, reason]);
+  // the buttons that open this dialog are already greyed out without the right; the server refuses it too
+  const { reason: rightProblem } = useClaimRight();
   const once = useSingleFlight();
 
   const change = (key: string, shifts: ShiftsValue) =>
@@ -78,7 +81,7 @@ function ClaimForm({ kind, rows: chosen, onOpenChange, onClaimed }: Omit<Props, 
   const submit = () =>
     once(async () => {
       setTouched(true);
-      if (!check.ok || raise.isPending) return;
+      if (!check.ok || rightProblem || raise.isPending) return;
       setError(null);
       const claimed: string[] = [];
       const refused = new Map<string, string>();
@@ -221,8 +224,8 @@ function ClaimForm({ kind, rows: chosen, onOpenChange, onClaimed }: Omit<Props, 
         <Button
           type="button"
           onClick={() => void submit()}
-          disabled={raise.isPending || total === 0}
-          title={check.ok ? undefined : (check.first ?? undefined)}
+          disabled={raise.isPending || total === 0 || !!rightProblem}
+          title={rightProblem ?? (check.ok ? undefined : (check.first ?? undefined))}
           data-testid="claim-submit"
         >
           {raise.isPending ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Send size={14} className="mr-2" />}

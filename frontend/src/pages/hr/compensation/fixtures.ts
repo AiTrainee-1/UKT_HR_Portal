@@ -234,6 +234,8 @@ export const windowOf = (id: number, over: Partial<CompensationWindow> = {}): Co
   ...over,
 });
 
+// Since the claim workflow any announcement can be removed, a past day and an older Compensation Day included: the server
+// says so per row (`canDelete`, with `deleteBlockedReason` when it cannot).
 export const WINDOWS: CompensationWindow[] = [
   windowOf(901),
   windowOf(900, {
@@ -242,7 +244,8 @@ export const WINDOWS: CompensationWindow[] = [
     kindLabel: "Early-out",
     time: "16:00",
     reason: "Transport strike",
-    canDelete: false,
+    canDelete: true,
+    deleteBlockedReason: null,
   }),
   windowOf(899, {
     date: "2026-09-20",
@@ -250,7 +253,8 @@ export const WINDOWS: CompensationWindow[] = [
     kindLabel: "Day exemption",
     time: null,
     reason: "Festival",
-    canDelete: false,
+    canDelete: true,
+    deleteBlockedReason: null,
   }),
 ];
 

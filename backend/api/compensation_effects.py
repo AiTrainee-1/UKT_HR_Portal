@@ -250,32 +250,122 @@ def _result(outcome: str, message: str, day: dt.date, shifts=None, **extra) -> d
     }
 
 
-def birthday_outcome(employee: Employee, date: dt.date, *, refresh: bool = False) -> dict:
+def punch_logs_around(pairs) -> dict:
+    """{(employee_id, date): [AttendanceLog, ...]} of the days of `pairs` ((employee, date)) and the day before and after
+    each, oldest punch first: what worked_days (and resolve_day_punch_logs) need, in one query."""
+    from .models import AttendanceLog
+
+    emp_ids = {emp.pk for emp, _d in pairs}
+    near = {day + dt.timedelta(days=k) for _e, day in pairs for k in (-1, 0, 1)}
+    logs: dict = {}
+    if not emp_ids:
+        return logs
+    for log in AttendanceLog.objects.filter(employee_id__in=emp_ids, date__in=near).order_by("punch_time", "id"):
+        logs.setdefault((log.employee_id, log.date), []).append(log)
+    return logs
+
+
+def worked_days(pairs, settings=None, *, logs: dict | None = None, assignments: dict | None = None) -> set:
+    """{(employee_id, date)} of the (employee, date) pairs the employee WORKED, read exactly the way the attendance engine
+    reads a day (attendance_final.compute_day_record's day_times / has_manual): the day's own punches after the
+    cross-midnight reattribution (shift_engine.resolve_day_punch_logs: an early punch that closes the previous night is
+    the previous day's; the next morning's early punch that closes this day's open session is this day's), or a manual
+    presence row (Attendance present=True) on a day with no punch of its own. A birthday whose only punch closes the
+    previous night is therefore NOT worked (it is paid birthday leave), and a manual Casual Leave day the employee then
+    came in on IS worked. The one "was the birthday worked?" answer cl_balance (free Casual Leave on an unworked new-rule
+    birthday) and birthday_outcomes (credit to claim / paid leave) share (verification 2026-11-19, correctness #1 / #2).
+    `logs` (punch_logs_around) and `assignments` ({employee_id: [EmployeeShiftAssignment]}), when the caller read them
+    already, save their queries; otherwise one query each, plus one for the presence rows of the days with no punch."""
+    from .models import Attendance, EmployeeShiftAssignment, PayrollSettings
+    from .shift_engine import resolve_day_punch_logs
+
+    pairs = [(emp, day) for emp, day in pairs]
+    out: set = set()
+    if not pairs:
+        return out
+    settings = settings or PayrollSettings.get()
+    if logs is None:
+        logs = punch_logs_around(pairs)
+    if assignments is None:
+        assignments = {}
+        latest = max(day for _e, day in pairs) + dt.timedelta(days=1)
+        for a in (
+            EmployeeShiftAssignment.objects.filter(
+                employee_id__in={e.pk for e, _d in pairs}, effective_from__lte=latest
+            )
+            .select_related("shift")
+            .order_by("effective_from")
+        ):
+            assignments.setdefault(a.employee_id, []).append(a)
+    no_punch = []
+    for emp, day in pairs:
+        own = logs.get((emp.pk, day), [])
+        following = logs.get((emp.pk, day + dt.timedelta(days=1)), [])
+        if own or following:
+            around = {
+                d: logs.get((emp.pk, d), []) for d in (day - dt.timedelta(days=1), day, day + dt.timedelta(days=1))
+            }
+            resolved = resolve_day_punch_logs(
+                emp, day, list(own), settings, assignments=assignments.get(emp.pk, []), logs_by_date=around
+            )
+            if resolved:
+                out.add((emp.pk, day))
+                continue
+            if own:
+                # every punch of the day closes the previous night: the punch ingest's presence row does not make it a
+                # worked day either (attendance_final clears has_manual the same way)
+                continue
+        no_punch.append((emp, day))
+    if no_punch:
+        presence = set(
+            Attendance.objects.filter(
+                employee_id__in={e.pk for e, _d in no_punch},
+                date__in=[d.isoformat() for _e, d in no_punch],
+                present=True,
+            ).values_list("employee_id", "date")
+        )
+        out |= {(emp.pk, day) for emp, day in no_punch if (emp.pk, day.isoformat()) in presence}
+    return out
+
+
+def day_worked(employee: Employee, day: dt.date, settings=None) -> bool:
+    """worked_days for one employee and day."""
+    return (employee.pk, day) in worked_days([(employee, day)], settings)
+
+
+def birthday_outcome(
+    employee: Employee, date: dt.date, *, refresh: bool = False, ignore_switches: bool = False
+) -> dict:
     """What `employee`'s birthday on `date` gives, from their actual attendance and their birthday claim:
     {"outcome": one of the BIRTHDAY_* values, "base": the attendance part alone (paid_leave / credit_claimable /
     upcoming / off_day / not_eligible / old_rule), "message": a plain sentence, "shifts": Decimal("1.00") for a paid leave
     or a credit (else None), "date", "claim": {id, status, kind, shifts} of the latest birthday claim or None,
     "claimable": True when a credit can be claimed now (worked, no pending / approved claim; a rejected one may be claimed
-    again), "dayStatus": the stored day's status or None}. `refresh`: see birthday_outcomes."""
-    return birthday_outcomes([(employee, date)], refresh=refresh)[(employee.pk, date)]
+    again), "dayStatus": the stored day's status or None}. `refresh` / `ignore_switches`: see birthday_outcomes."""
+    return birthday_outcomes([(employee, date)], refresh=refresh, ignore_switches=ignore_switches)[(employee.pk, date)]
 
 
-def birthday_outcomes(pairs, today: dt.date | None = None, *, refresh: bool = False) -> dict:
+def birthday_outcomes(
+    pairs, today: dt.date | None = None, *, refresh: bool = False, ignore_switches: bool = False
+) -> dict:
     """{(employee_id, date): birthday_outcome dict} for many (employee, date) pairs: the settings, the shift assignments,
     the stored days and the claims are each read once.
 
-    A day that has come but has no stored record yet (or a stale one: absent although it has punches now ...) is computed
-    through the normal refresh path (compute_range_records) ONLY when `refresh` is set (a caller that may write: an HR
-    login with Edit on Compensation, the employee's own page, a claim being raised or approved) and the day's payroll
-    month is not finalized (Payroll Done). Otherwise the answer comes from the stored row as it is, or says the day is not
-    worked out yet: a read never rewrites attendance (security review 2026-11-19)."""
+    A day that has come but has no stored record yet (or a stale one: absent although it has punches now, present
+    although it has none ...) is computed through the normal refresh path (compute_range_records) ONLY when `refresh` is
+    set (a caller that may write: an HR login with Edit on Compensation, the employee's own page, a claim being raised or
+    approved) and the day's payroll month is not finalized (Payroll Done). Otherwise the answer comes from the stored row
+    as it is, or says the day is not worked out yet: a read never rewrites attendance (security review 2026-11-19).
+
+    `ignore_switches`: answer from the attendance even with the master / birthday switch off (the approval re-check of a
+    birthday credit: a credit kind stays decidable with the switches off, like holiday work and OT credits; verification
+    2026-11-19, security #2). Whether the day was worked comes from worked_days."""
     from . import compensation_engine as comp
     from . import compensation_rules as rules
     from .attendance_final import compute_range_records
     from .clock import ist_today
     from .models import (
         AttendanceDayRecord,
-        AttendanceLog,
         CompensationConfig,
         EmployeeShiftAssignment,
         HolidayWorkClaim,
@@ -304,12 +394,12 @@ def birthday_outcomes(pairs, today: dt.date | None = None, *, refresh: bool = Fa
     candidates = []  # (emp, day) whose answer depends on the stored day
     for emp, day in pairs:
         key = (emp.pk, day)
-        if not master:
+        if not master and not ignore_switches:
             out[key] = _result(
                 BIRTHDAY_NOT_ELIGIBLE, "The OT / Compensation features are switched off in Settings.", day
             )
             continue
-        if not config.birthday_enabled:
+        if not config.birthday_enabled and not ignore_switches:
             out[key] = _result(BIRTHDAY_NOT_ELIGIBLE, "Birthday compensation is switched off in Settings.", day)
             continue
         if emp.employment_type != "staff" or emp.status != "active":
@@ -364,17 +454,17 @@ def birthday_outcomes(pairs, today: dt.date | None = None, *, refresh: bool = Fa
         (r.employee_id, r.date): r
         for r in AttendanceDayRecord.objects.filter(employee_id__in=cand_emps, date__in=cand_days)
     }
-    punched = set(
-        AttendanceLog.objects.filter(employee_id__in=cand_emps, date__in=cand_days)
-        .values_list("employee_id", "date")
-        .distinct()
-    )
+    # the punches of the days and the day before / after each (one query): what is stale here, and what worked_days reads
+    logs = punch_logs_around(candidates)
+    punched = {(emp_id, d) for (emp_id, d), rows in logs.items() if rows and d in cand_days}
     locked: dict = {}  # (year, month) -> Payroll Done? (read once per month)
     for emp, day in candidates:
         rec = records.get((emp.pk, day))
         # A stored verdict that may predate the day's punches is worked out again: an absent / on-leave day without the
-        # birthday marker (computed before the rule), or a birthday leave (no punch) on a day that has punches now (the
-        # employee came in after the morning's computation).
+        # birthday marker (computed before the rule), a birthday leave (no punch) on a day that has punches now (the
+        # employee came in after the morning's computation), or a present / half day that has no punch any more (its
+        # punches were corrected away and the day was not worked out again, e.g. a big Punch View import; verification
+        # 2026-11-19, correctness #5).
         stale = (
             rec is not None
             and rec.source != "manual"
@@ -384,6 +474,11 @@ def birthday_outcomes(pairs, today: dt.date | None = None, *, refresh: bool = Fa
                     and rec.status in (AttendanceDayRecord.STATUS_ABSENT, "on_leave")
                 )
                 or (rec.compensation_kind == comp.KIND_BIRTHDAY and (emp.pk, day) in punched)
+                or (
+                    rec.compensation_kind != comp.KIND_BIRTHDAY
+                    and rec.status in (AttendanceDayRecord.STATUS_PRESENT, AttendanceDayRecord.STATUS_HALF)
+                    and (emp.pk, day) not in punched
+                )
             )
         )
         month = (day.year, day.month)
@@ -405,10 +500,11 @@ def birthday_outcomes(pairs, today: dt.date | None = None, *, refresh: bool = Fa
     ).order_by("id"):
         claims[(claim.employee_id, claim.work_date)] = claim  # the latest one wins
 
+    worked = worked_days(candidates, settings, logs=logs, assignments=assignments)
     for emp, day in candidates:
         key = (emp.pk, day)
         rec = records.get(key)
-        result = _birthday_from_day(rec, day, today)
+        result = _birthday_from_day(rec, day, today, worked=key in worked)
         claim = claims.get(key)
         if claim is not None:
             result["claim"] = {
@@ -417,7 +513,16 @@ def birthday_outcomes(pairs, today: dt.date | None = None, *, refresh: bool = Fa
                 "kind": claim.kind,
                 "shifts": claim.shifts,
             }
-            if result["base"] == BIRTHDAY_CREDIT_CLAIMABLE:
+            if claim.status == HolidayWorkClaim.STATUS_APPROVED and result["base"] != BIRTHDAY_CREDIT_CLAIMABLE:
+                # an approved credit stays what HR's list and the employee see, whatever the day shows now (its punches
+                # may have been corrected away since; one benefit per birthday: the day is then never paid leave too;
+                # verification 2026-11-19)
+                result["outcome"] = BIRTHDAY_CREDIT_APPROVED
+                result["message"] = (
+                    "The birthday credit was approved (1.00 shift added to the compensation balance), although the "
+                    "day no longer shows as worked."
+                )
+            elif result["base"] == BIRTHDAY_CREDIT_CLAIMABLE:
                 result["outcome"] = _CLAIM_OUTCOME.get(claim.status, result["outcome"])
                 result["message"] = {
                     BIRTHDAY_CREDIT_PENDING: "Worked on the birthday: the credit claim waits for the Department Head.",
@@ -432,10 +537,11 @@ def birthday_outcomes(pairs, today: dt.date | None = None, *, refresh: bool = Fa
     return out
 
 
-def _birthday_from_day(rec, day: dt.date, today: dt.date | None = None) -> dict:
+def _birthday_from_day(rec, day: dt.date, today: dt.date | None = None, worked: bool | None = None) -> dict:
     """The attendance part of a birthday's outcome from its stored day (new rule, a working day that has come). TODAY's
     birthday with no punch yet is still to be decided (BIRTHDAY_UPCOMING): it becomes paid birthday leave only once the day
-    is over (attendance_final), or a credit to claim as soon as the employee punches."""
+    is over (attendance_final), or a credit to claim as soon as the employee punches. `worked` is worked_days' answer (the
+    punches as the engine reads them, never the stored row's possibly stale fields); None = read the row's own fields."""
     from . import compensation_engine as comp
 
     if rec is None:
@@ -445,7 +551,8 @@ def _birthday_from_day(rec, day: dt.date, today: dt.date | None = None) -> dict:
             day,
         )
     status = rec.status
-    worked = bool(rec.first_punch or rec.total_punches)
+    if worked is None:
+        worked = bool(rec.first_punch or rec.total_punches)
     if (
         today is not None
         and day >= today

@@ -375,39 +375,45 @@ export function runOutcome(run: HodRun): string {
   return `${run.hods} HoD${run.hods === 1 ? "" : "s"} reminded. ${parts.join(". ")}`.trim();
 }
 
-// ─── WhatsApp's own switches ───────────────────────────────────────────────────────────────────────────────────────
+// ─── WhatsApp's own switches and template ──────────────────────────────────────────────────────────────────────────
 
-/** WhatsApp Control, where the reminder's WhatsApp switches live (Department Head notifications, 2026-11-17). */
+/** WhatsApp Control, where the reminder's WhatsApp switches live (Department Head notifications, 2026-11-17) and, since
+ *  the move to the Meta WhatsApp Cloud API (2026-11-20), the Meta template it goes out as. */
 export const WHATSAPP_CONTROLS_HREF = "/hr/whatsapp-control?tab=controls";
-export const WHATSAPP_TEXT_HREF = "/hr/whatsapp-control?tab=templates";
+export const WHATSAPP_TEMPLATES_HREF = "/hr/whatsapp-control?tab=templates";
+
+/** The Meta template the HoD reminder goes out as (whatsapp_catalog.py: hrms_<type>). */
+export const HOD_REMINDER_TEMPLATE = "hrms_hod_pending_reminder";
 
 export type WhatsAppFix = { text: string; href: string; label: string };
 
 /**
- * When the server says WhatsApp can't (or didn't) carry the reminder because of a switch on WhatsApp Control (the
- * channel's note, or a delivery's reason), what to switch on and where. null for any other reason (the WAClient keys, a
- * development machine, a head without a phone): those are fixed elsewhere.
+ * When the server says WhatsApp can't (or didn't) carry the reminder because of something on WhatsApp Control (the
+ * channel's note, or a delivery's reason): a switch that is off, or a Meta template that is missing or not approved,
+ * what to fix and where. null for any other reason (the Meta keys, a development machine, a head without a phone):
+ * those are fixed elsewhere.
  */
 export function whatsappSwitchFix(note: string | null | undefined): WhatsAppFix | null {
   const n = note ?? "";
-  if (!/WhatsApp Control/i.test(n)) return null;
-  if (/Message Text/i.test(n))
+  // the template: a reason naming a Meta template, or (an older run's note) the retired Message Text tab
+  if (/Message Text/i.test(n) || (/template/i.test(n) && /approv|missing|no |not |reject|paus|Meta/i.test(n)))
     return {
-      text: "Turn the reminder's text back on: WhatsApp Control → Message Text → “HoD Pending Approvals Reminder”.",
-      href: WHATSAPP_TEXT_HREF,
-      label: "Open Message Text",
+      text: `The reminder goes out as the Meta template ${HOD_REMINDER_TEMPLATE}, which Meta must have approved: WhatsApp Control → Templates.`,
+      href: WHATSAPP_TEMPLATES_HREF,
+      label: "Open Templates",
     };
+  if (!/WhatsApp Control/i.test(n)) return null;
   const needs =
-    "the Department Head notifications section switch and “HoD Pending Approvals Reminder”, both under WhatsApp Control → Feature Controls";
-  if (/master switch/i.test(n))
+    "the Department Head notifications section switch and “HoD Pending Approvals Reminder”, both under WhatsApp Control → Message Controls";
+  if (/master switch|engine/i.test(n))
     return {
       text: `Turn the WhatsApp engine (master switch) back on. The reminder also needs ${needs}.`,
       href: WHATSAPP_CONTROLS_HREF,
-      label: "Open Feature Controls",
+      label: "Open Message Controls",
     };
   return {
     text: `The reminder goes by WhatsApp only with ${needs} switched ON.`,
     href: WHATSAPP_CONTROLS_HREF,
-    label: "Open Feature Controls",
+    label: "Open Message Controls",
   };
 }

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   allowanceFor,
   allowanceLimit,
+  allowanceUnderQuarters,
   dayWords,
+  EXAMPLE_LUNCH,
   EXAMPLE_SHIFT,
+  EXAMPLE_WORK_MINUTES,
   exampleDailyRate,
   judgeFirstPunch,
   ladderOrder,
@@ -210,5 +213,30 @@ describe("the quarters rule (staff OT credit from the claims date)", () => {
     expect(quarterCredit(180, 360)).toBe(0.5);
     expect(quarterCredit(0, 480)).toBe(0);
     expect(quarterCredit(200, 0)).toBe(0);
+  });
+});
+
+describe("the Type 1 allowance under the quarters rule", () => {
+  const rules: AllowanceValue[] = [
+    { enabled: true, minExtraMinutes: 60, allowanceMinutes: 30 },
+    { enabled: true, minExtraMinutes: 90, allowanceMinutes: 30 },
+    { enabled: true, minExtraMinutes: 120, allowanceMinutes: 60 },
+    { enabled: true, minExtraMinutes: 150, allowanceMinutes: 60 },
+  ];
+
+  it("works the Type 1 example's shift out like the quarters example's: 8 hours, so a quarter is 2 hours", () => {
+    expect(EXAMPLE_LUNCH).toBe(30);
+    expect(EXAMPLE_WORK_MINUTES).toBe(480);
+    expect(EXAMPLE_WORK_MINUTES).toBe(workingMinutes(QUARTER_EXAMPLE_SHIFT));
+  });
+
+  it("gives an allowance only while the overtime is less than a quarter of the shift (no Type 2 credit)", () => {
+    expect(allowanceUnderQuarters(119, rules)).toEqual({ minutes: 30, rule: 1, type2: false });
+    // a quarter or more is Type 2's, below the 2 h 30 threshold too
+    expect(allowanceUnderQuarters(120, rules)).toEqual({ minutes: 0, rule: null, type2: true });
+    expect(allowanceUnderQuarters(150, rules)).toEqual({ minutes: 0, rule: null, type2: true });
+    expect(allowanceUnderQuarters(45, rules)).toEqual({ minutes: 0, rule: null, type2: false });
+    // the employee's own shift decides: a 12-hour shift's quarter is 3 hours
+    expect(allowanceUnderQuarters(150, rules, 720)).toEqual({ minutes: 60, rule: 3, type2: false });
   });
 });

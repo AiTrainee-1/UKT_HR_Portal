@@ -336,7 +336,7 @@ def offer_letter_whatsapp(request: Request, employee_id: int) -> Response:
 
     log = whatsapp_service.send_document(
         request, emp, "offer_letter", pdf_bytes, f"offer_letter_{emp.employee_code}.pdf",
-        body_params=[full_name(emp), desig_title],
+        body_params={"employee_name": full_name(emp), "designation": desig_title},
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
     if not whatsapp_service.accepted(log):
@@ -449,7 +449,7 @@ def experience_letter_whatsapp(request: Request, employee_id: int) -> Response:
 
     log = whatsapp_service.send_document(
         request, emp, "experience_letter", pdf_bytes, f"experience_letter_{emp.employee_code}.pdf",
-        body_params=[full_name(emp)],
+        body_params={"employee_name": full_name(emp)},
         document_ref_id=emp.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
     if not whatsapp_service.accepted(log):
@@ -516,9 +516,25 @@ def _slip_personal_rows(fig, emp, ps, min_wage_label: str) -> list:
     return rows
 
 
-def build_salary_slip_pdf(s: SalarySlip) -> bytes:
+def build_salary_slip_pdf(s: SalarySlip, fig=None, leave_lines=None) -> bytes:
+    """One salary slip, a full A4 page. `fig` / `leave_lines` given (the standalone Salary Slip page,
+    salary_slip_center/pdf.py) = those figures are printed; otherwise the Payroll Report's own."""
     ps = PayrollSettings.get()
     ds = CompanyDocumentSettings.get(CompanyDocumentSettings.DOC_TYPE_SALARY_SLIP)
+    # the earnings, deductions, NET and days are the Payroll Report's own (salary_slip_figures): the two never differ
+    fig = fig if fig is not None else slip_figures(s)
+    leave_lines = leave_lines if leave_lines is not None else slip_leave_lines(s.employee, s.year)
+
+    buffer = io.BytesIO()
+    decorator = PremiumPageDecorator(ds, ps, footer_note=f"System-generated payslip -{s.slip_number}")
+    doc = new_premium_document(buffer, decorator)
+    doc.build(salary_slip_story(s, ps, ds, fig, leave_lines))
+    return buffer.getvalue()
+
+
+def salary_slip_story(s, ps: PayrollSettings, ds: CompanyDocumentSettings, fig, leave_lines) -> list:
+    """The flowables of one full-page salary slip (build_salary_slip_pdf). The standalone Salary Slip page puts several
+    of them in one document, a page each (salary_slip_center/pdf.py)."""
     st = styles_for(ds.heading_style, _hex(ds.primary_color, "#0E4B3A"))
     primary = _hex(ds.primary_color, "#0E4B3A")
     accent = _hex(ds.accent_color, "#C9A227")
@@ -526,14 +542,6 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     MONTHS = ["", "January", "February", "March", "April", "May", "June",
               "July", "August", "September", "October", "November", "December"]
     period_label = f"{MONTHS[s.month]} {s.year}" + (f" -Week {s.week_number}" if s.week_number else "")
-
-    # the earnings, deductions, NET and days are the Payroll Report's own (salary_slip_figures): the two never differ
-    fig = slip_figures(s)
-    leave_lines = slip_leave_lines(emp, s.year)
-
-    buffer = io.BytesIO()
-    decorator = PremiumPageDecorator(ds, ps, footer_note=f"System-generated payslip -{s.slip_number}")
-    doc = new_premium_document(buffer, decorator)
 
     story = []
 
@@ -705,9 +713,7 @@ def build_salary_slip_pdf(s: SalarySlip) -> bytes:
     )
     footer_row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "BOTTOM"), ("ALIGN", (3, 0), (3, 0), "RIGHT")]))
     story.append(footer_row)
-
-    doc.build(story)
-    return buffer.getvalue()
+    return story
 
 
 def _compact_salary_slip_flowables(s: SalarySlip, ds: CompanyDocumentSettings, ps: PayrollSettings,

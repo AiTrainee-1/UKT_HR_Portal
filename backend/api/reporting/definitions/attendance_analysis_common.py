@@ -47,6 +47,7 @@ from ..filters import (
 )
 from ..formatting import parse_date
 from ..types import F_EMPLOYMENT_TYPE, FilterSpec
+from .employees_master_base import join_date_of
 
 DAY_ABBR = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 UNASSIGNED = "Unassigned"
@@ -233,9 +234,12 @@ def day_records(ctx, date_from: date, date_to: date, **extra):
     return AttendanceDayRecord.objects.filter(ctx.emp_q("employee__"), date__gte=date_from, date__lte=date_to, **extra)
 
 
-def coverage_notes(ctx, people_by_id: dict[int, Employee], date_from: date, date_to: date) -> list[str]:
+def coverage_notes(
+    ctx, people_by_id: dict[int, Employee], date_from: date, date_to: date, roster: "Roster | None" = None
+) -> list[str]:
     """How many employee-days of the period have no stored record (nobody has opened them in Attendance
-    yet). Only ACTIVE employees are checked, from their joining date, up to today."""
+    yet). Only ACTIVE employees are checked, from their joining date, up to today. ``roster``: read the joining date
+    the way that Roster does (see Roster's ``decode_join``)."""
     last = min(date_to, ctx.today)
     if last < date_from:
         return []
@@ -249,7 +253,8 @@ def coverage_notes(ctx, people_by_id: dict[int, Employee], date_from: date, date
     )
     missing = 0
     for e in actives:
-        start = max(date_from, parse_date(e.join_date) or date_from)
+        joined = roster.join_date(e) if roster is not None else parse_date(e.join_date)
+        start = max(date_from, joined or date_from)
         for d in days_between(start, last):
             if (e.id, d) not in recorded:
                 missing += 1
@@ -266,8 +271,12 @@ class Roster:
     """Per-run lookups shared by the reports: shift assignments, holidays, exit dates, payroll working
     days. Each is one query, loaded lazily, never per row."""
 
-    def __init__(self, ctx, date_from: date, date_to: date):
+    def __init__(self, ctx, date_from: date, date_to: date, *, decode_join: bool = False):
+        """``decode_join``: read the joining date with ``employees_master_base.join_date_of(decode_serial=True)``, so a
+        production join date stored as a spreadsheet serial ('01-01-45640') is its real date instead of year 4564 (which
+        masks every day as 'before joining'). Off by default: the reports that never asked keep their output."""
         self.ctx = ctx
+        self.decode_join = decode_join
         self.month_start, self.month_end = month_span(date_from, date_to)
         self._assignments: dict[int, list] | None = None
         self._holidays: dict[date, list[str]] | None = None
@@ -350,7 +359,10 @@ class Roster:
 
     def join_date(self, emp) -> date | None:
         if emp.id not in self._join:
-            self._join[emp.id] = parse_date(emp.join_date)
+            if self.decode_join:
+                self._join[emp.id] = join_date_of(emp, decode_serial=True)[0]
+            else:
+                self._join[emp.id] = parse_date(emp.join_date)
         return self._join[emp.id]
 
     def employed_between(self, emp, d_from: date, d_to: date, worked: bool = False) -> bool:

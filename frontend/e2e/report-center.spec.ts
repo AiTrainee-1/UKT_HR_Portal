@@ -44,8 +44,13 @@ test("the catalog groups reports by category and search narrows it", async ({ pa
   await loginAsHr(page);
   await page.goto("/hr/reports");
   await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Payroll & Salary" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Attendance", exact: true })).toBeVisible();
+  // the 2026-11-19 layout: HR Reports, Attendance, Shift, Salary, Employee Details, Customise (nothing else is listed)
+  for (const name of ["HR Reports", "Attendance", "Shift", "Salary", "Employee Details", "Customise"]) {
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+  }
+  for (const retired of ["Leave & Requests", "Gate & Visitors", "Loans & Bonus", "Administration"]) {
+    await expect(page.getByRole("heading", { name: retired, exact: true })).toHaveCount(0);
+  }
 
   const search = page.getByLabel("Search reports");
   await search.fill("zzzz-nothing");
@@ -53,7 +58,7 @@ test("the catalog groups reports by category and search narrows it", async ({ pa
   await search.fill("salary");
   await expect(page.getByRole("link", { name: /salary/i }).first()).toBeVisible();
   await search.fill("");
-  await expect(page.getByRole("heading", { name: "Gate & Visitors" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Employee Details", exact: true })).toBeVisible();
 
   // the page brings its own Refresh button, so the shared strip must not appear as well
   await expect(page.getByTestId("button-page-refresh")).toHaveCount(1);
@@ -64,9 +69,9 @@ test("opening a report shows its records, keeps the filters in the URL and downl
   page,
 }) => {
   await loginAsHr(page);
-  await page.goto("/hr/reports?report=employee-master");
+  await page.goto("/hr/reports?report=employee-overall-details");
 
-  await expect(page).toHaveURL(/report=employee-master.*run=1|run=1.*report=employee-master/);
+  await expect(page).toHaveURL(/report=employee-overall-details.*run=1|run=1.*report=employee-overall-details/);
   await expect(page.getByText("Asha Kumar").first()).toBeVisible();
   await expect(page.getByText("Ravi Nair").first()).toBeVisible();
   await expect(page.getByText("Meena Nosalary").first()).toBeVisible();
@@ -101,8 +106,9 @@ test("HR Reports holds Employee Confo Details: the requested columns, an employe
   await loginAsHr(page);
   await page.goto("/hr/reports");
   await expect(page.getByRole("heading", { name: "HR Reports", exact: true })).toBeVisible();
-  // the chip row: ten reports since the Production Salary Statement joined the group (2026-11-06)
-  await expect(page.getByRole("link", { name: /HR Reports\s*10/ })).toBeVisible();
+  // the chip row: ten reports since the Production Salary Statement joined the group (2026-11-06); a chip narrows the
+  // catalog to its category (a button since 2026-11-19)
+  await expect(page.getByRole("button", { name: /HR Reports\s*10/ })).toBeVisible();
   await page.getByRole("link", { name: /Employee Confo Details/ }).click();
   await expect(page).toHaveURL(/report=employee-confo-details/);
 
@@ -225,7 +231,7 @@ test("a view-only role can open, run and download reports, but only for data it 
   await vp.getByTestId("button-submit").click();
   await expect(vp).toHaveURL(/\/hr\/(dashboard|reports)/);
 
-  await vp.goto("/hr/reports?report=employee-master");
+  await vp.goto("/hr/reports?report=employee-overall-details");
   await expect(vp.getByText("Asha Kumar").first()).toBeVisible();
   await expect(vp.getByTestId("report-show")).toBeEnabled();
   await expect(vp.getByTestId("report-download-xlsx")).toBeEnabled();
@@ -235,12 +241,22 @@ test("a view-only role can open, run and download reports, but only for data it 
   // payroll data is owned by the payroll modules this role does not have: not listed, and refused if asked for by id
   const vt = await token(vp);
   const visible = await catalog(vp.request, vt);
-  expect(visible.some((r) => r.id === "salary-register")).toBe(false);
-  expect(visible.some((r) => r.id === "employee-master")).toBe(true);
-  const denied = await vp.request.get("/api/reports/run/salary-register", { headers: auth(vt) });
+  expect(visible.some((r) => r.id === "salary-statement")).toBe(false);
+  expect(visible.some((r) => r.id === "employee-overall-details")).toBe(true);
+  const denied = await vp.request.get("/api/reports/run/salary-statement", { headers: auth(vt) });
   expect(denied.status()).toBe(403);
   expect(((await denied.json()) as { error: string }).error).toBe("report_forbidden");
   await ctx.close();
+});
+
+test("a retired report (2026-11-19 layout) is not listed and its link answers 404", async ({ page }) => {
+  await loginAsHr(page);
+  const t = await token(page);
+  const reports = await catalog(page.request, t);
+  for (const retired of ["employee-master", "audit-log", "salary-register", "attendance-muster-sheet"]) {
+    expect(reports.some((r) => r.id === retired)).toBe(false);
+    expect((await page.request.get(`/api/reports/run/${retired}`, { headers: auth(t) })).status()).toBe(404);
+  }
 });
 
 test("the existing Attendance Report Log page still works", async ({ page }) => {

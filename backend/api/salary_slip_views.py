@@ -303,10 +303,11 @@ def email_salary_slip(request: Request, pk: int) -> Response:
 
 
 def _send_slip_whatsapp(request: Request, s: SalarySlip, sent_by_id: int | None = None):
-    """Shared by the single-send and bulk-send endpoints -mirrors
-    _send_slip_email's role but for WhatsApp. Always returns a
-    WhatsAppMessageLog row (see whatsapp_service.send_document). Needs
-    `request` to build the public media URL WAClient fetches the PDF from."""
+    """The single-send endpoint's WhatsApp send -mirrors _send_slip_email's
+    role. Always returns a WhatsAppMessageLog row (see
+    whatsapp_service.send_document): the PDF travels in the header of the
+    approved Meta template hrms_salary_slip (uploaded to Meta when its turn
+    in the queue comes)."""
     from . import whatsapp_service
     from .company_documents_views import build_salary_slip_pdf
 
@@ -315,7 +316,7 @@ def _send_slip_whatsapp(request: Request, s: SalarySlip, sent_by_id: int | None 
     emp_name = f"{emp.first_name} {emp.last_name}".strip()
     return whatsapp_service.send_document(
         request, emp, "salary_slip", pdf_bytes, f"salary_slip_{s.slip_number}.pdf",
-        body_params=[emp_name, f"{MONTHS[s.month]} {s.year}"],
+        body_params={"employee_name": emp_name, "month_year": f"{MONTHS[s.month]} {s.year}"},
         document_ref_id=s.id, sent_by_id=sent_by_id,
     )
 
@@ -323,11 +324,11 @@ def _send_slip_whatsapp(request: Request, s: SalarySlip, sent_by_id: int | None 
 @api_view(["POST"])
 @require_hr
 def whatsapp_salary_slip(request: Request, pk: int) -> Response:
-    """Send a salary slip via WhatsApp (WAClient) with the configured message wording."""
+    """Send a salary slip via WhatsApp: the approved Meta template hrms_salary_slip with the PDF in its header."""
     from . import whatsapp_service
 
     if not whatsapp_service.is_configured():
-        logger.warning("Salary slip %s WhatsApp refused: WACLIENT_INSTANCE_ID / WACLIENT_ACCESS_TOKEN not set", pk)
+        logger.warning("Salary slip %s WhatsApp refused: %s", pk, whatsapp_service.sending_block_reason())
         return Response({"error": "WhatsApp is not configured on this server (missing credentials in .env)."}, status=400)
 
     try:
@@ -388,6 +389,10 @@ def salary_slip_bulk_whatsapp(request: Request) -> Response:
         return Response(
             {"error": "WhatsApp sending is switched off (master switch) on the WhatsApp Control page."}, status=400
         )
+    # ... or the type is switched off, or its Meta template (hrms_salary_slip) is not approved yet
+    problem = whatsapp_service.switch_off_reason("salary_slip") or whatsapp_service.template_problem("salary_slip")
+    if problem:
+        return Response({"error": problem}, status=400)
 
     sent_by_id = request.jwt_user.get("hrUserId")
     batch_id = progress.new_batch("salary_slip")
@@ -395,7 +400,10 @@ def salary_slip_bulk_whatsapp(request: Request) -> Response:
         emp = s.employee
         whatsapp_service.queue_document(
             request, emp, "salary_slip",
-            [f"{emp.first_name} {emp.last_name}".strip(), f"{MONTHS[s.month]} {s.year}"],
+            {
+                "employee_name": f"{emp.first_name} {emp.last_name}".strip(),
+                "month_year": f"{MONTHS[s.month]} {s.year}",
+            },
             build="salary_slip", build_args={"slip_id": s.id},
             filename=f"salary_slip_{s.slip_number}.pdf",
             document_ref_id=s.id, sent_by_id=sent_by_id, batch_id=batch_id,

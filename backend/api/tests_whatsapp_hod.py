@@ -8,7 +8,6 @@ Run via: python manage.py test api.tests_whatsapp_hod --keepdb
 """
 
 from datetime import date
-from unittest import mock
 
 from django.test import TestCase, override_settings
 
@@ -27,17 +26,10 @@ from .models import (
     WhatsAppMessageLog,
     WhatsAppSettings,
 )
-
-LIVE = dict(WACLIENT_INSTANCE_ID="I1", WACLIENT_ACCESS_TOKEN="tok", WHATSAPP_ALLOW_SENDING=True)
-
-
-def ok_answer(*args, **kwargs):
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message_payload": {"key": {"id": "WA1"}}}
-    return r
+from .tests_whatsapp_support import META, FakeMeta, approve_templates
 
 
-@override_settings(**LIVE)
+@override_settings(**META)
 class World(TestCase):
     def setUp(self):
         super().setUp()
@@ -59,8 +51,8 @@ class World(TestCase):
             total_days=2,
             reason="Fever",
         )
-        self.post = mock.patch("api.whatsapp_service.requests.post", side_effect=ok_answer).start()
-        self.addCleanup(mock.patch.stopall)
+        self.meta = FakeMeta.install(self)  # Meta's Graph API, faked: nothing leaves the machine
+        approve_templates("hod_request_waiting", "hod_pending_reminder")
 
     def waiting(self):
         return WhatsAppMessageLog.objects.filter(document_type="hod_request_waiting")
@@ -111,6 +103,21 @@ class RequestWaitingTests(World):
         self.assertEqual((row.employee, row.phone_number, row.status), (self.head, "919876543210", "sent"))
         for needle in ("Dear Suresh R", "Asha K (E1)", "20 Nov 2026", "Fever", "Approvals"):
             self.assertIn(needle, row.message_text)
+        # what went to Meta: the approved template and its named variables, one line each
+        sent = self.meta.last()
+        self.assertEqual((sent["to"], sent["template"]), ("919876543210", "hrms_hod_request_waiting"))
+        self.assertEqual(row.template_name, "hrms_hod_request_waiting")
+        self.assertEqual(
+            {k: sent["params"][k] for k in ("hod_name", "employee_name", "employee_code", "request_type", "reason")},
+            {
+                "hod_name": "Suresh R",
+                "employee_name": "Asha K",
+                "employee_code": "E1",
+                "request_type": "Leave",
+                "reason": "Fever",
+            },
+        )
+        self.assertLessEqual(set(sent["params"]), set(catalog.get("hod_request_waiting").variable_names))
 
     def test_the_whatsapp_does_not_follow_the_phone_settings(self):
         self.switch(hod_request_waiting_enabled=True)
@@ -133,3 +140,26 @@ class RequestWaitingTests(World):
         row = self.waiting().get()
         self.assertIn("*On-Duty* request waiting", row.message_text)
         self.assertIn("At Erode mill", row.message_text)
+        self.assertEqual(self.meta.last()["params"]["details"], "At Erode mill")
+        self.assertEqual(self.meta.last()["params"]["time"], "-")  # a template can't drop a line: "-" for nothing
+
+
+class MetaTemplateTests(World):
+    def test_a_reason_typed_over_several_lines_goes_on_one_line(self):
+        self.switch(hod_request_waiting_enabled=True)
+        self.leave.reason = "Fever\n\tand   a cold"
+        self.leave.save()
+        approval.notify_hod_of_request("leave", self.asha, "leave request", self.leave)
+        self.assertEqual(self.meta.last()["params"]["reason"], "Fever and a cold")
+        for value in self.meta.last()["params"].values():
+            self.assertNotIn("\n", value)
+
+    def test_without_an_approved_template_nothing_reaches_meta_and_the_log_says_why(self):
+        self.switch(hod_request_waiting_enabled=True)
+        approve_templates("hod_request_waiting", status="PENDING")
+        approval.notify_hod_of_request("leave", self.asha, "leave request", self.leave)
+        row = self.waiting().get()
+        self.assertEqual(row.status, "skipped")
+        self.assertIn("hrms_hod_request_waiting", row.error_message)
+        self.assertIn("PENDING", row.error_message)
+        self.assertEqual(self.meta.sent, [])

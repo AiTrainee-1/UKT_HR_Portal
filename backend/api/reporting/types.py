@@ -83,23 +83,39 @@ FILTER_KINDS = (
 )
 
 # Category ids, in display order. (id, label, description, lucide icon name)
+# The Report Center shows only the reports listed in layout.LAYOUT (plus saved Customise reports and the MD's own
+# category); the "Retired" groups below stay so their old definitions still load (the MD portal's analytics reuse
+# their helpers), but nothing of theirs is listed any more.
 CATEGORIES: list[tuple[str, str, str, str]] = [
-    ("payroll", "Payroll & Salary", "Slips, registers, wages, statutory statements and deductions", "Wallet"),
-    (
-        "attendance",
-        "Attendance",
-        "Time cards, daily and monthly attendance, late, overtime and shifts",
-        "CalendarCheck",
-    ),
-    ("leave", "Leave & Requests", "Leave, permission, on-duty, missing punch and other requests", "CalendarOff"),
-    ("gate", "Gate & Visitors", "Outpass, visitor and tea-break registers", "DoorOpen"),
-    ("employees", "Employees", "Master data, headcount, joiners, exits and compliance", "Users"),
     (
         "hr",
         "HR Reports",
         "Ready-made HR lists that bring employee, salary, HOD and shift details together",
         "Briefcase",
     ),
+    (
+        "attendance",
+        "Attendance",
+        "Staff and production attendance, time cards, punches, leave, late, misspunch and on-duty",
+        "CalendarCheck",
+    ),
+    ("shift", "Shift", "Assigned and gained shifts, shift changes and shift-wise attendance", "Clock"),
+    (
+        "payroll",
+        "Salary",
+        "Salary statements, staff and production salary, gained and expected salary, department-wise figures",
+        "Wallet",
+    ),
+    ("employees", "Employee Details", "Employee details, fixed salary, monthly shifts, time card and punches", "Users"),
+    (
+        "customise",
+        "Customise",
+        "Build your own report from any HRMS data, save it, and download it as Excel or PDF",
+        "SlidersHorizontal",
+    ),
+    # Retired groups (nothing listed): kept so their definitions still register.
+    ("leave", "Leave & Requests", "Leave, permission, on-duty, missing punch and other requests", "CalendarOff"),
+    ("gate", "Gate & Visitors", "Outpass, visitor and tea-break registers", "DoorOpen"),
     ("finance", "Loans & Bonus", "Advances, loans, bonus, increments and promotions", "Banknote"),
     ("admin", "Administration", "Audit trail, user access and system activity", "ShieldCheck"),
     # Executive reports for the Managing Director only (ReportSpec.md_only): nobody else sees this category.

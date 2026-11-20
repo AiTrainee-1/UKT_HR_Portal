@@ -235,6 +235,11 @@ describe("following the claims", () => {
     expect(dayKindText({ dayKind: "holiday", holidayName: "Diwali" })).toBe("Holiday: Diwali");
     expect(dayKindText({ dayKind: "holiday", holidayName: null })).toBe("Company holiday");
   });
+
+  it("names an employee's own off Saturday as such, never as a company holiday", () => {
+    expect(dayKindText({ dayKind: "off_saturday", holidayName: "Off Saturday" })).toBe("Off Saturday");
+    expect(dayKindText({ dayKind: "off_saturday", holidayName: null })).toBe("Off Saturday");
+  });
 });
 
 describe("the balance", () => {

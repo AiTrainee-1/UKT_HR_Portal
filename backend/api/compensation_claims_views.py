@@ -69,6 +69,7 @@ from .models import (
     CompensationLeaveCredit,
     CompensationLedger,
     Employee,
+    EmployeeShiftAssignment,
     HolidayWorkClaim,
     OvertimeRecord,
 )
@@ -296,10 +297,10 @@ def employee_compensation_use(request: Request) -> Response:
 # ───────────────────────────── HR portal: claims ─────────────────────────────
 
 
-def _enabled_block() -> dict:
+def _enabled_block(request=None) -> dict:
     from .holiday_work_views import _enabled_block as holiday_block
 
-    block = holiday_block()
+    block = holiday_block(request)
     flags = switches()
     workflow = block["workflow"]
     block.update(
@@ -403,7 +404,7 @@ def _list_claims(request: Request) -> Response:
                 "pendingCreditShifts": float(pending_by_side["credit"] or 0),
                 "pendingUseShifts": float(pending_by_side["use"] or 0),
             },
-            "enabled": _enabled_block(),
+            "enabled": _enabled_block(request),
         }
     )
 
@@ -841,7 +842,15 @@ def previous_sunday(today: date) -> date:
 def holiday_work_month(request: Request) -> Response:
     """GET ?month=&year=&departmentId=&branchId=: the month's Sundays and holidays with who worked / is eligible / is
     claimed, the default date (the latest past Sunday) and maxAgeDays."""
-    from .holiday_work_views import MAX_CLAIM_AGE_DAYS, _enabled_block as holiday_block, date_problem, worked_ids
+    from .holiday_work_views import (
+        DAY_KIND_LABELS,
+        MAX_CLAIM_AGE_DAYS,
+        OFF_SATURDAY,
+        date_problem,
+        off_saturday_staff,
+        worked_ids,
+    )
+    from .holiday_work_views import _enabled_block as holiday_block
 
     q = request.query_params
     month, year, error = _month_year(q, default_current=True)
@@ -862,6 +871,13 @@ def holiday_work_month(request: Request) -> Response:
     if ids["branchId"] is not None:
         staff = staff.filter(branch_id=ids["branchId"])
     staff_ids = list(staff.values_list("id", flat=True))
+    # the staff's shift assignments, read once: a Saturday is listed (kind off_saturday) when it is the own off day of
+    # anyone in scope (owner decision 4: working a day off is holiday work)
+    assignments: dict = {}
+    for a in EmployeeShiftAssignment.objects.filter(employee_id__in=staff_ids, effective_from__lte=last).order_by(
+        "effective_from"
+    ):
+        assignments.setdefault(a.employee_id, []).append(a)
     claimed = {}
     for row in HolidayWorkClaim.objects.filter(
         kind=HolidayWorkClaim.KIND_HOLIDAY_WORK,
@@ -877,15 +893,24 @@ def holiday_work_month(request: Request) -> Response:
     cursor = first
     while cursor <= last:
         kind = day_kind(cursor, holidays)
+        day_staff = staff_ids
+        if kind is None and cursor.weekday() == 5:
+            day_staff = list(off_saturday_staff(cursor, staff_ids, assignments))
+            kind = OFF_SATURDAY if day_staff else None
         if kind is not None:
-            worked = worked_ids(cursor, staff_ids) if cursor <= today else set()
+            worked = worked_ids(cursor, day_staff) if cursor <= today else set()
             taken = claimed.get(cursor, {"pending": set(), "approved": set()})
+            if kind == OFF_SATURDAY and not (worked or taken["pending"] or taken["approved"]):
+                # an off Saturday nobody worked (or claimed) is not listed: it would only crowd the strip
+                cursor += timedelta(days=1)
+                continue
             problem = date_problem(cursor, today)
             eligible = 0 if problem else len(worked - taken["pending"] - taken["approved"])
             days.append(
                 {
                     "date": cursor.isoformat(),
                     "kind": kind,
+                    "kindLabel": DAY_KIND_LABELS.get(kind),
                     "holidayName": holidays.get(cursor),
                     "weekLabel": f"Week {(cursor.day - 1) // 7 + 1}",
                     "label": date_text(cursor),
@@ -906,6 +931,6 @@ def holiday_work_month(request: Request) -> Response:
             "maxAgeDays": MAX_CLAIM_AGE_DAYS,
             "earliestDate": (today - timedelta(days=MAX_CLAIM_AGE_DAYS)).isoformat(),
             "today": today.isoformat(),
-            "enabled": holiday_block(),
+            "enabled": holiday_block(request),
         }
     )

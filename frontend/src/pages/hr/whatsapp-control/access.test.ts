@@ -8,8 +8,8 @@ import { WA_MODULE, WA_PATH, WA_TABS, waTabModule } from "./tabs";
 
 // Who sees which tab of WhatsApp Control. Every tab lives at /hr/whatsapp-control (?tab= picks one), so the route is
 // gated by the page's key and each tab by its own key (whatsapp_control.<tab>, Account Management -> Roles & Permissions),
-// which follows the page while nothing is set on it. "Send a test" (2026-11-17) is one of them: hidden, View only (preview,
-// no sending) or edit like the others.
+// which follows the page while nothing is set on it. The nine tabs of the Meta Cloud API page (2026-11-20): Overview,
+// Usage & Cost, Message Controls, Templates, OTP, Messages, Employees, Send a test, Settings.
 
 type User = Parameters<typeof canViewRoute>[0];
 const hr = (permissions: Record<string, "hidden" | "view" | "edit">): User => ({
@@ -26,11 +26,21 @@ const tabsFor = (user: User, search = "") => {
 };
 
 describe("the tabs and their keys", () => {
-  it("match the permission tree, Send a test included, in its order", () => {
+  it("match the permission tree's keys, labels and order", () => {
     const node = MODULE_TREE.find((n) => n.key === WA_MODULE);
     expect(node?.children?.map((c) => c.key)).toEqual(WA_TABS.map((t) => waTabModule(t.value)));
-    expect(WA_TABS.map((t) => t.value)).toContain("test");
-    expect(node?.children?.find((c) => c.key === "whatsapp_control.test")?.label).toBe("Send a test");
+    expect(node?.children?.map((c) => c.label)).toEqual(WA_TABS.map((t) => t.label));
+    expect(WA_TABS.map((t) => t.value)).toEqual([
+      "overview",
+      "usage",
+      "controls",
+      "templates",
+      "otp",
+      "messages",
+      "employees",
+      "test",
+      "config",
+    ]);
     expect(ROUTE_MODULE_MAP[WA_PATH]).toBe(WA_MODULE);
     expect(moduleForPath(WA_PATH)).toBe(WA_MODULE);
   });
@@ -50,8 +60,10 @@ describe("who sees which tab", () => {
     expect(open).toBe("overview");
   });
 
-  it("opens the tab the address names (a link from Requests -> Notify to Feature Controls)", () => {
+  it("opens the tab the address names (a link from Requests -> Notify to Message Controls)", () => {
     expect(tabsFor(hr({ whatsapp_control: "edit" }), "?tab=controls").open).toBe("controls");
+    expect(tabsFor(hr({ whatsapp_control: "edit" }), "?tab=usage").open).toBe("usage");
+    expect(tabsFor(hr({ whatsapp_control: "edit" }), "?tab=otp").open).toBe("otp");
     expect(tabsFor(hr({ whatsapp_control: "edit" }), "?tab=test").open).toBe("test");
     expect(tabsFor(hr({ whatsapp_control: "edit" }), "?tab=nope").open).toBe("overview");
     expect(tabHref(WA_PATH, "controls")).toBe("/hr/whatsapp-control?tab=controls");
@@ -64,7 +76,17 @@ describe("who sees which tab", () => {
     expect(tabsFor(user).open).toBe("test");
   });
 
-  it("keeps the connection check with Configuration: hiding Configuration hides it", () => {
+  it("hides Usage & Cost and Templates on their own (a role that may switch messages but not see the bill)", () => {
+    const user = hr({
+      whatsapp_control: "edit",
+      "whatsapp_control.usage": "hidden",
+      "whatsapp_control.templates": "hidden",
+    });
+    expect(tabsFor(user).visible).toEqual(["overview", "controls", "otp", "messages", "employees", "test", "config"]);
+    expect(tabsFor(user, "?tab=usage").open).toBe("overview");
+  });
+
+  it("keeps the set-up check with Settings: hiding Settings hides it", () => {
     const user = hr({ whatsapp_control: "edit", "whatsapp_control.config": "hidden" });
     expect(tabsFor(user).visible).not.toContain("config");
     expect(tabsFor(user).visible).toContain("test");

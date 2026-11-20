@@ -5,7 +5,13 @@ vi.mock("@/lib/exportUtils", () => ({
   downloadBlob: (blob: Blob, name: string) => saved.push({ name, size: blob.size }),
 }));
 
-import { downloadReportFile, exportFilename, filenameFromDisposition, ReportDownloadError } from "./report-download";
+import {
+  downloadReportFile,
+  exportBlockReason,
+  exportFilename,
+  filenameFromDisposition,
+  ReportDownloadError,
+} from "./report-download";
 
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -112,5 +118,34 @@ describe("downloadReportFile", () => {
     fetchMock.mockReturnValue(respond("PK", { headers: { "content-type": XLSX } }));
     await downloadReportFile(opts);
     expect(fetchMock.mock.calls[0][1].headers).toEqual({});
+  });
+});
+
+describe("exportBlockReason", () => {
+  const LIMITS = { screen: 10_000, xlsx: 30_000, pdf: 5_000 };
+
+  it("allows a file within its ceiling, and anything when the limits are not known", () => {
+    expect(exportBlockReason("pdf", 5_000, false, LIMITS)).toBeNull();
+    expect(exportBlockReason("xlsx", 10_000, false, LIMITS)).toBeNull();
+    expect(exportBlockReason("pdf", 999_999, true, undefined)).toBeNull();
+  });
+
+  it("refuses a PDF over its ceiling and points at Excel when Excel holds more", () => {
+    const why = exportBlockReason("pdf", 5_001, false, LIMITS);
+    expect(why).toMatch(/up to 5,000/);
+    expect(why).toMatch(/Download Excel instead/);
+    // a report whose PDF ceiling is not below Excel's: just narrow the filters
+    expect(exportBlockReason("pdf", 400, false, { screen: 300, xlsx: 300, pdf: 300 })).toMatch(/Narrow the filters/);
+  });
+
+  it("treats a cut-off screen as over a ceiling no higher than the screen's, but not over a higher one", () => {
+    // 10,000 shown of more: certainly over the 5,000-row PDF, maybe not over the 30,000-row Excel
+    expect(exportBlockReason("pdf", 10_000, true, LIMITS)).not.toBeNull();
+    expect(exportBlockReason("xlsx", 10_000, true, LIMITS)).toBeNull();
+    expect(exportBlockReason("xlsx", 2_000, true, { screen: 2_000, xlsx: 2_000, pdf: 1_000 })).toMatch(/Excel file/);
+  });
+
+  it("refuses an Excel file over its ceiling", () => {
+    expect(exportBlockReason("xlsx", 30_001, false, LIMITS)).toMatch(/up to 30,000/);
   });
 });

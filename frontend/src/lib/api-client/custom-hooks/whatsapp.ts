@@ -1,9 +1,15 @@
 // whatsapp: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
+//
+// Since 2026-11-20 every WhatsApp message goes out through the official Meta WhatsApp Cloud API as an APPROVED Meta
+// template. The first half of this file is what the rest of the portal uses (one-document sends, the
+// salary-slip bulk send); the second half is WhatsApp Control (/hr/whatsapp-control). Every answer of WhatsApp Control is
+// read through a read*() function that fills in a safe value for anything missing, so an older or a newer server (the
+// backend lands in parallel) never breaks a tab.
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, customFetch } from "../custom-fetch";
 import { PayrollBreakdownResponse, PayrollRunItem } from "./payroll";
 
-// ── WhatsApp (Settings, single-send mutations, bulk-send progress) ─────────
+// ── WhatsApp (single-send mutations, bulk-send progress) ───────────────────
 
 export type WhatsAppDocumentType =
   | "salary_slip"
@@ -32,42 +38,6 @@ export type WhatsAppDocumentType =
   | "visitor_contact"
   // The server's message catalog is the source of truth; a type added there just works here.
   | (string & {});
-
-export type WhatsAppStatus = { configured: boolean; instanceId: string | null };
-
-export const useWhatsAppStatus = () =>
-  useQuery<WhatsAppStatus>({
-    queryKey: ["/api/whatsapp/status"],
-    queryFn: () => customFetch<WhatsAppStatus>("/api/whatsapp/status"),
-  });
-
-export type WhatsAppTemplate = {
-  documentType: WhatsAppDocumentType;
-  /** HR's own wording; empty means the built-in default is sent. */
-  messageBody: string;
-  defaultMessage: string;
-  /** What each {{n}} placeholder is filled with for this document type. */
-  placeholders: string;
-  isEnabled: boolean;
-};
-
-export const useWhatsAppTemplates = () =>
-  useQuery<WhatsAppTemplate[]>({
-    queryKey: ["/api/whatsapp/templates"],
-    queryFn: () => customFetch<WhatsAppTemplate[]>("/api/whatsapp/templates"),
-  });
-
-export const useUpdateWhatsAppTemplate = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ documentType, data }: { documentType: WhatsAppDocumentType; data: Partial<WhatsAppTemplate> }) =>
-      customFetch<WhatsAppTemplate>(`/api/whatsapp/templates/${documentType}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/templates"] }),
-  });
-};
 
 // Single-document sends -one mutation per document type, same {ok, sentTo}
 // shape as the equivalent email mutations above.
@@ -191,33 +161,440 @@ export const usePayrollBreakdown = (id: number | null) =>
   });
 
 // ── WhatsApp Control page (/hr/whatsapp-control) ───────────────────────────
+//
+//   GET   overview                     the connection, this month's messages and cost, templates, OTP, queue, alerts
+//   GET   usage?month=YYYY-MM          per day / category / type, cost so far and projected (with and without GST)
+//   GET   settings / PATCH settings    switches, timings, sending limits, quiet hours, OTP master, template overrides,
+//                                      price per category, monthly budget
+//   GET   meta-templates               the Meta templates (synced from Meta) and which message types use each
+//   POST  meta-templates/sync          pull them from Meta now
+//   GET   meta-templates/draft/<type>  a ready-to-submit draft for one message type
+//   POST  meta-templates               create a template and submit it to Meta for approval
+//   POST  meta-templates/create-missing   submit a draft for every switched-on type without a template
+//   DELETE meta-templates/<id>         delete a template at Meta and here
+//   GET   connection                   the set-up checklist (environment variable names, phone, token, webhook)
+//   GET/POST test-message              Send a test: the options, then a dry-run preview or a real send
+//   GET   messages, employees, queue;  PATCH employees/<id>/opt-out;  POST queue/clear
 
-/** The statuses every overview count carries. */
+const BASE = "/api/whatsapp-control";
+
+/** Every status a message row can have: the queue's (queued, sending, expired, skipped) and Meta's delivery ones. */
 export type WhatsAppDeliveryStatus = "pending" | "sent" | "delivered" | "read" | "failed";
-/** The sending queue's statuses: waiting its turn, being sent, too late to be useful (never sent), blocked by a rule. */
 export type WhatsAppQueueMessageStatus = "queued" | "sending" | "expired" | "skipped";
 export type WhatsAppMessageStatus = WhatsAppDeliveryStatus | WhatsAppQueueMessageStatus;
 /** Why a message was sent: a one-time login code, something the employee asked for, an automatic alert, a document. */
 export type WhatsAppMessageKind = "code" | "requested" | "automatic" | "document";
-/** A module key from the server's catalog: documents, otp, attendance, approvals, geo, visitors, outpass, other. */
+/** A module key from the server's catalog: documents, otp, attendance, approvals, hod, geo, visitors, outpass, other. */
 export type WhatsAppCategory = string;
+/** Meta's pricing categories (what a message is charged as). One-time codes are authentication. */
+export type WhatsAppPricingCategory = "authentication" | "utility" | "marketing" | "service";
+export const WHATSAPP_PRICING_CATEGORIES: readonly WhatsAppPricingCategory[] = [
+  "authentication",
+  "utility",
+  "marketing",
+  "service",
+];
 
-export type WhatsAppCounts = Record<WhatsAppDeliveryStatus, number> &
-  Partial<Record<WhatsAppQueueMessageStatus, number>> & { total: number; accepted: number };
+// ── reading helpers ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type WhatsAppConfig = {
-  provider: string;
-  configured: boolean;
-  instanceId: string | null;
-  apiUrl: string;
-  defaultCountryCode: string;
-  sendDelaySeconds: number;
-  publicBaseUrl: string;
-  webhookUrl: string;
-  webhookTokenSet: boolean;
-  /** Approval, visitor and gate messages are delivered by a background worker. */
-  backgroundSending: boolean;
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const rec = (v: unknown): Record<string, unknown> => (isRecord(v) ? v : {});
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+/** A number from JSON: a number, or a Decimal the server sent as text ("0.1150"); anything else is null. */
+const numOrNull = (v: unknown): number | null => {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  return null;
 };
+const strOrNull = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+const boolOrNull = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+const strList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "") : [];
+const codeList = (v: unknown): string[] | null => {
+  if (!Array.isArray(v)) return null;
+  const out = v.map((c) => (typeof c === "number" ? String(c) : c)).filter((c): c is string => typeof c === "string");
+  return out.length ? out : null;
+};
+/** A rate as a percentage: the server may send 0.93 or 93. */
+const pctOrNull = (v: unknown): number | null => {
+  const n = numOrNull(v);
+  if (n === null) return null;
+  return n <= 1 ? Math.round(n * 1000) / 10 : Math.round(n * 10) / 10;
+};
+
+function query(params: Record<string, string | number | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
+  return qs.toString();
+}
+
+/** The server's own sentence for a refused request ("Max per hour must be between 1 and 500."), else `fallback`. A code
+ *  in `error` ("permission_denied", from the permission middleware) is passed over for the sentence in `message`. */
+export function whatsAppErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    const data = err.data;
+    if (isRecord(data)) {
+      for (const field of ["error", "message", "detail"]) {
+        const sentence = data[field];
+        if (typeof sentence !== "string" || !sentence.trim()) continue;
+        if (field === "error" && /^[a-z]+(_[a-z]+)+$/.test(sentence.trim()) && typeof data.message === "string")
+          continue;
+        return sentence.trim();
+      }
+    }
+    return fallback;
+  }
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
+/** A refused form's per-field sentences ({fields: {body: "..."}} or {errors: {...}}), when the server sent them. */
+export function whatsAppFieldErrors(err: unknown): Record<string, string> {
+  if (!(err instanceof ApiError) || !isRecord(err.data)) return {};
+  const out: Record<string, string> = {};
+  for (const holder of [err.data.fields, err.data.errors, err.data.fieldErrors]) {
+    if (!isRecord(holder)) continue;
+    for (const [key, value] of Object.entries(holder)) {
+      const sentence = Array.isArray(value) ? value.find((v) => typeof v === "string") : value;
+      if (typeof sentence === "string" && sentence.trim()) out[key] = sentence.trim();
+    }
+  }
+  return out;
+}
+
+// ── Overview ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export type WhatsAppAlert = { level: "error" | "warning" | "info"; code: string; message: string };
+
+export type WhatsAppConnectionSummary = {
+  configured: boolean;
+  sendingAllowed: boolean;
+  blockReasons: string[];
+  /** Meta's quality rating of the number: GREEN, YELLOW, RED (null: not known). */
+  qualityRating: string | null;
+  /** Meta's messaging limit: TIER_250, TIER_2K, TIER_10K, TIER_100K, TIER_UNLIMITED. */
+  messagingLimitTier: string | null;
+  displayNumber: string | null;
+  verifiedName: string | null;
+  /** The number's status at Meta (CONNECTED, FLAGGED, RESTRICTED ...). */
+  status: string | null;
+  lastWebhookAt: string | null;
+};
+
+export type WhatsAppMonthCounts = {
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  queued: number;
+  skipped: number;
+  /** Percentages (0-100), null when nothing was sent. */
+  deliveryRate: number | null;
+  readRate: number | null;
+};
+
+export type WhatsAppCostSummary = {
+  soFar: number;
+  projected: number;
+  budget: number | null;
+  budgetUsedPct: number | null;
+  currency: string;
+};
+
+/** A switched-on message type with no approved or pending template: it is skipped until one exists. */
+export type WhatsAppMissingTemplate = { type: string; label: string; templateName: string | null };
+
+export type WhatsAppOtpSummary = {
+  enabled: boolean;
+  /** WhatsApp codes can go out right now (configured, engine on, template approved). */
+  available: boolean;
+  templateStatus: string | null;
+  templateName: string | null;
+  /** This month's WhatsApp codes, when the server counts them. */
+  month: { sent: number; delivered: number | null; verified: number | null } | null;
+};
+
+export type WhatsAppOverview = {
+  connection: WhatsAppConnectionSummary;
+  month: WhatsAppMonthCounts;
+  cost: WhatsAppCostSummary;
+  templates: { approved: number; pending: number; rejected: number; missingForEnabledTypes: WhatsAppMissingTemplate[] };
+  otp: WhatsAppOtpSummary;
+  queue: WhatsAppQueue | null;
+  alerts: WhatsAppAlert[];
+};
+
+const ALERT_LEVELS = ["error", "warning", "info"] as const;
+
+function readAlerts(v: unknown): WhatsAppAlert[] {
+  return (Array.isArray(v) ? v : [])
+    .map((a): WhatsAppAlert | null => {
+      if (typeof a === "string" && a.trim()) return { level: "warning", code: "", message: a };
+      if (!isRecord(a) || !strOrNull(a.message)) return null;
+      const level = ALERT_LEVELS.includes(a.level as WhatsAppAlert["level"])
+        ? (a.level as WhatsAppAlert["level"])
+        : "info";
+      return { level, code: str(a.code), message: str(a.message) };
+    })
+    .filter((a): a is WhatsAppAlert => a !== null);
+}
+
+function readMissing(v: unknown): WhatsAppMissingTemplate[] {
+  return (Array.isArray(v) ? v : [])
+    .map((m): WhatsAppMissingTemplate | null => {
+      if (typeof m === "string" && m) return { type: m, label: m, templateName: null };
+      if (!isRecord(m)) return null;
+      const type = strOrNull(m.type) ?? strOrNull(m.key) ?? strOrNull(m.documentType);
+      if (!type) return null;
+      return {
+        type,
+        label: strOrNull(m.label) ?? type,
+        templateName: strOrNull(m.templateName) ?? strOrNull(m.template) ?? strOrNull(m.name),
+      };
+    })
+    .filter((m): m is WhatsAppMissingTemplate => m !== null);
+}
+
+export function readWhatsAppOverview(raw: unknown): WhatsAppOverview {
+  const r = rec(raw);
+  const c = rec(r.connection);
+  const m = rec(r.month);
+  const cost = rec(r.cost);
+  const t = rec(r.templates);
+  const o = rec(r.otp);
+  const om = isRecord(o.month) ? o.month : typeof o.sent === "number" ? o : null;
+  const sent = num(m.sent);
+  const delivered = num(m.delivered);
+  const read = num(m.read);
+  return {
+    connection: {
+      configured: c.configured === true,
+      sendingAllowed: c.sendingAllowed === true,
+      blockReasons: strList(c.blockReasons),
+      qualityRating: strOrNull(c.qualityRating),
+      messagingLimitTier: strOrNull(c.messagingLimitTier),
+      displayNumber: strOrNull(c.displayNumber),
+      verifiedName: strOrNull(c.verifiedName),
+      status: strOrNull(c.status),
+      lastWebhookAt: strOrNull(c.lastWebhookAt),
+    },
+    month: {
+      sent,
+      delivered,
+      read,
+      failed: num(m.failed),
+      queued: num(m.queued),
+      skipped: num(m.skipped),
+      // the server's rate when it sent one; else worked out here (a read message was delivered first)
+      deliveryRate: pctOrNull(m.deliveryRate) ?? (sent ? Math.round(((delivered + read) / sent) * 1000) / 10 : null),
+      readRate: pctOrNull(m.readRate) ?? (sent ? Math.round((read / sent) * 1000) / 10 : null),
+    },
+    cost: {
+      soFar: numOrNull(cost.soFar) ?? 0,
+      projected: numOrNull(cost.projected) ?? 0,
+      budget: numOrNull(cost.budget),
+      budgetUsedPct: numOrNull(cost.budgetUsedPct),
+      currency: strOrNull(cost.currency) ?? "INR",
+    },
+    templates: {
+      approved: num(t.approved),
+      pending: num(t.pending),
+      rejected: num(t.rejected),
+      missingForEnabledTypes: readMissing(t.missingForEnabledTypes),
+    },
+    otp: {
+      enabled: o.enabled === true,
+      available: o.available === true,
+      templateStatus: strOrNull(o.templateStatus),
+      templateName: strOrNull(o.templateName) ?? strOrNull(o.template),
+      month: om ? { sent: num(om.sent), delivered: numOrNull(om.delivered), verified: numOrNull(om.verified) } : null,
+    },
+    queue: isRecord(r.queue) ? readWhatsAppQueue(r.queue) : null,
+    alerts: readAlerts(r.alerts),
+  };
+}
+
+export const WHATSAPP_OVERVIEW_KEY = `${BASE}/overview`;
+
+export const useWhatsAppOverview = (enabled = true) =>
+  useQuery<WhatsAppOverview>({
+    queryKey: [WHATSAPP_OVERVIEW_KEY],
+    queryFn: async () => readWhatsAppOverview(await customFetch<unknown>(WHATSAPP_OVERVIEW_KEY)),
+    enabled,
+    refetchInterval: 60_000,
+  });
+
+// ── Usage & Cost ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export type WhatsAppCategoryCounts = Record<WhatsAppPricingCategory, number>;
+
+export type WhatsAppUsageDay = {
+  date: string;
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  byCategory: WhatsAppCategoryCounts;
+};
+
+export type WhatsAppCategoryUsage = { messages: number; billable: number; rate: number; cost: number };
+
+export type WhatsAppTypeUsage = { type: string; label: string; module: string; messages: number; cost: number };
+
+export type WhatsAppUsage = {
+  month: string;
+  days: WhatsAppUsageDay[];
+  totals: { sent: number; delivered: number; read: number; failed: number; skipped: number; billable: number };
+  byCategory: Record<WhatsAppPricingCategory, WhatsAppCategoryUsage>;
+  byType: WhatsAppTypeUsage[];
+  cost: {
+    soFar: number;
+    soFarWithGst: number;
+    projected: number;
+    projectedWithGst: number;
+    gstRate: number;
+    budget: number | null;
+    budgetUsedPct: number | null;
+    currency: string;
+    isCurrentMonth: boolean;
+  };
+  rates: Record<WhatsAppPricingCategory, number>;
+  /** Meta's own figures for the month (pricing analytics), when Meta answered. */
+  meta: {
+    available: boolean;
+    cost: number | null;
+    volume: number | null;
+    lastSyncedAt: string | null;
+    error: string | null;
+  };
+};
+
+/** India's price per delivered message before GST (Meta's rate card, Nov 2026): the page's estimate when the server
+ *  sends none. HR edits them on Settings. */
+export const WHATSAPP_DEFAULT_PRICE_RATES: Readonly<Record<WhatsAppPricingCategory, number>> = {
+  authentication: 0.115,
+  utility: 0.115,
+  marketing: 0.8631,
+  service: 0,
+};
+
+const GST = 0.18;
+
+function readCategoryCounts(v: unknown): WhatsAppCategoryCounts {
+  const r = rec(v);
+  return {
+    authentication: num(r.authentication),
+    utility: num(r.utility),
+    marketing: num(r.marketing),
+    service: num(r.service),
+  };
+}
+
+function readRates(v: unknown): Record<WhatsAppPricingCategory, number> {
+  const r = rec(v);
+  const out = { ...WHATSAPP_DEFAULT_PRICE_RATES };
+  for (const c of WHATSAPP_PRICING_CATEGORIES) {
+    const n = numOrNull(r[c]);
+    if (n !== null && n >= 0) out[c] = n;
+  }
+  return out;
+}
+
+export function readWhatsAppUsage(raw: unknown, askedMonth = ""): WhatsAppUsage {
+  const r = rec(raw);
+  const totals = rec(r.totals);
+  const byCat = rec(r.byCategory);
+  const cost = rec(r.cost);
+  const meta = rec(r.meta);
+  const rates = readRates(r.rates);
+  const gstRate = numOrNull(cost.gstRate) ?? GST;
+  const soFar = numOrNull(cost.soFar) ?? 0;
+  const projected = numOrNull(cost.projected) ?? soFar;
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const byCategory = Object.fromEntries(
+    WHATSAPP_PRICING_CATEGORIES.map((c) => {
+      const row = rec(byCat[c]);
+      return [
+        c,
+        {
+          messages: num(row.messages),
+          billable: num(row.billable),
+          rate: numOrNull(row.rate) ?? rates[c],
+          cost: numOrNull(row.cost) ?? 0,
+        },
+      ];
+    }),
+  ) as Record<WhatsAppPricingCategory, WhatsAppCategoryUsage>;
+  return {
+    month: strOrNull(r.month) ?? askedMonth,
+    days: (Array.isArray(r.days) ? r.days : [])
+      .filter(isRecord)
+      .filter((d) => typeof d.date === "string" && d.date !== "")
+      .map((d) => ({
+        date: d.date as string,
+        sent: num(d.sent),
+        delivered: num(d.delivered),
+        read: num(d.read),
+        failed: num(d.failed),
+        byCategory: readCategoryCounts(d.byCategory),
+      })),
+    totals: {
+      sent: num(totals.sent),
+      delivered: num(totals.delivered),
+      read: num(totals.read),
+      failed: num(totals.failed),
+      skipped: num(totals.skipped),
+      billable: num(totals.billable),
+    },
+    byCategory,
+    byType: (Array.isArray(r.byType) ? r.byType : [])
+      .filter(isRecord)
+      .filter((t) => typeof t.type === "string" && t.type !== "")
+      .map((t) => ({
+        type: t.type as string,
+        label: strOrNull(t.label) ?? (t.type as string),
+        module: str(t.module),
+        messages: num(t.messages),
+        cost: numOrNull(t.cost) ?? 0,
+      })),
+    cost: {
+      soFar,
+      soFarWithGst: numOrNull(cost.soFarWithGst) ?? round2(soFar * (1 + gstRate)),
+      projected,
+      projectedWithGst: numOrNull(cost.projectedWithGst) ?? round2(projected * (1 + gstRate)),
+      gstRate,
+      budget: numOrNull(cost.budget),
+      budgetUsedPct: numOrNull(cost.budgetUsedPct),
+      currency: strOrNull(cost.currency) ?? "INR",
+      isCurrentMonth: cost.isCurrentMonth !== false,
+    },
+    rates,
+    meta: {
+      available: meta.available === true,
+      cost: numOrNull(meta.cost),
+      volume: numOrNull(meta.volume),
+      lastSyncedAt: strOrNull(meta.lastSyncedAt),
+      error: strOrNull(meta.error),
+    },
+  };
+}
+
+export const WHATSAPP_USAGE_KEY = `${BASE}/usage`;
+
+/** One month's usage ("YYYY-MM"; "" = this month). */
+export const useWhatsAppUsage = (month: string, enabled = true) =>
+  useQuery<WhatsAppUsage>({
+    queryKey: [WHATSAPP_USAGE_KEY, month],
+    queryFn: async () =>
+      readWhatsAppUsage(
+        await customFetch<unknown>(month ? `${WHATSAPP_USAGE_KEY}?${query({ month })}` : WHATSAPP_USAGE_KEY),
+        month,
+      ),
+    enabled,
+    placeholderData: keepPreviousData,
+  });
+
+// ── Messages ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type WhatsAppMessage = {
   id: number;
@@ -245,42 +622,40 @@ export type WhatsAppMessage = {
   updatedAt: string | null;
   // The sending queue's fields (a server older than the queue leaves them out).
   kind?: WhatsAppMessageKind | (string & {});
-  /** When WhatsApp accepted it; null while it waits or when it was never sent. */
+  /** When Meta accepted it; null while it waits or when it was never sent. */
   sentAt?: string | null;
   /** After this it is too late to be useful, and it expires instead of going out. */
   expiresAt?: string | null;
   attempts?: number;
+  // Meta Cloud API (2026-11-20)
+  /** The Meta template it was sent as. */
+  templateName?: string;
+  /** What Meta charges it as (from the delivery receipt, else the template's category). */
+  pricingCategory?: WhatsAppPricingCategory | (string & {}) | null;
+  /** Meta says it is charged; null while not known. */
+  billable?: boolean | null;
+  deliveredAt?: string | null;
+  readAt?: string | null;
 };
 
-export type WhatsAppOverview = {
-  days: number;
-  config: WhatsAppConfig;
-  totals: WhatsAppCounts;
-  /** Today's and this month's counts, whatever the selected range. */
-  today: WhatsAppCounts;
-  thisMonth: WhatsAppCounts;
-  categories: { key: WhatsAppCategory; label: string }[];
-  /** The HRMS workflows a message can come from (Leave, On-Duty request, ...), for the Workflow filter. */
-  relatedModules: { key: string; label: string }[];
-  byCategory: Record<WhatsAppCategory, WhatsAppCounts>;
-  byType: {
-    documentType: WhatsAppDocumentType;
-    label: string;
-    category: WhatsAppCategory;
-    total: number;
-    failed: number;
-  }[];
-  daily: { date: string; total: number; failed: number }[];
-  recentFailures: WhatsAppMessage[];
-  stalePending: number;
-};
-
-export const useWhatsAppOverview = (days: number) =>
-  useQuery<WhatsAppOverview>({
-    queryKey: ["/api/whatsapp-control/overview", days],
-    queryFn: () => customFetch<WhatsAppOverview>(`/api/whatsapp-control/overview?days=${days}`),
-    refetchInterval: 30_000,
-  });
+/** A message row with the Meta fields read under either name the server may use. */
+export function readWhatsAppMessage(raw: WhatsAppMessage): WhatsAppMessage {
+  const r = raw as unknown as Record<string, unknown>;
+  const pricing =
+    strOrNull(r.pricingCategory) ??
+    strOrNull(r.metaCategory) ??
+    (WHATSAPP_PRICING_CATEGORIES.includes(r.category as WhatsAppPricingCategory) ? (r.category as string) : null);
+  return {
+    ...raw,
+    templateName: strOrNull(r.templateName) ?? strOrNull(r.template) ?? "",
+    pricingCategory: pricing ? pricing.toLowerCase() : null,
+    billable: boolOrNull(r.billable),
+    deliveredAt: strOrNull(r.deliveredAt),
+    readAt: strOrNull(r.readAt),
+    messageText: str(r.messageText),
+    error: str(r.error),
+  };
+}
 
 export type Paged<T> = { items: T[]; total: number; page: number; pageSize: number };
 
@@ -298,19 +673,18 @@ export type WhatsAppMessageFilters = {
   pageSize: number;
 };
 
-function query(params: Record<string, string | number | undefined>): string {
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
-  return qs.toString();
-}
-
 export const useWhatsAppMessages = (filters: WhatsAppMessageFilters, enabled = true) =>
   useQuery<Paged<WhatsAppMessage>>({
-    queryKey: ["/api/whatsapp-control/messages", filters],
-    queryFn: () => customFetch<Paged<WhatsAppMessage>>(`/api/whatsapp-control/messages?${query(filters)}`),
+    queryKey: [`${BASE}/messages`, filters],
+    queryFn: async () => {
+      const page = await customFetch<Paged<WhatsAppMessage>>(`${BASE}/messages?${query(filters)}`);
+      return { ...page, items: (page?.items ?? []).map(readWhatsAppMessage) };
+    },
     enabled,
     refetchInterval: 30_000,
   });
+
+// ── Employees and opt-out ───────────────────────────────────────────────────────────────────────────────────────────
 
 export type WhatsAppEmployeeRow = {
   employeeId: number;
@@ -321,7 +695,7 @@ export type WhatsAppEmployeeRow = {
   total: number;
   failed: number;
   lastMessageAt: string | null;
-  /** The employee asked for no WhatsApp messages ("No WhatsApp"). */
+  /** The employee asked for no WhatsApp messages ("No WhatsApp"), or replied STOP. */
   optOut: boolean;
 };
 
@@ -335,7 +709,7 @@ export type WhatsAppEmployeeParams = {
   pageSize: number;
 };
 
-const WHATSAPP_EMPLOYEES_KEY = "/api/whatsapp-control/employees";
+const WHATSAPP_EMPLOYEES_KEY = `${BASE}/employees`;
 
 export const useWhatsAppEmployees = (params: WhatsAppEmployeeParams) =>
   useQuery<Paged<WhatsAppEmployeeRow>>({
@@ -367,10 +741,12 @@ export const useSetWhatsAppOptOut = () => {
     onSettled: () => {
       queryClient.invalidateQueries({ predicate: isEmployeeList });
       // Messages held back from now on show as Skipped.
-      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp-control/queue"] });
+      queryClient.invalidateQueries({ queryKey: [WHATSAPP_QUEUE_KEY] });
     },
   });
 };
+
+// ── Settings (switches, timings, limits, OTP master, overrides, prices, budget) ─────────────────────────────────────
 
 export type WhatsAppFeature = { key: string; label: string; description: string; group: string; enabled: boolean };
 export type WhatsAppFeatureGroup = { key: string; title: string; blurb: string };
@@ -390,37 +766,113 @@ export type WhatsAppQuietHours = { enabled: boolean; start: string; end: string 
 export type WhatsAppControlSettings = {
   /** The master switch: OFF sends nothing by WhatsApp, one-time login codes included. */
   engineEnabled: boolean;
+  /** The WhatsApp OTP master switch: OFF sends no code by WhatsApp (SMS codes are set on SMS Control, on their own). */
+  otpEnabled: boolean;
   groups: WhatsAppFeatureGroup[];
   /** The module and workflow switches, plus one `type:<document_type>` switch per message type that has no other. */
   features: WhatsAppFeature[];
   timings: WhatsAppTiming[];
   queueLimits: WhatsAppQueueLimit[];
-  quietHours: WhatsAppQuietHours;
-  config: WhatsAppConfig;
+  quietHours: WhatsAppQuietHours | undefined;
+  /** HR's choice of Meta template for a message type: {typeKey: templateName}. */
+  templateOverrides: Record<string, string>;
+  /** Rupees per delivered billable message, before GST, per Meta pricing category. */
+  priceRates: Record<WhatsAppPricingCategory, number>;
+  /** Rupees a month; null = no budget set. */
+  monthlyBudget: number | null;
   updatedAt: string | null;
 };
-/** A PUT carries only what changed: a feature key, a timing or queue limit, engineEnabled, or (part of) quietHours. */
-export type WhatsAppControlSettingsUpdate = Record<string, boolean | number | Partial<WhatsAppQuietHours>>;
+/** A change carries only what changed: a feature key, a timing or queue limit, engineEnabled, otpEnabled, (part of)
+ *  quietHours, templateOverrides, priceRates, monthlyBudget. */
+export type WhatsAppControlSettingsUpdate = Record<
+  string,
+  boolean | number | null | Partial<WhatsAppQuietHours> | Record<string, string> | Record<string, number>
+>;
 
-export const useWhatsAppControlSettings = () =>
+export function readWhatsAppSettings(raw: unknown): WhatsAppControlSettings {
+  const r = rec(raw);
+  const list = <T>(v: unknown, keep: (x: Record<string, unknown>) => T | null): T[] =>
+    (Array.isArray(v) ? v : [])
+      .filter(isRecord)
+      .map(keep)
+      .filter((x): x is T => x !== null);
+  const q = isRecord(r.quietHours) ? r.quietHours : null;
+  const overrides: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rec(r.templateOverrides))) if (typeof v === "string" && v) overrides[k] = v;
+  return {
+    engineEnabled: r.engineEnabled !== false,
+    otpEnabled: r.otpEnabled !== false,
+    groups: list(r.groups, (g) =>
+      typeof g.key === "string" ? { key: g.key, title: str(g.title) || g.key, blurb: str(g.blurb) } : null,
+    ),
+    features: list(r.features, (f) =>
+      typeof f.key === "string"
+        ? {
+            key: f.key,
+            label: str(f.label) || f.key,
+            description: str(f.description),
+            group: str(f.group) || "other",
+            enabled: f.enabled === true,
+          }
+        : null,
+    ),
+    timings: list(r.timings, (t) =>
+      typeof t.key === "string"
+        ? { key: t.key, label: str(t.label) || t.key, value: num(t.value), min: num(t.min), max: num(t.max) }
+        : null,
+    ),
+    queueLimits: list(r.queueLimits, (l) =>
+      typeof l.key === "string"
+        ? {
+            key: l.key,
+            label: str(l.label) || l.key,
+            value: num(l.value),
+            min: num(l.min),
+            max: num(l.max),
+            unit: str(l.unit),
+          }
+        : null,
+    ),
+    quietHours: q
+      ? { enabled: q.enabled === true, start: str(q.start) || "21:00", end: str(q.end) || "07:00" }
+      : undefined,
+    templateOverrides: overrides,
+    priceRates: readRates(r.priceRates),
+    monthlyBudget: numOrNull(r.monthlyBudget),
+    updatedAt: strOrNull(r.updatedAt),
+  };
+}
+
+export const WHATSAPP_SETTINGS_KEY = `${BASE}/settings`;
+
+export const useWhatsAppControlSettings = (enabled = true) =>
   useQuery<WhatsAppControlSettings>({
-    queryKey: ["/api/whatsapp-control/settings"],
-    queryFn: () => customFetch<WhatsAppControlSettings>("/api/whatsapp-control/settings"),
+    queryKey: [WHATSAPP_SETTINGS_KEY],
+    queryFn: async () => readWhatsAppSettings(await customFetch<unknown>(WHATSAPP_SETTINGS_KEY)),
+    enabled,
   });
+
+/** PATCH (the Meta contract); a server that still only knows PUT (405) gets the same body as a PUT. */
+async function saveSettings(data: WhatsAppControlSettingsUpdate): Promise<unknown> {
+  const init = { body: JSON.stringify(data) };
+  try {
+    return await customFetch<unknown>(WHATSAPP_SETTINGS_KEY, { ...init, method: "PATCH" });
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 405)
+      return customFetch<unknown>(WHATSAPP_SETTINGS_KEY, { ...init, method: "PUT" });
+    throw e;
+  }
+}
 
 export const useUpdateWhatsAppControlSettings = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: WhatsAppControlSettingsUpdate) =>
-      customFetch<WhatsAppControlSettings>("/api/whatsapp-control/settings", {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }),
+    mutationFn: async (data: WhatsAppControlSettingsUpdate) => readWhatsAppSettings(await saveSettings(data)),
     onSuccess: (data) => {
-      queryClient.setQueryData(["/api/whatsapp-control/settings"], data);
-      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp-control/templates"] });
-      // The engine switch, the limits and quiet hours all change what the queue reports.
-      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp-control/queue"] });
+      queryClient.setQueryData([WHATSAPP_SETTINGS_KEY], data);
+      // The switches, limits, prices and budget change what the queue, the overview, the cost and the templates report.
+      for (const key of [WHATSAPP_QUEUE_KEY, WHATSAPP_OVERVIEW_KEY, WHATSAPP_USAGE_KEY, WHATSAPP_META_TEMPLATES_KEY])
+        void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });
 };
@@ -444,13 +896,10 @@ export type WhatsAppQueue = {
   limits: Record<WhatsAppQueueLimitKey, number>;
 };
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
-const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-
 /** Reads the queue's answer with a safe value for anything missing, so a partial answer can't break the page. */
 export function readWhatsAppQueue(raw: unknown): WhatsAppQueue {
-  const r = isRecord(raw) ? raw : {};
-  const limits = isRecord(r.limits) ? r.limits : {};
+  const r = rec(raw);
+  const limits = rec(r.limits);
   return {
     engineEnabled: r.engineEnabled !== false,
     paused: r.paused === true,
@@ -472,7 +921,7 @@ export function readWhatsAppQueue(raw: unknown): WhatsAppQueue {
   };
 }
 
-const WHATSAPP_QUEUE_KEY = "/api/whatsapp-control/queue";
+const WHATSAPP_QUEUE_KEY = `${BASE}/queue`;
 
 /** Today's sending queue. Polled every 30 s while the card showing it is on screen (and the browser tab is visible). */
 export const useWhatsAppQueue = (enabled = true) =>
@@ -489,231 +938,334 @@ export const useClearWhatsAppQueue = () => {
   return useMutation({
     mutationFn: () => customFetch<{ cleared: number }>(`${WHATSAPP_QUEUE_KEY}/clear`, { method: "POST" }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [WHATSAPP_QUEUE_KEY] });
-      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp-control/messages"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp-control/overview"] });
+      for (const key of [WHATSAPP_QUEUE_KEY, `${BASE}/messages`, WHATSAPP_OVERVIEW_KEY])
+        void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });
 };
 
-/** The server's own sentence for a refused request ("Max per hour must be between 1 and 500."), else `fallback`. A code
- *  in `error` ("permission_denied", from the permission middleware) is passed over for the sentence in `message`. */
-export function whatsAppErrorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    const data = err.data;
-    if (isRecord(data)) {
-      for (const field of ["error", "message", "detail"]) {
-        const sentence = data[field];
-        if (typeof sentence !== "string" || !sentence.trim()) continue;
-        if (field === "error" && /^[a-z]+(_[a-z]+)+$/.test(sentence.trim()) && typeof data.message === "string")
-          continue;
-        return sentence.trim();
-      }
-    }
-    return fallback;
-  }
-  return err instanceof Error && err.message ? err.message : fallback;
-}
+// ── Meta templates ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type WhatsAppTemplateVariable = { name: string; help: string; sample: string };
+/** Meta's template statuses (DRAFT: saved here, never submitted; DELETED: Meta no longer has it). */
+export type MetaTemplateStatus =
+  | "DRAFT"
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "PAUSED"
+  | "DISABLED"
+  | "IN_APPEAL"
+  | "PENDING_DELETION"
+  | "DELETED"
+  | "LIMIT_EXCEEDED"
+  | (string & {});
 
-export type WhatsAppControlTemplate = {
-  documentType: WhatsAppDocumentType;
-  label: string;
-  description: string;
-  category: WhatsAppCategory;
-  categoryLabel: string;
-  /** False for messages with no text to word (a contact card). */
-  hasWording: boolean;
-  messageBody: string;
-  defaultMessage: string;
-  placeholders: string;
-  variables: WhatsAppTemplateVariable[];
-  /** The current wording rendered with sample values. */
-  preview: string;
-  isEnabled: boolean;
-  /** This message's own switch (Feature Controls); null when it has none. */
-  featureEnabled: boolean | null;
-  /** The switch for the message's whole module; null when the module has none. */
-  moduleEnabled: boolean | null;
-  customised: boolean;
-  updatedAt: string | null;
-  total: number;
-  failed: number;
-  lastSentAt: string | null;
+export type MetaTemplateCategory = "UTILITY" | "AUTHENTICATION" | "MARKETING" | (string & {});
+
+export type WhatsAppMetaTemplate = {
+  id: number;
+  name: string;
+  language: string;
+  category: MetaTemplateCategory;
+  status: MetaTemplateStatus;
+  qualityScore: string | null;
+  rejectedReason: string | null;
+  /** The HRMS message types sent as this template (by default or by HR's choice). */
+  messageTypes: string[];
+  /** Meta's components (HEADER, BODY, FOOTER, BUTTONS). */
+  components: Record<string, unknown>[];
+  lastSyncedAt: string | null;
+  metaId: string | null;
 };
 
-export const useWhatsAppControlTemplates = (enabled = true) =>
-  useQuery<WhatsAppControlTemplate[]>({
-    queryKey: ["/api/whatsapp-control/templates"],
-    queryFn: () => customFetch<WhatsAppControlTemplate[]>("/api/whatsapp-control/templates"),
+export type WhatsAppMetaTemplates = {
+  templates: WhatsAppMetaTemplate[];
+  lastSyncedAt: string | null;
+  /** The Meta keys are set on this server (else nothing can be synced or submitted). */
+  configured: boolean;
+};
+
+const upper = (v: unknown, fallback: string): string => (strOrNull(v) ?? fallback).toUpperCase();
+
+export function readMetaTemplates(raw: unknown): WhatsAppMetaTemplates {
+  const r = rec(raw);
+  const rows = Array.isArray(raw) ? raw : r.templates;
+  return {
+    templates: (Array.isArray(rows) ? rows : [])
+      .filter(isRecord)
+      .filter((t) => typeof t.name === "string" && t.name !== "")
+      .map((t, i) => {
+        const quality = isRecord(t.qualityScore) ? strOrNull(t.qualityScore.score) : strOrNull(t.qualityScore);
+        return {
+          id: typeof t.id === "number" ? t.id : -(i + 1),
+          name: t.name as string,
+          language: strOrNull(t.language) ?? "en",
+          category: upper(t.category, "UTILITY"),
+          status: upper(t.status, "PENDING"),
+          qualityScore: quality ? quality.toUpperCase() : null,
+          rejectedReason: strOrNull(t.rejectedReason),
+          messageTypes: strList(t.messageTypes),
+          components: (Array.isArray(t.components) ? t.components : []).filter(isRecord),
+          lastSyncedAt: strOrNull(t.lastSyncedAt),
+          metaId: strOrNull(t.metaId) ?? (typeof t.metaId === "number" ? String(t.metaId) : null),
+        };
+      }),
+    lastSyncedAt: strOrNull(r.lastSyncedAt),
+    configured: r.configured !== false,
+  };
+}
+
+export const WHATSAPP_META_TEMPLATES_KEY = `${BASE}/meta-templates`;
+
+export const useMetaTemplates = (enabled = true) =>
+  useQuery<WhatsAppMetaTemplates>({
+    queryKey: [WHATSAPP_META_TEMPLATES_KEY],
+    queryFn: async () => readMetaTemplates(await customFetch<unknown>(WHATSAPP_META_TEMPLATES_KEY)),
     enabled,
   });
 
-export const useUpdateWhatsAppControlTemplate = () => {
+/** What changes when a template is created, synced or deleted: the list, the overview's counts and alerts, the
+ *  settings (a type's template status) and the OTP tab (the code template). */
+function invalidateTemplates(queryClient: ReturnType<typeof useQueryClient>) {
+  for (const key of [WHATSAPP_META_TEMPLATES_KEY, WHATSAPP_OVERVIEW_KEY, `${BASE}/meta-templates/draft`])
+    void queryClient.invalidateQueries({ queryKey: [key] });
+}
+
+export type WhatsAppSyncResult = { synced: number | null; message: string | null };
+
+export const useSyncMetaTemplates = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      documentType,
-      data,
-    }: {
-      documentType: WhatsAppDocumentType;
-      data: { messageBody?: string; isEnabled?: boolean };
-    }) =>
-      customFetch<WhatsAppControlTemplate>(`/api/whatsapp-control/templates/${documentType}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp-control/templates"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/whatsapp/templates"] });
+    mutationFn: async (): Promise<WhatsAppSyncResult> => {
+      const r = rec(await customFetch<unknown>(`${WHATSAPP_META_TEMPLATES_KEY}/sync`, { method: "POST" }));
+      const synced =
+        numOrNull(r.synced) ?? numOrNull(r.count) ?? (Array.isArray(r.templates) ? r.templates.length : null);
+      return { synced, message: strOrNull(r.message) };
     },
+    onSuccess: () => invalidateTemplates(queryClient),
   });
 };
 
-/** Renders unsaved wording with sample values, so HR sees how a message will look. */
-export const useWhatsAppTemplatePreview = () =>
-  useMutation({
-    mutationFn: ({ documentType, messageBody }: { documentType: WhatsAppDocumentType; messageBody: string }) =>
-      customFetch<{ preview: string; error: string | null }>(
-        `/api/whatsapp-control/templates/${documentType}/preview`,
-        { method: "POST", body: JSON.stringify({ messageBody }) },
+/** The header a template carries: none, a document (PDF) or an image (the ID card). */
+export type WhatsAppTemplateHeader = "" | "document" | "image" | "text";
+
+export type WhatsAppTemplateDraft = {
+  /** The message type it is for ("" for a template HR writes from scratch). */
+  messageType: string;
+  name: string;
+  language: string;
+  category: MetaTemplateCategory;
+  header: WhatsAppTemplateHeader;
+  body: string;
+  footer: string;
+  /** A sample value for every {{variable}} of the body (Meta asks for one). */
+  examples: Record<string, string>;
+  warnings: string[];
+  /** AUTHENTICATION only: how long a code lasts (Meta prints it in the footer). */
+  codeExpirationMinutes: number | null;
+};
+
+const HEADERS: readonly WhatsAppTemplateHeader[] = ["", "document", "image", "text"];
+
+export function readWhatsAppTemplateDraft(raw: unknown, messageType = ""): WhatsAppTemplateDraft {
+  const r = rec(raw);
+  const headerRaw = isRecord(r.header) ? str(r.header.type ?? r.header.format) : str(r.header);
+  const header = headerRaw.toLowerCase() as WhatsAppTemplateHeader;
+  const examples: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rec(r.examples)))
+    if (typeof v === "string" || typeof v === "number") examples[k] = String(v);
+  return {
+    messageType: strOrNull(r.messageType) ?? strOrNull(r.type) ?? messageType,
+    name: str(r.name),
+    language: strOrNull(r.language) ?? "en",
+    category: upper(r.category, "UTILITY"),
+    header: HEADERS.includes(header) ? header : "",
+    body: str(r.body),
+    footer: typeof r.footer === "string" ? r.footer : "UK Textiles HR",
+    examples,
+    warnings: strList(r.warnings),
+    codeExpirationMinutes: numOrNull(r.codeExpirationMinutes) ?? numOrNull(r.expiryMinutes),
+  };
+}
+
+/** The draft for one message type (the catalog's wording turned into a Meta template), or null while none is asked. */
+export const useMetaTemplateDraft = (messageType: string | null) =>
+  useQuery<WhatsAppTemplateDraft>({
+    queryKey: [`${BASE}/meta-templates/draft`, messageType],
+    queryFn: async () =>
+      readWhatsAppTemplateDraft(
+        await customFetch<unknown>(`${BASE}/meta-templates/draft/${encodeURIComponent(messageType ?? "")}`),
+        messageType ?? "",
       ),
+    enabled: !!messageType,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
   });
 
-// ── Connection check and Send a test (Configuration and Send a test tabs, 2026-11-17) ──────────────────────────────
-//
-//   GET  /api/whatsapp-control/connection    every reason WhatsApp may not be sending, in one answer (sends nothing, but
-//                                             asks WAClient live, so it can take a few seconds: never polled)
-//   GET  /api/whatsapp-control/test-message?search=   who may receive a test and the message types that can be tried
-//   POST /api/whatsapp-control/test-message  {documentType, employeeId, text?, dryRun?}: with dryRun the preview only;
-//                                             without it the message is SENT AT ONCE (not queued) and WAClient's answer
-//                                             comes back
+export type WhatsAppTemplateInput = {
+  name: string;
+  language: string;
+  category: MetaTemplateCategory;
+  header: WhatsAppTemplateHeader;
+  body: string;
+  footer: string;
+  examples: Record<string, string>;
+  /** The message type it is made for (the server may point the type at it). */
+  messageType?: string;
+  codeExpirationMinutes?: number;
+};
 
-/** WAClient's own word for the linked number. */
-export type WhatsAppProviderState =
-  "connected" | "disconnected" | "logged_out" | "pending" | "linking" | "connecting" | "unknown" | (string & {});
+export const useCreateMetaTemplate = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: WhatsAppTemplateInput) => {
+      const r = rec(
+        await customFetch<unknown>(WHATSAPP_META_TEMPLATES_KEY, { method: "POST", body: JSON.stringify(input) }),
+      );
+      const row = isRecord(r.template) ? r.template : r;
+      return readMetaTemplates({ templates: [row] }).templates[0] ?? null;
+    },
+    onSuccess: () => invalidateTemplates(queryClient),
+  });
+};
 
-/** WAClient's live answer about the linked number: its state, or why it could not be asked. */
-export type WhatsAppProviderStatus =
-  | {
-      ok: true;
-      state: WhatsAppProviderState;
-      socketLoaded: boolean | null;
-      reloginRequired: boolean | null;
-      httpStatus: number | null;
-      raw: unknown;
-    }
-  | { ok: false; error: string; httpStatus: number | null; raw: unknown };
+export type WhatsAppCreateMissingResult = {
+  type: string;
+  label: string;
+  name: string | null;
+  ok: boolean;
+  status: string | null;
+  error: string | null;
+};
+
+export function readWhatsAppCreateMissing(raw: unknown): WhatsAppCreateMissingResult[] {
+  const r = rec(raw);
+  const rows = Array.isArray(raw) ? raw : Array.isArray(r.results) ? r.results : Array.isArray(r.types) ? r.types : [];
+  return rows
+    .filter(isRecord)
+    .map((x) => {
+      const type = strOrNull(x.type) ?? strOrNull(x.messageType) ?? strOrNull(x.key) ?? "";
+      const error = strOrNull(x.error) ?? strOrNull(x.message);
+      return {
+        type,
+        label: strOrNull(x.label) ?? type,
+        name: strOrNull(x.name) ?? strOrNull(x.templateName),
+        ok: x.ok === true || (x.ok === undefined && !strOrNull(x.error)),
+        status: strOrNull(x.status),
+        error: x.ok === true ? null : error,
+      };
+    })
+    .filter((x) => x.type !== "" || x.name !== null);
+}
+
+export const useCreateMissingMetaTemplates = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      readWhatsAppCreateMissing(
+        await customFetch<unknown>(`${WHATSAPP_META_TEMPLATES_KEY}/create-missing`, { method: "POST" }),
+      ),
+    onSuccess: () => invalidateTemplates(queryClient),
+  });
+};
+
+export const useDeleteMetaTemplate = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => customFetch<unknown>(`${WHATSAPP_META_TEMPLATES_KEY}/${id}`, { method: "DELETE" }),
+    onSuccess: () => invalidateTemplates(queryClient),
+  });
+};
+
+// ── The set-up check (Settings tab) ─────────────────────────────────────────────────────────────────────────────────
+
+/** One environment variable of the set-up checklist. `required: false` = optional (a default is used when it is not
+ *  set, e.g. WHATSAPP_CLOUD_API_VERSION); an older server that does not say counts every variable as required. */
+export type WhatsAppEnvVar = { name: string; set: boolean; secret: boolean; required: boolean };
+
+/** Meta's answer about the business phone number. */
+export type WhatsAppPhoneInfo = {
+  displayPhoneNumber: string | null;
+  verifiedName: string | null;
+  qualityRating: string | null;
+  messagingLimitTier: string | null;
+  status: string | null;
+  nameStatus: string | null;
+  codeVerificationStatus: string | null;
+  throughput: string | null;
+  platformType: string | null;
+};
 
 export type WhatsAppConnection = {
-  /** True when the server found no problem at all (documents included). */
-  ok: boolean;
-  /** Plain sentences, most important first. */
-  problems: string[];
-  credentials: boolean;
-  /** The linked WAClient instance, masked ("…C042"). */
-  instance: string | null;
-  apiHost: string | null;
-  machine: {
-    developmentMachine: boolean;
-    sendingAllowed: boolean;
-    blockReason: string | null;
-    /** The employee codes this machine may message; null when it may message anyone. */
-    limitedTo: string[] | null;
-  };
-  /** null when the keys are missing (WAClient was not asked). */
-  provider: WhatsAppProviderStatus | null;
-  queue: {
-    engineEnabled: boolean;
-    paused: boolean;
-    pausedReason: string | null;
-    inQuietHours: boolean;
-    queued: number;
-    sentToday: number;
-    failedToday: number;
-  };
-  documents: { publicBase: string; problem: string | null };
-  lastFailure: { at: string | null; error: string; documentType: string } | null;
-  checkedAt: string | null;
+  env: WhatsAppEnvVar[];
+  configured: boolean;
+  sendingAllowed: boolean;
+  blockReasons: string[];
+  /** null when Meta was not asked (keys missing) or did not answer. */
+  phone: WhatsAppPhoneInfo | null;
+  /** Meta accepted the access token; null when it was not tried. */
+  tokenOk: boolean | null;
+  error: string | null;
+  apiVersion: string | null;
+  webhook: { url: string; verifyTokenSet: boolean; appSecretSet: boolean; lastWebhookAt: string | null };
+  /** The employee codes a development machine may message; null for no limit. */
+  devLock: { onlyToEmployees: string[] | null };
 };
 
-const strOrNull = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
-const boolOrNull = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
-const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-const codeList = (v: unknown): string[] | null => {
-  if (!Array.isArray(v)) return null;
-  const out = v.map((c) => (typeof c === "number" ? String(c) : c)).filter((c): c is string => typeof c === "string");
-  return out.length ? out : null;
-};
+const pick = (r: Record<string, unknown>, camel: string, snake: string): string | null =>
+  strOrNull(r[camel]) ?? strOrNull(r[snake]);
 
-function readProvider(raw: unknown): WhatsAppProviderStatus | null {
+function readPhone(raw: unknown): WhatsAppPhoneInfo | null {
   if (!isRecord(raw)) return null;
-  if (raw.ok === true) {
-    return {
-      ok: true,
-      state: strOrNull(raw.state) ?? "unknown",
-      socketLoaded: boolOrNull(raw.socketLoaded),
-      reloginRequired: boolOrNull(raw.reloginRequired),
-      httpStatus: numOrNull(raw.httpStatus),
-      raw: raw.raw ?? null,
-    };
-  }
-  return {
-    ok: false,
-    error: strOrNull(raw.error) ?? "WAClient did not answer.",
-    httpStatus: numOrNull(raw.httpStatus),
-    raw: raw.raw ?? null,
+  const tp = raw.throughput;
+  const info: WhatsAppPhoneInfo = {
+    displayPhoneNumber: pick(raw, "displayPhoneNumber", "display_phone_number"),
+    verifiedName: pick(raw, "verifiedName", "verified_name"),
+    qualityRating: pick(raw, "qualityRating", "quality_rating"),
+    messagingLimitTier: pick(raw, "messagingLimitTier", "messaging_limit_tier"),
+    status: strOrNull(raw.status),
+    nameStatus: pick(raw, "nameStatus", "name_status"),
+    codeVerificationStatus: pick(raw, "codeVerificationStatus", "code_verification_status"),
+    throughput: isRecord(tp) ? strOrNull(tp.level) : strOrNull(tp),
+    platformType: pick(raw, "platformType", "platform_type"),
   };
+  return Object.values(info).some((v) => v !== null) ? info : null;
 }
 
-/** Reads the connection check with a safe value for anything missing (an older or newer server never breaks the tab). */
 export function readWhatsAppConnection(raw: unknown): WhatsAppConnection {
-  const r = isRecord(raw) ? raw : {};
-  const m = isRecord(r.machine) ? r.machine : {};
-  const q = isRecord(r.queue) ? r.queue : {};
-  const d = isRecord(r.documents) ? r.documents : {};
-  const last = isRecord(r.lastFailure) ? r.lastFailure : null;
-  const problems = Array.isArray(r.problems)
-    ? r.problems.filter((p): p is string => typeof p === "string" && p.trim() !== "")
-    : [];
+  const r = rec(raw);
+  const w = rec(r.webhook);
+  const lock = rec(r.devLock);
   return {
-    ok: r.ok === true && problems.length === 0,
-    problems,
-    credentials: r.credentials === true,
-    instance: strOrNull(r.instance),
-    apiHost: strOrNull(r.apiHost),
-    machine: {
-      developmentMachine: m.developmentMachine === true,
-      sendingAllowed: m.sendingAllowed !== false,
-      blockReason: strOrNull(m.blockReason),
-      limitedTo: codeList(m.limitedTo),
+    env: (Array.isArray(r.env) ? r.env : [])
+      .filter(isRecord)
+      .filter((e) => typeof e.name === "string" && e.name !== "")
+      .map((e) => ({
+        name: e.name as string,
+        set: e.set === true,
+        secret: e.secret === true,
+        required: e.required !== false,
+      })),
+    configured: r.configured === true,
+    sendingAllowed: r.sendingAllowed === true,
+    blockReasons: strList(r.blockReasons),
+    phone: readPhone(r.phone),
+    tokenOk: boolOrNull(r.tokenOk),
+    error: strOrNull(r.error),
+    apiVersion: strOrNull(r.apiVersion),
+    webhook: {
+      url: str(w.url),
+      verifyTokenSet: w.verifyTokenSet === true,
+      appSecretSet: w.appSecretSet === true,
+      lastWebhookAt: strOrNull(w.lastWebhookAt),
     },
-    provider: readProvider(r.provider),
-    queue: {
-      engineEnabled: q.engineEnabled !== false,
-      paused: q.paused === true,
-      pausedReason: strOrNull(q.pausedReason),
-      inQuietHours: q.inQuietHours === true,
-      queued: num(q.queued),
-      sentToday: num(q.sentToday),
-      failedToday: num(q.failedToday),
-    },
-    documents: { publicBase: typeof d.publicBase === "string" ? d.publicBase : "", problem: strOrNull(d.problem) },
-    lastFailure: last
-      ? {
-          at: strOrNull(last.at),
-          error: typeof last.error === "string" ? last.error : "",
-          documentType: typeof last.documentType === "string" ? last.documentType : "",
-        }
-      : null,
-    checkedAt: strOrNull(r.checkedAt),
+    devLock: { onlyToEmployees: codeList(lock.onlyToEmployees) },
   };
 }
 
-export const WHATSAPP_CONNECTION_KEY = "/api/whatsapp-control/connection";
+export const WHATSAPP_CONNECTION_KEY = `${BASE}/connection`;
 
-/** The connection check. It asks WAClient live, so it is read when the tab opens and on "Check again", never polled. */
+/** The set-up check. It asks Meta live, so it is read when the tab opens and on "Check again", never polled. */
 export const useWhatsAppConnection = (enabled = true) =>
   useQuery<WhatsAppConnection>({
     queryKey: [WHATSAPP_CONNECTION_KEY],
@@ -724,6 +1276,13 @@ export const useWhatsAppConnection = (enabled = true) =>
     refetchOnWindowFocus: false,
     retry: false,
   });
+
+// ── Send a test ─────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+//   GET  test-message?search=   who may receive a test and the message types that can be tried
+//   POST test-message           {documentType, employeeId, dryRun?}: with dryRun the template, its parameters and the
+//                               rendered text only; without it the message is SENT AT ONCE (not queued) as its Meta
+//                               template, and Meta's answer comes back (wamid, or an error code and sentence)
 
 export type WhatsAppTestRecipient = {
   id: number;
@@ -743,6 +1302,9 @@ export type WhatsAppTestType = {
   moduleLabel: string;
   kind: string;
   variables: { name: string; sample: string }[];
+  /** The Meta template it goes out as, and that template's status here, when the server says. */
+  templateName: string | null;
+  templateStatus: string | null;
 };
 
 export type WhatsAppTestOptions = {
@@ -767,7 +1329,7 @@ function readRecipient(raw: unknown): WhatsAppTestRecipient | null {
 }
 
 export function readWhatsAppTestOptions(raw: unknown): WhatsAppTestOptions {
-  const r = isRecord(raw) ? raw : {};
+  const r = rec(raw);
   const types = (Array.isArray(r.types) ? r.types : [])
     .filter(isRecord)
     .filter((t) => typeof t.documentType === "string" && t.documentType !== "")
@@ -784,6 +1346,9 @@ export function readWhatsAppTestOptions(raw: unknown): WhatsAppTestOptions {
           .filter(isRecord)
           .map((v) => ({ name: String(v.name ?? ""), sample: String(v.sample ?? "") }))
           .filter((v) => v.name !== ""),
+        // the server nests it: template {name, language, status, category, header}
+        templateName: strOrNull(t.templateName) ?? strOrNull(t.template) ?? strOrNull(rec(t.template).name),
+        templateStatus: strOrNull(t.templateStatus) ?? strOrNull(rec(t.template).status),
       };
     });
   return {
@@ -796,7 +1361,7 @@ export function readWhatsAppTestOptions(raw: unknown): WhatsAppTestOptions {
   };
 }
 
-export const WHATSAPP_TEST_KEY = "/api/whatsapp-control/test-message";
+export const WHATSAPP_TEST_KEY = `${BASE}/test-message`;
 
 /** Who may receive a test (on a limited machine exactly the allowed employees, else up to 20 matching `search`) and the
  *  message types that can be tried. */
@@ -814,9 +1379,11 @@ export const useWhatsAppTestOptions = (search: string, enabled = true) => {
   });
 };
 
-/** preview: a dry run (nothing sent). sent: WAClient accepted it. failed: WAClient refused it. blocked: this machine's
- *  rules held it back (nothing reached WAClient). */
+/** preview: a dry run (nothing sent). sent: Meta accepted it. failed: Meta refused it. blocked: this machine's rules held
+ *  it back, or the type has no approved template (nothing reached Meta). */
 export type WhatsAppTestStatus = "preview" | "sent" | "failed" | "blocked";
+
+export type WhatsAppTestParam = { name: string; value: string };
 
 export type WhatsAppTestResult = {
   status: WhatsAppTestStatus;
@@ -824,46 +1391,76 @@ export type WhatsAppTestResult = {
   /** Masked number. */
   to: string | null;
   employee: WhatsAppTestRecipient | null;
+  /** The template's body with the parameters filled in. */
   text: string;
+  templateName: string | null;
+  language: string | null;
+  /** The parameters sent with the template, in order. */
+  params: WhatsAppTestParam[];
+  /** "document" / "image" when a file travels in the header. */
+  header: string | null;
   /** On a preview: why sending it would be held back, or null. */
   blockReason: string | null;
   /** The Messages log row of a real send. */
   logId: number | null;
+  /** Meta's message id (wamid) of a real send. */
   providerMessageId: string | null;
   error: string | null;
+  /** Meta's error code (190, 131026, 132001 ...). */
+  errorCode: number | null;
   httpStatus: number | null;
-  /** WAClient's own answer (credentials removed by the server). */
+  /** Meta's own answer (the server removes anything secret). */
   providerResponse: unknown;
+  /** The random code a test of a one-time-code type sent (so HR can check it arrived), else null. */
+  testCode: string | null;
 };
 
 export type WhatsAppTestInput = {
   documentType: string;
   employeeId: number;
-  /** HR's edited wording; left out to send the message's own wording. */
-  text?: string;
   /** true: only the preview, nothing is sent. Left out: SENT AT ONCE. */
   dryRun?: true;
 };
 
 const TEST_STATUSES: readonly WhatsAppTestStatus[] = ["preview", "sent", "failed", "blocked"];
 
+function readParams(v: unknown): WhatsAppTestParam[] {
+  if (Array.isArray(v))
+    return v
+      .filter(isRecord)
+      .map((p) => ({
+        name: str(p.name ?? p.parameter_name ?? p.parameterName),
+        value: String(p.value ?? p.text ?? ""),
+      }))
+      .filter((p) => p.name !== "" || p.value !== "");
+  if (isRecord(v)) return Object.entries(v).map(([name, value]) => ({ name, value: String(value ?? "") }));
+  return [];
+}
+
 /** Reads a test's answer; one that is none of the four (a newer server) shows as failed, with a sentence saying so. */
 export function readWhatsAppTestResult(raw: unknown): WhatsAppTestResult {
-  const r = isRecord(raw) ? raw : {};
+  const r = rec(raw);
+  const tpl = rec(r.template); // {name, language, status, category, header} on the server's answer
   const known = TEST_STATUSES.includes(r.status as WhatsAppTestStatus);
   const status = known ? (r.status as WhatsAppTestStatus) : "failed";
   return {
     status,
-    documentType: typeof r.documentType === "string" ? r.documentType : "",
+    documentType: str(r.documentType),
     to: strOrNull(r.to),
     employee: readRecipient(r.employee),
-    text: typeof r.text === "string" ? r.text : "",
+    text: str(r.text) || str(r.renderedText),
+    templateName: strOrNull(r.templateName) ?? strOrNull(r.template) ?? strOrNull(tpl.name),
+    language: strOrNull(r.language) ?? strOrNull(tpl.language),
+    params: readParams(r.params ?? r.parameters),
+    header: strOrNull(r.header) ?? strOrNull(tpl.header),
     blockReason: strOrNull(r.blockReason),
     logId: numOrNull(r.logId),
-    providerMessageId: strOrNull(r.providerMessageId),
+    providerMessageId: strOrNull(r.providerMessageId) ?? strOrNull(r.wamid),
     error: strOrNull(r.error) ?? (known ? null : "The server's answer was not understood."),
+    errorCode: numOrNull(r.errorCode) ?? numOrNull(r.code),
     httpStatus: numOrNull(r.httpStatus),
     providerResponse: r.providerResponse ?? null,
+    testCode: strOrNull(r.testCode),
   };
 }
 
@@ -877,12 +1474,7 @@ export const useWhatsAppTestMessage = () => {
       ),
     onSuccess: (_result, input) => {
       if (input.dryRun) return;
-      for (const key of [
-        "/api/whatsapp-control/messages",
-        "/api/whatsapp-control/overview",
-        WHATSAPP_QUEUE_KEY,
-        "/api/whatsapp-control/templates",
-      ])
+      for (const key of [`${BASE}/messages`, WHATSAPP_OVERVIEW_KEY, WHATSAPP_QUEUE_KEY, WHATSAPP_USAGE_KEY])
         void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });

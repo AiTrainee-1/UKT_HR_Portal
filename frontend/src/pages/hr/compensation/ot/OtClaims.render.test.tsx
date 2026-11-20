@@ -30,13 +30,18 @@ import {
 // claims for an employee here ("Claim for employee"), may still pay a Type 2 record, and a record is paid or credited,
 // never both. Records before the claims date keep the old rules side by side.
 
-const h = vi.hoisted(() => ({ fetch: vi.fn(), toast: vi.fn() }));
+const h = vi.hoisted(() => ({
+  fetch: vi.fn(),
+  toast: vi.fn(),
+  // the signed-in login (null: not an HR role, so every right): a test sets an HR role with its permissions
+  user: { current: null as { role: "hr"; employeeId: null; permissions: Record<string, string> } | null },
+}));
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
 vi.mock("@/contexts/AuthContext", async (original) => ({
   ...(await original<typeof import("@/contexts/AuthContext")>()),
-  useAuth: () => ({ token: "t", user: null }),
+  useAuth: () => ({ token: "t", user: h.user.current }),
 }));
 vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-fetch")>()),
@@ -181,6 +186,7 @@ beforeAll(installBrowserStubs);
 beforeEach(() => {
   vi.clearAllMocks();
   freezeClock();
+  h.user.current = null;
   nextClaim = 900;
   world = installWorld(h.fetch);
   world.ot = claimMonth();
@@ -325,6 +331,87 @@ describe("Type 1 under the claim workflow", () => {
     expect(how).toContain("Approved by the Department Head.");
     expect(how).toContain("Applied to the next working day after the OT date.");
     expect(text(q("ot1-how-before"))).toContain("This applies from 5 Oct 2026");
+  });
+});
+
+describe("Claim for employee needs Edit on Leave > Holiday work > Claims", () => {
+  const NEEDS = "Needs Edit on Compensation > Leave > Holiday work > Claims";
+  /** An HR role that may change OT Detection (and Birthdays) but only look at the Claims sub-tab. */
+  const viewClaimsOnly = () => {
+    h.user.current = {
+      role: "hr",
+      employeeId: null,
+      permissions: { compensation: "edit", "compensation.leave.holiday_work.claims": "view" },
+    };
+  };
+
+  it("greys out Type 1's Claim buttons, naming the right, for a role that may only view Claims", async () => {
+    viewClaimsOnly();
+    await open(T1);
+    click(must("ot1-select-E22-2026-10-06"));
+    expect(button("ot1-claim").disabled).toBe(true);
+    expect(button("ot1-claim").title).toBe(NEEDS);
+    expect(button("ot1-claim-E22-2026-10-06").disabled).toBe(true);
+    expect(button("ot1-claim-E22-2026-10-06").title).toBe(NEEDS);
+    click(must("ot1-claim-E22-2026-10-06"));
+    await settle();
+    expect(q("claim-dialog")).toBeNull();
+  });
+
+  it("greys out Type 2's Claim buttons the same way, and leaves Pay to HR's own right", async () => {
+    viewClaimsOnly();
+    await open(T2);
+    click(must("ot2-select-E32-2026-10-09"));
+    expect(button("ot2-claim").disabled).toBe(true);
+    expect(button("ot2-claim").title).toBe(NEEDS);
+    expect(button("ot2-claim-E32-2026-10-09").disabled).toBe(true);
+    expect(button("ot2-claim-E32-2026-10-09").title).toBe(NEEDS);
+    expect(button("ot2-assign").disabled).toBe(false);
+  });
+
+  it("keeps them for a role with Edit on Claims (set on the key itself or inherited)", async () => {
+    h.user.current = {
+      role: "hr",
+      employeeId: null,
+      permissions: {
+        compensation: "view",
+        "compensation.ot": "edit",
+        "compensation.leave.holiday_work.claims": "edit",
+      },
+    };
+    await open(T1);
+    expect(button("ot1-claim-E22-2026-10-06").disabled).toBe(false);
+    unmountPage();
+    h.user.current = { role: "hr", employeeId: null, permissions: { compensation: "edit" } };
+    await open(T1);
+    expect(button("ot1-claim-E22-2026-10-06").disabled).toBe(false);
+  });
+});
+
+describe("the threshold under the quarters rule", () => {
+  it("says in the footnote that the threshold decides only the days before the claims date or with the rule off", async () => {
+    world.config.shift = { ...world.config.shift, quarterRule: true };
+    await open(T2);
+    await waitFor(() => text(q("ot-footnote")).includes("quarters rule"), "the quarters rule in the footnote");
+    expect(text(q("ot-footnote"))).toContain(
+      "Type 2 threshold: 2 hours 30 minutes past the shift end, used only for days before 5 Oct 2026 or with the quarters rule off; from then Type 2 starts at a quarter of the employee's shift.",
+    );
+  });
+
+  it("names the claims date in the server's words when only the settings know it", async () => {
+    world.config.shift = { ...world.config.shift, quarterRule: true };
+    world.config.claims = { from: FROM, fromText: "5 Oct 2026" };
+    await open(T1);
+    expect(text(q("ot-footnote"))).toContain("used only for days before 5 Oct 2026 or with the quarters rule off");
+  });
+
+  it("leaves the footnote as it was while the quarters rule is off", async () => {
+    world.config.shift = { ...world.config.shift, quarterRule: false };
+    await open(T2);
+    expect(text(q("ot-footnote"))).toContain(
+      "Type 2 threshold: 2 hours 30 minutes past the shift end. Claims apply from",
+    );
+    expect(text(q("ot-footnote"))).not.toContain("quarters rule");
   });
 });
 

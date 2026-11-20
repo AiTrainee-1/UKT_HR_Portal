@@ -153,11 +153,9 @@ class AlertsTests(AlertBase):
     def setUp(self):
         super().setUp()
         PushToken.objects.create(employee=self.emp, token="ExponentPushToken[alert-r]")
-        whatsapp_answer = self.post.return_value
-        self.post.side_effect = lambda *a, **kw: (
-            mock.Mock(ok=True, status_code=200, json=lambda: {"data": [{"status": "ok", "id": "t"}]})
-            if "exp.host" in (a[0] if a else "")
-            else whatsapp_answer
+        # AlertBase fakes Meta's Graph API (self.meta) and Expo (self.expo) on the one requests.post, routed by address
+        self.expo.side_effect = lambda *a, **kw: mock.Mock(
+            ok=True, status_code=200, json=lambda: {"data": [{"status": "ok", "id": "t"}]}
         )
 
     def absent(self):

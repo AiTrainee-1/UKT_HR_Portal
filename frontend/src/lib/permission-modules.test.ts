@@ -136,7 +136,7 @@ describe("moduleForPath", () => {
 
   it("does not match a route that merely shares a string prefix", () => {
     expect(moduleForPath("/hr/payroll-extra")).toBeNull();
-    expect(moduleForPath("/hr/salary-slip")).toBe("salary_slip");
+    expect(moduleForPath("/hr/salary-slip")).toBe("salary_slip_center");
   });
 
   it("gates the Biometric Connectors pages like Attendance until a role sets them, whatever the case of the address", () => {

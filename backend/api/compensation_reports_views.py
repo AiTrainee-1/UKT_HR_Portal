@@ -78,6 +78,7 @@ from .compensation_windows_views import covers_count, visible_announcements, win
 from .models import (
     AttendanceDayRecord,
     CompensationDayAnnouncement,
+    CompensationLeaveCredit,
     CompensationLedger,
     Employee,
     HolidayWorkClaim,
@@ -673,6 +674,7 @@ def _holiday_work(ctx: Ctx):
         ctx,
     ).order_by("date", "employee__first_name", "id"):
         row = blank_row("holiday_work", entry.employee, entry.date)
+        mirror = entry.source == CompensationLedger.SOURCE_LEGACY_CREDIT
         row.update(
             {
                 "usedOn": entry.date.isoformat(),
@@ -680,6 +682,9 @@ def _holiday_work(ctx: Ctx):
                 "assignedBy": entry.created_by,
                 "grantedOn": _ist_date(entry.created_at),
                 "detail": entry.note or "Compensation balance redeemed.",
+                # a debit that only mirrors an earlier Alternative Day credit being used: the balance does not count it
+                # (the Credits tab's `counted`)
+                "counted": not mirror,
             }
         )
         set_status(row, "redeemed")
@@ -704,6 +709,47 @@ def _holiday_work(ctx: Ctx):
         )
         set_status(row, "credited")
         credits.append(row)
+    # earlier Alternative Day credits (CompensationLeaveCredit, before the ledger): part of what the balance earned (the
+    # Balance drawer and the Credits tab's legacy section show them), dated by their overtime day, else when they were
+    # given (verification 2026-11-19). Listed with the credits; counted apart (legacyCreditShifts) so creditedShifts stays
+    # the ledger's own figure.
+    legacy_shifts = Decimal("0")
+    legacy = scoped(
+        CompensationLeaveCredit.objects.filter(
+            Q(source_overtime_record__date__gte=ctx.start, source_overtime_record__date__lte=ctx.end)
+            | Q(
+                source_overtime_record__isnull=True,
+                created_at__date__gte=ctx.start - timedelta(days=1),
+                created_at__date__lte=ctx.end + timedelta(days=1),
+            )
+        ).select_related(*SELECT, "source_overtime_record"),
+        ctx,
+    ).order_by("created_at", "id")
+    for credit in legacy:
+        source = credit.source_overtime_record
+        day = source.date if source is not None else date.fromisoformat(_ist_date(credit.created_at))
+        if not ctx.start <= day <= ctx.end:
+            continue
+        row = blank_row("holiday_work", credit.employee, day)
+        row.update(
+            {
+                "workDate": day.isoformat(),
+                "shifts": 1.0,
+                "grantedOn": _ist_date(credit.created_at),
+                "usedOn": credit.used_date.isoformat() if credit.used_date else None,
+                "reason": CREDIT_SOURCE_LABELS.get(
+                    CompensationLedger.SOURCE_LEGACY_CREDIT, "Earlier Alternative Day credit"
+                ),
+                "detail": "Alternative Day credit from an earlier overtime announcement"
+                + (" (used)" if credit.status == CompensationLeaveCredit.STATUS_USED else ""),
+                "legacyCreditId": credit.id,
+            }
+        )
+        set_status(row, "credited")
+        credits.append(row)
+        legacy_shifts += Decimal("1")
+    if legacy_shifts:
+        credits.sort(key=lambda r: r["workDate"] or "")  # stable: the ledger's own order within a day
     approved_rows = [r for r in rows if r["status"] == "approved"]
     pending_rows = [r for r in rows if r["status"] == "pending"]
     summary = {
@@ -714,9 +760,17 @@ def _holiday_work(ctx: Ctx):
         "approvedShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in approved_rows)),
         "pendingShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in pending_rows)),
         "redeemedShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in redemptions)),
+        # what lowered the balance: without the debits that only mirror an earlier credit being used (the Credits tab's
+        # countedDebitShifts)
+        "countedRedeemedShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in redemptions if r["counted"])),
         # the balance's ledger in the period, every source (what Credits / Balance show)
-        "creditedShifts": float(sum(Decimal(str(r["shifts"] or 0)) for r in credits)),
-        "credits": len(credits),
+        "creditedShifts": float(
+            sum(Decimal(str(r["shifts"] or 0)) for r in credits if r.get("legacyCreditId") is None)
+        ),
+        "credits": sum(1 for r in credits if r.get("legacyCreditId") is None),
+        # earlier Alternative Day credits of the period (listed in `credits` too)
+        "legacyCredits": sum(1 for r in credits if r.get("legacyCreditId") is not None),
+        "legacyCreditShifts": float(legacy_shifts),
         "employees": _employees(rows),
     }
     return rows, summary, redemptions, credits
@@ -738,7 +792,7 @@ def _birthday(ctx: Ctx):
         ctx.department_id,
         ctx.branch_id,
         today=ctx.today,
-        refresh=can_edit_compensation(ctx.request),
+        refresh=can_edit_compensation(ctx.request, "compensation.leave.birthdays"),
     )
     for b in rows_in:
         if not b["benefits"]:

@@ -36,7 +36,7 @@ import {
 import { dateLong, dateShort, errorMessage, rangeLabel, shiftsText, todayIst } from "../logic";
 import { PeriodBar, isPeriod } from "../period";
 import { LEAVE_NESTED, subPath } from "../routes";
-import { keepOpenNested, useCanOpen } from "../visible";
+import { keepOpenNested, useCanOpen, useClaimRight } from "../visible";
 import { ErrorNotice, Field, Notice, StatusChip, SwitchOffNotice, useSingleFlight } from "../ui";
 import { OUTCOME_META, OUTCOME_OPTIONS, canClaimBirthday, outcomeOf } from "./claims-logic";
 import { OrgFilters } from "./LeaveFilters";
@@ -92,6 +92,8 @@ export function BirthdaysPart({ nested }: { nested: string }) {
   const [claiming, setClaiming] = useState<BirthdayRow | null>(null);
   const master = data?.enabled.master ?? true;
   const claimsFrom = fromText(data?.enabled.claimsFrom);
+  // raising a claim for an employee needs Edit on Leave > Holiday work > Claims (the server refuses anybody else)
+  const { reason: rightProblem } = useClaimRight();
 
   // the figures: the server's count per outcome (before the outcome filter) when it sends it, else the rows on screen
   const byOutcome = useMemo(() => {
@@ -194,7 +196,11 @@ export function BirthdaysPart({ nested }: { nested: string }) {
               size="sm"
               variant="outline"
               className="h-11 sm:h-8"
-              title={`Claim for employee: send the birthday credit of ${r.employeeName} to the Department Head`}
+              disabled={!!rightProblem}
+              title={
+                rightProblem ??
+                `Claim for employee: send the birthday credit of ${r.employeeName} to the Department Head`
+              }
               onClick={() => setClaiming(r)}
               data-testid={`birthday-claim-button-${r.employeeCode}`}
             >
@@ -203,7 +209,7 @@ export function BirthdaysPart({ nested }: { nested: string }) {
           ) : null,
       },
     ],
-    [],
+    [rightProblem],
   );
 
   return (
@@ -424,6 +430,7 @@ function ClaimBirthdayDialog({ row, onClose }: { row: BirthdayRow | null; onClos
 function ClaimBirthdayForm({ row, onClose }: { row: BirthdayRow; onClose: () => void }) {
   const { toast } = useToast();
   const raise = useRaiseCompensationClaims();
+  const { reason: rightProblem } = useClaimRight();
   const [reason, setReason] = useState("Worked on the birthday");
   const [error, setError] = useState<string | null>(null);
   const text = reason.trim();
@@ -437,7 +444,7 @@ function ClaimBirthdayForm({ row, onClose }: { row: BirthdayRow; onClose: () => 
   const once = useSingleFlight();
   const submit = () =>
     once(async () => {
-      if (problem || raise.isPending) return;
+      if (problem || rightProblem || raise.isPending) return;
       setError(null);
       try {
         const res = await raise.mutateAsync({
@@ -498,7 +505,12 @@ function ClaimBirthdayForm({ row, onClose }: { row: BirthdayRow; onClose: () => 
         <Button type="button" variant="outline" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" disabled={!!problem || raise.isPending} data-testid="birthday-claim-submit">
+        <Button
+          type="submit"
+          disabled={!!problem || !!rightProblem || raise.isPending}
+          title={rightProblem ?? undefined}
+          data-testid="birthday-claim-submit"
+        >
           {raise.isPending && <Loader2 size={14} className="mr-2 animate-spin" />}
           Send to the Department Head
         </Button>

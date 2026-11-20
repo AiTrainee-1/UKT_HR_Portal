@@ -25,6 +25,7 @@ import { LunchSection } from "./attendance/LunchSection";
 import { MidnightSection } from "./attendance/MidnightSection";
 import { NextMorningSection } from "./attendance/NextMorningSection";
 import { todayIst } from "./compensation/form";
+import { saveErrorText } from "./payroll/form";
 import { ModeSection } from "./attendance/ModeSection";
 import { ProductionSection } from "./attendance/ProductionSection";
 import { SaveFooter } from "./attendance/SaveFooter";
@@ -100,9 +101,10 @@ export default function AttendanceTab({ readOnly = false }: { readOnly?: boolean
           : "Saved for your branch only. Payroll, reports and WhatsApp alerts keep using the company-wide values, and the company-wide rules were not changed.",
       });
     } catch (err) {
+      // the server's own sentence when it gives one (e.g. a next-morning start date before today is refused)
       toast({
         title: "Failed to save attendance settings",
-        description: err instanceof Error ? err.message : undefined,
+        description: saveErrorText(err) ?? (err instanceof Error ? err.message : undefined),
         variant: "destructive",
       });
     } finally {

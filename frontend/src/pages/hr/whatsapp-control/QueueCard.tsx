@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ListOrdered, Moon, PauseCircle, PowerOff, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Moon, PauseCircle, PowerOff, Trash2 } from "lucide-react";
 import { useClearWhatsAppQueue, useWhatsAppQueue, whatsAppErrorMessage } from "@/lib/api-client/custom-hooks";
+import { cn } from "@/lib/utils";
+import { Notice, Panel } from "./kit";
 import { fmtSendTime, usageLevel } from "./logic";
 import { ConfirmDialog } from "./shared";
 
@@ -27,19 +28,19 @@ function Meter({
   const level = usageLevel(used, cap);
   const pct = cap ? Math.min(100, Math.round((used / cap) * 100)) : 0;
   return (
-    <div className="rounded-xl bg-slate-50 p-3" data-testid={testId} data-level={level}>
-      <p className="text-xs font-medium text-gray-500">{label}</p>
-      <p className="text-2xl font-black tabular-nums text-slate-800">
+    <div className="rounded-xl bg-muted p-3" data-testid={testId} data-level={level}>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="text-2xl font-bold tabular-nums">
         {used}
-        {cap > 0 && <span className="text-sm font-bold text-gray-400"> / {cap}</span>}
+        {cap > 0 && <span className="text-sm font-semibold text-muted-foreground"> / {cap}</span>}
       </p>
       <div
-        className="mt-1.5 h-1.5 rounded-full bg-slate-200 overflow-hidden"
+        className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-background"
         title={cap ? `${pct}% of the limit` : undefined}
       >
         <div className={`h-full ${BAR[level]}`} style={{ width: `${pct}%` }} />
       </div>
-      <p className="text-[10px] text-gray-400 mt-1">{sub}</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">{sub}</p>
     </div>
   );
 }
@@ -58,10 +59,10 @@ function Tile({
   testId: string;
 }) {
   return (
-    <div className="rounded-xl bg-slate-50 p-3" data-testid={testId}>
-      <p className="text-xs font-medium text-gray-500">{label}</p>
-      <p className={`text-2xl font-black tabular-nums ${tone}`}>{value}</p>
-      <p className="text-[10px] text-gray-400 mt-0.5">{sub}</p>
+    <div className="rounded-xl bg-muted p-3" data-testid={testId}>
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={cn("text-2xl font-bold tabular-nums", tone)}>{value}</p>
+      <p className="mt-0.5 text-[10px] text-muted-foreground">{sub}</p>
     </div>
   );
 }
@@ -80,22 +81,19 @@ function SmallCount({
   testId: string;
 }) {
   return (
-    <div
-      className="rounded-xl border bg-white px-3 py-2 flex items-baseline justify-between gap-2"
-      data-testid={testId}
-    >
+    <div className="flex items-baseline justify-between gap-2 rounded-xl border px-3 py-2" data-testid={testId}>
       <div className="min-w-0">
-        <p className="text-xs font-semibold text-gray-700">{label}</p>
-        <p className="text-[10px] text-gray-400">{sub}</p>
+        <p className="text-xs font-semibold">{label}</p>
+        <p className="text-[10px] text-muted-foreground">{sub}</p>
       </div>
-      <p className={`text-lg font-black tabular-nums ${value ? tone : "text-gray-300"}`}>{value}</p>
+      <p className={cn("text-lg font-bold tabular-nums", value ? tone : "text-muted-foreground")}>{value}</p>
     </div>
   );
 }
 
 /** Today's sending queue: what waits, what went out against the limits, and why sending may be held. Polls every 30 s
- *  while it is on screen. */
-export default function QueueCard() {
+ *  while it is on screen. `locked` (View only) keeps Clear queue shut. */
+export default function QueueCard({ locked = false }: { locked?: boolean }) {
   const { toast } = useToast();
   const { data: q, isLoading, isError } = useWhatsAppQueue();
   const clear = useClearWhatsAppQueue();
@@ -104,9 +102,9 @@ export default function QueueCard() {
   if (isLoading) return <Skeleton className="h-48 rounded-2xl" />;
   if (isError || !q) {
     return (
-      <div className="rounded-2xl border bg-white p-4 text-xs text-gray-500" data-testid="wa-queue-card">
+      <Notice tone="neutral" testId="wa-queue-card">
         Today's sending queue isn't available from the server right now.
-      </div>
+      </Notice>
     );
   }
 
@@ -145,70 +143,49 @@ export default function QueueCard() {
     });
 
   return (
-    <Card className="border-0 text-gray-900 shadow-sm" data-testid="wa-queue-card">
-      <CardHeader className="pb-2 flex-row items-start justify-between space-y-0 gap-3">
-        <div className="min-w-0">
-          <CardTitle className="text-sm font-bold text-gray-900">Today's queue</CardTitle>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Every message except a login code waits its turn here and goes out within the sending limits. Refreshes
-            every 30 seconds.
-          </p>
-        </div>
+    <Panel
+      title="Today's queue"
+      icon={ListOrdered}
+      testId="wa-queue-card"
+      description="Every message except a sign-in code waits its turn here and goes out within the sending limits. Refreshes every 30 seconds."
+      actions={
         <Button
           variant="outline"
           size="sm"
-          className="h-8 gap-1.5 text-xs text-red-700 hover:text-red-800 shrink-0"
+          className="h-8 gap-1.5 text-xs text-red-700 hover:text-red-800 dark:text-red-300"
           onClick={() => setAsking(true)}
-          disabled={q.queued === 0 || clear.isPending}
+          disabled={locked || q.queued === 0 || clear.isPending}
           title={q.queued === 0 ? "Nothing is waiting" : undefined}
           data-testid="wa-clear-queue"
         >
           <Trash2 size={13} /> Clear queue
         </Button>
-      </CardHeader>
-      <CardContent className="space-y-3">
+      }
+    >
+      <div className="space-y-3">
         {!q.engineEnabled && (
-          <div
-            data-testid="wa-queue-engine-off"
-            className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800"
-          >
-            <PowerOff size={14} className="mt-0.5 shrink-0" />
-            <span>
-              The WhatsApp engine is <b>OFF</b>: nothing is sent by WhatsApp until it is turned back on (Feature
-              Controls).
-            </span>
-          </div>
+          <Notice tone="bad" icon={PowerOff} testId="wa-queue-engine-off">
+            The WhatsApp engine is <b>OFF</b>: nothing is sent by WhatsApp until it is turned back on (above).
+          </Notice>
         )}
         {q.paused && (
-          <div
-            data-testid="wa-queue-paused"
-            className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
-          >
-            <PauseCircle size={14} className="mt-0.5 shrink-0" />
-            <span>
-              <b>Sending is paused.</b> {q.pausedReason || "The server gave no reason."}
-            </span>
-          </div>
+          <Notice tone="warn" icon={PauseCircle} testId="wa-queue-paused">
+            <b>Sending is paused.</b> {q.pausedReason || "The server gave no reason."}
+          </Notice>
         )}
         {q.inQuietHours && (
-          <div
-            data-testid="wa-queue-quiet"
-            className="flex items-start gap-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-800"
-          >
-            <Moon size={14} className="mt-0.5 shrink-0" />
-            <span>
-              <b>Quiet hours.</b> Nothing automatic is sent right now, and anything that can't go out today is never
-              sent. One-time login codes still go.
-            </span>
-          </div>
+          <Notice tone="info" icon={Moon} testId="wa-queue-quiet">
+            <b>Quiet hours.</b> Nothing automatic is sent right now, and anything that can't go out today is never sent.
+            Sign-in codes still go.
+          </Notice>
         )}
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Tile
             label="Waiting"
             value={q.queued}
             sub={q.queued === 1 ? "message in the queue" : "messages in the queue"}
-            tone={q.queued ? "text-amber-700" : "text-gray-400"}
+            tone={q.queued ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}
             testId="wa-queue-queued"
           />
           <Meter
@@ -229,11 +206,11 @@ export default function QueueCard() {
             label="Next send"
             value={<span className="text-xl">{q.queued ? fmtSendTime(q.nextSendAt) : "—"}</span>}
             sub={nextSub}
-            tone="text-slate-800"
+            tone=""
             testId="wa-queue-next"
           />
         </div>
-        <div className="grid sm:grid-cols-3 gap-3">
+        <div className="grid gap-3 sm:grid-cols-3">
           <SmallCount
             label="Failed today"
             value={q.failedToday}
@@ -251,18 +228,18 @@ export default function QueueCard() {
           <SmallCount
             label="Skipped today"
             value={q.skippedToday}
-            sub="blocked by a rule, never sent"
+            sub="held back by a rule, never sent"
             tone="text-orange-600"
             testId="wa-queue-skipped"
           />
         </div>
         {q.limits.maxPerEmployeePerDay > 0 && (
-          <p className="text-[10px] text-gray-400">
+          <p className="text-[10px] text-muted-foreground">
             At most {q.limits.maxPerEmployeePerDay} automatic message{q.limits.maxPerEmployeePerDay === 1 ? "" : "s"}{" "}
             per employee per day.
           </p>
         )}
-      </CardContent>
+      </div>
 
       <ConfirmDialog
         open={asking}
@@ -282,6 +259,6 @@ export default function QueueCard() {
           by mistake.
         </p>
       </ConfirmDialog>
-    </Card>
+    </Panel>
   );
 }

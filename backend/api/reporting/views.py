@@ -27,9 +27,11 @@ from api.clock import ist_now, ist_today
 from .access import FORBIDDEN, HIDDEN, access_state, can_access
 from .export_pdf import build_pdf
 from .export_xlsx import build_xlsx
+from .custom.specs import CUSTOM_PREFIX, can_view_customise, saved_specs, spec_for_saved
 from .filters import ReportParamError, resolve_default
+from .layout import is_listed, sort_key
 from .registry import all_specs, get_spec
-from .runner import column_json, run_report
+from .runner import column_json, limit_for, run_report
 from .types import CATEGORIES, F_BRANCH, F_DATE_RANGE, F_EMPLOYEE, ReportSpec
 
 logger = logging.getLogger(__name__)
@@ -49,7 +51,12 @@ def _resolve(request, report_id: str) -> tuple[ReportSpec | None, Response | Non
     """The spec, or the error response to return. Admin-only reports look non-existent (404);
     reports whose owning module the role lacks are 403 ``report_forbidden`` (distinct from the
     middleware's ``permission_denied``, which the UI reads as "view-only")."""
-    spec = get_spec(report_id)
+    if report_id.startswith(CUSTOM_PREFIX):
+        spec = spec_for_saved(request, report_id)  # a saved Customise report (custom/specs.py)
+    else:
+        spec = get_spec(report_id)
+        if spec is not None and not is_listed(spec):
+            spec = None  # retired in the 2026-11-19 cleanup (layout.py): it looks non-existent
     state = access_state(request, spec) if spec else HIDDEN
     if spec is None or state == HIDDEN:
         return None, _error("Report not found", 404, "not_found")
@@ -85,6 +92,13 @@ def _filter_json(f, today, branch_scoped: bool) -> dict | None:
 
 
 def spec_json(spec: ReportSpec, today, branch_scoped: bool) -> dict:
+    filters = [j for f in spec.filters if (j := _filter_json(f, today, branch_scoped))]
+    # A saved Customise report: the filters whose saved value an EMPTY parameter widens to "all" (custom/build.py
+    # SavedReportSpec); the workspace sends them empty when cleared instead of leaving them out.
+    clearable = getattr(spec, "clearable_keys", frozenset())
+    for j in filters:
+        if j["key"] in clearable:
+            j["clearable"] = True
     return {
         "id": spec.id,
         "title": spec.title,
@@ -95,10 +109,17 @@ def spec_json(spec: ReportSpec, today, branch_scoped: bool) -> dict:
         "family": spec.family,
         "variant": spec.variant,
         "landscape": spec.landscape,
-        "filters": [j for f in spec.filters if (j := _filter_json(f, today, branch_scoped))],
+        "filters": filters,
+        # Still read by the HR reports' catalog tests (the Report Center UI takes the columns of each run instead).
         "columns": [column_json(c) for c in spec.columns],
         "dynamicColumns": not spec.columns,
         "exports": ["xlsx", "pdf"],
+        # The row ceilings the run / export endpoints apply (runner.limit_for), so the workspace can say "too many rows
+        # for a PDF - download Excel instead" before the click rather than after a 413.
+        "exportLimits": {purpose: limit_for(spec, purpose) for purpose in ("screen", "xlsx", "pdf")},
+        # False: opening the report waits for "Show report" instead of running its default filters straight away (a
+        # report whose defaults are too heavy or too wide). A spec opts out with an ``auto_run = False`` attribute.
+        "autoRun": bool(getattr(spec, "auto_run", True)),
     }
 
 
@@ -109,7 +130,10 @@ def reports_catalog(request):
 
     branch_scoped = get_branch_scope(request) is not None
     today = ist_today()
-    specs = [s for s in all_specs() if can_access(request, s)]
+    # The layout's reports in the layout's order, then the saved Customise reports (layout.py, custom/specs.py).
+    specs = sorted((s for s in all_specs() if is_listed(s) and can_access(request, s)), key=sort_key)
+    specs += saved_specs(request)
+    show_customise = can_view_customise(request)
     counts: dict[str, int] = {}
     seen_families: set[tuple[str, str]] = set()
     for s in specs:
@@ -136,7 +160,8 @@ def reports_catalog(request):
             "categories": [
                 {"id": cid, "label": label, "description": desc, "icon": icon, "count": counts.get(cid, 0)}
                 for cid, label, desc, icon in CATEGORIES
-                if counts.get(cid)
+                # Customise is shown to whoever may use it even with no saved report yet (the "Create" tile lives there)
+                if counts.get(cid) or (cid == "customise" and show_customise)
             ],
             "reports": [spec_json(s, today, branch_scoped) for s in specs],
             "options": {

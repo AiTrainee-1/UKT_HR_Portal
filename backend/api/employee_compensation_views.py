@@ -582,20 +582,28 @@ def _ot_items(
             )
         # a rejected record is HR's decision that it is not compensable: it is not listed
 
-    # the next-day allowance that applies today / on the next working day (from claims_from on: approved claims only)
+    # the next-day allowance that applies today / on the next working day (from claims_from on: approved claims only).
+    # An approved claim follows the master switch only, as the attendance engine applies it
+    # (compensation_engine.allowance_for_arrival); the allowance switch and its effective-from date are the automatic
+    # rule's, so they decide only the OT days before claims_from (review 2026-11-19, correctness #11c).
     today_allowance = tomorrow_allowance = None
-    if master and cfg.allowance_enabled:
+    if master:
         tomorrow_on = next_working_day(emp, today, assignments)
         for r in allowance:
             # an allowance only applies on the next working day, so only a recent OT day can still be pending
             if not r.allowance_minutes or r.date < today - timedelta(days=ALLOWANCE_LOOKBACK_DAYS):
                 continue
-            if cfg.claims_apply_on(r.date):
+            granted = cfg.claims_apply_on(r.date)
+            if granted:
                 claim = record_claims.get(r.id)
                 if claim is None or claim.status != HolidayWorkClaim.STATUS_APPROVED:
                     continue
+            elif not cfg.allowance_enabled:
+                continue
             applies_on = next_working_day(emp, r.date, assignments)
-            if applies_on is None or (cfg.allowance_effective_from and applies_on < cfg.allowance_effective_from):
+            if applies_on is None:
+                continue
+            if not granted and cfg.allowance_effective_from and applies_on < cfg.allowance_effective_from:
                 continue
             block = {
                 "date": applies_on.isoformat(),
@@ -641,9 +649,12 @@ def _stuck_claim_detail(emp, raised_by_employee: bool = False) -> str | None:
 
 
 def _worked_off_days(emp, start: date, end: date, holidays: dict) -> set[date]:
-    """The Sundays / declared holidays in [start, end] the employee has on record as worked (punches, a manual present
-    entry or a present / half-shift day record): what holiday_work_views.worked_ids reads, for a range in three queries."""
-    from .models import Attendance, AttendanceLog
+    """The Sundays / declared holidays / the employee's own OFF SATURDAYS (their shift assignment's saturday_off; holiday
+    work too since 2026-11-19, owner decision 4) in [start, end] the employee has on record as worked (punches, a manual
+    present entry or a present / half-shift day record): what holiday_work_views.worked_ids reads, for a range in three
+    queries (plus one for the shift assignments when a worked Saturday is in the range)."""
+    from .compensation_engine import is_off_day
+    from .models import Attendance, AttendanceLog, EmployeeShiftAssignment
 
     days = set(
         AttendanceLog.objects.filter(employee=emp, date__gte=start, date__lte=end).values_list("date", flat=True)
@@ -660,7 +671,17 @@ def _worked_off_days(emp, start: date, end: date, holidays: dict) -> set[date]:
             days.add(date.fromisoformat(str(raw)[:10]))
         except ValueError:
             continue
-    return {d for d in days if start <= d <= end and day_kind(d, holidays) is not None}
+    days = {d for d in days if start <= d <= end}
+    saturdays = {d for d in days if d.weekday() == 5 and day_kind(d, holidays) is None}
+    off_saturdays = set()
+    if saturdays:
+        assignments = list(
+            EmployeeShiftAssignment.objects.filter(employee=emp, effective_from__lte=max(saturdays))
+            .select_related("shift")
+            .order_by("effective_from")
+        )
+        off_saturdays = {d for d in saturdays if is_off_day(emp, d, assignments)}
+    return {d for d in days if day_kind(d, holidays) is not None} | off_saturdays
 
 
 def _claim_items(emp, today: date, holidays: dict, since: date | None = None, ctx=None):
@@ -719,8 +740,10 @@ def _claim_items(emp, today: date, holidays: dict, since: date | None = None, ct
                 )
             )
             continue
-        kind = day_kind(c.work_date, holidays) or ("sunday" if c.work_date.weekday() == 6 else "holiday")
-        what = "Sunday" if kind == "sunday" else "Holiday"
+        kind = day_kind(c.work_date, holidays) or (
+            "sunday" if c.work_date.weekday() == 6 else "off_saturday" if c.work_date.weekday() == 5 else "holiday"
+        )
+        what = {"sunday": "Sunday", "off_saturday": "Off Saturday"}.get(kind, "Holiday")
         status = {"pending": "pending_hod"}.get(c.status, c.status)
         if c.status == HolidayWorkClaim.STATUS_APPROVED:
             detail = f"Approved by {c.reviewed_by or 'your Department Head'}: {shifts_text(c.shifts)} shift was added to your compensation balance."
@@ -766,7 +789,13 @@ def _claim_items(emp, today: date, holidays: dict, since: date | None = None, ct
             if not (can or why):
                 continue
             kind = day_kind(day, holidays)
-            what = "Sunday" if kind == "sunday" else (holidays.get(day) or "Holiday")
+            what = (
+                "Sunday"
+                if kind == "sunday"
+                else (holidays.get(day) or "Holiday")
+                if kind == "holiday"
+                else "Off Saturday"
+            )
             detail = (
                 f"You worked on {date_text(day)}. Claim compensation for it: once your Department Head approves, it is "
                 "added to your compensation balance to use on another day."

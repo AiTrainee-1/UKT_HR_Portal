@@ -1,41 +1,50 @@
 """
-One-time passcodes for the employee apps (mobile app + Employee Web App): sign
-in with an Employee Code, reset a forgotten password, or confirm a new
-employee's first password ("activate"). The code is delivered by ONE channel at
-a time, chosen on the SMS Control page (SmsSettings.otp_channel): WhatsApp
-(WAClient, the default and the original behaviour) or SMS (2Factor, sms_service.py).
-Everything below the delivery step -generation, hashing, expiry, single use,
-attempt limit, purpose binding- is shared by both channels.
+One-time passcodes for the employee apps (mobile app + Employee Web App): sign in with an Employee Code, reset a
+forgotten password, or confirm a new employee's first password ("activate").
 
-Security properties, each covered by tests_otp.py (WhatsApp) and
-tests_sms_otp.py (SMS):
-  * Codes are random digits from `secrets` -4 for SMS (the owner's 2Factor template is "XXXX is your ... OTP"; 2Factor
-    does not deliver 6-digit codes through it), 6 for WhatsApp (see CODE_LENGTH)- valid for a few minutes (the active
-    channel's expiry setting) and usable exactly once. The length is stored on the code row, so a code issued
-    on one channel still verifies after HR switches the channel.
-  * Only a salted HMAC of the code is stored -never the code- so a database
-    read or backup can't be turned into a login. The message logs store the
-    text with the code redacted (WhatsApp) or no text at all (SMS).
+Two delivery channels, INDEPENDENT of each other (owner, 2026-11-20):
+  * WhatsApp: the Meta WhatsApp Cloud API, an approved AUTHENTICATION template (`hrms_otp` unless HR pointed the purpose's
+    message type at another one); switched on WhatsApp Control (WhatsAppSettings.otp_enabled, its three purpose switches
+    otp_login_enabled / otp_reset_enabled / otp_activate_enabled, otp_expiry_minutes). 6-digit codes.
+  * SMS: 2Factor.in (sms_service.py); switched on SMS Control (SmsSettings.otp_enabled, its own three purpose switches,
+    expiry, cooldown and limits). 4-digit codes (the DLT template says "XXXX").
+A channel is AVAILABLE for a purpose when its master switch and its purpose switch are on AND it can really deliver from
+this server (configured, allowed to send; WhatsApp also: the WhatsApp master switch on and the template APPROVED by Meta).
+Either channel alone is enough; neither reads the other's settings. When both are available the apps let the employee
+choose (`channel` on otp/request); a request without a channel (an older app) gets the first available one, WhatsApp
+before SMS. Every successful answer names the other channels that would also work (`otherChannels`), so an app can offer
+"Didn't get it? Send by SMS instead". A temporary SMS pause (a cap used up, the circuit breaker) does not make SMS
+unavailable: it fails the request with a plain sentence and keeps password sign-in open (see paused_now).
+
+Each channel keeps its OWN expiry, resend cooldown, hourly / daily allowance and attempt limit, counted on its own codes
+(EmployeeOtp.channel; a row from before the column counts by its length: 4 digits = SMS, 6 = WhatsApp). Generation,
+hashing, single use, purpose binding and "only the newest code works" are shared by both.
+
+Security properties, each covered by tests_otp.py, tests_otp_channels.py and tests_sms_otp.py:
+  * Codes are random digits from `secrets` (CODE_LENGTH per channel), valid for a few minutes (the channel's expiry) and
+    usable exactly once. The length is stored on the code row, so a code verifies with the length it was issued with.
+  * Only a salted HMAC of the code is stored -never the code- so a database read or backup can't be turned into a login.
   * At most the channel's attempt limit of wrong guesses per code, then it is dead. Four digits are only 10 000
-    combinations, so the SMS channel is held tighter than WhatsApp (see the SMS_* constants below): at most 5 wrong
-    guesses per code and 10 codes per employee and purpose in any 24 hours, i.e. at most 50 guesses a day
-    (0.5 %) against one account.
-  * A new request kills every earlier unused code of the same purpose, so only
-    the latest message works -but only once the new code was really sent: a send
-    that fails (or is blocked by a limit) deletes the new row and leaves the
-    employee's previous code valid, so nobody can make a victim's code die by
-    making a send fail.
-  * One request per employee at a time: the cooldown / hourly check and the
-    creation of the new code run under a lock on the employee row, so twelve
-    simultaneous requests send one message.
-  * Requests are rate limited per employee (resend cooldown + hourly cap) on
-    top of the per-IP throttle on the endpoints; the SMS channel adds a
-    per-phone-number cap, global hourly/daily caps and a circuit breaker
-    (sms_service.py).
+    combinations, so SMS is held tighter (the SMS_* constants below): at most 5 wrong guesses per code and 10 codes per
+    employee and purpose in any 24 hours, i.e. at most 50 guesses a day (0.5 %) against one account.
+  * A new request (on either channel) kills every earlier unused code of the same purpose, so only the latest message
+    works -but only once the new code was really sent: a send that fails (or is blocked by a limit) deletes the new row
+    and leaves the employee's previous code valid, so nobody can make a victim's code die by making a send fail.
+  * One request per employee at a time: the cooldown / allowance checks and the creation of the new code run under a lock
+    on the employee row, so twelve simultaneous requests send one message.
+  * Requests are rate limited per employee and channel (resend cooldown + hourly cap, + daily cap for SMS) on top of the
+    per-IP throttle on the endpoints; SMS adds a per-number cap, global caps and a circuit breaker (sms_service.py).
   * A code issued for one purpose can't be used for another.
 
-While the channel is 'whatsapp' every limit, switch and sentence is exactly what
-it was before the SMS channel existed.
+Nobody is ever locked out:
+  * password sign-in can be refused (WhatsAppSettings.password_login_enabled off) only while at least one channel is
+    available for sign-in AND not paused right now;
+  * a first password needs a code only while at least one channel is available for activation; otherwise the old open
+    first-time setup stays.
+
+A code that dies without being used (a newer code replaced it, the attempt limit was reached, a password reset killed it)
+is marked consumed AND expired at that moment (expires_at = consumed_at), so `consumed_at < expires_at` means "used in
+time": verified_codes() is what the Control pages count as verified.
 """
 
 import hashlib
@@ -46,17 +55,22 @@ from datetime import timedelta
 
 from django.conf import settings as dj_settings
 from django.db import transaction
+from django.db.models import F, Q, QuerySet
 from django.utils import timezone
 
 from . import sms_service, whatsapp_service
-from .models import Employee, EmployeeOtp, SmsSettings, WhatsAppSettings
+from . import whatsapp_catalog as catalog
+from .models import Employee, EmployeeOtp, SmsSettings, WhatsAppSettings, WhatsAppTemplate
 
 RESEND_COOLDOWN_SECONDS = 60
 MAX_REQUESTS_PER_HOUR = 5
 MAX_ATTEMPTS = 5
 
-CHANNEL_WHATSAPP = SmsSettings.CHANNEL_WHATSAPP
-CHANNEL_SMS = SmsSettings.CHANNEL_SMS
+CHANNEL_WHATSAPP = "whatsapp"
+CHANNEL_SMS = "sms"
+#: every channel, in the order the apps list them and a request without a channel tries them
+CHANNELS = (CHANNEL_WHATSAPP, CHANNEL_SMS)
+PURPOSES = (EmployeeOtp.PURPOSE_LOGIN, EmployeeOtp.PURPOSE_RESET, EmployeeOtp.PURPOSE_ACTIVATE)
 
 #: digits in the code, per delivery channel. SMS: the approved DLT template says "XXXX" and 6-digit codes are not
 #: delivered through it. WhatsApp keeps the 6 digits it always had.
@@ -70,14 +84,17 @@ DEFAULT_CODE_LENGTH = CODE_LENGTH[CHANNEL_WHATSAPP]
 SMS_MAX_ATTEMPTS_CEILING = 5
 SMS_MAX_REQUESTS_PER_DAY = 10
 
-
-def code_length(channel: str | None) -> int:
-    """How many digits a code issued on this channel has (an unknown channel: the 6 of WhatsApp)."""
-    return CODE_LENGTH.get(channel or "", DEFAULT_CODE_LENGTH)
-
+#: the Meta AUTHENTICATION template every WhatsApp code goes out as, unless HR pointed the purpose's message type at
+#: another one (WhatsAppSettings.template_overrides) or the catalog names one for it
+WHATSAPP_OTP_TEMPLATE = "hrms_otp"
+TEMPLATE_APPROVED = "APPROVED"
 
 _CHANNEL_NAME = {CHANNEL_WHATSAPP: "WhatsApp", CHANNEL_SMS: "SMS"}
-
+_PURPOSE_LABEL = {
+    EmployeeOtp.PURPOSE_LOGIN: "sign-in",
+    EmployeeOtp.PURPOSE_RESET: "password reset",
+    EmployeeOtp.PURPOSE_ACTIVATE: "account activation",
+}
 _TYPE_FOR_PURPOSE = {
     EmployeeOtp.PURPOSE_LOGIN: "otp_login",
     EmployeeOtp.PURPOSE_RESET: "otp_reset",
@@ -85,13 +102,27 @@ _TYPE_FOR_PURPOSE = {
 }
 
 
+def code_length(channel: str | None) -> int:
+    """How many digits a code issued on this channel has (an unknown channel: the 6 of WhatsApp)."""
+    return CODE_LENGTH.get(channel or "", DEFAULT_CODE_LENGTH)
+
+
+def channel_name(channel: str) -> str:
+    """The channel as people read it: 'WhatsApp' or 'SMS'."""
+    return _CHANNEL_NAME.get(channel, channel)
+
+
+def _names(channels) -> str:
+    return " or ".join(channel_name(c) for c in channels)
+
+
 @dataclass(frozen=True)
 class OtpConfig:
-    """The settings one request works with, resolved ONCE for the active channel: which channel, its three switches and
-    its limits. For WhatsApp these are the WhatsAppSettings switches/expiry and the module constants above, for SMS the
-    SmsSettings values."""
+    """One channel's own settings: its master switch, its three purpose switches and its limits. WhatsApp: the
+    WhatsAppSettings switches / expiry and the module constants above; SMS: the SmsSettings values."""
 
     channel: str
+    enabled: bool  # the channel's own OTP master switch
     login_enabled: bool
     reset_enabled: bool
     activate_enabled: bool
@@ -100,128 +131,281 @@ class OtpConfig:
     max_requests_per_hour: int
     max_attempts_per_code: int
     max_requests_per_day: int | None  # per employee and purpose, rolling 24 h; None = no daily limit (WhatsApp)
-    password_login_enabled: bool  # always WhatsAppSettings.password_login_enabled: one switch for both channels
 
     @property
     def code_length(self) -> int:
-        """Digits in a code issued now (the active channel's)."""
         return code_length(self.channel)
 
     @property
     def name(self) -> str:
-        """The channel as people read it: 'WhatsApp' or 'SMS'."""
-        return _CHANNEL_NAME[self.channel]
+        return channel_name(self.channel)
 
-    def enabled_for(self, purpose: str) -> bool:
-        """Is this purpose's switch on (login_enabled / reset_enabled / activate_enabled)?"""
-        return bool(getattr(self, f"{purpose}_enabled"))
-
-    def available(self, purpose: str | None = None) -> bool:
-        """Can this channel deliver a code from this server (configured AND allowed to send)? A LONG-TERM fact: it says
-        nothing about a cap or the circuit breaker (see paused_now)."""
-        if self.channel == CHANNEL_SMS:
-            return sms_service.is_available(purpose)
-        # The WhatsApp master switch (WhatsApp Control) off = WhatsApp is not available: no code is offered or sent,
-        # password sign-in stays open and activation falls back to the open first-time setup, so nobody is locked out.
-        return whatsapp_service.is_configured() and whatsapp_service.engine_enabled()
-
-    def paused_now(self) -> bool:
-        """Is the channel configured but unable to send for the moment (SMS: the circuit breaker is paused or a global
-        hourly / daily cap is used up)? Anybody can bring this about with a flood of code requests, so it must never
-        close another sign-in method: password sign-in stays open while it is true (see password_login_block_message and
-        login_options). WhatsApp has no such state."""
-        return self.channel == CHANNEL_SMS and sms_service.temporarily_unavailable()
+    def switched_on(self, purpose: str) -> bool:
+        """Are this channel's master switch AND this purpose's switch on?"""
+        return bool(self.enabled and getattr(self, f"{purpose}_enabled", False))
 
 
-def resolve() -> OtpConfig:
-    """The active channel's settings (see OtpConfig)."""
-    sms = SmsSettings.get()
-    wa = WhatsAppSettings.get()
-    if sms.otp_channel == CHANNEL_SMS:
-        return OtpConfig(
-            channel=CHANNEL_SMS,
-            login_enabled=sms.otp_login_enabled,
-            reset_enabled=sms.otp_reset_enabled,
-            activate_enabled=sms.otp_activate_enabled,
-            expiry_minutes=sms.otp_expiry_minutes,
-            resend_cooldown_seconds=sms.resend_cooldown_seconds,
-            max_requests_per_hour=sms.max_requests_per_hour,
-            max_attempts_per_code=min(sms.max_attempts_per_code, SMS_MAX_ATTEMPTS_CEILING),
-            max_requests_per_day=SMS_MAX_REQUESTS_PER_DAY,
-            password_login_enabled=wa.password_login_enabled,
-        )
+def _whatsapp_config(wa: WhatsAppSettings) -> OtpConfig:
     return OtpConfig(
         channel=CHANNEL_WHATSAPP,
-        login_enabled=wa.otp_login_enabled,
-        reset_enabled=wa.otp_reset_enabled,
-        activate_enabled=wa.otp_activate_enabled,
-        expiry_minutes=wa.otp_expiry_minutes,
+        enabled=bool(wa.otp_enabled),
+        login_enabled=bool(wa.otp_login_enabled),
+        reset_enabled=bool(wa.otp_reset_enabled),
+        activate_enabled=bool(wa.otp_activate_enabled),
+        expiry_minutes=int(wa.otp_expiry_minutes),
         resend_cooldown_seconds=RESEND_COOLDOWN_SECONDS,
         max_requests_per_hour=MAX_REQUESTS_PER_HOUR,
         max_attempts_per_code=MAX_ATTEMPTS,
         max_requests_per_day=None,
-        password_login_enabled=wa.password_login_enabled,
     )
 
 
+def _sms_config(sms: SmsSettings) -> OtpConfig:
+    return OtpConfig(
+        channel=CHANNEL_SMS,
+        enabled=bool(sms.otp_enabled),
+        login_enabled=bool(sms.otp_login_enabled),
+        reset_enabled=bool(sms.otp_reset_enabled),
+        activate_enabled=bool(sms.otp_activate_enabled),
+        expiry_minutes=int(sms.otp_expiry_minutes),
+        resend_cooldown_seconds=int(sms.resend_cooldown_seconds),
+        max_requests_per_hour=int(sms.max_requests_per_hour),
+        max_attempts_per_code=min(int(sms.max_attempts_per_code), SMS_MAX_ATTEMPTS_CEILING),
+        max_requests_per_day=SMS_MAX_REQUESTS_PER_DAY,
+    )
+
+
+def resolve(channel: str) -> OtpConfig:
+    """This channel's settings (see OtpConfig)."""
+    if channel == CHANNEL_SMS:
+        return _sms_config(SmsSettings.get())
+    if channel == CHANNEL_WHATSAPP:
+        return _whatsapp_config(WhatsAppSettings.get())
+    raise ValueError(f"unknown OTP channel {channel!r}")
+
+
+# ── which WhatsApp template carries the codes ───────────────────────────────
+
+
+def whatsapp_template_name(purpose: str, wa: WhatsAppSettings | None = None) -> str:
+    """The Meta template a WhatsApp code for this purpose goes out as: HR's choice for the purpose's message type
+    (WhatsAppSettings.template_overrides), else the catalog's default for it -resolved exactly the way whatsapp_service
+    resolves it when it sends, so "available" here and the real send never disagree. The catalog names one shared
+    AUTHENTICATION template for the three code types (WHATSAPP_OTP_TEMPLATE, `hrms_otp`); it is also the fallback for a
+    code type the catalog does not send through Meta."""
+    key = _TYPE_FOR_PURPOSE[purpose]
+    overrides = (wa or WhatsAppSettings.get()).template_overrides
+    chosen = overrides.get(key) if isinstance(overrides, dict) else None
+    if isinstance(chosen, str) and chosen.strip():
+        return chosen.strip()
+    t = catalog.get(key)
+    default = getattr(t, "default_template_name", None) if t is not None else None
+    return default or WHATSAPP_OTP_TEMPLATE
+
+
+def whatsapp_template(purpose: str, wa: WhatsAppSettings | None = None) -> WhatsAppTemplate | None:
+    """The APPROVED Meta template row (name + language) a WhatsApp code for this purpose is sent as, or None."""
+    name = whatsapp_template_name(purpose, wa)
+    return WhatsAppTemplate.objects.filter(name=name, status__iexact=TEMPLATE_APPROVED).order_by("language").first()
+
+
+def whatsapp_template_status(purpose: str, wa: WhatsAppSettings | None = None) -> str | None:
+    """Meta's review status of this purpose's template as last seen ('APPROVED', 'PENDING', 'REJECTED', ...), None when
+    no template of that name is known. When the name exists in several languages an approved one wins."""
+    name = whatsapp_template_name(purpose, wa)
+    statuses = {str(s).upper() for s in WhatsAppTemplate.objects.filter(name=name).values_list("status", flat=True)}
+    if not statuses:
+        return None
+    return TEMPLATE_APPROVED if TEMPLATE_APPROVED in statuses else sorted(statuses)[0]
+
+
+# ── availability ────────────────────────────────────────────────────────────
+
+
+class _Snapshot:
+    """The settings and channel checks behind ONE decision, each read at most once."""
+
+    def __init__(self):
+        self.wa = WhatsAppSettings.get()
+        self.sms = SmsSettings.get()
+        self.configs = {CHANNEL_WHATSAPP: _whatsapp_config(self.wa), CHANNEL_SMS: _sms_config(self.sms)}
+        self._delivery: dict[str, list[str]] = {}
+        self._template: dict[str, str | None] = {}
+        self._paused: dict[str, bool] = {}
+
+    def delivery_problems(self, channel: str) -> list[str]:
+        """Why this channel cannot deliver from this server at all (purpose-independent), [] when it can."""
+        if channel not in self._delivery:
+            out = []
+            if channel == CHANNEL_SMS:
+                reason = sms_service.sending_block_reason()
+                if reason:
+                    out.append(reason)
+            else:
+                if not whatsapp_service.is_configured():
+                    out.append(
+                        "WhatsApp is not set up on this server, or this machine may not send WhatsApp messages "
+                        "(WhatsApp Control -> Settings)."
+                    )
+                if not whatsapp_service.engine_enabled():
+                    out.append("The WhatsApp master switch is off (WhatsApp Control -> Message Controls).")
+            self._delivery[channel] = out
+        return self._delivery[channel]
+
+    def template_status(self, purpose: str) -> str | None:
+        name = whatsapp_template_name(purpose, self.wa)
+        if name not in self._template:
+            self._template[name] = whatsapp_template_status(purpose, self.wa)
+        return self._template[name]
+
+    def available(self, channel: str, purpose: str) -> bool:
+        """Switched on for the purpose AND able to deliver (checked lazily: an off channel costs no further query)."""
+        if not self.configs[channel].switched_on(purpose) or self.delivery_problems(channel):
+            return False
+        return channel != CHANNEL_WHATSAPP or self.template_status(purpose) == TEMPLATE_APPROVED
+
+    def available_channels(self, purpose: str) -> list[str]:
+        return [c for c in CHANNELS if self.available(c, purpose)]
+
+    def problems(self, channel: str, purpose: str) -> list[str]:
+        """Every reason this channel can't deliver a code for this purpose, as sentences for HR ([] = available)."""
+        cfg = self.configs[channel]
+        out = []
+        if not cfg.enabled:
+            out.append(f"{cfg.name} codes are switched off.")
+        elif not cfg.switched_on(purpose):
+            out.append(f"{cfg.name} codes for {_PURPOSE_LABEL[purpose]} are switched off.")
+        out.extend(self.delivery_problems(channel))
+        if channel == CHANNEL_WHATSAPP:
+            status = self.template_status(purpose)
+            name = whatsapp_template_name(purpose, self.wa)
+            if status is None:
+                out.append(f"The WhatsApp template '{name}' does not exist yet (WhatsApp Control -> OTP: create it).")
+            elif status != TEMPLATE_APPROVED:
+                out.append(f"The WhatsApp template '{name}' is not approved by Meta (status: {status}).")
+        return out
+
+    def paused(self, channel: str) -> bool:
+        """Configured but unable to send at this moment (SMS: breaker paused or a global cap used up)."""
+        if channel not in self._paused:
+            self._paused[channel] = channel == CHANNEL_SMS and sms_service.temporarily_unavailable()
+        return self._paused[channel]
+
+
+def available_channels(purpose: str) -> list[str]:
+    """The channels that can deliver a code for this purpose right now, WhatsApp first ([] = none)."""
+    return _Snapshot().available_channels(purpose)
+
+
+def otp_channels() -> dict[str, list[str]]:
+    """{"login": [...], "reset": [...], "activate": [...]}: the available channels per purpose."""
+    snap = _Snapshot()
+    return {purpose: snap.available_channels(purpose) for purpose in PURPOSES}
+
+
+def channel_problems(channel: str, purpose: str) -> list[str]:
+    """Why this channel cannot deliver a code for this purpose, as plain sentences for HR; [] = available."""
+    return _Snapshot().problems(channel, purpose)
+
+
+def paused_now(channel: str) -> bool:
+    """Is the channel configured but unable to send for the moment (SMS: the circuit breaker is paused or a global hourly
+    / daily cap is used up)? Anybody can bring this about with a flood of code requests, so it must never close another
+    sign-in method: password sign-in stays open while it is true. WhatsApp has no such state."""
+    return channel == CHANNEL_SMS and sms_service.temporarily_unavailable()
+
+
+def channel_status(channel: str) -> dict:
+    """One channel's OTP state for its Control page: {channel, enabled, available (for at least one purpose), purposes:
+    {login, reset, activate: bool}, problems: {purpose: [sentences]}, paused, codeLength, expiryMinutes} (+ for WhatsApp:
+    templateName, templateStatus)."""
+    snap = _Snapshot()
+    cfg = snap.configs[channel]
+    purposes = {purpose: snap.available(channel, purpose) for purpose in PURPOSES}
+    out = {
+        "channel": channel,
+        "enabled": cfg.enabled,
+        "available": any(purposes.values()),
+        "purposes": purposes,
+        "problems": {purpose: snap.problems(channel, purpose) for purpose in PURPOSES},
+        "paused": snap.paused(channel),
+        "codeLength": cfg.code_length,
+        "expiryMinutes": cfg.expiry_minutes,
+    }
+    if channel == CHANNEL_WHATSAPP:
+        out["templateName"] = whatsapp_template_name(EmployeeOtp.PURPOSE_LOGIN, snap.wa)
+        out["templateStatus"] = snap.template_status(EmployeeOtp.PURPOSE_LOGIN)
+    return out
+
+
 def activation_required() -> bool:
-    """True when a first-time password must be confirmed with a code (sent by the active channel).
-    Only while that can really work (switched on AND the channel configured on this
-    server); otherwise the old open first-time setup stays, so nobody is locked out."""
-    cfg = resolve()
-    return bool(cfg.activate_enabled and cfg.available(EmployeeOtp.PURPOSE_ACTIVATE))
+    """True when a first-time password must be confirmed with a code. Only while that can really work (at least one
+    channel available for activation); otherwise the old open first-time setup stays, so nobody is locked out."""
+    return bool(available_channels(EmployeeOtp.PURPOSE_ACTIVATE))
 
 
 def activation_message() -> str:
-    """What set-password tells a stranger who must confirm a code first (names the active channel)."""
-    if resolve().channel == CHANNEL_SMS:
+    """What set-password tells a stranger who must confirm a code first (names the channels that would send it)."""
+    channels = available_channels(EmployeeOtp.PURPOSE_ACTIVATE)
+    if channels == [CHANNEL_SMS]:
         return "Please confirm the code we send by SMS to your registered mobile number to set your password."
-    return "Please confirm the code we send to your registered WhatsApp number to set your password."
+    if channels == [CHANNEL_WHATSAPP]:
+        return "Please confirm the code we send to your registered WhatsApp number to set your password."
+    return "Please confirm the code we send to your registered mobile number (by WhatsApp or SMS) to set your password."
+
+
+def _login_ready(snap: _Snapshot) -> list[str]:
+    """The channels a code sign-in really works on right now: available for sign-in and not paused."""
+    return [c for c in snap.available_channels(EmployeeOtp.PURPOSE_LOGIN) if not snap.paused(c)]
 
 
 def password_login_block_message() -> str | None:
-    """The refusal for a password sign-in when HR has switched password login off while code sign-in really works,
-    else None. (Never locks everyone out: when code sign-in can't work -not configured, or paused / capped for the
-    moment (paused_now)- password login stays open.)"""
-    cfg = resolve()
-    if (
-        not cfg.password_login_enabled
-        and cfg.login_enabled
-        and cfg.available(EmployeeOtp.PURPOSE_LOGIN)
-        and not cfg.paused_now()
-    ):
-        article = "an" if cfg.channel == CHANNEL_SMS else "a"
-        return f"Password sign-in is turned off. Please sign in with {article} {cfg.name} code."
-    return None
+    """The refusal for a password sign-in when HR has switched password login off while code sign-in really works, else
+    None. Never locks everyone out: while no channel can send a sign-in code right now (switched off, not configured,
+    paused / capped for the moment) password sign-in stays open."""
+    snap = _Snapshot()
+    if snap.wa.password_login_enabled:
+        return None
+    ready = _login_ready(snap)
+    if not ready:
+        return None
+    article = "an" if ready[0] == CHANNEL_SMS else "a"
+    return f"Password sign-in is turned off. Please sign in with {article} {_names(ready)} code."
 
 
 def login_options() -> dict:
-    """Which sign-in methods the apps should offer. A code method is only advertised when it can actually work
-    (switched on AND the ACTIVE channel configured and allowed to send on this server); `otpChannel` says which
-    channel that is ('sms' | 'whatsapp') so the apps can name it, `codeLength` how many digits that channel's codes have
-    (4 | 6) so they can size the code field."""
-    cfg = resolve()
-    login = bool(cfg.login_enabled and cfg.available(EmployeeOtp.PURPOSE_LOGIN))
+    """Which sign-in methods the apps should offer.
+
+    otpChannels {login, reset, activate}: the channels available for each purpose (WhatsApp first); channels: name and
+    code length of every channel in those lists. For older apps: otpLogin / otpReset / otpActivate (that purpose's list is
+    not empty), otpChannel (the first channel of the login list, else of reset, else of activate; null when there is none)
+    and codeLength (that channel's digits; 6 when there is none). passwordLogin is false only while HR switched password
+    sign-in off AND a code sign-in really works right now."""
+    snap = _Snapshot()
+    lists = {purpose: snap.available_channels(purpose) for purpose in PURPOSES}
+    first = next((lists[p][0] for p in PURPOSES if lists[p]), None)
+    used = [c for c in CHANNELS if any(c in channels for channels in lists.values())]
     return {
-        "otpLogin": login,
-        "otpReset": bool(cfg.reset_enabled and cfg.available(EmployeeOtp.PURPOSE_RESET)),
-        # A new employee must confirm a code before choosing a password.
-        "otpActivate": bool(cfg.activate_enabled and cfg.available(EmployeeOtp.PURPOSE_ACTIVATE)),
-        # Never lock everyone out: if code sign-in can't work -not configured, or paused / capped for the moment-
-        # password login stays. (The code methods above stay advertised while merely paused: they come back by
-        # themselves and a request meanwhile gets the plain "temporarily unavailable" sentence.)
-        "passwordLogin": bool(cfg.password_login_enabled or not login or cfg.paused_now()),
-        "otpChannel": cfg.channel,
-        "codeLength": cfg.code_length,
+        "otpLogin": bool(lists[EmployeeOtp.PURPOSE_LOGIN]),
+        "otpReset": bool(lists[EmployeeOtp.PURPOSE_RESET]),
+        "otpActivate": bool(lists[EmployeeOtp.PURPOSE_ACTIVATE]),
+        "passwordLogin": bool(snap.wa.password_login_enabled or not _login_ready(snap)),
+        "otpChannel": first,
+        "codeLength": code_length(first),
+        "otpChannels": lists,
+        "channels": {c: {"name": channel_name(c), "codeLength": code_length(c)} for c in used},
     }
 
 
-class OtpError(Exception):
-    """A refusal the API should report as-is. `status` is the HTTP status."""
+# ── the codes ───────────────────────────────────────────────────────────────
 
-    def __init__(self, message: str, status: int = 400, **extra):
-        super().__init__(message)
-        self.message = message
+
+class OtpError(Exception):
+    """A refusal the API should report as-is. `status` is the HTTP status; `extra` goes into the answer next to "error"."""
+
+    def __init__(self, error: str, status: int = 400, /, **extra):
+        super().__init__(error)
+        self.message = error
         self.status = status
         self.extra = extra
 
@@ -259,19 +443,79 @@ def find_employee(identifier: str | None) -> Employee:
     return employee
 
 
-def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
-    """Create a code and send it, by the active channel (WhatsApp or SMS), to the employee's registered number.
-    Returns {message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength}."""
+def _of_channel(channel: str) -> Q:
+    """The code rows issued on this channel (a row from before EmployeeOtp.channel: by its length)."""
+    return Q(channel=channel) | Q(channel="", code_length=code_length(channel))
+
+
+def row_channel(otp: EmployeeOtp) -> str:
+    """The channel a code row went out on (a row from before the column: 4 digits = SMS, else WhatsApp)."""
+    if otp.channel in CODE_LENGTH:
+        return otp.channel
+    return CHANNEL_SMS if otp.code_length == CODE_LENGTH[CHANNEL_SMS] else CHANNEL_WHATSAPP
+
+
+def verified_codes(channel: str) -> QuerySet:
+    """The code rows of this channel that were USED in time (verified): consumed before they expired. A code that died
+    unused (replaced, locked, killed by a reset) has expires_at set to its consumed_at, so it never counts. Filter it by
+    consumed_at for a period."""
+    return EmployeeOtp.objects.filter(channel=channel, consumed_at__isnull=False, consumed_at__lt=F("expires_at"))
+
+
+def _pick(snap: _Snapshot, purpose: str, requested) -> tuple[OtpConfig, list[str]]:
+    """(the channel config this request uses, every channel available for the purpose), or OtpError."""
+    available = snap.available_channels(purpose)
+    if requested is not None:
+        if requested in available:
+            return snap.configs[requested], available
+        if requested in CHANNELS:
+            message = f"{channel_name(requested)} codes aren't available right now."
+        else:
+            message = "Choose how to get the code: WhatsApp or SMS."
+        message += f" Please choose {_names(available)}." if available else " Please use your password or contact HR."
+        # `message` repeats `error` for the apps that read the contract's name for it
+        raise OtpError(message, 400, code="channel_unavailable", availableChannels=available, message=message)
+    if available:
+        return snap.configs[available[0]], available
+    switched = [c for c in CHANNELS if snap.configs[c].switched_on(purpose)]
+    if not switched:
+        raise OtpError(
+            "One-time codes are turned off. Please use your password or contact HR.",
+            403,
+            code="otp_off",
+            availableChannels=[],
+        )
+    raise OtpError(
+        f"{_names(switched)} OTP isn't available right now. Please contact HR.",
+        503,
+        code="otp_unavailable",
+        availableChannels=[],
+    )
+
+
+def _send_whatsapp_code(employee: Employee, purpose: str, code: str, minutes: int, phone: str) -> bool:
+    """THE one call that sends a code by WhatsApp: the purpose's message type through whatsapp_service, at once (never
+    queued), its log row with the code redacted. True when WhatsApp accepted it. Kept to this single call so the
+    WhatsApp side can change how it sends (the Meta AUTHENTICATION template) without touching the channel logic here."""
+    log = whatsapp_service.send_notification(
+        employee,
+        _TYPE_FOR_PURPOSE[purpose],
+        [code, str(minutes)],
+        log_params=["••••••", str(minutes)],
+    )  # a code is sent at once, never queued (whatsapp_catalog kind "code")
+    return log is not None and log.status in ("sent", "delivered", "read", "queued", "sending")
+
+
+def request_otp(identifier: str | None, purpose: str, ip: str = "", channel: str | None = None) -> dict:
+    """Create a code and send it to the employee's registered number by `channel` ("whatsapp" | "sms"; None: the first
+    available for the purpose). Returns {message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength,
+    otherChannels}. Raises OtpError (a requested channel that is not available: 400 code "channel_unavailable" with
+    availableChannels)."""
     if purpose not in _TYPE_FOR_PURPOSE:
         raise OtpError("Unknown purpose.")
-    cfg = resolve()
-    if not cfg.enabled_for(purpose):
-        raise OtpError(
-            f"{cfg.name} OTP is turned off. Please use your password or contact HR.",
-            403,
-        )
-    if not cfg.available(purpose):
-        raise OtpError(f"{cfg.name} OTP isn't available right now. Please contact HR.", 503)
+    snap = _Snapshot()
+    cfg, available = _pick(snap, purpose, channel)
+    others = [c for c in available if c != cfg.channel]
 
     employee = find_employee(identifier)
     if purpose == EmployeeOtp.PURPOSE_ACTIVATE and employee.password_hash:
@@ -281,35 +525,43 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
         raise OtpError("No mobile number is registered for this employee. Please contact HR.", 400)
     if cfg.channel == CHANNEL_SMS and not sms_service.is_valid_number(phone):
         # refused before anything is created or requested: a landline or a half-typed number
-        raise OtpError(sms_service.MSG_BAD_NUMBER, 400)
+        raise OtpError(sms_service.MSG_BAD_NUMBER, 400, otherChannels=others)
 
     length = cfg.code_length
     code = "".join(secrets.choice("0123456789") for _ in range(length))
     salt = secrets.token_hex(8)
     minutes = max(1, int(cfg.expiry_minutes))
     with transaction.atomic():
-        # One request per employee at a time: the cooldown / hourly check and the creation of the new code happen under
-        # a lock on the employee row, so simultaneous requests cannot all pass the check and send a message each (the
-        # second one waits here, then sees the first one's new code and its cooldown). The lock is released at the end of
-        # this block, BEFORE the (slow) send.
+        # One request per employee at a time: the cooldown / allowance checks and the creation of the new code happen
+        # under a lock on the employee row, so simultaneous requests cannot all pass the checks and send a message each
+        # (the second one waits here, then sees the first one's new code and its cooldown). The lock is released at the
+        # end of this block, BEFORE the (slow) send.
         if Employee.objects.select_for_update().filter(pk=employee.pk).first() is None:
             raise OtpError("You are not registered. Please contact HR.", 404)
         now = timezone.now()  # taken after the lock: a request that had to wait must not compute with an old clock
-        recent = EmployeeOtp.objects.filter(employee=employee, purpose=purpose)
-        latest = recent.first()
+        # each channel counts its own codes: asking for an SMS after a WhatsApp code is not held up by WhatsApp's cooldown
+        recent = EmployeeOtp.objects.filter(employee=employee, purpose=purpose).filter(_of_channel(cfg.channel))
+        latest = recent.order_by("-created_at").first()
         if latest is not None:
             wait = cfg.resend_cooldown_seconds - int((now - latest.created_at).total_seconds())
             if wait > 0:
                 raise OtpError(
-                    f"Please wait {wait} seconds before asking for another code.", 429, retryAfterSeconds=wait
+                    f"Please wait {wait} seconds before asking for another code.",
+                    429,
+                    retryAfterSeconds=wait,
+                    otherChannels=others,
                 )
         if recent.filter(created_at__gte=now - timedelta(hours=1)).count() >= cfg.max_requests_per_hour:
-            raise OtpError("Too many codes requested. Please try again in an hour, or contact HR.", 429)
+            raise OtpError(
+                "Too many codes requested. Please try again in an hour, or contact HR.", 429, otherChannels=others
+            )
         if (
             cfg.max_requests_per_day is not None
             and recent.filter(created_at__gte=now - timedelta(hours=24)).count() >= cfg.max_requests_per_day
         ):
-            raise OtpError("Too many codes requested today. Please try again tomorrow, or contact HR.", 429)
+            raise OtpError(
+                "Too many codes requested today. Please try again tomorrow, or contact HR.", 429, otherChannels=others
+            )
         # The new code is only ADDED here. The earlier codes are consumed after the send succeeded (below): consuming
         # them first meant that a send that failed or was blocked killed the employee's still-valid code.
         otp = EmployeeOtp.objects.create(
@@ -317,6 +569,7 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
             purpose=purpose,
             code_hash=_hash(code, salt, employee.id, purpose),
             code_length=length,
+            channel=cfg.channel,
             phone_number=phone,
             expires_at=now + timedelta(minutes=minutes),
             requested_ip=ip or "",
@@ -325,29 +578,25 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
     if cfg.channel == CHANNEL_SMS:
         sent = sms_service.send_otp(employee, purpose, code, minutes, phone=phone, ip=ip)
         if not sent.ok:
-            # Nothing usable reached the employee (or a limit stopped the send): same rule as WhatsApp below. The new
-            # row goes; the employee's previous code, if any, stays valid.
+            # Nothing usable reached the employee (or a limit stopped the send): the new row goes; the employee's
+            # previous code, if any, stays valid.
             otp.delete()
-            raise OtpError(sent.message, sent.http_status)
+            raise OtpError(sent.message, sent.http_status, otherChannels=others)
         message = f"We've sent a code by SMS to {mask_phone(phone)}."
     else:
-        log = whatsapp_service.send_notification(
-            employee,
-            _TYPE_FOR_PURPOSE[purpose],
-            [code, str(minutes)],
-            log_params=["••••••", str(minutes)],
-        )  # a code is sent at once, never queued (whatsapp_catalog kind "code")
-        if log is None or log.status == "failed":
-            # Nothing usable reached the employee, so this code must not stay valid
-            # (and shouldn't count against their hourly allowance); the previous one stays valid.
+        if not _send_whatsapp_code(employee, purpose, code, minutes, phone):
+            # Nothing usable reached the employee, so this code must not stay valid (and shouldn't count against their
+            # allowance); the previous one stays valid.
             otp.delete()
-            raise OtpError("We couldn't send the code on WhatsApp. Please try again in a moment or contact HR.", 502)
+            raise OtpError(
+                "We couldn't send the code on WhatsApp. Please try again in a moment or contact HR.",
+                502,
+                otherChannels=others,
+            )
         message = "We've sent a code to your WhatsApp."
 
-    # Only the newest message may work: now that it really went out, the earlier codes die.
-    EmployeeOtp.objects.filter(employee=employee, purpose=purpose, consumed_at__isnull=True).exclude(pk=otp.pk).update(
-        consumed_at=timezone.now()
-    )
+    # Only the newest message may work: now that it really went out, the earlier codes (of either channel) die.
+    _kill(EmployeeOtp.objects.filter(employee=employee, purpose=purpose).exclude(pk=otp.pk))
 
     return {
         "message": message,
@@ -356,7 +605,30 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "") -> dict:
         "resendAfterSeconds": cfg.resend_cooldown_seconds,
         "channel": cfg.channel,
         "codeLength": length,
+        "otherChannels": others,
     }
+
+
+def _kill(rows) -> int:
+    """Consume the unused codes among `rows` without using them: consumed AND expired now (see verified_codes)."""
+    now = timezone.now()
+    return rows.filter(consumed_at__isnull=True).update(consumed_at=now, expires_at=now)
+
+
+def _attempt_limit(otp: EmployeeOtp) -> int:
+    """Wrong guesses allowed on this code: its own channel's limit."""
+    if row_channel(otp) == CHANNEL_SMS:
+        return _sms_config(SmsSettings.get()).max_attempts_per_code
+    return MAX_ATTEMPTS
+
+
+def _shape_message(purpose: str) -> str:
+    lengths = sorted({code_length(c) for c in available_channels(purpose)})
+    if len(lengths) == 1:
+        return f"Enter the {lengths[0]}-digit code."
+    if lengths:
+        return "Enter the " + " or ".join(str(n) for n in lengths) + "-digit code."
+    return "Enter the code we sent you."
 
 
 def verify_otp(identifier: str | None, code: str | None, purpose: str) -> Employee:
@@ -368,10 +640,10 @@ def verify_otp(identifier: str | None, code: str | None, purpose: str) -> Employ
     generic = OtpError("That code is incorrect or has expired. Please request a new one.", 400)
     # the code is JSON from the client: a number, a list ... is a 400 like any other malformed code, never a 500
     code = code.strip() if isinstance(code, str) else ""
-    # Which length is right depends on the code row (a code issued before HR switched the channel keeps its length), so
-    # here only the shapes any channel can issue pass; the exact length is checked against the row below.
+    # Which length is right depends on the code row (each channel issues its own length), so here only the shapes any
+    # channel can issue pass; the exact length is checked against the row below.
     if not (code.isascii() and code.isdigit()) or len(code) not in set(CODE_LENGTH.values()):
-        raise OtpError(f"Enter the {resolve().code_length}-digit code.")
+        raise OtpError(_shape_message(purpose))
     identifier = (identifier or "").strip()
     if not is_plain_text(identifier):
         raise generic
@@ -383,18 +655,19 @@ def verify_otp(identifier: str | None, code: str | None, purpose: str) -> Employ
     # AFTER it commits: raising inside would roll back the incremented attempt
     # counter, which would make guessing unlimited.
     outcome = "invalid"
-    max_attempts = resolve().max_attempts_per_code
     with transaction.atomic():
         otp = (
             EmployeeOtp.objects.select_for_update()
             .filter(employee=employee, purpose=purpose, consumed_at__isnull=True, expires_at__gt=timezone.now())
+            .order_by("-created_at")
             .first()
         )
         if otp is not None:
             otp.attempts += 1
-            if otp.attempts > max_attempts:
-                otp.consumed_at = timezone.now()
-                otp.save(update_fields=["attempts", "consumed_at"])
+            if otp.attempts > _attempt_limit(otp):
+                # dead: consumed AND expired now, so it never counts as verified
+                otp.consumed_at = otp.expires_at = timezone.now()
+                otp.save(update_fields=["attempts", "consumed_at", "expires_at"])
                 outcome = "locked"
             elif len(code) != otp.code_length:
                 # Not a guess at this code (a different length can never match): counted like one anyway, and answered
@@ -415,4 +688,4 @@ def verify_otp(identifier: str | None, code: str | None, purpose: str) -> Employ
 
 def invalidate_all(employee: Employee) -> None:
     """Kill every unused code (used after a password reset)."""
-    EmployeeOtp.objects.filter(employee=employee, consumed_at__isnull=True).update(consumed_at=timezone.now())
+    _kill(EmployeeOtp.objects.filter(employee=employee))

@@ -1,63 +1,88 @@
 """
 WhatsApp notification service -the one place every HRMS module sends through
 ======================================================================
-    HRMS module -> send_notification() / send_document() -> template (whatsapp_catalog)
-                -> queued WhatsAppMessageLog row -> whatsapp_dispatcher (paced) -> WAClient -> employee
+    HRMS module -> send_notification() / send_document() -> queued WhatsAppMessageLog row
+                -> whatsapp_dispatcher (paced) -> deliver_template() -> Meta WhatsApp Cloud API -> employee
 
-  * whatsapp_catalog     what each message is, its default wording, variables and queue kind
-  * this module          switches (master, module, type, opt-out), wording, the log rows,
-                         and the WAClient calls themselves
-  * whatsapp_dispatcher  the one paced sender: at least `min_gap_seconds` between messages,
-                         hourly / daily / per-employee caps, quiet hours, today-only expiry,
-                         one retry for a temporary failure, a circuit breaker
+  * whatsapp_catalog     what each message is, its variables, its queue kind and its Meta template (meta_template /
+                         meta_header / meta_category)
+  * this module          switches (master, module, type, opt-out), which Meta template a type is sent as and whether it
+                         is approved, the log rows, and the one send path to Meta (deliver_template / deliver_code)
+  * whatsapp_cloud       the Graph API client (knows Meta, nothing about the HRMS)
+  * whatsapp_dispatcher  the one paced sender: at least `min_gap_seconds` between messages, hourly / daily /
+                         per-employee caps, quiet hours, today-only expiry, one retry for a temporary failure, a
+                         circuit breaker
   * whatsapp_approvals / whatsapp_notifications / whatsapp_alerts
                          what to say for each HRMS event
 
-Since 2026-11-06 nothing but a one-time code is sent from the request (or job) that raised it:
-everything else is written as a `queued` row and leaves when the dispatcher's pacing allows,
-so a burst of approvals, a shift's worth of alerts or a month of salary slips can never go out
-as the burst that gets the linked number restricted. A code is sent at once (the employee is
+Since 2026-11-20 WhatsApp goes through the official Meta WhatsApp Cloud API only. Meta lets a business
+start a conversation with an APPROVED message template only, so:
+
+  * every message type is sent as its template: WhatsAppSettings.template_overrides[type] when HR picked one, else the
+    catalog's default `hrms_<type>` (MessageType.default_template_name; "-" = never sent through Meta). The template
+    must be APPROVED in WhatsAppTemplate (the local mirror of Meta's list, kept by WhatsApp Control -> Templates and
+    the webhook). A type without one is SKIPPED with a clear reason, never a provider failure (the queue never pauses
+    for it).
+  * the variables travel to Meta as the template's named parameters (whatsapp_cloud.sanitize_param flattens each value
+    to one line). A queued row keeps them in payload["params"] until its turn; message_text is the rendered template
+    body, for the history.
+  * a document / ID card is uploaded to Meta (whatsapp_cloud.upload_media) when its row is sent and travels in the
+    template's header; between queueing and sending the bytes wait in WhatsAppMediaAsset (no public link any more).
+  * a one-time code goes as an AUTHENTICATION (copy-code) template (deliver_code).
+  * groups and contact cards do not exist for templates: refused / not sent, with the reason.
+
+Since 2026-11-06 nothing but a one-time code is sent from the request (or job) that raised it: everything else is
+written as a `queued` row and leaves when the dispatcher's pacing allows. A code is sent at once (the employee is
 waiting for it), blocked only by the master switch.
 
-Every attempt -queued, sent, failed, expired, skipped, switched off by HR- ends up as a
-WhatsAppMessageLog row that HR sees on the WhatsApp Control page, and a failed
-message never raises into the workflow that triggered it.
+Every attempt -queued, sent, failed, expired, skipped, switched off by HR- ends up as a WhatsAppMessageLog row that HR
+sees on the WhatsApp Control page, and a failed message never raises into the workflow that triggered it.
 
-Sending goes through WAClient's WhatsApp Web API (linked WhatsApp number), so there
-are no Meta templates to approve: wording is plain text with {{name}} placeholders
-that HR can edit (WhatsAppMessageTemplate.message_body); a type with no saved wording
-uses the catalog default. The API has no native buttons, so "components" are what it
-does offer: formatted text and emojis, documents and images with a caption, and
-contact cards (the visitor's tap-to-call card). No message carries a link to the
-Employee Web App, so every text goes out as a plain WAClient "text" message.
+Public functions other modules use (names and contracts kept): send_notification, send_document, queue_document,
+send_text, queue_to_recipient, accepted, engine_enabled, is_configured, has_credentials, sending_allowed,
+sending_block_reason, recipient_block_reason, recipient_codes, allowed_numbers, development_machine, local_dev_server,
+switch_off_reason, feature_enabled, opted_out, normalize_phone, render_message, build_document, expire_stale_pending,
+is_group_id, fetch_groups (always refuses now), public_base_problem (always None now), WhatsAppServiceError.
 
-Credentials (WACLIENT_INSTANCE_ID / WACLIENT_ACCESS_TOKEN) are .env-only -see
-config/settings.py -never stored in the database or editable from the UI.
+New with Meta:
+    template_name_for(document_type, s=None) -> str | None     the template a type is sent as (None: not via Meta)
+    template_for(document_type, s=None) -> TemplateChoice       that template's local row, status, language, category,
+                                                                header, variables, and `.problem` (why it can't be
+                                                                sent now, or None)
+    template_problem(document_type, s=None) -> str | None
+    template_approved(document_type, s=None) -> bool
+    deliver_template(to, document_type, params, *, media=None, media_id="", media_filename="", choice=None)
+        -> SendResult(wamid, template_name, language, text, media_id)
+                                                                THE send of one template message (the dispatcher and
+                                                                the test message); raises WhatsAppServiceError
+    deliver_code(to, document_type, code, *, minutes=None, choice=None) -> SendResult
+                                                                a one-time code (otp_service through send_notification)
+    phone_status(refresh=False) -> dict                         Meta's view of the number, cached 5 minutes
 
-Documents are sent by giving WAClient a *public URL* to fetch -see
-WhatsAppMediaAsset / _store_media / _media_url.
+Credentials (WHATSAPP_CLOUD_*) are .env-only -see config/settings.py and whatsapp_cloud.py- never stored in the
+database or editable from the UI.
 
-send_document() / send_text() / send_notification() never raise for an "expected"
-failure (not configured, no phone on file, switched off, or a WAClient API error).
+send_document() / send_text() / send_notification() never raise for an "expected" failure (not configured, no phone on
+file, switched off, template not approved, or a Meta API error).
 """
 
-import ipaddress
-import os
 import logging
+import os
 import re
 import secrets
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
 
-import requests
 from django.conf import settings as dj_settings
+from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.module_loading import import_string
 
 from . import push_messages
 from . import whatsapp_catalog as catalog
+from . import whatsapp_cloud as cloud
 
 logger = logging.getLogger(__name__)
 
@@ -75,29 +100,51 @@ ACCEPTED_STATUSES = ("queued", "sending", "sent", "delivered", "read")
 
 REASON_OPTED_OUT = "This employee has opted out of WhatsApp messages: not sent."
 REASON_QUIET = "Quiet hours: not sent"
+REASON_NO_GROUPS = (
+    "WhatsApp groups can't be messaged through the official WhatsApp Cloud API: add individual numbers instead."
+)
+# The texts the provider (or the way to it) produced, which the dispatcher's circuit breaker counts. A refusal of ONE
+# message by Meta (its recipient, its template, its variables) starts with REFUSED_PREFIX and is never counted.
+SEND_FAILED_PREFIX = "Send failed: "
+REFUSED_PREFIX = "Refused by WhatsApp: "
+UNREACHABLE_PREFIX = "Could not reach Meta"
 
 # Documents built only when their turn comes (a bulk send must answer at once, not build a few hundred PDFs inside one
 # web request): a name stored in the queued row's payload -> the function that returns the file's bytes.
 DOCUMENT_BUILDERS = {"salary_slip": "api.salary_slip_views.whatsapp_slip_pdf"}
 
+APPROVED = "APPROVED"
+AUTHENTICATION = "AUTHENTICATION"
+_MEDIA_HEADERS = ("document", "image", "video")
+
 
 class WhatsAppServiceError(Exception):
-    """A send that did not work. `temporary` is True for a failure worth ONE retry a minute later (the provider could
-    not be reached, timed out, answered 5xx or 429); everything else (a refused number, a disconnected instance, a bad
-    token) is final."""
+    """A send that did not work. `temporary` is True for a failure worth ONE retry a minute later (Meta could not be
+    reached, timed out, answered 5xx or a rate limit); everything else (a refused number, an unapproved template, a bad
+    token) is final. `code` is Meta's error code when Meta answered with one."""
 
     def __init__(
-        self, message: str = "", temporary: bool = False, http_status: int | None = None, provider_response=None
+        self,
+        message: str = "",
+        temporary: bool = False,
+        http_status: int | None = None,
+        provider_response=None,
+        code: int | None = None,
+        meta_message: str = "",
     ):
         super().__init__(message)
         self.temporary = temporary
-        # what WAClient answered, for the test message and the log (credentials never included)
+        # what Meta answered, for the test message and the log (credentials never included)
         self.http_status = http_status
         self.provider_response = provider_response
+        self.code = code
+        self.meta_message = meta_message
+        self.media_id = ""  # a file uploaded to Meta before the send itself failed (deliver_template)
 
 
 def has_credentials() -> bool:
-    return bool(dj_settings.WACLIENT_INSTANCE_ID and dj_settings.WACLIENT_ACCESS_TOKEN)
+    """The Meta Cloud API variables needed to send are set (whatsapp_cloud.is_configured)."""
+    return cloud.is_configured()
 
 
 def sending_allowed() -> bool:
@@ -115,10 +162,9 @@ def development_machine() -> bool:
 
 
 def provider_is_local() -> bool:
-    """Is WACLIENT_API_URL on this machine (the e2e stack's fake WAClient)? Such a provider reaches nobody, so a development
-    machine needs no recipient limit for it."""
-    host = (urlparse(dj_settings.WACLIENT_API_URL or "").hostname or "").lower()
-    return host in ("localhost", "127.0.0.1", "::1")
+    """Is WHATSAPP_CLOUD_API_BASE on this machine (the e2e stack's fake Graph API, frontend/e2e/fake-meta.mjs)? Such a
+    provider reaches nobody, so a development machine needs no recipient limit for it."""
+    return cloud.base_is_local()
 
 
 def local_dev_server() -> bool:
@@ -146,7 +192,7 @@ def recipient_codes() -> list[str]:
 def allowed_numbers() -> set[str] | None:
     """The phone numbers (normalised) this machine may message, or None when there is no limit. A real server has none.
     A development machine always has one (an empty set when no employee is named: nothing may be sent), except with a
-    local fake WAClient (the e2e stack)."""
+    local fake Graph API (the e2e stack)."""
     if not local_dev_server():
         return None
     codes = recipient_codes()
@@ -178,8 +224,18 @@ def recipient_block_reason(to: str | None) -> str | None:
 def sending_block_reason() -> str | None:
     """Why nothing can be sent from here, or None when it can."""
     if not has_credentials():
+        missing = [
+            name
+            for name in (
+                "WHATSAPP_CLOUD_PHONE_NUMBER_ID",
+                "WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID",
+                "WHATSAPP_CLOUD_ACCESS_TOKEN",
+            )
+            if not str(getattr(dj_settings, name, "") or "").strip()
+        ]
         return (
-            "WhatsApp is not configured on this server (missing WACLIENT_INSTANCE_ID / WACLIENT_ACCESS_TOKEN in .env)."
+            "WhatsApp (Meta Cloud API) is not configured on this server (missing "
+            f"{' / '.join(missing)} in .env, Railway Variables on the live server)."
         )
     if not sending_allowed():
         return (
@@ -202,13 +258,11 @@ def is_configured() -> bool:
 
 def normalize_phone(raw: str | None) -> str | None:
     """
-    Employee.phone is stored as a plain local number (no country code, no
-    formatting guarantees at all -it's a free-text field). WAClient needs the
-    full international number as digits only (no '+', spaces or punctuation).
-    Prefixes WHATSAPP_DEFAULT_COUNTRY_CODE (default "91") only when the number
-    doesn't already start with it. Returns None if there's nothing usable to
-    send to, so callers can report "no phone on file" cleanly instead of
-    sending garbage to the API.
+    Employee.phone is stored as a plain local number (no country code, no formatting guarantees at all -it's a
+    free-text field). Meta needs the full international number as digits only (no '+', spaces or punctuation).
+    Prefixes WHATSAPP_DEFAULT_COUNTRY_CODE (default "91") only when the number doesn't already start with it. Returns
+    None if there's nothing usable to send to, so callers can report "no phone on file" cleanly instead of sending
+    garbage to the API.
     """
     if not raw:
         return None
@@ -233,8 +287,8 @@ _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*|\d+)\s*\}\}")
 
 
 def _values(params, order: list[str] | None) -> dict[str, str]:
-    """name -> text, also reachable by position ({{1}} = the first variable) so wording HR
-    saved with numbered placeholders keeps working."""
+    """name -> text, also reachable by position ({{1}} = the first variable) so a positional template, or a caller that
+    passes a list, keeps working."""
     order = order or []
     values: dict[str, str] = {}
     if isinstance(params, dict):
@@ -281,42 +335,394 @@ def _order_for(document_type: str) -> list[str]:
 
 
 def _template_body(document_type: str) -> str:
-    """The wording that will be sent for this type: HR's saved text, else the default."""
-    from .models import WhatsAppMessageTemplate
-
-    template = WhatsAppMessageTemplate.objects.filter(document_type=document_type).first()
-    return (template.message_body.strip() if template else "") or DEFAULT_MESSAGES.get(document_type, "")
+    """The catalog's own wording of this type (what an HRMS template draft starts from). The wording HR used to save on
+    the old Message Text tab is no longer sent: with Meta the wording IS the approved template."""
+    return DEFAULT_MESSAGES.get(document_type, "")
 
 
-def _message_for(document_type: str, params) -> tuple[str | None, str | None]:
-    """(text, None) to send, or (None, reason) when HR has switched this
-    message type's wording off."""
-    from .models import WhatsAppMessageTemplate
+# ── which Meta template a message type is sent as ─────────────────────────────────────
 
-    template = WhatsAppMessageTemplate.objects.filter(document_type=document_type).first()
-    if template is not None and not template.is_enabled:
-        return None, f"WhatsApp sending for '{document_type}' is turned off in Settings → WhatsApp."
-    body = (template.message_body.strip() if template else "") or DEFAULT_MESSAGES.get(document_type, "")
-    return render_message(body, params, _order_for(document_type)), None
+
+@dataclass(frozen=True)
+class TemplateChoice:
+    """The Meta template a message type goes out as, as this server last saw it (WhatsAppTemplate)."""
+
+    document_type: str
+    name: str | None  # None: the type is not sent through Meta at all
+    language: str
+    status: str  # Meta's status (APPROVED, PENDING, REJECTED, PAUSED ...), "MISSING" (no row here) or "NONE"
+    category: str  # UTILITY | AUTHENTICATION | MARKETING
+    row: object | None = field(default=None, compare=False)
+    problem: str | None = None  # why it can't be sent now, or None
+
+    @property
+    def approved(self) -> bool:
+        return self.problem is None
+
+    def _component(self, kind: str) -> dict:
+        for c in (getattr(self.row, "components", None) or []) if self.row is not None else []:
+            if isinstance(c, dict) and str(c.get("type") or "").upper() == kind:
+                return c
+        return {}
+
+    @property
+    def header(self) -> str:
+        """ "" | "document" | "image" | "video" | "text": what the template's header holds. From the template Meta
+        approved when this server has its components, else the catalog's meta_header."""
+        found = self._component("HEADER")
+        if found:
+            return str(found.get("format") or "text").lower()
+        if self.row is not None and getattr(self.row, "components", None):
+            return ""
+        spec = catalog.get(self.document_type)
+        return spec.meta_header if spec else ""
+
+    @property
+    def body_text(self) -> str:
+        return str(self._component("BODY").get("text") or "")
+
+    @property
+    def header_text(self) -> str:
+        found = self._component("HEADER")
+        return str(found.get("text") or "") if str(found.get("format") or "").upper() == "TEXT" else ""
+
+    @property
+    def variable_names(self) -> list[str]:
+        """The template's own variables, in order: from its body when this server has it, else the catalog's."""
+        body = self.body_text
+        if body:
+            seen: list[str] = []
+            for name in _PLACEHOLDER.findall(body):
+                if name not in seen:
+                    seen.append(name)
+            return seen
+        if self.category == AUTHENTICATION:
+            return ["code"]
+        return _order_for(self.document_type)
+
+
+def template_name_for(document_type: str, s=None) -> str | None:
+    """The Meta template this type is sent as: HR's choice (WhatsAppSettings.template_overrides), else the catalog's
+    default name. None: the type is never sent through Meta (catalog meta_template "-", or not in the catalog)."""
+    spec = catalog.get(document_type)
+    if spec is None or spec.default_template_name is None:
+        return None
+    if s is None:
+        from .models import WhatsAppSettings
+
+        s = WhatsAppSettings.get()
+    override = str((s.template_overrides or {}).get(document_type) or "").strip()
+    return override or spec.default_template_name
+
+
+def _pick(rows: list, language: str):
+    """Approved in the configured language, else approved in any language, else the configured language's row, else
+    any: the row whose status explains the most."""
+    for test in (
+        lambda r: r.status == APPROVED and r.language == language,
+        lambda r: r.status == APPROVED,
+        lambda r: r.language == language,
+        lambda r: True,
+    ):
+        for r in rows:
+            if test(r):
+                return r
+    return None
+
+
+def template_for(document_type: str, s=None) -> TemplateChoice:
+    from .models import WhatsAppSettings, WhatsAppTemplate
+
+    spec = catalog.get(document_type)
+    label = spec.label if spec else document_type
+    category = spec.meta_category if spec else "UTILITY"
+    language = cloud.template_language()
+    s = s or WhatsAppSettings.get()
+    name = template_name_for(document_type, s)
+    if name is None:
+        return TemplateChoice(
+            document_type,
+            None,
+            language,
+            "NONE",
+            category,
+            None,
+            f"'{label}' is not sent through the WhatsApp Cloud API (it has no Meta template): not sent.",
+        )
+    row = _pick(list(WhatsAppTemplate.objects.filter(name=name)), language)
+    if row is None:
+        return TemplateChoice(
+            document_type,
+            name,
+            language,
+            "MISSING",
+            category,
+            None,
+            f"The WhatsApp template '{name}' for '{label}' is not on this server yet: create it (or Sync now) on "
+            "WhatsApp Control -> Templates. Not sent.",
+        )
+    status = str(row.status or "").upper()
+    problem = None
+    if status != APPROVED:
+        problem = f"The WhatsApp template '{name}' is {status or 'not submitted'} at Meta, not approved yet: not sent."
+        if status == "REJECTED" and row.rejected_reason:
+            problem = f"The WhatsApp template '{name}' was rejected by Meta ({row.rejected_reason}): not sent."
+    return TemplateChoice(
+        document_type, name, row.language or language, status, (row.category or category).upper(), row, problem
+    )
+
+
+def template_problem(document_type: str, s=None) -> str | None:
+    return template_for(document_type, s).problem
+
+
+def template_approved(document_type: str, s=None) -> bool:
+    return template_for(document_type, s).problem is None
+
+
+def template_params(choice: TemplateChoice, values: dict[str, str]) -> dict[str, str]:
+    """{variable: value} for exactly the variables the template has (a missing value is sent as "-")."""
+    return {name: values.get(name, "") for name in choice.variable_names}
+
+
+def _fill(text: str, values: dict[str, str]) -> str:
+    return _PLACEHOLDER.sub(lambda m: cloud.sanitize_param(values.get(m.group(1), "")), text)
+
+
+def render_auth_text(code: str, choice: TemplateChoice | None = None, minutes=None) -> str:
+    """What an AUTHENTICATION (copy-code) template looks like on the phone (Meta writes the words itself)."""
+    text = f"{code} is your verification code."
+    body = choice._component("BODY") if choice is not None else {}
+    footer = choice._component("FOOTER") if choice is not None else {}
+    if body.get("add_security_recommendation", True):
+        text += " For your security, do not share this code."
+    expiry = footer.get("code_expiration_minutes") or minutes
+    if expiry:
+        text += f"\nThis code expires in {expiry} minutes."
+    return text
+
+
+def render_template_text(choice: TemplateChoice, params) -> str:
+    """The template's body with the variables filled in (what the employee reads), for the log and the previews. Falls
+    back to the catalog's wording when this server does not have the template's text."""
+    values = _values(params, _order_for(choice.document_type))
+    if choice.category == AUTHENTICATION:
+        return render_auth_text(values.get("code") or values.get("1") or "", choice, values.get("minutes"))
+    if choice.body_text:
+        return _fill(choice.body_text, values).strip()
+    return render_message(_template_body(choice.document_type), values, _order_for(choice.document_type))
+
+
+@dataclass
+class SendResult:
+    wamid: str
+    template_name: str
+    language: str
+    text: str
+    media_id: str = ""
+
+
+def _service_error(exc: "cloud.MetaApiError") -> WhatsAppServiceError:
+    if exc.code is None and exc.temporary:
+        text = exc.friendly  # "Could not reach Meta (WhatsApp Cloud API): ..."
+    elif exc.message_level:
+        text = f"{REFUSED_PREFIX}{exc}"
+    else:
+        text = f"{SEND_FAILED_PREFIX}{exc}"
+    return WhatsAppServiceError(
+        text[:1000],
+        temporary=exc.temporary,
+        http_status=exc.http_status,
+        provider_response=exc.response,
+        code=exc.code,
+        meta_message=exc.message,
+    )
+
+
+def _guard(to: str) -> None:
+    """The last line of defence, in front of every call that reaches Meta: credentials, this machine's rules, and the
+    development-machine recipient lock."""
+    blocked = sending_block_reason()
+    if blocked:
+        raise WhatsAppServiceError(blocked)
+    if is_group_id(to or ""):
+        raise WhatsAppServiceError(REASON_NO_GROUPS)
+    refused = recipient_block_reason(to)
+    if refused:
+        raise WhatsAppServiceError(refused)
+
+
+def deliver_template(
+    to: str,
+    document_type: str,
+    params,
+    *,
+    media=None,
+    media_id: str = "",
+    media_filename: str = "",
+    choice: TemplateChoice | None = None,
+) -> SendResult:
+    """Send one message of `document_type` to `to` (digits with the country code) as its APPROVED template, NOW. The
+    only path to Meta for everything but a one-time code. `params`: the type's variables (dict by name or list by
+    position). `media`: the file of a document / ID card, (bytes, filename, mime type) or a function returning that
+    (called only when the message really goes); `media_id` reuses a file already uploaded (a retry). Raises
+    WhatsAppServiceError; Meta's refusals keep its code (`.code`) and its words (`.meta_message`)."""
+    _guard(to)
+    choice = choice or template_for(document_type)
+    if choice.problem:
+        raise WhatsAppServiceError(choice.problem)
+    if choice.category == AUTHENTICATION:
+        values = _values(params, _order_for(document_type))
+        return deliver_code(to, document_type, values.get("code") or values.get("1") or "", choice=choice)
+    values = _values(params, _order_for(document_type))
+    header = None
+    fmt = choice.header
+    try:
+        if fmt in _MEDIA_HEADERS:
+            filename = media_filename
+            if not media_id:
+                if media is None:
+                    raise WhatsAppServiceError(f"The {fmt} of this message is missing: not sent.")
+                content, filename, mime_type = media() if callable(media) else media
+                media_id = cloud.upload_media(content, mime_type, filename)
+            header = {"type": fmt, "id": media_id, "filename": filename or "document.pdf"}
+        elif media is not None or media_id:
+            raise WhatsAppServiceError(
+                f"The WhatsApp template '{choice.name}' has no document or image header, so the file can't be attached: "
+                "not sent."
+            )
+        elif fmt == "text" and choice.header_text:
+            names = _PLACEHOLDER.findall(choice.header_text)
+            if names:
+                header = {
+                    "type": "text",
+                    "parameter_name": names[0],
+                    "text": cloud.sanitize_param(values.get(names[0])),
+                }
+                if names[0].isdigit():
+                    header.pop("parameter_name")
+        wamid = cloud.send_template(to, choice.name, choice.language, template_params(choice, values), header)
+    except cloud.MetaApiError as exc:
+        error = _service_error(exc)
+        error.media_id = media_id  # a file already uploaded: a retry reuses it
+        raise error from None
+    return SendResult(wamid, choice.name, choice.language, render_template_text(choice, values), media_id)
+
+
+def deliver_code(
+    to: str, document_type: str, code: str, *, minutes=None, choice: TemplateChoice | None = None
+) -> SendResult:
+    """A one-time code NOW, as the type's AUTHENTICATION (copy-code) template (the code is the body parameter and the
+    copy button's). A type pointed at a non-authentication template sends {code, minutes} as its variables instead.
+    `text` of the result carries the code: the caller logs a redacted text."""
+    _guard(to)
+    choice = choice or template_for(document_type)
+    if choice.problem:
+        raise WhatsAppServiceError(choice.problem)
+    code = str(code or "").strip()
+    if not code:
+        raise WhatsAppServiceError("No code to send.")
+    try:
+        if choice.category == AUTHENTICATION:
+            wamid = cloud.send_auth_code(to, choice.name, choice.language, code)
+            return SendResult(wamid, choice.name, choice.language, render_auth_text(code, choice, minutes))
+        values = {"code": code, "minutes": "" if minutes is None else str(minutes), "1": code}
+        if minutes is not None:
+            values["2"] = str(minutes)
+        wamid = cloud.send_template(to, choice.name, choice.language, template_params(choice, values))
+    except cloud.MetaApiError as exc:
+        raise _service_error(exc) from None
+    return SendResult(wamid, choice.name, choice.language, render_template_text(choice, values))
+
+
+# ── Meta's view of the number ───────────────────────────────────────────────────────
+
+_PHONE_CACHE_KEY = "whatsapp_cloud:phone_status"
+_PHONE_CACHE_SECONDS = 300
+
+
+def phone_status(refresh: bool = False) -> dict:
+    """Meta's view of the sending number, cached 5 minutes (refresh=True asks Meta now). Sends nothing; allowed on any
+    machine (it needs the credentials only).
+
+    {"ok": True, "phone": {displayPhoneNumber, verifiedName, qualityRating, messagingLimitTier, status, nameStatus,
+    codeVerificationStatus, throughput, platformType}, "tokenOk": True, "checkedAt"} or {"ok": False, "phone": None,
+    "tokenOk": False (Meta refused the token) | None (not configured / not known), "error", "code", "checkedAt"}."""
+    if not cloud.is_configured():
+        return {
+            "ok": False,
+            "phone": None,
+            "tokenOk": None,
+            "error": "WhatsApp (Meta Cloud API) is not configured on this server.",
+            "code": None,
+            "checkedAt": None,
+        }
+    if not refresh:
+        cached = cache.get(_PHONE_CACHE_KEY)
+        if cached is not None:
+            return cached
+    now = timezone.now().isoformat()
+    try:
+        info = cloud.phone_number_info()
+    except cloud.MetaApiError as exc:
+        result = {
+            "ok": False,
+            "phone": None,
+            "tokenOk": False if exc.code in (190, 10, 200) else None,
+            "error": str(exc),
+            "code": exc.code,
+            "checkedAt": now,
+        }
+        cache.set(_PHONE_CACHE_KEY, result, 60)  # a failure is asked again sooner
+        return result
+    throughput = info.get("throughput")
+    result = {
+        "ok": True,
+        "phone": {
+            "displayPhoneNumber": info.get("display_phone_number"),
+            "verifiedName": info.get("verified_name"),
+            "qualityRating": info.get("quality_rating"),
+            "messagingLimitTier": info.get("messaging_limit_tier"),
+            "status": info.get("status"),
+            "nameStatus": info.get("name_status"),
+            "codeVerificationStatus": info.get("code_verification_status"),
+            "throughput": throughput.get("level") if isinstance(throughput, dict) else throughput,
+            "platformType": info.get("platform_type"),
+        },
+        "tokenOk": True,
+        "error": None,
+        "code": None,
+        "checkedAt": now,
+    }
+    cache.set(_PHONE_CACHE_KEY, result, _PHONE_CACHE_SECONDS)
+    return result
+
+
+# ── public base address (the webhook URL HR pastes into Meta) ───────────────────────
 
 
 def _backend_public_base_url(request) -> str:
-    """Public origin WAClient's servers can reach to fetch a media asset.
-    settings.BACKEND_PUBLIC_URL is an optional override for deployments
-    where the request's own Host header isn't the public one (mirrors
-    growth_views._public_base_url's identical FRONTEND_URL fallback
-    pattern); on-premise, where Nginx serves /api under its real public
-    hostname directly, the request-derived origin is already correct."""
+    """This server's public origin: settings.BACKEND_PUBLIC_URL when set (a proxy / tunnel whose Host header is not the
+    public one), else the request's own origin. Used for the webhook address WhatsApp Control shows."""
     if dj_settings.BACKEND_PUBLIC_URL:
         return dj_settings.BACKEND_PUBLIC_URL.rstrip("/")
+    if request is None:
+        return ""
     return request.build_absolute_uri("/").rstrip("/")
 
 
+def public_base_problem(base: str) -> str | None:
+    """Kept for older callers: with Meta a file is uploaded to WhatsApp (whatsapp_cloud.upload_media), so no public
+    address of this server is needed for documents any more. Always None."""
+    return None
+
+
+# ── documents waiting for their turn ────────────────────────────────────────────────
+
+
 def _store_media(file_bytes: bytes, filename: str, mime_type: str) -> str:
-    """Writes a short-lived, token-addressed row WAClient can fetch over
-    HTTP (see WhatsAppMediaAsset). Also lazily prunes any rows past their
-    expiry -cheap at this send volume, avoids needing a separate scheduled
-    cleanup job."""
+    """Keep a document's bytes until its queued row is sent (WhatsAppMediaAsset, addressed by a random token; nothing
+    serves it publicly). Also lazily prunes rows past their expiry (a queued row never outlives its day)."""
     from .models import WhatsAppMediaAsset
 
     WhatsAppMediaAsset.objects.filter(expires_at__lt=timezone.now()).delete()
@@ -332,258 +738,33 @@ def _store_media(file_bytes: bytes, filename: str, mime_type: str) -> str:
     return token
 
 
-def _media_url(request, token: str) -> str:
-    return media_url_for_base(_backend_public_base_url(request), token)
+def load_media(token: str) -> tuple[bytes, str, str] | None:
+    """(bytes, filename, mime type) of a stored document, or None when it is gone."""
+    from .models import WhatsAppMediaAsset
+
+    asset = WhatsAppMediaAsset.objects.filter(token=token).first() if token else None
+    if asset is None:
+        return None
+    return bytes(asset.content), asset.filename, asset.mime_type
 
 
-def media_url_for_base(base: str, token: str) -> str:
-    """The public link of a stored media asset, from a base address saved when the message was queued (the dispatcher
-    sends later, with no request at hand)."""
-    return f"{(dj_settings.BACKEND_PUBLIC_URL or base or '').rstrip('/')}/api/whatsapp/media/{token}"
-
-
-def public_base_problem(base: str) -> str | None:
-    """Why WAClient could not download a file from `base` (a private or local address), or None."""
-    host = (urlparse(base or "").hostname or "").lower()
-    private = host in ("", "localhost") or host.endswith((".local", ".internal", ".lan"))
-    if not private:
-        try:
-            ip = ipaddress.ip_address(host)
-            private = ip.is_private or ip.is_loopback or ip.is_link_local
-        except ValueError:
-            pass
-    if private:
-        return (
-            f"WAClient can't download the PDF from '{base or 'this server'}' because it isn't reachable from the "
-            "internet. Set BACKEND_PUBLIC_URL to the server's public address."
-        )
-    return None
-
-
-def _require_public_base_url(request) -> None:
-    """WAClient downloads each document itself, from its own servers, so the
-    link must be reachable from the internet. On a developer machine the link
-    is http://localhost:8000/... -which points at WAClient's own localhost, not
-    yours- and the send comes back as an opaque "Media URL returned HTTP 403".
-    Refuse up front with a message that says what to do instead."""
-    base = _backend_public_base_url(request)
-    host = (urlparse(base).hostname or "").lower()
-    private = host in ("", "localhost") or host.endswith((".local", ".internal", ".lan"))
-    if not private:
-        try:
-            ip = ipaddress.ip_address(host)
-            private = ip.is_private or ip.is_loopback or ip.is_link_local
-        except ValueError:
-            pass
-    if private:
-        raise WhatsAppServiceError(
-            f"WAClient can't download documents from '{base}' because it isn't reachable from the internet. "
-            "Set BACKEND_PUBLIC_URL to a public address for this server (for example a tunnel URL when testing "
-            "locally, or https://api.uktextiles.in in production), or test from the deployed site."
-        )
-
-
-def _post_send(payload: dict, url: str | None = None) -> dict:
-    """POST one message to WAClient (JSON body, credentials included in the body). Returns
-    the parsed response; raises WhatsAppServiceError with WAClient's own message on any failure."""
-    blocked = sending_block_reason()
-    if blocked:
-        raise WhatsAppServiceError(blocked)
-    # the last line of defence: whatever path this message took, a limited machine never reaches anybody else
-    refused = recipient_block_reason(str(payload.get("number") or payload.get("chat_id") or ""))
-    if refused:
-        raise WhatsAppServiceError(refused)
-    body = {
-        **payload,
-        "instance_id": dj_settings.WACLIENT_INSTANCE_ID,
-        "access_token": dj_settings.WACLIENT_ACCESS_TOKEN,
-    }
-    try:
-        # (connect, read): 5 s to reach WAClient, 20 s for its answer. It was 30 s for each, as long as the whole request
-        # may take on the server, so a slow WAClient made the click (an OTP login, sending a document) kill the worker.
-        resp = requests.post(url or dj_settings.WACLIENT_API_URL, json=body, timeout=(5, 20))
-    except requests.RequestException as exc:
-        raise WhatsAppServiceError(f"Could not reach WAClient: {exc}", temporary=True)
-
-    try:
-        data = resp.json() if resp.content else {}
-    except ValueError:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-
-    if resp.status_code >= 400 or str(data.get("status", "")).lower() != "success":
-        detail = data.get("message") or data.get("error") or resp.text[:200] or f"HTTP {resp.status_code}"
-        # The provider's own trouble (5xx) or "slow down" (429) may pass; a refusal of THIS message will not.
-        temporary = resp.status_code >= 500 or resp.status_code == 429
-        raise WhatsAppServiceError(
-            f"Send failed: {detail}",
-            temporary=temporary,
-            http_status=resp.status_code,
-            provider_response=_without_credentials(data) or resp.text[:500],
-        )
-    return data
-
-
-def _masked(value) -> str:
-    text = str(value or "")
-    return f"…{text[-4:]}" if len(text) > 4 else "***"
-
-
-def _without_credentials(data):
-    """WAClient's answer, safe to show and keep: anything that looks like a credential is masked."""
-    if isinstance(data, dict):
-        return {
-            k: (
-                _masked(v)
-                if any(w in str(k).lower() for w in ("token", "secret", "password", "instance"))
-                else _without_credentials(v)
-            )
-            for k, v in data.items()
-        }
-    if isinstance(data, list):
-        return [_without_credentials(v) for v in data[:20]]
-    return data
-
-
-def instance_status() -> dict:
-    """WAClient's own view of the linked number (GET /instance_status, live socket check): {"ok": True, "state":
-    "connected" | "disconnected" | "logged_out" | ..., "socketLoaded", "reloginRequired", "raw"} or {"ok": False, "error",
-    "httpStatus", "raw"}. Sends nothing. Needs the credentials only (allowed on any machine)."""
-    if not has_credentials():
-        return {"ok": False, "error": "The WAClient keys are missing on this server.", "httpStatus": None, "raw": None}
-    base = dj_settings.WACLIENT_API_URL
-    url = (base[: -len("/send")] if base.endswith("/send") else base.rstrip("/")) + "/instance_status"
-    try:
-        resp = requests.get(
-            url,
-            params={
-                "instance_id": dj_settings.WACLIENT_INSTANCE_ID,
-                "access_token": dj_settings.WACLIENT_ACCESS_TOKEN,
-                "live": 1,
-            },
-            timeout=(5, 15),
-        )
-    except requests.RequestException as exc:
-        return {"ok": False, "error": f"Could not reach WAClient: {exc}", "httpStatus": None, "raw": None}
-    try:
-        data = resp.json() if resp.content else {}
-    except ValueError:
-        data = {}
-    raw = _without_credentials(data) if isinstance(data, dict) and data else resp.text[:500]
-    if resp.status_code >= 400 or not isinstance(data, dict) or str(data.get("status", "")).lower() != "success":
-        detail = (data.get("message") or data.get("error")) if isinstance(data, dict) else None
-        return {
-            "ok": False,
-            "error": str(detail or resp.text[:200] or f"HTTP {resp.status_code}"),
-            "httpStatus": resp.status_code,
-            "raw": raw,
-        }
-    info = data.get("data") if isinstance(data.get("data"), dict) else {}
-    return {
-        "ok": True,
-        "state": str(info.get("connection_state") or "unknown"),
-        "socketLoaded": info.get("socket_loaded"),
-        "reloginRequired": info.get("relogin_required"),
-        "httpStatus": resp.status_code,
-        "raw": raw,
-    }
-
-
-def _provider_message_id(result: dict) -> str:
-    """WhatsApp's own id for the message, echoed in message_payload.key.id.
-    Delivery/read webhooks refer to the message by this same id."""
-    key = (result.get("message_payload") or {}).get("key") or {}
-    return str(key.get("id") or "")
-
+# ── groups and contact cards: not available with templates ──────────────────────────
 
 GROUP_SUFFIX = "@g.us"
 
 
 def is_group_id(value) -> bool:
-    """A WhatsApp group's id (its JID, "120363…@g.us"), as WAClient's get_groups lists them."""
+    """A WhatsApp group's id ("120363…@g.us"), as the old WhatsApp Web link listed them. Meta's templates cannot reach a group:
+    such a recipient is refused (REASON_NO_GROUPS)."""
     return isinstance(value, str) and value.endswith(GROUP_SUFFIX) and value[: -len(GROUP_SUFFIX)].isdigit()
 
 
-def _to(to_phone: str) -> dict:
-    """WAClient's recipient field: `number` (digits) for a phone, `chat_id` for a group's JID ("120363…@g.us"; the
-    same /send endpoint, documented under WAClient's WhatsApp Web API -> Send Text)."""
-    return {"chat_id": to_phone} if is_group_id(to_phone) else {"number": to_phone}
-
-
-def send_document_message(to_phone: str, media_url: str, filename: str, caption: str, mime_type: str) -> dict:
-    """A document (PDF) or image (PNG ID card) fetched by WAClient from
-    media_url, with `caption` as the message text."""
-    if mime_type.startswith("image/"):
-        payload = {**_to(to_phone), "type": "image", "media_url": media_url, "message": caption}
-    else:
-        payload = {
-            **_to(to_phone),
-            "type": "document",
-            "media_url": media_url,
-            "filename": filename,
-            "message": caption,
-        }
-    return _post_send(payload)
-
-
-def send_text_message(to_phone: str, text: str) -> dict:
-    """A plain text message (WAClient's "text" type)."""
-    return _post_send({**_to(to_phone), "type": "text", "message": text})
-
-
 def fetch_groups() -> list[dict]:
-    """The WhatsApp groups the linked number is in: [{"id": "120363…@g.us", "name": "…", "size": 12}] (WAClient
-    GET /get_groups). Raises WhatsAppServiceError when WhatsApp is not set up or WAClient refuses. Reading the list
-    sends nothing."""
-    if not has_credentials():
-        raise WhatsAppServiceError("WhatsApp is not set up on this server (the WAClient keys are missing).")
-    base = dj_settings.WACLIENT_API_URL
-    url = (base[: -len("/send")] if base.endswith("/send") else base.rstrip("/")) + "/get_groups"
-    try:
-        resp = requests.get(
-            url,
-            params={"instance_id": dj_settings.WACLIENT_INSTANCE_ID, "access_token": dj_settings.WACLIENT_ACCESS_TOKEN},
-            timeout=(5, 20),
-        )
-    except requests.RequestException as exc:
-        raise WhatsAppServiceError(f"Could not reach WAClient: {exc}", temporary=True)
-    try:
-        data = resp.json() if resp.content else {}
-    except ValueError:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    if resp.status_code >= 400 or str(data.get("status", "")).lower() != "success":
-        detail = data.get("message") or data.get("error") or resp.text[:200] or f"HTTP {resp.status_code}"
-        raise WhatsAppServiceError(f"WAClient did not list the groups: {detail}")
-    found = data.get("data")
-    if isinstance(found, dict):
-        found = found.get("groups") or found.get("data") or list(found.values())
-    if not isinstance(found, list):
-        found = data.get("groups") if isinstance(data.get("groups"), list) else []
-    groups = []
-    for g in found:
-        if not isinstance(g, dict):
-            continue
-        gid = str(g.get("id") or g.get("jid") or g.get("chat_id") or "").strip()
-        if not is_group_id(gid):
-            continue
-        size = g.get("size") or g.get("participants_count") or len(g.get("participants") or []) or None
-        groups.append({"id": gid, "name": str(g.get("name") or g.get("subject") or gid), "size": size})
-    return sorted(groups, key=lambda g: g["name"].lower())
+    """Kept for older callers: there are no groups with the official WhatsApp Cloud API. Always raises."""
+    raise WhatsAppServiceError(REASON_NO_GROUPS)
 
 
-def send_contact_message(to_phone: str, first_name: str, last_name: str, contact_phone: str) -> dict:
-    """A WhatsApp contact card the recipient can tap to call, message or save."""
-    payload = {
-        "number": to_phone,
-        "first_name": first_name or "Visitor",
-        "phone_number": "".join(ch for ch in contact_phone if ch.isdigit()),
-    }
-    if last_name:
-        payload["last_name"] = last_name
-    return _post_send(payload, dj_settings.WACLIENT_CONTACT_API_URL)
+# ── switches ────────────────────────────────────────────────────────────────────────
 
 
 def engine_enabled(s=None) -> bool:
@@ -626,8 +807,8 @@ def feature_enabled(document_type: str, related_module: str = "") -> bool:
 
 
 def opted_out(employee) -> bool:
-    """Has this employee opted out of WhatsApp notifications and documents (WhatsApp Control -> Employees)? A code they
-    ask for themselves still goes."""
+    """Has this employee opted out of WhatsApp notifications and documents (WhatsApp Control -> Employees, or a STOP
+    reply)? A code they ask for themselves still goes."""
     from .models import WhatsAppOptOut
 
     emp_id = employee if isinstance(employee, int) else getattr(employee, "pk", None)  # an employee or its id
@@ -646,6 +827,28 @@ def _inline_delivery() -> bool:
     return not dj_settings.WHATSAPP_ASYNC_SEND
 
 
+# ── the log rows and the queue ──────────────────────────────────────────────────────
+
+
+def _named_params(document_type: str, params) -> dict[str, str]:
+    """The variables as {name: value} for the queued row's payload (what the dispatcher sends later)."""
+    values = _values(params, _order_for(document_type))
+    names = _order_for(document_type) or [k for k in values if not k.isdigit()]
+    out = {name: values.get(name, "") for name in names}
+    for k, v in values.items():  # a variable a custom template has that the catalog does not list
+        if not k.isdigit():
+            out.setdefault(k, v)
+    return out
+
+
+def _log_text(document_type: str, params, choice: TemplateChoice | None = None) -> str:
+    """What the message says, for the history: the template's text filled in (the catalog's wording when this server
+    does not have the template's text yet)."""
+    if choice is not None and choice.name and choice.category != AUTHENTICATION:
+        return render_template_text(choice, params)
+    return render_message(_template_body(document_type), params, _order_for(document_type))
+
+
 def _log(
     employee,
     document_type: str,
@@ -660,6 +863,7 @@ def _log(
     related_module: str = "",
     payload: dict | None = None,
     priority: int | None = None,
+    template_name: str = "",
 ):
     from .models import WhatsAppMessageLog
 
@@ -679,14 +883,16 @@ def _log(
         kind=spec.kind if spec else catalog.KIND_AUTOMATIC,
         priority=priority if priority is not None else (spec.priority if spec else 5),
         payload=payload or {},
+        template_name=template_name or "",
     )
 
 
 def _precheck(employee, document_type, document_ref_id, sent_by_id, params, payload=None, priority=None):
-    """Shared guard clauses for the document / text send paths. Returns (phone, text, stopped_log): when stopped_log is
-    set, the send must stop and return it (a failed row for a switch or a missing phone, a skipped row for an employee
-    who opted out or quiet hours)."""
+    """Shared guard clauses for the document / text send paths. Returns (phone, text, choice, stopped_log): when
+    stopped_log is set, the send must stop and return it (a failed row for a switch or a missing phone, a skipped row
+    for an employee who opted out, quiet hours, or a template that is not approved)."""
     phone = normalize_phone(getattr(employee, "phone", None))
+    choice = None
 
     def stop(msg, status="failed", text=""):
         return _log(
@@ -700,30 +906,32 @@ def _precheck(employee, document_type, document_ref_id, sent_by_id, params, payl
             message_text=text,
             payload=payload,
             priority=priority,
+            template_name=(choice.name or "") if choice is not None else "",
         )
 
     blocked = sending_block_reason()
     if blocked:
-        return phone, None, stop(blocked)
+        return phone, None, None, stop(blocked)
     if not phone:
-        return phone, None, stop("No phone number on file for this employee.")
+        return phone, None, None, stop("No phone number on file for this employee.")
     off = switch_off_reason(document_type)
     if off:
-        return phone, None, stop(off)
-    text, disabled_reason = _message_for(document_type, params)
-    if disabled_reason:
-        return phone, None, stop(disabled_reason)
+        return phone, None, None, stop(off)
+    choice = template_for(document_type)
+    text = _log_text(document_type, params, choice)
     if opted_out(employee):
-        return phone, None, stop(REASON_OPTED_OUT, "skipped", text)
+        return phone, None, choice, stop(REASON_OPTED_OUT, "skipped", text)
+    if choice.problem:
+        return phone, None, choice, stop(choice.problem, "skipped", text)
     if not _inline_delivery():
         from . import whatsapp_dispatcher
 
         if whatsapp_dispatcher.in_quiet_hours():
-            return phone, None, stop(REASON_QUIET, "skipped", text)
-    return phone, text, None
+            return phone, None, choice, stop(REASON_QUIET, "skipped", text)
+    return phone, text, choice, None
 
 
-def _queue_row(employee, document_type, phone, text, *, document_ref_id, sent_by_id, payload, priority):
+def _queue_row(employee, document_type, phone, text, *, document_ref_id, sent_by_id, payload, priority, choice=None):
     """Write the queued row of a document / text send (no dedupe key), and deliver it at once in inline mode."""
     from . import whatsapp_dispatcher
     from .models import WhatsAppMessageLog, WhatsAppSettings
@@ -743,6 +951,7 @@ def _queue_row(employee, document_type, phone, text, *, document_ref_id, sent_by
         send_after=now,
         expires_at=whatsapp_dispatcher.expiry_for(document_type, WhatsAppSettings.get(), now),
         payload=payload,
+        template_name=(choice.name or "") if choice is not None else "",
     )
     if _inline_delivery():
         return whatsapp_dispatcher.deliver_now(log)
@@ -755,52 +964,44 @@ def send_document(
     document_type: str,
     pdf_bytes: bytes,
     filename: str,
-    body_params: list[str],
+    body_params,
     mime_type: str = "application/pdf",
     document_ref_id: int | None = None,
     sent_by_id: int | None = None,
 ):
     """
-    The one entry point every single-document send endpoint calls. Normalizes the phone, builds the caption from the
-    saved (or default) wording, stores the document as a fetchable media asset and QUEUES it (the dispatcher sends it
-    when the pacing allows, usually within a minute). Always returns a WhatsAppMessageLog row: queued when accepted,
-    failed (not configured / no phone / switched off / wording off / unreachable link) or skipped (opted out, quiet
-    hours) otherwise, so callers never need their own try/except to get a uniform result to report back to the user.
-    Report success with `accepted(log)`.
+    The one entry point every single-document send endpoint calls. Normalizes the phone, checks the switches and the
+    type's template, keeps the file (WhatsAppMediaAsset) and QUEUES the message (the dispatcher uploads the file to
+    Meta and sends it in the template's header when the pacing allows, usually within a minute). Always returns a
+    WhatsAppMessageLog row: queued when accepted, failed (not configured / no phone / switched off) or skipped (opted
+    out, quiet hours, template not approved) otherwise, so callers never need their own try/except to get a uniform
+    result to report back to the user. Report success with `accepted(log)`.
 
-    `request` is needed to build the public media URL WAClient fetches the document from -see
-    _backend_public_base_url.
+    `request` is accepted for older callers and not needed any more (Meta takes the file as an upload, so no public
+    link of this server is built).
     """
     # the event, told on the phone by Phone Notify Control with its own settings and wording (push_messages.py)
     push_messages.announce(employee, document_type, params=body_params)
-    phone, caption, stopped = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
+    phone, text, choice, stopped = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
     if stopped is not None:
         return stopped
-
-    try:
-        _require_public_base_url(request)
-        token = _store_media(pdf_bytes, filename, mime_type)
-    except WhatsAppServiceError as exc:
-        return _log(
-            employee,
-            document_type,
-            document_ref_id,
-            phone,
-            "failed",
-            error_message=str(exc),
-            sent_by_id=sent_by_id,
-            message_text=caption,
-        )
-    payload = {"media_url": _media_url(request, token), "filename": filename, "mime_type": mime_type}
+    token = _store_media(pdf_bytes, filename, mime_type)
+    payload = {
+        "params": _named_params(document_type, body_params),
+        "media_token": token,
+        "filename": filename,
+        "mime_type": mime_type,
+    }
     return _queue_row(
         employee,
         document_type,
         phone,
-        caption,
+        text,
         document_ref_id=document_ref_id,
         sent_by_id=sent_by_id,
         payload=payload,
         priority=None,
+        choice=choice,
     )
 
 
@@ -826,7 +1027,7 @@ def queue_document(
         raise ValueError(f"Unknown document builder: {build}")
     push_messages.announce(employee, document_type, params=body_params)  # Phone Notify Control's own notification
     marker = {"batch": batch_id} if batch_id else {}
-    phone, caption, stopped = _precheck(
+    phone, text, choice, stopped = _precheck(
         employee,
         document_type,
         document_ref_id,
@@ -837,26 +1038,11 @@ def queue_document(
     )
     if stopped is not None:
         return stopped
-    try:
-        _require_public_base_url(request)
-    except WhatsAppServiceError as exc:
-        return _log(
-            employee,
-            document_type,
-            document_ref_id,
-            phone,
-            "failed",
-            error_message=str(exc),
-            sent_by_id=sent_by_id,
-            message_text=caption,
-            payload=marker,
-            priority=catalog.PRIORITY_BULK,
-        )
     payload = {
         **marker,
+        "params": _named_params(document_type, body_params),
         "build": build,
         "build_args": build_args,
-        "base_url": _backend_public_base_url(request),
         "filename": filename,
         "mime_type": mime_type,
     }
@@ -864,11 +1050,12 @@ def queue_document(
         employee,
         document_type,
         phone,
-        caption,
+        text,
         document_ref_id=document_ref_id,
         sent_by_id=sent_by_id,
         payload=payload,
         priority=catalog.PRIORITY_BULK,
+        choice=choice,
     )
 
 
@@ -880,13 +1067,13 @@ def build_document(name: str, args: dict) -> bytes:
 def send_text(
     employee,
     document_type: str,
-    body_params: list[str],
+    body_params,
     document_ref_id: int | None = None,
     sent_by_id: int | None = None,
 ):
-    """Same contract as send_document above (always returns a WhatsAppMessageLog row, never raises) but a plain text
-    message with no attachment, queued like every other non-code message."""
-    phone, text, stopped = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
+    """Same contract as send_document above (always returns a WhatsAppMessageLog row, never raises) but a template with
+    no attachment, queued like every other non-code message."""
+    phone, text, choice, stopped = _precheck(employee, document_type, document_ref_id, sent_by_id, body_params)
     if stopped is not None:
         return stopped
     return _queue_row(
@@ -896,31 +1083,53 @@ def send_text(
         text,
         document_ref_id=document_ref_id,
         sent_by_id=sent_by_id,
-        payload={},
+        payload={"params": _named_params(document_type, body_params)},
         priority=None,
+        choice=choice,
     )
 
 
-def _send_code_now(log, phone: str, text: str):
+def _send_code_now(log, phone: str, params, log_params=None):
     """A one-time code: sent from the request that asked for it (the employee is waiting), outcome recorded on its
-    pending row. It counts as the last message sent for the queue's gap."""
+    pending row. It counts as the last message sent for the queue's gap. The row's text is the code-free version."""
     from .models import WhatsAppMessageLog
 
     log.attempts = 1
+    values = _values(params, _order_for(log.document_type))
+    code = values.get("code") or values.get("1") or ""
+    minutes = values.get("minutes") or values.get("2") or None
     try:
-        result = send_text_message(phone, text)
+        choice = template_for(log.document_type)
+        log.template_name = choice.name or ""
+        result = deliver_code(phone, log.document_type, code, minutes=minutes, choice=choice)
     except WhatsAppServiceError as exc:
         log.status = WhatsAppMessageLog.STATUS_FAILED
-        log.error_message = str(exc)
+        log.error_message = str(exc)[:1000]
     except Exception as exc:  # never leave a row pending because of a bug in a helper
         logger.exception("Unexpected error sending WhatsApp code %s", log.id)
         log.status = WhatsAppMessageLog.STATUS_FAILED
         log.error_message = f"Unexpected error: {exc}"
     else:
         log.status = WhatsAppMessageLog.STATUS_SENT
-        log.provider_message_id = _provider_message_id(result)
+        log.provider_message_id = result.wamid
         log.sent_at = timezone.now()
-    log.save(update_fields=["status", "error_message", "provider_message_id", "sent_at", "attempts", "updated_at"])
+        log.template_name = result.template_name
+    if log_params is not None or code:
+        hidden = _values(log_params, _order_for(log.document_type)) if log_params is not None else {}
+        shown = hidden.get("code") or hidden.get("1") or "••••••"
+        log.message_text = render_auth_text(shown, None, minutes)
+    log.save(
+        update_fields=[
+            "status",
+            "error_message",
+            "provider_message_id",
+            "sent_at",
+            "attempts",
+            "template_name",
+            "message_text",
+            "updated_at",
+        ]
+    )
     return log
 
 
@@ -934,15 +1143,18 @@ def queue_to_recipient(
     document_ref_id: int | None = None,
     document: tuple[bytes, str, str] | None = None,
     base_url: str = "",
+    params: dict | None = None,
 ):
-    """A message to a phone number or a WhatsApp group that is not an employee's (Attendance Notify's reports), queued
-    like every other message so the pacing, the caps, quiet hours and the switches keep the number safe. `document` =
-    (bytes, filename, mime type) sends the file with `text` as its caption; WAClient downloads it from `base_url`.
+    """A message to a phone number that is not an employee's (Attendance Notify's reports), queued like every other
+    message so the pacing, the caps, quiet hours and the switches keep the number safe. It goes as the type's template:
+    `params` are its variables ({name: value}); without them the whole `text` becomes the type's first variable
+    (flattened to one line). `document` = (bytes, filename, mime type) travels in the template's header (the template
+    must have a document header). `base_url` is accepted for older callers and not needed.
+
+    A WhatsApp group id is refused (skipped, REASON_NO_GROUPS): Meta's templates cannot reach a group.
 
     Returns the WhatsAppMessageLog row (status queued, or failed / skipped with the reason); `dedupe_key` makes it
     exactly-once: the same key again returns the first row and queues nothing."""
-    from django.db import IntegrityError, transaction
-
     from . import whatsapp_dispatcher
     from .models import WhatsAppMessageLog, WhatsAppSettings
 
@@ -950,18 +1162,23 @@ def queue_to_recipient(
     if existing is not None:
         return existing
     spec = catalog.get(document_type)
-    # A text part is a plain message, the PDF a document (the queue sends a "document" row as a file); both at the
-    # type's priority, so a report's parts leave in the order they were queued.
+    if params is None:
+        order = _order_for(document_type)
+        params = {order[0]: text} if order else {}
+    values = _named_params(document_type, params)
+    choice = template_for(document_type)
+    logged = _log_text(document_type, values, choice) or text
     common = dict(
         employee=None,
         recipient_label=recipient_label[:200],
         document_type=document_type,
         document_ref_id=document_ref_id,
         phone_number=to,
-        message_text=text,
+        message_text=logged,
         dedupe_key=dedupe_key,
         kind=catalog.KIND_DOCUMENT if document is not None else catalog.KIND_REQUESTED,
         priority=spec.priority if spec else 3,
+        template_name=choice.name or "",
     )
 
     def stop(reason: str, status: str = WhatsAppMessageLog.STATUS_FAILED):
@@ -975,20 +1192,22 @@ def queue_to_recipient(
     if blocked:
         return stop(blocked)
     if not to:
-        return stop("No WhatsApp number or group.")
+        return stop("No WhatsApp number.")
+    if is_group_id(to):
+        return stop(REASON_NO_GROUPS, WhatsAppMessageLog.STATUS_SKIPPED)
     off = switch_off_reason(document_type)
     if off:
         return stop(off)
+    if choice.problem:
+        return stop(choice.problem, WhatsAppMessageLog.STATUS_SKIPPED)
     if not _inline_delivery() and whatsapp_dispatcher.in_quiet_hours():
         return stop(REASON_QUIET, WhatsAppMessageLog.STATUS_SKIPPED)
-    payload: dict = {}
+    payload: dict = {"params": values}
     if document is not None:
-        problem = public_base_problem(base_url)
-        if problem:
-            return stop(problem)
         content, filename, mime_type = document
-        token = _store_media(content, filename, mime_type)
-        payload = {"media_url": media_url_for_base(base_url, token), "filename": filename, "mime_type": mime_type}
+        payload.update(
+            {"media_token": _store_media(content, filename, mime_type), "filename": filename, "mime_type": mime_type}
+        )
     now = timezone.now()
     try:
         with transaction.atomic():
@@ -1027,21 +1246,22 @@ def send_notification(
 
     `params` are the template's variables, by name (a dict) or by position (a list).
     `related_module` names the workflow behind a shared message ("leave" for the Approved wording).
-    `contact` follows the message with a contact card (dict of first_name, last_name, phone).
+    `contact` is accepted for older callers and ignored: Meta's templates carry no contact card (the visitor's number is
+    a variable of the visitor message).
     `on_sent` names a hook (whatsapp_dispatcher.ON_SENT_HOOKS) run once the message is really sent.
     `expires_at` is a moment after which the message is no longer worth sending (the alert job knows it exactly); the
     row expires at the earliest of that, the type's freshness and the end of today.
 
     None -not a failed row- is returned when: HR has this type (or its module, or WhatsApp itself) switched off,
-    WhatsApp isn't configured on this server, the type's wording is disabled, or `dedupe_key` was already used (the
-    message already went out, or is queued). Those aren't failures worth listing; a *failed* row is reserved for a real
-    attempt that couldn't complete (no phone on file, provider error).
+    WhatsApp isn't configured on this server, or `dedupe_key` was already used (the message already went out, or is
+    queued). Those aren't failures worth listing; a *failed* row is reserved for a real attempt that couldn't complete
+    (no phone on file, Meta's error, a code whose template is not approved).
 
-    A one-time code is sent at once and the row comes back sent / failed. Everything else is QUEUED (the row comes back
-    "queued") and leaves when whatsapp_dispatcher's pacing allows; during quiet hours it is recorded "skipped" instead,
-    and for an employee who opted out it is recorded "skipped" too. With dedupe_key the reserved row is what makes the
-    message exactly-once: the unique constraint rejects a second reservation, so two overlapping runs cannot both queue
-    it. `log_params` lets a caller store a redacted version of the text (the one-time code must never sit in the
+    A one-time code is sent at once (deliver_code) and the row comes back sent / failed. Everything else is QUEUED (the
+    row comes back "queued") and leaves when whatsapp_dispatcher's pacing allows; during quiet hours it is recorded
+    "skipped" instead, and for an employee who opted out it is recorded "skipped" too. A type whose template is not
+    approved is skipped when its turn comes (whatsapp_dispatcher). With dedupe_key the reserved row is what makes the
+    message exactly-once. `log_params` lets a caller store a redacted version (the one-time code must never sit in the
     history).
 
     `asynchronous` is accepted for older callers and ignored: whether a message waits in the queue is decided by its kind
@@ -1064,24 +1284,16 @@ def send_notification(
         settings_row = WhatsAppSettings.get()
         if switch_off_reason(document_type, related_module, settings_row) or not is_configured():
             return None
-        text, disabled_reason = _message_for(document_type, params)
-        if disabled_reason:
-            return None
 
         spec = catalog.get(document_type)
         kind = spec.kind if spec else catalog.KIND_AUTOMATIC
         phone = normalize_phone(getattr(employee, "phone", None))
-        order = _order_for(document_type)
-        logged_text = (
-            render_message(_template_body(document_type), log_params, order) if log_params is not None else text
-        )
         now = timezone.now()
         fields = {
             "employee": employee,
             "document_type": document_type,
             "document_ref_id": document_ref_id,
             "phone_number": phone or "",
-            "message_text": logged_text,
             "dedupe_key": dedupe_key,
             "related_module": related_module,
             "kind": kind,
@@ -1099,17 +1311,15 @@ def send_notification(
                 log.error_message = "No phone number on file for this employee."
                 log.save(update_fields=["status", "error_message", "updated_at"])
                 return log
-            return _send_code_now(log, phone, text)
+            return _send_code_now(log, phone, params, log_params)
 
         from . import whatsapp_dispatcher
 
-        payload = {}
-        if logged_text != text:
-            payload["text"] = text
-        if contact:
-            payload["contact"] = contact
+        choice = template_for(document_type, settings_row)
+        payload = {"params": _named_params(document_type, params)}
         if on_sent:
             payload["on_sent"] = on_sent
+        logged_text = _log_text(document_type, log_params if log_params is not None else params, choice)
         status, reason = WhatsAppMessageLog.STATUS_QUEUED, ""
         if not phone:
             status, reason = WhatsAppMessageLog.STATUS_FAILED, "No phone number on file for this employee."
@@ -1125,6 +1335,8 @@ def send_notification(
                     send_after=now,
                     expires_at=whatsapp_dispatcher.expiry_for(document_type, settings_row, now, until=expires_at),
                     payload=payload,
+                    message_text=logged_text,
+                    template_name=choice.name or "",
                     **fields,
                 )
         except IntegrityError:
@@ -1155,3 +1367,8 @@ def expire_stale_pending(minutes: int = 10) -> int:
         error_message="This message was never sent - the server stopped before it could be delivered.",
         updated_at=timezone.now(),
     )
+
+
+def _without_credentials(data):
+    """`data` with every credential masked (an answer from Meta, safe to show and keep)."""
+    return cloud._scrub(data)

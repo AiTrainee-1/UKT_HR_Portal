@@ -1,166 +1,335 @@
-"""WAClient webhook: must always answer 200 and fold delivery events into the log."""
+"""Meta's WhatsApp webhook: the verification handshake, the signature on every POST, delivery statuses with pricing,
+STOP replies, template status / quality updates, last-received time, and no personal data in the logs.
+
+Run via: python manage.py test api.tests_whatsapp_webhook --noinput
+"""
+
+import hashlib
+import hmac
+import json
+from datetime import datetime, timezone as dt_timezone
 
 from django.test import TestCase, override_settings
 
-from .models import Employee, WhatsAppMessageLog
+from .models import Employee, WhatsAppMessageLog, WhatsAppOptOut, WhatsAppSettings, WhatsAppTemplate
+from .tests_whatsapp_support import APP_SECRET, META, VERIFY_TOKEN
+
+URL = "/api/whatsapp/webhook/"
+TS = "1795113000"  # 20 Nov 2026 00:00 IST
 
 
-class WebhookTests(TestCase):
+def sign(raw: bytes, secret: str = APP_SECRET) -> str:
+    return "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+
+
+def envelope(field: str, value: dict) -> dict:
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [{"id": "205550002222", "changes": [{"field": field, "value": value}]}],
+    }
+
+
+def statuses(*items) -> dict:
+    return envelope(
+        "messages",
+        {
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "919800000000", "phone_number_id": "105550001111"},
+            "statuses": list(items),
+        },
+    )
+
+
+@override_settings(**META)
+class Base(TestCase):
     def setUp(self):
-        emp = Employee.objects.create(employee_code="WH1", first_name="W", last_name="H")
+        self.emp = Employee.objects.create(employee_code="WH1", first_name="W", last_name="H", phone="9876543210")
         self.log = WhatsAppMessageLog.objects.create(
-            employee=emp, document_type="salary_slip", phone_number="919999999999", provider_message_id="ABC123"
+            employee=self.emp,
+            document_type="salary_slip",
+            phone_number="919876543210",
+            provider_message_id="wamid.ABC",
+            status="sent",
         )
 
-    def _post(self, body, path="/api/whatsapp/webhook/", **kw):
-        return self.client.post(path, body, content_type="application/json", **kw)
+    def post(self, body, signature: str | None = "auto", path: str = URL, raw: bytes | None = None):
+        raw = raw if raw is not None else json.dumps(body).encode()
+        headers = {}
+        if signature == "auto":
+            headers["HTTP_X_HUB_SIGNATURE_256"] = sign(raw)
+        elif signature is not None:
+            headers["HTTP_X_HUB_SIGNATURE_256"] = signature
+        return self.client.post(path, raw, content_type="application/json", **headers)
 
-    def _status(self):
+    def reload(self):
         self.log.refresh_from_db()
-        return self.log.status
+        return self.log
 
-    def test_probes_get_200_without_auth(self):
-        for path in ("/api/whatsapp/webhook/", "/api/whatsapp/webhook"):
-            self.assertEqual(self.client.get(path).json(), {"status": "ok"})
-            self.assertEqual(self._post({}, path).status_code, 200)
-            self.assertEqual(self.client.head(path).status_code, 200)
 
-    def test_empty_form_and_malformed_bodies_still_get_200(self):
-        self.assertEqual(self.client.post("/api/whatsapp/webhook/").status_code, 200)
-        self.assertEqual(self.client.post("/api/whatsapp/webhook/", "a=b", content_type="text/plain").status_code, 200)
-        self.assertEqual(
-            self.client.post("/api/whatsapp/webhook/", "{bad", content_type="application/json").status_code, 200
-        )
-        self.assertEqual(self._post([1, 2, "x", None]).status_code, 200)
-        self.assertEqual(self._post({"key": "not-a-dict", "status": {"a": 1}}).status_code, 200)
+class VerificationTests(Base):
+    def test_metas_handshake_returns_the_challenge_as_plain_text(self):
+        for path in (URL, URL.rstrip("/")):
+            r = self.client.get(
+                path, {"hub.mode": "subscribe", "hub.verify_token": VERIFY_TOKEN, "hub.challenge": "1158201444"}
+            )
+            self.assertEqual((r.status_code, r.content, r["Content-Type"]), (200, b"1158201444", "text/plain"))
 
-    def test_baileys_style_update_advances_the_status(self):
-        # {"key": {"id"}, "update": {"status": N}}: 3 = delivered, 4 = read
-        self._post({"event": "messages.update", "data": [{"key": {"id": "ABC123"}, "update": {"status": 3}}]})
-        self.assertEqual(self._status(), "delivered")
-        self._post({"data": [{"key": {"id": "ABC123"}, "update": {"status": 4}}]})
-        self.assertEqual(self._status(), "read")
+    def test_a_wrong_or_missing_token_or_mode_is_403(self):
+        for params in (
+            {"hub.mode": "subscribe", "hub.verify_token": "wrong", "hub.challenge": "1"},
+            {"hub.mode": "unsubscribe", "hub.verify_token": VERIFY_TOKEN, "hub.challenge": "1"},
+            {"hub.challenge": "1"},
+            {},
+        ):
+            r = self.client.get(URL, params)
+            self.assertEqual(r.status_code, 403, params)
+            self.assertNotIn(b"1", r.content.replace(b"Forbidden", b""))
 
-    def test_named_statuses_and_flat_payloads(self):
-        self._post({"id": "ABC123", "status": "DELIVERY_ACK"})
-        self.assertEqual(self._status(), "delivered")
-        self._post({"message_id": "ABC123", "status": "read"})
-        self.assertEqual(self._status(), "read")
+    @override_settings(WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN="")
+    def test_no_verify_token_configured_refuses_every_handshake(self):
+        r = self.client.get(URL, {"hub.mode": "subscribe", "hub.verify_token": "", "hub.challenge": "1"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_no_login_is_needed(self):
+        r = self.client.get(URL, {"hub.mode": "subscribe", "hub.verify_token": VERIFY_TOKEN, "hub.challenge": "7"})
+        self.assertEqual(r.status_code, 200)  # no Authorization header at all
+
+
+class SignatureTests(Base):
+    def test_an_unsigned_or_badly_signed_post_is_403_and_never_processed(self):
+        body = statuses({"id": "wamid.ABC", "status": "read", "timestamp": TS})
+        for signature in (None, "", "sha256=deadbeef", sign(b"something else"), sign(json.dumps(body).encode(), "x")):
+            r = self.post(body, signature=signature)
+            self.assertEqual(r.status_code, 403, signature)
+        self.assertEqual(self.reload().status, "sent")
+        self.assertIsNone(WhatsAppSettings.get().last_webhook_at)
+
+    @override_settings(WHATSAPP_CLOUD_APP_SECRET="")
+    def test_no_app_secret_configured_refuses_every_post(self):
+        raw = json.dumps(statuses({"id": "wamid.ABC", "status": "read"})).encode()
+        r = self.post(None, signature=sign(raw), raw=raw)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.reload().status, "sent")
+
+    def test_a_signed_post_is_always_200_and_stamps_last_received(self):
+        self.assertEqual(self.post({}).status_code, 200)
+        self.assertIsNotNone(WhatsAppSettings.get().last_webhook_at)
+        self.assertEqual(self.post(None, raw=b"{not json").status_code, 200)
+        self.assertEqual(self.post([1, 2, "x"]).status_code, 200)
+        self.assertEqual(self.post({"entry": "nope"}).status_code, 200)
+        self.assertEqual(self.post({"entry": [{"changes": [{"field": "messages", "value": "x"}]}]}).status_code, 200)
+
+    def test_other_methods(self):
+        self.assertEqual(self.client.put(URL).status_code, 405)
+
+
+class StatusTests(Base):
+    def test_delivered_then_read_with_times_and_pricing(self):
+        pricing = {"billable": True, "pricing_model": "PMP", "category": "utility", "type": "regular"}
+        self.post(statuses({"id": "wamid.ABC", "status": "delivered", "timestamp": TS, "pricing": pricing}))
+        log = self.reload()
+        self.assertEqual((log.status, log.pricing_category, log.billable), ("delivered", "utility", True))
+        self.assertEqual(log.delivered_at, datetime(2026, 11, 19, 18, 30, tzinfo=dt_timezone.utc))
+        self.post(statuses({"id": "wamid.ABC", "status": "read", "timestamp": str(int(TS) + 60)}))
+        log = self.reload()
+        self.assertEqual(log.status, "read")
+        self.assertEqual((log.read_at - log.delivered_at).total_seconds(), 60)
+
+    def test_read_alone_also_fills_delivered(self):
+        self.post(statuses({"id": "wamid.ABC", "status": "read", "timestamp": TS}))
+        log = self.reload()
+        self.assertEqual((log.status, log.delivered_at, log.read_at), ("read", log.read_at, log.read_at))
+        self.assertIsNotNone(log.read_at)
 
     def test_late_or_duplicate_events_never_go_backwards(self):
-        self._post({"key": {"id": "ABC123"}, "status": "READ"})
-        self._post({"key": {"id": "ABC123"}, "status": "DELIVERY_ACK"})
-        self._post({"key": {"id": "ABC123"}, "status": "SERVER_ACK"})
-        self.assertEqual(self._status(), "read")
+        self.post(statuses({"id": "wamid.ABC", "status": "read", "timestamp": TS}))
+        self.post(statuses({"id": "wamid.ABC", "status": "delivered", "timestamp": TS}))
+        self.post(statuses({"id": "wamid.ABC", "status": "sent", "timestamp": TS}))
+        self.assertEqual(self.reload().status, "read")
 
-    def test_error_status_marks_the_message_failed(self):
-        self._post({"key": {"id": "ABC123"}, "update": {"status": 0}})
-        self.log.refresh_from_db()
-        self.assertEqual((self.log.status, self.log.error_message), ("failed", "Delivery failed"))
+    def test_a_free_service_message_is_recorded_not_billable(self):
+        pricing = {"billable": False, "category": "service", "pricing_model": "PMP"}
+        self.post(statuses({"id": "wamid.ABC", "status": "sent", "timestamp": TS, "pricing": pricing}))
+        log = self.reload()
+        self.assertEqual((log.billable, log.pricing_category), (False, "service"))
 
-    def test_unknown_ids_and_other_events_are_ignored(self):
-        self.assertEqual(self._post({"key": {"id": "nope"}, "status": "READ"}).status_code, 200)
-        self._post({"event": "messages.upsert", "data": {"key": {"id": "ABC123"}, "message": {"conversation": "hi"}}})
-        self.assertEqual(self._status(), "sent")
+    def test_a_failure_with_metas_error_in_plain_words(self):
+        self.post(
+            statuses(
+                {
+                    "id": "wamid.ABC",
+                    "status": "failed",
+                    "timestamp": TS,
+                    "errors": [
+                        {
+                            "code": 131026,
+                            "title": "Message undeliverable.",
+                            "error_data": {"details": "Message Undeliverable."},
+                        }
+                    ],
+                }
+            )
+        )
+        log = self.reload()
+        self.assertEqual(log.status, "failed")
+        self.assertTrue(log.error_message.startswith("Refused by WhatsApp: "))
+        self.assertTrue(log.error_message.endswith("(code 131026)"))
+        self.post(statuses({"id": "wamid.ABC", "status": "delivered", "timestamp": TS}))
+        self.assertEqual(self.reload().status, "failed")  # a failure is final
 
-    def test_form_encoded_bodies_are_accepted(self):
-        r = self.client.post("/api/whatsapp/webhook/", {"id": "ABC123", "status": "delivered"})
+    def test_an_account_level_failure_reads_as_a_provider_failure(self):
+        self.post(
+            statuses({"id": "wamid.ABC", "status": "failed", "errors": [{"code": 131042, "title": "Payment issue"}]})
+        )
+        self.assertTrue(self.reload().error_message.startswith("Send failed: "))
+
+    def test_unknown_ids_and_unknown_statuses_are_ignored(self):
+        self.assertEqual(self.post(statuses({"id": "wamid.NOPE", "status": "read"})).status_code, 200)
+        self.post(statuses({"id": "wamid.ABC", "status": "deleted"}, {"status": "read"}, "x"))
+        self.assertEqual(self.reload().status, "sent")
+
+    def test_several_statuses_in_one_body(self):
+        other = WhatsAppMessageLog.objects.create(
+            employee=self.emp, document_type="late_alert", phone_number="919876543210", provider_message_id="wamid.DEF"
+        )
+        self.post(
+            statuses(
+                {"id": "wamid.ABC", "status": "delivered", "timestamp": TS},
+                {"id": "wamid.DEF", "status": "read", "timestamp": TS},
+            )
+        )
+        other.refresh_from_db()
+        self.assertEqual((self.reload().status, other.status), ("delivered", "read"))
+
+
+class StopTests(Base):
+    def inbound(self, text: str, sender: str = "919876543210", kind: str = "text"):
+        message = {"from": sender, "id": "wamid.IN1", "timestamp": TS, "type": kind}
+        if kind == "text":
+            message["text"] = {"body": text}
+        return self.post(
+            envelope(
+                "messages",
+                {
+                    "messaging_product": "whatsapp",
+                    "contacts": [{"profile": {"name": "W H"}, "wa_id": sender}],
+                    "messages": [message],
+                },
+            )
+        )
+
+    def test_an_employee_who_replies_stop_is_opted_out(self):
+        for text in ("STOP", " stop "):
+            self.assertEqual(self.inbound(text).status_code, 200)
+        opt = WhatsAppOptOut.objects.get(employee=self.emp)
+        self.assertEqual(opt.reason, "Replied STOP")
+        self.assertEqual(WhatsAppOptOut.objects.count(), 1)
+
+    def test_other_replies_and_strangers_change_nothing(self):
+        self.inbound("Please stop the reminders after 6")
+        self.inbound("STOP", sender="919000000000")  # not an employee's number
+        self.inbound("", kind="image")
+        self.assertFalse(WhatsAppOptOut.objects.exists())
+
+    def test_a_number_saved_with_spaces_or_a_plus_still_matches(self):
+        Employee.objects.filter(pk=self.emp.pk).update(phone="+91 98765 43210")
+        self.inbound("Stop")
+        self.assertTrue(WhatsAppOptOut.objects.filter(employee=self.emp).exists())
+
+
+class TemplateEventTests(Base):
+    def test_approval_rejection_and_pause_update_the_template(self):
+        WhatsAppTemplate.objects.create(name="hrms_late_alert", language="en", status="PENDING", meta_id="111")
+        status = "message_template_status_update"
+        self.post(envelope(status, {"event": "APPROVED", "message_template_id": 111, "message_template_name": "hrms_late_alert", "message_template_language": "en", "reason": "NONE"}))  # fmt: skip
+        row = WhatsAppTemplate.objects.get(name="hrms_late_alert")
+        self.assertEqual((row.status, row.rejected_reason), ("APPROVED", ""))
+        self.post(envelope(status, {"event": "REJECTED", "message_template_id": 111, "message_template_name": "hrms_late_alert", "message_template_language": "en", "reason": "INVALID_FORMAT"}))  # fmt: skip
+        row.refresh_from_db()
+        self.assertEqual((row.status, row.rejected_reason), ("REJECTED", "INVALID_FORMAT"))
+        self.post(envelope(status, {"event": "PAUSED", "message_template_name": "hrms_late_alert", "message_template_language": "en"}))  # fmt: skip
+        row.refresh_from_db()
+        self.assertEqual((row.status, row.rejected_reason), ("PAUSED", ""))
+
+    def test_a_template_this_server_did_not_know_is_added(self):
+        self.post(
+            envelope(
+                "message_template_status_update",
+                {
+                    "event": "APPROVED",
+                    "message_template_id": 222,
+                    "message_template_name": "hrms_new",
+                    "message_template_language": "en_US",
+                },
+            )
+        )
+        row = WhatsAppTemplate.objects.get(name="hrms_new")
+        self.assertEqual((row.language, row.status, row.meta_id), ("en_US", "APPROVED", "222"))
+
+    def test_quality_updates(self):
+        WhatsAppTemplate.objects.create(name="hrms_late_alert", language="en", status="APPROVED", meta_id="111")
+        self.post(
+            envelope(
+                "message_template_quality_update",
+                {
+                    "previous_quality_score": "GREEN",
+                    "new_quality_score": "YELLOW",
+                    "message_template_id": 111,
+                    "message_template_name": "hrms_late_alert",
+                    "message_template_language": "en",
+                },
+            )
+        )
+        self.assertEqual(WhatsAppTemplate.objects.get(name="hrms_late_alert").quality_score, "YELLOW")
+
+    def test_account_events_are_only_noted(self):
+        with self.assertLogs("api.whatsapp_views", level="WARNING") as logs:
+            r = self.post(envelope("phone_number_quality_update", {"event": "FLAGGED", "current_limit": "TIER_250"}))
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(self._status(), "delivered")
-
-    @override_settings(WHATSAPP_WEBHOOK_TOKEN="s3cret")
-    def test_optional_token_gate(self):
-        body = {"key": {"id": "ABC123"}, "status": "READ"}
-        self.assertEqual(self._post(body).status_code, 403)
-        self.assertEqual(self._status(), "sent")
-        self.assertEqual(self._post(body, "/api/whatsapp/webhook/?token=wrong").status_code, 403)
-        self.assertEqual(self._post(body, "/api/whatsapp/webhook/?token=s3cret").status_code, 200)
-        self.assertEqual(self._status(), "read")
+        self.assertIn("phone_number_quality_update FLAGGED", "\n".join(logs.output))
 
 
-class WebhookLoggingTests(TestCase):
-    """The webhook body holds employees' phone numbers and the text of messages sent to them.
-    None of it may reach the logs, only a description of what arrived."""
+class WebhookLoggingTests(Base):
+    """The body holds employees' phone numbers and the text they send. None of it may reach the logs."""
 
     LOGGER = "api.whatsapp_views"
-    # The shape of a real WhatsApp message echo, with made-up people.
-    ECHO = {
-        "object": "whatsapp_business_account",
-        "entry": [
+    PRIVATE = ("919876543210", "Please call me", "W H", "wamid", "105550001111", "919800000000")
+
+    def test_an_inbound_message_and_statuses_are_described_without_their_data(self):
+        body = envelope(
+            "messages",
             {
-                "id": "1770760234235498",
-                "changes": [
-                    {
-                        "field": "smb_message_echoes",
-                        "value": {
-                            "messaging_product": "whatsapp",
-                            "metadata": {"display_phone_number": "918000000001", "phone_number_id": "1366514856543744"},
-                            "message_echoes": [
-                                {
-                                    "from": "918000000001",
-                                    "to": "917000000002",
-                                    "id": "wamid.HBgTSU4uMjYzMzkzMzUxMDM3NjU0",
-                                    "timestamp": "1790394553",
-                                    "type": "text",
-                                    "text": {"body": "Punch Reminder. Hello ASHA KUMAR, please punch now."},
-                                }
-                            ],
-                        },
-                    }
+                "metadata": {"display_phone_number": "919800000000", "phone_number_id": "105550001111"},
+                "contacts": [{"profile": {"name": "W H"}, "wa_id": "919876543210"}],
+                "messages": [
+                    {"from": "919876543210", "id": "wamid.X", "type": "text", "text": {"body": "Please call me"}}
                 ],
-            }
-        ],
-    }
-    PRIVATE = ("918000000001", "917000000002", "ASHA", "KUMAR", "Punch Reminder", "wamid", "1366514856543744")
-
-    def _post(self, body):
-        return self.client.post("/api/whatsapp/webhook/", body, content_type="application/json")
-
-    def _logged(self, body, level="INFO"):
-        with self.assertLogs(self.LOGGER, level=level) as captured:
-            self.assertEqual(self._post(body).status_code, 200)
-        return "\n".join(captured.output)
-
-    def test_a_message_echo_is_described_without_any_of_its_data(self):
-        text = self._logged(self.ECHO)
-        self.assertIn("fields=smb_message_echoes", text)
-        self.assertIn("message_echoes=1", text)
-        self.assertIn("types=text", text)
+                "statuses": [{"id": "wamid.ABC", "status": "delivered", "recipient_id": "919876543210"}],
+            },
+        )
+        with self.assertLogs(self.LOGGER, level="INFO") as captured:
+            self.assertEqual(self.post(body).status_code, 200)
+        text = "\n".join(captured.output)
+        for expected in ("fields=messages", "messages=1", "statuses=1", "types=text", "statuses=delivered"):
+            self.assertIn(expected, text)
         for private in self.PRIVATE:
             self.assertNotIn(private, text)
-        self.assertNotIn("webhook body", text)
-
-    def test_delivery_statuses_are_named(self):
-        text = self._logged({"data": [{"key": {"id": "ABC123"}, "update": {"status": 3}}]})
-        self.assertIn("statuses=delivered", text)
-        summary = next(line for line in text.splitlines() if "WhatsApp webhook:" in line)
-        self.assertNotIn("ABC123", summary)  # the message id is not part of the summary
 
     def test_a_recognised_event_is_quiet_by_default(self):
-        # Recognised events are INFO, which production does not print: nothing at WARNING.
         with self.assertNoLogs(self.LOGGER, level="WARNING"):
-            self._post(self.ECHO)
+            self.post(statuses({"id": "wamid.ABC", "status": "read"}))
 
     def test_an_unrecognised_body_warns_with_key_names_only(self):
         body = {"customer_phone": "918000000001", "note": "salary is 50000", "nested": {"secret": "hunter2"}}
-        text = self._logged(body, level="WARNING")
+        with self.assertLogs(self.LOGGER, level="WARNING") as captured:
+            self.post(body)
+        text = "\n".join(captured.output)
         self.assertIn("unrecognised shape", text)
-        self.assertIn("customer_phone", text)  # the key names say what WAClient started sending
-        self.assertIn("note", text)
-        for private in ("918000000001", "salary is 50000", "hunter2", "secret"):
+        self.assertIn("customer_phone", text)
+        for private in ("918000000001", "salary is 50000", "hunter2"):
             self.assertNotIn(private, text)
 
-    def test_odd_keys_and_odd_bodies_are_not_printed(self):
-        text = self._logged({"hello world, my phone is 918000000001": 1, "ok_key": 2}, level="WARNING")
-        self.assertIn("ok_key", text)
-        self.assertNotIn("918000000001", text)
-        text = self._logged([{"a": "918000000001"}, "918000000001"], level="WARNING")
-        self.assertIn("body_type=list", text)
-        self.assertNotIn("918000000001", text)
-
-    def test_a_form_encoded_body_is_never_printed_either(self):
+    def test_a_refused_post_logs_no_body(self):
         with self.assertLogs(self.LOGGER, level="WARNING") as captured:
-            self.client.post("/api/whatsapp/webhook/", {"phone": "918000000001", "message": "hello"})
-        text = "\n".join(captured.output)
-        self.assertNotIn("918000000001", text)
-        self.assertNotIn("hello", text)
+            self.post({"phone": "918000000001"}, signature="sha256=00")
+        self.assertNotIn("918000000001", "\n".join(captured.output))

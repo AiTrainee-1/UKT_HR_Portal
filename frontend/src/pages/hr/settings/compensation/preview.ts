@@ -131,6 +131,29 @@ export const workingMinutes = (
 };
 
 /**
+ * The lunch of the Type 1 example's 9:00 AM to 5:30 PM shift: 30 minutes, so 8 hours of work, the same as the quarters
+ * example's shift (a quarter is 2 hours in both).
+ */
+export const EXAMPLE_LUNCH = 30;
+
+/** The working length of the Type 1 example's shift (8 hours): what the quarters rule divides into quarters. */
+export const EXAMPLE_WORK_MINUTES = workingMinutes({ ...EXAMPLE_SHIFT, lunch: EXAMPLE_LUNCH });
+
+/**
+ * The Type 1 allowance a day earns (see allowanceFor) under the quarters rule: only while the overtime is LESS than a
+ * quarter of the shift (no Type 2 credit); from a quarter on the day is Type 2's and earns no allowance, whatever the
+ * threshold says (as the server's overtime.classify_day does from the claims date).
+ */
+export function allowanceUnderQuarters(
+  extraMinutes: number,
+  rules: AllowanceValue[],
+  shiftMinutes: number = EXAMPLE_WORK_MINUTES,
+): { minutes: number; rule: number | null; type2: boolean } {
+  if (quarterCredit(extraMinutes, shiftMinutes) > 0) return { minutes: 0, rule: null, type2: true };
+  return { ...allowanceFor(extraMinutes, rules), type2: false };
+}
+
+/**
  * The Type 2 credit by the quarters rule: the OT minutes over the employee's working shift, in quarters, rounded DOWN, at
  * most 1.00. Below a quarter it is 0 (no Type 2 credit; the day may still earn the Type 1 allowance). The backend's
  * compensation_effects.staff_ot_credit does the same.

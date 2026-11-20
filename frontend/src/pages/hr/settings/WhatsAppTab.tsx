@@ -1,14 +1,21 @@
-import { MessageCircle, SlidersHorizontal } from "lucide-react";
+import { IndianRupee, MessageCircle, SlidersHorizontal } from "lucide-react";
 import { permissionLevel, useAuth } from "@/contexts/AuthContext";
 import { ManagedElsewhere, PreviewCard, PreviewLine, SettingBlock, SettingsSection } from "./kit/SettingBlock";
 import { WhatsAppBubble } from "./whatsapp/WhatsAppBubble";
 
 const CONTROL = "/hr/whatsapp-control";
+const TAB = {
+  config: `${CONTROL}?tab=config`,
+  templates: `${CONTROL}?tab=templates`,
+  controls: `${CONTROL}?tab=controls`,
+  usage: `${CONTROL}?tab=usage`,
+  otp: `${CONTROL}?tab=otp`,
+};
 
 /**
- * Settings -> WhatsApp. Everything WhatsApp is set on WhatsApp Control (the wording and on/off of all 24 messages, the
- * feature switches and timings, the connection status) or in the server's environment (the WAClient credentials). This
- * tab used to repeat the status and 7 of the messages; it now explains where each part lives and links there.
+ * Settings -> WhatsApp. Everything WhatsApp is set on WhatsApp Control (since 2026-11-20 on the official Meta WhatsApp
+ * Cloud API: the set-up check, the Meta templates, a switch for every message, the OTP codes, usage, cost and budget) or
+ * in the server's environment (the WHATSAPP_CLOUD_* keys). This tab explains where each part lives and links there.
  */
 export default function WhatsAppTab() {
   const { user } = useAuth();
@@ -19,39 +26,39 @@ export default function WhatsAppTab() {
     <div className="space-y-4">
       <SettingsSection
         icon={MessageCircle}
-        title="WAClient WhatsApp API"
-        purpose="WhatsApp messages go out through a WhatsApp number linked to a WAClient instance. Nothing about the connection is set on this page."
+        title="Meta WhatsApp Cloud API"
+        purpose="WhatsApp messages go out through the official Meta WhatsApp Cloud API, from the company's WhatsApp Business number. Nothing about the connection is set on this page."
         usedBy={[{ label: "WhatsApp Control", to: CONTROL }]}
         testId="whatsapp-connection-section"
       >
         <SettingBlock
           id="whatsapp-connection"
           title="Connection and credentials"
-          purpose="The WAClient instance ID and access token are kept only in the server's environment (the .env file, or the hosting's variables), never in the database or on any page, so a database backup or a screenshot cannot leak them. Changing them needs a server restart."
+          purpose="The Meta access token, phone number ID, WhatsApp Business account ID, app secret and webhook verify token are kept only in the server's environment (the WHATSAPP_CLOUD_* variables in the .env file, or the hosting's variables), never in the database or on any page, so a database backup or a screenshot cannot leak them. Changing them needs a server restart."
           affects={[
             {
               where: "Every WhatsApp message",
-              what: "is sent only while the connection is configured: salary slips, ID cards and letters, sign-in codes, attendance alerts, approval notices, visitor and gate pass messages",
+              what: "is sent only while the keys are set, and only as a template Meta approved: salary slips, ID cards and letters, sign-in codes, attendance alerts, approval notices, visitor and gate pass messages",
             },
             {
               where: "Employee sign-in",
-              what: "without the connection employees get no one-time code and sign in with their password instead",
+              what: "WhatsApp codes need the approved code template; SMS codes (SMS Control) work on their own, and password sign-in is always there when neither can send",
             },
             {
-              where: "WhatsApp Control > Configuration",
-              to: CONTROL,
-              what: "shows whether it is configured, which instance, the webhook address for delivery receipts and a setup checklist",
+              where: "WhatsApp Control > Settings",
+              to: TAB.config,
+              what: "lists each WHATSAPP_CLOUD_* variable as set or missing (never its value), the number's quality and messaging limit at Meta, and the webhook address to paste into Meta",
             },
           ]}
-          note='On a development machine (debug mode on, or started with runserver) sending is switched off on purpose unless WHATSAPP_ALLOW_SENDING=true is set. WhatsApp Control then says "Not configured" even though the credentials are there.'
+          note="On a development machine (debug mode on, or started with runserver) sending is switched off on purpose unless WHATSAPP_ALLOW_SENDING=true is set, and even then only the employees in WHATSAPP_ONLY_TO_EMPLOYEES are messaged."
         >
           <ManagedElsewhere
-            title="Connection status and setup checklist"
-            to={CONTROL}
+            title="Set-up check, webhook, prices and budget"
+            to={TAB.config}
             linkLabel="Open WhatsApp Control"
             testId="whatsapp-managed-connection"
           >
-            {`Open the Configuration tab.${noAccess}`}
+            {`Open the Settings tab.${noAccess}`}
           </ManagedElsewhere>
         </SettingBlock>
       </SettingsSection>
@@ -59,90 +66,129 @@ export default function WhatsAppTab() {
       <SettingsSection
         icon={SlidersHorizontal}
         title="WhatsApp messages and switches"
-        purpose="What each WhatsApp message says and whether it is sent. All of it is set on WhatsApp Control, next to the record of every message sent."
+        purpose="What each WhatsApp message says (its Meta template) and whether it is sent. All of it is set on WhatsApp Control, next to the record of every message sent."
         usedBy={[{ label: "WhatsApp Control", to: CONTROL }]}
         testId="whatsapp-messages-section"
       >
         <SettingBlock
           id="whatsapp-message-text"
-          title="Message text and per-message on/off"
-          purpose="The wording of each of the 24 WhatsApp messages (salary slip, ID card, the letters, other documents, the visitor notice, sign-in codes, attendance alerts, approval and gate pass messages) and a switch that stops one kind of message."
+          title="Message templates"
+          purpose="Every WhatsApp message goes out as a template Meta has approved: its wording, its variables and its attachment. Templates are made from the HRMS wording of each message type, checked against Meta's rules, submitted for review and kept in step with Meta."
           affects={[
             {
-              where: "WhatsApp Control > Message Text",
-              to: CONTROL,
-              what: "edit the wording with a live preview and the variables each message can use; a blank text sends the built-in wording",
+              where: "WhatsApp Control > Templates",
+              to: TAB.templates,
+              what: "create a template from a message type with a live phone preview, create all missing ones at once, sync with Meta, see why Meta rejected one, delete one",
             },
             {
               where: "Every message of that kind",
-              what: "uses the saved wording from the next send. A document switched off is refused and listed as failed; a visitor notice switched off is skipped without a record",
+              what: "is skipped (shown as Skipped on the Messages tab) while its template is missing, in review, rejected or paused",
             },
           ]}
-          note="This tab used to have its own copy of 7 of these messages. It changed the same wording and the same switch as WhatsApp Control, so they now live only there."
+          note="Until 2026-11-20 HR edited the text of each message on a Message Text tab. With Meta the approved template is the text, so that tab is gone."
           preview={
             <PreviewCard
               title="Example"
-              scenario="Asha Kumar's August 2026 salary slip, sent on WhatsApp from Payroll. It goes out only when all four are true:"
+              scenario="Asha Kumar's August 2026 salary slip, sent on WhatsApp from Payroll. It goes out only when all five are true:"
               testId="whatsapp-send-chain"
             >
-              <PreviewLine label="1. The connection is configured" result="server environment" tone="info" />
+              <PreviewLine label="1. The Meta keys are set" result="server environment" tone="info" />
               <PreviewLine label="2. This server is allowed to send" result="not a development setup" tone="info" />
               <PreviewLine
                 label='3. "Document notifications" is on'
-                result="WhatsApp Control > Feature Controls"
+                result="WhatsApp Control > Message Controls"
                 tone="info"
               />
               <PreviewLine
                 label='4. The "Salary Slip" message is on'
-                result="WhatsApp Control > Message Text"
+                result="WhatsApp Control > Message Controls"
+                tone="info"
+              />
+              <PreviewLine
+                label="5. Meta approved hrms_salary_slip"
+                result="WhatsApp Control > Templates"
                 tone="info"
               />
               <WhatsAppBubble
-                text={
-                  "*Salary Slip*\n\nHello Asha Kumar,\n\nYour salary slip for *August 2026* is attached.\n\nRegards,\nUK Textiles HRMS"
-                }
+                text={"Dear Asha Kumar,\nYour salary slip for August 2026 is attached.\n\n- UK Textiles HR"}
                 attachment="Salary slip (PDF)"
               />
               <p className="text-[11px] text-gray-500">
-                The built-in wording, with the slip attached. WhatsApp Control &gt; Messages then shows it as sent,
-                delivered and read.
+                The template with the slip attached. WhatsApp Control &gt; Messages then shows it as sent, delivered and
+                read, and Usage &amp; Cost counts what it cost.
               </p>
             </PreviewCard>
           }
         >
           <ManagedElsewhere
-            title="Wording and on/off of every message"
-            to={CONTROL}
+            title="Templates of every message"
+            to={TAB.templates}
             linkLabel="Open WhatsApp Control"
             testId="whatsapp-managed-messages"
           >
-            {`Open the Message Text tab.${noAccess}`}
+            {`Open the Templates tab.${noAccess}`}
           </ManagedElsewhere>
         </SettingBlock>
 
         <SettingBlock
           id="whatsapp-feature-controls"
-          title="Feature switches and timings"
-          purpose="Turn whole WhatsApp features on or off (sign-in codes, document messages, attendance alerts, approval notices for each workflow, visitor and gate pass messages) and set their timings, such as how long a sign-in code lasts and when attendance alerts go out."
+          title="Message switches, limits and timings"
+          purpose="Switch the whole WhatsApp engine, a whole section (documents, attendance alerts, approvals, Department Heads, visitors, gate) or any single message type on or off, and set the sending limits, quiet hours and alert timings. Sign-in codes have a tab of their own (OTP)."
           affects={[
             {
-              where: "WhatsApp Control > Feature Controls",
-              to: CONTROL,
-              what: "a feature switched off stops every message of that feature, whatever each message's own switch says",
+              where: "WhatsApp Control > Message Controls",
+              to: TAB.controls,
+              what: "a section switched off stops every message in it, whatever each message's own switch says; each message shows its template and this month's count",
             },
             {
               where: "Employee sign-in",
-              what: "the sign-in code switches decide whether employees can sign in, reset a password or activate an account with a WhatsApp code",
+              to: TAB.otp,
+              what: "WhatsApp Control > OTP turns WhatsApp codes on or off for sign-in, password reset and activation, independently of SMS codes",
             },
           ]}
         >
           <ManagedElsewhere
-            title="Feature switches and timings"
-            to={CONTROL}
+            title="Switches, limits and timings"
+            to={TAB.controls}
             linkLabel="Open WhatsApp Control"
             testId="whatsapp-managed-features"
           >
-            {`Open the Feature Controls tab.${noAccess}`}
+            {`Open the Message Controls tab.${noAccess}`}
+          </ManagedElsewhere>
+        </SettingBlock>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={IndianRupee}
+        title="WhatsApp usage and cost"
+        purpose="What WhatsApp costs: Meta charges each delivered message by its pricing category."
+        usedBy={[{ label: "WhatsApp Control", to: CONTROL }]}
+        testId="whatsapp-cost-section"
+      >
+        <SettingBlock
+          id="whatsapp-cost"
+          title="Usage, cost and monthly budget"
+          purpose="Messages per day and per type, the estimated cost so far and the projected month (with and without 18% GST), Meta's own figures, and a monthly budget the Overview warns against. The price per category is set on WhatsApp Control > Settings."
+          affects={[
+            {
+              where: "WhatsApp Control > Usage & Cost",
+              to: TAB.usage,
+              what: "any month: the cost so far and projected, by category and by message type",
+            },
+            {
+              where: "WhatsApp Control > Overview",
+              to: CONTROL,
+              what: "warns at 80% of the budget and as soon as the projection passes it (messages are never stopped by the budget)",
+            },
+          ]}
+        >
+          <ManagedElsewhere
+            title="Usage and cost"
+            to={TAB.usage}
+            linkLabel="Open WhatsApp Control"
+            testId="whatsapp-managed-cost"
+          >
+            {`Open the Usage & Cost tab.${noAccess}`}
           </ManagedElsewhere>
         </SettingBlock>
       </SettingsSection>

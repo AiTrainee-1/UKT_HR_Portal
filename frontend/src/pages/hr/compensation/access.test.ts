@@ -12,7 +12,7 @@ import {
   otPath,
   pagePath,
 } from "./routes";
-import { openDefaultNested, openSubs, openTarget } from "./visible";
+import { CLAIMS_KEY, CLAIMS_ROUTE, openDefaultNested, openSubs, openTarget } from "./visible";
 
 // Splitting Compensation into five pages must not change who may open it: App.tsx gates a route by the module its path
 // belongs to (moduleForPath), so every path under /hr/compensation has to stay in the one `compensation` module.
@@ -112,5 +112,12 @@ describe("the parts of Compensation a role may open (visible.ts)", () => {
     });
     expect(openSubs(canOpen, "ot", OT_SUBS)).toEqual(["type-1", "type-2", "earlier"]);
     expect(openDefaultNested(canOpen, "ot", "type-2")).toBe("assigned");
+  });
+});
+
+describe("who may raise a claim for an employee", () => {
+  it("is decided by the Claims sub-tab's own key, as the server's POST /compensation/claims is", () => {
+    expect(CLAIMS_ROUTE).toBe("/hr/compensation/compensation-leave/holiday-work/claims");
+    expect(CLAIMS_KEY).toBe("compensation.leave.holiday_work.claims");
   });
 });

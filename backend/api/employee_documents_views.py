@@ -123,6 +123,27 @@ def delete_employee_document(request: Request, pk: int) -> Response:
 _EXT_MIME = {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}
 
 
+def _picture_as_pdf(content: bytes, filename: str) -> tuple[bytes, str, str] | None:
+    """A photo of a document as a one-page PDF (bytes, name.pdf, mime), or None when it can't be read. WhatsApp sends a
+    document as the header of the approved Meta template hrms_document, and a document header carries files (PDF), not
+    pictures."""
+    import io
+
+    from PIL import Image
+
+    try:
+        img = Image.open(io.BytesIO(content))
+        img.load()
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="PDF", resolution=150.0)
+    except Exception:
+        return None
+    base = (filename or "document").rsplit(".", 1)[0] or "document"
+    return out.getvalue(), f"{base}.pdf", "application/pdf"
+
+
 @api_view(["POST"])
 @require_hr
 def whatsapp_employee_document(request: Request, pk: int) -> Response:
@@ -146,10 +167,18 @@ def whatsapp_employee_document(request: Request, pk: int) -> Response:
     ext = (doc.file.name or doc.original_filename or "").rsplit(".", 1)[-1].lower()
     mime_type = _EXT_MIME.get(ext, "application/pdf")
     file_bytes = doc.file.read()
+    if mime_type.startswith("image/"):
+        as_pdf = _picture_as_pdf(file_bytes, filename)
+        if as_pdf is None:
+            return _error("This picture could not be read, so it can't be sent by WhatsApp.", 400)
+        file_bytes, filename, mime_type = as_pdf
 
     log = whatsapp_service.send_document(
         request, doc.employee, "other", file_bytes, filename,
-        body_params=[f"{doc.employee.first_name} {doc.employee.last_name}".strip(), doc.get_category_display()],
+        body_params={
+            "employee_name": f"{doc.employee.first_name} {doc.employee.last_name}".strip(),
+            "document_category": doc.get_category_display(),
+        },
         mime_type=mime_type, document_ref_id=doc.id, sent_by_id=request.jwt_user.get("hrUserId"),
     )
     if not whatsapp_service.accepted(log):

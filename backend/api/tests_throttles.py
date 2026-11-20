@@ -24,6 +24,8 @@ from rest_framework.decorators import api_view
 from rest_framework.throttling import SimpleRateThrottle
 
 from . import throttles
+from .models import SmsSettings
+from .tests_sms_otp import SMS_CONFIG
 
 # The rates config/settings.py ships (without THROTTLE_RELAXED). The behaviour tests pin them here so they hold on a machine
 # whose environment happens to set THROTTLE_RELAXED too.
@@ -66,13 +68,15 @@ class Clock:
         return self.now
 
 
-# WhatsApp configured (as in tests_otp.py): an unknown employee code is then a plain 404, not "OTP isn't available"
-@override_settings(WACLIENT_INSTANCE_ID="INST1234", WACLIENT_ACCESS_TOKEN="tok", WHATSAPP_DEFAULT_COUNTRY_CODE="91")
+# A code channel that works (SMS codes on, 2Factor configured as in tests_sms_otp.py; nothing is ever sent because the
+# employee code is unknown): an unknown employee code is then a plain 404, not "OTP isn't available"
+@override_settings(**SMS_CONFIG)
 class ThrottleCase(TestCase):
     """Frozen clock, empty throttle cache, rates as shipped (or as the test sets them)."""
 
     def setUp(self):
         super().setUp()
+        SmsSettings.objects.update_or_create(pk=1, defaults={"otp_enabled": True})
         self.clock = Clock()
         patcher = mock.patch.object(SimpleRateThrottle, "timer", staticmethod(self.clock))
         patcher.start()

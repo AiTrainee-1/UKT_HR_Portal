@@ -1,6 +1,6 @@
 """
-Every registered report, end to end, on a realistic seeded month (seed_data: 35 employees, attendance, payroll,
-advances, leave and requests for June 2026).
+Every listed report (the catalog: reporting/layout.py since the 2026-11-19 cleanup), end to end, on a realistic seeded
+month (seed_data: 35 employees, attendance, payroll, advances, leave and requests for June 2026).
 
 Whatever a domain author forgot, this catches: a crash on real data or on empty data, a screen/Excel mismatch,
 a report that writes on GET, a branch-scoped user seeing another branch, a view-only role being refused,
@@ -22,6 +22,7 @@ from .models import Branch, Department, Employee, HRUser, PayrollSettings, Role
 from .permission_registry import all_module_keys
 from .reporting import registry
 from .reporting.export_xlsx import HEADER_ROW
+from .reporting.layout import LAYOUT, is_listed
 
 JUNE = {"period": "2026-06", "dateFrom": "2026-06-01", "dateTo": "2026-06-30", "year": "2026"}
 # A screen run may not issue more queries than this on the 35-employee seed (guards N+1 patterns).
@@ -119,12 +120,16 @@ class AllReportsTests(TestCase):
         return self.client.get(f"/api/reports/run/{spec['id']}", params, **_headers(user))
 
     # ── catalog ──────────────────────────────────────────────────────────────
-    def test_the_catalog_is_large_and_every_definition_loaded(self):
+    def test_the_catalog_is_the_layout_and_every_definition_loaded(self):
+        # Since the 2026-11-19 cleanup the catalog lists exactly reporting/layout.py's reports (the retired ones stay
+        # registered); tests_reporting_rc_layout pins the ids, the order and the categories in detail.
         self.assertEqual(registry.LOAD_ERRORS, {})
         reports = self.catalog(self.admin)["reports"]
-        self.assertGreaterEqual(len(reports), 60, "expected the full Report Center catalog")
+        self.assertEqual(
+            len(reports), sum(len(ids) for ids in LAYOUT.values()), "expected the full Report Center layout"
+        )
         cats = {c["id"] for c in self.catalog(self.admin)["categories"]}
-        self.assertTrue({"payroll", "attendance", "leave", "gate", "employees"} <= cats, cats)
+        self.assertEqual(cats, {"hr", "attendance", "shift", "payroll", "employees", "customise"})
 
     # ── every report runs, on real data and on empty data ──────────────────
     def test_every_report_runs_on_the_seeded_month(self):
@@ -251,10 +256,15 @@ class AllReportsTests(TestCase):
             )
         for spec in specs.values():
             if spec.super_admin_only:
-                self.assertIn(spec.id, admin_ids)
                 self.assertNotIn(spec.id, viewer_ids)
                 r = self.client.get(f"/api/reports/run/{spec.id}", **_headers(self.viewer))
                 self.assertEqual(r.status_code, 404)
+                if is_listed(spec):
+                    self.assertIn(spec.id, admin_ids)
+                else:  # retired by the 2026-11-19 layout (hr-users, audit-log ...): gone for the super admin as well
+                    self.assertNotIn(spec.id, admin_ids)
+                    r = self.client.get(f"/api/reports/run/{spec.id}", **_headers(self.admin))
+                    self.assertEqual(r.status_code, 404)
 
     def test_a_role_with_only_the_reports_module_sees_only_reports_that_need_no_other_module(self):
         ids = {s["id"] for s in self.catalog(self.reports_only)["reports"]}
@@ -296,13 +306,11 @@ class AllReportsTests(TestCase):
                 cells = " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value is not None)
                 self.assertNotIn("OTHER001", cells)
 
-    def test_the_stranger_is_visible_to_an_unscoped_admin_in_the_employee_master(self):
+    def test_the_stranger_is_visible_to_an_unscoped_admin_in_the_employee_details(self):
+        # Employee Overall Details replaced the retired Employee Master in the 2026-11-19 layout
         specs = {s["id"]: s for s in self.catalog(self.admin)["reports"]}
-        if "employee-master" not in specs:
-            self.skipTest("employee-master not registered")
-        body = self.run_report(
-            self.admin, specs["employee-master"], _default_query(specs["employee-master"], JUNE)
-        ).json()
+        spec = specs["employee-overall-details"]
+        body = self.run_report(self.admin, spec, _default_query(spec, JUNE)).json()
         self.assertIn("OTHER001", str(body["rows"]))
 
     # ── contract on the specs themselves ─────────────────────────────────────
@@ -313,6 +321,8 @@ class AllReportsTests(TestCase):
             self.assertTrue(set(spec.modules) <= keys, f"{spec.id}: unknown module in {spec.modules}")
             self.assertTrue(spec.description.strip(), spec.id)
             self.assertLess(len(spec.description), 220, f"{spec.id}: keep the catalog card description short")
-            key = spec.title.strip().lower()
+            # unique inside a category: the owner's layout names two "Salary Statement"s on purpose, HR's own
+            # (hr-salary-statement, kept as it was) and the Salary category's (salary-statement)
+            key = (spec.category, spec.title.strip().lower())
             self.assertNotIn(key, seen_titles, f"{spec.id} has the same title as {seen_titles.get(key)}")
             seen_titles[key] = spec.id

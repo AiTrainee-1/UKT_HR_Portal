@@ -2,7 +2,12 @@
 SMS delivery of one-time codes (2Factor.in) -the one place the rest of the HRMS sends an SMS through
 ==================================================================================================
     otp_service.request_otp -> send_otp() -> twofactor_client.send_otp() -> 2Factor -> the employee's phone
-    SMS Control page "Test"  -> send_test() ----^
+    SMS Control page "Test"  -> send_test() -> send_otp() ----^
+
+SMS IS FOR ONE-TIME CODES ONLY (owner, 2026-11-20): sign-in, password reset and account activation codes through the
+approved OTP template. send_otp() is the only way an SMS leaves the system (the Control page's test is a code through the
+same template), it carries nothing but 4 to 6 digits, and there is no function for free text, promotions, bulk messages
+or notifications. tests_sms_otp.SmsIsOnlyForCodesTests pins that no other module calls the 2Factor client.
 
 The code itself is generated and verified by otp_service (an HMAC is stored, never the code); this module only carries
 it. Every attempt ends up as a SmsMessageLog row that HR sees on the SMS Control page: "sent", "failed" (2Factor or the
@@ -11,6 +16,9 @@ auth key or a full phone number. Nothing here raises for an expected failure.
 
 Protections, all counted from the log so they hold across server workers and restarts:
   * not configured / not allowed to send on this machine -> nothing is attempted (see sending_block_reason)
+  * LOCAL DEVELOPMENT ONLY: `manage.py runserver` texts only the employees named in SMS_ONLY_TO_EMPLOYEES (exactly like
+    WHATSAPP_ONLY_TO_EMPLOYEES for WhatsApp; none named = nothing is sent; a local fake 2Factor of the e2e stack is
+    exempt). Production never runs runserver, so the variable is ignored there (see local_dev_server)
   * circuit breaker: BREAKER_FAILURES failed sends within BREAKER_WINDOW pause SMS for BREAKER_PAUSE, so a dead
     provider or a wrong key is not hammered and employees are told to use their password. Only failures that say
     something about the PROVIDER count: a refused number or an unrecognised refusal of one message (error codes
@@ -32,12 +40,16 @@ can never both slip under the same cap, and a crash in the middle leaves the sen
 import hashlib
 import hmac
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, time as time_type, timedelta
+from decimal import Decimal
+from urllib.parse import urlparse
 
 from django.conf import settings as dj_settings
+from django.core.cache import cache
 from django.db import DatabaseError, transaction
 from django.utils import timezone
 
@@ -69,12 +81,21 @@ MSG_PHONE_CAP = "Too many codes were sent to this number. Please try again in an
 MSG_SEND_FAILED = "We couldn't send the code by SMS. Please try again in a moment or contact HR."
 MSG_BAD_NUMBER = "The mobile number registered for this employee isn't a valid mobile number. Please contact HR."
 
-BALANCE_NOTE = (
-    "2Factor documents no balance check this system can use. Look at the balance in the 2Factor panel (Dashboard)."
-)
+MSG_NOT_A_CODE = "Only one-time codes (4 to 6 digits) can be sent by SMS."
+#: what a refused recipient is told on a development machine (SMS_ONLY_TO_EMPLOYEES); the words never start like a
+#: provider failure, and the row is 'blocked', so it never pauses SMS for everybody
+DEV_SAFETY = "Not sent (development safety)"
+
+BALANCE_NOT_SET_UP = "2Factor is not set up on this server, so the balance cannot be checked."
 BALANCE_EMPTY_NOTE = (
     "2Factor refused the last message because the account has no balance. Top it up in the 2Factor panel."
 )
+#: the balance is read from 2Factor at most once per BALANCE_CACHE_SECONDS (the overview polls)
+BALANCE_CACHE_SECONDS = 300
+#: fewer credits than this shows a "top up soon" alert on the SMS Control page
+LOW_BALANCE_CREDITS = 100
+#: rupees per SMS for the cost estimate until HR sets their own (SMS Control -> Settings -> Cost)
+DEFAULT_PRICE_PER_SMS = Decimal("0.20")
 
 # What marks a value as the demo text of .env.example rather than a credential (all compared in lower case):
 _PLACEHOLDER_STARTS = ("your_", "your-", "your ", "demo")
@@ -163,6 +184,56 @@ def sending_allowed() -> bool:
     return not dj_settings.DEBUG and "runserver" not in sys.argv
 
 
+def local_dev_server() -> bool:
+    """Is this Django's own development server (`manage.py runserver`) on a developer's machine? The ONLY place the
+    SMS_ONLY_TO_EMPLOYEES recipient lock applies (the same rule as WhatsApp's WHATSAPP_ONLY_TO_EMPLOYEES). Production never
+    runs runserver (gunicorn on Railway, waitress on-premise), and Railway's own variables rule it out a second time.
+    DEBUG is deliberately NOT a sign: a misconfigured DEBUG=true on the live server must never limit its codes."""
+    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_ENVIRONMENT_NAME"):
+        return False
+    return "runserver" in sys.argv
+
+
+def provider_is_local() -> bool:
+    """Is TWOFACTOR_API_BASE on this machine (the e2e stack's fake 2Factor)? Such a provider reaches nobody."""
+    try:
+        host = (urlparse(api_base()).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
+def recipient_codes() -> list[str]:
+    """The employee codes the local development server may text (SMS_ONLY_TO_EMPLOYEES). Always [] anywhere else."""
+    if not local_dev_server():
+        return []
+    return [str(c).strip() for c in (getattr(dj_settings, "SMS_ONLY_TO_EMPLOYEES", None) or []) if str(c).strip()]
+
+
+def allowed_numbers() -> set[str] | None:
+    """The normalised numbers this machine may text, or None when there is no limit (a real server; or the e2e stack's
+    local fake 2Factor with nobody named). A development machine otherwise always has a limit: an empty set when nobody
+    is named, so nothing is sent."""
+    if not local_dev_server():
+        return None
+    codes = recipient_codes()
+    if not codes and provider_is_local():
+        return None
+    from .models import Employee
+
+    phones = Employee.objects.filter(employee_code__in=codes).values_list("phone", flat=True)
+    return {n for n in (normalize_phone(p) for p in phones) if n}
+
+
+def recipient_block_reason(number: str | None) -> str | None:
+    """Why this (normalised) number may not be texted from this machine, or None."""
+    allowed = allowed_numbers()
+    if allowed is None or (number or "") in allowed:
+        return None
+    codes = ", ".join(recipient_codes()) or "none set"
+    return f"{DEV_SAFETY}: this machine may only text employee {codes} (SMS_ONLY_TO_EMPLOYEES)."
+
+
 def sending_block_reason(purpose: str | None = None) -> str | None:
     """Why nothing can be sent from here, or None when it can. (`purpose` is kept for the callers: one template serves
     every purpose.)"""
@@ -173,6 +244,11 @@ def sending_block_reason(purpose: str | None = None) -> str | None:
         return (
             "SMS sending is switched off on this machine because it is a development setup (DEBUG on or runserver), "
             "so it can't text employees from the live account. Set SMS_ALLOW_SENDING=true to override."
+        )
+    if local_dev_server() and not recipient_codes() and not provider_is_local():
+        return (
+            "This development machine may send SMS only to the employees named in SMS_ONLY_TO_EMPLOYEES (for example "
+            "SMS_ONLY_TO_EMPLOYEES=30020), and none is named, so nothing is sent."
         )
     return None
 
@@ -257,29 +333,77 @@ def temporarily_unavailable(now: datetime | None = None) -> bool:
     hourly or daily cap is used up? The answer is temporary and anybody can bring it about (a flood of code requests
     uses a cap up), so it must never close another sign-in method: otp_service keeps password sign-in open while this
     is true."""
+    return pause_reason(now) is not None
+
+
+def pause_reason(now: datetime | None = None) -> str | None:
+    """Why SMS cannot be sent at this moment although it is configured (the breaker is paused, or the global hourly /
+    daily cap is used up), as one sentence for HR; None when nothing pauses it."""
     now = now or timezone.now()
-    if circuit(now)[0]:
-        return True
+    paused, until = circuit(now)
+    if paused:
+        clock = until.astimezone(FACTORY_TZ).strftime("%H:%M")
+        minutes = int(BREAKER_WINDOW.total_seconds() // 60)
+        return f"SMS sending is paused until {clock} (IST) because {BREAKER_FAILURES} sends failed within {minutes} minutes."
     cfg = SmsSettings.get()
     used = usage(now)
-    return used["hourUsed"] >= cfg.hourly_cap or used["dayUsed"] >= cfg.daily_cap
+    if used["hourUsed"] >= cfg.hourly_cap:
+        return f"The hourly limit of {cfg.hourly_cap} SMS is used up."
+    if used["dayUsed"] >= cfg.daily_cap:
+        return f"The daily limit of {cfg.daily_cap} SMS is used up (it starts again at midnight IST)."
+    return None
 
 
-def balance() -> dict:
-    """The overview's balance card. 2Factor's documentation has no balance call (and its API would put the key in the
-    URL), so nothing is called: the card says where to look, and says so plainly when the last send was refused for lack
-    of balance."""
+def price_per_sms(s: SmsSettings | None = None) -> Decimal:
+    """Rupees per SMS for the cost estimate: what HR set on SMS Control, else DEFAULT_PRICE_PER_SMS."""
+    value = (s or SmsSettings.get()).price_per_sms
+    return Decimal(value) if value is not None else DEFAULT_PRICE_PER_SMS
+
+
+def _balance_cache_key() -> str:
+    # a different key or address is a different account: never show one account's balance for another
+    fingerprint = hashlib.sha256(f"{auth_key()}|{api_base()}".encode()).hexdigest()[:16]
+    return f"sms_control:twofactor_balance:{fingerprint}"
+
+
+def balance(*, refresh: bool = False) -> dict:
+    """The SMS credits left on the 2Factor account, read from 2Factor at most once per BALANCE_CACHE_SECONDS (a read:
+    nothing is sent). {"credits": number | None, "available": the same (older pages read it), "checkedAt": ISO time |
+    None, "error": one sentence | None}. Never raises; never carries the key. `refresh` skips the cache."""
+    if config_problems():
+        return {"credits": None, "available": None, "checkedAt": None, "error": BALANCE_NOT_SET_UP}
+    key = _balance_cache_key()
+    entry = None if refresh else cache.get(key)
+    if not isinstance(entry, dict):
+        checked = timezone.now().isoformat()
+        try:
+            credits = twofactor_client.balance(api_key=auth_key(), base_url=api_base())
+            entry = {"credits": credits, "checkedAt": checked, "error": None}
+        except twofactor_client.TwoFactorError as exc:
+            entry = {"credits": None, "checkedAt": checked, "error": f"The balance could not be read: {exc.message}"}
+        except Exception as exc:  # a bug must never break the page (and must not log the URL: it holds the key)
+            logger.error("2Factor balance check crashed unexpectedly (%s)", type(exc).__name__)
+            entry = {
+                "credits": None,
+                "checkedAt": checked,
+                "error": "The balance could not be read because of an unexpected error on this server.",
+            }
+        cache.set(key, entry, BALANCE_CACHE_SECONDS)
+    error = entry.get("error")
+    credits = entry.get("credits")
     last = (
         SmsMessageLog.objects.exclude(status=SmsMessageLog.STATUS_BLOCKED)
         .filter(created_at__gte=timezone.now() - timedelta(hours=24))
         .first()
     )
-    note = (
-        BALANCE_EMPTY_NOTE
-        if last and last.status == SmsMessageLog.STATUS_FAILED and last.error_code == "balance"
-        else BALANCE_NOTE
-    )
-    return {"available": None, "checkedAt": None, "error": note}
+    if (
+        last is not None
+        and last.status == SmsMessageLog.STATUS_FAILED
+        and last.error_code == "balance"
+        and not (credits or 0) > 0
+    ):
+        error = BALANCE_EMPTY_NOTE
+    return {"credits": credits, "available": credits, "checkedAt": entry.get("checkedAt"), "error": error}
 
 
 # ── sending ─────────────────────────────────────────────────────────────────
@@ -300,8 +424,11 @@ class SmsResult:
     masked_phone: str = ""
 
 
-def _refusal(cfg: SmsSettings, number_hash: str, now: datetime):
+def _refusal(cfg: SmsSettings, number: str, number_hash: str, now: datetime):
     """(kind, sentence for the person, http status, sentence for HR) when a limit stops this send, else None."""
+    locked = recipient_block_reason(number)
+    if locked:
+        return ("dev_lock", locked, 403, f"Blocked: {locked}")
     paused, until = circuit(now)
     if paused:
         clock = until.astimezone(FACTORY_TZ).strftime("%H:%M")
@@ -376,7 +503,7 @@ def _deliver(
     )
     with transaction.atomic():
         SmsSettings.objects.select_for_update().get(pk=cfg.pk)  # one send decision at a time, across workers
-        refused = _refusal(cfg, number_hash, now)
+        refused = _refusal(cfg, number, number_hash, now)
         if refused:
             kind, for_person, http_status, for_hr = refused
             # One 'blocked' row per employee per reason per minute is all HR needs to see; a caller who keeps asking
@@ -423,24 +550,47 @@ def _deliver(
     return SmsResult(True, SmsMessageLog.STATUS_SENT, "sent", "", 200, "", log.id, masked)
 
 
-def send_otp(employee, purpose: str, code: str, minutes: int, *, phone: str | None = None, ip: str = "") -> SmsResult:
-    """THE entry point for an employee's one-time code. `phone` is the normalised number (default: the employee's
-    registered one). Returns the outcome; nothing here raises. A failed or blocked outcome means the code did not
-    reach the employee: the caller must discard it."""
+_SEND_PURPOSES = tuple(p for p, _ in SmsMessageLog.PURPOSES)  # login, reset, activate, test
+
+
+def send_otp(
+    employee,
+    purpose: str,
+    code: str,
+    minutes: int,
+    *,
+    phone: str | None = None,
+    ip: str = "",
+    sent_by_id: int | None = None,
+) -> SmsResult:
+    """THE one way an SMS leaves the HRMS: a one-time code (4 to 6 digits, nothing else) through the approved OTP
+    template. `phone` is the normalised number (default: the employee's registered one). Returns the outcome; nothing
+    here raises. A failed or blocked outcome means the code did not reach the employee: the caller must discard it."""
+    if purpose not in _SEND_PURPOSES or not (
+        isinstance(code, str) and code.isascii() and code.isdigit() and 4 <= len(code) <= 6
+    ):
+        return SmsResult(False, SmsMessageLog.STATUS_FAILED, "not_a_code", MSG_NOT_A_CODE, 400, MSG_NOT_A_CODE)
     number = phone or normalize_phone(getattr(employee, "phone", None))
     if not number or not is_valid_number(number):
         return SmsResult(False, SmsMessageLog.STATUS_FAILED, "invalid_number", MSG_BAD_NUMBER, 400, MSG_BAD_NUMBER)
-    return _deliver(purpose=purpose, code=code, minutes=minutes, number=number, employee=employee, ip=ip)
+    return _deliver(
+        purpose=purpose, code=code, minutes=minutes, number=number, employee=employee, sent_by_id=sent_by_id, ip=ip
+    )
 
 
-def send_test(raw_phone: str, sent_by_id: int | None, ip: str = "") -> SmsResult:
-    """The SMS Control page's test: the real template, the dummy code TEST_CODE, to the number typed (masked in the
-    log, purpose 'test'). Counts against the caps like any other send."""
-    number = normalize_phone(raw_phone)
+def send_test(raw_phone: str | None, sent_by_id: int | None, ip: str = "", *, employee=None) -> SmsResult:
+    """The SMS Control page's test: a one-time code (the dummy TEST_CODE) through the same OTP template and send_otp, to
+    an employee's registered number (`employee`) or to the number typed (masked in the log, purpose 'test'). Counts
+    against the caps and obeys SMS_ONLY_TO_EMPLOYEES like any other send."""
+    number = normalize_phone(employee.phone if employee is not None else raw_phone)
     if not number:
-        message = "Enter a valid mobile number, for example 9876543210."
+        message = (
+            "This employee has no valid mobile number registered."
+            if employee is not None
+            else "Enter a valid mobile number, for example 9876543210."
+        )
         return SmsResult(False, SmsMessageLog.STATUS_FAILED, "invalid_number", message, 400, message)
     minutes = max(1, int(SmsSettings.get().otp_expiry_minutes))
-    return _deliver(
-        purpose=SmsMessageLog.PURPOSE_TEST, code=TEST_CODE, minutes=minutes, number=number, sent_by_id=sent_by_id, ip=ip
+    return send_otp(
+        employee, SmsMessageLog.PURPOSE_TEST, TEST_CODE, minutes, phone=number, ip=ip, sent_by_id=sent_by_id
     )

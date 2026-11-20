@@ -19,7 +19,9 @@ import { fmtDateTime, useDebounced } from "./shared";
 
 type Show = "all" | "optout";
 
-export default function EmployeesTab() {
+/** Employees: everyone who has been (or may be) messaged, their counts, and No WhatsApp. `locked` (View only) keeps
+ *  the switches shut. */
+export default function EmployeesTab({ locked = false }: { locked?: boolean }) {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [show, setShow] = useState<Show>("all");
@@ -51,7 +53,7 @@ export default function EmployeesTab() {
           toast({
             title: optOut ? `${r.employeeName}: No WhatsApp` : `${r.employeeName}: WhatsApp messages back on`,
             description: optOut
-              ? "Their WhatsApp messages are skipped from now on, except login codes they ask for."
+              ? "Their WhatsApp messages are skipped from now on, except sign-in codes they ask for."
               : undefined,
           }),
         onError: (e) =>
@@ -66,10 +68,11 @@ export default function EmployeesTab() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <p className="text-xs text-gray-500 max-w-2xl">
-          Everyone who has been sent a WhatsApp message. Open a row for that employee's full history. Turn on{" "}
-          <b>No WhatsApp</b> for an employee who has asked not to get WhatsApp messages: what would have gone to them
-          shows as Skipped on the Messages tab. Login codes they ask for themselves still go.
+        <p className="max-w-2xl text-xs text-muted-foreground">
+          Every employee and the WhatsApp messages sent to them. Open a row for that employee's full history. Turn on{" "}
+          <b>No WhatsApp</b> for an employee who has asked not to get WhatsApp messages; an employee who replies STOP to
+          the company number is switched on by itself. What would have gone to them shows as Skipped on the Messages
+          tab. Sign-in codes they ask for themselves still go.
         </p>
         <div className="flex items-center gap-3 flex-wrap">
           <div data-testid="wa-optout-filter">
@@ -91,7 +94,7 @@ export default function EmployeesTab() {
             />
           </div>
           <div className="relative">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => {
@@ -106,9 +109,9 @@ export default function EmployeesTab() {
         </div>
       </div>
 
-      <div className="rounded-xl border bg-white overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead className="bg-slate-50 text-gray-500">
+      <div className="overflow-x-auto rounded-xl border bg-card">
+        <table className="w-full min-w-[720px] text-xs">
+          <thead className="bg-muted text-muted-foreground">
             <tr className="text-left">
               <th className="px-3 py-2 font-semibold">Employee</th>
               <th className="px-3 py-2 font-semibold">Department</th>
@@ -130,7 +133,7 @@ export default function EmployeesTab() {
               ))
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-gray-400">
+                <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
                   {onlyOptOut
                     ? debounced
                       ? "No employee with No WhatsApp matches that search."
@@ -146,31 +149,33 @@ export default function EmployeesTab() {
                 return (
                   <tr
                     key={r.employeeId}
-                    className={`border-t hover:bg-slate-50 cursor-pointer ${r.optOut ? "bg-orange-50/40" : ""}`}
+                    className={`cursor-pointer border-t hover:bg-muted ${r.optOut ? "bg-orange-50/40 dark:bg-orange-950/40" : ""}`}
                     onClick={() => setSelected(r)}
                     data-testid="whatsapp-employee-row"
                   >
                     <td className="px-3 py-2">
-                      <p className="font-semibold text-gray-800">{r.employeeName}</p>
-                      <p className="text-[10px] text-gray-400">{r.employeeCode}</p>
+                      <p className="font-semibold">{r.employeeName}</p>
+                      <p className="text-[10px] text-muted-foreground">{r.employeeCode}</p>
                     </td>
-                    <td className="px-3 py-2 text-gray-600">{r.department ?? "—"}</td>
-                    <td className="px-3 py-2 text-gray-600">
+                    <td className="px-3 py-2 text-muted-foreground">{r.department ?? "—"}</td>
+                    <td className="px-3 py-2 text-muted-foreground">
                       {r.phone ? `+${r.phone}` : <span className="text-red-600">Not on file</span>}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{r.total}</td>
                     <td
-                      className={`px-3 py-2 text-right tabular-nums ${r.failed ? "text-red-600 font-semibold" : "text-gray-400"}`}
+                      className={`px-3 py-2 text-right tabular-nums ${r.failed ? "font-semibold text-red-600" : "text-muted-foreground"}`}
                     >
                       {r.failed}
                     </td>
-                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtDateTime(r.lastMessageAt)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">
+                      {fmtDateTime(r.lastMessageAt)}
+                    </td>
                     {/* The switch must not open the history dialog. */}
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
                         <Switch
                           checked={Boolean(r.optOut)}
-                          disabled={busy}
+                          disabled={locked || busy}
                           onCheckedChange={(next) => changeOptOut(r, next)}
                           aria-label={`No WhatsApp for ${r.employeeName}`}
                           data-testid={`wa-optout-${r.employeeId}`}
@@ -203,11 +208,12 @@ export default function EmployeesTab() {
           <DialogContent className="max-w-3xl">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 flex-wrap">
-                {selected.employeeName} <span className="text-gray-400 font-normal">({selected.employeeCode})</span>
+                {selected.employeeName}{" "}
+                <span className="font-normal text-muted-foreground">({selected.employeeCode})</span>
                 {selected.optOut && <StatusBadge tone="caution">No WhatsApp</StatusBadge>}
               </DialogTitle>
             </DialogHeader>
-            <p className="text-xs text-gray-500 -mt-1">
+            <p className="-mt-1 text-xs text-muted-foreground">
               {selected.phone ? `+${selected.phone}` : "No number on file"} · {selected.total} message
               {selected.total === 1 ? "" : "s"}, {selected.failed} failed
             </p>

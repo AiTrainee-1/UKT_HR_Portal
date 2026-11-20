@@ -334,7 +334,7 @@ class RegisterTests(Fixture):
             whatsapp_notifications.notify_visitor_arrival(self.visit_b, self.host_a)
         args = wa.call_args
         self.assertEqual(args.args[2]["visitor_name"], "R. Kumar")
-        self.assertEqual(args.kwargs["contact"]["first_name"], "R. Kumar")
+        self.assertNotIn("contact", args.kwargs)  # Meta's templates carry no contact card (2026-11-20)
 
 
 # ═══ Report Center and the MD portal ═════════════════════════════════════════════════════════════════════════════════

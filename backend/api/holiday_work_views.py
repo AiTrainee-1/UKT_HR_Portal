@@ -139,14 +139,51 @@ def claims_json(claims: list[HolidayWorkClaim]) -> list[dict]:
     return _claims_json(claims, for_role="hr")
 
 
-def _enabled_block() -> dict:
+CLAIMS_KEY = "compensation.leave.holiday_work.claims"
+RAISE_NEEDS_CLAIMS_EDIT = "Raising a claim needs Edit on Compensation > Leave > Holiday work > Claims."
+
+
+def may_raise(request) -> bool:
+    """May the HR login raise claims? Every raise (the Raise tab's POST /api/compensation/holiday-work and POST
+    /api/compensation/claims) is governed by the Claims sub-tab's key, so it needs Edit there (a super administrator
+    always may). No request (an internal caller) = True."""
+    if request is None:
+        return True
+    from .models import HRUser
+    from .permission_registry import effective_permissions, resolve_permission
+
+    user_id = (getattr(request, "jwt_user", None) or {}).get("hrUserId")
+    hr = HRUser.objects.select_related("role").filter(pk=user_id, is_active=True).first() if user_id else None
+    if hr is None:
+        return False
+    if hr.is_super_admin:
+        return True
+    return resolve_permission(effective_permissions(hr), CLAIMS_KEY) == "edit"
+
+
+def _enabled_block(request=None) -> dict:
+    """The switches the Raise / Claims screens read. `canRaise` is the switches AND the caller's Edit right on the Claims
+    sub-tab (verification 2026-11-19: a Raise=Edit / Claims=View role was shown a live button the server refused);
+    `raiseProblem` says why it is false (null when it is true)."""
     flags = switches()
     workflow = approval.get_config(WORKFLOW).enabled
+    switched_on = bool(flags["master"] and flags["holidayWork"] and workflow)
+    allowed = may_raise(request)
+    problem = None
+    if not flags["master"]:
+        problem = "The OT / Compensation features are switched off in Settings > Payroll."
+    elif not flags["holidayWork"]:
+        problem = "Sunday / holiday work compensation is switched off in Settings > Compensation."
+    elif not workflow:
+        problem = "Compensation claims are switched off in Approval Workflow Control."
+    elif not allowed:
+        problem = RAISE_NEEDS_CLAIMS_EDIT
     return {
         "master": flags["master"],
         "holidayWork": flags["holidayWork"],
         "workflow": workflow,
-        "canRaise": bool(flags["master"] and flags["holidayWork"] and workflow),
+        "canRaise": switched_on and allowed,
+        "raiseProblem": problem,
     }
 
 
@@ -164,18 +201,60 @@ def feature_block() -> Response | None:
     return None
 
 
+OFF_SATURDAY = "off_saturday"
+DAY_KIND_LABELS = {"sunday": "Sunday", "holiday": "Holiday", OFF_SATURDAY: "Off Saturday"}
+
+
 def date_problem(work_date, today) -> str | None:
-    """Why `work_date` cannot carry a claim, or None. `work_date` is a date."""
+    """Why `work_date` cannot carry a claim, or None. `work_date` is a date. A Saturday passes here: it is holiday work
+    for the employees whose own off day it is (their shift assignment's saturday_off; owner decision 4, 2026-11-19), which
+    _employee_problem / off_saturday_staff check per employee."""
     holidays = holiday_names(work_date, work_date)
-    if day_kind(work_date, holidays) is None:
+    if day_kind(work_date, holidays) is None and work_date.weekday() != 5:
         return (
-            f"{date_text(work_date)} is neither a Sunday nor a declared holiday, so there is no holiday work to claim."
+            f"{date_text(work_date)} is neither a Sunday, a declared holiday nor an off Saturday, so there is no holiday "
+            "work to claim."
         )
     if work_date > today:
         return f"{date_text(work_date)} has not happened yet."
     if work_date < today - timedelta(days=MAX_CLAIM_AGE_DAYS):
         return f"A claim can only be raised for work done in the last {MAX_CLAIM_AGE_DAYS} days."
     return None
+
+
+def holiday_day_kind(work_date, holidays: dict | None = None) -> str | None:
+    """'holiday' | 'sunday' | 'off_saturday' | None for a holiday-work DATE: a Saturday that is no declared holiday is an
+    off Saturday for (only) the staff whose shift assignment marks it off (off_saturday_staff)."""
+    names = holidays if holidays is not None else holiday_names(work_date, work_date)
+    found = day_kind(work_date, names)
+    if found is None and work_date.weekday() == 5:
+        return OFF_SATURDAY
+    return found
+
+
+def off_saturday_staff(work_date, employee_ids, assignments: dict | None = None) -> set[int]:
+    """Of `employee_ids`, the employees whose own off day `work_date` (a Saturday) is: the shift assignment in force that
+    day marks Saturday off (compensation_engine.is_off_day). Two queries; `assignments` ({employee_id: [assignment]}),
+    when a caller already read them, saves one. Empty for any other weekday."""
+    from .compensation_engine import is_off_day
+    from .models import EmployeeShiftAssignment
+
+    if work_date.weekday() != 5:
+        return set()
+    ids = list(employee_ids)
+    if not ids:
+        return set()
+    if assignments is None:
+        assignments = {}
+        for a in EmployeeShiftAssignment.objects.filter(employee_id__in=ids, effective_from__lte=work_date).order_by(
+            "effective_from"
+        ):
+            assignments.setdefault(a.employee_id, []).append(a)
+    candidates = [i for i in ids if assignments.get(i)]
+    if not candidates:
+        return set()
+    people = Employee.objects.in_bulk(candidates)
+    return {i for i in candidates if i in people and is_off_day(people[i], work_date, assignments.get(i, []))}
 
 
 def worked_ids(work_date, employee_ids=None) -> set[int]:
@@ -217,6 +296,12 @@ def _employee_problem(emp: Employee, evidence: set[int], claims: dict[int, Holid
         return f"{name} is a production employee: holiday and Sunday work compensation is only for staff."
     if emp.status != "active":
         return f"{name} is not an active employee."
+    if work_date.weekday() == 5 and day_kind(work_date, holiday_names(work_date, work_date)) is None:
+        if emp.id not in off_saturday_staff(work_date, [emp.id]):
+            return (
+                f"{date_text(work_date)} is a working Saturday for {name} (not their off Saturday), so there is no "
+                "holiday work to claim."
+            )
     if emp.id not in evidence:
         return f"{name} has no punches or attendance on {date_text(work_date)}, so there is no work on record to claim for."
     existing = claims.get(emp.id)
@@ -461,7 +546,7 @@ def _list_claims(request: Request) -> Response:
             "month": month,
             "year": year,
             "summary": summary,
-            "enabled": _enabled_block(),
+            "enabled": _enabled_block(request),
         }
     )
 
@@ -567,17 +652,18 @@ def holiday_work_eligible(request: Request) -> Response:
         return _bad("employeeId must be a number.")
     today = ist_today()
     holidays = holiday_names(work_date, work_date)
-    kind = day_kind(work_date, holidays)
+    kind = holiday_day_kind(work_date, holidays)
     message = date_problem(work_date, today)
     body = {
         "date": work_date.isoformat(),
         "dayKind": kind,
+        "dayKindLabel": DAY_KIND_LABELS.get(kind),
         "holidayName": holidays.get(work_date),
         "claimable": message is None,
         "message": message,
         "maxAgeDays": MAX_CLAIM_AGE_DAYS,
         "earliestDate": (today - timedelta(days=MAX_CLAIM_AGE_DAYS)).isoformat(),
-        "enabled": _enabled_block(),
+        "enabled": _enabled_block(request),
         "employees": [],
         "counts": {"worked": 0, "eligible": 0},
     }
@@ -597,6 +683,9 @@ def holiday_work_eligible(request: Request) -> Response:
             staff = staff.filter(department_id=parse_int(q.get("departmentId")))
         scope_ids = staff.values("pk")
         people = None
+    if kind == OFF_SATURDAY and people is None:
+        # only the staff whose own off day this Saturday is (for everybody else it is a working day)
+        scope_ids = list(off_saturday_staff(work_date, list(scope_ids.values_list("pk", flat=True))))
     punches = _punch_rows(work_date, scope_ids)
     on_record = worked_ids(work_date, scope_ids)
     if people is None:

@@ -8,6 +8,7 @@ import {
   indianNumber,
   rowMatches,
   sortRows,
+  type ColumnType,
 } from "./report-format";
 
 describe("indianNumber", () => {
@@ -111,14 +112,33 @@ describe("sortRows", () => {
 
 describe("rowMatches", () => {
   const row = { code: "UKT001", name: "Priya Kumar", dept: null };
-  it("matches case-insensitively across the given keys", () => {
-    expect(rowMatches(row, ["code", "name"], "priya")).toBe(true);
-    expect(rowMatches(row, ["code", "name"], "  UKT ")).toBe(true);
-    expect(rowMatches(row, ["code", "name"], "nope")).toBe(false);
-    expect(rowMatches(row, ["dept"], "x")).toBe(false);
+  const col = (key: string, type: ColumnType = "text") => ({ key, type });
+  const TEXT_COLS = [col("code"), col("name")];
+  it("matches case-insensitively across the given columns", () => {
+    expect(rowMatches(row, TEXT_COLS, "priya")).toBe(true);
+    expect(rowMatches(row, TEXT_COLS, "  UKT ")).toBe(true);
+    expect(rowMatches(row, TEXT_COLS, "nope")).toBe(false);
+    expect(rowMatches(row, [col("dept")], "x")).toBe(false);
   });
   it("matches everything for an empty needle", () => {
-    expect(rowMatches(row, ["code"], "")).toBe(true);
-    expect(rowMatches(row, ["code"], "   ")).toBe(true);
+    expect(rowMatches(row, [col("code")], "")).toBe(true);
+    expect(rowMatches(row, [col("code")], "   ")).toBe(true);
+  });
+  it("finds a value as the table shows it, and as the server sent it", () => {
+    const r = { day: "2026-09-05", net: 1234567.891, late: 125, joined: "2026-09-05 14:30", empty: "" };
+    // dates: the cell reads 05-Sep-2026
+    expect(rowMatches(r, [col("day", "date")], "05-sep")).toBe(true);
+    expect(rowMatches(r, [col("day", "date")], "sep-2026")).toBe(true);
+    expect(rowMatches(r, [col("day", "date")], "2026-09-05")).toBe(true);
+    // money: ₹12,34,567.89 on screen, 1234567.891 in the data
+    expect(rowMatches(r, [col("net", "currency")], "12,34,567")).toBe(true);
+    expect(rowMatches(r, [col("net", "currency")], "₹12")).toBe(true);
+    expect(rowMatches(r, [col("net", "currency")], "1234567")).toBe(true);
+    // durations: 2h 05m
+    expect(rowMatches(r, [col("late", "duration")], "2h 05")).toBe(true);
+    expect(rowMatches(r, [col("joined", "datetime")], "05-sep-2026 14:30")).toBe(true);
+    // number columns are searched too (they used to be skipped), but an empty cell never matches its em dash
+    expect(rowMatches(r, [col("empty", "text")], "—")).toBe(false);
+    expect(rowMatches(r, [col("net", "currency")], "99,99")).toBe(false);
   });
 });

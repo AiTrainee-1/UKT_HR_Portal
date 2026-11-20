@@ -100,8 +100,10 @@ export function NextMorningSection({
   const guarded = effective < cutoff;
   const nightIsOt = on && valid && NIGHT_PUNCH < effective;
   const morningIsArrival = on && valid && MORNING_PUNCH >= effective;
-  // forward-only: never earlier than the saved date (or today, for a date set for the first time)
-  const minDate = savedFrom || today;
+  // both early punches before the cut-off end Monday (as the server judges it): its overtime runs to the later one
+  const otEnd = morningIsArrival ? NIGHT_PUNCH : MORNING_PUNCH;
+  // forward-only: never earlier than the saved date, nor than today (the server refuses a changed date before today)
+  const minDate = savedFrom && savedFrom > today ? savedFrom : today;
 
   const preview = (
     <PreviewCard
@@ -133,7 +135,9 @@ export function NextMorningSection({
             label={`Punch at ${clock(NIGHT_PUNCH)} next morning`}
             result={
               nightIsOt
-                ? `Monday's overtime: from the ${clock(EXAMPLE.end)} shift end until ${clock(NIGHT_PUNCH)} (${span(24 * 60 - EXAMPLE.end + NIGHT_PUNCH)})`
+                ? `Monday's overtime: from the ${clock(EXAMPLE.end)} shift end until ${clock(otEnd)}${
+                    otEnd === NIGHT_PUNCH ? "" : ", its last early punch"
+                  } (${span(24 * 60 - EXAMPLE.end + otEnd)})`
                 : `Tuesday's arrival: it is not before the ${clock(effective)} cut-off`
             }
             tone={nightIsOt ? "good" : "warn"}
@@ -227,7 +231,7 @@ export function NextMorningSection({
           },
           { where: "Staff Payroll", what: "payslips already generated are never rewritten", to: "/hr/payroll" },
         ]}
-        note="It can only be moved later, never back: days already judged keep their old rule."
+        note="It can only be moved later, never back and never before today: days already judged keep their old rule."
       >
         <div className="space-y-1" data-testid="next-morning-from">
           <Input

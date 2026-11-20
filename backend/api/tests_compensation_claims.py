@@ -124,6 +124,11 @@ class ClaimsBase(TestCase):
         )
         self.check = self._patch("check_claim_effects", return_value=None)
         self.after = self._patch("after_claim_decided", return_value=None)
+        # the approval's own evidence refresh (the day worked out again + the OT row brought in step) is the attendance
+        # side too: the OT records below are made by hand with no punches behind them (tests_comp_fix_v covers it for real)
+        refresh = mock.patch.object(claims, "_refresh_evidence", return_value=None)
+        refresh.start()
+        self.addCleanup(refresh.stop)
 
         settings = PayrollSettings.get()
         settings.compensation_feature_enabled = True
@@ -816,7 +821,19 @@ class ListAndAccessTests(ClaimsBase):
         self.assertEqual(body["summary"]["byStatus"]["pending"], 3)
         self.assertEqual(
             sorted(body["enabled"]),
-            sorted(["master", "holidayWork", "workflow", "canRaise", "allowance", "shift", "birthday", "canClaim"]),
+            sorted(
+                [
+                    "master",
+                    "holidayWork",
+                    "workflow",
+                    "canRaise",
+                    "raiseProblem",
+                    "allowance",
+                    "shift",
+                    "birthday",
+                    "canClaim",
+                ]
+            ),
         )
         item = body["items"][0]
         for key in (

@@ -9,6 +9,17 @@ from .reporting import registry
 from .reporting import filters as F
 from .reporting.access import is_md
 from .reporting.types import CATEGORY_IDS, TEXT, ColumnSpec, ReportResult, ReportSpec
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
+
+
+# The 2026-11-19 Report Center layout lists only its own reports; the probes registered here are not in it, so the
+# module lists every report while it runs (the access rules under test do not depend on the layout).
+def setUpModule():
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
 
 
 def headers_for(user: HRUser) -> dict:

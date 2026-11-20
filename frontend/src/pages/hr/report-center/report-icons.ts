@@ -60,6 +60,7 @@ import {
   ClipboardCheck,
   CalendarRange,
   Inbox,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 
@@ -128,6 +129,7 @@ const ICONS: Record<string, LucideIcon> = {
   ClipboardCheck,
   CalendarRange,
   Inbox,
+  SlidersHorizontal, // the Customise category and its saved reports
 };
 
 export function iconFor(name: string | null | undefined): LucideIcon {
@@ -143,6 +145,7 @@ export const CATEGORY_STYLE: Record<string, { chip: string; ring: string; text: 
     dot: "bg-emerald-500",
   },
   attendance: { chip: "bg-sky-50 text-sky-700", ring: "ring-sky-100", text: "text-sky-700", dot: "bg-sky-500" },
+  shift: { chip: "bg-cyan-50 text-cyan-700", ring: "ring-cyan-100", text: "text-cyan-700", dot: "bg-cyan-500" },
   leave: {
     chip: "bg-violet-50 text-violet-700",
     ring: "ring-violet-100",
@@ -159,6 +162,13 @@ export const CATEGORY_STYLE: Record<string, { chip: string; ring: string; text: 
   hr: { chip: "bg-teal-50 text-teal-700", ring: "ring-teal-100", text: "text-teal-700", dot: "bg-teal-500" },
   finance: { chip: "bg-rose-50 text-rose-700", ring: "ring-rose-100", text: "text-rose-700", dot: "bg-rose-500" },
   admin: { chip: "bg-slate-100 text-slate-700", ring: "ring-slate-200", text: "text-slate-700", dot: "bg-slate-500" },
+  // reports the user builds (Customise): purple, apart from every ready-made category
+  customise: {
+    chip: "bg-purple-50 text-purple-700",
+    ring: "ring-purple-100",
+    text: "text-purple-700",
+    dot: "bg-purple-500",
+  },
   // The Managing Director's executive reports (only ever listed for the MD): the MD portal's gold.
   md: {
     chip: "bg-[#fbf3dc] text-[#8a5d00]",

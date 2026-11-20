@@ -30,8 +30,9 @@ def default_recipients() -> dict:
 
 
 class AttendanceNotifySettings(models.Model):
-    """Singleton (pk=1). `connected_number` is the company number the HRMS's WhatsApp is linked to (WAClient does not
-    tell it): an automation can send its report there too ("Send to the connected number")."""
+    """Singleton (pk=1). `connected_number` is a number HR types in on the page (with the WhatsApp Cloud API the company
+    number lives at Meta, not on a phone, so this is usually HR's or the owner's own WhatsApp): an automation can send
+    its report there too ("Send to the connected number")."""
 
     connected_number = models.TextField(blank=True, default="", db_column="connected_number")
     updated_by = models.TextField(blank=True, default="", db_column="updated_by")
@@ -182,7 +183,9 @@ class AttendanceNotifyDelivery(models.Model):
     run = models.ForeignKey(
         AttendanceNotifyRun, on_delete=models.CASCADE, db_column="run_id", related_name="deliveries"
     )
-    kind = models.TextField(db_column="kind")  # connected | number | group | email | chat
+    # connected | number | group | email | chat. "group" only on runs of an automation saved before 2026-11-20: Meta's
+    # templates cannot reach a WhatsApp group, so such a delivery is skipped with the reason (no migration needed).
+    kind = models.TextField(db_column="kind")
     recipient = models.TextField(db_column="recipient")  # phone / group id / "to" addresses / chat channel id
     label = models.TextField(blank=True, default="", db_column="label")
     status = models.TextField(default=STATUS_PENDING, db_column="status")

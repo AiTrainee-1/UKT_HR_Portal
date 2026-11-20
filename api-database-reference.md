@@ -811,8 +811,8 @@ addresses).
   `biometric_connectors.device_control.fetch` ...). View = GET (and `READ_ONLY_POST_PATHS`), Edit = every write, as before.
 - **Checked inside the view** (`VIEW_CHECKED_KEYS`): **GET /api/hr-requests** (and the HoD board) leaves out a kind whose
   `requests.list.<kind>` is hidden (it follows `requests` until set); **reports** (`reporting/access.py`): a report of a
-  category whose `reports.<category>` is hidden is answered as not found and the catalog drops the group (`reports.admin`,
-  `reports.md` stay Super Admin / MD only); **PUT /api/payroll-settings**: `FIELD_GROUPS` now names the Settings SUB-TAB
+  category whose `reports.<category>` is hidden is answered as not found and the catalog drops the group (the groups since
+  2026-11-19: `reports.hr|attendance|shift|payroll|employees|customise`; `reports.md` stays MD only); **PUT /api/payroll-settings**: `FIELD_GROUPS` now names the Settings SUB-TAB
   of each field (`settings.payroll.rates|bonus|ot_compensation`, `settings.attendance.staff`,
   `settings.late_detection.staff|production`, `settings.production_payroll.<cycle>|pay_bonus`); each follows its tab until
   set, so a role can be given one sub-tab of a tab; **hr/hod-reminders/settings** saves need `requests.notify` edit;
@@ -972,10 +972,11 @@ Numbers come from the Report Center's `gate_visitor_tea_common` (the page, the R
 
 The Report Center. All endpoints are `@api_view(["GET"])` + `@require_hr`, branch-scoped through `ReportContext.emp_q()`, and sit under `/api/reports/` (module `reports`).
 
-- **GET /api/reports/catalog** — Every report the caller may run (id, title, description, category, icon, tags, family/variant, filters with resolved defaults, columns, export formats) plus the department/designation/branch option lists and the categories with counts. Reports whose owning modules the role lacks, and admin-only reports for non-super-admins, are omitted.
+- **GET /api/reports/catalog** — Every report the caller may run (id, title, description, category, icon, tags, family/variant, filters with resolved defaults, columns, export formats, `exportLimits` {screen, xlsx, pdf}, `autoRun`) plus the department/designation/branch option lists and the categories with counts. Since 2026-11-19 only the reports `reporting/layout.py` lists appear, in its order (HR Reports, Attendance, Shift, Salary = `payroll`, Employee Details = `employees`), then the saved Customise reports (`custom-<id>`, category `customise`, shown to whoever has `reports.customise` even with none saved) and, for the MD only, the `md` reports. Reports whose owning modules the role lacks are omitted. Every other registered report is retired: not listed, and `run` / `export` answer 404 `not_found`.
 - **GET /api/reports/run/\<id\>?\<filters\>** — Runs one report: `{ id, title, category, generatedAt, generatedBy, filters[] (echo), columns[], rows[], totals, summary[], notes[], rowCount, truncated, limit }`. Filter parameters: `period=YYYY-MM`, `year`, `dateFrom`/`dateTo`, `departmentIds`/`designationIds`/`branchIds`/`employeeIds` (comma lists), `employmentType`, `employeeStatus`, plus report-specific select/boolean/number/text filters. Errors: 400 `invalid_filter` (with `field`), 403 `report_forbidden`, 404 `not_found`, 500 `report_failed`.
 - **GET /api/reports/export/\<id\>?fmt=xlsx|pdf&\<filters\>** — The same data as a file (`Cache-Control: no-store`, audited). 413 `too_many_rows` when the result exceeds the format's limit (PDF 5,000, Excel 30,000).
 - **GET /api/reports/options/employees?q=&ids=&departmentIds=** — Employee picker search (max 40 hits; `ids` resolves chips). Refused for roles that can open no report with an employee filter.
+- **Customise (the report builder, `reporting/custom/views.py`, key `reports.customise`: GET = view, every write = edit)** — **GET /api/reports/custom/datasets** (the five data sources `employees`, `attendance_days`, `punches`, `requests`, `payroll` with their filters, field sections and default fields; a field the role cannot view is left out), **GET /api/reports/custom/preview?dataset=&fields=a,b&sort=key:asc&\<filters\>** (the run payload, 200 rows at most; 400 `field_forbidden` for a field the role cannot view), **GET / POST /api/reports/custom/saved**, **GET / PUT / PATCH / DELETE /api/reports/custom/saved/\<id\>** (delete: the creator or a super admin) and **POST /api/reports/custom/saved/\<id\>/duplicate** ("\<name\> (copy)"). A saved report runs and exports through the normal `run/custom-<id>` and `export/custom-<id>` endpoints, its saved filters being the catalog defaults; every change is audited.
 - **Legacy (deprecated, unused)** — `/api/reports/attendance-log`, `attendance-summary`, `leave`, `leave-balance`, `payroll`, `pf-esi`, `employees`, `headcount`, `settlement`, `new-joinings` (`reports_views.py`) remain for one release only.
 
 ## MD Portal & AI Assistant (api/md_portal/)
@@ -2342,6 +2343,29 @@ One row per gate sign-in attempt (the shared `/gatemonitor` sign-in and the old 
 
 ### ReceptionLoginAttempt (new)
 **Table name:** `reception_login_attempts` — one row per desk sign-in attempt, like `gate_login_attempts` (kept apart: a username is unique per table, so a desk and a gate may share one). Index on `(username, created_at)` (`reception_login_att_user_idx`). Migration 0163.
+
+## Salary Slip page - standalone slips (api/models/salary_slip_center.py, api/salary_slip_center/; migration 0170)
+
+Additive (two new tables). Permission key `salary_slip_center` (API prefix `salary-slip-center/`, route `/hr/salary-slip`). No link to `Payroll` / `SalarySlip` in either direction.
+
+### StandaloneSalarySlip (`standalone_salary_slips`)
+`employee` (FK, CASCADE), `month`, `year` (unique together), `kind` (`staff` | `production`), `slip_number` (`SSL/<code>/<yyyy>/<mm>`), `figures` (JSON: the whole worked-out slip - employee, period, rate, days, earnings, deductions, net, statement columns, calendar, notes, options), `gross`, `deductions`, `net` (12,2), `options` (`{"statutory", "lateDeductions", "advances"}`), `counted_to` (date), `generated_at`, `generated_by` (FK HRUser, SET_NULL) + `generated_by_name`.
+
+### StandaloneSalaryHold (`standalone_salary_holds`)
+`employee`, `month`, `year` (unique together), `reason`, `held_at`, `held_by` (FK HRUser, SET_NULL) + `held_by_name`. A row = on hold for that month.
+
+### Endpoints (`/api/salary-slip-center/...`, HR only, branch-scoped)
+| Method | Path | What |
+|---|---|---|
+| GET | `employees?month=&year=` | every employee (active and inactive) with `category`, `status`, department / designation / unit, `isNewJoiner`, hold, salary, `payIssue`, `bankAccountMasked`, `bankIssue`, the saved `slip` summary; plus `departments`, `designations`, `units`, `canEdit`, `defaultOptions`, `inProgress` |
+| GET | `preview?month=&year=&employeeId=&statutory=&late=&advances=` | the month worked out now, not saved (`{"result": SlipResult}`) |
+| GET | `slip?month=&year=&employeeId=` | the saved slip (404 when not generated) |
+| POST | `generate` `{month, year, employeeIds (max 50), options}` | work out and save; `{"generated": [...], "skipped": [{employeeId, code, name, reason}]}` (edit) |
+| POST | `hold` `{month, year, employeeIds, hold, reason}` | Hold / Release (edit) |
+| GET | `bank-check?month=&year=&ids=` | `{"included", "total", "leftOut": [{..., reason}]}` |
+| GET | `download/slips?...&ids=&layout=single\|double` | PDF (409 `missing` when a slip is not generated) |
+| GET | `download/statement?...&ids=&fmt=pdf\|xlsx` | Salary Statement |
+| GET | `download/bank-file?...&ids=` | bank template .xlsx (audited) |
 
 ## Settings & Configuration
 

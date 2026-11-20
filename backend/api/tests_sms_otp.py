@@ -1,15 +1,20 @@
 """
-SMS one-time codes through 2Factor: configuration, the send pipeline (caps, per-number cap, circuit breaker) and the
-whole OTP flow with the SMS channel active (the HTTP client itself: tests_twofactor.py). 2Factor is NEVER contacted: every
-test mocks the one HTTP call (`requests.get` as seen by api.twofactor_client) and a guard turns any real network connection into a failure.
+SMS one-time codes through 2Factor: configuration, the send pipeline (caps, per-number cap, circuit breaker, the
+development lock SMS_ONLY_TO_EMPLOYEES), the balance, "SMS is for codes only", and the whole OTP flow with SMS codes
+switched on and WhatsApp codes off (the HTTP client itself: tests_twofactor.py). 2Factor is NEVER contacted: every test
+mocks the one HTTP call (`requests.get` as seen by api.twofactor_client) and a guard turns any real network connection
+into a failure.
 
-The WhatsApp channel's behaviour is pinned by tests_otp.py (unchanged apart from the additive `otpChannel` key).
+The WhatsApp channel's behaviour is pinned by tests_otp.py, both channels together by tests_otp_channels.py.
 """
 
+import ast
 import logging
+import os
 import re
 import sys
 import threading
+from pathlib import Path
 import time as time_module
 from contextlib import contextmanager
 from datetime import datetime, time, timedelta
@@ -25,7 +30,7 @@ from django.utils import timezone
 
 from . import otp_service, sms_service, twofactor_client
 from .clock import FACTORY_TZ
-from .models import Employee, EmployeeOtp, SmsMessageLog, SmsSettings, WhatsAppSettings
+from .models import Employee, EmployeeOtp, SmsMessageLog, SmsSettings, WhatsAppSettings, WhatsAppTemplate
 
 TF_KEY = "3f2a91c0-7b6e-11ef-8b3d-0200cd936042"
 TEMPLATE_NAME = "UKT_HRMS_OTP"
@@ -39,8 +44,6 @@ SMS_CONFIG = dict(
     SMS_COUNTRY_CODE="91",
     SMS_ALLOW_SENDING=True,
     WHATSAPP_DEFAULT_COUNTRY_CODE="91",
-    WACLIENT_INSTANCE_ID="INST1234",
-    WACLIENT_ACCESS_TOKEN="tok",
 )
 GET = "api.twofactor_client.requests.get"
 
@@ -295,7 +298,10 @@ class SmsBase(NoNetworkMixin, TestCase):
         self.emp = Employee.objects.create(
             employee_code="E100", first_name="Asha", last_name="Kumar", phone="82200 15110", status="active"
         )
-        self.configure(otp_channel="sms")
+        self.configure(otp_enabled=True)
+        # SMS alone: WhatsApp codes off (they could not be delivered here anyway: no WhatsApp provider, no approved
+        # template), so every answer below is SMS's
+        WhatsAppSettings.objects.update_or_create(pk=1, defaults={"otp_enabled": False})
 
     def configure(self, **values):
         SmsSettings.objects.update_or_create(pk=1, defaults=values)
@@ -324,7 +330,7 @@ class SmsBase(NoNetworkMixin, TestCase):
 
 
 class LoginOptionsMatrixTests(SmsBase):
-    def test_sms_channel_advertises_otp_when_configured_and_names_the_channel(self):
+    def test_sms_advertises_otp_when_configured_and_names_the_channel(self):
         self.assertEqual(
             self.options(),
             {
@@ -334,16 +340,21 @@ class LoginOptionsMatrixTests(SmsBase):
                 "passwordLogin": True,
                 "otpChannel": "sms",
                 "codeLength": 4,
+                "otpChannels": {"login": ["sms"], "reset": ["sms"], "activate": ["sms"]},
+                "channels": {"sms": {"name": "SMS", "codeLength": 4}},
             },
         )
 
-    def test_whatsapp_channel_is_the_default_and_says_so(self):
-        self.configure(otp_channel="whatsapp")
+    def test_the_sms_codes_switch_turns_every_sms_code_off_at_once(self):
+        self.configure(otp_enabled=False)
         body = self.options()
-        self.assertEqual(body["otpChannel"], "whatsapp")
-        self.assertEqual((body["otpLogin"], body["otpReset"], body["otpActivate"]), (True, True, True))
+        self.assertEqual((body["otpLogin"], body["otpReset"], body["otpActivate"]), (False, False, False))
+        self.assertEqual((body["otpChannel"], body["channels"]), (None, {}))
+        self.assertTrue(body["passwordLogin"])
+        self.configure(otp_enabled=True)  # ... and back on: the very next read says so (nothing is cached)
+        self.assertEqual(self.options()["otpChannels"]["login"], ["sms"])
 
-    def test_nothing_is_advertised_while_the_active_channel_cannot_send(self):
+    def test_nothing_is_advertised_while_sms_cannot_send(self):
         for override in (
             dict(TWOFACTOR_API_KEY=""),
             dict(TWOFACTOR_API_KEY="your_2factor_api_key_here"),
@@ -355,19 +366,19 @@ class LoginOptionsMatrixTests(SmsBase):
                 body = self.options()
                 self.assertEqual((body["otpLogin"], body["otpReset"], body["otpActivate"]), (False, False, False))
                 self.assertTrue(body["passwordLogin"])  # nobody is locked out
-                self.assertEqual(body["otpChannel"], "sms")
+                self.assertIsNone(body["otpChannel"])
 
-    def test_the_active_channel_decides_not_the_other_one(self):
-        # SMS selected, WhatsApp configured but 2Factor not: no OTP
-        with override_settings(TWOFACTOR_API_KEY=""):
-            self.assertFalse(self.options()["otpLogin"])
-        # WhatsApp selected, 2Factor configured but WhatsApp not: no OTP
-        self.configure(otp_channel="whatsapp")
-        with override_settings(WACLIENT_INSTANCE_ID="", WACLIENT_ACCESS_TOKEN=""):
-            self.assertFalse(self.options()["otpLogin"])
-        # ... and 2Factor being unconfigured does not hurt WhatsApp
-        with override_settings(TWOFACTOR_API_KEY=""):
-            self.assertTrue(self.options()["otpLogin"])
+    def test_no_whatsapp_setting_changes_sms(self):
+        for values in (
+            {"engine_enabled": False},
+            {"otp_login_enabled": False, "otp_reset_enabled": False, "otp_activate_enabled": False},
+            {"otp_expiry_minutes": 1},
+        ):
+            with self.subTest(values):
+                WhatsAppSettings.objects.filter(pk=1).update(**values)
+                self.assertEqual(
+                    self.options()["otpChannels"], {"login": ["sms"], "reset": ["sms"], "activate": ["sms"]}
+                )
 
     def test_each_sms_switch_is_independent(self):
         for field, key in (
@@ -381,12 +392,12 @@ class LoginOptionsMatrixTests(SmsBase):
             self.assertEqual(sum(body[k] for k in ("otpLogin", "otpReset", "otpActivate")), 2)
             self.configure(**{field: True})
 
-    def test_the_sms_switches_rule_while_sms_is_active_and_the_whatsapp_ones_while_whatsapp_is(self):
-        WhatsAppSettings.objects.update_or_create(pk=1, defaults={"otp_login_enabled": False})
-        self.assertTrue(self.options()["otpLogin"])  # SMS active: the WhatsApp switch is irrelevant
-        self.configure(otp_channel="whatsapp", otp_login_enabled=False)
+    def test_the_sms_switches_are_smss_own(self):
+        WhatsAppSettings.objects.update_or_create(pk=1, defaults={"otp_login_enabled": False, "otp_enabled": True})
+        self.assertTrue(self.options()["otpLogin"])  # the WhatsApp switch is not SMS's
+        self.configure(otp_login_enabled=False)
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"otp_login_enabled": True})
-        self.assertTrue(self.options()["otpLogin"])  # WhatsApp active: the SMS switch is irrelevant
+        self.assertFalse(self.options()["otpLogin"])  # SMS's own switch rules SMS
 
     def test_password_login_can_be_off_only_while_sms_codes_really_work(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"password_login_enabled": False})
@@ -395,28 +406,28 @@ class LoginOptionsMatrixTests(SmsBase):
             self.assertTrue(self.options()["passwordLogin"])
         self.configure(otp_login_enabled=False)
         self.assertTrue(self.options()["passwordLogin"])
+        self.configure(otp_login_enabled=True, otp_enabled=False)
+        self.assertTrue(self.options()["passwordLogin"])
 
-    def test_password_sign_in_refusal_and_activation_text_name_the_active_channel(self):
+    def test_password_sign_in_refusal_and_activation_text_name_sms(self):
         self.emp.password_hash = bcrypt.hashpw(b"correct-horse", bcrypt.gensalt(rounds=4)).decode()
         self.emp.save()
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"password_login_enabled": False})
         r = self.post("employee-login", {"identifier": "E100", "password": "correct-horse"})
         self.assertEqual(r.status_code, 403)
-        self.assertIn("SMS", r.json()["error"])
-        self.assertNotIn("WhatsApp", r.json()["error"])
+        self.assertEqual(r.json()["error"], "Password sign-in is turned off. Please sign in with an SMS code.")
         with override_settings(TWOFACTOR_API_KEY=""):
             self.assertEqual(
                 self.post("employee-login", {"identifier": "E100", "password": "correct-horse"}).status_code, 200
             )
-        self.configure(otp_channel="whatsapp")
-        r = self.post("employee-login", {"identifier": "E100", "password": "correct-horse"})
-        self.assertEqual(r.status_code, 403)
-        self.assertIn("WhatsApp", r.json()["error"])
 
     def test_a_stranger_cannot_set_a_first_password_while_sms_activation_is_on(self):
         r = self.post("set-password", {"identifier": "E100", "password": "attacker-pass"})
         self.assertEqual(r.status_code, 403)
-        self.assertIn("SMS", r.json()["error"])
+        self.assertEqual(
+            r.json()["error"],
+            "Please confirm the code we send by SMS to your registered mobile number to set your password.",
+        )
         self.assertFalse(Employee.objects.get(pk=self.emp.pk).password_hash)
         # not configured -> the old open setup stays, nobody is locked out
         with override_settings(TWOFACTOR_API_KEY=""):
@@ -427,7 +438,7 @@ class LoginOptionsMatrixTests(SmsBase):
 
 class RequestOtpBySmsTests(SmsBase):
     def test_the_code_goes_by_sms_to_the_registered_number_and_the_answer_names_the_channel(self):
-        with mock.patch("api.whatsapp_service.send_notification") as whatsapp:
+        with mock.patch("api.otp_service._send_whatsapp_code") as whatsapp:
             r, code, post = self.request_code()
         self.assertEqual(r.status_code, 200)
         body = r.json()
@@ -440,6 +451,7 @@ class RequestOtpBySmsTests(SmsBase):
                 "resendAfterSeconds": 60,
                 "channel": "sms",
                 "codeLength": 4,
+                "otherChannels": [],
             },
         )
         whatsapp.assert_not_called()
@@ -448,23 +460,28 @@ class RequestOtpBySmsTests(SmsBase):
         self.assertRegex(code, r"^\d{4}$")  # the template says XXXX: four digits by SMS
         self.assertNotIn("8220015110", str(body))
         self.assertNotIn(code, r.content.decode())
+        self.assertEqual(EmployeeOtp.objects.get().channel, "sms")
 
-    def test_the_whatsapp_channel_still_uses_whatsapp_and_never_calls_2factor(self):
-        self.configure(otp_channel="whatsapp")
-        ok = mock.Mock(status_code=200, content=b"x", text="")
-        ok.json.return_value = {"status": "success", "message_payload": {"key": {"id": "WAID"}}}
-        with (
-            mock.patch("api.twofactor_client.send_otp") as twofactor,
-            mock.patch("api.whatsapp_service.requests.post", return_value=ok) as whatsapp,
-        ):
-            r = self.post("otp/request", {"employeeCode": "E100"})
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["message"], "We've sent a code to your WhatsApp.")
-        self.assertEqual(r.json()["channel"], "whatsapp")
-        self.assertEqual(r.json()["codeLength"], 6)
-        twofactor.assert_not_called()
-        whatsapp.assert_called_once()
-        self.assertFalse(SmsMessageLog.objects.exists())
+    def test_an_older_app_that_names_no_channel_gets_sms_and_one_that_names_sms_too(self):
+        r, _, _ = self.request_code()
+        self.assertEqual(r.json()["channel"], "sms")
+        EmployeeOtp.objects.all().delete()
+        with mock.patch(GET, return_value=provider_ok()):
+            r = self.post("otp/request", {"employeeCode": "E100", "purpose": "login", "channel": "sms"})
+        self.assertEqual((r.status_code, r.json()["channel"]), (200, "sms"))
+        with mock.patch(GET) as get:
+            r = self.post("otp/request", {"employeeCode": "E100", "purpose": "reset", "channel": "whatsapp"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(
+            r.json(),
+            {
+                "error": "WhatsApp codes aren't available right now. Please choose SMS.",
+                "message": "WhatsApp codes aren't available right now. Please choose SMS.",
+                "code": "channel_unavailable",
+                "availableChannels": ["sms"],
+            },
+        )
+        get.assert_not_called()
 
     def test_the_code_signs_in_and_nothing_stores_it(self):
         r, code, _ = self.request_code()
@@ -568,12 +585,15 @@ class RequestOtpBySmsTests(SmsBase):
         self.assertEqual(SmsMessageLog.objects.get().status, "failed")  # ... and no longer counted once it failed
 
     def test_refused_without_any_request_when_off_unconfigured_or_not_allowed(self):
-        self.configure(otp_login_enabled=False)
-        r, _, post = self.request_code()
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(r.json()["error"], "SMS OTP is turned off. Please use your password or contact HR.")
-        post.assert_not_called()
-        self.configure(otp_login_enabled=True)
+        for off in ({"otp_login_enabled": False}, {"otp_enabled": False}):
+            self.configure(**off)
+            r, _, post = self.request_code()
+            self.assertEqual(r.status_code, 403, off)
+            self.assertEqual(
+                r.json()["error"], "One-time codes are turned off. Please use your password or contact HR."
+            )
+            post.assert_not_called()
+            self.configure(otp_login_enabled=True, otp_enabled=True)
         for override in (
             dict(TWOFACTOR_API_KEY=""),
             dict(TWOFACTOR_TEMPLATE_NAME="your_2factor_template_name_here"),
@@ -735,8 +755,8 @@ class CodeLengthTests(SmsBase):
     combinations, so the same tests pin what stops a guesser: the wrong-attempt cap, single use, the per-employee request
     caps (hourly AND daily for SMS) and that a new code never gives back the guesses of an old one."""
 
-    def make_row(self, code, length, purpose="login"):
-        """A live code row exactly as request_otp stores one (so a code can exist on either channel whatever is active)."""
+    def make_row(self, code, length, purpose="login", channel=None):
+        """A live code row exactly as request_otp stores one (so a code can exist on either channel whatever is on)."""
         return EmployeeOtp.objects.create(
             employee=self.emp,
             purpose=purpose,
@@ -744,6 +764,7 @@ class CodeLengthTests(SmsBase):
             phone_number="918220015110",
             expires_at=timezone.now() + timedelta(minutes=5),
             code_length=length,
+            channel=channel if channel is not None else ("sms" if length == 4 else "whatsapp"),
         )
 
     def login(self, code):
@@ -758,32 +779,21 @@ class CodeLengthTests(SmsBase):
         self.assertEqual(otp_service.code_length("something-else"), 6)
         self.assertEqual(otp_service.code_length(None), 6)
 
-    def test_options_and_request_answers_carry_the_length_of_the_active_channel(self):
+    def test_options_and_request_answers_carry_the_length_of_the_channel(self):
         self.assertEqual(self.options()["codeLength"], 4)
+        self.assertEqual(self.options()["channels"]["sms"]["codeLength"], 4)
         r, code, _ = self.request_code()
         self.assertEqual((r.json()["codeLength"], len(code), EmployeeOtp.objects.get().code_length), (4, 4, 4))
-        self.configure(otp_channel="whatsapp")
-        self.assertEqual(self.options()["codeLength"], 6)
+        self.configure(otp_enabled=False)
+        self.assertEqual(self.options()["codeLength"], 6)  # no channel: older apps get the 6 they always had
 
-    def test_the_whatsapp_channel_keeps_six_digits(self):
-        self.configure(otp_channel="whatsapp")
-        ok = mock.Mock(status_code=200, content=b"x", text="")
-        ok.json.return_value = {"status": "success", "message_payload": {"key": {"id": "WAID"}}}
-        with mock.patch("api.whatsapp_service.requests.post", return_value=ok) as post:
-            r = self.post("otp/request", {"employeeCode": "E100"})
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["codeLength"], 6)
-        code = re.search(r"\b(\d{6})\b", post.call_args.kwargs["json"]["message"]).group(1)
-        self.assertEqual(EmployeeOtp.objects.get().code_length, 6)
-        self.assertEqual(self.login(code).status_code, 200)
-
-    def test_a_code_of_the_wrong_shape_is_refused_with_the_active_channels_length(self):
+    def test_a_code_of_the_wrong_shape_is_refused_with_the_channels_length(self):
         for bad in ("123", "12345", "123456a", "١٢٣٤", " ", "12 34", None, 1234, ["1234"]):
             r = self.login(bad)
             self.assertEqual(r.status_code, 400, bad)
             self.assertEqual(r.json()["error"], "Enter the 4-digit code.", bad)
-        self.configure(otp_channel="whatsapp")
-        self.assertEqual(self.login("1234567").json()["error"], "Enter the 6-digit code.")
+        self.configure(otp_enabled=False)
+        self.assertEqual(self.login("1234567").json()["error"], "Enter the code we sent you.")
 
     def test_a_four_digit_sms_code_is_dead_after_the_attempt_cap(self):
         _, code, _ = self.request_code()
@@ -797,14 +807,14 @@ class CodeLengthTests(SmsBase):
 
     def test_the_sms_attempt_cap_cannot_be_set_above_five_not_even_by_a_row_saved_earlier(self):
         self.configure(max_attempts_per_code=10)  # what the page used to allow
-        self.assertEqual(otp_service.resolve().max_attempts_per_code, 5)
+        self.assertEqual(otp_service.resolve("sms").max_attempts_per_code, 5)
         _, code, _ = self.request_code()
         wrong = self.wrong_code(code)
         for _ in range(5):
             self.login(wrong)
         self.assertEqual(self.login(code).status_code, 429)
         self.configure(max_attempts_per_code=3)  # a stricter page setting still wins
-        self.assertEqual(otp_service.resolve().max_attempts_per_code, 3)
+        self.assertEqual(otp_service.resolve("sms").max_attempts_per_code, 3)
 
     def test_a_new_code_does_not_give_the_old_one_back_and_requests_are_what_bounds_the_guesses(self):
         """Every resend starts a fresh code with fresh attempts, so what bounds the guesses is how many codes can be
@@ -847,23 +857,32 @@ class CodeLengthTests(SmsBase):
         post.assert_not_called()
 
     def test_the_daily_limit_is_for_sms_only_and_the_whatsapp_limits_are_unchanged(self):
-        self.configure(otp_channel="whatsapp")
-        cfg = otp_service.resolve()
+        cfg = otp_service.resolve("whatsapp")
         self.assertEqual(
             (cfg.max_requests_per_day, cfg.max_attempts_per_code, cfg.max_requests_per_hour, cfg.code_length),
             (None, 5, 5, 6),
         )
+        self.assertEqual(otp_service.resolve("sms").max_requests_per_day, 10)
 
-    def test_a_code_issued_by_sms_still_works_after_the_channel_is_switched_to_whatsapp(self):
+    def test_a_code_issued_by_sms_still_works_after_sms_codes_are_switched_off(self):
         _, code, _ = self.request_code()
-        self.configure(otp_channel="whatsapp")
+        self.configure(otp_enabled=False)
         self.assertEqual(self.options()["codeLength"], 6)
         self.assertEqual(self.login(code).status_code, 200)  # 4 digits, issued as 4
 
-    def test_a_code_issued_by_whatsapp_still_works_after_the_channel_is_switched_to_sms(self):
+    def test_a_code_issued_by_whatsapp_still_works_while_only_sms_is_on(self):
         self.make_row("482913", 6)
         self.assertEqual(self.options()["codeLength"], 4)
         self.assertEqual(self.login("482913").status_code, 200)  # 6 digits, issued as 6
+
+    def test_a_row_from_before_the_channel_column_gets_its_channels_attempt_limit_by_its_length(self):
+        self.configure(max_attempts_per_code=3)
+        row = self.make_row("4829", 4, channel="")
+        self.assertEqual(otp_service.row_channel(row), "sms")
+        for _ in range(3):
+            self.assertEqual(self.login("0000").status_code, 400)
+        self.assertEqual(self.login("4829").status_code, 429)  # SMS's 3, not WhatsApp's 5
+        self.assertEqual(otp_service.row_channel(self.make_row("482913", 6, channel="")), "whatsapp")
 
     def test_the_other_length_is_not_a_back_door_to_a_code_of_the_active_length(self):
         # a live 6-digit code is not opened by its first four digits (nor a 4-digit code by anything of 6)
@@ -1217,14 +1236,6 @@ class CapAndBreakerNeverLockEverybodyOutTests(SmsBase):
         self.assertEqual(r.status_code, 403)
         self.assertFalse(Employee.objects.get(pk=fresh.pk).password_hash)
 
-    def test_the_whatsapp_channel_ignores_the_sms_caps(self):
-        self.put_in_state("hour cap")
-        self.configure(otp_channel="whatsapp")
-        self.assertFalse(self.options()["passwordLogin"])  # WhatsApp codes work: the SMS cap is irrelevant
-        self.assertEqual(
-            self.post("employee-login", {"identifier": "E100", "password": "correct-horse"}).status_code, 403
-        )
-
     def test_password_login_on_is_unchanged_by_the_cap_state(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"password_login_enabled": True})
         for state in self.STATES:
@@ -1243,16 +1254,17 @@ class ConcurrentRequestsTests(NoNetworkMixin, TransactionTestCase):
         self.emp = Employee.objects.create(
             employee_code="E100", first_name="Asha", last_name="Kumar", phone="82200 15110", status="active"
         )
-        SmsSettings.objects.update_or_create(pk=1, defaults={"otp_channel": "sms"})
+        SmsSettings.objects.update_or_create(pk=1, defaults={"otp_enabled": True})
+        WhatsAppSettings.objects.update_or_create(pk=1, defaults={"otp_enabled": False})
 
-    def burst(self, threads=12):
+    def burst(self, threads=12, channel=None):
         results, barrier = [], threading.Barrier(threads)
 
         def worker():
             try:
                 barrier.wait(timeout=20)
                 try:
-                    otp_service.request_otp("E100", "login", "10.1.1.1")
+                    otp_service.request_otp("E100", "login", "10.1.1.1", channel=channel)
                     results.append("ok")
                 except otp_service.OtpError as exc:
                     results.append(exc.status)
@@ -1294,17 +1306,21 @@ class ConcurrentRequestsTests(NoNetworkMixin, TransactionTestCase):
         self.assertEqual(SmsMessageLog.objects.filter(status="sent").count(), 1)
 
     def test_twelve_simultaneous_requests_send_one_whatsapp_message_too(self):
-        SmsSettings.objects.update_or_create(pk=1, defaults={"otp_channel": "whatsapp"})
+        WhatsAppSettings.objects.update_or_create(pk=1, defaults={"otp_enabled": True})
+        WhatsAppTemplate.objects.create(name=otp_service.whatsapp_template_name("login"), status="APPROVED")
         sent, lock = [], threading.Lock()
 
         def slow_send(*args, **kwargs):
             with lock:
                 sent.append(1)
             time_module.sleep(0.4)
-            return mock.Mock(status="sent")
+            return True
 
-        with mock.patch("api.whatsapp_service.send_notification", side_effect=slow_send):
-            results = self.burst()
+        with (
+            mock.patch("api.whatsapp_service.is_configured", return_value=True),
+            mock.patch("api.otp_service._send_whatsapp_code", side_effect=slow_send),
+        ):
+            results = self.burst(channel="whatsapp")
         self.assertEqual(sorted(results, key=str), [429] * 11 + ["ok"], results)
         self.assertEqual(len(sent), 1)
         self.assertEqual(EmployeeOtp.objects.count(), 1)
@@ -1320,14 +1336,60 @@ class OverviewHelpersTests(SmsBase):
         self.assertEqual(used["hourUsed"], 1)
         self.assertEqual(used["dayUsed"], 2)
 
-    def test_the_balance_card_never_calls_2factor_and_says_where_to_look(self):
-        with mock.patch(GET) as post:
+    def test_the_balance_is_read_from_2factor_once_and_cached(self):
+        with mock.patch(GET, return_value=FakeResponse(200, {"Status": "Success", "Details": "194"})) as get:
             card = sms_service.balance()
-        post.assert_not_called()
-        self.assertEqual((card["available"], card["checkedAt"]), (None, None))
-        self.assertIn("2Factor panel", card["error"])
+            again = sms_service.balance()
+        get.assert_called_once()  # the second read came from the cache (the overview polls)
+        self.assertEqual(get.call_args.args, (f"{BASE}/{TF_KEY}/BAL/SMS",))
+        self.assertEqual((card["credits"], card["available"], card["error"]), (194, 194, None))
+        self.assertTrue(card["checkedAt"])
+        self.assertEqual(again, card)
+        with mock.patch(GET, return_value=FakeResponse(200, {"Status": "Success", "Details": "180"})) as get:
+            self.assertEqual(sms_service.balance(refresh=True)["credits"], 180)
+        get.assert_called_once()
+
+    def test_a_failed_balance_read_is_a_sentence_never_the_key(self):
+        for response, side_effect in (
+            (provider_error(f"Invalid API Key {TF_KEY}"), None),
+            (FakeResponse(200, {"Status": "Success", "Details": "lots"}), None),
+            (None, requests.exceptions.ConnectionError(f"url /API/V1/{TF_KEY}/BAL/SMS")),
+            (None, RuntimeError(f"bug {TF_KEY}")),
+        ):
+            with self.subTest(response=response, side_effect=side_effect):
+                cache.clear()
+                with captured_logs() as lines, mock.patch(GET, return_value=response, side_effect=side_effect):
+                    card = sms_service.balance()
+                self.assertIsNone(card["credits"])
+                self.assertTrue(card["error"])
+                self.assertNotIn(TF_KEY, card["error"] + "\n".join(lines))
+
+    def test_no_balance_read_while_2factor_is_not_set_up_and_the_empty_note_after_a_balance_refusal(self):
+        with override_settings(TWOFACTOR_API_KEY=""), mock.patch(GET) as get:
+            card = sms_service.balance()
+        get.assert_not_called()
+        self.assertEqual(
+            card, {"credits": None, "available": None, "checkedAt": None, "error": sms_service.BALANCE_NOT_SET_UP}
+        )
         SmsMessageLog.objects.create(purpose="login", status="failed", error_code="balance", error="x")
-        self.assertIn("no balance", sms_service.balance()["error"])
+        with mock.patch(GET, return_value=FakeResponse(200, {"Status": "Success", "Details": "0"})):
+            self.assertIn("no balance", sms_service.balance()["error"])
+
+    def test_the_cost_price_is_hrs_or_the_default(self):
+        self.assertEqual(sms_service.price_per_sms(), sms_service.DEFAULT_PRICE_PER_SMS)
+        self.assertEqual(str(sms_service.DEFAULT_PRICE_PER_SMS), "0.20")
+        self.configure(price_per_sms="0.1750")
+        self.assertEqual(str(sms_service.price_per_sms()), "0.1750")
+
+    def test_the_pause_reason_names_what_holds_sms(self):
+        self.assertIsNone(sms_service.pause_reason())
+        self.configure(hourly_cap=1)
+        SmsMessageLog.objects.create(purpose="login", status="sent", created_at=timezone.now())
+        self.assertEqual(sms_service.pause_reason(), "The hourly limit of 1 SMS is used up.")
+        SmsMessageLog.objects.all().delete()
+        for _ in range(3):
+            SmsMessageLog.objects.create(purpose="login", status="failed", error_code="timeout")
+        self.assertIn("paused until", sms_service.pause_reason())
 
 
 class TestMessageTests(SmsBase):
@@ -1342,6 +1404,19 @@ class TestMessageTests(SmsBase):
             ("test", "•" * 8 + "3210", None, "10.0.0.5"),
         )
 
+    def test_a_test_to_an_employee_goes_to_their_registered_number_through_send_otp(self):
+        with (
+            mock.patch("api.sms_service.send_otp", wraps=sms_service.send_otp) as send,
+            mock.patch(GET, return_value=provider_ok()) as get,
+        ):
+            result = sms_service.send_test(None, None, "10.0.0.5", employee=self.emp)
+        self.assertTrue(result.ok)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[1:3], ("test", "1234"))
+        self.assertEqual(get.call_args.args, (f"{BASE}/{TF_KEY}/SMS/+918220015110/1234/{TEMPLATE_NAME}",))
+        log = SmsMessageLog.objects.get()
+        self.assertEqual((log.purpose, log.employee_id), ("test", self.emp.id))
+
     def test_send_test_refuses_garbage_and_an_unconfigured_server_without_a_request(self):
         with mock.patch(GET) as post:
             self.assertEqual(sms_service.send_test("12345", None).kind, "invalid_number")
@@ -1351,3 +1426,154 @@ class TestMessageTests(SmsBase):
         self.assertEqual(result.kind, "not_configured")
         self.assertIn("TWOFACTOR_API_KEY", result.detail)
         self.assertFalse(SmsMessageLog.objects.exists())
+
+
+# ── SMS_ONLY_TO_EMPLOYEES: what a development machine may text ─────────────
+
+
+class DevLockTests(SmsBase):
+    """`manage.py runserver` texts only the employees named in SMS_ONLY_TO_EMPLOYEES (exactly like WhatsApp's lock);
+    anywhere else the variable is ignored."""
+
+    def setUp(self):
+        super().setUp()
+        self.other = Employee.objects.create(
+            employee_code="E200", first_name="Ravi", last_name="S", phone="98765 43210", status="active"
+        )
+        patcher = mock.patch.object(sys, "argv", ["manage.py", "runserver"])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        environ = mock.patch.dict(os.environ)
+        environ.start()
+        self.addCleanup(environ.stop)
+        os.environ.pop("RAILWAY_ENVIRONMENT", None)
+        os.environ.pop("RAILWAY_ENVIRONMENT_NAME", None)
+
+    def test_the_test_runner_blanks_the_list(self):
+        self.assertEqual(dj_settings.SMS_ONLY_TO_EMPLOYEES, [])
+
+    @override_settings(SMS_ONLY_TO_EMPLOYEES=["E100"])
+    def test_only_the_named_employee_gets_a_code(self):
+        self.assertTrue(sms_service.local_dev_server())
+        self.assertEqual(self.request_code("E100")[0].status_code, 200)
+        r, _, get = self.request_code("E200")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(
+            r.json()["error"],
+            "Not sent (development safety): this machine may only text employee E100 (SMS_ONLY_TO_EMPLOYEES).",
+        )
+        get.assert_not_called()
+        blocked = SmsMessageLog.objects.get(status="blocked")
+        self.assertEqual((blocked.error_code, blocked.employee_id), ("dev_lock", self.other.id))
+        self.assertFalse(EmployeeOtp.objects.filter(employee=self.other).exists())
+        self.assertEqual(sms_service.circuit(), (False, None))  # a lock refusal never pauses SMS for everybody
+
+    @override_settings(SMS_ONLY_TO_EMPLOYEES=["E100"])
+    def test_a_test_sms_is_held_to_the_same_lock(self):
+        with mock.patch(GET, return_value=provider_ok()) as get:
+            refused = sms_service.send_test("98765 43210", None)
+            allowed = sms_service.send_test(None, None, employee=self.emp)
+        self.assertEqual((refused.ok, refused.status, refused.kind), (False, "blocked", "dev_lock"))
+        self.assertTrue(allowed.ok)
+        get.assert_called_once()
+
+    def test_nobody_named_means_nothing_is_sent_and_sms_is_not_offered(self):
+        self.assertIn("SMS_ONLY_TO_EMPLOYEES", sms_service.sending_block_reason())
+        self.assertFalse(sms_service.is_available())
+        self.assertEqual(self.options()["otpChannels"]["login"], [])
+        r, _, get = self.request_code("E100")
+        self.assertEqual(r.status_code, 503)
+        get.assert_not_called()
+
+    def test_a_local_fake_2factor_needs_no_list(self):
+        with override_settings(TWOFACTOR_API_BASE="http://127.0.0.1:8192/API/V1"):
+            self.assertIsNone(sms_service.sending_block_reason())
+            self.assertIsNone(sms_service.allowed_numbers())
+            r, _, _ = self.request_code("E200")
+        self.assertEqual(r.status_code, 200)
+
+    @override_settings(SMS_ONLY_TO_EMPLOYEES=["E100"])
+    def test_ignored_on_a_real_server(self):
+        for argv, env in ((["gunicorn"], {}), (["manage.py", "runserver"], {"RAILWAY_ENVIRONMENT": "production"})):
+            with (
+                self.subTest(argv=argv, env=env),
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.dict(os.environ, env),
+            ):
+                self.assertFalse(sms_service.local_dev_server())
+                self.assertEqual(sms_service.recipient_codes(), [])
+                self.assertIsNone(sms_service.allowed_numbers())
+                self.assertIsNone(sms_service.recipient_block_reason("919876543210"))
+
+
+# ── SMS is for one-time codes only ──────────────────────────────────────────
+
+
+class SmsIsOnlyForCodesTests(SimpleTestCase):
+    """The owner's rule: SMS carries one-time codes (sign-in, password reset, activation) and nothing else. The only way
+    an SMS can leave is sms_service.send_otp -> twofactor_client.send_otp, and only digits can travel."""
+
+    API = Path(__file__).resolve().parent
+
+    def sources(self):
+        for path in sorted(self.API.rglob("*.py")):
+            rel = path.relative_to(self.API).as_posix()
+            if rel.startswith("tests") or "/tests" in rel or "migrations/" in rel:
+                continue
+            yield rel, path.read_text(encoding="utf-8")
+
+    def test_no_module_but_sms_service_talks_to_2factor(self):
+        importers = []
+        for rel, text in self.sources():
+            try:
+                tree = ast.parse(text)
+            except SyntaxError:  # pragma: no cover - a file somebody is editing right now
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                    continue
+                names = [a.name for a in node.names]
+                if (
+                    isinstance(node, ast.ImportFrom)
+                    and ((node.module or "").endswith("twofactor_client") or "twofactor_client" in names)
+                ) or (isinstance(node, ast.Import) and any(n.endswith("twofactor_client") for n in names)):
+                    importers.append(rel)
+                    break
+        self.assertEqual(importers, ["sms_service.py"])
+
+    def test_the_only_sends_are_send_otp_and_the_test_that_goes_through_it(self):
+        tree = ast.parse((self.API / "sms_service.py").read_text(encoding="utf-8"))
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+        def calls(fn):
+            return {
+                (n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", ""))
+                for n in ast.walk(functions[fn])
+                if isinstance(n, ast.Call)
+            }
+
+        # the one HTTP send (twofactor_client.send_otp) is made by _deliver only, _deliver is reached from send_otp only,
+        # and the Control page's test goes through send_otp too
+        self.assertEqual(sorted(f for f in functions if "send_otp" in calls(f)), ["_deliver", "send_test"])
+        self.assertEqual(sorted(f for f in functions if "_deliver" in calls(f)), ["send_otp"])
+        public_senders = sorted(f for f in functions if re.match(r"send(_|$)", f))
+        self.assertEqual(public_senders, ["send_otp", "send_test"])
+        client = ast.parse((self.API / "twofactor_client.py").read_text(encoding="utf-8"))
+        requesting = sorted(
+            node.name
+            for node in client.body
+            if isinstance(node, ast.FunctionDef)
+            and "_get_json" in {getattr(c.func, "id", "") for c in ast.walk(node) if isinstance(c, ast.Call)}
+        )
+        self.assertEqual(requesting, ["balance", "send_otp"])
+
+    @override_settings(**SMS_CONFIG)
+    def test_nothing_but_a_code_can_be_sent(self):
+        emp = Employee(employee_code="E1", first_name="A", last_name="B", phone="9876543210")
+        with mock.patch(GET) as get:
+            for code in ("Hello there", "1234 promo", "123", "1234567", "", None, 1234, "١٢٣٤"):
+                with self.subTest(code=code):
+                    result = sms_service.send_otp(emp, "login", code, 5)
+                    self.assertEqual((result.ok, result.kind), (False, "not_a_code"))
+            self.assertEqual(sms_service.send_otp(emp, "promotion", "1234", 5).kind, "not_a_code")
+        get.assert_not_called()

@@ -669,7 +669,8 @@ class AttendanceData:
                     k: [(_t2s(p.punch_time), (k, i)) for i, p in enumerate(v)] for k, v in by_date.items()
                 }
             out = []
-            for secs, (k, i) in shift_day_punches(ruleset, d, refs, self.prod_manual_dates(emp.id)):
+            # the worker's id: the early-arrival guard sees their special shift, as in the engine
+            for secs, (k, i) in shift_day_punches(ruleset, d, refs, self.prod_manual_dates(emp.id), employee_id=emp.id):
                 p = by_date[k][i]
                 out.append(DayPunch(secs, p.punch_time, p.date, p.source))
             out.sort(key=lambda p: (p.secs, p.at))

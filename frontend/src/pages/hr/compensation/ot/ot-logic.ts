@@ -527,12 +527,18 @@ export type Pause = { reason: string; setting?: string } | null;
 const MASTER_PAUSE = "Paused: the OT / Compensation features are switched off in Settings → Payroll";
 
 /**
- * Why claiming for an employee is paused (null when it is not): the master switch first, then the type's own switch.
+ * Why claiming for an employee is paused (null when it is not): the master switch first, then the type's own switch, then
+ * the login's own right (`rightProblem`: the Edit on Leave > Holiday work > Claims it lacks, see useClaimRight).
  * Relaxation and Payment do not matter: a claim credits the balance, it is neither of them.
  */
-export function claimPause(config: OvertimeConfig | undefined, featuresOff: boolean, type: 1 | 2): Pause {
+export function claimPause(
+  config: OvertimeConfig | undefined,
+  featuresOff: boolean,
+  type: 1 | 2,
+  rightProblem: string | null = null,
+): Pause {
   if (featuresOff || config?.masterEnabled === false) return { reason: MASTER_PAUSE };
-  if (!config) return null;
+  if (!config) return rightProblem ? { reason: rightProblem } : null;
   if (type === 1 && !config.allowanceEnabled) {
     return {
       reason: "Paused: Type 1 (next-day late-in allowance) is switched off in Settings → Compensation",
@@ -545,7 +551,7 @@ export function claimPause(config: OvertimeConfig | undefined, featuresOff: bool
       setting: "shift-enabled",
     };
   }
-  return null;
+  return rightProblem ? { reason: rightProblem } : null;
 }
 
 /**

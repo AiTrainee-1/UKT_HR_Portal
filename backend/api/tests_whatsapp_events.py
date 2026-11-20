@@ -1,4 +1,5 @@
-"""WhatsApp messages for gate movement (Outpass IN / OUT) and visitors. WAClient is always mocked."""
+"""WhatsApp messages for gate movement (Outpass IN / OUT) and visitors. Meta's Graph API is always faked (FakeMeta):
+each goes out as its approved template (hrms_gate_out, hrms_gate_in, hrms_visitor_at_reception)."""
 
 from datetime import timedelta
 from unittest import mock
@@ -22,54 +23,35 @@ from .models import (
     WhatsAppSettings,
 )
 from .outpass_visitor_views import outpass_gate_submit, visitor_gate_new
-
-CONFIG = dict(
-    WACLIENT_INSTANCE_ID="INST1234",
-    WACLIENT_ACCESS_TOKEN="tok",
-    WHATSAPP_DEFAULT_COUNTRY_CODE="91",
-    WACLIENT_API_URL="https://api.waclient.test/send",
-    WACLIENT_CONTACT_API_URL="https://api.waclient.test/send_contact",
-)
-
-
-def _ok():
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "success", "message_payload": {"key": {"id": "WAID"}}}
-    return r
-
-
-def _error(text):
-    r = mock.Mock(status_code=200, content=b"x", text="")
-    r.json.return_value = {"status": "error", "message": text}
-    return r
+from .tests_whatsapp_caller_support import assert_template_variables, sent_texts
+from .tests_whatsapp_support import META, FakeMeta, approve_templates
 
 
 class WhatsAppBase(TestCase):
-    def start_mock(self, **kw):
-        patcher = mock.patch("api.whatsapp_service.requests.post", **({"return_value": _ok()} | kw))
-        post = patcher.start()
-        self.addCleanup(patcher.stop)
-        return post
+    def start_meta(self):
+        self.meta = FakeMeta.install(self)  # Meta's Graph API, faked: nothing leaves the machine
+        approve_templates("outpass_gate_out", "outpass_gate_in", "visitor_notification")
 
-    def sent_to(self, post, suffix):
-        return [c for c in post.call_args_list if c.args[0].endswith(suffix)]
+    def texts(self):
+        return sent_texts(self.meta)
 
-    def assert_texts_are_plain(self, post):
-        """Every text that went out is a plain WAClient "text": no preview card, no address, no portal link."""
-        calls = self.sent_to(post, "/send")
-        self.assertTrue(calls)
-        for call in calls:
-            payload = call.kwargs["json"]
-            self.assertEqual(payload["type"], "text")
-            self.assertNotIn("url", payload)
+    def assert_texts_are_plain(self):
+        """Every message that went out is an approved template with its variables only: no free text, no preview card,
+        no address, no portal link, every variable on one line."""
+        self.assertTrue(self.meta.sent)
+        for record in self.meta.sent:
+            self.assertEqual(record["body"]["type"], "template")
+            self.assertNotIn("text", record["body"])
+            assert_template_variables(self, record)
+        for text in self.texts():
             for banned in ("http", "portal", "View request", "🔗"):
-                self.assertNotIn(banned, payload["message"])
+                self.assertNotIn(banned, text)
 
 
-@override_settings(**CONFIG)
+@override_settings(**META)
 class GateMovementTests(WhatsAppBase):
     def setUp(self):
-        self.post = self.start_mock()
+        self.start_meta()
         self.branch = Branch.objects.create(name="Main Unit")
         self.gate = GateDevice.objects.create(
             name="Gate 1", branch=self.branch, username="g1", password_hash="x", login_token="t1"
@@ -112,9 +94,6 @@ class GateMovementTests(WhatsAppBase):
             expires_in=timedelta(minutes=30),
         )
 
-    def texts(self):
-        return [c.kwargs["json"]["message"] for c in self.post.call_args_list]
-
     def test_the_employee_is_told_when_the_gate_records_them_going_out(self):
         body, status = resolve_gate_scan(self.gate, self.exit_qr())
         self.assertEqual(status, 200)
@@ -136,8 +115,9 @@ class GateMovementTests(WhatsAppBase):
         log = WhatsAppMessageLog.objects.get()
         self.assertEqual((log.document_type, log.related_module, log.status), ("outpass_gate_out", "outpass", "sent"))
         self.assertEqual(log.dedupe_key, f"gate:out:{self.req.id}")
-        self.assertEqual(self.post.call_args.kwargs["json"]["number"], "918220015110")
-        self.assert_texts_are_plain(self.post)
+        self.assertEqual((self.meta.last()["to"], self.meta.last()["template"]), ("918220015110", "hrms_gate_out"))
+        self.assertEqual(log.template_name, "hrms_gate_out")
+        self.assert_texts_are_plain()
 
     def test_and_again_with_both_times_and_how_long_they_were_out_when_they_return(self):
         resolve_gate_scan(self.gate, self.exit_qr())
@@ -157,27 +137,26 @@ class GateMovementTests(WhatsAppBase):
         ):
             self.assertIn(expected, text)
         self.assertEqual(WhatsAppMessageLog.objects.filter(document_type="outpass_gate_in").count(), 1)
-        self.assertEqual(len(self.texts()), 2)
-        self.assert_texts_are_plain(self.post)
+        self.assertEqual(self.meta.templates_sent, ["hrms_gate_out", "hrms_gate_in"])
+        self.assert_texts_are_plain()
 
     def test_a_denied_scan_sends_nothing(self):
         resolve_gate_scan(self.gate, self.exit_qr())
-        self.post.reset_mock()
         body, status = resolve_gate_scan(self.gate2, self.exit_qr())  # already used
         self.assertEqual(status, 409)
-        self.post.assert_not_called()
+        self.assertEqual(len(self.meta.sent), 1)
         self.assertEqual(WhatsAppMessageLog.objects.count(), 1)
 
     def test_the_switch_stops_the_message_but_not_the_scan(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"outpass_notifications_enabled": False})
         body, status = resolve_gate_scan(self.gate, self.exit_qr())
         self.assertEqual(status, 200)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         self.req.refresh_from_db()
         self.assertIsNotNone(self.req.exited_at)
 
     def test_a_whatsapp_outage_never_blocks_the_gate(self):
-        self.post.return_value = _error("Instance not connected")
+        self.meta.fail(131026, "Message undeliverable")
         body, status = resolve_gate_scan(self.gate, self.exit_qr())
         self.assertEqual((status, body["result"]), (200, "success"))
         self.assertEqual(WhatsAppMessageLog.objects.get().status, "failed")
@@ -215,13 +194,13 @@ class GateMovementTests(WhatsAppBase):
             format="json",
         )
         self.assertEqual(outpass_gate_submit(request, qr.token).status_code, 201)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
 
 
-@override_settings(**CONFIG)
+@override_settings(**META)
 class VisitorMessageTests(WhatsAppBase):
     def setUp(self):
-        self.post = self.start_mock()
+        self.start_meta()
         self.branch = Branch.objects.create(name="Tirupur")
         self.dept = Department.objects.create(name="Weaving")
         self.qr = GateQRCode.get_or_create_for(self.branch, GateQRCode.KIND_VISITOR)
@@ -251,8 +230,8 @@ class VisitorMessageTests(WhatsAppBase):
 
     def test_the_employee_gets_everything_they_need_to_know_about_the_visitor(self):
         self.assertEqual(self.check_in().status_code, 201)
-        first = self.sent_to(self.post, "/send")[0]
-        text = first.kwargs["json"]["message"]
+        first = self.meta.sent[0]
+        text = self.texts()[0]
         for expected in (
             "Visitor at Reception",
             "Dear Meeting Target",
@@ -267,44 +246,42 @@ class VisitorMessageTests(WhatsAppBase):
             "- UK Textiles HR",
         ):
             self.assertIn(expected, text)
-        self.assertNotIn("Company:", text)  # nothing recorded, so no empty label
-        self.assertEqual(first.kwargs["json"]["number"], "919123456789")
+        self.assertIn("Company: -", text)  # nothing recorded: a template can't drop the line, so a dash
+        self.assertEqual((first["to"], first["template"]), ("919123456789", "hrms_visitor_at_reception"))
+        self.assert_texts_are_plain()
 
-    def test_a_tap_to_call_contact_card_follows(self):
+    def test_the_visitors_number_is_a_line_of_the_message_and_no_contact_card_follows(self):
         self.check_in()
-        cards = self.sent_to(self.post, "/send_contact")
-        self.assertEqual(len(cards), 1)
-        payload = cards[0].kwargs["json"]
-        self.assertEqual(
-            (payload["number"], payload["first_name"], payload["phone_number"]),
-            ("919123456789", "Vishal Visitor", "917000000001"),
-        )
+        self.assertEqual(len(self.meta.sent), 1)  # Meta's templates carry no contact card
+        self.assertEqual(self.meta.last()["params"]["visitor_phone"], "+91 70000 00001")
         types = list(WhatsAppMessageLog.objects.order_by("id").values_list("document_type", "status"))
-        self.assertEqual(types, [("visitor_notification", "sent"), ("visitor_contact", "sent")])
-        self.assertIn("Vishal Visitor", WhatsAppMessageLog.objects.get(document_type="visitor_contact").message_text)
+        self.assertEqual(types, [("visitor_notification", "sent")])
+        self.assertFalse(WhatsAppMessageLog.objects.filter(document_type="visitor_contact").exists())
 
     def test_reception_sees_the_host_was_notified_once_it_really_was(self):
         self.check_in()
         self.assertIsNotNone(VisitorVisit.objects.get().notified_whatsapp_at)
 
-    def test_a_failed_contact_card_does_not_undo_the_message(self):
-        self.post.side_effect = [_ok(), _error("Contact not supported")]
+    def test_a_refused_message_leaves_reception_not_notified(self):
+        self.meta.fail(131026, "Message undeliverable")
         self.assertEqual(self.check_in().status_code, 201)
-        self.assertEqual(WhatsAppMessageLog.objects.get(document_type="visitor_notification").status, "sent")
-        self.assertEqual(WhatsAppMessageLog.objects.get(document_type="visitor_contact").status, "failed")
-        self.assertIsNotNone(VisitorVisit.objects.get().notified_whatsapp_at)
-
-    def test_no_card_when_the_message_itself_failed(self):
-        self.post.return_value = _error("Instance not connected")
-        self.assertEqual(self.check_in().status_code, 201)
-        self.assertEqual(self.sent_to(self.post, "/send_contact"), [])
+        self.assertEqual(WhatsAppMessageLog.objects.get(document_type="visitor_notification").status, "failed")
         self.assertIsNone(VisitorVisit.objects.get().notified_whatsapp_at)
         self.assertFalse(WhatsAppMessageLog.objects.filter(document_type="visitor_contact").exists())
+
+    def test_without_an_approved_template_the_check_in_works_and_the_log_says_why(self):
+        approve_templates("visitor_notification", status="PAUSED")
+        self.assertEqual(self.check_in().status_code, 201)
+        log = WhatsAppMessageLog.objects.get()
+        self.assertEqual(log.status, "skipped")
+        self.assertIn("hrms_visitor_at_reception", log.error_message)
+        self.assertEqual(self.meta.sent, [])
+        self.assertIsNone(VisitorVisit.objects.get().notified_whatsapp_at)
 
     def test_the_visitor_switch_turns_it_off_but_check_in_still_works(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"visitor_notification_enabled": False})
         self.assertEqual(self.check_in().status_code, 201)
-        self.post.assert_not_called()
+        self.assertEqual(self.meta.sent, [])
         self.assertIsNone(VisitorVisit.objects.get().notified_whatsapp_at)
 
     def test_a_host_with_no_phone_is_logged_and_check_in_still_works(self):

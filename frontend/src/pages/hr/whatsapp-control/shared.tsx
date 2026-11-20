@@ -10,13 +10,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { TONE, WHATSAPP_STATUS_TONE } from "@/lib/statusTones";
-import type {
-  WhatsAppCategory,
-  WhatsAppMessage,
-  WhatsAppMessageKind,
-  WhatsAppMessageStatus,
-} from "@/lib/api-client/custom-hooks";
+import { WHATSAPP_STATUS_TONE } from "@/lib/statusTones";
+import type { WhatsAppMessageKind, WhatsAppMessageStatus } from "@/lib/api-client/custom-hooks";
+
+// Words and small pieces shared by the tabs of WhatsApp Control. Nothing here imports the page's logic or kit (they
+// import this file), so there is no import cycle.
 
 export const STATUS_LABEL: Record<WhatsAppMessageStatus, string> = {
   queued: "Queued",
@@ -34,19 +32,18 @@ export const STATUS_LABEL: Record<WhatsAppMessageStatus, string> = {
 export const STATUS_HELP: Record<WhatsAppMessageStatus, string> = {
   queued: "Waiting its turn in the sending queue.",
   sending: "Being sent right now.",
-  pending: "Handed to WhatsApp, waiting for it to confirm.",
-  sent: "Accepted by WhatsApp, not yet confirmed on the phone.",
-  delivered: "Reached the employee's phone.",
-  read: "Opened by the employee.",
-  failed: "Could not be sent. It is not re-sent automatically.",
+  pending: "Handed to Meta, waiting for it to confirm.",
+  sent: "Accepted by Meta (one grey tick), not yet on the phone.",
+  delivered: "Reached the employee's phone (two grey ticks).",
+  read: "Opened by the employee (two blue ticks).",
+  failed: "Could not be sent or delivered. It is not re-sent automatically.",
   expired: "Too late to be useful, so it was never sent.",
-  skipped: "Blocked by a rule, so it was never sent.",
+  skipped: "Held back by a rule (a switch, no approved template, No WhatsApp), so it was never sent.",
 };
 
 export const STATUS_ORDER: WhatsAppMessageStatus[] = [
   "queued",
   "sending",
-  "pending",
   "sent",
   "delivered",
   "read",
@@ -63,7 +60,7 @@ export const KIND_LABEL: Record<WhatsAppMessageKind, string> = {
 };
 
 export const KIND_HELP: Record<WhatsAppMessageKind, string> = {
-  code: "A one-time login code",
+  code: "A one-time sign-in code",
   requested: "Something the employee asked for",
   automatic: "Sent automatically by the HRMS",
   document: "A document HR sent",
@@ -78,11 +75,14 @@ export function reasonLabel(status: WhatsAppMessageStatus | string): string {
 
 /** Red for a real failure; a message held back by a rule or by the clock is not one. */
 export const reasonTone = (status: WhatsAppMessageStatus | string): string =>
-  status === "skipped" || status === "expired" ? "text-orange-700" : "text-red-700";
+  status === "skipped" || status === "expired"
+    ? "text-orange-700 dark:text-orange-300"
+    : "text-red-700 dark:text-red-300";
 
 // The server's catalog owns the list of modules; these labels and hints are only for the ones
 // known today (an unknown key falls back to its own name).
 export const CATEGORY_LABEL: Record<string, string> = {
+  signin: "Sign-in codes",
   documents: "Documents",
   otp: "OTP & Login",
   attendance: "Attendance",
@@ -96,17 +96,17 @@ export const CATEGORY_LABEL: Record<string, string> = {
 
 export const CATEGORY_HELP: Record<string, string> = {
   documents: "Salary slips, ID cards, letters and employee documents",
-  otp: "Login, activation and password-reset codes",
+  otp: "Sign-in, activation and password-reset codes",
   attendance: "Absent, late, punch reminders and missing-punch messages",
   approvals: "Leave, permission, outpass, missing punch and other approvals",
   hod: "New requests waiting for a Department Head, and the scheduled reminder",
   geo: "Geo Attendance and punch approvals and rejections",
-  visitors: "Visitor arrivals with a tap-to-call card",
+  visitors: "Visitor arrivals, with the visitor's phone number",
   outpass: "Gate OUT and IN confirmations",
   other: "Anything else",
 };
 
-export const CATEGORIES: WhatsAppCategory[] = [
+export const CATEGORIES: string[] = [
   "documents",
   "otp",
   "attendance",
@@ -117,11 +117,29 @@ export const CATEGORIES: WhatsAppCategory[] = [
   "outpass",
 ];
 
+/** The HRMS workflows a message can come from (whatsapp_catalog.APPROVAL_MODULES and the On-Duty ones). */
+export const WORKFLOWS: { key: string; label: string }[] = [
+  { key: "leave", label: "Leave" },
+  { key: "permission", label: "Permission" },
+  { key: "casual_leave", label: "Casual Leave" },
+  { key: "missing_punch", label: "Missing Punch" },
+  { key: "outpass", label: "Gate Outpass" },
+  { key: "attendance_correction", label: "Attendance Correction" },
+  { key: "holiday_work", label: "Holiday Work Compensation" },
+  { key: "resignation", label: "Resignation" },
+  { key: "advance", label: "Advance" },
+  { key: "request", label: "Other Requests" },
+  { key: "on_duty", label: "On-Duty request" },
+  { key: "on_duty_punch", label: "On-Duty punch" },
+];
+
 export const categoryLabel = (key: string): string => CATEGORY_LABEL[key] ?? key;
 
 export function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("en-IN", {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-IN", {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -168,7 +186,7 @@ export function KindTag({ kind }: { kind: string }) {
   return (
     <Badge
       variant="outline"
-      className="ml-1.5 text-[9px] px-1 py-0 font-medium text-gray-500"
+      className="ml-1.5 px-1 py-0 text-[9px] font-medium text-muted-foreground"
       title={KIND_HELP[kind as WhatsAppMessageKind]}
       data-testid="whatsapp-message-kind"
     >
@@ -206,7 +224,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         <DialogDescription asChild>
-          <div className="space-y-2 text-sm text-gray-600">{children}</div>
+          <div className="space-y-2 text-sm text-muted-foreground">{children}</div>
         </DialogDescription>
         <DialogFooter className="gap-2">
           <Button variant="outline" size="sm" onClick={onCancel} disabled={pending}>
@@ -226,6 +244,8 @@ export function ConfirmDialog({
     </Dialog>
   );
 }
+
+// ── Kept for Gmail Control, which imports them from here (gmail-control/shared.tsx) ─────────────────────────────────
 
 export function StatCard({
   label,
@@ -262,72 +282,3 @@ export function Row({ label, children }: { label: string; children: ReactNode })
     </div>
   );
 }
-
-/** Everything about one message, including the exact text that was sent. */
-export function MessageDetailDialog({ message, onClose }: { message: WhatsAppMessage | null; onClose: () => void }) {
-  if (!message) return null;
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {message.typeLabel} <StatusPill status={message.status} />
-          </DialogTitle>
-        </DialogHeader>
-        <div className="divide-y">
-          <Row label="Employee">
-            {message.employeeName} <span className="text-gray-400">({message.employeeCode})</span>
-          </Row>
-          <Row label="Module">{message.relatedLabel || message.categoryLabel}</Row>
-          <Row label="Status">
-            <span className="text-gray-600">
-              {STATUS_HELP[message.status as WhatsAppMessageStatus] ?? message.status}
-            </span>
-          </Row>
-          <Row label="Sent to">{message.phone ? `+${message.phone}` : "—"}</Row>
-          <Row label="Created">{fmtDateTime(message.createdAt)}</Row>
-          {message.sentAt && <Row label="Sent">{fmtDateTime(message.sentAt)}</Row>}
-          {message.expiresAt && ["queued", "sending", "expired"].includes(message.status) && (
-            <Row label={message.status === "expired" ? "Expired at" : "Expires"}>{fmtDateTime(message.expiresAt)}</Row>
-          )}
-          <Row label="Last update">{fmtDateTime(message.updatedAt)}</Row>
-          <Row label="Trigger">
-            {message.automatic ? (
-              <Badge variant="outline" className="text-[10px]">
-                Automatic
-              </Badge>
-            ) : (
-              <span>Sent by {message.sentBy ?? "HR"}</span>
-            )}
-            {message.kind && (
-              <span className="ml-2 text-xs text-gray-500">
-                {KIND_HELP[message.kind as WhatsAppMessageKind] ?? message.kind}
-              </span>
-            )}
-          </Row>
-          {typeof message.attempts === "number" && message.attempts > 0 && (
-            <Row label="Attempts">{message.attempts}</Row>
-          )}
-          {message.error && (
-            <Row label={reasonLabel(message.status)}>
-              <span className={reasonTone(message.status)}>{message.error}</span>
-            </Row>
-          )}
-          {message.providerMessageId && (
-            <Row label="Provider ID">
-              <code className="text-xs">{message.providerMessageId}</code>
-            </Row>
-          )}
-        </div>
-        <div>
-          <p className="text-xs font-semibold text-gray-500 mb-1">Message</p>
-          <pre className="whitespace-pre-wrap rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-xs text-gray-800 font-sans max-h-64 overflow-auto">
-            {message.messageText || "The text of this message wasn't recorded."}
-          </pre>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export const failedTone = TONE.danger;
