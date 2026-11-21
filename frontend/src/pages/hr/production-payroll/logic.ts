@@ -4,8 +4,9 @@
  * state of the page in its address (?tab=salary&period=2026-02-02_2026-02-08&view=issues).
  */
 
-import { STATEMENT_URL_DEFAULTS } from "@/components/payroll/kit/statement-url";
 import { parsePeriodParam } from "@/components/payroll/kit/url-state";
+import { PRODUCTION_NOT_INCLUDED_URL_DEFAULTS } from "@/components/payroll/not-included/logic";
+import { PAYSLIP_URL_DEFAULTS } from "@/components/payroll/period-payslips/logic";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
 import { DEFAULT_ISSUE_FILTERS, sanitizeFilters, type IssueFilterState } from "@/components/payroll/panels/issues";
 import type { SkippedItem } from "@/components/payroll/panels/skipped";
@@ -151,12 +152,21 @@ export function unassignedNotice(unassigned: number): string | null {
 
 // ── the state of the page, in its address ──────────────────────────────────────
 
+// "salary" is the Excess tab since 2026-11-20 (same value and permission key, so old links and roles keep working)
 export type ProductionTab = "payroll" | "employees" | "salary" | "payslip";
-// "moved": the workers who moved from this cycle to another (owner 2026-11-16)
-export type ProductionView = "records" | "issues" | "skipped" | "rules" | "moved";
+// "moved": the workers who moved from this cycle to another (owner 2026-11-16); "not_included": every employee who is not
+// in the period's payroll, with the reason (2026-11-20)
+export type ProductionView = "records" | "issues" | "skipped" | "not_included" | "rules" | "moved";
 
 export const PRODUCTION_TABS: readonly ProductionTab[] = ["payroll", "employees", "salary", "payslip"];
-export const PRODUCTION_VIEWS: readonly ProductionView[] = ["records", "issues", "skipped", "rules", "moved"];
+export const PRODUCTION_VIEWS: readonly ProductionView[] = [
+  "records",
+  "issues",
+  "skipped",
+  "not_included",
+  "rules",
+  "moved",
+];
 
 export const isProductionTab = (v: string): v is ProductionTab => (PRODUCTION_TABS as readonly string[]).includes(v);
 export const isProductionView = (v: string): v is ProductionView => (PRODUCTION_VIEWS as readonly string[]).includes(v);
@@ -183,20 +193,20 @@ export const ROSTER_URL_DEFAULTS = { eq: "", estate: "all" } as const;
 
 /**
  * Every key the page keeps in its address, with its default (a value equal to its default is left out of the address).
- * `period` empty = the period the cycle is due to pay next (the page follows it); `month` / `year` empty = the current
- * month and year, for the Payslip tab. A module-level constant: `useUrlParams` needs a stable identity.
+ * `period` empty = the period the cycle is due to pay next (the page follows it); every tab follows that one period (the
+ * Payslip tab too, since 2026-11-20). The Not included view's filters (ni*, Production first) and the Payslip tab's (pl*)
+ * are here too; the Excess tab keeps its own ex* keys. A module-level constant: `useUrlParams` needs a stable identity.
  */
 export const PRODUCTION_URL_DEFAULTS: Record<string, string> = {
   tab: "payroll",
   view: "records",
   period: "",
-  month: "",
-  year: "",
   layout: "cards",
   ...FILTER_URL_DEFAULTS,
   ...ISSUE_URL_DEFAULTS,
-  ...STATEMENT_URL_DEFAULTS,
   ...ROSTER_URL_DEFAULTS,
+  ...PRODUCTION_NOT_INCLUDED_URL_DEFAULTS,
+  ...PAYSLIP_URL_DEFAULTS,
 };
 
 /**
@@ -209,23 +219,10 @@ export function periodFromUrl(value: string | null | undefined): CyclePeriod | n
   return parsed.periodStart <= parsed.periodEnd ? parsed : null;
 }
 
-/** The month the Payslip tab shows: the address's `month` / `year` when they are real, else today's. */
-export function resolveSlipMonth(
-  values: { month?: string; year?: string },
-  today: Date = new Date(),
-): { month: number; year: number } {
-  const month = Number(values.month);
-  const year = Number(values.year);
-  return {
-    month: Number.isInteger(month) && month >= 1 && month <= 12 ? month : today.getMonth() + 1,
-    year: Number.isInteger(year) && year >= 2000 && year <= 2100 ? year : today.getFullYear(),
-  };
-}
-
 export const rosterStateFromUrl = (value: string | null | undefined): RosterState | "all" =>
   (ROSTER_STATES as readonly string[]).includes(value ?? "") ? (value as RosterState) : "all";
 
-/** The slice of payroll the insight panels (issues, rules, salary statement) ask the server about. */
+/** The slice of payroll the panels (issues, rules, Excess, payslips, not included) ask the server about. */
 export const productionScope = (cycle: PayCycle, period: CyclePeriod): PayrollScope => ({
   kind: "production",
   cycle,

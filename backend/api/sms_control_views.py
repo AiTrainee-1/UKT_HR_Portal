@@ -3,7 +3,9 @@ SMS Control page (HR portal -> SMS Control): the central control of SMS in the H
 (sign-in, password reset, account activation) through 2Factor.in. SMS codes are switched on here, independently of
 WhatsApp codes (switched on at WhatsApp Control): either one alone is enough, and the apps follow both at once
 (GET /api/auth/login-options is never cached). All endpoints are HR-only and sit under the `sms_control` permission module
-(see permission_registry.URL_MODULE_MAP): GET needs "view", PUT / PATCH / POST need "edit".
+(see permission_registry.URL_MODULE_MAP): GET needs "view", PUT / PATCH / POST need "edit". A settings save also needs
+"edit" on the Settings sub-tab (OTP Switches, Limits, Cost) of every value it changes: 403 {"code": "permission_denied",
+"subtabs": [...]} and nothing is saved otherwise.
 
     GET  /api/sms-control/overview          status, balance, this month's numbers and cost, the caps, alerts
     GET  /api/sms-control/usage?month=YYYY-MM   one month: per day, per purpose, cost and projection, balance
@@ -140,9 +142,45 @@ _FIELD_LABELS = {
 class SettingsError(Exception):
     """A problem with the submitted settings: the message is the one plain sentence the 400 carries."""
 
-    def __init__(self, message: str, code: str | None = None):
+    def __init__(self, message: str, code: str | None = None, status: int = 400, **extra):
         super().__init__(message)
         self.code = code
+        self.status = status
+        self.extra = extra
+
+
+# The Settings sub-tab each value is changed on (permission_tree.py sms_control.settings.*): a save needs edit on the
+# sub-tab of every value it CHANGES (a sub-tab follows Settings until a role sets it on its own). The page saves one
+# sub-tab at a time, but one URL serves them all, so the middleware can only check Settings itself.
+SUBTAB_OF_KEY = {
+    **{key: "sms_control.settings.switches" for key, _field in BOOL_FIELDS},
+    **{key: "sms_control.settings.limits" for key, *_rest in INT_FIELDS},
+    **{key: "sms_control.settings.cost" for key, *_rest in MONEY_FIELDS},
+}
+_SUBTAB_LABELS = {
+    "sms_control.settings.switches": "OTP Switches",
+    "sms_control.settings.limits": "Limits",
+    "sms_control.settings.cost": "Cost",
+}
+
+
+def _refused_subtabs(request: Request, keys) -> list[str]:
+    """The Settings sub-tabs whose edit access this login lacks for these keys (empty = all allowed). A super admin may
+    change everything; a login with no HR account behind it may change nothing (fail closed)."""
+    from .models import HRUser
+    from .permission_registry import effective_permissions, resolve_permission
+
+    user_id = (getattr(request, "jwt_user", None) or {}).get("hrUserId")
+    hr = HRUser.objects.filter(pk=user_id, is_active=True).first() if user_id else None
+    if hr is not None and hr.is_super_admin:
+        return []
+    permissions = effective_permissions(hr) if hr is not None else {}
+    refused: list[str] = []
+    for key in keys:
+        subtab = SUBTAB_OF_KEY[key]
+        if resolve_permission(permissions, subtab) != "edit" and subtab not in refused:
+            refused.append(subtab)
+    return refused
 
 
 def _error(message: str, status: int = 400, **extra) -> Response:
@@ -330,6 +368,18 @@ def _apply(request: Request, data: dict) -> tuple[dict, dict] | None:
             raise SettingsError(STALE_VERSION, code="stale_settings")
 
     proposed = _parse(data, before)
+    changed = [key for key in proposed if proposed[key] != before[key]]
+    if not changed:
+        return None
+    refused = _refused_subtabs(request, changed)
+    if refused:
+        names = ", ".join(f"SMS Control -> Settings -> {_SUBTAB_LABELS[subtab]}" for subtab in refused)
+        raise SettingsError(
+            f"You may view but not change {names}. Nothing was saved.",
+            code="permission_denied",
+            status=403,
+            subtabs=refused,
+        )
     if proposed["otpEnabled"] and not before["otpEnabled"]:
         # With SMS codes on and nothing able to send them the apps would offer nothing by SMS anyway; refusing the switch
         # makes HR set 2Factor up first instead of believing SMS codes work.
@@ -338,9 +388,6 @@ def _apply(request: Request, data: dict) -> tuple[dict, dict] | None:
             raise SettingsError(
                 f"SMS codes cannot be switched on until 2Factor is configured on the server: missing: {'; '.join(missing)}."
             )
-    changed = [key for key in proposed if proposed[key] != before[key]]
-    if not changed:
-        return None
     for key in changed:
         field, value = _model_value(key, proposed[key])
         setattr(s, field, value)
@@ -367,7 +414,7 @@ def sms_settings(request: Request) -> Response:
         changes = _apply(request, data)
     except SettingsError as exc:
         extra = {"code": exc.code} if exc.code else {}
-        return _error(str(exc), **extra)
+        return _error(str(exc), exc.status, **extra, **exc.extra)
     if changes is not None:
         old_values, new_values = changes
         log_action(
@@ -565,6 +612,12 @@ def _alerts(s: SmsSettings, status: dict, month: dict, limits: dict, balance: di
         add("info", "otp_off", "SMS codes are switched off: no SMS is sent (Settings -> OTP Switches).")
     elif not (s.otp_login_enabled or s.otp_reset_enabled or s.otp_activate_enabled):
         add("warning", "all_switches_off", "SMS codes are on but all three code switches are off, so no SMS is sent.")
+    if on and status.get("accountProblem"):
+        add(
+            "error",
+            "account_problem",
+            f"{status['accountProblem']} Employees can sign in with their password (or a WhatsApp code) meanwhile.",
+        )
     if status["paused"]:
         add("error", "paused", status["pauseReason"])
     else:
@@ -650,6 +703,9 @@ def sms_overview(request: Request) -> Response:
         "purposes": otp["purposes"],
         "paused": pause_reason is not None,
         "pauseReason": pause_reason,
+        # 2Factor's account refuses to send (key, balance, template) until an SMS goes out again: password sign-in and
+        # the first-time setup stay open meanwhile (otp_service)
+        "accountProblem": sms_service.account_problem() if configured else None,
         "devLock": {
             "active": sms_service.allowed_numbers() is not None,
             "onlyToEmployees": sms_service.recipient_codes(),

@@ -31,7 +31,7 @@ test.describe("HR login", () => {
 test.describe("employee tokens cannot reach HR data", () => {
   test("an employee can only see their own payroll and cannot open HR endpoints", async ({ request }) => {
     // A first password can't be set anonymously any more: the employee must confirm the code
-    // WhatsApped to their registered number (the fake WAClient in e2e/fake-waclient.mjs hands it to us).
+    // WhatsApped to their registered number (the fake Meta WhatsApp Cloud API in e2e/fake-meta.mjs hands it to us).
     const direct = await request.post("/api/auth/set-password", {
       data: { identifier: "E2E003", password: "employee-pass-1" },
     });

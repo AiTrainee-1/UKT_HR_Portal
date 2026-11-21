@@ -134,6 +134,18 @@ describe("prices and the monthly budget", () => {
     expect(el('[data-testid="wa-prices-error"]')!.textContent).toContain("between 0 and 100");
   });
 
+  it("says so when the settings can't be read, instead of loading for ever", async () => {
+    await open({
+      extra: { "/api/whatsapp-control/settings": { status: 500, body: { error: "Database is busy" } } },
+    });
+    const notice = el('[data-testid="wa-prices-load-error"]')!;
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.textContent).toContain("could not be loaded");
+    expect(notice.textContent).toContain("Database is busy");
+    // the rest of the tab still works
+    expect(el('[data-testid="wa-rate-utility"]')).toBeNull();
+  });
+
   it("locks the prices on a View-only tab", async () => {
     await open({ me: hrWith({ whatsapp_control: "edit", "whatsapp_control.config": "view" }) });
     expect((el('[data-testid="wa-rate-utility"]') as HTMLInputElement).disabled).toBe(true);

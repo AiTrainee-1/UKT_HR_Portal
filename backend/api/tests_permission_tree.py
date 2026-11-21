@@ -100,6 +100,12 @@ NEW_SINCE_SNAPSHOT: tuple[tuple[str, str], ...] = (
     (r"visitor/(visits|people|export)(/.*)?", "outpass_visitors"),  # Visitors register / check-out / export, 2026-11-18
     # Payroll -> Salary Slip (standalone slips), 2026-11-20: follows Staff Payroll -> Payslip until a role sets it
     (r"salary-slip-center(/.*)?", "salary_slip"),
+    # Staff Payroll -> Excess tab and the new Payslip tab list, 2026-11-20 (the Excess tab is the old Salary tab, key salary)
+    (r"payroll-excess(/.*)?", "salary"),
+    # the same on each Production Payroll cycle, 2026-11-20 (Excess = the old Salary tab, key production_payroll.salary)
+    (r"production-payroll-excess(/.*)?", "production_payroll"),
+    (r"payslips/production(/.*)?", "production_payroll"),
+    (r"payslips/staff(/.*)?", "salary_slip"),
 )
 
 
@@ -640,7 +646,14 @@ class ApprovalEnforcement(TestCase):
 
     def test_hold_and_mark_as_cleared_have_their_own_switches(self):
         p = Payroll.objects.create(
-            employee=self.emp, salary_mode="monthly", month=9, year=2026, base_salary=1, gross_salary=1, final_salary=1
+            employee=self.emp,
+            salary_mode="monthly",
+            month=9,
+            year=2026,
+            base_salary=1,
+            gross_salary=1,
+            final_salary=1,
+            bonus=5,  # set before the Excess tab (2026-11-20): the PATCH below only re-sends it
         )
         user = self.login({"payroll": "edit"}, approvals={"payroll_hold": False, "payroll_mark_cleared": False})
         self.assertEqual(self.call(user, "post", f"/api/payroll/{p.id}/hold", {"hold": True}).status_code, 403)

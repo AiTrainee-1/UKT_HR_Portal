@@ -324,7 +324,9 @@ const hexRgb = (hex: string): Rgb => [1, 3, 5].map((i) => parseInt(hex.slice(i, 
 /** The status colour as a light wash for the PDF's status cell. */
 const washOf = (hex: string): Rgb => hexRgb(hex).map((v) => Math.round(v + (255 - v) * 0.82)) as Rgb;
 
-async function renderTablePdf(opts: {
+/** One A4 landscape table: the company head on the first page, the title on the others, rows as tall as their text, a
+ *  totals row when a row says so, and the page numbers. The Settlement exports draw with it too. */
+export async function renderTablePdf(opts: {
   title: string;
   subtitle: string;
   company: ExportCompany;

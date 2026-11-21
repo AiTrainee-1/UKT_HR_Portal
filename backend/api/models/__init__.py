@@ -20,6 +20,8 @@ Modules (each only imports from ones listed before it):
   geo_tracking On-Duty Geo-Tracking: settings, tracks, points, events, derived segments, devices and consents.
   hod_reminders Reminders to Department Heads about pending approvals: the schedule, the rounds and each delivery.
   report_center Report Center -> Customise: the reports HR builds and saves (data source, fields, filters, sort).
+  factory      Employees -> Factory Employees: the page's labels (Driver, Housekeeping, Chef ...).
+  payroll_excess Staff Payroll -> Excess tab: amounts HR adds to (Excess) or takes off (Detection) a month's salary.
   salary_slip_center HR -> Payroll -> Salary Slip: standalone salary slips (no payroll) and the page's own Hold switch.
 """
 
@@ -78,6 +80,7 @@ from .payroll import (
     DeductionItem,
     Advance,
     AdvanceRepayment,
+    AdvanceDecision,
     SalarySlip,
     SessionConfig,
     WorkSession,
@@ -212,3 +215,5 @@ from .attendance_notify import (
 )
 from .report_center import SavedCustomReport
 from .salary_slip_center import StandaloneSalaryHold, StandaloneSalarySlip
+from .payroll_excess import PayrollExcessEntry, PayrollExcessHistory
+from .factory import FactoryLabel

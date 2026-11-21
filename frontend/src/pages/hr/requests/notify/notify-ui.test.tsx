@@ -71,8 +71,20 @@ beforeAll(() => {
 });
 
 const MESSAGES: HodPreviewMessage[] = [
-  { managerId: 1, name: "Ravi Shankar", pending: 4, text: "Dear Ravi Shankar,\n• Leave Requests: 2" },
-  { managerId: 2, name: "Meena Rani", pending: 1, text: "Dear Meena Rani,\n• Casual Leave Requests: 1" },
+  {
+    managerId: 1,
+    name: "Ravi Shankar",
+    pending: 4,
+    text: "Dear Ravi Shankar,\n• Leave Requests: 2",
+    whatsappText: "Dear Ravi Shankar, You have 4 request(s) waiting: Leave 2, Permission 2.",
+  },
+  {
+    managerId: 2,
+    name: "Meena Rani",
+    pending: 1,
+    text: "Dear Meena Rani,\n• Casual Leave Requests: 1",
+    whatsappText: null,
+  },
 ];
 
 let root: Root | null = null;
@@ -258,6 +270,8 @@ describe("channels and the message", () => {
     mount();
     expect(text(q("notify-preview-count"))).toBe("2 HoDs would get a reminder now");
     expect(text(q("notify-preview-text"))).toContain("Dear Ravi Shankar,");
+    // WhatsApp carries the approved template instead of the wording on this page: both are shown
+    expect(text(q("notify-preview-whatsapp"))).toContain("Leave 2, Permission 2");
     expect(h.previewArgs.at(-1)).toBeNull();
     const edited = `${DEFAULT_TEMPLATE}\nThanks`;
     typeInto(q("notify-template-text") as HTMLTextAreaElement, edited);

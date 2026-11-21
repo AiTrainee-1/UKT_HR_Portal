@@ -175,3 +175,61 @@ export function EmptyState({
     </div>
   );
 }
+
+/** Overview / Term Loan / Term Advance, each with how many wait for approval. */
+export function TabBar<T extends string>({
+  items,
+  value,
+  onChange,
+}: {
+  items: { value: T; label: string; hint: string; pending: number; icon: IconType }[];
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <div className="max-w-full overflow-x-auto pb-0.5">
+      <div
+        className="inline-flex items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm"
+        role="tablist"
+        aria-label="Settlement views"
+        data-testid="settlement-tabs"
+      >
+        {items.map((t) => {
+          const on = t.value === value;
+          const Icon = t.icon;
+          return (
+            <button
+              key={t.value}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              title={t.hint}
+              onClick={() => onChange(t.value)}
+              className={cn(
+                "inline-flex h-10 items-center gap-1.5 whitespace-nowrap rounded-xl px-3 text-sm font-semibold transition-colors",
+                on ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+              )}
+              data-view-safe
+              data-testid={`settlement-tab-${t.value}`}
+            >
+              <Icon size={15} />
+              {t.label}
+              {t.pending > 0 && (
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 text-[11px] font-bold tabular-nums",
+                    on ? "bg-amber-400 text-slate-900" : "bg-amber-100 text-amber-800",
+                  )}
+                  title={`${t.pending} waiting for approval`}
+                  aria-label={`${t.pending} waiting for approval`}
+                >
+                  {t.pending}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

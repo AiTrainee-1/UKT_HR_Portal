@@ -85,7 +85,12 @@ export default function OtpTab({ access, go }: { access: WaAccess; go: (tab: WaT
   const expiryValid =
     !!expiryTiming && Number.isInteger(expiryNum) && expiryNum >= expiryTiming.min && expiryNum <= expiryTiming.max;
 
-  const templateName = templateNameFor(OTP_TYPES[0], data.templateOverrides, templates?.templates ?? null);
+  const templateName = templateNameFor(
+    OTP_TYPES[0],
+    data.templateOverrides,
+    templates?.templates ?? null,
+    data.messageTypes,
+  );
   const template = findTemplate(templateName, templates?.templates ?? null);
   const tplState: TemplateState | null = templates
     ? templateState(template?.status ?? null)
@@ -103,9 +108,11 @@ export default function OtpTab({ access, go }: { access: WaAccess; go: (tab: WaT
         ? "WhatsApp is not set up on this server (Settings)."
         : overview && overview.otp.enabled && !overview.otp.available
           ? "WhatsApp codes can't be sent from this server right now."
-          : purposesOn === 0
-            ? "Every use below is OFF."
-            : null;
+          : overview && overview.otp.enabled && overview.otp.paused
+            ? `On hold: ${overview.otp.pauseReason ?? "WhatsApp codes can't be sent right now."} Password sign-in stays open meanwhile.`
+            : purposesOn === 0
+              ? "Every use below is OFF."
+              : null;
   const verdict: { label: string; tone: Tone } = !data.otpEnabled
     ? { label: "OFF", tone: "neutral" }
     : held
@@ -356,6 +363,16 @@ export default function OtpTab({ access, go }: { access: WaAccess; go: (tab: WaT
           {month === null && (
             <p className="mt-2 text-[11px] text-muted-foreground">
               Delivered and used counts appear once the server reports them.
+            </p>
+          )}
+          {overview?.otp.limits && (
+            <p className="mt-2 text-[11px] text-muted-foreground" data-testid="wa-otp-limits">
+              Limits (each WhatsApp code costs money): {formatCount(overview.otp.limits.hourUsed)} of{" "}
+              {formatCount(overview.otp.limits.hourlyCap)} this hour, {formatCount(overview.otp.limits.dayUsed)} of{" "}
+              {formatCount(overview.otp.limits.dailyCap)} today; at most{" "}
+              {formatCount(overview.otp.limits.perEmployeePerDay)} a day per employee and use, and{" "}
+              {formatCount(overview.otp.limits.perNumberPerHour)} an hour to one number. A limit used up puts codes on
+              hold and keeps password sign-in open.
             </p>
           )}
         </Panel>

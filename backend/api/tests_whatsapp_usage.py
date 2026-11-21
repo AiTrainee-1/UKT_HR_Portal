@@ -160,7 +160,7 @@ class UsageTests(UsageBase):
         self.assertEqual(days[0]["sent"], 0)
 
     def test_a_message_from_before_meta_is_counted_but_never_charged(self):
-        self.log("salary_slip", "sent", self.on(2))  # no template: sent through WAClient before the switch
+        self.log("salary_slip", "sent", self.on(2))  # no template: sent by the old provider before Meta
         self.log("salary_slip", "sent", self.on(2), template_name="hrms_salary_slip")
         self.log("salary_slip", "delivered", self.on(2), pricing_category="utility")  # Meta priced it, billable unknown
         u = self.usage(with_meta=False)
@@ -315,6 +315,26 @@ class OverviewTests(UsageBase):
         self.assertIn("otp_template", codes)
         self.assertIn("webhook_never", codes)
         self.assertNotIn("not_configured", codes)
+
+    def test_whatsapp_codes_on_hold_are_reported_with_the_reason_and_the_limits(self):
+        approve_templates()
+        s = WhatsAppSettings.get()
+        s.last_webhook_at = timezone.now()
+        s.save()
+        # Meta refused a code because the token expired: WhatsApp codes are on hold (password sign-in reopens)
+        self.log("otp_login", "failed", error_message="Send failed: The access token has expired. (code 190)")
+        body = self.overview()
+        otp = body["otp"]
+        self.assertTrue(otp["available"])
+        self.assertTrue(otp["paused"])
+        self.assertIn("access token", otp["pauseReason"])
+        self.assertEqual(
+            {k: otp["limits"][k] for k in ("perEmployeePerDay", "perNumberPerHour", "hourlyCap", "dailyCap")},
+            {"perEmployeePerDay": 10, "perNumberPerHour": 10, "hourlyCap": 300, "dailyCap": 1500},
+        )
+        alert = next(a for a in body["alerts"] if a["code"] == "otp_paused")
+        self.assertEqual(alert["level"], "warning")
+        self.assertIn("password", alert["message"])
 
     def test_everything_approved_and_the_webhook_seen_is_quiet(self):
         approve_templates()

@@ -339,19 +339,23 @@ the Django URL list (592 API paths). The tables below are generated from the per
 | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ Phones | Sub-tab | `mobile_app_login.messages.devices` | - | shares: mobile-app/messages/devices (Send a message reads it too) | Screen only |  |
 | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ Send a message | Sub-tab | `mobile_app_login.messages.send` | - | mobile-app/messages/send | Server |  |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ New Version | Tab | `mobile_app_login.version` | - | mobile-app/versions | Server |  |
-| WhatsApp Control | Page | `whatsapp_control` | - | whatsapp-control | Server | existing key |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Overview | Tab | `whatsapp_control.overview` | - | whatsapp-control/queue | Server |  |
+| WhatsApp Control | Page | `whatsapp_control` | - | whatsapp-control | Server | existing key; Meta WhatsApp Cloud API (2026-11-20) |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Overview | Tab | `whatsapp_control.overview` | - | whatsapp-control/overview, whatsapp-control/queue | Server |  |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Usage & Cost | Tab | `whatsapp_control.usage` | - | whatsapp-control/usage | Server | new 2026-11-20 |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Message Controls | Tab | `whatsapp_control.controls` | - | shares: whatsapp-control/settings (OTP and Settings read it too) | Server (per value: a settings save needs Edit here for the switches, limits, quiet hours, timings) | was Feature Controls |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Templates | Tab | `whatsapp_control.templates` | - | whatsapp-control/meta-templates | Server | was Message Text (the old wording endpoints are retired) |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ OTP | Tab | `whatsapp_control.otp` | - | shares: whatsapp-control/settings | Server (per value: the code switches, expiry, password sign-in) | new 2026-11-20 |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Messages | Tab | `whatsapp_control.messages` | - | whatsapp-control/messages | Server |  |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Employees | Tab | `whatsapp_control.employees` | - | whatsapp-control/employees | Server |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Feature Controls | Tab | `whatsapp_control.controls` | - | shares: whatsapp-control/settings (Configuration reads it too) | Screen only |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Message Text | Tab | `whatsapp_control.templates` | - | whatsapp-control/templates | Server |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;└ Configuration | Tab | `whatsapp_control.config` | - | shares: whatsapp-control/settings | Screen only |  |
-| SMS Control | Page | `sms_control` | - | sms-control | Server | existing key |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Send a test | Tab | `whatsapp_control.test` | - | whatsapp-control/test-message | Server |  |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Settings | Tab | `whatsapp_control.config` | - | whatsapp-control/connection | Server (+ per value: prices and the monthly budget in the settings save) | was Configuration |
+| SMS Control | Page | `sms_control` | - | sms-control | Server | existing key; SMS for codes only |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Overview | Tab | `sms_control.overview` | /hr/sms-control/overview | shares: sms-control/overview (Settings, Test and Setup read it too) | Screen only |  |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ Usage & Cost | Tab | `sms_control.usage` | /hr/sms-control/usage | sms-control/usage | Server | new 2026-11-20 |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Settings | Tab | `sms_control.settings` | /hr/sms-control/settings | sms-control/settings | Server |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ Channel | Sub-tab | `sms_control.settings.channel` | /hr/sms-control/settings/channel | shares: sms-control/settings (one call for the three sections) | Screen only |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ Limits | Sub-tab | `sms_control.settings.limits` | /hr/sms-control/settings/limits | shares: sms-control/settings (one call for the three sections) | Screen only |  |
-| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ Switches | Sub-tab | `sms_control.settings.switches` | /hr/sms-control/settings/switches | shares: sms-control/settings (one call for the three sections) | Screen only |  |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ OTP Switches | Sub-tab | `sms_control.settings.switches` | /hr/sms-control/settings/switches | shares: sms-control/settings (one call for the three sections) | Server (per value changed) | the SMS codes master switch; replaces Channel (`/settings/channel` opens it) |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ Limits | Sub-tab | `sms_control.settings.limits` | /hr/sms-control/settings/limits | shares: sms-control/settings (one call for the three sections) | Server (per value changed) |  |
+| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ Cost | Sub-tab | `sms_control.settings.cost` | /hr/sms-control/settings/cost | shares: sms-control/settings (one call for the three sections) | Server (per value changed) | new 2026-11-20 |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Messages | Tab | `sms_control.messages` | /hr/sms-control/messages | sms-control/messages | Server |  |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Test | Tab | `sms_control.test` | /hr/sms-control/test | sms-control/test | Server |  |
 | &nbsp;&nbsp;&nbsp;&nbsp;└ Setup | Tab | `sms_control.setup` | /hr/sms-control/setup | shares: sms-control/overview | Screen only |  |

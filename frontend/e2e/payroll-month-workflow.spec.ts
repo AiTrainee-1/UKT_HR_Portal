@@ -10,7 +10,7 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 //   held employee, with a bank file of just them.
 // Three throwaway staff employees are made here and removed again (their payrolls go with them).
 
-const FAKE_WACLIENT = "http://127.0.0.1:8190";
+const FAKE_META = "http://127.0.0.1:8190";
 const JAN = "/hr/payroll?month=1&year=2026";
 const PERIOD = { month: 1, year: 2026 };
 const MAIN_PASSWORD = "main-pass-2026";
@@ -59,10 +59,10 @@ async function statementCodes(download: Download): Promise<string[]> {
 
 /** An employee login for the throwaway employee (activated through the fake WhatsApp one-time code). */
 async function employeeToken(page: Page, code: string): Promise<string> {
-  await page.request.post(`${FAKE_WACLIENT}/reset`);
+  await page.request.post(`${FAKE_META}/reset`);
   const ask = await page.request.post("/api/auth/otp/request", { data: { employeeCode: code, purpose: "activate" } });
   expect(ask.status(), await ask.text()).toBe(200);
-  const sent = await (await page.request.get(`${FAKE_WACLIENT}/messages`)).json();
+  const sent = await (await page.request.get(`${FAKE_META}/messages`)).json();
   const otp = sent[sent.length - 1].message.match(/\b(\d{6})\b/)![1];
   const activate = await page.request.post("/api/auth/otp/activate", {
     data: { employeeCode: code, otp, password: MAIN_PASSWORD },
@@ -210,7 +210,21 @@ test("Hold, bank file, Payroll Done, the lock, Mark as Paid, the employee's Paid
     const generated = await api(page, "POST", "/api/payroll/generate", PERIOD, admin);
     expect(generated.status).toBe(409);
     expect(generated.body.error).toContain("locked");
-    expect((await api(page, "PATCH", `/api/payroll/${mani.id}`, { bonus: 500 }, admin)).status).toBe(409);
+    expect((await api(page, "PATCH", `/api/payroll/${mani.id}`, { deductions: 500 }, admin)).status).toBe(409);
+    // ... and no Excess / Detection can be added to the finalized month (a bonus is one since 2026-11-20)
+    const excess = await api(
+      page,
+      "POST",
+      "/api/payroll-excess/entries",
+      { ...PERIOD, kind: "excess", amount: 500, remark: "After Payroll Done", employeeIds: [mani.employeeId] },
+      admin,
+    );
+    expect(excess.status).toBe(409);
+    expect(excess.body.error).toContain("locked");
+    await page.goto(`${JAN}&tab=salary`);
+    await expect(page.getByTestId("excess-locked-note")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("excess-add-open")).toBeDisabled();
+    await page.goto(JAN);
     expect((await api(page, "POST", `/api/payroll/${mani.id}/hold`, { hold: true }, admin)).status).toBe(409);
 
     // ── Mark as Paid -> Paid, and the employee sees Paid + got the notification ─────────────────────────────────────

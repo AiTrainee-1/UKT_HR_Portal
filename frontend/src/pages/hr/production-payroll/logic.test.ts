@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
-import { STATEMENT_URL_DEFAULTS } from "@/components/payroll/kit/statement-url";
+import { PRODUCTION_NOT_INCLUDED_URL_DEFAULTS } from "@/components/payroll/not-included/logic";
+import { PAYSLIP_URL_DEFAULTS } from "@/components/payroll/period-payslips/logic";
 import type { CyclePeriodRow, PeriodEmployee, ProductionPayrollItem } from "@/lib/api-client/custom-hooks";
 import {
   ISSUE_URL_DEFAULTS,
@@ -22,7 +23,6 @@ import {
   periodOptionLabel,
   periodValue,
   productionScope,
-  resolveSlipMonth,
   rosterState,
   rosterStateCounts,
   rosterStateFromUrl,
@@ -248,13 +248,26 @@ describe("wording", () => {
 
 describe("the page's state in its address", () => {
   it("has a default for every key, and no two parts of the page share one", () => {
-    const parts = [FILTER_URL_DEFAULTS, ISSUE_URL_DEFAULTS, STATEMENT_URL_DEFAULTS, ROSTER_URL_DEFAULTS];
+    const parts = [
+      FILTER_URL_DEFAULTS,
+      ISSUE_URL_DEFAULTS,
+      ROSTER_URL_DEFAULTS,
+      PRODUCTION_NOT_INCLUDED_URL_DEFAULTS,
+      PAYSLIP_URL_DEFAULTS,
+    ];
     const keys = parts.flatMap((p) => Object.keys(p));
     expect(new Set(keys).size).toBe(keys.length);
-    for (const key of [...keys, "tab", "view", "period", "month", "year", "layout"]) {
+    for (const key of [...keys, "tab", "view", "period", "layout"]) {
       expect(PRODUCTION_URL_DEFAULTS).toHaveProperty(key);
     }
-    expect(Object.keys(PRODUCTION_URL_DEFAULTS)).toHaveLength(keys.length + 6);
+    expect(Object.keys(PRODUCTION_URL_DEFAULTS)).toHaveLength(keys.length + 4);
+    // the Payslip tab follows the pay period now: no month of its own (2026-11-20)
+    expect(PRODUCTION_URL_DEFAULTS).not.toHaveProperty("month");
+    expect(PRODUCTION_URL_DEFAULTS).not.toHaveProperty("year");
+  });
+
+  it("opens the Not included view on the production employees", () => {
+    expect(PRODUCTION_URL_DEFAULTS.nicat).toBe("production");
   });
 
   it("opens on the Payroll tab, the Records view and the period the cycle is due to pay", () => {
@@ -275,7 +288,7 @@ describe("the page's state in its address", () => {
 
   it("knows its tabs and its views", () => {
     expect(PRODUCTION_TABS).toEqual(["payroll", "employees", "salary", "payslip"]);
-    expect(PRODUCTION_VIEWS).toEqual(["records", "issues", "skipped", "rules", "moved"]);
+    expect(PRODUCTION_VIEWS).toEqual(["records", "issues", "skipped", "not_included", "rules", "moved"]);
     expect(isProductionTab("salary")).toBe(true);
     expect(isProductionTab("settings")).toBe(false);
     expect(isProductionTab("")).toBe(false);
@@ -294,14 +307,6 @@ describe("the page's state in its address", () => {
     expect(periodFromUrl("2026-02-30_2026-03-05")).toBeNull();
     expect(periodFromUrl("2026-13-01_2026-13-07")).toBeNull();
     expect(periodFromUrl("2026-02-08_2026-02-02")).toBeNull();
-  });
-
-  it("reads the Payslip tab's month, falling back to this month for anything that is not one", () => {
-    const today = new Date(2026, 9, 13);
-    expect(resolveSlipMonth({ month: "2", year: "2026" }, today)).toEqual({ month: 2, year: 2026 });
-    expect(resolveSlipMonth({}, today)).toEqual({ month: 10, year: 2026 });
-    expect(resolveSlipMonth({ month: "13", year: "1999" }, today)).toEqual({ month: 10, year: 2026 });
-    expect(resolveSlipMonth({ month: "x", year: "2026.5" }, today)).toEqual({ month: 10, year: 2026 });
   });
 
   it("reads the roster's state filter, and shows everyone for anything else", () => {

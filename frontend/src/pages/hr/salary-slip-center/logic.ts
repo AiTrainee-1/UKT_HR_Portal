@@ -86,9 +86,9 @@ export type SlipFilter = "all" | "generated" | "not_generated";
 export type SlipFilters = {
   search: string;
   category: CategoryFilter;
-  /** A department id, or "all". */
+  /** A department name, or "all" (by name: each unit has its own department of the same name). */
   department: string;
-  /** A designation id, or "all". */
+  /** A designation title, or "all". */
   designation: string;
   /** A unit (branch) id, or "all". */
   unit: string;
@@ -182,12 +182,15 @@ export function matchesTab(e: SlipCenterEmployee, tab: SlipTab): boolean {
   }
 }
 
+const sameName = (a: string | null | undefined, b: string): boolean =>
+  (a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+
 export function matchesFilters(e: SlipCenterEmployee, f: SlipFilters): boolean {
   const q = f.search.trim().toLowerCase();
   if (q && !e.name.toLowerCase().includes(q) && !e.code.toLowerCase().includes(q)) return false;
   if (f.category !== "all" && e.category !== f.category) return false;
-  if (f.department !== ALL && String(e.departmentId ?? "") !== f.department) return false;
-  if (f.designation !== ALL && String(e.designationId ?? "") !== f.designation) return false;
+  if (f.department !== ALL && !sameName(e.department, f.department)) return false;
+  if (f.designation !== ALL && !sameName(e.designation, f.designation)) return false;
   if (f.unit !== ALL && String(e.branchId ?? "") !== f.unit) return false;
   if (f.status === "active" && !isActiveEmployee(e)) return false;
   if (f.status === "inactive" && isActiveEmployee(e)) return false;
@@ -219,32 +222,32 @@ export type Option = { value: string; label: string };
 
 const byLabel = (a: Option, b: Option) => a.label.localeCompare(b.label);
 
-/** Departments / designations offered for the chosen category ("all": every one; a name used by both gets its category). */
+/**
+ * Departments / designations offered for the chosen category ("all": every one), once per name: each unit has its own
+ * department of the same name, and picking "ACCOUNTS" means the accounts people of every unit (the Unit filter narrows).
+ */
 function categoryOptions(
-  items: readonly { id: number; label: string; category: string | null }[],
+  items: readonly { label: string; category: string | null }[],
   category: CategoryFilter,
 ): Option[] {
-  const shown = items.filter((i) => category === "all" || (i.category ?? "") === category);
-  const seen = new Map<string, number>();
-  for (const i of shown) seen.set(i.label.toLowerCase(), (seen.get(i.label.toLowerCase()) ?? 0) + 1);
-  return shown
-    .map((i) => {
-      const twice = (seen.get(i.label.toLowerCase()) ?? 0) > 1 && i.category;
-      const suffix = twice ? ` (${i.category === "production" ? "Production" : "Staff"})` : "";
-      return { value: String(i.id), label: `${i.label}${suffix}` };
-    })
-    .sort(byLabel);
+  const byName = new Map<string, Option>();
+  for (const i of items) {
+    const name = i.label.trim();
+    if (!name || (category !== "all" && (i.category ?? "") !== category)) continue;
+    if (!byName.has(name.toLowerCase())) byName.set(name.toLowerCase(), { value: name, label: name });
+  }
+  return [...byName.values()].sort(byLabel);
 }
 
 export const departmentOptions = (list: readonly SlipCenterDepartment[], category: CategoryFilter): Option[] =>
   categoryOptions(
-    list.map((d) => ({ id: d.id, label: d.name, category: d.category })),
+    list.map((d) => ({ label: d.name, category: d.category })),
     category,
   );
 
 export const designationOptions = (list: readonly SlipCenterDesignation[], category: CategoryFilter): Option[] =>
   categoryOptions(
-    list.map((d) => ({ id: d.id, label: d.title, category: d.category })),
+    list.map((d) => ({ label: d.title, category: d.category })),
     category,
   );
 
@@ -262,7 +265,7 @@ export function changeCategory(
   designations: readonly SlipCenterDesignation[],
 ): Partial<SlipFilters> {
   const keep = (value: string, options: Option[]) =>
-    value === ALL || options.some((o) => o.value === value) ? value : ALL;
+    value === ALL || options.some((o) => sameName(o.value, value)) ? value : ALL;
   return {
     category,
     department: keep(f.department, departmentOptions(departments, category)),

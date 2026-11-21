@@ -8,10 +8,7 @@ import {
   Loader2,
   Phone,
   Plus,
-  RefreshCw,
-  Search,
   Trash2,
-  Users,
   UsersRound,
   X,
 } from "lucide-react";
@@ -23,16 +20,14 @@ import { useToast } from "@/hooks/use-toast";
 import {
   useAttendanceNotifyChatChannels,
   useAttendanceNotifyRecipientLists,
-  useAttendanceNotifyWhatsAppGroups,
   useDeleteAttendanceNotifyRecipientList,
-  useRefreshAttendanceNotifyWhatsAppGroups,
   useSaveAttendanceNotifyRecipientList,
   type NotifyChatChannel,
   type NotifyRecipientList,
   type NotifyRecipientSet,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
-import { addEmails, errorText, normalisePhone, phoneLabel, whenText } from "./logic";
+import { addEmails, errorText, normalisePhone, phoneLabel } from "./logic";
 import { Field, Segmented, ToggleRow } from "./parts";
 
 type RecipientsProps = {
@@ -227,10 +222,6 @@ export function WhatsAppRecipients({
   const [phone, setPhone] = useState("");
   const [label, setLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [groupsAsked, setGroupsAsked] = useState(false);
-  const [groupSearch, setGroupSearch] = useState("");
-  const groups = useAttendanceNotifyWhatsAppGroups(groupsAsked);
-  const refreshGroups = useRefreshAttendanceNotifyWhatsAppGroups();
 
   const addNumber = () => {
     const n = normalisePhone(phone);
@@ -252,18 +243,6 @@ export function WhatsAppRecipients({
     }
   };
 
-  const data = groups.data;
-  const pickedGroups = new Set(value.groups.map((g) => g.id));
-  const shownGroups = (data?.groups ?? []).filter((g) =>
-    g.name.toLowerCase().includes(groupSearch.trim().toLowerCase()),
-  );
-  const toggleGroup = (g: { id: string; name: string }) =>
-    onChange({
-      groups: pickedGroups.has(g.id)
-        ? value.groups.filter((x) => x.id !== g.id)
-        : [...value.groups, { id: g.id, name: g.name }],
-    });
-
   return (
     <div className="space-y-4" data-testid="an-recipients-whatsapp">
       <ToggleRow
@@ -271,7 +250,7 @@ export function WhatsAppRecipients({
         label="Also send to the connected WhatsApp number"
         hint={
           connectedNumber
-            ? `The number the HRMS's WhatsApp is linked to: ${phoneLabel(connectedNumber)}.`
+            ? `HR's own WhatsApp number, set on the WhatsApp tab: ${phoneLabel(connectedNumber)}.`
             : "No connected number is set yet: set it once on the WhatsApp tab."
         }
       >
@@ -370,116 +349,45 @@ export function WhatsAppRecipients({
       />
 
       <div className="space-y-2" data-testid="an-groups">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-            <UsersRound size={13} /> WhatsApp groups ({value.groups.length})
-          </p>
-          {!groupsAsked ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8 gap-1.5"
-              onClick={() => setGroupsAsked(true)}
-              data-view-safe
-              data-testid="an-groups-load"
-            >
-              <Users size={13} /> Load WhatsApp groups
-            </Button>
-          ) : (
-            data?.supported && (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-8 gap-1.5 text-slate-600"
-                onClick={() => refreshGroups.mutate()}
-                disabled={refreshGroups.isPending}
-                data-view-safe
-                data-testid="an-groups-refresh"
-              >
-                <RefreshCw size={13} className={refreshGroups.isPending ? "animate-spin" : ""} /> Ask WhatsApp again
-              </Button>
-            )
-          )}
-        </div>
+        <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+          <UsersRound size={13} /> WhatsApp groups
+        </p>
+        <p
+          className="flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+          data-testid="an-groups-unsupported"
+        >
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          WhatsApp groups can't get these reports: the WhatsApp Cloud API (Meta) sends approved template messages to
+          individual numbers only. Add each person's number above.
+        </p>
         {value.groups.length > 0 && (
-          <ul className="flex flex-wrap gap-1.5">
-            {value.groups.map((g) => (
-              <li
-                key={g.id}
-                className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 py-0.5 pl-2.5 pr-1 text-xs font-semibold text-emerald-800"
-              >
-                {g.name}
-                <button
-                  type="button"
-                  onClick={() => onChange({ groups: value.groups.filter((x) => x.id !== g.id) })}
-                  aria-label={`Remove the group ${g.name}`}
-                  className="rounded-full p-0.5 hover:bg-emerald-100"
+          <div className="space-y-1.5" data-testid="an-groups-legacy">
+            <p className="text-xs text-amber-800">
+              This automation still lists {value.groups.length === 1 ? "a group" : `${value.groups.length} groups`} from
+              before: {value.groups.length === 1 ? "it is" : "they are"} skipped. Remove{" "}
+              {value.groups.length === 1 ? "it" : "them"} to save the automation.
+            </p>
+            <ul className="flex flex-wrap gap-1.5">
+              {value.groups.map((g) => (
+                <li
+                  key={g.id}
+                  className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 py-0.5 pl-2.5 pr-1 text-xs font-semibold text-amber-900"
                 >
-                  <X size={12} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {!groupsAsked ? (
-          <p className="text-[11px] text-slate-500">
-            The groups are read from WhatsApp only when you ask (it can take a few seconds).
-          </p>
-        ) : groups.isLoading ? (
-          <p className="flex items-center gap-1.5 text-xs text-slate-500">
-            <Loader2 size={13} className="animate-spin" /> Asking WhatsApp for the groups…
-          </p>
-        ) : groups.isError ? (
-          <p className="text-xs text-red-600" data-testid="an-groups-error">
-            The groups could not be read: {errorText(groups.error) ?? "the server did not answer"}.
-          </p>
-        ) : data && !data.supported ? (
-          <p
-            className="flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
-            data-testid="an-groups-unsupported"
-          >
-            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-            {data.note || "WhatsApp groups are not available with the WhatsApp set up on this server."}
-          </p>
-        ) : data ? (
-          <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-2" data-testid="an-groups-picker">
-            <div className="relative">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <Input
-                value={groupSearch}
-                onChange={(e) => setGroupSearch(e.target.value)}
-                placeholder="Search groups"
-                className="h-8 pl-7 text-xs"
-                aria-label="Search groups"
-              />
-            </div>
-            {data.groups.length === 0 ? (
-              <p className="px-1 py-2 text-xs text-slate-500">
-                {data.note || "The linked WhatsApp is not in any group."}
-              </p>
-            ) : (
-              <ul className="max-h-56 space-y-0.5 overflow-y-auto">
-                {shownGroups.map((g) => (
-                  <li key={g.id}>
-                    <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50">
-                      <Checkbox
-                        checked={pickedGroups.has(g.id)}
-                        onCheckedChange={() => toggleGroup(g)}
-                        data-testid={`an-group-${g.id}`}
-                      />
-                      <span className="min-w-0 flex-1 truncate">{g.name}</span>
-                      {g.size !== null && <span className="text-[11px] text-slate-400">{g.size} members</span>}
-                    </label>
-                  </li>
-                ))}
-                {shownGroups.length === 0 && <li className="px-2 py-2 text-xs text-slate-500">No group matches.</li>}
-              </ul>
-            )}
-            {data.fetchedAt && <p className="px-1 text-[10px] text-slate-400">Read {whenText(data.fetchedAt)}</p>}
+                  {g.name}
+                  <button
+                    type="button"
+                    onClick={() => onChange({ groups: value.groups.filter((x) => x.id !== g.id) })}
+                    aria-label={`Remove the group ${g.name}`}
+                    className="rounded-full p-0.5 hover:bg-amber-100"
+                    data-testid={`an-group-remove-${g.id}`}
+                  >
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
-        ) : null}
+        )}
       </div>
     </div>
   );

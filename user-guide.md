@@ -1662,7 +1662,7 @@ Required fields: SMTP host, port, username/email, password, TLS/SSL setting.
 
 #### WhatsApp
 
-Shows whether WhatsApp (WAClient) is connected (configured entirely via the server `.env`, not editable here; see `waclient-whatsapp-integration.md`) and lets HR edit the wording of the documents (Salary Slip, ID Card, Offer / Experience / Resignation Letters, other documents) and of the visitor message. Everything else about WhatsApp, including how fast messages go out, is on **WhatsApp Control** (section 4.13).
+Shows whether WhatsApp (the official Meta WhatsApp Cloud API) is set up on the server (the keys live only in the server's `.env`, never here; see `whatsapp-meta-cloud-integration.md`) and links to the places on **WhatsApp Control** (section 4.13) where everything about WhatsApp is managed: the message templates, the switches, the limits, the usage and the cost.
 
 
 **Every WhatsApp message is also a phone notification.** Each message the system sends to an employee on WhatsApp (the attendance alerts and punch reminders, every approval and rejection of a leave, permission, casual leave, missing punch, outpass, attendance change, holiday-work claim, resignation, advance or other request, the Geo Attendance / On-Duty approvals and rejections, gate OUT and IN, a visitor arriving, and every document HR sends: salary slip, ID card, offer / experience / resignation letter, other documents) is ALSO delivered to the employee's phone as a push notification (it appears on the lock screen like a message, with the headline of the WhatsApp message and its text) and saved in the **Notifications** page of the mobile app and the Employee Web App, with a headline. It is the same wording HR edits on the WhatsApp Control page. **Never sent this way:** the login, password-reset and activation codes (they are secrets). The push does not need WhatsApp to be connected and is not stopped by the WhatsApp switches (those only control the WhatsApp channel); the attendance alerts still depend on the WhatsApp alert switches because that job decides when an alert is due. A leave or other request that only moves to the next approver (Department Head approved, now waiting for HR) keeps its short notice as before; the final approval or rejection is the WhatsApp message, once. Only phones that have the new app and allowed notifications receive the push; the in-app record is always saved.
@@ -1797,27 +1797,28 @@ On every page: the period and unit/department filters at the top; **Needs your a
 
 ### 4.12 SMS Control (Codes by SMS)
 
-**What it's for:** Employees get a one-time code (4 digits when it comes by SMS, 6 digits on WhatsApp) when they sign in with a code, when they forgot their password and when they set their first password. SMS Control lets HR choose whether those codes arrive by **WhatsApp** (the default) or by **SMS**, and shows whether it is working. Salary slips, alerts and approvals stay on WhatsApp either way.
+**What it's for:** Employees get a one-time code (4 digits when it comes by SMS, 6 digits on WhatsApp) when they sign in with a code, when they forgot their password and when they set their first password. SMS Control switches **SMS codes** on or off, shows whether they work, what they cost and how much credit is left. **SMS is used for these codes only**: nothing else is ever sent by SMS.
 
-**Why SMS:** the WhatsApp number that sent the codes was restricted by WhatsApp twice, and an employee without a code cannot sign in. SMS works on every phone, with no internet, and costs a few paise for each message.
+**SMS and WhatsApp codes are separate.** WhatsApp codes have their own switch on **WhatsApp Control → OTP**. Either one alone is enough. With both on, the app asks the employee how to get the code ("Send code by WhatsApp" / "Send code by SMS"), remembers the choice, and after sending offers the other way ("Didn't get it? Send by SMS instead"). With only one on, the app uses it without asking. With neither on, employees sign in with their password. The apps check these switches every time a sign-in screen opens or the app comes back to the front, so a change here shows at once.
 
 **Where to find it:** sidebar → Administration → **SMS Control**. An HR user needs the **SMS Control** permission: View to look, Edit to change. A branch login can look at its own branch's messages but cannot change settings or send a test.
 
-**The five tabs**
-- **Overview.** Shows which channel the codes use, whether the SMS service is set up, whether this server may send, how many messages went today and this hour against the limits, and a list of what to do next.
-- **Settings.** **Channel** (WhatsApp or SMS), **Limits** (how long a code works, how often it can be asked for, the company limits) and **Switches** (sign in with a code, forgot password by code, first-time password by code). Each setting explains what it does.
+**The six tabs**
+- **Overview.** Whether SMS codes are on, whether 2Factor is set up, whether this server may send, and whether sending is paused; the 2Factor **credit balance**; this month's codes sent, failed, blocked and used, with the delivery and used rates; the **cost so far** against your monthly budget, with the projected cost for the month; today against the hourly and daily limits; and a list of what needs attention.
+- **Usage & Cost.** Any month: a day-by-day chart, the codes by purpose (sign-in, password reset, first password, tests) and the cost.
+- **Settings.** **OTP Switches** (SMS codes on or off, and what they may be used for: sign in, forgot password, first password), **Limits** (how long a code works, how often it can be asked for, the company limits) and **Cost** (the price of one SMS, ₹0.20 unless you change it, and a monthly budget). Each setting explains what it does.
 - **Messages.** Every SMS the system sent or held back, newest first: when, who, the last four digits of the number, what for, and the result. A failed or blocked message says why. A code is never shown.
-- **Test.** Sends one real SMS to a number you type, so you can see that it works.
-- **Setup.** The short list of what must be done once for SMS to work.
+- **Test.** Sends one real test code (always `1234`, through the approved template) to an employee's registered number or to a number you type, so you can see that it works.
+- **Setup.** What must be done once for SMS to work, by name, and a note about codes that arrive as a phone call.
 
-**Before you can use SMS (done once).** An account with the SMS company (2Factor) with some credit, and the approved message template (name `UKT_HRMS_OTP`, sender `UKTHRM`). The developer then puts the 2Factor API key on the server. The full step-by-step guide is in `twofactor-sms-otp-integration.md`. The system will not let you choose SMS until the server has the 2Factor details.
+**Before you can use SMS (done once).** An account with the SMS company (2Factor) with some credit, and the approved message template (name `UKT_HRMS_OTP`, sender `UKTHRM`). The developer then puts the 2Factor API key on the server. The full step-by-step guide is in `twofactor-sms-otp-integration.md`. The system will not let you switch SMS codes on until the server has the 2Factor details.
 
-**Switching to SMS, step by step**
-1. Open **Overview**. It should say **2Factor set up: Yes** and **This machine sends: Allowed**.
-2. Open **Test**, type **your own number** and send one message. It should arrive within a minute and read exactly like the approved text.
-3. Open **Settings → Channel**, choose **SMS**, press **Save channel** and confirm.
+**Switching SMS codes on, step by step**
+1. Open **Overview**. It should say **2Factor set up: Yes** and **This server sends: Allowed**.
+2. Open **Test**, send one code to **yourself**. It should arrive within a minute and read exactly like the approved text.
+3. Open **Settings → OTP Switches**, switch **SMS codes** on, press **Save switches** and confirm.
 4. Watch **Messages** for the first day.
-5. Keep **password sign-in** switched on (WhatsApp Control → Feature Controls). It is the fallback.
+5. Keep **password sign-in** switched on (WhatsApp Control → OTP). It is the fallback.
 
 **The limits that protect you** (you can change them in Settings → Limits):
 - A code works for 5 minutes, and only once.
@@ -1826,51 +1827,57 @@ On every page: the period and unit/department filters at the top; **Needs your a
 - One phone number receives at most 5 SMS an hour.
 - The company sends at most 300 SMS an hour and 1,500 a day.
 - After 3 failed sends in 10 minutes, SMS pauses for 10 minutes by itself.
-When a limit stops a code, **Messages** shows it as **Blocked** with the reason, and the employee is told to use their password.
+When a limit stops a code, **Messages** shows it as **Blocked** with the reason, and the employee is told to use their password (or WhatsApp, if WhatsApp codes are on).
 
-**What it costs.** Each SMS is paid to 2Factor (check the current price in your 2Factor account). A message that fails after 2Factor accepted it may still be charged, and so is every test. For about 250 employees, using codes only for first-time passwords and password resets costs a few hundred rupees a year. Signing in with a code every day costs far more, so it is better to leave daily sign-in on passwords.
+**What it costs.** Each SMS is paid to 2Factor. The page estimates the cost from the price you set in Settings → Cost; check the real price in your 2Factor account. A message that fails after 2Factor accepted it may still be charged, and so is every test. For about 250 employees, using codes only for first-time passwords and password resets costs a few hundred rupees a year. Signing in with a code every day costs far more, so it is better to leave daily sign-in on passwords.
 
-**If something goes wrong.** Employees can always sign in with their password. Open **Messages** and read the reason on the failed row. The usual causes are no credit left (top up in the 2Factor panel), a wrong API key or template name on the server, or a message text that does not match the approved one. Ask the developer to check the setup. To go back, choose **WhatsApp** in Settings → Channel and save.
+**If something goes wrong.** Employees can always sign in with their password. Open **Messages** and read the reason on the failed row. The usual causes are no credit left (top up in the 2Factor panel), a wrong API key or template name on the server, or a message text that does not match the approved one. Ask the developer to check the setup. To stop SMS codes, switch them off in Settings → OTP Switches and save.
 
-**New app versions.** The mobile app needs a **new APK build**, and the Employee Web App needs its own **Vercel deploy**, before their screens say "SMS". Older versions keep working but still say "WhatsApp" while the code arrives by SMS.
+**New app versions.** The mobile app needs a new version (APK or update) and the Employee Web App its own deploy before they offer the WhatsApp / SMS choice. Older versions keep working: they use the first way that works.
 
 #### What NOT to do in SMS Control
 - Do not share the 2Factor API key with anyone, and never type it into the portal (it is not asked for there).
 - Do not change the message wording on your own: it must match the text approved with the telecom operators exactly.
-- Do not switch off password sign-in until you have seen SMS work for every kind of employee.
+- Do not switch off password sign-in until you have seen the codes work for every kind of employee.
 - Do not raise the company limits far above what you need: they protect your credit.
 
 ### 4.13 WhatsApp Control (how WhatsApp messages go out)
 
-**What it's for:** every WhatsApp message the system sends (sign-in codes, documents, attendance alerts, approval decisions, Geo / On-Duty decisions, visitor arrivals, gate OUT / IN, the Department Head reminders) is managed here: what is switched on, the wording, the history, and how fast messages leave the company's WhatsApp number.
+**What it's for:** every WhatsApp message the system sends (sign-in codes, documents, attendance alerts, approval decisions, Geo / On-Duty decisions, visitor arrivals, gate OUT / IN, the Department Head reminders, Attendance Notify) goes through the **official Meta WhatsApp Cloud API** and is managed here: what is switched on, the message templates, the history, the usage and the cost.
 
-**Where to find it:** sidebar → Administration → **WhatsApp Control** (permission **WhatsApp Control**: View to look, Edit to change).
+**Where to find it:** sidebar → Administration → **WhatsApp Control** (permission **WhatsApp Control**: View to look, Edit to change; each tab can be given separately).
 
-**Why messages wait in a queue (since 6 Nov 2026).** The company number is linked to WhatsApp Web, and WhatsApp blocks ("restricts") a number that sends many messages quickly, the same text to many people, or several messages a day to one person. So, apart from sign-in codes, **no message is sent at the moment it is created**. It waits in a queue and leaves one at a time:
+**Templates, not free text.** Meta delivers a business message only as a **template it has approved**: fixed wording with blanks (the employee's name, the date ...) that the system fills in. Every message type has its own template (named `hrms_...`); the sign-in, password reset and first-password codes share one (`hrms_otp`, Meta's own wording with a "Copy code" button). A message whose template is missing or not yet approved is **not sent** (the Messages tab says why) until you create it and Meta approves it, which usually takes minutes and at most a day. WhatsApp **groups** and the visitor **contact card** cannot be sent this way any more.
+
+**Why messages wait in a queue.** Apart from sign-in codes, no message is sent at the moment it is created. It waits in a queue and leaves one at a time:
 - at least **30 seconds** between two messages;
 - at most **60 messages an hour** and **200 a day**;
 - at most **3 automatic messages** (alerts, gate, visitor, reminders) **per employee per day**; decisions on their own requests and documents are not counted in this one;
 - **nothing between 9 PM and 7 AM** (quiet hours). A message created during quiet hours is not sent, not even the next morning;
-- **only today's messages are sent.** A message that is no longer useful (an absent alert after an hour, a late alert after 30 minutes, a gate or visitor message after 30 minutes, an On-Duty decision after 2 hours) or that was not sent by midnight is dropped ("Expired") and never sent later;
+- **only today's messages are sent.** A message that is no longer useful or that was not sent by midnight is dropped ("Expired") and never sent later;
 - the same message to the same employee twice within 24 hours is sent once ("Duplicate");
-- if WhatsApp refuses 3 messages within 30 minutes (for example the phone with the linked number is offline), sending pauses by itself and tries again 15 minutes later.
+- if Meta refuses the account itself (an expired token, a spam limit, a payment problem), sending pauses at once and the Overview says why. A message refused for one employee only (for example a number that is not on WhatsApp) is marked **Failed** and does not stop the others.
 
-You can change these numbers and the quiet hours under **Feature Controls**, but the defaults are deliberately careful: raising them is how a number gets restricted again.
+You can change these numbers and the quiet hours on **Message Controls**.
 
-**Sign-in codes** always go at once, also at night. They are stopped only by the **WhatsApp sending** master switch; while it is OFF the apps do not offer WhatsApp codes, and employees sign in with their password (or SMS, if SMS Control uses it).
+**Sign-in codes** always go at once, also at night, and only while **WhatsApp OTP** is on (the **OTP** tab) and the `hrms_otp` template is approved. SMS codes are separate (section 4.12): either one is enough.
 
 **The tabs**
-- **Overview.** Today's and this month's messages by result, and the **queue**: how many are waiting, how many went today and in the last hour, failed / expired / skipped today, whether sending is paused (and why) or it is quiet hours, and when the next message can go. **Clear queue** throws away everything still waiting (each becomes "Skipped - Cleared by HR"); use it when something went wrong and you do not want the waiting messages to go at all.
-- **Messages.** Every message with its result: **Queued** (waiting its turn), **Sending**, **Sent**, **Delivered**, **Read**, **Failed** (with WhatsApp's reason), **Expired** (too late, not sent), **Skipped** (with the reason: quiet hours, opted out, daily limit for this employee, duplicate, switched off, cleared). Codes are always hidden.
-- **Employees.** Each employee's messages, and the **opt-out** switch: an opted-out employee gets no WhatsApp notifications or documents (they still get the sign-in codes they ask for, and the phone notifications of the mobile app). Use it when an employee asks to stop, or when the number on file belongs to someone else.
-- **Feature Controls.** The **WhatsApp sending** master switch, a switch for every feature and for **every single message type**, the timings, the queue limits and the quiet hours. **Punch reminders are OFF** (owner decision, 6 Nov 2026).
-- **Message Text.** The wording of every message. The built-in wordings are short and plain and end with "- UK Textiles HR"; any wording you saved yourself is kept.
-- **Configuration.** The connection, read only.
+- **Overview.** The WhatsApp number as Meta sees it (verified name, quality, how many people it may message a day, status, when Meta's delivery reports last arrived), this month's messages (sent, delivered, read, failed), the **cost so far** against your monthly budget with the projected cost, the templates (approved, waiting, rejected, missing) and a list of what needs attention.
+- **Usage & Cost.** Any month: a day-by-day chart by Meta's price category, the messages and cost of each message type, the cost with and without 18% GST, the projection for the month, Meta's own figures when Meta gives them, and the prices used.
+- **Message Controls.** The **WhatsApp sending** master switch, a switch for every module and for **every single message type** (with its template, whether Meta approved it, this month's count, and **Create template** when it is missing), the timings, the queue limits, the quiet hours and the queue (**Clear queue** throws away everything still waiting). **Punch reminders are OFF** (owner decision, 6 Nov 2026).
+- **Templates.** Every template at Meta with its status, category, quality and the message types that use it. **Sync now** reads them from Meta; **Create** starts from the system's own wording of a message type (ready to edit, with a preview of how it will look on the phone) or from a blank one; **Create all missing** submits one for every switched-on type that has none; **Delete** removes one at Meta (after asking). A rejected template shows Meta's reason.
+- **OTP.** WhatsApp codes on or off, and what for (sign in, password reset, first password); how long a code works; whether `hrms_otp` is approved; this month's codes; and password sign-in.
+- **Messages.** Every message with its result and WhatsApp's ticks: **Queued**, **Sending**, **Sent** (one tick), **Delivered** (two), **Read** (two blue), **Failed** (with the reason), **Expired**, **Skipped** (with the reason), plus the template it went as and how Meta charges it. Codes are always hidden.
+- **Employees.** Each employee's messages, and the **opt-out** switch: an opted-out employee gets no WhatsApp notifications or documents (they still get the sign-in codes they ask for). An employee who replies **STOP** is opted out automatically.
+- **Send a test.** Sends one message of any type to an employee as its template: first a preview (the template, the filled-in blanks and the text), then the real send with Meta's answer.
+- **Settings.** What the server needs (each key shown only as set or missing, never its value), the **webhook address** to give Meta, the prices per category and the monthly budget.
 
-**Sending documents.** A salary slip, ID card or letter sent from its page is queued and usually leaves within a minute ("Queued" counts as done on that page). **Bulk WhatsApp** of salary slips queues one message per employee and answers at once; with the default limits about 200 can go in a day, and nothing at night. The answer says how many can still go today: whatever has not gone by midnight is dropped, so send the rest again the next day.
+**Sending documents.** A salary slip, ID card or letter sent from its page is queued and usually leaves within a minute; the file travels with the message. **Bulk WhatsApp** of salary slips queues one message per employee; with the default limits about 200 can go in a day, and nothing at night.
 
 #### What NOT to do in WhatsApp Control
-- Do not raise the limits or switch quiet hours off to "catch up": a burst is exactly what gets the number restricted.
+- Do not raise the limits or switch quiet hours off to "catch up": a burst lowers the number's quality, and Meta then limits it.
+- Do not delete a template that message types still use unless you create the new one first: those messages are not sent meanwhile.
 - Do not switch the punch reminders back on for everyone at once.
 - Do not use WhatsApp for announcements to all staff: use the phone notifications (Mobile Messages) instead.
 

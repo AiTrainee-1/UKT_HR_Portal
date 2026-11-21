@@ -437,13 +437,13 @@ describe("Execution History", () => {
 });
 
 describe("the form's WhatsApp groups", () => {
-  it("are only read from WhatsApp when asked", () => {
+  it("says groups can't get reports with the Meta Cloud API, and never asks WhatsApp for them", () => {
     open("/hr/attendance/attendance-notify?tab=whatsapp");
     click(q("an-card-edit-1"));
     click(q("an-form-step-recipients"));
-    expect(q("an-groups-load")).not.toBeNull();
-    expect(h.groupsCalls.every((on) => on === false)).toBe(true);
-    click(q("an-groups-load"));
-    expect(h.groupsCalls.at(-1)).toBe(true);
+    expect(text(q("an-groups-unsupported"))).toContain("individual numbers only");
+    expect(q("an-groups-load")).toBeNull();
+    expect(q("an-groups-legacy")).toBeNull();
+    expect(h.groupsCalls).toEqual([]);
   });
 });

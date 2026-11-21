@@ -7,8 +7,11 @@ import {
   STATUS_TONE,
   TYPE_LABEL,
   appliedByEmployee,
+  approvedOf,
+  decidedByOf,
   hasLeft,
   progressPct,
+  requestedOf,
   type Sort,
   type SortKey,
   type SettlementRow,
@@ -54,15 +57,45 @@ function Recovery({ a }: { a: SettlementRow }) {
   );
 }
 
-/** The approved amount, and what the employee asked for when HR approved less. */
+/** What was asked for and, once decided, what was approved: one figure while they agree, both when HR approved less. */
 function AmountCell({ a }: { a: SettlementRow }) {
-  const asked = a.requestedAmount;
+  const asked = requestedOf(a);
+  const approved = approvedOf(a);
+  if (approved == null) {
+    return (
+      <div className="space-y-0.5 whitespace-nowrap">
+        <p className={cn("text-sm font-bold", a.status === "rejected" && "text-gray-400 line-through")}>
+          {formatMoney(asked)}
+        </p>
+        <p className="text-[11px] text-gray-500">requested</p>
+      </div>
+    );
+  }
   return (
     <div className="space-y-0.5 whitespace-nowrap">
-      <p className="text-sm font-bold">{formatMoney(a.amount)}</p>
-      {asked != null && asked !== a.amount && (
+      <p className="text-sm font-bold">{formatMoney(approved)}</p>
+      {approved !== asked ? (
         <p className="text-[11px] font-medium text-amber-700" data-testid={`advance-asked-${a.id}`}>
-          asked {formatMoney(asked)}
+          of {formatMoney(asked)} asked
+        </p>
+      ) : (
+        <p className="text-[11px] text-gray-500">approved</p>
+      )}
+    </div>
+  );
+}
+
+/** Who decided, and HR's remark (the reason for a rejection, the why of a smaller approval). */
+function DecisionNote({ a, className }: { a: SettlementRow; className?: string }) {
+  const by = decidedByOf(a);
+  const remark = a.status === "pending" ? "" : (a.decisionRemark ?? "").trim();
+  if (!by && !remark) return null;
+  return (
+    <div className={cn("max-w-[16rem] space-y-0.5 text-[11px] leading-snug", className)}>
+      {by && <p className="text-gray-400">by {by}</p>}
+      {remark && (
+        <p className="line-clamp-2 italic text-gray-600" title={remark} data-testid={`advance-remark-${a.id}`}>
+          &ldquo;{remark}&rdquo;
         </p>
       )}
     </div>
@@ -172,6 +205,10 @@ function DeleteButton({
   );
 }
 
+/** The Actions column stays pinned to the right edge: at laptop widths (1366 px) the table is wider than its box, and
+ *  Approve / Reject would otherwise sit behind the sideways scroll. */
+const STICKY_ACTIONS = "sticky right-0 z-10 bg-white shadow-[-10px_0_12px_-12px_rgba(15,23,42,0.35)]";
+
 export default function AdvanceList({
   rows,
   sort,
@@ -197,7 +234,12 @@ export default function AdvanceList({
               <SortHead label="Deduction from" column="start" sort={sort} onSort={onSort} />
               <SortHead label="Status" column="status" sort={sort} onSort={onSort} />
               <SortHead label="Raised" column="created" sort={sort} onSort={onSort} />
-              <TableHead className="text-right text-[11px] font-bold uppercase tracking-wider text-[#006496]/60">
+              <TableHead
+                className={cn(
+                  STICKY_ACTIONS,
+                  "text-right text-[11px] font-bold uppercase tracking-wider text-[#006496]/60",
+                )}
+              >
                 Actions
               </TableHead>
             </TableRow>
@@ -206,7 +248,7 @@ export default function AdvanceList({
             {rows.map((a) => (
               <TableRow
                 key={a.id}
-                className="cursor-pointer"
+                className="group cursor-pointer"
                 onClick={() => onOpen(a)}
                 data-testid={`advance-row-${a.id}`}
               >
@@ -225,12 +267,13 @@ export default function AdvanceList({
                 <TableCell className="whitespace-nowrap text-xs text-gray-600">{startOf(a)}</TableCell>
                 <TableCell>
                   <Chip tone={STATUS_TONE[a.status]}>{STATUS_LABEL[a.status]}</Chip>
-                  {a.approvedBy && a.status !== "pending" && (
-                    <p className="mt-0.5 text-[11px] text-gray-400">by {a.approvedBy}</p>
-                  )}
+                  <DecisionNote a={a} className="mt-0.5" />
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-xs text-gray-500">{formatDate(a.createdAt)}</TableCell>
-                <TableCell onClick={(e) => e.stopPropagation()}>
+                <TableCell
+                  className={cn(STICKY_ACTIONS, "transition-colors group-hover:bg-slate-50")}
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <div className="flex items-center justify-end gap-1">
                     {canDecide(a) && (
                       <Decide
@@ -264,8 +307,13 @@ export default function AdvanceList({
         {rows.map((a) => (
           <div key={a.id} onClick={() => onOpen(a)} className="space-y-3 p-4" data-testid={`advance-card-${a.id}`}>
             <div className="flex items-start justify-between gap-2">
-              <EmployeeCell a={a} large />
-              <Chip tone={STATUS_TONE[a.status]}>{STATUS_LABEL[a.status]}</Chip>
+              {/* min-w-0 lets the code / department line truncate, so the status chip is never pushed off the card */}
+              <div className="min-w-0 flex-1">
+                <EmployeeCell a={a} large />
+              </div>
+              <span className="shrink-0">
+                <Chip tone={STATUS_TONE[a.status]}>{STATUS_LABEL[a.status]}</Chip>
+              </span>
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
@@ -280,6 +328,7 @@ export default function AdvanceList({
                 <Recovery a={a} />
               </div>
             </div>
+            <DecisionNote a={a} className="max-w-none" />
             <div className="flex items-center justify-between gap-2 text-[11px] text-gray-500">
               <span>
                 Raised {formatDate(a.createdAt)} · from {startOf(a)}

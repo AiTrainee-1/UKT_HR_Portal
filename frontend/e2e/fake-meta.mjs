@@ -14,11 +14,16 @@
 //                                                      (FAKE_META_TEMPLATE_STATUS=PENDING to keep it pending)
 //   DELETE /{ver}/{waba-id}/message_templates?name=…   delete (all languages, or one with hsm_id)
 //   GET    /{ver}/{waba-id}?fields=pricing_analytics…  daily volume / cost per category, from what was sent here
+//   POST   /{ver}/{template-id}                       edit a template (resubmitting a rejected one) -> {success: true}
+//   GET    /{ver}/app                                 the Meta app the token belongs to -> {id}
+// Meta's Resumable Upload API (the sample file a document / image template header needs as its example):
+//   POST   /{ver}/{app-id}/uploads?file_name&file_length&file_type   open a session -> {id: "upload:…"}
+//   POST   /{ver}/upload:…                            the raw file, "Authorization: OAuth <token>" -> {h: "<handle>"}
 //
 // Control endpoints for the tests (no version prefix):
 //   GET  /messages          everything sent so far: {id, to, number, template, language, category, params, header,
 //                           button, message, receivedAt}
-//   GET  /uploads           every media upload: {id, size, contentType, receivedAt}
+//   GET  /uploads           every media upload and template sample upload: {id, size, contentType, fileName?, receivedAt}
 //   GET  /templates         the templates this fake holds
 //   POST /templates/status  {name, status, language?, reason?}: change a template's status (e.g. REJECTED)
 //   POST /reset             forget the messages, uploads and pending failures (templates stay)
@@ -30,6 +35,7 @@ import { readFileSync } from "node:fs";
 import http from "node:http";
 
 const PORT = Number(process.env.FAKE_META_PORT ?? 8190);
+const APP_ID = "300000000000003";
 const NEW_TEMPLATE_STATUS = (process.env.FAKE_META_TEMPLATE_STATUS ?? "APPROVED").toUpperCase();
 // India rates (INR per message) the backend also assumes by default: only for the fake pricing figures.
 const RATES = { authentication: 0.115, utility: 0.115, marketing: 0.8631, service: 0 };
@@ -38,6 +44,7 @@ let messages = [];
 let uploads = [];
 let failures = [];
 let templates = [];
+let sessions = new Map();
 let counter = 0;
 
 function seed() {
@@ -206,7 +213,9 @@ const PHONE = {
 };
 
 function graph(req, res, url, parts, raw) {
-  if (!/^Bearer \S+/.test(req.headers.authorization ?? "")) {
+  // the upload step of the Resumable Upload API authenticates with "OAuth <token>", every other call with a bearer token
+  const uploadStep = parts.length === 1 && parts[0].startsWith("upload:");
+  if (!(uploadStep ? /^OAuth \S+/ : /^Bearer \S+/).test(req.headers.authorization ?? "")) {
     return metaError(res, 401, 190, "Invalid OAuth access token - Cannot parse access token");
   }
   if (failures.length) {
@@ -214,6 +223,29 @@ function graph(req, res, url, parts, raw) {
     return metaError(res, f.status ?? 400, f.code ?? 131026, f.message ?? "Message undeliverable.");
   }
   const [id, edge] = parts;
+  if (uploadStep) {
+    const session = sessions.get(id);
+    if (req.method !== "POST" || !session) return metaError(res, 400, 100, "(#100) Unknown upload session");
+    sessions.delete(id);
+    uploads.push({
+      id,
+      size: raw.length,
+      contentType: session.fileType,
+      fileName: session.fileName,
+      receivedAt: new Date().toISOString(),
+    });
+    return json(res, 200, { h: `4::${next("FAKEHANDLE")}` });
+  }
+  if (req.method === "GET" && id === "app" && !edge)
+    return json(res, 200, { id: APP_ID, name: "UK Textiles HRMS (e2e)" });
+  if (req.method === "POST" && id === APP_ID && edge === "uploads") {
+    const session = `upload:${next("FAKEUPLOAD")}`;
+    sessions.set(session, {
+      fileName: url.searchParams.get("file_name") ?? "",
+      fileType: url.searchParams.get("file_type") ?? "",
+    });
+    return json(res, 200, { id: session });
+  }
   let body = {};
   if ((req.headers["content-type"] ?? "").includes("application/json")) {
     try {
@@ -246,6 +278,17 @@ function graph(req, res, url, parts, raw) {
       if (templates.length === before) return metaError(res, 400, 100, "(#100) Template not found");
       return json(res, 200, { success: true });
     }
+  }
+  if (req.method === "POST" && !edge) {
+    // editing a template Meta knows (the backend resubmits a rejected one this way): it goes back to review
+    const template = templates.find((t) => t.id === id);
+    if (!template)
+      return metaError(res, 400, 100, `(#100) Unsupported post request. Object with ID '${id}' does not exist`);
+    if (Array.isArray(body.components)) template.components = body.components;
+    if (body.category) template.category = String(body.category).toUpperCase();
+    template.status = NEW_TEMPLATE_STATUS;
+    template.rejected_reason = "NONE";
+    return json(res, 200, { success: true });
   }
   if (req.method === "GET" && !edge) {
     const fields = url.searchParams.get("fields") ?? "";
@@ -291,6 +334,7 @@ const server = http.createServer((req, res) => {
       messages = [];
       uploads = [];
       failures = [];
+      sessions = new Map();
       templates = seed();
       return json(res, 200, { ok: true });
     }

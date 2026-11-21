@@ -1965,6 +1965,8 @@ def _regenerated_before_the_advance_fix(emp):
 class PayrollSlipReconciliationTests(_Base):
     def patch_payroll(self, emp, **body):
         p = Payroll.objects.get(employee=emp, month=MONTH, year=YEAR)
+        if "bonus" in body:
+            Payroll.objects.filter(pk=p.pk).update(bonus=body["bonus"])  # set before the Excess tab
         r = self.client.patch(f"/api/payroll/{p.id}", body, content_type="application/json", **_headers(self.admin))
         self.assertEqual(r.status_code, 200, r.content)
         return p
@@ -2246,6 +2248,8 @@ class ExportAndAccessTests(_Base):
 class AdversarialReviewTests(_Base):
     def patch_payroll(self, emp, **body):
         p = Payroll.objects.get(employee=emp, month=MONTH, year=YEAR)
+        if "bonus" in body:
+            Payroll.objects.filter(pk=p.pk).update(bonus=body["bonus"])  # set before the Excess tab
         r = self.client.patch(f"/api/payroll/{p.id}", body, content_type="application/json", **_headers(self.admin))
         self.assertEqual(r.status_code, 200, r.content)
         return p
@@ -2398,6 +2402,7 @@ class StaleSlipAndTotalsTests(_Base):
 
     def test_recon_variance_column_is_filled_on_the_net_differs_finding_only(self):
         p = Payroll.objects.get(employee=self.L, month=MONTH, year=YEAR)
+        Payroll.objects.filter(pk=p.pk).update(bonus=500)  # set before the Excess tab: the PATCH only re-sends it
         self.client.patch(
             f"/api/payroll/{p.id}", {"bonus": 500}, content_type="application/json", **_headers(self.admin)
         )

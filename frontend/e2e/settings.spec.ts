@@ -19,7 +19,7 @@ const TAB_HEADINGS: Record<string, string> = {
   "PF & ESI": "Staff PF and ESI",
   "Salary Slip": "Salary Slip Settings",
   "SMTP / Email": "SMTP / Email Configuration",
-  WhatsApp: "WAClient WhatsApp API",
+  WhatsApp: "Meta WhatsApp Cloud API",
   Backup: "Scheduled Backup",
   Themes: "Themes",
 };

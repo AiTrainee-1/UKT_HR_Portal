@@ -4,15 +4,18 @@ import { monthYear } from "@/components/payroll/kit/format";
 import { STATEMENT_URL_DEFAULTS } from "@/components/payroll/kit/statement-url";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
 import { DEFAULT_ISSUE_FILTERS, sanitizeFilters, type IssueFilterState } from "@/components/payroll/panels/issues";
+import { NOT_INCLUDED_URL_DEFAULTS } from "@/components/payroll/not-included/logic";
+import { PAYSLIP_URL_DEFAULTS } from "@/components/payroll/period-payslips/logic";
 
 // The state of the Staff Payroll page. It lives in the address (?tab=salary&month=10&year=2026&q=asha) so a reload, a
 // shared link and Back from a payroll's details page all land on the same view.
 
 export type StaffTab = "payroll" | "salary" | "payslip";
-export type StaffView = "records" | "issues" | "skipped" | "rules";
+export type StaffView = "records" | "issues" | "skipped" | "not_included" | "rules";
 
 export const STAFF_TABS: readonly StaffTab[] = ["payroll", "salary", "payslip"];
-export const STAFF_VIEWS: readonly StaffView[] = ["records", "issues", "skipped", "rules"];
+// "not_included" (2026-11-20): every employee of the HRMS who is not in the month's payroll, with the reason
+export const STAFF_VIEWS: readonly StaffView[] = ["records", "issues", "skipped", "not_included", "rules"];
 
 /** The Issues view's own filters in the address: prefixed, so they never collide with the records' filters (q, dept ...). */
 export const ISSUE_URL_DEFAULTS = {
@@ -40,6 +43,9 @@ export const STAFF_URL_DEFAULTS: Record<string, string> = {
   ...FILTER_URL_DEFAULTS,
   ...ISSUE_URL_DEFAULTS,
   ...STATEMENT_URL_DEFAULTS,
+  /** The Not included view's filters (ni*) and the Payslip tab's (pl*). */
+  ...NOT_INCLUDED_URL_DEFAULTS,
+  ...PAYSLIP_URL_DEFAULTS,
 };
 
 export const isStaffTab = (v: string): v is StaffTab => (STAFF_TABS as readonly string[]).includes(v);

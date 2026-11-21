@@ -2,7 +2,7 @@ import { act, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderMdPage, type Fixtures, type RenderedPage } from "@/pages/md/testing/renderMdPage";
 import WhatsAppControl from "../WhatsAppControl";
-import { ADMIN, metaTemplatesFixture, pageFixtures } from "./test-fixtures";
+import { ADMIN, metaTemplatesFixture, pageFixtures, settingsServer } from "./test-fixtures";
 
 // Templates: every Meta template with its status, category, quality, the message types it serves and Meta's rejection
 // reason; filters; Sync now; delete after a confirmation; the switched-on types with no approved template, one by one or
@@ -162,7 +162,45 @@ describe("the types without an approved template", () => {
   });
 });
 
+describe("the types without an approved template follow the server's rule", () => {
+  it("leaves the code template out while WhatsApp OTP is OFF, and a type held by a shared switch", async () => {
+    const settings = settingsServer();
+    settings.state.otpEnabled = false;
+    settings.state.groups = [...(settings.state.groups as unknown[]), { key: "geo", title: "Geo", blurb: "" }];
+    settings.state.features.push(
+      { key: "geoApprovalEnabled", group: "geo", label: "Geo approval", enabled: false },
+      { key: "type:geo_approval", group: "geo", label: "Geo Approval", enabled: true },
+    );
+    const server = templatesServer();
+    const list = metaTemplatesFixture();
+    list.templates = list.templates.filter((t) => t.name !== "hrms_otp");
+    page = await renderMdPage(
+      WhatsAppControl,
+      {
+        ...pageFixtures(settings),
+        "/api/auth/me": ADMIN,
+        ...server.fixtures,
+        "/api/whatsapp-control/meta-templates": list,
+      },
+      { path: "/hr/whatsapp-control?tab=templates" },
+    );
+    const missing = Array.from(document.body.querySelectorAll<HTMLElement>('[data-testid^="wa-missing-"]'))
+      .map((r) => r.dataset.testid!)
+      .filter((id) => !id.startsWith("wa-missing-create-"));
+    expect(missing).toEqual(["wa-missing-id_card", "wa-missing-approval_approved"]);
+  });
+});
+
 describe("the template editor", () => {
+  it("never offers Marketing: the server refuses it", async () => {
+    await open();
+    await page!.click('[data-testid="wa-templates-new"]');
+    const options = Array.from(
+      (el('[data-testid="wa-tpl-category"]') as HTMLSelectElement).querySelectorAll("option"),
+    ).map((o) => o.value);
+    expect(options).toEqual(["UTILITY", "AUTHENTICATION"]);
+  });
+
   it("checks Meta's rules as HR types, shows the phone, and submits the template", async () => {
     const { server } = await open();
     await page!.click('[data-testid="wa-templates-new"]');

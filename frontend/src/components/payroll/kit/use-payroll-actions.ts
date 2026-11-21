@@ -4,7 +4,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useUpdatePayrollRecord } from "@/lib/api-client";
 import { useUpdatePayrollOf, type PayrollKind } from "@/lib/api-client/custom-hooks";
 
-const PAYROLL_KEY_PREFIXES = ["/api/payroll", "/api/salary-slips"];
+// (/api/payslips: Staff Payroll's Payslip tab, read from the month's payroll records)
+const PAYROLL_KEY_PREFIXES = ["/api/payroll", "/api/salary-slips", "/api/payslips"];
 // "Who would be skipped" depends only on who has a salary and working days, and it is the heaviest question the page asks
 // (about 14 s of server work for 120 staff): a change to one payslip must not ask it again.
 const SKIP_CHECK_PREFIXES = ["/api/payroll/skip-check", "/api/payroll/production/skip-check"];

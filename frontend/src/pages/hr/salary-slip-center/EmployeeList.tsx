@@ -72,8 +72,8 @@ function RowCheckbox({
 function DeptCell({ row, showUnit }: { row: SlipCenterEmployee; showUnit: boolean }) {
   return (
     <div className="min-w-0 leading-tight">
-      <p className="truncate text-gray-800">{row.department ?? <span className="text-gray-400">No department</span>}</p>
-      <p className="truncate text-xs text-gray-500">{row.designation ?? "—"}</p>
+      <p className="truncate text-gray-800">{row.department || <span className="text-gray-400">No department</span>}</p>
+      <p className="truncate text-xs text-gray-500">{row.designation || "—"}</p>
       {showUnit && row.unit && <p className="truncate text-[11px] text-gray-400">{row.unit}</p>}
     </div>
   );
@@ -233,7 +233,7 @@ function EmployeeCards({ rows, allRows, selection, onToggle, onToggleAll, showUn
                 <RowBadges row={row} />
               </div>
               <p className="text-xs text-gray-600">
-                {row.department ?? "No department"}
+                {row.department || "No department"}
                 {row.designation && <> · {row.designation}</>}
                 {showUnit && row.unit && <> · {row.unit}</>}
               </p>

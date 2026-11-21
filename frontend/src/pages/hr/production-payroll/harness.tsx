@@ -5,6 +5,9 @@ import type { Mock } from "vitest";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import type {
   EmployeeRules,
+  ExcessEntry,
+  ExcessHistoryItem,
+  NotIncludedEmployee,
   PayCycle,
   PayrollIssue,
   PeriodEmployee,
@@ -26,8 +29,11 @@ import {
   WEEKLY_SLIPS,
   ASHA_ISSUES,
   cyclesOf,
+  excessPeriodOf,
   issuesResponse,
+  notIncludedOf,
   periodsOf,
+  productionPayslipsOf,
   rulesResponse,
   skipCheckOf,
   statementOf,
@@ -57,6 +63,12 @@ export type World = {
   movedOut: Partial<ProductionMovedOut> | null;
   /** What the server says today is (YYYY-MM-DD): a period ends once its last day is not after it. */
   today: string;
+  /** The Excess tab (2026-11-20): every active entry (each names its period), the history, and the login's edit right. */
+  excess: ExcessEntry[];
+  excessHistory: ExcessHistoryItem[];
+  excessCanEdit: boolean;
+  /** Not included: the server's list (built from the roster unless set). */
+  notIncluded: NotIncludedEmployee[] | null;
   /** Paths (without the query) that fail with this HTTP status. */
   failing: Map<string, number>;
   /** Answers for this path only once the returned function is called (a request that is still on its way). */
@@ -68,8 +80,8 @@ export type World = {
   unexpected: string[];
 };
 
-export const apiError = (status: number): ApiError =>
-  new ApiError(new Response(null, { status, statusText: String(status) }), null, { method: "GET", url: "/x" });
+export const apiError = (status: number, body: unknown = null): ApiError =>
+  new ApiError(new Response(null, { status, statusText: String(status) }), body, { method: "GET", url: "/x" });
 
 const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -130,6 +142,10 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
     newJoiners: null,
     movedOut: null,
     today: TODAY,
+    excess: [],
+    excessHistory: [],
+    excessCanEdit: true,
+    notIncluded: null,
     failing: new Map(),
     hold: (path) => {
       let release = () => {};
@@ -165,6 +181,18 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
     const inPeriod = (p: ProductionPayrollItem) =>
       p.periodStart === period.periodStart && p.periodEnd === period.periodEnd;
     const payrolls = payrollsOf(world.people);
+
+    // ── the Excess tab's writes (2026-11-20): refused while the period is finalized ──
+    if (path.startsWith("/api/production-payroll-excess/") && method !== "GET") {
+      const body = JSON.parse(String(options?.body ?? "{}")) as Record<string, unknown>;
+      world.writes.push({ method, url, body });
+      if (world.workflow?.locked) {
+        throw apiError(409, {
+          error: "Weekly 2 Feb - 8 Feb 2026 is finalized (Payroll Done): no excess or detection can be changed.",
+        });
+      }
+      return excessWrite(world, method, path, body);
+    }
 
     if (method === "PATCH") {
       // a production payroll is changed on its own route (Production Payroll rights, 2026-11-16)
@@ -355,6 +383,36 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
           moves: [],
           ...(world.movedOut ?? {}),
         } satisfies ProductionMovedOut);
+      case "/api/production-payroll-excess/period":
+        return copy(
+          excessPeriodOf(world.people, world.excess, period, {
+            locked: !!world.workflow?.locked,
+            canEdit: world.excessCanEdit,
+          }),
+        );
+      case "/api/production-payroll-excess/history": {
+        const items = world.excessHistory.filter(
+          (i) =>
+            (!qs.get("periodStart") ||
+              (i.periodStart === qs.get("periodStart") && i.periodEnd === qs.get("periodEnd"))) &&
+            (!qs.get("kind") || i.kind === qs.get("kind")) &&
+            (!qs.get("action") || i.action === qs.get("action")),
+        );
+        return copy({ items, total: items.length, page: 1, pageSize: Number(qs.get("pageSize") ?? 50) });
+      }
+      case "/api/payslips/production":
+        return copy(
+          productionPayslipsOf(world.people, period, {
+            locked: !!world.workflow?.locked,
+            slips: world.slips,
+            excess: world.excess,
+          }),
+        );
+      case "/api/payroll/production/not-included": {
+        const answer = notIncludedOf(world.people, period);
+        if (world.notIncluded) answer.employees = world.notIncluded;
+        return copy(answer);
+      }
       case "/api/payroll-settings":
         return copy(world.settings);
       case "/api/pf-esi-settings":
@@ -380,6 +438,117 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
     }
   });
   return world;
+}
+
+/**
+ * The fake server's side of an Excess change: add (several employees, the ones without a rate refused), change the amount,
+ * remove; each logged in the history and applied to the period's payroll at once (bonus and NET), as the server does.
+ */
+function excessWrite(world: World, method: string, path: string, body: Record<string, unknown>) {
+  const signed = (kind: string, amount: number) => (kind === "detection" ? -amount : amount);
+  const payrollOf = (employeeId: number, entry: Pick<ExcessEntry, "periodStart" | "periodEnd">) => {
+    const run = world.people.find((p) => p.employeeId === employeeId)?.payroll as ProductionPayrollItem | undefined;
+    return run && run.periodStart === entry.periodStart && run.periodEnd === entry.periodEnd ? run : undefined;
+  };
+  const apply = (run: ProductionPayrollItem | undefined, delta: number) => {
+    if (!run) return false;
+    run.bonus += delta;
+    run.finalSalary = run.grossSalary + run.bonus - run.deductions;
+    return true;
+  };
+  const log = (
+    entry: ExcessEntry,
+    action: ExcessHistoryItem["action"],
+    before: number | null,
+    after: number | null,
+  ) => {
+    const who = world.people.find((p) => p.employeeId === entry.employeeId);
+    world.excessHistory.unshift({
+      id: world.excessHistory.length + 1,
+      entryId: entry.id,
+      employeeId: entry.employeeId,
+      code: who?.employeeCode ?? "",
+      name: who?.name ?? "",
+      department: who?.departmentName ?? null,
+      cycle: entry.cycle,
+      periodStart: entry.periodStart,
+      periodEnd: entry.periodEnd,
+      kind: entry.kind,
+      action,
+      source: entry.source,
+      previousAmount: before,
+      newAmount: after,
+      remark: String(body.remark ?? ""),
+      by: "HR",
+      at: "2026-02-10T09:00:00+05:30",
+      payrollNetBefore: null,
+      payrollNetAfter: null,
+    });
+  };
+
+  if (method === "POST" && path === "/api/production-payroll-excess/entries") {
+    const ids = (body.employeeIds as number[] | undefined) ?? [];
+    const created: ExcessEntry[] = [];
+    const refused: { employeeId: number; code: string; name: string; reason: string }[] = [];
+    let payrollUpdated = 0;
+    for (const id of ids) {
+      const who = world.people.find((p) => p.employeeId === id);
+      if (!who || who.salaryPerShift === null) {
+        refused.push({
+          employeeId: id,
+          code: who?.employeeCode ?? "",
+          name: who?.name ?? "",
+          reason: "No salary per shift on the profile",
+        });
+        continue;
+      }
+      const entry: ExcessEntry = {
+        id: 500 + world.excess.length + world.excessHistory.length,
+        employeeId: id,
+        kind: body.kind as ExcessEntry["kind"],
+        amount: Number(body.amount),
+        remark: String(body.remark),
+        source: ids.length > 1 ? "bulk" : "manual",
+        createdBy: "HR",
+        createdAt: "2026-02-10T09:00:00+05:30",
+        updatedBy: "HR",
+        updatedAt: "2026-02-10T09:00:00+05:30",
+        cycle: body.cycle as PayCycle,
+        periodStart: String(body.periodStart),
+        periodEnd: String(body.periodEnd),
+      };
+      world.excess.push(entry);
+      created.push(entry);
+      log(entry, "added", null, entry.amount);
+      if (apply(payrollOf(id, entry), signed(entry.kind, entry.amount))) payrollUpdated += 1;
+    }
+    return copy({ created, refused, payrollUpdated });
+  }
+  const patch = /^\/api\/production-payroll-excess\/entries\/(\d+)$/.exec(path);
+  if (method === "PATCH" && patch) {
+    const entry = world.excess.find((e) => e.id === Number(patch[1]));
+    if (!entry) throw apiError(404, { error: "This entry is gone." });
+    const before = entry.amount;
+    entry.amount = Number(body.amount);
+    entry.updatedAt = "2026-02-10T10:00:00+05:30";
+    log(entry, "changed", before, entry.amount);
+    const updated = apply(payrollOf(entry.employeeId, entry), signed(entry.kind, entry.amount - before));
+    return copy({ entry, payrollUpdated: updated });
+  }
+  if (method === "POST" && path === "/api/production-payroll-excess/remove") {
+    const ids = (body.entryIds as number[] | undefined) ?? [];
+    let payrollUpdated = 0;
+    for (const id of ids) {
+      const entry = world.excess.find((e) => e.id === id);
+      if (!entry) continue;
+      world.excess = world.excess.filter((e) => e.id !== id);
+      log(entry, "removed", entry.amount, null);
+      if (apply(payrollOf(entry.employeeId, entry), -signed(entry.kind, entry.amount))) payrollUpdated += 1;
+    }
+    return copy({ removed: ids.length, payrollUpdated });
+  }
+  world.unexpected.push(`${method} ${path}`);
+  throw apiError(404);
 }
 
 let root: Root | null = null;

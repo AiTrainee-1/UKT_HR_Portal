@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from . import approval_workflow as approval, hr_access, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name, is_hr
 from .clock import ist_today
-from .models import Advance, AdvanceRepayment, Employee
+from .models import Advance, AdvanceDecision, AdvanceRepayment, Employee
 from .payroll_insights import inr
 from .view_common import paginate
 
@@ -105,10 +105,39 @@ def advance_json(a: Advance, include_repayments: bool = False) -> dict:
         "salaryAtRequest": float(a.salary_at_request) if a.salary_at_request is not None else None,
         "appliedBy": a.applied_by or Advance.APPLIED_BY_HR,
         "approval": approval.progress("advance", a),
+        # HR's remark on the decision (mandatory on a rejection and on a different approved amount) and when it was
+        # decided (2026-11-20); the months of the deduction schedule ("2026-11"), for the page's month filter.
+        "decisionRemark": a.decision_remark or "",
+        "decidedAt": a.decided_at.isoformat() if a.decided_at else None,
+        "scheduleMonths": sorted({f"{r.year:04d}-{r.month:02d}" for r in a.repayments.all()}),
     }
     if include_repayments:
         data["repayments"] = [repayment_json(r) for r in a.repayments.order_by("year", "month", "id")]
+        data["history"] = [decision_json(d) for d in a.decisions.all()]
     return data
+
+
+def decision_json(d: AdvanceDecision) -> dict:
+    return {
+        "id": d.id,
+        "action": d.action,
+        "requestedAmount": float(d.requested_amount) if d.requested_amount is not None else None,
+        "approvedAmount": float(d.approved_amount) if d.approved_amount is not None else None,
+        "startMonth": d.start_month,
+        "startYear": d.start_year,
+        "remark": d.remark,
+        "by": d.actor_name,
+        "at": d.at.isoformat() if d.at else None,
+    }
+
+
+REMARK_MIN = 3
+
+
+def clean_remark(data) -> str:
+    """HR's decision remark from a PUT body: `decisionRemark` (the Settlement page), `remark`, or `notes` (what older
+    clients sent the reason in)."""
+    return " ".join(str(data.get("decisionRemark") or data.get("remark") or data.get("notes") or "").split())[:1000]
 
 
 def repayment_json(r: AdvanceRepayment) -> dict:
@@ -184,6 +213,7 @@ def advances(request: Request) -> Response:
         employee=emp,
         advance_type=data["advanceType"],
         amount=amount,
+        requested_amount=amount,  # what was asked for, kept for audit when a smaller amount is approved (2026-11-20)
         purpose=data.get("purpose"),
         emi_amount=emi,
         repayment_months=repayment_months,
@@ -285,9 +315,25 @@ def _decision_comment(adv: Advance) -> str | None:
     parts = []
     if adv.requested_amount is not None and Decimal(adv.amount) < Decimal(adv.requested_amount):
         parts.append(f"Approved {inr(adv.amount)} of the {inr(adv.requested_amount)} you asked for.")
-    if adv.notes:
+    if adv.decision_remark:
+        parts.append(adv.decision_remark.strip())
+    elif adv.notes:
         parts.append(adv.notes.strip())
     return " ".join(p for p in parts if p) or None
+
+
+def _record_decision(adv: Advance, action: str, requested: Decimal, remark: str, request: Request) -> None:
+    approved = action == AdvanceDecision.ACTION_APPROVED
+    AdvanceDecision.objects.create(
+        advance=adv,
+        action=action,
+        requested_amount=requested,
+        approved_amount=adv.amount if approved else None,
+        start_month=adv.repayment_start_month if approved else None,
+        start_year=adv.repayment_start_year if approved else None,
+        remark=remark,
+        actor_name=adv.approved_by or get_hr_display_name(request),
+    )
 
 
 @api_view(["GET", "PUT", "DELETE"])
@@ -336,11 +382,36 @@ def advance_detail(request: Request, pk: int) -> Response:
             if field in data:
                 setattr(adv, attr, data[field])
 
+        # The amount asked for is kept for audit: an advance HR recorded before 2026-11-20 has none stored, so its
+        # amount before this decision is it (and the approved amount can then never go above it).
+        amount_before = Decimal(adv.amount)
+        if deciding and adv.status == "approved" and adv.requested_amount is None:
+            adv.requested_amount = amount_before
+
         # Approving a smaller amount and/or moving the first deduction month (2026-10-31). Validated before anything is
         # saved: a refusal leaves the advance exactly as it was.
         problem = _apply_amount_and_start(adv, data, previous_status)
         if problem:
             return Response({"error": problem, "code": "invalid"}, status=400)
+
+        # Remarks (owner 2026-11-20): a rejection always needs one, an approval of another amount than was asked for too.
+        remark = clean_remark(data)
+        if deciding and adv.status == "rejected" and len(remark) < REMARK_MIN:
+            return Response(
+                {"error": "Write the reason for rejecting (at least 3 characters).", "code": "remark"}, status=400
+            )
+        requested = Decimal(adv.requested_amount) if adv.requested_amount is not None else amount_before
+        if deciding and adv.status == "approved" and Decimal(adv.amount) != requested and len(remark) < REMARK_MIN:
+            return Response(
+                {
+                    "error": f"Write a remark: you are approving {inr(adv.amount)} of the {inr(requested)} asked for.",
+                    "code": "remark",
+                },
+                status=400,
+            )
+        if deciding:
+            adv.decision_remark = remark
+            adv.decided_at = timezone.now()
 
         decided_now = adv.status in ("approved", "rejected") and adv.status != previous_status
         if decided_now and not adv.approved_by and "approvedBy" not in data:
@@ -351,6 +422,8 @@ def advance_detail(request: Request, pk: int) -> Response:
             adv.save()
             _auto_create_repayments(adv)
             adv.refresh_from_db()
+            if deciding:
+                _record_decision(adv, AdvanceDecision.ACTION_APPROVED, requested, remark, request)
             if previous_status != "approved":
                 hr_access.log_decision(
                     request, hr_access.kind_for("advance", adv), adv, "approved", f"advance of {inr(adv.amount)}"
@@ -362,13 +435,19 @@ def advance_detail(request: Request, pk: int) -> Response:
             return Response(advance_json(adv, include_repayments=True))
 
         adv.save()
+        if deciding:
+            action = {
+                "approved": AdvanceDecision.ACTION_APPROVED,
+                "rejected": AdvanceDecision.ACTION_REJECTED,
+            }.get(adv.status, AdvanceDecision.ACTION_REOPENED)
+            _record_decision(adv, action, requested, remark, request)
         if adv.status == "rejected" and previous_status != "rejected":
             hr_access.log_decision(
                 request, hr_access.kind_for("advance", adv), adv, "rejected", f"advance of {inr(adv.amount)}"
             )
             whatsapp_approvals.notify_decision(
                 "advance", adv, "rejected", approver=adv.approved_by or request.jwt_user.get("name", ""),
-                role="hr", comment=adv.notes,
+                role="hr", comment=adv.decision_remark or adv.notes,
             )
         return Response(advance_json(adv, include_repayments=was_approved))
 

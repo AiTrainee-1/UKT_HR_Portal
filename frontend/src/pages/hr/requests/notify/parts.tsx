@@ -566,13 +566,36 @@ export function PreviewCard({
             </Select>
           </div>
           {current && (
-            <div className="rounded-2xl bg-[#e7f6e9] p-3" aria-live="polite">
-              <div
-                className="whitespace-pre-wrap break-words rounded-xl rounded-tl-sm bg-white px-3.5 py-2.5 text-[13px] leading-relaxed text-gray-900 shadow-sm"
-                data-testid="notify-preview-text"
-              >
-                {current.text}
+            <div className="space-y-3" aria-live="polite">
+              <div>
+                {current.whatsappText !== null && (
+                  <p className="mb-1 text-[11px] font-semibold text-gray-500">By email and phone notification</p>
+                )}
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <div
+                    className="whitespace-pre-wrap break-words rounded-xl rounded-tl-sm bg-white px-3.5 py-2.5 text-[13px] leading-relaxed text-gray-900 shadow-sm"
+                    data-testid="notify-preview-text"
+                  >
+                    {current.text}
+                  </div>
+                </div>
               </div>
+              {current.whatsappText !== null && (
+                <div>
+                  <p className="mb-1 text-[11px] font-semibold text-gray-500">
+                    By WhatsApp: Meta only delivers its approved template (hrms_hod_pending_reminder), so this wording
+                    does not change it
+                  </p>
+                  <div className="rounded-2xl bg-[#e7f6e9] p-3">
+                    <div
+                      className="whitespace-pre-wrap break-words rounded-xl rounded-tl-sm bg-white px-3.5 py-2.5 text-[13px] leading-relaxed text-gray-900 shadow-sm"
+                      data-testid="notify-preview-whatsapp"
+                    >
+                      {current.whatsappText}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

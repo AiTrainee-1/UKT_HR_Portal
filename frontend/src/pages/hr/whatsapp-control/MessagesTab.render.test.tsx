@@ -86,6 +86,19 @@ async function clickEl(target: HTMLElement) {
 }
 
 describe("WhatsApp Control messages", () => {
+  it("says the messages could not be loaded, never that none were sent", async () => {
+    page = await renderMdPage(
+      () => <MessagesTab />,
+      { "/api/whatsapp-control/messages": { status: 500, body: { error: "Database is busy" } } },
+      { path: "/hr/whatsapp-control?tab=messages" },
+    );
+    const cell = el('[data-testid="wa-messages-error"]')!;
+    expect(cell.getAttribute("role")).toBe("alert");
+    expect(cell.textContent).toContain("could not be loaded");
+    expect(cell.textContent).toContain("Database is busy");
+    expect(document.body.textContent).not.toContain("No WhatsApp messages have been sent yet.");
+  });
+
   it("offers the queue's and Meta's statuses in the filter, and asks only for the messages", async () => {
     await open();
     const labels = tabs().map((t) => t.querySelector(".ptab-label")?.textContent);

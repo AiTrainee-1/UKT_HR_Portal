@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { OLD_WEEK, cyclesOf, summaryOf } from "./fixtures";
+import { OLD_WEEK, PREVIOUS_WEEK, cyclesOf, summaryOf } from "./fixtures";
 import {
-  choose,
   click,
   here,
   installBrowserStubs,
@@ -22,7 +21,7 @@ import {
 
 // The shell of a Production Payroll cycle page (Weekly / BiWeekly / Monthly) in jsdom, with a fake server behind
 // customFetch: who is on the page, the states a cycle can be in (set up, not set up, nobody assigned), and the page's
-// state - tab, pay period, Payslip month - living in the address, so a reload, a shared link and Back from a payroll's
+// state - tab, pay period, filters - living in the address, so a reload, a shared link and Back from a payroll's
 // details page all land on the same screen.
 
 const h = vi.hoisted(() => ({ fetch: vi.fn(), trigger: vi.fn(), toast: vi.fn() }));
@@ -181,14 +180,15 @@ describe("a Production Payroll cycle page", () => {
     // no period to pick, nothing to generate
     expect(q("pcp-period")).toBeNull();
     expect(q("pcp-generate-open")).toBeNull();
-    // the statement is per period, so the Salary tab needs the set-up too; the Payslip tab is by month and still works
+    // every tab is about one pay period (the Payslip tab too, since 2026-11-20), so each needs the set-up
     click(tab("Employees"));
     expect(q("pcp-setup-needed")).not.toBeNull();
-    click(tab("Salary"));
+    click(tab("Excess"));
     expect(q("pcp-setup-needed")).not.toBeNull();
+    expect(q("excess-tab")).toBeNull();
     click(tab("Payslip"));
-    expect(q("pcp-setup-needed")).toBeNull();
-    expect(q("pcp-payslip-tab")).not.toBeNull();
+    expect(q("pcp-setup-needed")).not.toBeNull();
+    expect(q("pcp-payslip-tab")).toBeNull();
   });
 
   it("shows a loader while the cycle is on its way, never a blank page", async () => {
@@ -236,15 +236,16 @@ describe("the page's state in its address", () => {
     expect(selectedTab()).toEqual(["Employees"]);
     expect(q("pcp-payroll-tab")).toBeNull();
     unmountPage();
+    // `salary` is the Excess tab since 2026-11-20: old links still open it
     mountPage(`${WEEKLY}?tab=salary`);
-    await waitFor(() => !!q("statement-table"), "the Salary tab");
-    expect(selectedTab()).toEqual(["Salary"]);
+    await waitFor(() => !!q("excess-summary"), "the Excess tab");
+    expect(selectedTab()).toEqual(["Excess"]);
     unmountPage();
     mountPage(`${WEEKLY}?tab=payslip`);
-    await waitFor(() => !!q("pcp-payslip-tab"), "the Payslip tab");
+    await waitFor(() => !!q("ps-list") || !!q("ps-empty"), "the Payslip tab");
     expect(selectedTab()).toEqual(["Payslip"]);
-    // the Payslip tab has its own month, so there is no pay period to pick
-    expect(q("pcp-period")).toBeNull();
+    // the Payslip tab is about the page's pay period too
+    expect(text(q("pcp-period"))).toBe("2 Feb - 8 Feb 2026 Next due");
   });
 
   it("opens the Payroll tab for a tab that does not exist", async () => {
@@ -257,7 +258,7 @@ describe("the page's state in its address", () => {
     await openPayroll();
     click(tab("Employees"));
     expect(params()).toEqual({ tab: "employees" });
-    click(tab("Salary"));
+    click(tab("Excess"));
     expect(params()).toEqual({ tab: "salary" });
     click(tab("Payroll"));
     expect(params()).toEqual({});
@@ -343,23 +344,18 @@ describe("the page's state in its address", () => {
     await waitFor(() => text(q("pcp-cal-month-1")) === "November 2025", "the calendar to move to it");
   });
 
-  it("keeps the Payslip tab's month in the address", async () => {
-    world.slips = [
-      ...world.slips,
-      { ...world.slips[0], id: 2, employeeId: 20, employeeName: "Bala Worker", employeeCode: "PC-W2", month: 3 },
-    ];
-    mountPage(`${WEEKLY}?tab=payslip&month=2&year=2026`);
-    await waitFor(() => !!q("pcp-slip-row-1"), "the February slips");
-    expect((must("pcp-slips-month") as HTMLSelectElement).value).toBe("2");
-    expect(q("pcp-slip-row-2")).toBeNull();
-    choose(must("pcp-slips-month") as HTMLSelectElement, "3");
-    expect(params()).toEqual({ tab: "payslip", month: "3", year: "2026" });
-    await waitFor(() => !!q("pcp-slip-row-2"), "the March slips");
-    expect(q("pcp-slip-row-1")).toBeNull();
-    // the cycle's slips only
-    expect(world.requests().filter((r) => r.startsWith("/api/salary-slips"))).toContain(
-      "/api/salary-slips?month=3&year=2026&employmentType=production&payCycle=weekly",
+  it("keeps the Payslip tab on the pay period in the address", async () => {
+    mountPage(`${WEEKLY}?tab=payslip&period=${WEEK_PARAM}`);
+    await waitFor(() => !!q("ps-row-11"), "the payslips of the week");
+    expect(world.requests()).toContain(
+      "/api/payslips/production?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08",
     );
+    unmountPage();
+    // nothing was generated for the week before
+    mountPage(`${WEEKLY}?tab=payslip&period=${PREVIOUS_WEEK.periodStart}_${PREVIOUS_WEEK.periodEnd}`);
+    await waitFor(() => !!q("ps-empty"), "the empty week");
+    expect(text(q("ps-empty"))).toContain("No payroll for Weekly 26 Jan - 1 Feb 2026 yet");
+    expect(params()).toEqual({ tab: "payslip", period: `${PREVIOUS_WEEK.periodStart}_${PREVIOUS_WEEK.periodEnd}` });
   });
 
   it("opens a payroll's details page with the history Back needs, and Back returns to the same tab and period", async () => {

@@ -162,7 +162,7 @@ test("the new-advance form explains what is wrong, previews the schedule, and cr
   await expect(dialog.getByText("The amount must be more than 0.")).toBeVisible();
 
   await dialog.getByTestId("advance-type").click();
-  await page.getByRole("option", { name: "Term advance (loan)" }).click();
+  await page.getByRole("option", { name: "Term loan (monthly EMIs)" }).click();
   await dialog.getByTestId("advance-amount").fill("6000");
   await dialog.getByTestId("advance-submit").click();
   await expect(dialog.getByText("Enter the number of months or the monthly EMI.")).toBeVisible();
@@ -193,13 +193,49 @@ test("deleting an advance asks first", async ({ page }) => {
   await expect(page.getByTestId(`advance-row-${ids.general}`)).toHaveCount(0);
 });
 
-test("Settlement exports the filtered list", async ({ page }) => {
+test("Settlement exports the filtered list as Excel and PDF, named after the tab and month", async ({ page }) => {
   await seedAdvances(page);
   await page.goto("/hr/settlement");
   await page.getByTestId("settlement-search").fill(TAG);
-  const download = page.waitForEvent("download");
+  let download = page.waitForEvent("download");
   await page.getByTestId("settlement-export").click();
-  expect((await download).suggestedFilename()).toMatch(/^Settlement_advances_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  await page.getByTestId("settlement-export-xlsx").click();
+  expect((await download).suggestedFilename()).toMatch(/^Settlement_Overview_All_months_\d{4}-\d{2}-\d{2}\.xlsx$/);
+
+  await page.getByTestId("settlement-tab-loan").click();
+  await expect(page).toHaveURL(/tab=loan/);
+  download = page.waitForEvent("download");
+  await page.getByTestId("settlement-export").click();
+  await page.getByTestId("settlement-export-pdf").click();
+  expect((await download).suggestedFilename()).toMatch(/^Settlement_Term_Loan_All_months_\d{4}-\d{2}-\d{2}\.pdf$/);
+});
+
+test("rejecting needs a reason, which is saved and shown in the details", async ({ page }) => {
+  const ids = await seedAdvances(page);
+  await page.goto("/hr/settlement?tab=advance");
+  await page.getByTestId(`advance-reject-${ids.general}`).click();
+  const dialog = page.getByTestId("decision-dialog");
+  await dialog.getByTestId("decision-confirm").click();
+  await expect(dialog.getByTestId("decision-remark-problem")).toHaveText(
+    "Write the reason for rejecting (at least 3 characters).",
+  );
+  expect(((await api(page, "GET", `/api/advances/${ids.general}`)).body as { status: string }).status).toBe("pending");
+  await dialog.getByTestId("decision-remark").fill(`${TAG} already has one running`);
+  await dialog.getByTestId("decision-confirm").click();
+  await expect(page.getByText("Advance rejected").first()).toBeVisible();
+  const saved = (await api(page, "GET", `/api/advances/${ids.general}`)).body as {
+    status: string;
+    decisionRemark: string;
+    history: { action: string; remark: string }[];
+  };
+  expect(saved.status).toBe("rejected");
+  expect(saved.decisionRemark).toBe(`${TAG} already has one running`);
+  expect(saved.history[0]).toMatchObject({ action: "rejected", remark: `${TAG} already has one running` });
+
+  await page.getByRole("tab", { name: /^Rejected/ }).click();
+  await page.getByTestId(`advance-row-${ids.general}`).click();
+  await expect(page.getByTestId("advance-decision-remark")).toContainText("already has one running");
+  await expect(page.getByTestId("advance-history")).toContainText("Rejected");
 });
 
 test("Settlement on a phone shows cards, not a clipped table", async ({ page }) => {

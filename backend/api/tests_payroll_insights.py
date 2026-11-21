@@ -974,6 +974,7 @@ class StaffIssueTests(TestCase):
             _get(self, f"/api/payroll/issues?{qs}", expect=400)
 
     def test_an_adjustment_made_after_generation_is_an_issue_with_its_note(self):
+        Payroll.objects.filter(pk=self.w.meena_payroll.pk).update(bonus=1500)  # set before the Excess tab (2026-11-20)
         r = self.client.patch(
             f"/api/payroll/{self.w.meena_payroll.id}",
             {"bonus": 1500, "deductions": 700, "notes": "Festival bonus, one more advance cut"},
@@ -1008,6 +1009,7 @@ class StaffIssueTests(TestCase):
         self.assertNotIn("adjustment", [i["code"] for i in self.meena()])
 
     def test_a_bonus_alone_is_an_adjustment_without_a_deduction_change(self):
+        Payroll.objects.filter(pk=self.w.meena_payroll.pk).update(bonus=500)  # set before the Excess tab (2026-11-20)
         self.client.patch(
             f"/api/payroll/{self.w.meena_payroll.id}", {"bonus": 500}, content_type="application/json", **_admin()
         )
@@ -1655,6 +1657,7 @@ class StaffDetailsTests(TestCase):
         self.assertEqual(d["period"]["label"], "March 2026")
 
     def test_payroll_that_hr_adjusted_shows_the_adjustment_in_the_lines_and_the_notes(self):
+        Payroll.objects.filter(pk=self.w.meena_payroll.pk).update(bonus=1500)  # set before the Excess tab (2026-11-20)
         self.client.patch(
             f"/api/payroll/{self.w.meena_payroll.id}",
             {"bonus": 1500, "deductions": 700, "notes": "Festival bonus, one more advance cut"},

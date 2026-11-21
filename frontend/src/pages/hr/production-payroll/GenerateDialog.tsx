@@ -149,7 +149,11 @@ export function GenerateDialog({
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg" data-testid="pcp-generate-dialog">
+      {/* Never taller than the window (owner 2026-11-20): title and buttons stay in view, the middle scrolls. */}
+      <DialogContent
+        className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-1.5rem)] max-w-lg flex-col gap-4 sm:w-full"
+        data-testid="pcp-generate-dialog"
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Play size={16} className="text-amber-600" /> Generate {info.label} Payroll
@@ -161,7 +165,7 @@ export function GenerateDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="max-h-[65vh] space-y-4 overflow-y-auto py-1 pr-1">
+        <div className="-mx-6 min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-1" data-testid="pcp-generate-body">
           <div className="rounded-xl border border-amber-100 bg-amber-50/60 p-3">
             <p className="text-xs font-medium text-amber-700">{info.calculation}</p>
             <p className="text-lg font-black text-amber-900" data-testid="pcp-generate-period">

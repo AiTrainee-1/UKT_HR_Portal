@@ -1,15 +1,17 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 
-// SMS Control (HR portal) and the SMS delivery of login / reset / activation codes, end to end against the real backend and a
-// FAKE 2Factor (e2e/fake-twofactor.mjs, :8192) that records every request it receives and hands the spec the code an employee
-// would have got by SMS. Nothing leaves the machine: playwright.config.ts points TWOFACTOR_API_BASE at the fake and sets
+// SMS Control (HR portal) and SMS one-time codes, end to end against the real backend and a FAKE 2Factor
+// (e2e/fake-twofactor.mjs, :8192) that records every request it receives and hands the spec the code an employee would
+// have got by SMS. Nothing leaves the machine: playwright.config.ts points TWOFACTOR_API_BASE at the fake and sets
 // SMS_ALLOW_SENDING=true because this is a dev-mode (DEBUG) backend.
 //
-// Everything created here is prefixed "SMS" / "sms_" and removed again, and the SMS settings are put back as they were (the
-// WhatsApp channel, the default limits), so the other specs only ever see the seed data and WhatsApp codes.
+// SMS is used for codes only, and SMS codes and WhatsApp codes are INDEPENDENT: each has its own master switch (SMS here,
+// WhatsApp on WhatsApp Control), either alone is enough, and with both on the employee picks. SMS codes start OFF in the
+// seed; WhatsApp codes (the fake Meta API, :8190) start on.
 //
-// The whole file SKIPS when the backend has no /api/sms-control yet (a 404), so it can be committed before the backend.
+// Everything created here is prefixed "SMS" / "sms_" and removed again, and the SMS settings (SMS codes off, the default
+// limits and price) and the WhatsApp code switch are put back as they were, so the other specs only see WhatsApp codes.
 
 const FAKE = "http://127.0.0.1:8192";
 const FAKE_WHATSAPP = "http://127.0.0.1:8190";
@@ -21,7 +23,6 @@ const TEMPLATE_TEXT =
 const PASSWORD = "Passw0rd!smsx";
 const PAGE = "/hr/sms-control";
 
-let backendReady = false;
 let adminToken = "";
 let viewerToken = "";
 let nobodyToken = "";
@@ -61,7 +62,7 @@ const admin = (request: APIRequestContext, method: string, url: string, data?: u
   api(request, adminToken, method, url, data);
 
 const SETTINGS_KEYS = [
-  "otpChannel",
+  "otpEnabled",
   "otpLoginEnabled",
   "otpResetEnabled",
   "otpActivateEnabled",
@@ -72,14 +73,16 @@ const SETTINGS_KEYS = [
   "maxPerPhonePerHour",
   "hourlyCap",
   "dailyCap",
+  "monthlyBudget",
 ];
 
-/** Puts the SMS settings back as they were when the spec started. */
+/** Puts the SMS settings back as they were when the spec started (the price back to the default), and WhatsApp codes on. */
 async function restoreSettings(request: APIRequestContext) {
   const body = Object.fromEntries(
     SETTINGS_KEYS.filter((k) => k in originalSettings).map((k) => [k, originalSettings[k]]),
   );
-  if (Object.keys(body).length > 0) await admin(request, "PUT", "/api/sms-control/settings", body);
+  await admin(request, "PUT", "/api/sms-control/settings", { ...body, pricePerSms: null });
+  await admin(request, "PATCH", "/api/whatsapp-control/settings", { otpEnabled: true });
 }
 
 async function purge(request: APIRequestContext) {
@@ -111,9 +114,21 @@ const wrongCode = (code: string) => (code === "0000" ? "1111" : "0000");
 
 const asEmployee = (key: string) => employees[key];
 
-async function ask(request: APIRequestContext, key: string, purpose: "login" | "reset" | "activate") {
-  return api(request, null, "POST", "/api/auth/otp/request", { employeeCode: asEmployee(key).code, purpose });
+/** Asks for a code; `channel` as a new app sends it (left out: what an old app sends, the first way that works). */
+async function ask(
+  request: APIRequestContext,
+  key: string,
+  purpose: "login" | "reset" | "activate",
+  channel?: "sms" | "whatsapp",
+) {
+  return api(request, null, "POST", "/api/auth/otp/request", {
+    employeeCode: asEmployee(key).code,
+    purpose,
+    ...(channel ? { channel } : {}),
+  });
 }
+
+const loginOptions = async (request: APIRequestContext) => (await request.get("/api/auth/login-options")).json();
 
 /** Opens a page already signed in as `token` (no sign-in screen: the server throttles those). */
 async function openAs(page: Page, token: string, path: string) {
@@ -124,14 +139,24 @@ async function openAs(page: Page, token: string, path: string) {
 const tab = (page: Page, name: string) => page.getByRole("tab", { name, exact: true });
 const rows = (page: Page) => page.getByTestId("sms-message-row");
 
+/** Settings > OTP Switches: flips the SMS master switch, saves, and confirms in the page's own question. */
+async function switchSmsCodes(page: Page, on: boolean) {
+  await openAs(page, adminToken, `${PAGE}/settings/switches`);
+  const master = page.getByTestId("sms-switch-otpEnabled");
+  await expect(master).toHaveAttribute("aria-checked", on ? "false" : "true");
+  await master.click();
+  await page.getByTestId("sms-switches-save-row-save").click();
+  const dialog = page.getByTestId("sms-master-confirm");
+  await expect(dialog).toContainText(on ? "Switch SMS codes on?" : "Switch SMS codes off?");
+  await dialog.getByRole("button", { name: on ? "Yes, switch on" : "Yes, switch off" }).click();
+  await expect(page.getByTestId("sms-switches-save-row")).toHaveAttribute("data-dirty", "false");
+  await expect(master).toHaveAttribute("aria-checked", on ? "true" : "false");
+}
+
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async ({ request }) => {
   adminToken = await signIn(request, HR_USERNAME, HR_PASSWORD);
-  const probe = await admin(request, "GET", "/api/sms-control/overview");
-  backendReady = probe.status !== 404;
-  if (!backendReady) return;
-
   await purge(request);
   await request.post(`${FAKE}/reset`);
   originalSettings = (await admin(request, "GET", "/api/sms-control/settings")).body;
@@ -162,7 +187,8 @@ test.beforeAll(async ({ request }) => {
   await make("G", "Golf", "9000000086"); // the breaker
   await make("H", "Hotel", "9000000087"); // the breaker
   await make("I", "India", "9000000088"); // the breaker
-  await make("J", "Juliet", "9000000089"); // WhatsApp again
+  await make("J", "Juliet", "9000000089"); // WhatsApp once SMS codes are off again
+  await make("K", "Kilo", "9000000090"); // SMS only, while WhatsApp codes are off
 
   const role = async (name: string, permissions: Record<string, string>) => {
     const res = await admin(request, "POST", "/api/roles", { name, permissions });
@@ -183,33 +209,29 @@ test.beforeAll(async ({ request }) => {
 });
 
 test.afterAll(async ({ request }) => {
-  if (!backendReady) return;
   await restoreSettings(request);
   await purge(request);
   await request.post(`${FAKE}/reset`);
   await request.post(`${FAKE_WHATSAPP}/reset`);
 });
 
-test.beforeEach(() => {
-  test.skip(!backendReady, "this backend has no /api/sms-control yet (it answered 404)");
-});
-
 // ── who may use the API ─────────────────────────────────────────────────────
 
 test("the SMS Control API needs a login, and a role needs the module", async ({ request }) => {
-  for (const path of ["overview", "settings", "messages"]) {
+  const paths = ["overview", "usage", "settings", "messages"];
+  for (const path of paths) {
     expect((await request.get(`/api/sms-control/${path}`)).status(), path).toBe(401);
   }
   expect((await request.put("/api/sms-control/settings", { data: { hourlyCap: 10 } })).status()).toBe(401);
   expect((await request.post("/api/sms-control/test", { data: { phone: "9876543210" } })).status()).toBe(401);
 
   // a role without the module sees nothing of it
-  for (const path of ["overview", "settings", "messages"]) {
+  for (const path of paths) {
     expect((await api(request, nobodyToken, "GET", `/api/sms-control/${path}`)).status, `no module: ${path}`).toBe(403);
   }
 
   // View Only reads everything and changes nothing
-  for (const path of ["overview", "settings", "messages"]) {
+  for (const path of paths) {
     expect((await api(request, viewerToken, "GET", `/api/sms-control/${path}`)).status, `view: ${path}`).toBe(200);
   }
   expect((await api(request, viewerToken, "PUT", "/api/sms-control/settings", { hourlyCap: 10 })).status).toBe(403);
@@ -223,7 +245,7 @@ test("the SMS Control API needs a login, and a role needs the module", async ({ 
   expect((await api(request, branchToken, "POST", "/api/sms-control/test", { phone: "9876543210" })).status).toBe(403);
 
   // and nothing a role can read contains the auth key
-  for (const path of ["overview", "settings", "messages"]) {
+  for (const path of paths) {
     const body = JSON.stringify((await admin(request, "GET", `/api/sms-control/${path}`)).body);
     expect(body, path).not.toContain(AUTH_KEY);
   }
@@ -233,53 +255,77 @@ test("the SMS Control API needs a login, and a role needs the module", async ({ 
   expect(typeof overview.env.authKey).toBe("boolean");
 });
 
-test("until HR switches, WhatsApp is still how codes go", async ({ request }) => {
-  expect(originalSettings.otpChannel).toBe("whatsapp");
-  const options = await (await request.get("/api/auth/login-options")).json();
-  expect(options).toMatchObject({ otpChannel: "whatsapp", otpLogin: true, passwordLogin: true });
+test("SMS codes start off, WhatsApp codes work on their own, and there is no 'active channel' any more", async ({
+  request,
+}) => {
+  expect(originalSettings.otpEnabled).toBe(false);
+  expect("otpChannel" in originalSettings).toBe(false);
+  const options = await loginOptions(request);
+  expect(options).toMatchObject({
+    otpChannel: "whatsapp",
+    otpLogin: true,
+    passwordLogin: true,
+    otpChannels: { login: ["whatsapp"], reset: ["whatsapp"], activate: ["whatsapp"] },
+  });
+  expect(options.channels.sms).toBeUndefined();
+  // asking for an SMS code now is refused, and names the way that works
+  const refused = await ask(request, "A", "activate", "sms");
+  expect(refused.status).toBe(400);
+  expect(refused.body).toMatchObject({ code: "channel_unavailable", availableChannels: ["whatsapp"] });
+  expect(await (await request.get(`${FAKE}/requests`)).json()).toEqual([]);
+  // the old single "channel" setting is refused with a sentence that says why
+  const old = await admin(request, "PUT", "/api/sms-control/settings", { otpChannel: "sms" });
+  expect(old.status).toBe(400);
+  expect(JSON.stringify(old.body)).toContain("switched on separately");
 });
 
 // ── the page ────────────────────────────────────────────────────────────────
 
-test("HR finds SMS Control in the sidebar and sees all five tabs, with Overview in plain words", async ({ page }) => {
+test("HR finds SMS Control in the sidebar and sees its six tabs, with Overview in plain words", async ({ page }) => {
   await openAs(page, adminToken, "/hr/dashboard");
   await expect(page.getByRole("link", { name: "SMS Control" })).toBeVisible();
   await page.getByRole("link", { name: "SMS Control" }).click();
   await expect(page).toHaveURL(/\/hr\/sms-control\/overview$/);
   await expect(page.getByRole("heading", { name: "SMS Control" })).toBeVisible();
-  for (const name of ["Overview", "Settings", "Messages", "Test", "Setup"]) {
+  for (const name of ["Overview", "Usage & Cost", "Settings", "Messages", "Test", "Setup"]) {
     await expect(tab(page, name)).toBeVisible();
   }
   // exactly one Refresh button, in the title row (the page has its own)
   await expect(page.getByRole("button", { name: /^\s*Refresh( this page)?\s*$/ })).toHaveCount(1);
   await expect(page.getByTestId("page-refresh-bar")).toHaveCount(0);
 
-  await expect(page.getByTestId("sms-card-channel")).toContainText("WhatsApp");
+  await expect(page.getByTestId("sms-hero")).toBeVisible();
+  await expect(page.getByTestId("sms-card-otp-value")).toHaveText("Off");
   await expect(page.getByTestId("sms-card-configured")).toContainText("Yes");
   await expect(page.getByTestId("sms-card-sending")).toContainText("Allowed");
   await expect(page.getByTestId("sms-card-circuit")).toContainText("Working");
-  await expect(page.getByTestId("sms-card-balance")).toBeVisible();
-  await expect(page.getByTestId("sms-chart")).toBeVisible();
-  // 2Factor is ready and the channel is WhatsApp: the checklist explains switching
-  await expect(page.getByTestId("sms-step-switch")).toContainText("Codes still go by WhatsApp");
+  // the 2Factor balance (the fake answers 500 credits)
+  await expect(page.getByTestId("sms-card-balance")).toContainText("500");
+  // SMS is for codes only, and WhatsApp codes are set on WhatsApp Control
+  await expect(page.getByTestId("sms-codes-only")).toBeVisible();
+  await expect(page.getByTestId("sms-independent")).toContainText("WhatsApp");
+  await expect(page.getByTestId("sms-month")).toBeVisible();
   // nothing on the page is the auth key
   await expect(page.locator("body")).not.toContainText(AUTH_KEY);
 });
 
-test("the tabs have addresses, and an address that stops early or is unknown lands on the first one", async ({
+test("the tabs have addresses, and an address that stops early, is retired or is unknown lands on a real one", async ({
   page,
 }) => {
   await openAs(page, adminToken, PAGE);
   await expect(page).toHaveURL(/\/hr\/sms-control\/overview$/);
   await page.goto(`${PAGE}/settings`);
-  await expect(page).toHaveURL(/\/hr\/sms-control\/settings\/channel$/);
+  await expect(page).toHaveURL(/\/hr\/sms-control\/settings\/switches$/);
+  // the retired "Channel" section
+  await page.goto(`${PAGE}/settings/channel`);
+  await expect(page).toHaveURL(/\/hr\/sms-control\/settings\/switches$/);
   await page.goto(`${PAGE}/nope/deeper`);
   await expect(page).toHaveURL(/\/hr\/sms-control\/overview$/);
   await page.goto(`${PAGE}/settings/limits`);
   await expect(page.getByTestId("sms-section-limits")).toBeVisible();
   // only the open section is on the page
-  await expect(page.getByTestId("sms-section-channel")).toHaveCount(0);
   await expect(page.getByTestId("sms-section-switches")).toHaveCount(0);
+  await expect(page.getByTestId("sms-section-cost")).toHaveCount(0);
   await tab(page, "Messages").click();
   await expect(page).toHaveURL(/\/hr\/sms-control\/messages$/);
   await page.goBack();
@@ -303,9 +349,10 @@ test("at 390 px wide no tab pushes the page sideways", async ({ page }) => {
   };
   await page.addInitScript((t) => localStorage.setItem("uk_textile_token", t), adminToken);
   await open(`${PAGE}/overview`, "sms-overview");
-  await open(`${PAGE}/settings/channel`, "sms-section-channel");
-  await open(`${PAGE}/settings/limits`, "sms-section-limits");
+  await open(`${PAGE}/usage`, "sms-usage");
   await open(`${PAGE}/settings/switches`, "sms-section-switches");
+  await open(`${PAGE}/settings/limits`, "sms-section-limits");
+  await open(`${PAGE}/settings/cost`, "sms-section-cost");
   await open(`${PAGE}/messages`, "sms-message-table");
   await open(`${PAGE}/test`, "sms-test");
   await open(`${PAGE}/setup`, "sms-setup");
@@ -323,6 +370,7 @@ test("Setup lists what the server needs by name, copies the template text, and n
     "TWOFACTOR_TEMPLATE_NAME",
     "TWOFACTOR_API_BASE",
     "SMS_ALLOW_SENDING",
+    "SMS_ONLY_TO_EMPLOYEES",
   ]) {
     await expect(page.getByTestId(`sms-env-${name}`)).toContainText(name);
   }
@@ -333,7 +381,8 @@ test("Setup lists what the server needs by name, copies the template text, and n
   await expect(page.getByTestId("sms-2f-template-text")).toContainText(TEMPLATE_TEXT);
   await expect(page.getByTestId("sms-2f-template-name")).toContainText("UKT_HRMS_OTP");
   await expect(page.getByTestId("sms-2f-sender-id")).toContainText("UKTHRM");
-  await expect(page.getByText("twofactor-sms-otp-integration.md")).toBeVisible();
+  // 2Factor may read a code out as a phone call: nothing in the HRMS can change that, so the page says so
+  await expect(page.getByTestId("sms-setup-voice")).toBeVisible();
   // there is no box to type a key into, and the page never shows one
   await expect(page.getByTestId("sms-setup").locator("input, textarea, select")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText(AUTH_KEY);
@@ -343,17 +392,20 @@ test("Setup lists what the server needs by name, copies the template text, and n
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(TEMPLATE_TEXT);
 });
 
-// ── the test SMS ────────────────────────────────────────────────────────────
+// ── the test code ───────────────────────────────────────────────────────────
 
-test("a test SMS goes through 2Factor, is logged without the number, and tests are limited to three an hour", async ({
+test("a test code goes through 2Factor's OTP template, is logged without the number, and is limited to three an hour", async ({
   page,
   request,
 }) => {
   await request.post(`${FAKE}/reset`);
   await openAs(page, adminToken, `${PAGE}/test`);
-  const phone = page.getByLabel("Mobile number");
-  const send = page.getByRole("button", { name: "Send a test SMS" });
   await expect(page.getByTestId("sms-test-preview")).toContainText("1234 is your UK Textiles HRMS OTP.");
+  // there is no box for a message of your own: SMS carries codes only
+  await expect(page.getByTestId("sms-test").locator("textarea")).toHaveCount(0);
+  await page.getByTestId("sms-test-mode-phone").click();
+  const phone = page.getByLabel("Mobile number");
+  const send = page.getByTestId("sms-test-send");
 
   // a number that is not a mobile number is refused on the page, and nothing is sent
   await phone.fill("12345");
@@ -376,10 +428,11 @@ test("a test SMS goes through 2Factor, is logged without the number, and tests a
   await send.click();
   await expect(page.getByTestId("sms-test-refused")).toContainText("was not sent");
 
-  // 3: accepted, through the API
-  const third = await admin(request, "POST", "/api/sms-control/test", { phone: "9876543212" });
-  expect(third.status).toBe(200);
+  // 3: accepted, through the API, to an employee's registered number
+  const third = await admin(request, "POST", "/api/sms-control/test", { employeeCode: asEmployee("B").code });
+  expect(third.status, JSON.stringify(third.body)).toBe(200);
   expect(third.body.ok).toBe(true);
+  expect(await (await request.get(`${FAKE}/requests?mobile=${asEmployee("B").phone}`)).json()).toHaveLength(1);
 
   // 4: over the limit: the server's own sentence is shown
   await phone.fill("9876543213");
@@ -423,9 +476,9 @@ test("a limit outside its range is refused where it is typed; a good one saves, 
   await expect(page.getByTestId("sms-example-otpExpiryMinutes")).toContainText("10:07");
   await expect(save).toBeEnabled();
 
-  // an unsaved choice in Channel does not go with the limits
-  await page.getByTestId("sms-settings-nested-channel").click();
-  await page.getByTestId("sms-channel-sms").locator("input").check();
+  // an unsaved change in OTP Switches does not go with the limits
+  await page.getByTestId("sms-settings-nested-switches").click();
+  await page.getByTestId("sms-switch-otpResetEnabled").click();
   await page.getByTestId("sms-settings-nested-limits").click();
   await expect(expiry).toHaveValue("7");
   await save.click();
@@ -433,7 +486,8 @@ test("a limit outside its range is refused where it is typed; a good one saves, 
 
   const saved = (await admin(request, "GET", "/api/sms-control/settings")).body;
   expect(saved.otpExpiryMinutes).toBe(7);
-  expect(saved.otpChannel).toBe("whatsapp");
+  expect(saved.otpResetEnabled).toBe(true);
+  expect(saved.otpEnabled).toBe(false);
   expect(saved.updatedBy).toBeTruthy();
 });
 
@@ -464,70 +518,67 @@ test("a copy of the settings that somebody else has outdated is refused, and can
   expect((await admin(request, "GET", "/api/sms-control/settings")).body.otpExpiryMinutes).toBe(5);
 });
 
-test("switching the channel to SMS asks first, and the login screens follow", async ({ page, request }) => {
-  await openAs(page, adminToken, `${PAGE}/settings/channel`);
-  await page.getByTestId("sms-channel-sms").locator("input").check();
-  await page.getByTestId("sms-channel-save-row-save").click();
-  const dialog = page.getByRole("alertdialog");
-  await expect(dialog).toContainText("Send codes by SMS?");
-  await expect(dialog).toContainText("WhatsApp keeps sending every other message");
+test("the price per SMS and the monthly budget save on Cost, and Usage & Cost uses them", async ({ page, request }) => {
+  await openAs(page, adminToken, `${PAGE}/settings/cost`);
+  await page.getByTestId("sms-input-pricePerSms").fill("0.25");
+  await page.getByTestId("sms-input-monthlyBudget").fill("500");
+  await page.getByTestId("sms-cost-save-row-save").click();
+  await expect(page.getByTestId("sms-cost-save-row")).toHaveAttribute("data-dirty", "false");
+  const saved = (await admin(request, "GET", "/api/sms-control/settings")).body;
+  expect(saved.pricePerSms).toBe(0.25);
+  expect(saved.monthlyBudget).toBe(500);
+  expect(saved.pricePerSmsDefault).toBe(0.2);
 
-  // Cancel: nothing changed
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  expect((await admin(request, "GET", "/api/sms-control/settings")).body.otpChannel).toBe("whatsapp");
+  const usage = (await admin(request, "GET", "/api/sms-control/usage")).body;
+  expect(usage.cost).toMatchObject({ perSms: 0.25, budget: 500, currency: "INR", isCurrentMonth: true });
+  expect(usage.totals.sent).toBeGreaterThanOrEqual(2);
+  expect(usage.byPurpose.test.sent).toBeGreaterThanOrEqual(2);
+  expect(usage.cost.soFar).toBeGreaterThan(0);
 
-  // Yes: saved, and shown as in use
-  await page.getByTestId("sms-channel-save-row-save").click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Yes, use SMS" }).click();
-  await expect(page.getByTestId("sms-channel-sms")).toContainText("In use now");
-  expect((await admin(request, "GET", "/api/sms-control/settings")).body.otpChannel).toBe("sms");
+  await tab(page, "Usage & Cost").click();
+  await expect(page).toHaveURL(/\/hr\/sms-control\/usage/);
+  await expect(page.getByTestId("sms-usage-totals")).toBeVisible();
+  await expect(page.getByTestId("sms-usage-price")).toContainText("0.25");
+  await expect(page.getByTestId("sms-by-purpose")).toBeVisible();
 
-  // login-options names the channel, and the code methods are on (2Factor is set up and this machine may send)
-  const options = await (await request.get("/api/auth/login-options")).json();
+  // a price above the allowed range is refused by the server too
+  expect((await admin(request, "PATCH", "/api/sms-control/settings", { pricePerSms: 1000 })).status).toBe(400);
+  // and an empty price goes back to the default
+  expect((await admin(request, "PATCH", "/api/sms-control/settings", { pricePerSms: null })).status).toBe(200);
+  expect((await admin(request, "GET", "/api/sms-control/settings")).body.pricePerSms).toBe(0.2);
+});
+
+test("switching SMS codes on asks first, and the apps are offered both ways at once", async ({ page, request }) => {
+  await switchSmsCodes(page, true);
+  expect((await admin(request, "GET", "/api/sms-control/settings")).body.otpEnabled).toBe(true);
+
+  const options = await loginOptions(request);
   expect(options).toMatchObject({
-    otpChannel: "sms",
     otpLogin: true,
     otpReset: true,
     otpActivate: true,
     passwordLogin: true,
+    // an old app still gets the first way (WhatsApp) and its code length
+    otpChannel: "whatsapp",
+    codeLength: 6,
+    otpChannels: { login: ["whatsapp", "sms"], reset: ["whatsapp", "sms"], activate: ["whatsapp", "sms"] },
+    channels: { whatsapp: { name: "WhatsApp", codeLength: 6 }, sms: { name: "SMS", codeLength: 4 } },
   });
 
-  await tab(page, "Overview").click();
-  await expect(page.getByTestId("sms-card-channel")).toContainText("SMS");
-  await expect(page.getByTestId("sms-step-switch")).toHaveCount(0);
+  await openAs(page, adminToken, `${PAGE}/overview`);
+  await expect(page.getByTestId("sms-card-otp-value")).toHaveText("On");
 });
 
-test("the three switches turn each code feature off for the login screens", async ({ page, request }) => {
-  await openAs(page, adminToken, `${PAGE}/settings/switches`);
-  const reset = page.getByRole("switch", { name: "Forgot password by code" });
-  await expect(reset).toBeChecked();
-  await reset.click();
-  await page.getByTestId("sms-switches-save-row-save").click();
-  await expect(page.getByTestId("sms-switches-save-row")).toHaveAttribute("data-dirty", "false");
-  let options = await (await request.get("/api/auth/login-options")).json();
-  expect(options).toMatchObject({ otpChannel: "sms", otpLogin: true, otpReset: false, otpActivate: true });
-  const refused = await ask(request, "C", "reset");
-  expect(refused.status).toBeGreaterThanOrEqual(400);
-
-  await reset.click();
-  await page.getByTestId("sms-switches-save-row-save").click();
-  await expect(page.getByTestId("sms-switches-save-row")).toHaveAttribute("data-dirty", "false");
-  options = await (await request.get("/api/auth/login-options")).json();
-  expect(options.otpReset).toBe(true);
-});
-
-// ── employees, by SMS ───────────────────────────────────────────────────────
-
-test("a new employee activates by SMS: the code reaches 2Factor, never WhatsApp, and a wrong code sets nothing", async ({
+test("with both on, the employee's choice decides: SMS goes to 2Factor only, WhatsApp to Meta only", async ({
   request,
 }) => {
   await request.post(`${FAKE}/reset`);
   await request.post(`${FAKE_WHATSAPP}/reset`);
   const a = asEmployee("A");
 
-  const requested = await ask(request, "A", "activate");
+  const requested = await ask(request, "A", "activate", "sms");
   expect(requested.status, JSON.stringify(requested.body)).toBe(200);
-  expect(requested.body.channel).toBe("sms");
+  expect(requested.body).toMatchObject({ channel: "sms", codeLength: 4, otherChannels: ["whatsapp"] });
   expect(requested.body.message).toContain("SMS");
   expect(requested.body.message).not.toContain("WhatsApp");
   expect(requested.body.maskedPhone).toMatch(/0081$/);
@@ -551,11 +602,6 @@ test("a new employee activates by SMS: the code reaches 2Factor, never WhatsApp,
     password: "first-password-1",
   });
   expect(wrong.status).toBe(400);
-  expect(
-    (await api(request, null, "POST", "/api/auth/employee-login", { identifier: a.code, password: "first-password-1" }))
-      .status,
-  ).toBe(401);
-
   const activated = await api(request, null, "POST", "/api/auth/otp/activate", {
     employeeCode: a.code,
     otp: code,
@@ -566,23 +612,32 @@ test("a new employee activates by SMS: the code reaches 2Factor, never WhatsApp,
     (await api(request, null, "POST", "/api/auth/employee-login", { identifier: a.code, password: "first-password-1" }))
       .status,
   ).toBe(200);
-  // once activated there is nothing left to activate
   expect((await ask(request, "A", "activate")).status).toBe(409);
+
+  // the same employee asks for a sign-in code by WhatsApp: Meta gets it, 2Factor hears nothing more
+  await request.post(`${FAKE}/reset`);
+  const byWhatsApp = await ask(request, "A", "login", "whatsapp");
+  expect(byWhatsApp.status, JSON.stringify(byWhatsApp.body)).toBe(200);
+  expect(byWhatsApp.body).toMatchObject({ channel: "whatsapp", codeLength: 6, otherChannels: ["sms"] });
+  const whatsapp = await (await request.get(`${FAKE_WHATSAPP}/messages`)).json();
+  expect(whatsapp).toHaveLength(1);
+  expect(whatsapp[0]).toMatchObject({ number: `91${a.phone}`, template: "hrms_otp" });
+  expect(await (await request.get(`${FAKE}/requests`)).json()).toEqual([]);
 });
 
-test("an employee signs in with an SMS code once, is made to wait before asking again, and cannot open SMS Control", async ({
+test("an employee signs in with an SMS code once, waits per channel, and cannot open SMS Control", async ({
   request,
 }) => {
   await request.post(`${FAKE}/reset`);
   const b = asEmployee("B");
 
-  const first = await ask(request, "B", "login");
+  const first = await ask(request, "B", "login", "sms");
   expect(first.status, JSON.stringify(first.body)).toBe(200);
   expect(first.body.channel).toBe("sms");
   expect(first.body.message).toContain("SMS");
 
-  // asking for another code at once is a 429 that says how long to wait (the wait is per employee and purpose)
-  const again = await ask(request, "B", "login");
+  // asking for another SMS code at once is a 429 that says how long to wait (per employee, purpose and channel)
+  const again = await ask(request, "B", "login", "sms");
   expect(again.status).toBe(429);
   expect(again.body.retryAfterSeconds).toBeGreaterThan(0);
   expect(JSON.stringify(again.body).toLowerCase()).toContain("wait");
@@ -600,9 +655,11 @@ test("an employee signs in with an SMS code once, is made to wait before asking 
   expect((await api(request, null, "POST", "/api/auth/otp/login", { employeeCode: b.code, otp: code })).status).toBe(
     400,
   );
+  // the SMS wait does not hold back a WhatsApp code: each way has its own
+  expect((await ask(request, "B", "login", "whatsapp")).status).toBe(200);
 
   // an employee token cannot open SMS Control
-  for (const path of ["overview", "settings", "messages"]) {
+  for (const path of ["overview", "usage", "settings", "messages"]) {
     expect((await api(request, token, "GET", `/api/sms-control/${path}`)).status, path).toBe(403);
   }
   expect((await api(request, token, "PUT", "/api/sms-control/settings", { hourlyCap: 5 })).status).toBe(403);
@@ -613,7 +670,7 @@ test("forgot password resets through an SMS code", async ({ request }) => {
   await request.post(`${FAKE}/reset`);
   const c = asEmployee("C");
   // a first password (activation), then a new one (reset): two purposes, so no cooldown between them
-  expect((await ask(request, "C", "activate")).status).toBe(200);
+  expect((await ask(request, "C", "activate", "sms")).status).toBe(200);
   const activation = await codeFor(request, c.phone);
   expect(
     (
@@ -625,11 +682,10 @@ test("forgot password resets through an SMS code", async ({ request }) => {
     ).status,
   ).toBe(200);
 
-  const requested = await ask(request, "C", "reset");
+  const requested = await ask(request, "C", "reset", "sms");
   expect(requested.status, JSON.stringify(requested.body)).toBe(200);
   expect(requested.body.message).toContain("SMS");
   const code = await codeFor(request, c.phone);
-  // a wrong code changes nothing
   expect(
     (
       await api(request, null, "POST", "/api/auth/otp/reset-password", {
@@ -653,6 +709,56 @@ test("forgot password resets through an SMS code", async ({ request }) => {
     (await api(request, null, "POST", "/api/auth/employee-login", { identifier: c.code, password: "charlie-pass-1" }))
       .status,
   ).toBe(401);
+});
+
+test("an SMS purpose switch turns off SMS only: WhatsApp keeps offering that use", async ({ page, request }) => {
+  await openAs(page, adminToken, `${PAGE}/settings/switches`);
+  const reset = page.getByTestId("sms-switch-otpResetEnabled");
+  await expect(reset).toHaveAttribute("aria-checked", "true");
+  await reset.click();
+  await page.getByTestId("sms-switches-save-row-save").click();
+  await expect(page.getByTestId("sms-switches-save-row")).toHaveAttribute("data-dirty", "false");
+  let options = await loginOptions(request);
+  expect(options).toMatchObject({ otpReset: true, otpChannels: { login: ["whatsapp", "sms"], reset: ["whatsapp"] } });
+  const refused = await ask(request, "C", "reset", "sms");
+  expect(refused.status).toBe(400);
+  expect(refused.body).toMatchObject({ code: "channel_unavailable", availableChannels: ["whatsapp"] });
+
+  await reset.click();
+  await page.getByTestId("sms-switches-save-row-save").click();
+  await expect(page.getByTestId("sms-switches-save-row")).toHaveAttribute("data-dirty", "false");
+  options = await loginOptions(request);
+  expect(options.otpChannels.reset).toEqual(["whatsapp", "sms"]);
+});
+
+test("WhatsApp codes switched off on WhatsApp Control leave SMS codes working on their own", async ({ request }) => {
+  await request.post(`${FAKE}/reset`);
+  await request.post(`${FAKE_WHATSAPP}/reset`);
+  expect((await admin(request, "PATCH", "/api/whatsapp-control/settings", { otpEnabled: false })).status).toBe(200);
+  try {
+    const options = await loginOptions(request);
+    expect(options).toMatchObject({
+      otpLogin: true,
+      otpChannel: "sms",
+      codeLength: 4,
+      otpChannels: { login: ["sms"], reset: ["sms"], activate: ["sms"] },
+    });
+    expect(options.channels.whatsapp).toBeUndefined();
+    // an old app (no channel) gets the SMS code
+    const k = asEmployee("K");
+    const requested = await ask(request, "K", "activate");
+    expect(requested.status, JSON.stringify(requested.body)).toBe(200);
+    expect(requested.body).toMatchObject({ channel: "sms", codeLength: 4, otherChannels: [] });
+    await codeFor(request, k.phone);
+    expect(await (await request.get(`${FAKE_WHATSAPP}/messages`)).json()).toEqual([]);
+    // and WhatsApp is refused when asked for by name
+    const refused = await ask(request, "K", "login", "whatsapp");
+    expect(refused.status).toBe(400);
+    expect(refused.body).toMatchObject({ code: "channel_unavailable", availableChannels: ["sms"] });
+  } finally {
+    expect((await admin(request, "PATCH", "/api/whatsapp-control/settings", { otpEnabled: true })).status).toBe(200);
+  }
+  expect((await loginOptions(request)).otpChannels.login).toEqual(["whatsapp", "sms"]);
 });
 
 test("the log shows every one of those, newest first, and never a code", async ({ page, request }) => {
@@ -684,36 +790,38 @@ test("the log shows every one of those, newest first, and never a code", async (
 
 // ── the protections ─────────────────────────────────────────────────────────
 
-test("the hourly cap and the per-phone cap block more codes, say so to the employee, and show up as Blocked", async ({
+test("the hourly cap and the per-phone cap block more SMS codes, say so to the employee, and show up as Blocked", async ({
   page,
   request,
 }) => {
   await request.post(`${FAKE}/reset`);
-  const before = (await admin(request, "GET", "/api/sms-control/overview")).body;
-  const used = before.limits.hourUsed as number;
 
   // per phone: two employees share a number; one code to it is allowed, the second is refused
   expect((await admin(request, "PUT", "/api/sms-control/settings", { maxPerPhonePerHour: 1 })).status).toBe(200);
-  expect((await ask(request, "E", "activate")).status).toBe(200);
-  const sharedPhone = await ask(request, "F", "activate");
+  expect((await ask(request, "E", "activate", "sms")).status).toBe(200);
+  const sharedPhone = await ask(request, "F", "activate", "sms");
   expect(sharedPhone.status, JSON.stringify(sharedPhone.body)).toBe(429);
   expect(await (await request.get(`${FAKE}/requests?mobile=${asEmployee("F").phone}`)).json()).toHaveLength(1);
   expect((await admin(request, "PUT", "/api/sms-control/settings", { maxPerPhonePerHour: 5 })).status).toBe(200);
 
-  // the company-wide hourly cap: set it to what has been used, and the next code is refused
-  const nowUsed = ((await admin(request, "GET", "/api/sms-control/overview")).body.limits.hourUsed as number) ?? used;
+  // the company-wide hourly cap: set it to what has been used, and the next SMS code is refused
+  const nowUsed = (await admin(request, "GET", "/api/sms-control/overview")).body.limits.hourUsed as number;
   expect(
     (await admin(request, "PUT", "/api/sms-control/settings", { hourlyCap: nowUsed, dailyCap: 10000 })).status,
   ).toBe(200);
-  const blocked = await ask(request, "D", "activate");
+  const blocked = await ask(request, "D", "activate", "sms");
   expect(blocked.status, JSON.stringify(blocked.body)).toBe(503);
   expect(blocked.body.error ?? blocked.body.message).toContain("temporarily unavailable");
   expect(await (await request.get(`${FAKE}/requests?mobile=${asEmployee("D").phone}`)).json()).toHaveLength(0);
+  // a cap is a pause, not a switch: SMS is still offered, and WhatsApp still works for the same employee
+  expect((await loginOptions(request)).otpChannels.activate).toEqual(["whatsapp", "sms"]);
 
   // HR sees it: the overview says so, and the log has a Blocked row with the reason
   await openAs(page, adminToken, `${PAGE}/overview`);
-  await expect(page.getByTestId("sms-step-cap-hour")).toContainText("cap is reached");
-  await expect(page.getByTestId("sms-card-hour")).toContainText(`${nowUsed} of ${nowUsed}`);
+  await expect(page.getByTestId("sms-cap-hour")).toContainText(`${nowUsed} of ${nowUsed}`);
+  // a used-up cap pauses SMS until the hour turns: the alert says which limit
+  await expect(page.getByTestId("sms-alert-paused")).toContainText(`The hourly limit of ${nowUsed} SMS is used up`);
+  await expect(page.getByTestId("sms-card-circuit")).toContainText("Paused");
   await page.goto(`${PAGE}/messages?status=blocked`);
   await expect(rows(page).first()).toBeVisible();
   await expect(rows(page).filter({ hasText: "Sms Delta" }).first()).toContainText("limit");
@@ -723,11 +831,11 @@ test("the hourly cap and the per-phone cap block more codes, say so to the emplo
   expect((await admin(request, "PUT", "/api/sms-control/settings", { hourlyCap: 100, dailyCap: 500 })).status).toBe(
     200,
   );
-  const allowed = await ask(request, "D", "activate");
+  const allowed = await ask(request, "D", "activate", "sms");
   expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
 });
 
-test("three 2Factor failures pause sending: employees are told to use their password, and HR sees why", async ({
+test("three 2Factor failures pause SMS: employees are told to use their password, and HR sees why", async ({
   page,
   request,
 }) => {
@@ -735,7 +843,7 @@ test("three 2Factor failures pause sending: employees are told to use their pass
   await request.post(`${FAKE}/fail-next`, { data: { times: 10 } });
   let paused = false;
   for (const key of ["G", "H", "I"]) {
-    const res = await ask(request, key, "activate");
+    const res = await ask(request, key, "activate", "sms");
     if (res.status === 503) {
       paused = true;
       expect(res.body.error ?? res.body.message).toContain("temporarily unavailable");
@@ -747,41 +855,43 @@ test("three 2Factor failures pause sending: employees are told to use their pass
   }
   // (earlier failures in the last ten minutes count too: after at most the third, sending is paused)
   if (!paused) {
-    const next = await ask(request, "J", "activate");
+    const next = await ask(request, "J", "activate", "sms");
     expect(next.status).toBe(503);
   }
   await request.post(`${FAKE}/reset`);
   const overview = (await admin(request, "GET", "/api/sms-control/overview")).body;
+  expect(overview.status.paused).toBe(true);
   expect(overview.circuit.paused).toBe(true);
-  expect(overview.circuit.until).toBeTruthy();
 
   await openAs(page, adminToken, `${PAGE}/overview`);
   await expect(page.getByTestId("sms-card-circuit")).toContainText("Paused");
-  await expect(page.getByTestId("sms-step-paused")).toContainText("SMS sending is paused");
+  await expect(page.getByTestId("sms-alert-paused")).toBeVisible();
   await page.goto(`${PAGE}/test`);
   await expect(page.getByTestId("sms-test-blocked")).toContainText("paused");
-  await expect(page.getByRole("button", { name: "Send a test SMS" })).toBeDisabled();
+  await expect(page.getByTestId("sms-test-send")).toBeDisabled();
   await page.goto(`${PAGE}/messages?status=failed`);
   await expect(rows(page).first()).toBeVisible();
 });
 
-// ── and back ────────────────────────────────────────────────────────────────
+// ── and off again ───────────────────────────────────────────────────────────
 
-test("switching back to WhatsApp sends codes by WhatsApp again, and 2Factor hears nothing", async ({
+test("switching SMS codes off sends codes by WhatsApp only again, and 2Factor hears nothing", async ({
   page,
   request,
 }) => {
   await request.post(`${FAKE}/reset`);
   await request.post(`${FAKE_WHATSAPP}/reset`);
-  await openAs(page, adminToken, `${PAGE}/settings/channel`);
-  await page.getByTestId("sms-channel-whatsapp").locator("input").check();
-  await page.getByTestId("sms-channel-save-row-save").click();
-  await expect(page.getByRole("alertdialog")).toContainText("Send codes by WhatsApp again?");
-  await page.getByRole("alertdialog").getByRole("button", { name: "Yes, use WhatsApp" }).click();
-  await expect(page.getByTestId("sms-channel-whatsapp")).toContainText("In use now");
+  await switchSmsCodes(page, false);
 
-  const options = await (await request.get("/api/auth/login-options")).json();
-  expect(options).toMatchObject({ otpChannel: "whatsapp", otpLogin: true, otpReset: true, otpActivate: true });
+  const options = await loginOptions(request);
+  expect(options).toMatchObject({
+    otpChannel: "whatsapp",
+    otpLogin: true,
+    otpReset: true,
+    otpActivate: true,
+    otpChannels: { login: ["whatsapp"], reset: ["whatsapp"], activate: ["whatsapp"] },
+  });
+  expect(options.channels.sms).toBeUndefined();
 
   const j = asEmployee("J");
   const requested = await ask(request, "J", "activate");

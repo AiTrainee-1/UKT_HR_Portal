@@ -18,11 +18,11 @@ import {
 import { cn } from "@/lib/utils";
 import { Chip, Dot, Notice, Panel, TemplateStatusChip } from "./kit";
 import {
-  OFF_REASON_TEXT,
   controlSections,
   controlSummary,
   formatCount,
   monthOf,
+  offReasonText,
   type ControlSection,
   type TypeRow,
 } from "./logic";
@@ -142,6 +142,7 @@ function TypeLine({
 }) {
   const f = row.feature;
   const live = row.off === null;
+  const never = row.off === "none"; // not sent through Meta at all: its switch changes nothing
   const needsTemplate =
     row.templateState !== null && ["missing", "rejected", "disabled", "paused"].includes(row.templateState);
   return (
@@ -163,7 +164,7 @@ function TypeLine({
             )}
             data-testid={`wa-type-off-${row.type}`}
           >
-            {OFF_REASON_TEXT[row.off]}
+            {offReasonText(row)}
           </p>
         )}
       </div>
@@ -210,8 +211,8 @@ function TypeLine({
       </p>
       <div className="col-start-2 row-span-2 row-start-1 flex items-center gap-2 sm:col-start-auto sm:row-span-1 sm:row-start-auto">
         <Switch
-          checked={f.enabled}
-          disabled={disabled}
+          checked={f.enabled && !never}
+          disabled={disabled || never}
           onCheckedChange={onToggle}
           aria-label={`WhatsApp ${f.label}`}
           data-testid={`toggle-${f.key}`}
@@ -241,6 +242,7 @@ function SectionCard({
   const { group, master, general, types } = section;
   const held = master !== null && !master.enabled;
   const live = types.filter((t) => t.off === null).length;
+  const sendable = types.filter((t) => t.off !== "none").length;
   return (
     <section
       className={cn(
@@ -256,7 +258,7 @@ function SectionCard({
           <h3 className="flex flex-wrap items-center gap-2 text-[15px] font-semibold">
             {group.title}
             <span className="text-xs font-medium text-muted-foreground" data-testid={`wa-section-count-${group.key}`}>
-              {live} of {types.length} going out
+              {live} of {sendable} going out
             </span>
           </h3>
           {group.blurb && <p className="mt-0.5 max-w-3xl text-xs text-muted-foreground">{group.blurb}</p>}
@@ -507,7 +509,8 @@ export default function ControlsTab({ access, go }: { access: WaAccess; go: (tab
         <SendingLimits limits={data.queueLimits} quietHours={data.quietHours} locked={!canEdit} />
       )}
       <Timings timings={data.timings.filter((t) => !OTP_TIMINGS.includes(t.key))} disabled={!canEdit} />
-      {access.canOpen("overview") && <QueueCard locked={!canEdit} />}
+      {/* the server files "Clear queue" under the Overview tab (permission_tree.py whatsapp_control.overview) */}
+      {access.canOpen("overview") && <QueueCard locked={!access.canEdit("overview")} />}
 
       <TemplateEditorDialog
         open={editor !== null}

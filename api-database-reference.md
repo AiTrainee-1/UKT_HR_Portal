@@ -680,42 +680,174 @@ One claim workflow for every kind (2026-11-19): the employee (mobile app / Emplo
 - **GET `/api/mobile-app-logins/export`** — Exports the currently-filtered staff list (name, code, phone, department) as an `.xlsx` file using the exact same filters as the list endpoint, and logs the export. **Auth: `@require_hr`.**
 - **POST `/api/mobile-app-logins/\<int:employee_id\>/reset-password`** — Sets a new bcrypt-hashed mobile-app password for an employee, or clears it entirely (`{"clear": true}`) forcing them to re-run Set Password; never returns the stored/plaintext password since bcrypt hashes are one-way, and deliberately does not touch `last_mobile_login_at`. **Auth: `@require_hr`.**
 
-## WhatsApp (Settings → WhatsApp)
+## WhatsApp: Meta's webhook and the document senders (whatsapp_views.py)
 
-- **GET `/api/whatsapp/status`** — Read-only credential status: whether WhatsApp is configured (from `.env`/Django settings), a masked (last-4) phone number ID, and API version — never exposes the actual credentials. **Auth: `@require_hr`.**
-- **GET `/api/whatsapp/templates`** — Lists one row per document type (`WhatsAppMessageTemplate` if configured, else a default empty placeholder row) so the Settings UI always renders a full fixed set of rows. **Auth: `@require_hr`.**
-- **PUT `/api/whatsapp/templates/\<str:document_type\>`** — Creates/updates the Meta template name, language code, variable note, and enabled flag for one document type's WhatsApp message template. **Auth: `@require_hr`.**
-- Every single-document WhatsApp endpoint (salary slip, offer / experience / resignation letter, ID card, employee document) **queues** the message since 2026-11-06 and answers `{ok, sentTo, status, queued}` (`status` = the row's status, usually `queued`; 400 `{error}` when it was refused: not configured, no phone, switched off, opted out, quiet hours).
+WhatsApp goes through the official Meta WhatsApp Cloud API only (2026-11-20): every message is an approved template. How it
+works end to end: `whatsapp-meta-cloud-integration.md`.
 
-## WhatsApp Control and the send queue (whatsapp_control_views.py, whatsapp_dispatcher.py)
+- **GET / POST `/api/whatsapp/webhook/`** (also without the slash) — Meta's webhook. Public by design (no login, no JWT,
+  csrf-exempt): the verify token (GET) and the signature (POST) are the only credentials. GET with `hub.mode=subscribe` and
+  `hub.verify_token` equal to `WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN` answers `hub.challenge` as `text/plain`, anything else
+  403. POST needs `X-Hub-Signature-256: sha256=<HMAC-SHA256 of the raw body with WHATSAPP_CLOUD_APP_SECRET>` (constant-time
+  compare; missing or wrong = 403, nothing read). A signed POST always answers 200 and stamps
+  `whatsapp_settings.last_webhook_at`: `statuses[]` (sent / delivered / read / failed, never backwards) update the log row by
+  its wamid (`delivered_at`, `read_at`, `pricing_category`, `billable`, the error); an inbound text "STOP" from an employee's
+  registered number opts them out (reason "Replied STOP"; the text is never stored); template status / quality events update
+  or create the `whatsapp_meta_template` row.
+- Every single-document WhatsApp endpoint (salary slip, offer / experience / resignation letter, ID card, employee document)
+  **queues** the message and answers `{ok, sentTo, status, queued}` (`status` = the row's status, usually `queued`; 400
+  `{error}` when it was refused: not configured, no phone, switched off, its template not approved, opted out). The file is
+  uploaded to Meta when its turn comes and travels in the template's header (a photo of an employee document is sent as a
+  one-page PDF). The bulk salary-slip send is refused up front while the type is off or its template is not approved.
+- Retired 2026-11-20 (404): `GET /api/whatsapp/status`, `GET /api/whatsapp/media/<token>`, `GET/PUT /api/whatsapp/templates…`,
+  `/api/whatsapp-control/templates…` (with Meta the wording IS the approved template).
 
-All `@require_hr`, permission module `whatsapp_control` (non-GET needs Edit), branch-scoped where they list employees or messages. Behaviour of the queue: `waclient-whatsapp-integration.md` → *The send queue*.
+## WhatsApp Control and the send queue (whatsapp_control_views.py, whatsapp_test_views.py, whatsapp_templates.py, whatsapp_usage.py, whatsapp_dispatcher.py)
 
-- **GET `/api/whatsapp-control/overview?days=`** — `{days, config, totals, today, thisMonth, categories, relatedModules, byCategory, byType, daily, recentFailures, stalePending}`; each counts object has every status (`pending, queued, sending, sent, delivered, read, failed, expired, skipped`) plus `total` and `accepted` (sent + delivered + read). `config.sendDelaySeconds` is the queue's `minGapSeconds`; `config.engineEnabled` added.
-- **GET `/api/whatsapp-control/messages`** — filters `status` (any of the nine), `category`, `type`, `related`, `employeeId`, `search`, `dateFrom`, `dateTo`, `page`. Each row adds `kind` (`code|requested|automatic|document`), `sentAt`, `expiresAt`, `attempts`.
-- **GET `/api/whatsapp-control/employees`** — employees with at least one message or an opt-out (`all=1`: every employee; `optOut=true|false` filters; `search`). Each row adds `optOut`, `optOutReason`, `optOutAt`, `optOutBy`.
-- **PATCH `/api/whatsapp-control/employees/<id>/opt-out`** — `{optOut: boolean, reason?: string (<= 500)}` → the updated employee row. 400 bad body, 404 unknown or outside the branch.
-- **GET / PUT `/api/whatsapp-control/settings`** — the existing `{groups, features, timings, config, updatedAt}` plus `engineEnabled` (master switch), a `features` entry `type:<document_type>` (group = its module) for every message type without a boolean of its own (or sharing one), `queueLimits [{key, label, value, min, max, unit}]` for `minGapSeconds` (5-600 seconds), `maxPerHour` (1-1000), `maxPerDay` (1-5000), `maxPerEmployeePerDay` (1-20), and `quietHours {enabled, start: "HH:MM", end: "HH:MM"}`. PUT accepts `engineEnabled`, any `type:<key>` boolean, each queue limit as an integer, and `quietHours` (partial allowed); 400 `{error}` for a wrong type, a value out of range or an unknown `type:` key.
-- **GET `/api/whatsapp-control/queue`** — `{engineEnabled, paused, pausedReason, inQuietHours, queued, sentToday, sentLastHour, failedToday, expiredToday, skippedToday, nextSendAt (ISO or null), limits {minGapSeconds, maxPerHour, maxPerDay, maxPerEmployeePerDay}}`.
-- **POST `/api/whatsapp-control/queue/clear`** — every queued row becomes `skipped` ("Cleared by HR") → `{cleared}`.
-- **GET `/api/whatsapp-control/templates`**, **PUT `/api/whatsapp-control/templates/<type>`**, **POST `/api/whatsapp-control/templates/<type>/preview`** — unchanged.
+All `@require_hr`, permission module `whatsapp_control` and its tab keys `whatsapp_control.<tab>` (non-GET needs Edit),
+branch-scoped where they list employees or messages. Rates are fractions 0-1; money is INR. Behaviour:
+`whatsapp-meta-cloud-integration.md`.
+
+- **GET `/api/whatsapp-control/overview`** — `{connection: {configured, sendingAllowed, blockReasons[], qualityRating,
+  messagingLimitTier, tierLimit, uniqueRecipients24h, displayNumber, verifiedName, status, nameStatus, throughput, tokenOk,
+  error, checkedAt, lastWebhookAt, apiVersion}, month: {sent, delivered, read, failed, skipped, expired, queued, deliveryRate,
+  readRate, billable}, cost: {soFar, soFarWithGst, projected, projectedWithGst, gstRate, budget, budgetUsedPct,
+  projectedBudgetPct, budgetIncludesGst: false, currency, isCurrentMonth, daysElapsed, daysInMonth}, templates: {approved,
+  pending, rejected, paused, total, missingForEnabledTypes: [{type, label, templateName}]}, otp: {enabled, available, purposes,
+  problems, templateName, templateStatus, expiryMinutes, templateExpiryMinutes, month: {sent, delivered, failed, verified}},
+  queue: {...as GET queue}, alerts: [{level: error|warning|info, code, message}]}` plus the older `config`, `today`,
+  `thisMonth`, `recentFailures`, `stalePending`, `categories`, `relatedModules`. `sent` counts sent + delivered + read; alert
+  codes include `not_configured`, `token_invalid`, `meta_unreachable`, `sending_blocked`, `engine_off`, `queue_paused`,
+  `templates_missing`, `templates_pending`, `template_quality`, `quality_yellow` / `quality_red`, `tier_near_limit`,
+  `number_status`, `otp_template`, `webhook_never`, budget alerts.
+- **GET `/api/whatsapp-control/usage?month=YYYY-MM`** (default this month) — `{month, days: [{date, sent, delivered, read,
+  failed, skipped, expired, queued, billable, byCategory: {authentication, utility, marketing, service}}], totals: {sent,
+  delivered, read, failed, skipped, expired, queued, billable, deliveryRate, readRate}, byCategory: {<cat>: {messages, billable,
+  rate, cost}}, byType: [{type, label, module, moduleLabel, messages, billable, failed, categories, cost}], cost: {...as the
+  overview}, rates, defaultRates, meta: {available, cost, volume, byCategory, lastSyncedAt, error}}`. A row's category: Meta's
+  pricing category (webhook), else its template's, else the catalog's (codes = authentication); billable: Meta's flag, else
+  every sent row of a non-service category; a row with no template name and no Meta pricing (sent before Meta) is counted, never
+  charged. `meta` = Meta's pricing analytics, cached 10 minutes ("Meta figures unavailable" on failure). Projection =
+  cost so far / elapsed days x days in the month (current month only).
+- **GET / PATCH / PUT `/api/whatsapp-control/settings`** — `{groups, features: [{key, label, description, group, enabled}],
+  timings, queueLimits, quietHours, engineEnabled, otpEnabled, templateOverrides, messageTypes, priceRates,
+  defaultPriceRates, gstRate, currency, monthlyBudget, config, updatedAt}`. A `features` entry `type:<document_type>` exists
+  for every type without a boolean of its own (or sharing one). `messageTypes`: `{<type>: {templateName (null = never sent
+  through Meta), switches: [keys that must all be on besides the engine: otpEnabled, the section master, a shared switch,
+  its own]}}`. PATCH (PUT still works) accepts `engineEnabled`, `otpEnabled` (the WhatsApp codes master), any feature
+  key, `type:<key>` booleans, the timings and queue limits, `quietHours`, `templateOverrides` (merged; keys must be catalog
+  types sent through Meta, names lowercase / digits / underscores; a blank or the default name removes the override),
+  `priceRates` (`{authentication|utility|marketing|service: 0-100 or null = default}`), `monthlyBudget` (null or >= 0).
+  400 `{error}` for anything else; audited. Every value a save CHANGES needs Edit on its tab (`whatsapp_control.otp` for the
+  code switches, expiry and password sign-in; `.config` for prices and budget; `.templates` or `.controls` for
+  `templateOverrides`; `.controls` for the rest): else 403 `{error, code: "permission_denied", tabs}`, nothing saved.
+- **GET `/api/whatsapp-control/messages`** — filters `status`, `category`, `type`, `template`, `related`, `employeeId`,
+  `search`, `dateFrom`, `dateTo`; with `page` / `pageSize` → `{items, total, page, pageSize}`. Each row: `{id, employeeId,
+  employeeCode, employeeName, phone, documentType, typeLabel, category, categoryLabel, relatedModule, relatedLabel, status,
+  error, messageText, providerMessageId, referenceId, sentBy, automatic, kind, sentAt, expiresAt, attempts, templateName,
+  pricingCategory, pricingCategoryFromMeta, billable, deliveredAt, readAt, createdAt, updatedAt}`. A code's text is masked.
+- **GET `/api/whatsapp-control/employees`** (`all=1`, `optOut=true|false`, `search`) and **PATCH
+  `/api/whatsapp-control/employees/<id>/opt-out`** `{optOut, reason?}` — unchanged.
+- **GET `/api/whatsapp-control/queue`**, **POST `/api/whatsapp-control/queue/clear`** — unchanged.
+- **GET `/api/whatsapp-control/connection`** — the set-up checklist: `{env: [{name, set, secret, required}], configured,
+  sendingAllowed, blockReasons, warnings, phone: {displayPhoneNumber, verifiedName, qualityRating, messagingLimitTier, status,
+  nameStatus, codeVerificationStatus, throughput, platformType} | null, tokenOk, error, errorCode, apiVersion, apiBase,
+  templateLanguage, webhook: {url, verifyTokenSet, appSecretSet, lastWebhookAt}, devLock: {onlyToEmployees}, templates:
+  {approved, total}, machine, queue, lastFailure, checkedAt}`. Asks Meta about the number live; never a secret's value.
+- **GET `/api/whatsapp-control/test-message?search=`** — `{blockReason, limitedTo, recipients: [{id, code, name, phone
+  (masked), hasPhone, blockedReason}], types: [{documentType, label, module, moduleLabel, kind, variables: [{name, sample}],
+  template: {name, language, status, category, approved, problem, header}}]}`. **POST** `{documentType, employeeId, params?,
+  dryRun?}` → every answer has `{documentType, to, employee, template, params, header, text}` plus `status`: `preview`
+  (`blockReason`), `sent` (`logId`, `providerMessageId` = wamid, `testCode` for a code type), `failed` (`logId`, `error`,
+  `code` = Meta's error code, `metaMessage`, `httpStatus`, `providerResponse` without secrets) or `blocked` (`error`). Sent at
+  once (not queued) as the type's template; free `text` is a 400.
+- **GET `/api/whatsapp-control/meta-templates`** — `{templates: [{id, name, language, category, status, qualityScore,
+  rejectedReason, messageTypes, madeFor, components, header, body, footer, variables, codeExpirationMinutes, metaId,
+  lastSyncedAt, createdAt, updatedAt}], lastSyncedAt, configured, language}`. **POST** `{name, language, category, header,
+  headerText, body, footer, examples, messageType?, codeExpirationMinutes?, addSecurityRecommendation?}` validates against
+  Meta's rules (400 `{error, fields, warnings}`), submits to Meta and saves the row → 201 `{template, message, warnings}`; 409
+  when the name is taken in that language; Meta's refusal comes back readable. A document / image header uploads a sample file
+  (Resumable Upload API, app = `WHATSAPP_CLOUD_APP_ID` or Meta's `GET /app`).
+- **POST `/api/whatsapp-control/meta-templates/sync`** — pulls every template from Meta, upserts by name + language, marks
+  rows Meta no longer has as `DELETED` → the list plus `{synced, created, updated, deleted, message}`.
+- **POST `/api/whatsapp-control/meta-templates/create-missing`** — submits a draft for every switched-on type without an
+  approved or pending template (a shared template once) → `{results: [{type, label, name, ok, status, error, message}]}`.
+- **GET `/api/whatsapp-control/meta-templates/draft/<type_key>`** — `{messageType, label, module, name, language,
+  currentStatus, currentProblem, category, header, headerText, body, footer, examples, variables, codeExpirationMinutes,
+  addSecurityRecommendation, warnings, errors, preview}`; the code types get Meta's AUTHENTICATION shape (`hrms_otp`, the
+  expiry from the settings). 404 unknown type, 400 a type never sent through Meta.
+- **DELETE `/api/whatsapp-control/meta-templates/<id>`** — deletes that language at Meta (by its Meta id) and here →
+  `{deleted, name, language, messageTypes, message}`; a template Meta already lost still counts as deleted.
 
 ## One-time codes: sign in, forgot password, first-time password (otp_views.py, otp_service.py)
 
-Public endpoints for the Employee Web App and the mobile app (no login; throttled per client IP: `otp_request` 300/min, `otp_verify` 600/min, `NUM_PROXIES` says who the client is). The code goes by **WhatsApp or SMS (2Factor)**, whichever HR chose on SMS Control (`SmsSettings.otp_channel`, default `whatsapp`). The SMS side is set up as described in `twofactor-sms-otp-integration.md`. A throttled call answers 429 `{ error, retryAfterSeconds }` with a `Retry-After` header; a non-text code or password, a NUL byte or a non-object body is a clean 400.
+Public endpoints for the Employee Web App and the mobile app (no login; throttled per client IP: `otp_request` 300/min,
+`otp_verify` 600/min, `NUM_PROXIES` says who the client is). Codes go by **WhatsApp** (the approved `hrms_otp` template,
+6 digits) and / or **SMS** (2Factor, 4 digits): two INDEPENDENT channels, either alone is enough (2026-11-20). A channel is
+available for a purpose when its master switch (`whatsapp_settings.otp_enabled` / `sms_settings.otp_enabled`) and its purpose
+switch are on and it can deliver here (WhatsApp: configured, the engine on, the code template APPROVED; SMS: 2Factor set up
+and allowed to send). A temporary pause (SMS caps, the breaker) fails a request but does not remove the channel.
+`sms_settings.otp_channel` is no longer read. A throttled call answers 429 `{ error, retryAfterSeconds }` with a
+`Retry-After` header; a non-text code or password, a NUL byte or a non-object body is a clean 400.
 
-- **GET `/api/auth/login-options`** — `{ otpLogin, otpReset, otpActivate, passwordLogin, otpChannel, codeLength }`. A code method is `true` only when its switch is on and the active channel is configured and allowed to send; `passwordLogin` is `true` whenever code sign-in cannot work. `otpChannel` (`"sms"` | `"whatsapp"`) and `codeLength` (`4` for SMS, `6` for WhatsApp: how many digits a code issued now has) are additive.
-- **POST `/api/auth/otp/request`** — `{ employeeCode, purpose: "login" | "reset" | "activate" }` (the mobile app sends `identifier`). Makes a code (4 digits by SMS, 6 by WhatsApp; only a salted HMAC is stored, the length is stored as `employee_otp.code_length`), sends it to the employee's registered number and returns `{ message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength }` (`channel` and `codeLength` are additive). 400 no valid mobile number, 403 purpose switched off or account inactive, 404 not registered, 409 already has a password (activate), 429 resend wait / hourly allowance / (SMS only) 10 codes in 24 hours (with `retryAfterSeconds` for a wait) / per-number cap / per-IP throttle, 502 the send failed (the code is discarded), 503 SMS not available or temporarily unavailable.
-- **POST `/api/auth/otp/login`** `{ employeeCode, otp }` returns `{ token, role, employeeId, name }`; **POST `/api/auth/otp/reset-password`** and **POST `/api/auth/otp/activate`** `{ employeeCode, otp, password }` (password at least 8 characters) return `{ message }`. A code works once, expires (default 5 minutes), is bound to its purpose and allows a limited number of wrong tries; every verify failure is the same "incorrect or expired" sentence.
+- **GET `/api/auth/login-options`** (`Cache-Control: no-store`) — `{ otpLogin, otpReset, otpActivate, passwordLogin,
+  otpChannel, codeLength, otpChannels: {login: [...], reset: [...], activate: [...]}, channels: {whatsapp?: {name: "WhatsApp",
+  codeLength: 6}, sms?: {name: "SMS", codeLength: 4}} }`. `otpChannels` lists what is available now, WhatsApp first;
+  `channels` only the available ones. For old app builds: `otpChannel` = the first channel for login, else reset, else
+  activate, else null, and `codeLength` its length (6 when none); `otpLogin` etc. = that purpose's list is not empty.
+  `passwordLogin` is `true` whenever no channel can sign anyone in, so nobody is locked out.
+- **POST `/api/auth/otp/request`** — `{ employeeCode, purpose: "login" | "reset" | "activate", channel?: "whatsapp" | "sms" }`
+  (the mobile app sends `identifier`; no channel = the first available). Makes a code (only a salted HMAC is stored, with
+  `employee_otp.code_length` and `employee_otp.channel`), sends it and returns `{ message, maskedPhone, expiresInSeconds,
+  resendAfterSeconds, channel, codeLength, otherChannels }`. Each channel has its own expiry, resend wait and allowances; a new
+  code on either channel kills the earlier unused codes of that purpose. 400 no valid mobile number, or `{code:
+  "channel_unavailable", availableChannels, message}` for a channel that is not available; 403 `otp_off` (no channel switched
+  on for the purpose) or account inactive; 404 not registered; 409 already has a password (activate); 429 resend wait / hourly
+  allowance / (SMS) 10 codes in 24 hours / per-number cap / per-IP throttle; 502 the send failed (the code is discarded); 503
+  `otp_unavailable` (switched on but nothing can deliver) or SMS temporarily unavailable. Errors after a channel was picked
+  carry `otherChannels`.
+- **POST `/api/auth/otp/login`** `{ employeeCode, otp }` returns `{ token, role, employeeId, name }`; **POST
+  `/api/auth/otp/reset-password`** and **POST `/api/auth/otp/activate`** `{ employeeCode, otp, password }` (password at least
+  8 characters) return `{ message }`. A code works once, expires, is bound to its purpose and allows a limited number of wrong
+  tries (its own channel's limit); every verify failure is the same "incorrect or expired" sentence.
 
 ## SMS Control (sms_control_views.py, sms_service.py, twofactor_client.py)
 
-All `@require_hr`, module `sms_control` (GET needs view, PUT / POST need edit). A branch login reads its own branch's rows and gets 403 `company_wide_settings` on a change or a test. The 2Factor API key is never accepted, stored in the database, returned or logged: it lives in the server environment only.
+All `@require_hr`, module `sms_control` and its tab keys (GET needs view, PUT / PATCH / POST need edit). A branch login reads
+its own branch's rows and gets 403 `company_wide_settings` on a change or a test. The 2Factor API key is never accepted,
+stored in the database, returned or logged. SMS carries one-time codes ONLY: `sms_service.send_otp` (4-6 digits, a known
+purpose) is the only send, and no other module may import the 2Factor client (a test enforces it).
 
-- **GET `/api/sms-control/overview`** — `{ provider: "twofactor", channel, configured, sendingAllowed, sendingNote, env: { authKey, senderId, templateName, apiBase }, balance, today: { sent, failed, blocked }, last7Days: [{ date, sent, failed }], lastSentAt, limits: { hourlyCap, dailyCap, hourUsed, dayUsed }, circuit: { paused, until } }`. `env.authKey` says only whether the key is set (a boolean, never the key); `senderId` / `templateName` are plain strings (empty when unset or still a placeholder); `balance` is a note ("look at the balance in the 2Factor panel": 2Factor documents no balance call).
-- **GET, PUT `/api/sms-control/settings`** — `{ otpChannel, otpLoginEnabled, otpResetEnabled, otpActivateEnabled, otpExpiryMinutes (1-15), resendCooldownSeconds (30-600), maxRequestsPerHour (1-20), maxAttemptsPerCode (3-5), maxPerPhonePerHour (1-20), hourlyCap (1-10000), dailyCap (1-10000), version, updatedAt, updatedBy, warnings }`. PUT is all-or-nothing (any problem is a 400 `{ error }` and nothing is saved; an hourly cap above the daily one is a 400), takes any subset of the keys, honours `expectedVersion` (400 code `stale_settings`), and **refuses `otpChannel: "sms"` (400, "SMS cannot be selected until 2Factor is configured on the server: missing: ...") until 2Factor is configured on the server**. Audited (module `sms_control`, action `update`).
-- **GET `/api/sms-control/messages`** — newest first. Filters `status` (`sent` | `failed` | `blocked`), `purpose` (`login` | `reset` | `activate` | `test`), `search`, `dateFrom`, `dateTo` (YYYY-MM-DD), `page`, `pageSize` (at most 200). `{ items: [{ id, at, employeeId, employeeName, employeeCode, maskedPhone, purpose, status, error, providerMessageId, ip }], total, page, pageSize, statusCounts }`. Never a code or a full number.
-- **POST `/api/sms-control/test`** — `{ phone }`: sends one real SMS through the real template with the dummy code `1234`. `200 { ok, message }` for everything about the send itself (accepted, refused by 2Factor, not configured, a limit), 400 for a bad number, 429 after 3 tests an hour per HR user. Audited (action `test`, masked number only).
+- **GET `/api/sms-control/overview`** — `{ provider: "twofactor", configured, sendingAllowed, sendingNote, otpEnabled, env: {
+  authKey, senderId, templateName, apiBase }, status: { configured, sendingAllowed, sendingAllowedNow, otpEnabled, available,
+  purposes: {login, reset, activate}, paused, pauseReason, devLock: { active, onlyToEmployees } }, balance: { credits,
+  available, checkedAt, error }, today: { sent, failed, blocked }, last7Days, lastSentAt, limits: { hourlyCap, dailyCap,
+  hourUsed, dayUsed }, circuit: { paused, until }, month: { month, requested, sent, failed, blocked, verified, deliveryRate,
+  verifiedRate }, cost: { perSms, soFar, projected, budget, budgetUsedPct, projectedBudgetPct, currency, isCurrentMonth },
+  alerts: [{ level, code, message }] }`. `env.authKey` is only a boolean. The balance is a real read-only 2Factor call
+  (`/{key}/BAL/SMS`), cached 5 minutes. Rates are percentages with one decimal (null when there is nothing to divide by).
+  Alert codes: `not_configured`, `sending_blocked`, `otp_off`, `all_switches_off`, `paused` (the breaker, or a used-up
+  hourly / daily cap), `hourly_cap_near`, `daily_cap_near`, `balance_unknown`, `balance_empty`, `balance_low`,
+  `budget_exceeded`, `budget_projected`, `failures`, `dev_lock`.
+- **GET `/api/sms-control/usage?month=YYYY-MM`** — `{ month, days: [{ date, sent, failed, blocked, verified }], daysInMonth,
+  elapsedDays, totals, byPurpose: { login, reset, activate, test }, cost, balance }`. `verified` = SMS codes used.
+- **GET, PUT, PATCH `/api/sms-control/settings`** — `{ otpEnabled, otpLoginEnabled, otpResetEnabled, otpActivateEnabled,
+  otpExpiryMinutes (1-15), resendCooldownSeconds (30-600), maxRequestsPerHour (1-20), maxAttemptsPerCode (3-5),
+  maxPerPhonePerHour (1-20), hourlyCap (1-10000), dailyCap (1-10000), pricePerSms (0-100; null = the default),
+  pricePerSmsDefault (0.20, read-only), monthlyBudget (null or 0-10,000,000), version, updatedAt, updatedBy, warnings }`.
+  All-or-nothing (any problem is a 400 `{ error }` and nothing is saved), any subset of the keys, honours `expectedVersion`
+  (400 code `stale_settings`). `otpChannel` is refused (400 "SMS and WhatsApp codes are now switched on separately…"), and so
+  is switching `otpEnabled` on while 2Factor is not configured. Every value a save CHANGES needs Edit on its Settings sub-tab
+  (`sms_control.settings.switches` / `.limits` / `.cost`): else 403 `{error, code: "permission_denied", subtabs}`, nothing
+  saved. Audited (module `sms_control`, action `update`).
+- **GET `/api/sms-control/messages`** — unchanged: filters `status`, `purpose` (`login` | `reset` | `activate` | `test`),
+  `search`, `dateFrom`, `dateTo`, `page`, `pageSize` (at most 200) → `{ items, total, page, pageSize, statusCounts }`. Never a
+  code or a full number.
+- **POST `/api/sms-control/test`** — `{ employeeCode }` or `{ employeeId }` (that employee's registered number) or `{ phone }`:
+  one real SMS through the OTP template with the dummy code `1234` (no free text). `200 { ok, message }` for everything about
+  the send itself (accepted, refused by 2Factor, not configured, a limit, the development lock), 400 no usable employee or
+  number, 429 after 3 tests an hour per HR user. Audited (masked number only). On a development machine
+  `SMS_ONLY_TO_EMPLOYEES` limits every SMS to those employees' numbers (a refused one is logged `blocked`, `dev_lock`).
 
 ## Endpoint Sharing (shared_endpoint_views.py, shared_endpoint_admin_views.py, shared_datasets.py)
 
@@ -2133,6 +2265,7 @@ One row per WhatsApp message (every catalogue type: documents, codes, alerts, ap
 - `status` — TextField: `pending` (a code being sent, or a row from before the queue) | `queued` | `sending` | `sent` | `delivered` | `read` | `failed` | `expired` (too late to be useful, never sent) | `skipped` (quiet hours, opted out, daily limit, duplicate, switched off, cleared by HR); `error_message` holds the reason
 - `message_text` (codes redacted), `provider_message_id`, `dedupe_key` (unique when not empty), `document_ref_id`
 - Migration `0143_whatsapp_send_queue` (additive, all with database defaults): `kind` TextField (`code|requested|automatic|document`, "" on older rows), `priority` SmallInteger (default 5; code 0, document 3, requested 4, automatic 5, bulk 6), `send_after` / `expires_at` / `sent_at` DateTime null, `attempts` SmallInteger (default 0), `payload` JSON (default `{}`: a document's `media_url` / `filename` / `mime_type` or `build` + `build_args` + `base_url`, `contact`, `on_sent`, `batch`, the real `text` when the logged one is redacted)
+- Migration `0169_meta_cloud_independent_otp` (additive): `template_name` Text (the Meta template it went as; "" before Meta), `pricing_category` Text (Meta's, from the webhook: `authentication|utility|marketing|service`), `billable` Boolean null, `delivered_at` / `read_at` DateTime null. `payload["params"]` holds a queued row's template variables (a row queued before Meta, without them, is skipped as legacy); a document waits as a `WhatsAppMediaAsset` and is uploaded to Meta at its turn.
 - Indexes `(employee, document_type)`, `(status, -created_at)`, `(document_type, -created_at)`, `whatsapp_log_queue_idx (status, priority, send_after)`, `whatsapp_log_sent_at_idx (sent_at)`; ordering `["-created_at"]`
 
 ### WhatsAppSettings
@@ -2140,6 +2273,12 @@ One row per WhatsApp message (every catalogue type: documents, codes, alerts, ap
 
 - The OTP / feature / alert switches and timings (`otp_*_enabled`, `*_notifications_enabled`, `attendance_alerts_enabled`, `absent|late|four_punch|missing_punch_alert_enabled`, `geo_approval_enabled`, `disabled_approval_modules`, `password_login_enabled`, `otp_expiry_minutes`, `absent_extra_minutes`, `four_punch_lead_minutes`, `missing_punch_after_minutes`)
 - Migration `0143`: `engine_enabled` Boolean (default true; master switch, codes included), `disabled_message_types` JSON list (default `[]`; types switched off one by one), `min_gap_seconds` (30), `max_per_hour` (60), `max_per_day` (200), `max_per_employee_per_day` (3), `quiet_hours_enabled` (true), `quiet_start` Time (21:00), `quiet_end` Time (07:00). Its data step set `four_punch_alert_enabled = false` on the existing row (owner decision: punch reminders off).
+- Migration `0169`: `otp_enabled` Boolean (WhatsApp codes master, default true; independent of SMS), `template_overrides` JSON (`{type_key: template_name}`, default `{}`), `price_rates` JSON (`{category: rupees}`, default `{}` = the built-in India rates), `monthly_budget` Decimal null, `last_webhook_at` DateTime null (stamped by every signed webhook POST).
+
+### WhatsAppTemplate
+**Table name:** `whatsapp_meta_template` (migration `0169`)
+
+The local mirror of the Meta message templates (filled by Templates -> create / Sync now and by the webhook's template events). A type is sent only while its template's row is `APPROVED`. `name`, `language` (unique together), `category` (`UTILITY|AUTHENTICATION|MARKETING`), `status` (`DRAFT|PENDING|APPROVED|REJECTED|PAUSED|DISABLED|IN_APPEAL|DELETED`...), `meta_id`, `parameter_format` (`named|positional`), `components` JSON (Meta's shape), `rejected_reason`, `quality_score`, `message_type` (the catalog type it was made for), `last_synced_at`, `created_by` ForeignKey → `HRUser` (SET_NULL), `created_at`, `updated_at`.
 
 ### WhatsAppOptOut
 **Table name:** `whatsapp_opt_out` (migration `0143`)
@@ -2149,7 +2288,7 @@ An employee who gets no WhatsApp notifications or documents (codes they ask for 
 ### WhatsAppMessageTemplate
 **Table name:** `whatsapp_message_template`
 
-Per-document-type configuration of which pre-approved Meta WhatsApp Business template name/language to use (Meta requires business-initiated messages to use a reviewed template); editable from Settings → WhatsApp.
+**Retired 2026-11-20 (kept, no migration; read by nothing):** the old per-type custom wording and its `is_enabled` switch. With the Meta Cloud API the wording is the approved template (`whatsapp_meta_template`).
 
 **Key fields:**
 - `document_type` — TextField, `unique=True`
@@ -2157,18 +2296,20 @@ Per-document-type configuration of which pre-approved Meta WhatsApp Business tem
 - `is_enabled` — BooleanField, default False
 - `updated_at` — DateTimeField
 
-## SMS OTP Channel (api/models/sms.py; migration 0123)
+## SMS one-time codes (api/models/sms.py; migrations 0123, 0169)
 
-Codes can go by SMS (2Factor) instead of WhatsApp; HR chooses on SMS Control. Setup and behaviour: `twofactor-sms-otp-integration.md`. The code table `employee_otp` (`EmployeeOtp`, shared by both channels) keeps only a salted HMAC of each code with its purpose, expiry, attempts counter, requesting IP and the number it was sent to.
+Codes go by WhatsApp and / or SMS (2Factor): two independent channels, each with its own master switch (2026-11-20). Setup and behaviour: `twofactor-sms-otp-integration.md`. The code table `employee_otp` (`EmployeeOtp`, shared by both channels) keeps only a salted HMAC of each code with its purpose, expiry, attempts counter, requesting IP, the number it was sent to, `code_length` and (migration `0169`) `channel` (`whatsapp` | `sms` | "" for older rows).
 
 ### SmsSettings
-**Table name:** `sms_settings` — singleton (pk=1, `SmsSettings.get()`). While `otp_channel` is `whatsapp` the three switches below do nothing and WhatsApp behaves exactly as before.
+**Table name:** `sms_settings` — singleton (pk=1, `SmsSettings.get()`), edited on SMS Control.
 
 **Key fields:**
-- `otp_channel` — CharField, `whatsapp` (default) | `sms`
-- `otp_login_enabled`, `otp_reset_enabled`, `otp_activate_enabled` — BooleanField, default True (they apply while the channel is SMS)
+- `otp_enabled` — BooleanField, default False (migration `0169`, set from the old `otp_channel`): the SMS codes master switch
+- `otp_channel` — CharField, **deprecated 2026-11-20, never read** (kept, no migration)
+- `otp_login_enabled`, `otp_reset_enabled`, `otp_activate_enabled` — BooleanField, default True (they apply while `otp_enabled` is on)
 - `otp_expiry_minutes` (5, range 1–15), `resend_cooldown_seconds` (60, 30–600), `max_requests_per_hour` (5, 1–20, per employee), `max_attempts_per_code` (5, 3–10), `max_per_phone_per_hour` (5, 1–20, per mobile number across employee records) — PositiveSmallIntegerField
 - `hourly_cap` (default 300), `daily_cap` (default 1500) — PositiveIntegerField, 1–10000, the hourly cap never above the daily one
+- `price_per_sms` (Decimal null = ₹0.20), `monthly_budget` (Decimal null = no budget) — migration `0169`, for the estimate on SMS Control
 - `updated_at` (null until somebody saves), `updated_by` — ForeignKey → `HRUser`, `on_delete=SET_NULL`
 
 ### SmsMessageLog
@@ -2180,7 +2321,7 @@ One row per SMS attempt, written as `sent` before the call and corrected to `fai
 - `employee` — ForeignKey → `Employee`, `on_delete=SET_NULL`, related_name `sms_messages` (null for a test); `sent_by` — ForeignKey → `HRUser`, `SET_NULL` (who sent a test)
 - `phone_masked` (`••••••3210`), `phone_hash` (keyed HMAC-SHA256 of the normalised number, so the per-number cap can count without storing the number)
 - `purpose` — `login` | `reset` | `activate` | `test`; `provider` (`twofactor`); `status` — `sent` | `failed` | `blocked`
-- `provider_message_id` (2Factor's session id), `error` (one plain sentence, at most 300 characters), `error_code` (`ip`, `auth`, `template`, `balance`, `number`, `timeout`, `hourly_cap`, `daily_cap`, `phone_cap`, `paused` ...), `requested_ip`, `created_at`
+- `provider_message_id` (2Factor's session id), `error` (one plain sentence, at most 300 characters), `error_code` (`ip`, `auth`, `template`, `balance`, `number`, `timeout`, `hourly_cap`, `daily_cap`, `phone_cap`, `paused`, `dev_lock` ...), `requested_ip`, `created_at`
 - Indexes on `(status, created_at)`, `(phone_hash, created_at)` and `(created_at)`; ordering `["-created_at", "-id"]`
 
 ## Endpoint Sharing (api/models/shared_endpoints.py; migrations 0122, 0131)
@@ -2366,6 +2507,42 @@ Additive (two new tables). Permission key `salary_slip_center` (API prefix `sala
 | GET | `download/slips?...&ids=&layout=single\|double` | PDF (409 `missing` when a slip is not generated) |
 | GET | `download/statement?...&ids=&fmt=pdf\|xlsx` | Salary Statement |
 | GET | `download/bank-file?...&ids=` | bank template .xlsx (audited) |
+
+## Payroll Excess / Detection (api/models/payroll_excess.py; migrations 0171, 0172)
+
+### PayrollExcessEntry (`payroll_excess_entries`)
+`employee`, `month`, `year` (production: the month the period ends in), `pay_cycle`, `period_start`, `period_end` (NULL for staff), `kind` (`excess` | `detection`), `amount` (> 0), `remark`, `source` (`manual` | `bulk` | `migrated`), `status` (`active` | `removed`, never deleted), `created_by` / `_name`, `created_at`, `updated_by` / `_name`, `updated_at`.
+
+### PayrollExcessHistory (`payroll_excess_history`)
+`entry`, `employee`, month / year / period fields, `kind`, `action` (`added` | `changed` | `removed`), `previous_amount`, `new_amount`, `remark` (mandatory), `source`, `actor` / `actor_name`, `at`, `payroll_net_before`, `payroll_net_after`.
+
+### Endpoints (HR, branch-scoped)
+| Method | Staff (key `salary`) | Production (key `production_payroll.salary`, `?cycle=&periodStart=&periodEnd=`) | What |
+|---|---|---|---|
+| GET | `payroll-excess/month?month=&year=` | `production-payroll-excess/period` | department-wise breakdown, summary, employee picker with eligibility |
+| POST | `payroll-excess/entries` | `production-payroll-excess/entries` | add for one or more employees `{kind, amount, remark, employeeIds}` |
+| PATCH | `payroll-excess/entries/<id>` | `production-payroll-excess/entries/<id>` | change the amount `{amount, remark}` |
+| POST | `payroll-excess/remove` | `production-payroll-excess/remove` | `{entryIds, remark}` |
+| GET | `payroll-excess/history` | `production-payroll-excess/history` | filters month / period, department, employee, kind, action; paginated |
+| GET | `payroll/not-included?month=&year=` | `payroll/production/not-included` | who is not in the payroll, and why |
+| GET | `payslips/staff?month=&year=` (+ `/pdf?ids=&layout=`) | `payslips/production` (+ `/pdf`) | the payroll's payslips with their printed lines |
+
+## Factory Employees (api/models/factory.py; migration 0173)
+
+`Employee.is_factory` (bool, `db_default` false), `Employee.factory_label` (FK `FactoryLabel`, SET_NULL). `FactoryLabel` (`factory_employee_labels`): `name` (unique, case-insensitive), `color` (#rrggbb), `description`, `sort_order`, `created_by_name`, timestamps.
+
+| Method | Path (`/api/`, key `employees.factory`) | What |
+|---|---|---|
+| GET | `employees/factory?status=&labelId=&search=&departmentId=&designationId=&employmentType=` | rows (label, department, designation, unit, salary, pay cycle, current shift, payrollIssue), labels with counts, counts, canEdit |
+| POST | `employees/factory` | create a new employee (the employee create body + `labelId`) as a factory employee |
+| GET | `employees/factory/candidates?search=` | employees not in Factory Employees yet (max 50) |
+| POST | `employees/factory/add` / `remove` / `label` | `{employeeIds, labelId?}` mark, unmark (still an employee), set the label |
+| GET, POST | `employees/factory/labels` | list / create a label |
+| PATCH, DELETE | `employees/factory/labels/<id>` | edit / delete (409 while carried, `?unassign=1` clears it first) |
+| GET | `employees/factory/<id>/history` | the employee's audit trail |
+| GET | `employees/factory/shifts` | every existing shift with its factory employees, and who has none |
+| POST | `employees/factory/shifts/plan` / `apply` / `remove` | the Manage Shifts planner for factory employees (`plan` is read-only); `remove {employeeIds, lastDay?}` |
+| POST | `employees/factory/payroll` | `{employeeIds, category, payCycle, salaryAmount?, salaryBreakup?, salaryPerShift?, confirm?, reason?}`: Staff Payroll (monthly) or Production Payroll Weekly / BiWeekly / Monthly |
 
 ## Settings & Configuration
 

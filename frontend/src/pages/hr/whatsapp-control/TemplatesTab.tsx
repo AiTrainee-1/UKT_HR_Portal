@@ -19,6 +19,7 @@ import { Chip, Empty, Notice, Panel, TemplateStatusChip, WhatsAppPreview } from 
 import {
   TEMPLATE_STATE_INFO,
   controlSections,
+  missingTemplateRows,
   plural,
   pricingLabel,
   templateExamples,
@@ -190,19 +191,11 @@ export default function TemplatesTab({ access, go }: { access: WaAccess; go: (ta
       .filter((r) => r.templateState !== "none" && !(r.type !== "otp_login" && r.templateName === "hrms_otp"))
       .map((r) => ({ type: r.type, label: r.type === "otp_login" ? "Sign-in codes (hrms_otp)" : r.feature.label }));
   }, [settings]);
-  // the switched-on types whose template is missing, rejected, paused or disabled (in review is on its way)
+  // the switched-on types whose template is missing, rejected, paused or disabled (in review is on its way): the same
+  // rule as the server's "Create all missing" (every switch it needs ON, the WhatsApp OTP master for the codes)
   const missing = useMemo(() => {
     if (!settings || !data) return [];
-    return (
-      controlSections(settings, templates, null)
-        .flatMap((s) => (s.master && !s.master.enabled ? [] : s.types))
-        .filter(
-          (r) =>
-            r.feature.enabled && r.templateState !== null && !["approved", "pending", "none"].includes(r.templateState),
-        )
-        // the three code types share one template: offer it once
-        .filter((r, i, all) => all.findIndex((x) => x.templateName === r.templateName) === i)
-    );
+    return missingTemplateRows(controlSections(settings, templates, null));
   }, [settings, data, templates]);
 
   const counts = Object.fromEntries(

@@ -16,14 +16,22 @@ What a signed POST does (entry[].changes[] by `field`):
                                 delivered -> read (never backwards; delivered_at / read_at from Meta's timestamp), or to
                                 failed with Meta's error in plain words; pricing {billable, category} is recorded for
                                 the usage and cost figures.
-  * messages / messages[]       an employee's reply. A text "STOP" from an employee's registered number opts them out
-                                (WhatsAppOptOut, reason "Replied STOP"). Nothing else is stored: the text is never logged.
+  * messages / messages[]       an employee's reply. A text "STOP" from an employee's registered number opts out every
+                                employee record on that number (WhatsAppOptOut, reason "Replied STOP"). Nothing else is
+                                stored: the text is never logged.
   * message_template_status_update   the template's row (WhatsAppTemplate) takes Meta's new status (APPROVED,
-                                REJECTED with the reason, PAUSED, DISABLED ...); a template this server did not know is
-                                added (a later Sync fills in its text).
+                                REJECTED with the reason, PAUSED, DISABLED ...). REINSTATED (a pause / disable lifted)
+                                makes it APPROVED again, UNARCHIVED brings back an archived one; FLAGGED and LOCKED change
+                                no status (a flag shows as low quality). A template this server did not know is added,
+                                with the category of the message type sent as it (a later Sync fills in its text). A
+                                template HR made for a message type whose review ends APPROVED takes over that type
+                                (whatsapp_templates.adopt_if_approved).
   * message_template_quality_update  the template's quality score.
+  * template_category_update    the template's new category.
   * phone_number_quality_update, account_update, others   only noted in the log (a summary without personal data).
-Every signed POST stamps WhatsAppSettings.last_webhook_at (WhatsApp Control shows whether the webhook is set up).
+A change about another WhatsApp Business Account (entry id) or another phone number (metadata.phone_number_id) than
+this server's is ignored: one Meta app may be subscribed to a test account too. Every signed POST stamps
+WhatsAppSettings.last_webhook_at (WhatsApp Control shows whether the webhook is set up).
 
 The body holds employees' phone numbers and message texts, so it never reaches the logs: only a summary of what arrived
 (_webhook_summary). The WhatsApp Control page's Settings tab shows the webhook address to paste into Meta.
@@ -41,7 +49,7 @@ from django.http import HttpResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
-from . import whatsapp_cloud, whatsapp_service
+from . import whatsapp_catalog, whatsapp_cloud, whatsapp_service, whatsapp_templates
 from .models import (
     Employee,
     WhatsAppMessageLog,
@@ -115,34 +123,73 @@ def _apply_status(status: dict) -> None:
             log.save(update_fields=[*dict.fromkeys(changed), "updated_at"])
 
 
-def _employee_by_number(number: str):
-    """The active employee whose registered phone is this WhatsApp number (digits with the country code), or None."""
+def _employees_by_number(number: str) -> list[int]:
+    """Every employee whose registered phone is this WhatsApp number (digits with the country code). Two records may
+    share a number (a re-joined employee, a family phone): the person behind it is all of them."""
     digits = "".join(ch for ch in str(number or "") if ch.isdigit())
     if len(digits) < 10:
-        return None
+        return []
     tail = digits[-10:]
+    out = []
     for emp_id, phone in Employee.objects.filter(phone__isnull=False).exclude(phone="").values_list("id", "phone"):
         cleaned = "".join(ch for ch in str(phone or "") if ch.isdigit())
         if cleaned.endswith(tail) and whatsapp_service.normalize_phone(phone) == digits:
-            return emp_id
-    return None
+            out.append(emp_id)
+    return out
 
 
 def _employee_wrote(message: dict) -> None:
-    """An inbound message. Only a STOP is acted on (an opt-out); its text is never stored or logged."""
+    """An inbound message. Only a STOP is acted on (an opt-out of every employee record on that number); its text is
+    never stored or logged."""
     if str(message.get("type") or "") != "text":
         return
     body = str(((message.get("text") or {}) if isinstance(message.get("text"), dict) else {}).get("body") or "")
     if body.strip().lower() not in _STOP_WORDS:
         return
-    emp_id = _employee_by_number(message.get("from"))
-    if emp_id is None:
-        return
-    _, created = WhatsAppOptOut.objects.get_or_create(
-        employee_id=emp_id, defaults={"reason": REASON_STOP, "created_by": "WhatsApp (employee replied STOP)"}
-    )
-    if created:
-        logger.info("WhatsApp: employee %s opted out by replying STOP", emp_id)
+    for emp_id in _employees_by_number(message.get("from")):
+        _, created = WhatsAppOptOut.objects.get_or_create(
+            employee_id=emp_id, defaults={"reason": REASON_STOP, "created_by": "WhatsApp (employee replied STOP)"}
+        )
+        if created:
+            logger.info("WhatsApp: employee %s opted out by replying STOP", emp_id)
+
+
+# Meta's template events (webhooks reference, message_template_status_update -> event). These are a status of the
+# template and are stored as it:
+_STATUS_EVENTS = frozenset(
+    {
+        "APPROVED",
+        "REJECTED",
+        "PENDING",
+        "IN_APPEAL",
+        "PAUSED",
+        "DISABLED",
+        "DELETED",
+        "PENDING_DELETION",
+        "LIMIT_EXCEEDED",
+        "ARCHIVED",
+    }
+)
+# REINSTATED: Meta lifted a pause / disable, "it can be sent in template messages again" -> APPROVED. UNARCHIVED: the
+# template is back from the archive -> APPROVED, unless it went there rejected (its rejection reason is kept).
+_REINSTATED = "REINSTATED"
+_UNARCHIVED = "UNARCHIVED"
+# Events about a template whose status does NOT change: FLAGGED (people reacted badly, Meta may pause it: it is still
+# sent, and shows as low quality), LOCKED / UNLOCKED (whether it can still be edited).
+_FLAGGED = "FLAGGED"
+_NOTE_EVENTS = frozenset({_FLAGGED, "LOCKED", "UNLOCKED"})
+_CATEGORIES = ("UTILITY", "AUTHENTICATION", "MARKETING")
+
+
+def _category_for(name: str, value: dict) -> str:
+    """The category of a template this server learns about from an event: Meta's own word when the event carries one,
+    else the category of the HRMS message type sent as it (hrms_otp -> AUTHENTICATION), else Utility."""
+    stated = str(value.get("message_template_category") or "").strip().upper()
+    if stated in _CATEGORIES:
+        return stated
+    uses = whatsapp_templates.used_by(name)
+    spec = whatsapp_catalog.get(uses[0]) if uses else None
+    return spec.meta_category if spec is not None else "UTILITY"
 
 
 def _template_status(value: dict) -> None:
@@ -158,13 +205,58 @@ def _template_status(value: dict) -> None:
     row = (WhatsAppTemplate.objects.filter(meta_id=meta_id).first() if meta_id else None) or (
         WhatsAppTemplate.objects.filter(name=name, language=language).first()
     )
+    if event in _NOTE_EVENTS:
+        if row is not None and event == _FLAGGED and row.quality_score != "RED":
+            row.quality_score = "RED"  # Meta flags a template whose quality dropped to low
+            row.save(update_fields=["quality_score", "updated_at"])
+        return
+    if event not in _STATUS_EVENTS and event not in (_REINSTATED, _UNARCHIVED):
+        logger.warning(
+            "WhatsApp webhook: a template event this server does not know (%s): nothing changed",
+            event if _SAFE_WORD.match(event) else "-",
+        )
+        return
+    before = str(row.status or "").upper() if row is not None else ""
     if row is None:
-        row = WhatsAppTemplate(name=name, language=language, meta_id=meta_id)
-    row.status = event
+        category = _category_for(name, value)
+        row = WhatsAppTemplate(
+            name=name,
+            language=language,
+            meta_id=meta_id,
+            category=category,
+            parameter_format="positional" if category == "AUTHENTICATION" else "named",
+            components=[],  # its text comes with the next Sync now
+        )
+    if event == _REINSTATED:
+        row.status = whatsapp_templates.APPROVED
+        row.rejected_reason = ""
+    elif event == _UNARCHIVED:
+        if before in ("", "ARCHIVED"):
+            row.status = "REJECTED" if row.rejected_reason else whatsapp_templates.APPROVED
+    else:
+        row.status = event
+        if event in ("REJECTED", "DISABLED"):
+            row.rejected_reason = reason if reason and reason.upper() != "NONE" else ""
+        elif event != "ARCHIVED":  # an archived template keeps why it was rejected (see UNARCHIVED)
+            row.rejected_reason = ""
     if meta_id:
         row.meta_id = meta_id
-    row.rejected_reason = reason if reason and reason.upper() != "NONE" and event in ("REJECTED", "DISABLED") else ""
     row.save()
+    whatsapp_templates.adopt_if_approved(row, before)
+
+
+def _template_category(value: dict) -> None:
+    """Meta moved a template to another category (template_category_update): its price and how a code is sent follow."""
+    category = str(value.get("new_category") or value.get("correct_category") or "").strip().upper()
+    if category not in _CATEGORIES:
+        return
+    meta_id = str(value.get("message_template_id") or "").strip()
+    name = str(value.get("message_template_name") or "").strip()
+    rows = WhatsAppTemplate.objects.filter(meta_id=meta_id) if meta_id else WhatsAppTemplate.objects.none()
+    if not rows.exists() and name:
+        language = str(value.get("message_template_language") or "").strip()
+        rows = WhatsAppTemplate.objects.filter(name=name, **({"language": language} if language else {}))
+    rows.update(category=category, updated_at=timezone.now())
 
 
 def _template_quality(value: dict) -> None:
@@ -180,6 +272,24 @@ def _template_quality(value: dict) -> None:
     rows.update(quality_score=score, updated_at=timezone.now())
 
 
+_TEMPLATE_FIELDS = ("message_template_status_update", "message_template_quality_update", "template_category_update")
+
+
+def _ours(entry: dict, field, value: dict) -> bool:
+    """Is this change about OUR WhatsApp Business Account and number? One Meta app can be subscribed to several accounts
+    (a test account next to the real one): a template event of another account must not overwrite our template of the
+    same name, and a STOP sent to another number must not opt our employee out. A change that does not say which
+    account / number it is about, or a server without the id set, is taken as ours."""
+    if field in _TEMPLATE_FIELDS:
+        ours, theirs = whatsapp_cloud.business_account_id(), str(entry.get("id") or "").strip()
+    elif field == "messages":
+        metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+        ours, theirs = whatsapp_cloud.phone_number_id(), str(metadata.get("phone_number_id") or "").strip()
+    else:
+        return True
+    return not (ours and theirs and ours != theirs)
+
+
 def _process(payload) -> None:
     if not isinstance(payload, dict):
         return
@@ -191,6 +301,12 @@ def _process(payload) -> None:
                 continue
             field = change.get("field")
             value = change.get("value") if isinstance(change.get("value"), dict) else {}
+            if not _ours(entry, field, value):
+                logger.info(
+                    "WhatsApp webhook: a %s change for another WhatsApp Business Account or number was ignored",
+                    field if isinstance(field, str) and _SAFE_WORD.match(field) else "-",
+                )
+                continue
             try:
                 if field == "messages":
                     for status in value.get("statuses") or []:
@@ -203,6 +319,8 @@ def _process(payload) -> None:
                     _template_status(value)
                 elif field == "message_template_quality_update":
                     _template_quality(value)
+                elif field == "template_category_update":
+                    _template_category(value)
                 elif field in ("phone_number_quality_update", "account_update", "phone_number_name_update"):
                     event = value.get("event")
                     logger.warning(

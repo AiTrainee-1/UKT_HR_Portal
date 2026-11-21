@@ -156,11 +156,38 @@ class Advance(models.Model):
     total_repaid = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_column="total_repaid")
     outstanding = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
+    # HR's remark on the decision (owner 2026-11-20): mandatory on a rejection and on an approval of a different amount
+    # than was asked for; the employee sees it in their request history. Every decision is also in AdvanceDecision.
+    decision_remark = models.TextField(blank=True, default="", db_default="", db_column="decision_remark")
+    decided_at = models.DateTimeField(null=True, blank=True, db_column="decided_at")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
     class Meta:
         db_table = "advances"
+
+
+class AdvanceDecision(models.Model):
+    """One approval / rejection of an advance (Settlement page, owner 2026-11-20): what was asked for, what was approved,
+    from which month it is deducted, the remark, who and when. Never edited."""
+
+    ACTION_APPROVED = "approved"
+    ACTION_REJECTED = "rejected"
+    ACTION_REOPENED = "reopened"
+
+    advance = models.ForeignKey(Advance, on_delete=models.CASCADE, db_column="advance_id", related_name="decisions")
+    action = models.TextField()
+    requested_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    approved_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    start_month = models.IntegerField(null=True, blank=True)
+    start_year = models.IntegerField(null=True, blank=True)
+    remark = models.TextField(blank=True, default="")
+    actor_name = models.TextField(blank=True, default="")
+    at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "advance_decisions"
+        ordering = ["-at", "-id"]
 
 
 class AdvanceRepayment(models.Model):

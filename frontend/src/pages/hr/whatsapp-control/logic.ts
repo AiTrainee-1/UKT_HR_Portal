@@ -7,6 +7,7 @@ import {
   type WhatsAppControlSettings,
   type WhatsAppFeature,
   type WhatsAppFeatureGroup,
+  type WhatsAppMessageTypeInfo,
   type WhatsAppMetaTemplate,
   type WhatsAppPricingCategory,
   type WhatsAppQueueLimit,
@@ -239,14 +240,50 @@ export function sortAlerts(alerts: WhatsAppAlert[]): WhatsAppAlert[] {
 export const alertTone = (level: WhatsAppAlert["level"]): Tone =>
   level === "error" ? "bad" : level === "warning" ? "warn" : "info";
 
-/** Which tab fixes an alert (by its code, else its words), so the alert can link there. */
-export function alertTab(alert: WhatsAppAlert): "templates" | "config" | "usage" | "otp" | "controls" | null {
+export type AlertTab = "templates" | "config" | "usage" | "otp" | "controls" | "messages";
+
+/** The tab that fixes each alert the server raises (backend whatsapp_usage.alerts), by its code. */
+export const ALERT_TAB: Readonly<Record<string, AlertTab>> = {
+  not_configured: "config",
+  sending_blocked: "config",
+  token_invalid: "config",
+  meta_unreachable: "config",
+  webhook_never: "config",
+  webhook_stale: "config",
+  number_status: "config",
+  quality_red: "controls",
+  quality_yellow: "controls",
+  tier_near_limit: "controls",
+  engine_off: "controls",
+  queue_paused: "controls",
+  template_rejected: "templates",
+  template_paused: "templates",
+  template_disabled: "templates",
+  templates_missing: "templates",
+  templates_pending: "templates",
+  template_quality: "templates",
+  otp_template: "otp",
+  otp_expiry_mismatch: "otp",
+  otp_paused: "otp",
+  budget_exceeded: "usage",
+  budget_projected_over: "usage",
+  budget_near: "usage",
+  failures: "messages",
+};
+
+/** Which tab fixes an alert, so the alert can link there: by its code (ALERT_TAB), else by the code's family, else by
+ *  its words (an alert a newer server raises). The webhook's address is on Settings, so "webhook" is tested before the
+ *  "template approvals" its sentence mentions. */
+export function alertTab(alert: WhatsAppAlert): AlertTab | null {
   const code = alert.code.toLowerCase();
+  if (ALERT_TAB[code]) return ALERT_TAB[code];
+  if (/^otp/.test(code)) return "otp";
+  if (/^templates?_/.test(code)) return "templates";
+  if (/^budget/.test(code)) return "usage";
   const text = `${code} ${alert.message}`.toLowerCase();
-  if (/otp/.test(code)) return "otp";
+  if (/not_configured|configured|token|webhook|env|set up/.test(text)) return "config";
   if (/template/.test(text)) return "templates";
   if (/budget|cost|spend/.test(text)) return "usage";
-  if (/not_configured|configured|token|webhook|env|set up/.test(text)) return "config";
   if (/engine|switch|paused|quiet/.test(text)) return "controls";
   return null;
 }
@@ -384,19 +421,45 @@ export const OTP_TEMPLATE = "hrms_otp";
 /** Types that never go through Meta (whatsapp_catalog.py meta_template "-"): the visitor's contact card is now a line of
  *  the visitor notice. */
 export const NOT_VIA_META: readonly string[] = ["visitor_contact"];
+/** The catalog's default template names that are not simply hrms_<type> (backend whatsapp_catalog.py meta_template).
+ *  The server sends every type's real name (settings.messageTypes); this is the page's fallback for an older server. */
+export const DEFAULT_TEMPLATE_NAME: Readonly<Record<string, string>> = {
+  otp_login: OTP_TEMPLATE,
+  otp_reset: OTP_TEMPLATE,
+  otp_activate: OTP_TEMPLATE,
+  four_punch_alert: "hrms_punch_reminder",
+  other: "hrms_document",
+  visitor_notification: "hrms_visitor_at_reception",
+  outpass_gate_out: "hrms_gate_out",
+  outpass_gate_in: "hrms_gate_in",
+};
+/** Switches several types share besides their own `type:` switch (backend whatsapp_catalog.py `switch`): while one is
+ *  OFF none of its types is sent. The server sends every type's switches (settings.messageTypes); this is the fallback. */
+export const SHARED_SWITCH: Readonly<Record<string, string>> = {
+  four_punch_alert: "fourPunchAlertEnabled",
+  on_duty_punch_reminder: "fourPunchAlertEnabled",
+  geo_approval: "geoApprovalEnabled",
+  geo_rejection: "geoApprovalEnabled",
+  geo_punch_approval: "geoApprovalEnabled",
+  geo_punch_rejection: "geoApprovalEnabled",
+};
 
-/** The Meta template a message type goes out as: HR's choice, else the template that says it serves the type, else the
- *  catalog's default name (hrms_<type>, hrms_otp for the codes); null for a type that is not sent through Meta. */
+/** The Meta template a message type goes out as: what the server says (settings.messageTypes), else HR's choice, else
+ *  the template that says it serves the type, else the catalog's default name; null for a type that is not sent
+ *  through Meta. */
 export function templateNameFor(
   type: string,
   overrides: Record<string, string>,
   templates: WhatsAppMetaTemplate[] | null,
+  serverTypes?: Record<string, WhatsAppMessageTypeInfo>,
 ): string | null {
+  const known = serverTypes?.[type];
+  if (known) return known.templateName;
   if (overrides[type]) return overrides[type];
   if (NOT_VIA_META.includes(type)) return null;
   const serving = templates?.find((t) => t.messageTypes.includes(type) && templateState(t.status) !== "disabled");
   if (serving) return serving.name;
-  return OTP_TYPES.includes(type) ? OTP_TEMPLATE : `hrms_${type}`;
+  return DEFAULT_TEMPLATE_NAME[type] ?? `hrms_${type}`;
 }
 
 /** The best row of a template name: approved first, then in review, then whatever else (several languages may exist). */
@@ -413,16 +476,26 @@ export function findTemplate(
   return rows.sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
 
-/** Why a message type is not sent right now, the first reason that applies. */
-export type OffReason = "engine" | "otp" | "module" | "own" | "template";
+/** Why a message type is not sent right now, the first reason that applies: never sent through Meta, the engine, the
+ *  WhatsApp OTP master, its section's master, a switch it shares with other types, its own switch, its template. */
+export type OffReason = "none" | "engine" | "otp" | "module" | "shared" | "own" | "template";
 
 export const OFF_REASON_TEXT: Record<OffReason, string> = {
+  none: "Not sent: the official WhatsApp Cloud API has no template that can carry it.",
   engine: "The WhatsApp engine is OFF.",
   otp: "WhatsApp OTP is OFF (OTP tab).",
   module: "Its section switch is OFF.",
+  shared: "A switch it shares with other messages is OFF.",
   own: "Switched OFF.",
   template: "Skipped: no approved Meta template.",
 };
+
+/** The sentence under a held-back type: names the shared switch that holds it when there is one. */
+export function offReasonText(row: Pick<TypeRow, "off" | "offBy">): string | null {
+  if (!row.off) return null;
+  if (row.off === "shared" && row.offBy) return `Held: “${row.offBy.label}” is OFF.`;
+  return OFF_REASON_TEXT[row.off];
+}
 
 export type TypeRow = {
   type: string;
@@ -436,6 +509,11 @@ export type TypeRow = {
   monthCount: number | null;
   /** null: it goes out. */
   off: OffReason | null;
+  /** The switch that holds it back (for "own", "module" and "shared"). */
+  offBy: WhatsAppFeature | null;
+  /** Every switch it needs is ON (the engine and its template aside): what the server's "Create all missing" and its
+   *  "missing for switched-on types" go by. False for a type never sent through Meta. */
+  switchedOn: boolean;
 };
 
 export type ControlSection = {
@@ -481,13 +559,32 @@ export function orderedGroups(groups: WhatsAppFeatureGroup[], features: WhatsApp
   return ordered.filter((g) => features.some((f) => f.group === g.key));
 }
 
+type SettingsForControls = Pick<
+  WhatsAppControlSettings,
+  "engineEnabled" | "otpEnabled" | "groups" | "features" | "templateOverrides"
+> &
+  Partial<Pick<WhatsAppControlSettings, "messageTypes">>;
+
+/** The keys of every switch a type needs besides the engine, in the order the first OFF one is named: what the server
+ *  says (settings.messageTypes), else the page's own mirror (the OTP master for a code, the section's master, a shared
+ *  switch, its own). */
+export function typeSwitches(type: string, group: string, ownKey: string, settings: SettingsForControls): string[] {
+  const known = settings.messageTypes?.[type]?.switches;
+  if (known && known.length > 0) return known.includes(ownKey) ? known : [...known, ownKey];
+  const out: string[] = [];
+  if (OTP_TYPES.includes(type)) out.push("otpEnabled");
+  for (const key of [SECTION_MASTER[group], SHARED_SWITCH[type], ownKey]) if (key && !out.includes(key)) out.push(key);
+  return out;
+}
+
 /** Every section of Message Controls: its switches, and each message type with its switch, template and count. */
 export function controlSections(
-  settings: Pick<WhatsAppControlSettings, "engineEnabled" | "otpEnabled" | "groups" | "features" | "templateOverrides">,
+  settings: SettingsForControls,
   templates: WhatsAppMetaTemplate[] | null,
   byType: WhatsAppTypeUsage[] | null,
 ): ControlSection[] {
   const counts = byType ? new Map(byType.map((t) => [t.type, t.messages])) : null;
+  const byKey = new Map(settings.features.map((f) => [f.key, f]));
   return orderedGroups(settings.groups, settings.features).map((group) => {
     const rows = settings.features.filter((f) => f.group === group.key && !SIGNIN_ONLY_SWITCHES.includes(f.key));
     const masterKey = SECTION_MASTER[group.key];
@@ -495,20 +592,29 @@ export function controlSections(
     const general = rows.filter((f) => f !== master && !isTypeSwitch(f));
     const types = rows.filter(isTypeSwitch).map((feature): TypeRow => {
       const type = typeOfSwitch(feature.key)!;
-      const name = templateNameFor(type, settings.templateOverrides, templates);
+      const name = templateNameFor(type, settings.templateOverrides, templates, settings.messageTypes);
       const template = findTemplate(name, templates);
       const state: TemplateState | null =
         name === null ? "none" : templates === null ? null : templateState(template?.status ?? null);
-      const isOtp = OTP_TYPES.includes(type);
-      const off: OffReason | null = !settings.engineEnabled
-        ? "engine"
-        : isOtp && !settings.otpEnabled
-          ? "otp"
-          : master && !master.enabled
-            ? "module"
-            : !feature.enabled
-              ? "own"
-              : state !== null && state !== "approved" && state !== "none"
+      // the first switch that is OFF, and which kind of switch it is
+      let held: { reason: OffReason; by: WhatsAppFeature | null } | null = null;
+      for (const key of typeSwitches(type, group.key, feature.key, settings)) {
+        const switchOf = key === feature.key ? feature : (byKey.get(key) ?? null);
+        const on = key === "otpEnabled" ? settings.otpEnabled : switchOf?.enabled;
+        if (on !== false) continue; // a switch this page was not given is not held against the type
+        const reason: OffReason =
+          key === "otpEnabled" ? "otp" : key === feature.key ? "own" : key === masterKey ? "module" : "shared";
+        held = { reason, by: key === "otpEnabled" ? null : switchOf };
+        break;
+      }
+      const off: OffReason | null =
+        name === null
+          ? "none"
+          : !settings.engineEnabled
+            ? "engine"
+            : held
+              ? held.reason
+              : state !== null && state !== "approved"
                 ? "template"
                 : null;
       return {
@@ -519,26 +625,45 @@ export function controlSections(
         templateState: state,
         monthCount: counts ? (counts.get(type) ?? 0) : null,
         off,
+        offBy: held && off === held.reason ? held.by : null,
+        switchedOn: name !== null && held === null,
       };
     });
     return { group, master, general, types };
   });
 }
 
-/** How many types go out, how many are held back, and how many wait for a template. */
+/** How many types go out, how many are held back, and how many wait for a template. A type never sent through Meta
+ *  is left out of every count. */
 export function controlSummary(sections: ControlSection[]): {
   total: number;
   live: number;
   off: number;
   noTemplate: number;
 } {
-  const rows = sections.flatMap((s) => s.types);
+  const rows = sections.flatMap((s) => s.types).filter((r) => r.off !== "none");
   return {
     total: rows.length,
     live: rows.filter((r) => r.off === null).length,
     off: rows.filter((r) => r.off !== null && r.off !== "template").length,
     noTemplate: rows.filter((r) => r.off === "template").length,
   };
+}
+
+/** The switched-on types whose template is missing, rejected, paused, disabled or only a draft (in review is on its
+ *  way), each template once (the three code types share one): what the server's "Create all missing" submits. The
+ *  engine is left aside, as on the server: templates are prepared before sending starts. */
+export function missingTemplateRows(sections: ControlSection[]): TypeRow[] {
+  return sections
+    .flatMap((s) => s.types)
+    .filter(
+      (r) =>
+        r.switchedOn &&
+        r.templateState !== null &&
+        (!["approved", "pending", "none"].includes(r.templateState) ||
+          (r.template?.status ?? "").toUpperCase() === "DRAFT"),
+    )
+    .filter((r, i, all) => all.findIndex((x) => x.templateName === r.templateName) === i);
 }
 
 // ── Meta's template rules (the editor checks them before submitting) ────────────────────────────────────────────────
@@ -613,7 +738,7 @@ export function checkTemplate(input: {
   if (input.footer.length > FOOTER_MAX)
     errors.footer = `At most ${FOOTER_MAX} characters (now ${input.footer.length}).`;
   if (input.category.toUpperCase() === "MARKETING")
-    warnings.push("Marketing templates cost about 7 times a utility one, and the HRMS sends no promotions.");
+    errors.category = "UK Textiles HRMS sends Utility and Authentication templates only: choose Utility.";
   return { errors, warnings };
 }
 

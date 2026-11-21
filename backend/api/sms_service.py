@@ -69,6 +69,13 @@ BREAKER_WINDOW = timedelta(minutes=10)
 BREAKER_PAUSE = timedelta(minutes=10)
 #: failures that are about one recipient / one message, not about the provider: they never pause SMS for everybody
 PER_RECIPIENT_ERRORS = ("number", "rejected")
+#: failures that say the 2Factor ACCOUNT cannot send at all (see account_problem), with what HR is told
+ACCOUNT_ERRORS = {
+    "auth": "2Factor did not accept the API key (TWOFACTOR_API_KEY): no SMS can be sent until it is fixed.",
+    "balance": "The 2Factor account has no balance: no SMS can be sent until it is topped up.",
+    "template": "2Factor does not accept the OTP template (TWOFACTOR_TEMPLATE_NAME): no SMS can be sent until it is "
+    "fixed.",
+}
 #: a refused request writes a 'blocked' log row at most once per employee per reason within this window
 BLOCKED_ROW_WINDOW = timedelta(minutes=1)
 #: the dummy code of the SMS Control page's test message
@@ -352,6 +359,27 @@ def pause_reason(now: datetime | None = None) -> str | None:
     if used["dayUsed"] >= cfg.daily_cap:
         return f"The daily limit of {cfg.daily_cap} SMS is used up (it starts again at midnight IST)."
     return None
+
+
+def account_problem(now: datetime | None = None) -> str | None:
+    """Why the 2Factor ACCOUNT cannot send (it refused the key, or has no balance: ACCOUNT_ERRORS), as one sentence for HR,
+    while that was 2Factor's answer to the latest SMS of the last 24 hours (sent or failed; a blocked row never reached
+    2Factor); None otherwise. Unlike the breaker it does not run out after a few minutes: it holds until an SMS goes out
+    again, so otp_service keeps password sign-in and the open first-password setup available all that time. Sends are
+    still tried (each one is the probe that clears it), and nobody outside can bring it about."""
+    now = now or timezone.now()
+    last = (
+        SmsMessageLog.objects.filter(
+            status__in=(SmsMessageLog.STATUS_SENT, SmsMessageLog.STATUS_FAILED),
+            created_at__gte=now - timedelta(hours=24),
+        )
+        .order_by("-created_at", "-id")
+        .values("status", "error_code")
+        .first()
+    )
+    if last is None or last["status"] != SmsMessageLog.STATUS_FAILED or last["error_code"] not in ACCOUNT_ERRORS:
+        return None
+    return ACCOUNT_ERRORS[last["error_code"]]
 
 
 def price_per_sms(s: SmsSettings | None = None) -> Decimal:

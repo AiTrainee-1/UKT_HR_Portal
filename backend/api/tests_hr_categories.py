@@ -214,7 +214,7 @@ class AssistantRules(Matrix):
     def test_assistant_with_payroll_edit_can_edit_payroll(self):
         p = Payroll.objects.create(
             employee=self.emp_a, salary_mode="monthly", month=8, year=2026, base_salary=10000, gross_salary=10000,
-            final_salary=10000,
+            final_salary=10000, bonus=250,  # a bonus set before the Excess tab (2026-11-20): the PATCH only re-sends it
         )  # fmt: skip
         r = self.call(self.assistant, "patch", f"/api/payroll/{p.id}", {"bonus": 250})
         self.assertEqual(r.status_code, 200, r.content)
@@ -610,6 +610,7 @@ class AssistantActivity(Matrix):
             base_salary=1,
             gross_salary=1,
             final_salary=1,
+            bonus=5,  # set before the Excess tab (2026-11-20): the PATCH only re-sends it
         )
         self.call(self.assistant, "patch", f"/api/payroll/{p.id}", {"bonus": 5, "password": "secret"})
         q = Payroll.objects.create(
@@ -620,6 +621,7 @@ class AssistantActivity(Matrix):
             base_salary=1,
             gross_salary=1,
             final_salary=1,
+            bonus=7,
         )
         self.call(self.assistant_b, "patch", f"/api/payroll/{q.id}", {"bonus": 7})
 
@@ -658,6 +660,7 @@ class AssistantActivity(Matrix):
             base_salary=1,
             gross_salary=1,
             final_salary=1,
+            bonus=1,
         )
         before = AuditLog.objects.count()
         self.assertEqual(self.call(self.admin, "patch", f"/api/payroll/{p.id}", {"bonus": 1}).status_code, 200)

@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   useWhatsAppMessages,
+  whatsAppErrorMessage,
   type WhatsAppCategory,
   type WhatsAppMessage,
   type WhatsAppMessageStatus,
@@ -175,7 +176,7 @@ export function MessageList({
     setPage(1);
   }, [preset?.status, preset?.category]);
 
-  const { data, isLoading, isFetching } = useWhatsAppMessages({
+  const { data, isLoading, isFetching, isError, error } = useWhatsAppMessages({
     status,
     category,
     related,
@@ -311,6 +312,17 @@ export function MessageList({
                   </td>
                 </tr>
               ))
+            ) : isError ? (
+              <tr>
+                <td
+                  colSpan={7}
+                  role="alert"
+                  className="px-3 py-10 text-center font-medium text-red-700 dark:text-red-300"
+                  data-testid="wa-messages-error"
+                >
+                  The messages could not be loaded: {whatsAppErrorMessage(error, "Try Refresh in a moment.")}
+                </td>
+              </tr>
             ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">

@@ -230,7 +230,7 @@ class TermLoanTests(_Base):
 class HrDecisionTests(_Base):
     def test_hr_approves_a_smaller_amount_and_the_schedule_follows_it(self):
         pk = self.term(10000, 3).json()["id"]
-        r = self.hr_put(pk, {"status": "approved", "amount": 6000})
+        r = self.hr_put(pk, {"status": "approved", "amount": 6000, "decisionRemark": "Part approved"})
         self.assertEqual(r.status_code, 200, r.content)
         a = Advance.objects.get(pk=pk)
         self.assertEqual(
@@ -284,7 +284,7 @@ class HrDecisionTests(_Base):
 
     def test_payroll_finds_the_approved_deduction_as_before(self):
         pk = self.general(4000).json()["id"]
-        self.hr_put(pk, {"status": "approved", "amount": 3000})
+        self.hr_put(pk, {"status": "approved", "amount": 3000, "decisionRemark": "Part approved"})
         total, details = _pending_advance_repayments(self.emp, 10, 2026)  # read-only lookup payroll uses
         self.assertEqual((total, len(details)), (Decimal("3000.00"), 1))
 
@@ -307,7 +307,7 @@ class DuplicateTests(_Base):
         first = self.general(1000).json()["id"]
         r = self.general(1000)
         self.assertEqual((r.status_code, r.json()["code"]), (409, "duplicate"))
-        self.hr_put(first, {"status": "rejected"})
+        self.hr_put(first, {"status": "rejected", "decisionRemark": "Not this month"})
         self.assertEqual(self.general(1000).status_code, 201)
         # next month's window is a new month
         self.assertEqual(self.general(1000, day=date(2026, 11, 21)).status_code, 201)

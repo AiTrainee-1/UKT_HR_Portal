@@ -6,7 +6,7 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 // covers the rules for every type; this is the pages and the whole path). Employee E2E001 (Asha Kumar) is the employee,
 // E2E003 (Meena) her Department Head, set up here and removed again.
 
-const FAKE_WACLIENT = "http://127.0.0.1:8190";
+const FAKE_META = "http://127.0.0.1:8190";
 const HOD_CODE = "E2E003";
 const HOD_PASSWORD = "employee-pass-1"; // the password auth.spec.ts and approval-screens.spec.ts also use for this account
 
@@ -26,12 +26,12 @@ async function api(page: Page, method: string, url: string, data?: unknown, toke
 }
 
 async function hodToken(page: Page): Promise<string> {
-  await page.request.post(`${FAKE_WACLIENT}/reset`);
+  await page.request.post(`${FAKE_META}/reset`);
   const ask = await page.request.post("/api/auth/otp/request", {
     data: { employeeCode: HOD_CODE, purpose: "activate" },
   });
   if (ask.status() === 200) {
-    const sent = await (await page.request.get(`${FAKE_WACLIENT}/messages`)).json();
+    const sent = await (await page.request.get(`${FAKE_META}/messages`)).json();
     const otp = sent[0].message.match(/\b(\d{6})\b/)![1];
     const activate = await page.request.post("/api/auth/otp/activate", {
       data: { employeeCode: HOD_CODE, otp, password: HOD_PASSWORD },

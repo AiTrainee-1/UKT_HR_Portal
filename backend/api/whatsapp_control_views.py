@@ -16,7 +16,10 @@ and its tabs (permission_tree.py: overview, usage, controls, templates, otp, mes
     GET    /api/whatsapp-control/settings                    master switch, WhatsApp OTP master, feature / per-type
                                                              switches, timings, queue limits, quiet hours, template
                                                              overrides, price per category, monthly budget, set-up
-    PATCH  /api/whatsapp-control/settings                    change any of those (PUT does the same, for older pages)
+    PATCH  /api/whatsapp-control/settings                    change any of those (PUT does the same, for older pages);
+                                                             every value it changes needs edit on its tab (OTP,
+                                                             Message Controls, Templates, Settings): else 403
+                                                             {"code": "permission_denied", "tabs": [...]}, nothing saved
     GET    /api/whatsapp-control/queue                       the send queue right now (whatsapp_dispatcher.queue_status)
     POST   /api/whatsapp-control/queue/clear                 every queued message -> skipped ("Cleared by HR")
     GET    /api/whatsapp-control/meta-templates              the Meta templates (local mirror) and which types use each
@@ -236,6 +239,23 @@ QUEUE_LIMITS = [
         "messages",
     ),
 ]
+
+
+_KEY_OF_FIELD = {field: key for key, field, *_rest in FEATURES}
+
+
+def _type_switches(type_key: str, spec) -> list[str]:
+    """The json keys of every switch that must be on for this type to be sent (the engine aside), in the order the page
+    names the first one that is off: the WhatsApp OTP master (codes), the section's master, a switch the type shares with
+    others (geo approvals, punch reminders), its own switch. Mirrors whatsapp_service.switch_off_reason."""
+    out = ["otpEnabled"] if templates.is_code_type(spec) else []
+    for field in (catalog.MODULE_SWITCHES.get(spec.module), spec.switch):
+        if field and field in _KEY_OF_FIELD and _KEY_OF_FIELD[field] not in out:
+            out.append(_KEY_OF_FIELD[field])
+    own = f"{TYPE_SWITCH_PREFIX}{type_key}"
+    if own in TYPE_SWITCHES:
+        out.append(own)
+    return out
 
 
 def _camel(module: str) -> str:
@@ -600,6 +620,13 @@ def _settings_json(request: Request, s: WhatsAppSettings) -> dict:
         },
         # {message type: Meta template} where HR chose another template than the default (hrms_<type>).
         "templateOverrides": {k: v for k, v in (s.template_overrides or {}).items() if isinstance(v, str) and v},
+        # Every message type: the Meta template it goes out as (null: never sent through Meta) and the json keys of the
+        # switches that must ALL be on for it besides the engine (the OTP master, its section's master, a switch it
+        # shares with other types, its own), so the page never guesses either.
+        "messageTypes": {
+            key: {"templateName": whatsapp_service.template_name_for(key, s), "switches": _type_switches(key, spec)}
+            for key, spec in catalog.TYPES.items()
+        },
         # Rupees per billable message before GST, per Meta pricing category (HR's, else the India default).
         "priceRates": wa_usage.rates_json(s),
         "defaultPriceRates": {k: float(v) for k, v in wa_usage.DEFAULT_RATES.items()},
@@ -694,6 +721,49 @@ def _price_rates(raw, s: WhatsAppSettings) -> tuple[dict | None, str | None]:
             return None, f"priceRates.{key} must be a number of rupees from 0 to {wa_usage.MAX_RATE}"
         rates[key] = float(rate.quantize(Decimal("0.0001")))
     return rates, None
+
+
+# Which tab of the page each setting is changed on (permission_tree.py whatsapp_control.*): every value a save CHANGES
+# needs edit on its tab (a tab follows the page until a role sets it on its own). The settings endpoint is one URL for
+# all tabs, so the middleware can only check the page; this is the per-tab check, like payroll_views.FIELD_GROUPS.
+_TAB_OF_FIELD = {
+    **{f: "whatsapp_control.otp" for f in ("otp_enabled", "password_login_enabled", "otp_expiry_minutes")},
+    **{field: "whatsapp_control.otp" for _k, field, _l, group, _d in FEATURES if group == "signin"},
+    "price_rates": "whatsapp_control.config",
+    "monthly_budget": "whatsapp_control.config",
+}
+# which tabs may change a setting not named above (the switches, limits, quiet hours and timings: Message Controls);
+# which template a type goes out as may be changed from Templates too
+_TABS_OF_FIELD = {"template_overrides": ("whatsapp_control.templates", "whatsapp_control.controls")}
+_TAB_LABELS = {
+    "whatsapp_control.otp": "OTP",
+    "whatsapp_control.config": "Settings",
+    "whatsapp_control.controls": "Message Controls",
+    "whatsapp_control.templates": "Templates",
+}
+
+
+def _tabs_for(field: str) -> tuple[str, ...]:
+    if field in _TABS_OF_FIELD:
+        return _TABS_OF_FIELD[field]
+    return (_TAB_OF_FIELD.get(field, "whatsapp_control.controls"),)
+
+
+def _refused_tabs(request: Request, fields) -> list[str]:
+    """The tabs whose edit access this login lacks for the given model fields (empty = all allowed). A super admin may
+    change everything; a login with no HR account behind it may change nothing (fail closed)."""
+    from .permission_registry import effective_permissions, resolve_permission
+
+    hr = _hr_user(request)
+    if hr is not None and hr.is_super_admin:
+        return []
+    permissions = effective_permissions(hr) if hr is not None else {}
+    refused: list[str] = []
+    for field in fields:
+        tabs = _tabs_for(field)
+        if not any(resolve_permission(permissions, tab) == "edit" for tab in tabs) and tabs[0] not in refused:
+            refused.append(tabs[0])
+    return refused
 
 
 @api_view(["GET", "PUT", "PATCH"])
@@ -792,10 +862,19 @@ def whatsapp_control_settings(request: Request) -> Response:
             if budget is None or not Decimal("0") <= budget <= MAX_BUDGET:
                 return _error("monthlyBudget must be empty (no budget) or a number of rupees from 0 up")
             updates["monthly_budget"] = budget.quantize(Decimal("0.01"))
-    changed = {}
+    changed = {field: value for field, value in updates.items() if getattr(s, field) != value}
+    refused = _refused_tabs(request, changed)
+    if refused:
+        names = ", ".join(f"WhatsApp Control -> {_TAB_LABELS.get(tab, tab)}" for tab in refused)
+        return Response(
+            {
+                "error": f"You may view but not change {names}. Nothing was saved.",
+                "code": "permission_denied",
+                "tabs": refused,
+            },
+            status=403,
+        )
     for field, value in updates.items():
-        if getattr(s, field) != value:
-            changed[field] = value
         setattr(s, field, value)
     if updates:
         s.save()

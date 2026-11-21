@@ -182,7 +182,7 @@ def _from_row(slip, payroll, v: dict, kind: str) -> SlipFigures:
     if ot:
         earnings.append(("OT Wages", ot))
     if bonus:
-        earnings.append(("Bonus", bonus))
+        earnings.extend(_bonus_lines(slip, bonus))
 
     return SlipFigures(
         earnings=earnings,
@@ -192,6 +192,17 @@ def _from_row(slip, payroll, v: dict, kind: str) -> SlipFigures:
         net=_dec(v["net"]),
         days=days,
     )
+
+
+def _bonus_lines(slip, bonus: Decimal) -> list[tuple[str, Decimal]]:
+    """A staff payroll's bonus is HR's Excess minus Detection of the month (payroll_excess.py, 2026-11-20): printed as
+    those two lines when the slip's breakdown has them and they add up to the bonus; otherwise one "Bonus" line."""
+    block = ((getattr(slip, "breakdown_details", None) or {}).get("excess")) or {}
+    excess, detection = _dec(block.get("excess")), _dec(block.get("detection"))
+    if (excess or detection) and excess - detection == bonus:
+        lines = [("Excess (added by HR)", excess)] if excess else []
+        return lines + ([("Detection (taken off by HR)", -detection)] if detection else [])
+    return [("Bonus", bonus)]
 
 
 def _from_slip(slip) -> SlipFigures:

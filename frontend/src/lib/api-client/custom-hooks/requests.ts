@@ -58,6 +58,28 @@ export type Advance = {
   createdAt?: string | null;
   updatedAt?: string | null;
   repayments?: AdvanceRepaymentItem[];
+  /** HR's remark on the approval / rejection ("" when none; 2026-11-20). Required on a rejection, and on an approval of
+   *  another amount than was asked for. Sent on the PUT that decides. */
+  decisionRemark?: string;
+  /** When the advance was last approved / rejected (older rows: null, approvedAt then says it). */
+  decidedAt?: string | null;
+  /** The months of its deduction schedule, "YYYY-MM" (the Settlement page's month filter). */
+  scheduleMonths?: string[];
+  /** Every approval / rejection / reopening, newest first (the detail endpoint only). */
+  history?: AdvanceDecisionItem[];
+};
+
+/** One decision on an advance, as GET /api/advances/<id> lists them in `history` (settlement_views.decision_json). */
+export type AdvanceDecisionItem = {
+  id: number;
+  action: "approved" | "rejected" | "reopened";
+  requestedAmount: number | null;
+  approvedAmount: number | null;
+  startMonth: number | null;
+  startYear: number | null;
+  remark: string;
+  by: string;
+  at: string | null;
 };
 export const getListEmployeeRequestsQueryKey = (params?: Record<string, string>) =>
   ["/api/employee-requests", params] as const;

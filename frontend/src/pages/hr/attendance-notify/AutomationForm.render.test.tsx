@@ -212,9 +212,9 @@ describe("a new WhatsApp automation, step by step", () => {
     enter("an-number-input");
     expect(q("an-number-+919876543211")).not.toBeNull();
     click("an-list-5");
-    click("an-groups-load");
-    expect(text(q("an-groups-unsupported"))).toContain("Groups need the WhatsApp Web link.");
-    expect(q("an-groups-picker")).toBeNull();
+    // WhatsApp groups: not possible with Meta's templates, so there is nothing to load or pick
+    expect(text(q("an-groups-unsupported"))).toContain("individual numbers only");
+    expect(q("an-groups-load")).toBeNull();
     click("an-form-next");
 
     // Preview

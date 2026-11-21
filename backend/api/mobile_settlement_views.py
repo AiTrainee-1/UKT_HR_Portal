@@ -322,18 +322,18 @@ def timeline(a: Advance, requested: Decimal, schedule: list[dict]) -> list[dict]
                 "title": "Approved by HR",
                 "by": a.approved_by,
                 "text": text,
-                "comment": a.notes or None,
+                "comment": a.decision_remark or a.notes or None,
             }
         )
     elif a.status == "rejected":
         events.append(
             {
                 "kind": "rejected",
-                "at": a.updated_at.isoformat() if a.updated_at else None,
+                "at": (a.decided_at or a.updated_at).isoformat() if (a.decided_at or a.updated_at) else None,
                 "title": "Rejected by HR",
                 "by": a.approved_by,
                 "text": "Nothing will be deducted from your salary.",
-                "comment": a.notes or None,
+                "comment": a.decision_remark or a.notes or None,
             }
         )
     else:

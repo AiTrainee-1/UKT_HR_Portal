@@ -97,6 +97,65 @@ class AccessTests(ControlBase):
         self.assertEqual(self.patch("settings", {"absentAlertEnabled": True}, editor).status_code, 200)
         self.assertTrue(WhatsAppSettings.get().absent_alert_enabled)
 
+    def test_each_setting_needs_edit_on_the_tab_it_is_changed_on(self):
+        # Edit on the page, View on the OTP tab: the OTP switches, password sign-in and the code expiry stay as they are
+        role = Role.objects.create(
+            name="Mixed", permissions={"whatsapp_control": "edit", "whatsapp_control.otp": "view"}
+        )
+        mixed = _hr("mixed", super_admin=False, role=role)
+        for body in (
+            {"otpEnabled": False},
+            {"passwordLoginEnabled": False},
+            {"otpLoginEnabled": False},
+            {"otpExpiryMinutes": 9},
+            {"absentAlertEnabled": True, "otpEnabled": False},  # all or nothing
+        ):
+            r = self.patch("settings", body, mixed)
+            self.assertEqual(r.status_code, 403, body)
+            self.assertEqual((r.json()["code"], r.json()["tabs"]), ("permission_denied", ["whatsapp_control.otp"]))
+            self.assertIn("WhatsApp Control -> OTP", r.json()["error"])
+        s = WhatsAppSettings.get()
+        self.assertEqual((s.otp_enabled, s.password_login_enabled, s.otp_expiry_minutes), (True, True, 5))
+        self.assertFalse(s.absent_alert_enabled)
+        # the tabs it may edit still save, and sending a value unchanged needs nothing
+        self.assertEqual(
+            self.patch("settings", {"absentAlertEnabled": True, "otpEnabled": True}, mixed).status_code, 200
+        )
+        self.assertTrue(WhatsAppSettings.get().absent_alert_enabled)
+
+    def test_prices_and_budget_need_the_settings_tab_and_switches_need_message_controls(self):
+        role = Role.objects.create(
+            name="Clerk",
+            permissions={
+                "whatsapp_control": "edit",
+                "whatsapp_control.config": "view",
+                "whatsapp_control.controls": "view",
+                "whatsapp_control.templates": "view",
+            },
+        )
+        clerk = _hr("clerk", super_admin=False, role=role)
+        for body, tab in (
+            ({"priceRates": {"utility": 0.2}}, "whatsapp_control.config"),
+            ({"monthlyBudget": 900}, "whatsapp_control.config"),
+            ({"engineEnabled": False}, "whatsapp_control.controls"),
+            ({"type:salary_slip": False}, "whatsapp_control.controls"),
+            ({"maxPerHour": 10}, "whatsapp_control.controls"),
+            ({"quietHours": {"enabled": False}}, "whatsapp_control.controls"),
+            ({"templateOverrides": {"late_alert": "hrms_late_v2"}}, "whatsapp_control.templates"),
+        ):
+            r = self.patch("settings", body, clerk)
+            self.assertEqual((r.status_code, r.json().get("tabs")), (403, [tab]), body)
+        # the OTP tab follows the page (edit): its settings save
+        self.assertEqual(self.patch("settings", {"otpExpiryMinutes": 7}, clerk).status_code, 200)
+        # which template a type goes out as may be changed from Message Controls too
+        role.permissions["whatsapp_control.controls"] = "edit"
+        role.save()
+        self.assertEqual(
+            self.patch("settings", {"templateOverrides": {"late_alert": "hrms_late_v2"}}, clerk).status_code, 200
+        )
+        # a super admin may change everything
+        self.assertEqual(self.patch("settings", {"monthlyBudget": 900, "otpEnabled": False}).status_code, 200)
+
     def test_a_role_without_the_module_is_locked_out(self):
         role = Role.objects.create(name="Other", permissions={"payroll": "edit"})
         other = _hr("other", super_admin=False, role=role)
@@ -150,7 +209,24 @@ class OverviewTests(ControlBase):
         self.assertNotIn(TOKEN, str(body))
         self.assertNotIn(META["WHATSAPP_CLOUD_APP_SECRET"], str(body))
         self.assertNotIn(META["WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN"], str(body))
-        self.assertNotIn("waclient", str(body).lower())
+        # only the Meta set-up is described: nothing of the retired provider (instance id, QR link, media URL) is left
+        self.assertEqual(
+            set(config),
+            {
+                "apiVersion",
+                "appSecretSet",
+                "backgroundSending",
+                "configured",
+                "defaultCountryCode",
+                "engineEnabled",
+                "provider",
+                "publicBaseUrl",
+                "sendDelaySeconds",
+                "sendingBlockedReason",
+                "webhookUrl",
+                "webhookVerifyTokenSet",
+            },
+        )
 
     @override_settings(**NO_META)
     def test_unconfigured_is_reported(self):
@@ -478,6 +554,28 @@ class CentralControlTests(ControlBase):
 
     def features(self):
         return {f["key"]: f for f in self.get("settings").json()["features"]}
+
+    def test_settings_name_each_types_template_and_the_switches_it_needs(self):
+        body = self.get("settings").json()
+        types = body["messageTypes"]
+        self.assertEqual(set(types), set(catalog.TYPES))
+        self.assertEqual(types["four_punch_alert"]["templateName"], "hrms_punch_reminder")
+        self.assertEqual(types["outpass_gate_in"]["templateName"], "hrms_gate_in")
+        self.assertIsNone(types["visitor_contact"]["templateName"])
+        self.assertEqual(
+            types["four_punch_alert"]["switches"],
+            ["attendanceAlertsEnabled", "fourPunchAlertEnabled", "type:four_punch_alert"],
+        )
+        self.assertEqual(types["geo_rejection"]["switches"], ["geoApprovalEnabled", "type:geo_rejection"])
+        self.assertEqual(types["otp_reset"]["switches"], ["otpEnabled", "otpResetEnabled"])
+        self.assertEqual(types["late_alert"]["switches"], ["attendanceAlertsEnabled", "lateAlertEnabled"])
+        # every key named is a switch the same answer lists
+        keys = {f["key"] for f in body["features"]} | {"otpEnabled"}
+        for t in types.values():
+            self.assertTrue(set(t["switches"]) <= keys, t)
+        # HR's choice of template shows through
+        self.patch("settings", {"templateOverrides": {"late_alert": "hrms_late_v2"}})
+        self.assertEqual(self.get("settings").json()["messageTypes"]["late_alert"]["templateName"], "hrms_late_v2")
 
     def test_settings_list_groups_and_a_switch_for_every_module_and_approval_workflow(self):
         body = self.get("settings").json()

@@ -21,7 +21,7 @@ export function PeriodControls({
   onChange: (month: number, year: number) => void;
   onRefresh: () => void;
   refreshing?: boolean;
-  /** False on a tab that has its own month and year fields (Payslip): only the Refresh button is left. */
+  /** False hides the month (only the Refresh button is left); every tab follows the month since 2026-11-20. */
   showPeriod?: boolean;
 }) {
   const years = useMemo(() => {

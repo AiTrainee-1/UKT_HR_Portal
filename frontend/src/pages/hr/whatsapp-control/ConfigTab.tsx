@@ -65,9 +65,7 @@ function EnvChecklist({ env }: { env: WhatsAppConnection["env"] }) {
             ) : (
               <CircleDashed
                 size={15}
-                className={
-                  e.required ? "shrink-0 text-red-600 dark:text-red-400" : "shrink-0 text-muted-foreground"
-                }
+                className={e.required ? "shrink-0 text-red-600 dark:text-red-400" : "shrink-0 text-muted-foreground"}
               />
             )}
             <code className="truncate font-mono text-xs">{e.name}</code>
@@ -430,12 +428,20 @@ function PricesPanel({ settings, locked }: { settings: WhatsAppControlSettings; 
 /** Settings: the Meta account set-up check (environment variables by name, the number at Meta, the token), the
  *  webhook to paste into Meta, the development lock, and the prices and monthly budget the cost figures use. */
 export default function ConfigTab({ locked = false }: { locked?: boolean }) {
-  const settings = useWhatsAppControlSettings().data;
+  const { data: settings, error, isError } = useWhatsAppControlSettings();
   return (
     <div className="space-y-4" data-testid="wa-config">
       <ConnectionPanel />
       <WebhookPanel />
-      {settings ? <PricesPanel settings={settings} locked={locked} /> : <Skeleton className="h-56 rounded-2xl" />}
+      {settings ? (
+        <PricesPanel settings={settings} locked={locked} />
+      ) : isError ? (
+        <Notice tone="bad" role="alert" title="The prices and budget could not be loaded" testId="wa-prices-load-error">
+          {whatsAppErrorMessage(error, "Try Refresh in a moment.")}
+        </Notice>
+      ) : (
+        <Skeleton className="h-56 rounded-2xl" />
+      )}
     </div>
   );
 }

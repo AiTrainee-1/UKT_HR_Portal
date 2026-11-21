@@ -6,7 +6,7 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 // sidebar badge counts only what HR can decide. (approval-workflow.spec.ts covers the configuration page itself, and
 // api/tests_approval_workflow.py the rules; this is what HR sees and can do on the screens that use them.)
 
-const FAKE_WACLIENT = "http://127.0.0.1:8190";
+const FAKE_META = "http://127.0.0.1:8190";
 const EMPLOYEE_CODE = "E2E003";
 // The password auth.spec.ts also sets for this employee, so whichever spec activates the account first, both can sign in.
 const EMPLOYEE_PASSWORD = "employee-pass-1";
@@ -35,15 +35,15 @@ async function adminToken(page: Page): Promise<string> {
   return (await res.json()).token as string;
 }
 
-// An employee's own token: the account is activated with the code the fake WAClient receives (as auth.spec.ts does), or
+// An employee's own token: the account is activated with the code the fake Meta WhatsApp API receives (as auth.spec.ts does), or
 // simply signed in when it was already activated.
 async function employeeToken(page: Page): Promise<string> {
-  await page.request.post(`${FAKE_WACLIENT}/reset`);
+  await page.request.post(`${FAKE_META}/reset`);
   const ask = await page.request.post("/api/auth/otp/request", {
     data: { employeeCode: EMPLOYEE_CODE, purpose: "activate" },
   });
   if (ask.status() === 200) {
-    const sent = await (await page.request.get(`${FAKE_WACLIENT}/messages`)).json();
+    const sent = await (await page.request.get(`${FAKE_META}/messages`)).json();
     const otp = sent[0].message.match(/\b(\d{6})\b/)![1];
     const activate = await page.request.post("/api/auth/otp/activate", {
       data: { employeeCode: EMPLOYEE_CODE, otp, password: EMPLOYEE_PASSWORD },

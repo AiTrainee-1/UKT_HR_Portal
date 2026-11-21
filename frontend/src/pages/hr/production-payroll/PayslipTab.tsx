@@ -1,30 +1,24 @@
-import { PayslipsPanel } from "@/components/payroll/panels/payslips";
-import type { PayCycle } from "@/lib/api-client/custom-hooks";
+import { useMemo } from "react";
+import { PeriodPayslipsPanel } from "@/components/payroll/period-payslips";
+import type { CyclePeriod, PayCycle } from "@/lib/api-client/custom-hooks";
+import { productionScope, type UrlSetter } from "./logic";
 
 /**
- * Payslip tab of a cycle page: the salary slips of the cycle for a month (a slip belongs to the month its period ends
- * in), with the PDF / email / WhatsApp actions, the bulk versions of them and the Payslip register, all limited to this
- * cycle's slips. The month is kept in the address (?tab=payslip&month=2&year=2026), so a reload lands on the same one.
+ * Payslip tab of a cycle page (rebuilt 2026-11-20 like Staff Payroll's): the payslips of the workers in this cycle's
+ * payroll for the pay period the page chose (rate per shift, shifts, days worked, earned, excess, detection, deductions,
+ * NET), each payslip's breakdown, its PDF / email / WhatsApp and one PDF of many. Its filters live in the page's address.
  */
 export function PayslipTab({
   cycle,
-  month,
-  year,
-  onPeriodChange,
+  period,
+  url,
+  setUrl,
 }: {
   cycle: PayCycle;
-  month: number;
-  year: number;
-  onPeriodChange: (month: number, year: number) => void;
+  period: CyclePeriod;
+  url: Record<string, string>;
+  setUrl: UrlSetter;
 }) {
-  return (
-    <PayslipsPanel
-      kind="production"
-      cycle={cycle}
-      accent="amber"
-      month={month}
-      year={year}
-      onPeriodChange={onPeriodChange}
-    />
-  );
+  const scope = useMemo(() => productionScope(cycle, period), [cycle, period]);
+  return <PeriodPayslipsPanel scope={scope} url={url} setUrl={setUrl} />;
 }

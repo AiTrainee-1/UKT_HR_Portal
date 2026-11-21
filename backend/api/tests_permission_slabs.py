@@ -58,16 +58,20 @@ from .payroll_views import (
     permission_shift_deduction,
 )
 from .shift_engine import compute_monthly_shift_summary
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
 
 _FROZEN_TODAY = patch("api.attendance_final.ist_today", return_value=date(2026, 12, 31))
 
 
 def setUpModule():
     _FROZEN_TODAY.start()
+    # the late / permission reports these parity tests run are retired from the catalog since 2026-11-20 (layout.py)
+    list_retired_reports()
 
 
 def tearDownModule():
     _FROZEN_TODAY.stop()
+    unlist_retired_reports()
 
 
 MONTH, YEAR = 2, 2026

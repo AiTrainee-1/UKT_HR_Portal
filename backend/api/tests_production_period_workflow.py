@@ -633,6 +633,7 @@ class ProductionRightsTests(WorkflowTestCase):
             self.assertEqual(
                 self.patch_(f"/api/payroll/production/{self.row.pk}", {"deductions": bad}).status_code, 400
             )
+        Payroll.objects.filter(pk=self.row.pk).update(bonus=Decimal("40.00"))  # set before the Excess tab (2026-11-20)
         r = self.patch_(f"/api/payroll/production/{self.row.pk}", {"deductions": 260, "bonus": 40})
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(r.json()["finalSalary"], 3500 + 40 - 260)

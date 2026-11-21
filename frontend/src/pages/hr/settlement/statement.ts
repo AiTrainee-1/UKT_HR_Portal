@@ -2,7 +2,17 @@
 // plain HTML and printed from a hidden frame, so the browser's own "Save as PDF" gives HR a file as well.
 
 import type { AdvanceRepaymentItem } from "@/lib/api-client";
-import { STATUS_LABEL, TYPE_LABEL, hasLeft, progressPct, type SettlementRow } from "./logic";
+import {
+  STATUS_LABEL,
+  TYPE_LABEL,
+  approvedOf,
+  decidedAtOf,
+  decidedByOf,
+  hasLeft,
+  progressPct,
+  requestedOf,
+  type SettlementRow,
+} from "./logic";
 import { MONTH_FULL, formatDate, formatDateTime, formatMoney } from "./shared";
 
 const esc = (v: string | number | null | undefined): string =>
@@ -51,12 +61,12 @@ ${row("Name", a.employeeName)}${row("Employee code", a.employeeCode)}${row("Depa
 </table>
 <h2>Advance</h2>
 <table>
-${row("Amount", formatMoney(a.amount))}${row("Recovered so far", `${formatMoney(a.totalRepaid)} (${progressPct(a)}%)`)}${row("Outstanding", formatMoney(a.outstanding))}${row("Purpose", a.purpose ?? "")}${
+${row("Requested", formatMoney(requestedOf(a)))}${row("Approved", approvedOf(a) != null ? formatMoney(approvedOf(a)) : a.status === "rejected" ? "Rejected" : "Waiting for approval")}${row("Recovered so far", `${formatMoney(a.totalRepaid)} (${progressPct(a)}%)`)}${row("Outstanding", formatMoney(a.outstanding))}${row("Purpose", a.purpose ?? "")}${
     a.advanceType === "term"
       ? row("Monthly EMI", formatMoney(a.emiAmount)) +
         row("Repayment months", a.repaymentMonths ? String(a.repaymentMonths) : "")
       : ""
-  }${row("Raised on", formatDate(a.createdAt))}${row("Approved by", a.approvedBy ?? "")}${row("Approved on", formatDate(a.approvedAt))}${row("Notes", a.notes ?? "")}
+  }${row("Applied on", formatDate(a.createdAt))}${row("Decided by", decidedByOf(a))}${row("Decided on", decidedAtOf(a) ? formatDate(decidedAtOf(a)) : "")}${row(a.status === "rejected" ? "Reason for rejecting" : "HR's remark", a.status === "pending" ? "" : (a.decisionRemark ?? ""))}${row("Notes", a.notes ?? "")}
 </table>
 ${left}
 <h2>Deduction schedule${repayments.length ? ` (${repayments.length})` : ""}</h2>

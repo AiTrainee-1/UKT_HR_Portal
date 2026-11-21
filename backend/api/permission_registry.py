@@ -324,7 +324,9 @@ URL_PATTERNS: list[tuple[re.Pattern, str]] = url_patterns()
 
 # POST endpoints that only READ (their input is too structured for a query string) and write nothing: a role that may
 # only VIEW the module can call them, like a GET. Paths relative to /api/, exact. Everything else a POST does is a change.
-READ_ONLY_POST_PATHS: frozenset[str] = frozenset({"production-shift-rules/preview", "hr/hod-reminders/preview"})
+READ_ONLY_POST_PATHS: frozenset[str] = frozenset(
+    {"production-shift-rules/preview", "hr/hod-reminders/preview", "employees/factory/shifts/plan"}
+)
 
 
 def resolve_module(path: str) -> str | None:

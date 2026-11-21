@@ -35,7 +35,8 @@ const INTRO: Record<NotifyChannel, string> = {
   chat: "Reports posted in the Internal Chat: a company channel per branch, or a department's channel.",
 };
 
-/** The number the HRMS's WhatsApp is linked to: set once here, used by "Also send to the connected number". */
+/** HR's own WhatsApp number (not the business number messages are sent from): set once here, used by "Also send
+ *  to the connected number". */
 export function ConnectedNumberCard({ number }: { number: string | undefined }) {
   const { toast } = useToast();
   const update = useUpdateAttendanceNotifySettings();
@@ -80,11 +81,11 @@ export function ConnectedNumberCard({ number }: { number: string | undefined }) 
           <p className="text-xs text-emerald-800" data-testid="an-connected-number-value">
             {number ? (
               <>
-                <span className="font-mono font-semibold">{phoneLabel(number)}</span> · the number the HRMS's WhatsApp
-                is linked to. An automation can send its report here too.
+                <span className="font-mono font-semibold">{phoneLabel(number)}</span> · HR's own WhatsApp number. An
+                automation can send its report here too.
               </>
             ) : (
-              "Not set yet. Type the number the HRMS's WhatsApp is linked to, so automations can send their report to it."
+              "Not set yet. Type HR's own WhatsApp number (not the business number messages are sent from), so automations can send their report to it."
             )}
           </p>
         ) : (

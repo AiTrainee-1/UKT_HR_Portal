@@ -179,6 +179,14 @@ class Employee(models.Model):
         choices=CYCLE_CHOICES, null=True, blank=True, db_index=True, db_column="production_pay_cycle"
     )
     status = models.TextField(default="active")
+    # Employees -> Factory Employees (owner 2026-11-20; models/factory.py): drivers, housekeeping, chefs, security ... An
+    # ordinary employee in every other respect (attendance, both payrolls); the flag and the label only group them on
+    # that page. db_default: a release still running during a rolling deploy keeps inserting employees without them.
+    is_factory = models.BooleanField(default=False, db_default=False, db_column="is_factory")
+    factory_label = models.ForeignKey(
+        "FactoryLabel", on_delete=models.SET_NULL, null=True, blank=True, db_column="factory_label_id",
+        related_name="employees",
+    )
     bank_name = models.TextField(null=True, blank=True, db_column="bank_name")
     bank_account = models.TextField(null=True, blank=True, db_column="bank_account")
     bank_ifsc = models.TextField(null=True, blank=True, db_column="bank_ifsc")

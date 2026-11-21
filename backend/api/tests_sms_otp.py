@@ -856,11 +856,12 @@ class CodeLengthTests(SmsBase):
         self.assertEqual((r.status_code, "hour" in r.json()["error"]), (429, True))
         post.assert_not_called()
 
-    def test_the_daily_limit_is_for_sms_only_and_the_whatsapp_limits_are_unchanged(self):
+    def test_each_channel_has_its_own_limits(self):
+        # WhatsApp codes cost money too (2026-11-20 review): a daily allowance of their own, same 5 attempts / 5 an hour
         cfg = otp_service.resolve("whatsapp")
         self.assertEqual(
             (cfg.max_requests_per_day, cfg.max_attempts_per_code, cfg.max_requests_per_hour, cfg.code_length),
-            (None, 5, 5, 6),
+            (otp_service.WHATSAPP_MAX_REQUESTS_PER_DAY, 5, 5, 6),
         )
         self.assertEqual(otp_service.resolve("sms").max_requests_per_day, 10)
 

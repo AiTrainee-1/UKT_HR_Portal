@@ -73,6 +73,18 @@ const filterTab = (label: string) =>
   )!;
 
 describe("No WhatsApp (opt-out) on the Employees tab", () => {
+  it("says the employees could not be loaded, never that nobody was messaged", async () => {
+    page = await renderMdPage(
+      () => <EmployeesTab />,
+      { "/api/whatsapp-control/employees": { status: 500, body: { error: "Database is busy" } } },
+      { path: "/hr/whatsapp-control" },
+    );
+    const cell = el('[data-testid="wa-employees-error"]')!;
+    expect(cell.getAttribute("role")).toBe("alert");
+    expect(cell.textContent).toContain("Database is busy");
+    expect(document.body.textContent).not.toContain("No employee has been messaged yet.");
+  });
+
   it("shows each employee's switch, and how many have No WhatsApp on", async () => {
     await open();
     expect(names()).toEqual(["Asha Kumar", "Ravi Nair", "Meena Das"]);

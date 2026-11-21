@@ -1,5 +1,5 @@
-export { PayslipsPanel } from "./PayslipsPanel";
-export type { PayslipsPanelProps } from "./PayslipsPanel";
+// The old month-based Payslip panel was replaced on 2026-11-20 by components/payroll/period-payslips (Staff Payroll and the
+// Production Payroll cycle pages); its helpers are still used there.
 export {
   ALL_DEPARTMENTS,
   MONTH_NAMES,

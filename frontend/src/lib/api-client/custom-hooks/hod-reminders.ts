@@ -11,7 +11,8 @@
 //   PUT  /api/hr/hod-reminders/settings      any subset of {enabled, times, days, channels, template}; a problem is 400
 //                                            {"error": "<one sentence>"}; a branch-limited login gets 403
 //                                            {"error", "code": "company_wide_rule"} (the schedule is company-wide)
-//   POST /api/hr/hod-reminders/preview       {template?} -> {messages: [{managerId, name, pending, text}]}; nothing is sent
+//   POST /api/hr/hod-reminders/preview       {template?} -> {messages: [{managerId, name, pending, text, whatsappText}],
+//                                            whatsappTemplate: {name, status}}; nothing is sent
 //   POST /api/hr/hod-reminders/send          {managerIds?, channels?} -> 202 {run}; the run is processed in the background
 //   GET  /api/hr/hod-reminders/runs          {items, total, page, pageSize}
 //   GET  /api/hr/hod-reminders/runs/<id>     one run, with its deliveries
@@ -147,7 +148,16 @@ export type HodReminderSettingsInput = Partial<
   Pick<HodReminderSettings, "enabled" | "times" | "days" | "channels" | "template">
 >;
 
-export type HodPreviewMessage = { managerId: number; name: string; pending: number; text: string };
+export type HodPreviewMessage = {
+  managerId: number;
+  name: string;
+  pending: number;
+  /** The message on this page: what email and the phone notification carry. */
+  text: string;
+  /** What WhatsApp carries instead: the approved Meta template hrms_hod_pending_reminder, filled in (null: an older
+   *  server that does not say). */
+  whatsappText: string | null;
+};
 
 export type HodRunPage = { items: HodRun[]; total: number; page: number; pageSize: number };
 
@@ -340,7 +350,13 @@ export function readHodPreview(raw: unknown): HodPreviewMessage[] {
   return list(obj(raw).messages)
     .map((m) => obj(m))
     .filter((m) => typeof m.managerId === "number")
-    .map((m) => ({ managerId: m.managerId as number, name: str(m.name), pending: num(m.pending), text: str(m.text) }));
+    .map((m) => ({
+      managerId: m.managerId as number,
+      name: str(m.name),
+      pending: num(m.pending),
+      text: str(m.text),
+      whatsappText: strOrNull(m.whatsappText),
+    }));
 }
 
 // ── hooks ─────────────────────────────────────────────────────────────────────

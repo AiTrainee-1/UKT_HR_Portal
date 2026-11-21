@@ -13,8 +13,10 @@ this server (configured, allowed to send; WhatsApp also: the WhatsApp master swi
 Either channel alone is enough; neither reads the other's settings. When both are available the apps let the employee
 choose (`channel` on otp/request); a request without a channel (an older app) gets the first available one, WhatsApp
 before SMS. Every successful answer names the other channels that would also work (`otherChannels`), so an app can offer
-"Didn't get it? Send by SMS instead". A temporary SMS pause (a cap used up, the circuit breaker) does not make SMS
-unavailable: it fails the request with a plain sentence and keeps password sign-in open (see paused_now).
+"Didn't get it? Send by SMS instead". A channel on hold (pause_reason: a breaker, Meta's account pause, a global limit
+used up; account_problem: the provider account refuses) stays listed: it fails the request with a plain sentence (a
+WhatsApp code on hold never reaches Meta), keeps password sign-in open (see paused_now), and a request that names no
+channel goes to the other one.
 
 Each channel keeps its OWN expiry, resend cooldown, hourly / daily allowance and attempt limit, counted on its own codes
 (EmployeeOtp.channel; a row from before the column counts by its length: 4 digits = SMS, 6 = WhatsApp). Generation,
@@ -32,15 +34,19 @@ Security properties, each covered by tests_otp.py, tests_otp_channels.py and tes
     and leaves the employee's previous code valid, so nobody can make a victim's code die by making a send fail.
   * One request per employee at a time: the cooldown / allowance checks and the creation of the new code run under a lock
     on the employee row, so twelve simultaneous requests send one message.
-  * Requests are rate limited per employee and channel (resend cooldown + hourly cap, + daily cap for SMS) on top of the
-    per-IP throttle on the endpoints; SMS adds a per-number cap, global caps and a circuit breaker (sms_service.py).
+  * Requests are rate limited per employee and channel (resend cooldown, hourly and daily allowance) on top of the
+    per-IP throttle on the endpoints; each channel adds a per-number cap, global caps and a circuit breaker (SMS:
+    sms_service.py; WhatsApp: the WHATSAPP_* limits here and whatsapp_dispatcher.pause_state).
   * A code issued for one purpose can't be used for another.
 
 Nobody is ever locked out:
   * password sign-in can be refused (WhatsAppSettings.password_login_enabled off) only while at least one channel is
-    available for sign-in AND not paused right now;
-  * a first password needs a code only while at least one channel is available for activation; otherwise the old open
-    first-time setup stays.
+    available for sign-in AND not on hold right now (pause_reason / account_problem);
+  * a first password needs a code only while at least one channel is available for activation and its provider account
+    is not refusing to send; otherwise the old open first-time setup stays. A temporary hold (a breaker, a limit used up)
+    never reopens it: anybody can bring one about with a flood of requests.
+WhatsApp codes cost money, so they have limits of their own like SMS (WHATSAPP_MAX_REQUESTS_PER_DAY and the lines below
+it): per employee and purpose a day, per phone number an hour, and every WhatsApp code an hour / a day.
 
 A code that dies without being used (a newer code replaced it, the attempt limit was reached, a password reset killed it)
 is marked consumed AND expired at that moment (expires_at = consumed_at), so `consumed_at < expires_at` means "used in
@@ -51,7 +57,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, time as time_type, timedelta
 
 from django.conf import settings as dj_settings
 from django.db import transaction
@@ -60,6 +66,7 @@ from django.utils import timezone
 
 from . import sms_service, whatsapp_service
 from . import whatsapp_catalog as catalog
+from .clock import FACTORY_TZ
 from .models import Employee, EmployeeOtp, SmsSettings, WhatsAppSettings, WhatsAppTemplate
 
 RESEND_COOLDOWN_SECONDS = 60
@@ -83,6 +90,24 @@ DEFAULT_CODE_LENGTH = CODE_LENGTH[CHANNEL_WHATSAPP]
 #: ask for per purpose in any 24 hours. Together: at most 5 x 10 = 50 guesses in 24 hours against one account (0.5 %).
 SMS_MAX_ATTEMPTS_CEILING = 5
 SMS_MAX_REQUESTS_PER_DAY = 10
+
+#: WhatsApp codes cost money too (Meta charges every authentication message), so they have limits of their own, like
+#: SMS (a Django setting of the same name with the WHATSAPP_OTP_ prefix overrides each one; there is no column for them
+#: yet): codes per employee and purpose in any 24 hours, codes to one phone number in any hour (two employee records that
+#: share a number cannot multiply the allowance), and every WhatsApp code in the rolling hour / since midnight IST. A
+#: global limit used up PAUSES WhatsApp codes (whatsapp_pause_reason): the request gets a plain sentence and password
+#: sign-in stays open, so an anonymous flood can cost at most these numbers and never lock anybody out.
+WHATSAPP_MAX_REQUESTS_PER_DAY = 10
+WHATSAPP_MAX_PER_NUMBER_PER_HOUR = 10
+WHATSAPP_HOURLY_CAP = 300
+WHATSAPP_DAILY_CAP = 1500
+_WHATSAPP_LIMIT_SETTINGS = (
+    ("perEmployeePerDay", "WHATSAPP_OTP_MAX_PER_DAY", WHATSAPP_MAX_REQUESTS_PER_DAY),
+    ("perNumberPerHour", "WHATSAPP_OTP_MAX_PER_NUMBER_PER_HOUR", WHATSAPP_MAX_PER_NUMBER_PER_HOUR),
+    ("hourlyCap", "WHATSAPP_OTP_HOURLY_CAP", WHATSAPP_HOURLY_CAP),
+    ("dailyCap", "WHATSAPP_OTP_DAILY_CAP", WHATSAPP_DAILY_CAP),
+)
+MSG_NUMBER_CAP = "Too many codes were sent to this number. Please try again in an hour, or contact HR."
 
 #: the Meta AUTHENTICATION template every WhatsApp code goes out as, unless HR pointed the purpose's message type at
 #: another one (WhatsAppSettings.template_overrides) or the catalog names one for it
@@ -130,7 +155,7 @@ class OtpConfig:
     resend_cooldown_seconds: int
     max_requests_per_hour: int
     max_attempts_per_code: int
-    max_requests_per_day: int | None  # per employee and purpose, rolling 24 h; None = no daily limit (WhatsApp)
+    max_requests_per_day: int | None  # per employee and purpose, rolling 24 h; None = no daily limit
 
     @property
     def code_length(self) -> int:
@@ -145,6 +170,18 @@ class OtpConfig:
         return bool(self.enabled and getattr(self, f"{purpose}_enabled", False))
 
 
+def whatsapp_limits() -> dict[str, int]:
+    """The WhatsApp code limits in force: {perEmployeePerDay, perNumberPerHour, hourlyCap, dailyCap} (see
+    WHATSAPP_MAX_REQUESTS_PER_DAY)."""
+    out = {}
+    for key, setting, default in _WHATSAPP_LIMIT_SETTINGS:
+        try:
+            out[key] = max(1, int(getattr(dj_settings, setting, default)))
+        except (TypeError, ValueError):
+            out[key] = default
+    return out
+
+
 def _whatsapp_config(wa: WhatsAppSettings) -> OtpConfig:
     return OtpConfig(
         channel=CHANNEL_WHATSAPP,
@@ -156,7 +193,7 @@ def _whatsapp_config(wa: WhatsAppSettings) -> OtpConfig:
         resend_cooldown_seconds=RESEND_COOLDOWN_SECONDS,
         max_requests_per_hour=MAX_REQUESTS_PER_HOUR,
         max_attempts_per_code=MAX_ATTEMPTS,
-        max_requests_per_day=None,
+        max_requests_per_day=whatsapp_limits()["perEmployeePerDay"],
     )
 
 
@@ -219,6 +256,69 @@ def whatsapp_template_status(purpose: str, wa: WhatsAppSettings | None = None) -
     return TEMPLATE_APPROVED if TEMPLATE_APPROVED in statuses else sorted(statuses)[0]
 
 
+# ── pauses: a channel that is set up but cannot send at this moment ─────────────
+
+
+def _day_start(now):
+    local = now.astimezone(FACTORY_TZ)
+    return datetime.combine(local.date(), time_type.min, tzinfo=FACTORY_TZ)
+
+
+def whatsapp_code_usage(now=None) -> dict[str, int]:
+    """WhatsApp codes sent (or on their way) in the rolling hour and since midnight IST: the channel's code rows. A code
+    whose send failed was deleted, so only what went to Meta counts."""
+    now = now or timezone.now()
+    rows = EmployeeOtp.objects.filter(_of_channel(CHANNEL_WHATSAPP))
+    return {
+        "hourUsed": rows.filter(created_at__gte=now - timedelta(hours=1)).count(),
+        "dayUsed": rows.filter(created_at__gte=_day_start(now)).count(),
+    }
+
+
+def _whatsapp_cap_reason(now) -> str | None:
+    limits = whatsapp_limits()
+    used = whatsapp_code_usage(now)
+    if used["hourUsed"] >= limits["hourlyCap"]:
+        return f"The hourly limit of {limits['hourlyCap']} WhatsApp codes is used up."
+    if used["dayUsed"] >= limits["dailyCap"]:
+        return f"The daily limit of {limits['dailyCap']} WhatsApp codes is used up (it starts again at midnight IST)."
+    return None
+
+
+def whatsapp_pause_reason(now=None) -> str | None:
+    """Why WhatsApp codes cannot be sent at this moment although WhatsApp is set up, as one sentence for HR; None when
+    nothing holds them: WhatsApp sending is paused (Meta said the account cannot send, or messages kept failing at Meta:
+    whatsapp_dispatcher.pause_state), or a global code limit is used up (WHATSAPP_HOURLY_CAP / WHATSAPP_DAILY_CAP)."""
+    from . import whatsapp_dispatcher
+
+    now = now or timezone.now()
+    paused, why, _until = whatsapp_dispatcher.pause_state(now)
+    if paused:
+        return why
+    return _whatsapp_cap_reason(now)
+
+
+def pause_reason(channel: str, now=None) -> str | None:
+    """Why this channel cannot send a code at this moment although it is set up (a circuit breaker, a global limit used
+    up, Meta's account pause), else None. Temporary, and partly in anybody's hands (a flood of code requests uses a limit
+    up): it reopens password sign-in, never the open first-password setup."""
+    if channel == CHANNEL_SMS:
+        return sms_service.pause_reason(now)
+    return whatsapp_pause_reason(now)
+
+
+def account_problem(channel: str, now=None) -> str | None:
+    """Why the provider ACCOUNT behind this channel refuses to send at all (WhatsApp: an expired token, a blocked or
+    locked number, a payment problem; SMS: a refused key, no balance), held until a message goes out again; else None.
+    Nobody outside can bring it about, so while it holds the channel counts as unable to deliver everywhere: password
+    sign-in and the open first-password setup both stay available."""
+    if channel == CHANNEL_SMS:
+        return sms_service.account_problem(now)
+    from . import whatsapp_dispatcher
+
+    return whatsapp_dispatcher.account_problem(now)
+
+
 # ── availability ────────────────────────────────────────────────────────────
 
 
@@ -231,7 +331,8 @@ class _Snapshot:
         self.configs = {CHANNEL_WHATSAPP: _whatsapp_config(self.wa), CHANNEL_SMS: _sms_config(self.sms)}
         self._delivery: dict[str, list[str]] = {}
         self._template: dict[str, str | None] = {}
-        self._paused: dict[str, bool] = {}
+        self._pause: dict[str, str | None] = {}
+        self._broken: dict[str, str | None] = {}
 
     def delivery_problems(self, channel: str) -> list[str]:
         """Why this channel cannot deliver from this server at all (purpose-independent), [] when it can."""
@@ -285,11 +386,34 @@ class _Snapshot:
                 out.append(f"The WhatsApp template '{name}' is not approved by Meta (status: {status}).")
         return out
 
+    def pause_reason(self, channel: str) -> str | None:
+        """See pause_reason(): a temporary hold (breaker, a global limit, Meta's account pause)."""
+        if channel not in self._pause:
+            self._pause[channel] = pause_reason(channel)
+        return self._pause[channel]
+
+    def broken(self, channel: str) -> str | None:
+        """See account_problem(): the provider account refuses to send until it is fixed."""
+        if channel not in self._broken:
+            self._broken[channel] = account_problem(channel)
+        return self._broken[channel]
+
     def paused(self, channel: str) -> bool:
-        """Configured but unable to send at this moment (SMS: breaker paused or a global cap used up)."""
-        if channel not in self._paused:
-            self._paused[channel] = channel == CHANNEL_SMS and sms_service.temporarily_unavailable()
-        return self._paused[channel]
+        """Configured but unable to send at this moment: held for a while, or the provider account refuses."""
+        return bool(self.pause_reason(channel) or self.broken(channel))
+
+    def why_paused(self, channel: str) -> str | None:
+        return self.broken(channel) or self.pause_reason(channel)
+
+    def first_ready(self, channels: list[str]) -> str | None:
+        """The channel a request that names none gets: the first that is not paused, else the first (which then answers
+        with the plain 'can't be sent right now' sentence). An older app can't choose, so it must never be sent to a
+        paused channel while the other one works."""
+        if len(channels) > 1:
+            for channel in channels:
+                if not self.paused(channel):
+                    return channel
+        return channels[0] if channels else None
 
 
 def available_channels(purpose: str) -> list[str]:
@@ -309,16 +433,17 @@ def channel_problems(channel: str, purpose: str) -> list[str]:
 
 
 def paused_now(channel: str) -> bool:
-    """Is the channel configured but unable to send for the moment (SMS: the circuit breaker is paused or a global hourly
-    / daily cap is used up)? Anybody can bring this about with a flood of code requests, so it must never close another
-    sign-in method: password sign-in stays open while it is true. WhatsApp has no such state."""
-    return channel == CHANNEL_SMS and sms_service.temporarily_unavailable()
+    """Is the channel configured but unable to send for the moment: a breaker or Meta's account pause, a global limit
+    used up (pause_reason), or the provider account refuses (account_problem)? Anybody can bring part of this about with
+    a flood of code requests, so it must never close another sign-in method: password sign-in stays open while it is
+    true."""
+    return bool(pause_reason(channel) or account_problem(channel))
 
 
 def channel_status(channel: str) -> dict:
     """One channel's OTP state for its Control page: {channel, enabled, available (for at least one purpose), purposes:
-    {login, reset, activate: bool}, problems: {purpose: [sentences]}, paused, codeLength, expiryMinutes} (+ for WhatsApp:
-    templateName, templateStatus)."""
+    {login, reset, activate: bool}, problems: {purpose: [sentences]}, paused, pauseReason, codeLength, expiryMinutes}
+    (+ for WhatsApp: templateName, templateStatus, limits)."""
     snap = _Snapshot()
     cfg = snap.configs[channel]
     purposes = {purpose: snap.available(channel, purpose) for purpose in PURPOSES}
@@ -329,24 +454,34 @@ def channel_status(channel: str) -> dict:
         "purposes": purposes,
         "problems": {purpose: snap.problems(channel, purpose) for purpose in PURPOSES},
         "paused": snap.paused(channel),
+        "pauseReason": snap.why_paused(channel),
         "codeLength": cfg.code_length,
         "expiryMinutes": cfg.expiry_minutes,
     }
     if channel == CHANNEL_WHATSAPP:
         out["templateName"] = whatsapp_template_name(EmployeeOtp.PURPOSE_LOGIN, snap.wa)
         out["templateStatus"] = snap.template_status(EmployeeOtp.PURPOSE_LOGIN)
+        out["limits"] = {**whatsapp_limits(), **whatsapp_code_usage()}
     return out
+
+
+def _activation_channels(snap: _Snapshot) -> list[str]:
+    """The channels a first password can really be confirmed through: available for activation and the provider account
+    not refusing to send. A temporary pause (a breaker, a global limit used up) does NOT take a channel out here: anybody
+    can bring one about with a flood of code requests, and that must never reopen the open setup to strangers."""
+    return [c for c in snap.available_channels(EmployeeOtp.PURPOSE_ACTIVATE) if not snap.broken(c)]
 
 
 def activation_required() -> bool:
     """True when a first-time password must be confirmed with a code. Only while that can really work (at least one
-    channel available for activation); otherwise the old open first-time setup stays, so nobody is locked out."""
-    return bool(available_channels(EmployeeOtp.PURPOSE_ACTIVATE))
+    channel available for activation whose provider account is not refusing to send); otherwise the old open first-time
+    setup stays, so nobody is locked out."""
+    return bool(_activation_channels(_Snapshot()))
 
 
 def activation_message() -> str:
     """What set-password tells a stranger who must confirm a code first (names the channels that would send it)."""
-    channels = available_channels(EmployeeOtp.PURPOSE_ACTIVATE)
+    channels = _activation_channels(_Snapshot())
     if channels == [CHANNEL_SMS]:
         return "Please confirm the code we send by SMS to your registered mobile number to set your password."
     if channels == [CHANNEL_WHATSAPP]:
@@ -355,7 +490,8 @@ def activation_message() -> str:
 
 
 def _login_ready(snap: _Snapshot) -> list[str]:
-    """The channels a code sign-in really works on right now: available for sign-in and not paused."""
+    """The channels a code sign-in really works on right now: available for sign-in, not paused and the provider account
+    not refusing to send."""
     return [c for c in snap.available_channels(EmployeeOtp.PURPOSE_LOGIN) if not snap.paused(c)]
 
 
@@ -380,10 +516,12 @@ def login_options() -> dict:
     code length of every channel in those lists. For older apps: otpLogin / otpReset / otpActivate (that purpose's list is
     not empty), otpChannel (the first channel of the login list, else of reset, else of activate; null when there is none)
     and codeLength (that channel's digits; 6 when there is none). passwordLogin is false only while HR switched password
-    sign-in off AND a code sign-in really works right now."""
+    sign-in off AND a code sign-in really works right now. While one of two channels is paused, otpChannel names the
+    other one: a request that names no channel is sent there too (_Snapshot.first_ready), so an older app always gets the
+    code length it shows."""
     snap = _Snapshot()
     lists = {purpose: snap.available_channels(purpose) for purpose in PURPOSES}
-    first = next((lists[p][0] for p in PURPOSES if lists[p]), None)
+    first = next((snap.first_ready(lists[p]) for p in PURPOSES if lists[p]), None)
     used = [c for c in CHANNELS if any(c in channels for channels in lists.values())]
     return {
         "otpLogin": bool(lists[EmployeeOtp.PURPOSE_LOGIN]),
@@ -476,7 +614,7 @@ def _pick(snap: _Snapshot, purpose: str, requested) -> tuple[OtpConfig, list[str
         # `message` repeats `error` for the apps that read the contract's name for it
         raise OtpError(message, 400, code="channel_unavailable", availableChannels=available, message=message)
     if available:
-        return snap.configs[available[0]], available
+        return snap.configs[snap.first_ready(available)], available
     switched = [c for c in CHANNELS if snap.configs[c].switched_on(purpose)]
     if not switched:
         raise OtpError(
@@ -506,6 +644,29 @@ def _send_whatsapp_code(employee: Employee, purpose: str, code: str, minutes: in
     return log is not None and log.status in ("sent", "delivered", "read", "queued", "sending")
 
 
+def _whatsapp_paused_message(others: list[str]) -> str:
+    message = "WhatsApp codes can't be sent right now."
+    return message + (
+        f" Please choose {_names(others)} instead." if others else " Please use your password or contact HR."
+    )
+
+
+def _whatsapp_limit_refusal(phone: str, now, others: list[str]) -> tuple[str, int] | None:
+    """(sentence, http status) when a WhatsApp code limit stops this request (see WHATSAPP_MAX_REQUESTS_PER_DAY), else
+    None. Counted on the channel's code rows, so a failed send (its row is deleted) never counts."""
+    limits = whatsapp_limits()
+    if _whatsapp_cap_reason(now):
+        return _whatsapp_paused_message(others), 503
+    to_this_number = (
+        EmployeeOtp.objects.filter(_of_channel(CHANNEL_WHATSAPP))
+        .filter(phone_number=phone, created_at__gte=now - timedelta(hours=1))
+        .count()
+    )
+    if to_this_number >= limits["perNumberPerHour"]:
+        return MSG_NUMBER_CAP, 429
+    return None
+
+
 def request_otp(identifier: str | None, purpose: str, ip: str = "", channel: str | None = None) -> dict:
     """Create a code and send it to the employee's registered number by `channel` ("whatsapp" | "sms"; None: the first
     available for the purpose). Returns {message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength,
@@ -526,6 +687,10 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "", channel: str
     if cfg.channel == CHANNEL_SMS and not sms_service.is_valid_number(phone):
         # refused before anything is created or requested: a landline or a half-typed number
         raise OtpError(sms_service.MSG_BAD_NUMBER, 400, otherChannels=others)
+    if cfg.channel == CHANNEL_WHATSAPP and snap.pause_reason(CHANNEL_WHATSAPP):
+        # Meta said the account cannot send, messages keep failing at Meta, or a global code limit is used up: nothing is
+        # tried (more sends would only fail, cost money or hurt the number's standing). Password sign-in is open meanwhile.
+        raise OtpError(_whatsapp_paused_message(others), 503, otherChannels=others)
 
     length = cfg.code_length
     code = "".join(secrets.choice("0123456789") for _ in range(length))
@@ -562,6 +727,14 @@ def request_otp(identifier: str | None, purpose: str, ip: str = "", channel: str
             raise OtpError(
                 "Too many codes requested today. Please try again tomorrow, or contact HR.", 429, otherChannels=others
             )
+        if cfg.channel == CHANNEL_WHATSAPP:
+            # The global and per-number WhatsApp limits are checked, and the new code row that counts against them is
+            # written, under a lock on the WhatsApp settings row: simultaneous requests for different employees can't
+            # all slip under the same limit. (SMS does the same inside sms_service.)
+            WhatsAppSettings.objects.select_for_update().filter(pk=snap.wa.pk).first()
+            refused = _whatsapp_limit_refusal(phone, now, others)
+            if refused:
+                raise OtpError(*refused, otherChannels=others)
         # The new code is only ADDED here. The earlier codes are consumed after the send succeeded (below): consuming
         # them first meant that a send that failed or was blocked killed the employee's still-valid code.
         otp = EmployeeOtp.objects.create(

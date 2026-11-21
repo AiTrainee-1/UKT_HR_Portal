@@ -11,8 +11,9 @@ from datetime import datetime, timezone as dt_timezone
 
 from django.test import TestCase, override_settings
 
+from . import otp_service, whatsapp_service
 from .models import Employee, WhatsAppMessageLog, WhatsAppOptOut, WhatsAppSettings, WhatsAppTemplate
-from .tests_whatsapp_support import APP_SECRET, META, VERIFY_TOKEN
+from .tests_whatsapp_support import APP_SECRET, META, VERIFY_TOKEN, FakeMeta, approve_templates
 
 URL = "/api/whatsapp/webhook/"
 TS = "1795113000"  # 20 Nov 2026 00:00 IST
@@ -22,11 +23,16 @@ def sign(raw: bytes, secret: str = APP_SECRET) -> str:
     return "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
 
 
-def envelope(field: str, value: dict) -> dict:
-    return {
-        "object": "whatsapp_business_account",
-        "entry": [{"id": "205550002222", "changes": [{"field": field, "value": value}]}],
-    }
+def envelope(field: str, value: dict, account: str | None = "205550002222") -> dict:
+    entry = {"changes": [{"field": field, "value": value}]}
+    if account is not None:
+        entry["id"] = account
+    return {"object": "whatsapp_business_account", "entry": [entry]}
+
+
+def template_event(event: str, name: str, account: str | None = "205550002222", **extra) -> dict:
+    value = {"event": event, "message_template_name": name, "message_template_language": "en", **extra}
+    return envelope("message_template_status_update", value, account)
 
 
 def statuses(*items) -> dict:
@@ -236,6 +242,14 @@ class StopTests(Base):
         self.inbound("Stop")
         self.assertTrue(WhatsAppOptOut.objects.filter(employee=self.emp).exists())
 
+    def test_a_stop_from_a_shared_number_opts_out_every_record_on_it(self):
+        twin = Employee.objects.create(employee_code="WH2", first_name="T", last_name="W", phone="09876543210")
+        other = Employee.objects.create(employee_code="WH3", first_name="O", last_name="X", phone="9123456789")
+        self.inbound("STOP")
+        self.assertEqual(set(WhatsAppOptOut.objects.values_list("employee__employee_code", flat=True)), {"WH1", "WH2"})
+        self.assertTrue(whatsapp_service.opted_out(twin))
+        self.assertFalse(whatsapp_service.opted_out(other))
+
 
 class TemplateEventTests(Base):
     def test_approval_rejection_and_pause_update_the_template(self):
@@ -266,6 +280,121 @@ class TemplateEventTests(Base):
         row = WhatsAppTemplate.objects.get(name="hrms_new")
         self.assertEqual((row.language, row.status, row.meta_id), ("en_US", "APPROVED", "222"))
 
+    def test_reinstated_makes_a_paused_template_usable_again(self):
+        approve_templates("otp_login", status="PAUSED")
+        self.assertEqual(otp_service.whatsapp_template_status("login"), "PAUSED")
+        self.post(template_event("REINSTATED", "hrms_otp", message_template_id="meta-hrms_otp", reason="NONE"))
+        row = WhatsAppTemplate.objects.get(name="hrms_otp")
+        self.assertEqual(row.status, "APPROVED")
+        self.assertIsNone(whatsapp_service.template_problem("otp_login"))
+        self.assertEqual(otp_service.whatsapp_template_status("login"), "APPROVED")
+
+    def test_flagged_and_locked_leave_an_approved_template_sendable(self):
+        (row,) = approve_templates("approval_approved")
+        for event in ("FLAGGED", "LOCKED", "UNLOCKED"):
+            with self.subTest(event):
+                self.post(template_event(event, row.name, message_template_id=row.meta_id))
+                row.refresh_from_db()
+                self.assertEqual(row.status, "APPROVED")
+                self.assertIsNone(whatsapp_service.template_problem("approval_approved"))
+        self.assertEqual(row.quality_score, "RED")  # a flag shows as low quality (WhatsApp Control alerts on it)
+
+    def test_unarchived_brings_back_an_archived_template_but_not_a_rejected_one(self):
+        (row,) = approve_templates("late_alert")
+        self.post(template_event("ARCHIVED", row.name))
+        row.refresh_from_db()
+        self.assertEqual(row.status, "ARCHIVED")
+        self.assertIsNotNone(whatsapp_service.template_problem("late_alert"))
+        self.post(template_event("UNARCHIVED", row.name))
+        row.refresh_from_db()
+        self.assertEqual(row.status, "APPROVED")
+        # one that was archived after Meta rejected it comes back rejected
+        self.post(template_event("REJECTED", row.name, reason="INVALID_FORMAT"))
+        self.post(template_event("ARCHIVED", row.name))
+        self.post(template_event("UNARCHIVED", row.name))
+        row.refresh_from_db()
+        self.assertEqual((row.status, row.rejected_reason), ("REJECTED", "INVALID_FORMAT"))
+        # UNARCHIVED never touches a template that was not archived
+        self.post(template_event("APPROVED", row.name))
+        self.post(template_event("UNARCHIVED", row.name))
+        row.refresh_from_db()
+        self.assertEqual(row.status, "APPROVED")
+
+    def test_an_event_this_server_does_not_know_changes_nothing(self):
+        (row,) = approve_templates("late_alert")
+        with self.assertLogs("api.whatsapp_views", level="WARNING") as logs:
+            self.post(template_event("SOMETHING_NEW", row.name))
+        row.refresh_from_db()
+        self.assertEqual(row.status, "APPROVED")
+        self.assertIn("SOMETHING_NEW", "\n".join(logs.output))
+        self.post(template_event("FLAGGED", "hrms_never_seen"))  # a note about an unknown template adds nothing
+        self.assertFalse(WhatsAppTemplate.objects.filter(name="hrms_never_seen").exists())
+
+    def test_a_code_template_first_seen_in_an_event_is_an_authentication_template(self):
+        # HR made hrms_otp in WhatsApp Manager (the documented fallback); Meta's approval arrives before any Sync now
+        meta = FakeMeta.install(self)
+        self.post(template_event("APPROVED", "hrms_otp", message_template_id="123123", reason="NONE"))
+        row = WhatsAppTemplate.objects.get(name="hrms_otp")
+        self.assertEqual((row.category, row.status, row.components), ("AUTHENTICATION", "APPROVED", []))
+        self.assertEqual(otp_service.whatsapp_template_status("login"), "APPROVED")
+        whatsapp_service.deliver_code("919876543210", "otp_login", "123456", minutes=5)
+        sent = meta.last()
+        self.assertEqual(sent["params"], {"1": "123456"})  # the copy-code shape Meta wants
+        self.assertEqual(sent["button"], "123456")
+        # a template no HRMS type is sent as: Utility; Meta's own word wins when the event carries it
+        self.post(template_event("APPROVED", "hrms_hand_made"))
+        self.post(template_event("APPROVED", "hrms_promo", message_template_category="MARKETING"))
+        self.assertEqual(WhatsAppTemplate.objects.get(name="hrms_hand_made").category, "UTILITY")
+        self.assertEqual(WhatsAppTemplate.objects.get(name="hrms_promo").category, "MARKETING")
+
+    def test_a_row_without_components_is_sent_by_its_types_category(self):
+        # a row an older server added from an event, filed as Utility: the code still goes out the copy-code way
+        meta = FakeMeta.install(self)
+        WhatsAppTemplate.objects.create(name="hrms_otp", language="en", status="APPROVED", category="UTILITY")
+        self.assertEqual(whatsapp_service.template_for("otp_login").category, "AUTHENTICATION")
+        whatsapp_service.deliver_code("919876543210", "otp_login", "654321", minutes=5)
+        self.assertEqual(meta.last()["button"], "654321")
+
+    def test_a_category_change_at_meta_is_recorded(self):
+        (row,) = approve_templates("late_alert")
+        self.post(
+            envelope(
+                "template_category_update",
+                {
+                    "message_template_id": row.meta_id,
+                    "message_template_name": row.name,
+                    "message_template_language": "en",
+                    "previous_category": "UTILITY",
+                    "new_category": "MARKETING",
+                },
+            )
+        )
+        row.refresh_from_db()
+        self.assertEqual(row.category, "MARKETING")
+
+    def test_an_approval_moves_the_type_it_was_made_for_onto_it(self):
+        from . import whatsapp_templates
+
+        approve_templates("approval_approved")
+        WhatsAppTemplate.objects.create(
+            name="hrms_approval_approved_v2", language="en", status="PENDING", message_type="approval_approved"
+        )
+        self.assertEqual(whatsapp_service.template_name_for("approval_approved"), "hrms_approval_approved")
+        self.post(template_event("APPROVED", "hrms_approval_approved_v2"))
+        self.assertEqual(whatsapp_service.template_name_for("approval_approved"), "hrms_approval_approved_v2")
+        # a rejection leaves the type where it is
+        WhatsAppTemplate.objects.create(
+            name="hrms_approval_approved_v3", language="en", status="PENDING", message_type="approval_approved"
+        )
+        self.post(template_event("REJECTED", "hrms_approval_approved_v3", reason="INVALID_FORMAT"))
+        self.assertEqual(whatsapp_service.template_name_for("approval_approved"), "hrms_approval_approved_v2")
+        # HR points the type back to the first one: a later pause / reinstatement of v2 does not take it back
+        s = WhatsAppSettings.get()
+        whatsapp_templates._point_type_at("approval_approved", "hrms_approval_approved", s)
+        self.post(template_event("PAUSED", "hrms_approval_approved_v2"))
+        self.post(template_event("REINSTATED", "hrms_approval_approved_v2"))
+        self.assertEqual(whatsapp_service.template_name_for("approval_approved"), "hrms_approval_approved")
+
     def test_quality_updates(self):
         WhatsAppTemplate.objects.create(name="hrms_late_alert", language="en", status="APPROVED", meta_id="111")
         self.post(
@@ -287,6 +416,43 @@ class TemplateEventTests(Base):
             r = self.post(envelope("phone_number_quality_update", {"event": "FLAGGED", "current_limit": "TIER_250"}))
         self.assertEqual(r.status_code, 200)
         self.assertIn("phone_number_quality_update FLAGGED", "\n".join(logs.output))
+
+
+class AccountScopeTests(Base):
+    """One Meta app can be subscribed to several WhatsApp Business Accounts (a test account next to the real one): only
+    this server's account and number count."""
+
+    def test_a_template_event_of_another_account_changes_nothing(self):
+        approve_templates("otp_login")
+        self.post(template_event("REJECTED", "hrms_otp", account="999999999999", message_template_id="777000777"))
+        row = WhatsAppTemplate.objects.get(name="hrms_otp")
+        self.assertEqual((row.status, row.meta_id, row.rejected_reason), ("APPROVED", "meta-hrms_otp", ""))
+        self.assertEqual(otp_service.whatsapp_template_status("login"), "APPROVED")
+        # ours, or one that does not say which account it is about, is applied
+        self.post(template_event("PAUSED", "hrms_otp", account=None))
+        self.assertEqual(WhatsAppTemplate.objects.get(name="hrms_otp").status, "PAUSED")
+        self.post(template_event("REINSTATED", "hrms_otp"))
+        self.assertEqual(WhatsAppTemplate.objects.get(name="hrms_otp").status, "APPROVED")
+
+    def test_a_stop_sent_to_another_number_opts_nobody_out(self):
+        def stop(phone_number_id):
+            value = {
+                "messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "919800000001", "phone_number_id": phone_number_id},
+                "messages": [{"from": "919876543210", "id": "wamid.IN9", "type": "text", "text": {"body": "STOP"}}],
+            }
+            return self.post(envelope("messages", value))
+
+        self.assertEqual(stop("100099990000").status_code, 200)
+        self.assertFalse(WhatsAppOptOut.objects.exists())
+        stop("105550001111")
+        self.assertTrue(WhatsAppOptOut.objects.filter(employee=self.emp).exists())
+
+    @override_settings(WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID="")
+    def test_a_server_without_the_account_id_takes_every_event(self):
+        approve_templates("late_alert")
+        self.post(template_event("PAUSED", "hrms_late_alert", account="999999999999"))
+        self.assertEqual(WhatsAppTemplate.objects.get(name="hrms_late_alert").status, "PAUSED")
 
 
 class WebhookLoggingTests(Base):

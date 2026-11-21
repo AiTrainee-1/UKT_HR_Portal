@@ -6,7 +6,7 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 // page: the Department Head first, then HR, and the day is written only after both (api/tests_attendance_edit.py covers the
 // rules). A throwaway employee (PD-001) in February 2026, E2E003 (Meena) her Department Head, set up here and removed again.
 
-const FAKE_WACLIENT = "http://127.0.0.1:8190";
+const FAKE_META = "http://127.0.0.1:8190";
 const HOD_CODE = "E2E003";
 const HOD_PASSWORD = "employee-pass-1";
 const DAY = "2026-02-03";
@@ -27,12 +27,12 @@ async function api(page: Page, method: string, url: string, data?: unknown, toke
 }
 
 async function hodToken(page: Page): Promise<string> {
-  await page.request.post(`${FAKE_WACLIENT}/reset`);
+  await page.request.post(`${FAKE_META}/reset`);
   const ask = await page.request.post("/api/auth/otp/request", {
     data: { employeeCode: HOD_CODE, purpose: "activate" },
   });
   if (ask.status() === 200) {
-    const sent = await (await page.request.get(`${FAKE_WACLIENT}/messages`)).json();
+    const sent = await (await page.request.get(`${FAKE_META}/messages`)).json();
     const otp = sent[0].message.match(/\b(\d{6})\b/)![1];
     const activate = await page.request.post("/api/auth/otp/activate", {
       data: { employeeCode: HOD_CODE, otp, password: HOD_PASSWORD },

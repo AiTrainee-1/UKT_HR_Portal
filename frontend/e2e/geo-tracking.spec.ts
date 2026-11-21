@@ -14,7 +14,7 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 // recorded before the track started is refused (a little slack for the phone's clock apart), so the route is uploaded with
 // times in the half hour AFTER now: the server accepts up to a day ahead and only marks such points "suspect clock".
 
-const FAKE_WACLIENT = "http://127.0.0.1:8190";
+const FAKE_META = "http://127.0.0.1:8190";
 const EMPLOYEE_CODE = "E2E003";
 const EMPLOYEE_NAME = "Meena Nosalary";
 // The password auth.spec.ts and approval-screens.spec.ts also set for this employee: whichever spec activates the account first.
@@ -49,15 +49,15 @@ async function hrToken(request: APIRequestContext): Promise<string> {
   return (await res.json()).token as string;
 }
 
-// The employee's own token: the account is activated with the code the fake WAClient receives (as auth.spec.ts does), or simply
+// The employee's own token: the account is activated with the code the fake Meta WhatsApp API receives (as auth.spec.ts does), or simply
 // signed in when it was already activated.
 async function employeeToken(request: APIRequestContext): Promise<string> {
-  await request.post(`${FAKE_WACLIENT}/reset`);
+  await request.post(`${FAKE_META}/reset`);
   const ask = await request.post("/api/auth/otp/request", {
     data: { employeeCode: EMPLOYEE_CODE, purpose: "activate" },
   });
   if (ask.status() === 200) {
-    const sent = await (await request.get(`${FAKE_WACLIENT}/messages`)).json();
+    const sent = await (await request.get(`${FAKE_META}/messages`)).json();
     const otp = sent[0].message.match(/\b(\d{6})\b/)![1];
     const activate = await request.post("/api/auth/otp/activate", {
       data: { employeeCode: EMPLOYEE_CODE, otp, password: EMPLOYEE_PASSWORD },

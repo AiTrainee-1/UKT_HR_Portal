@@ -40,6 +40,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   // Production Payroll is one page per pay cycle (and its details pages), and Production Employees sits under Employees
   /^\/hr\/production-payroll(\/|$)/,
   "/hr/employees/productionemployee",
+  // Factory Employees (drivers, housekeeping...): a list with its own dialogs and sheets, like Production Employees
+  "/hr/employees/factory-emp",
   // Compensation is five pages (CTC Breakdown, OT Detection, Compensation Leave, History, Reports) with subtabs in the path
   /^\/hr\/compensation(\/|$)/,
   "/hr/settlement",

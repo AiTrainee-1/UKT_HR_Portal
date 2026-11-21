@@ -1,33 +1,63 @@
 import { describe, expect, it } from "vitest";
 import { hasBothCategories, namedOrgOptions } from "@/lib/departments";
+import { ApiError } from "@/lib/api-client/custom-fetch";
 import {
   DEFAULT_FILTERS,
+  DEFAULT_FILTER_URL,
+  DEFAULT_SORT,
+  SETTLEMENT_URL_DEFAULTS,
   appliedByEmployee,
   approvalDefaults,
   approvalEmi,
   approvalPayload,
   approvalPreview,
   approvalProblem,
+  approvalRemarkProblem,
   approvedLess,
+  approvedOf,
   NO_FILTERS,
+  buildExport,
+  cleanRemark,
+  decidedAtOf,
+  deductionMonths,
   describeSchedule,
+  describeScope,
   emptyForm,
-  exportTable,
+  exportColumns,
   filterRows,
   filtersActive,
+  filtersFromUrl,
+  filtersToUrl,
   formPreview,
   hasLeft,
+  historyText,
+  inPeriod,
+  pageView,
+  parseBasis,
+  parsePeriod,
   parseSort,
+  parseTab,
+  periodLabel,
+  pickFilterUrl,
   previewForAdvance,
   progressPct,
+  rejectionPayload,
+  rejectionProblem,
+  remarkRequired,
+  rowsOfTab,
   schedulePreview,
+  serverError,
   sortRows,
   startWarning,
   statusCounts,
   summarize,
+  tabFilters,
   toPayload,
   validateForm,
+  yearOptions,
   type AdvanceForm,
+  type ApprovalEdit,
+  type PageState,
   type SettlementRow,
 } from "./logic";
 import { buildStatementHtml } from "./statement";
@@ -62,6 +92,23 @@ const form = (over: Partial<AdvanceForm> = {}): AdvanceForm => ({
   ...emptyForm(new Date(2026, 9, 10)),
   employeeId: "7",
   amount: "12000",
+  ...over,
+});
+
+const edit = (over: Partial<ApprovalEdit> = {}): ApprovalEdit => ({
+  amount: "10000",
+  startMonth: 11,
+  startYear: 2026,
+  remark: "",
+  ...over,
+});
+
+const page = (over: Partial<PageState> = {}): PageState => ({
+  tab: "overview",
+  period: null,
+  basis: "any",
+  filters: NO_FILTERS,
+  sort: DEFAULT_SORT,
   ...over,
 });
 
@@ -457,16 +504,18 @@ describe("export and statement", () => {
   });
 
   it("exports one line per advance under the right headings", () => {
-    const t = exportTable([row]);
+    const t = buildExport([row], page(), 1);
     expect(t.rows).toHaveLength(1);
-    expect(t.rows[0]).toHaveLength(t.headers.length);
-    const at = (h: string) => t.rows[0][t.headers.indexOf(h)];
-    expect(at("Advance type")).toBe("Term loan");
+    expect(t.rows[0]).toHaveLength(t.columns.length);
+    const at = (h: string) => t.rows[0][t.columns.findIndex((c) => c.header === h)];
+    expect(at("Type")).toBe("Term loan");
     expect(at("Status")).toBe("Active");
     expect(at("Outstanding")).toBe(9000);
-    expect(at("Recovered %")).toBe(25);
-    expect(at("Deduction starts")).toBe("Nov 2026");
-    expect(at("Approved on")).toBe("6 Oct 2026");
+    expect(at("Repaid")).toBe(3000);
+    expect(at("EMI / months")).toBe("₹1,000 x 12 months");
+    expect(at("Deduction start")).toBe("Nov 2026");
+    expect(at("Decided on")).toBe("6 Oct 2026");
+    expect(at("Decided by")).toBe("HR Admin");
   });
 
   it("builds a statement that escapes what it prints and lists the schedule", () => {
@@ -484,6 +533,26 @@ describe("export and statement", () => {
     expect(html).toContain("Deducted via payroll");
     expect(html).toContain("Still scheduled: <strong>₹1,000</strong>");
     expect(html).toContain("full and final settlement");
+  });
+
+  it("prints what was asked for and approved apart, with HR's remark", () => {
+    const html = buildStatementHtml(
+      {
+        ...row,
+        amount: 9000,
+        requestedAmount: 12000,
+        decisionRemark: "Budget <limit>",
+        decidedAt: "2026-11-20T05:00:00Z",
+      },
+      [],
+    );
+    expect(html).toContain("<tr><th>Requested</th><td>₹12,000</td></tr>");
+    expect(html).toContain("<tr><th>Approved</th><td>₹9,000</td></tr>");
+    expect(html).toContain("<tr><th>HR&#39;s remark</th><td>Budget &lt;limit&gt;</td></tr>");
+    expect(html).toContain("<tr><th>Decided on</th><td>20 Nov 2026</td></tr>");
+    const rejected = buildStatementHtml({ ...row, status: "rejected", decisionRemark: "Has one running" }, []);
+    expect(rejected).toContain("<tr><th>Reason for rejecting</th><td>Has one running</td></tr>");
+    expect(rejected).toContain("<tr><th>Approved</th><td>Rejected</td></tr>");
   });
 
   it("says so when there is no schedule", () => {
@@ -505,8 +574,8 @@ describe("approving an employee's application (2026-10-31)", () => {
       ...over,
     });
 
-  it("opens on the amount asked for and the start month on the advance", () => {
-    expect(approvalDefaults(applied())).toEqual({ amount: "10000", startMonth: 11, startYear: 2026 });
+  it("opens on the amount asked for and the start month on the advance, with no remark", () => {
+    expect(approvalDefaults(applied())).toEqual({ amount: "10000", startMonth: 11, startYear: 2026, remark: "" });
   });
 
   it("keeps the whole-rupee EMI for an employee's loan and the paisa EMI for one HR recorded", () => {
@@ -516,7 +585,7 @@ describe("approving an employee's application (2026-10-31)", () => {
   });
 
   it("previews the smaller amount with the last EMI absorbing the rest", () => {
-    const p = approvalPreview(applied(), { amount: "7000", startMonth: 12, startYear: 2026 });
+    const p = approvalPreview(applied(), edit({ amount: "7000", startMonth: 12, startYear: 2026 }));
     expect(p?.items.map((i) => [i.month, i.year, i.amount])).toEqual([
       [12, 2026, 2334],
       [1, 2027, 2334],
@@ -527,21 +596,26 @@ describe("approving an employee's application (2026-10-31)", () => {
 
   it("refuses more than was asked, nothing, and a bad year", () => {
     const a = applied();
-    expect(approvalProblem(a, { amount: "10001", startMonth: 11, startYear: 2026 })).toMatch("₹10,000");
-    expect(approvalProblem(a, { amount: "", startMonth: 11, startYear: 2026 })).toMatch("Enter");
-    expect(approvalProblem(a, { amount: "0", startMonth: 11, startYear: 2026 })).toMatch("more than 0");
-    expect(approvalProblem(a, { amount: "5000", startMonth: 11, startYear: 26 })).toMatch("4-digit");
-    expect(approvalProblem(a, { amount: "5000", startMonth: 11, startYear: 2026 })).toBeNull();
+    expect(approvalProblem(a, edit({ amount: "10001" }))).toMatch("₹10,000");
+    expect(approvalProblem(a, edit({ amount: "" }))).toMatch("Enter");
+    expect(approvalProblem(a, edit({ amount: "0" }))).toMatch("more than 0");
+    expect(approvalProblem(a, edit({ amount: "5000", startYear: 26 }))).toMatch("4-digit");
+    expect(approvalProblem(a, edit({ amount: "5000" }))).toBeNull();
+    // an older advance HR recorded has no requested amount stored: its amount is what was asked for
+    expect(approvalProblem(adv({ amount: 4000 }), edit({ amount: "4000.5" }))).toMatch("at most the ₹4,000");
   });
 
   it("sends only what changed, so an untouched approval is the call it always was", () => {
     const a = applied();
     expect(approvalPayload(a, approvalDefaults(a))).toEqual({ status: "approved" });
-    expect(approvalPayload(a, { amount: "6000", startMonth: 1, startYear: 2027 })).toEqual({
+    expect(
+      approvalPayload(a, edit({ amount: "6000", startMonth: 1, startYear: 2027, remark: "  Budget\n limit " })),
+    ).toEqual({
       status: "approved",
       amount: 6000,
       repaymentStartMonth: 1,
       repaymentStartYear: 2027,
+      decisionRemark: "Budget limit",
     });
   });
 
@@ -553,11 +627,430 @@ describe("approving an employee's application (2026-10-31)", () => {
     expect(approvedLess(adv({ status: "approved" }))).toBe(false);
   });
 
-  it("exports what the employee asked for and who applied", () => {
-    const t = exportTable([applied({ status: "approved", amount: 6000 })]);
-    const at = (h: string) => t.rows[0][t.headers.indexOf(h)];
-    expect(at("Requested by employee")).toBe(10000);
+  it("exports what the employee asked for, what was approved and who applied", () => {
+    const t = buildExport([applied({ status: "approved", amount: 6000, decisionRemark: "Budget" })], page(), 1);
+    const at = (h: string) => t.rows[0][t.columns.findIndex((c) => c.header === h)];
+    expect(at("Requested amount")).toBe(10000);
+    expect(at("Approved amount")).toBe(6000);
+    expect(at("Remark")).toBe("Budget");
     expect(at("Applied by")).toBe("Employee (app)");
-    expect(t.rows[0]).toHaveLength(t.headers.length);
+    expect(t.rows[0]).toHaveLength(t.columns.length);
+  });
+});
+
+// ───────────────────── 2026-11-20: tabs, the month filter, remarks, history, per-tab exports ─────────────────────
+
+describe("the tabs: Overview, Term Loan, Term Advance", () => {
+  const loan = adv({ advanceType: "term", employeeCode: "L1", status: "approved", emiAmount: 1000 });
+  const advance = adv({ advanceType: "general", employeeCode: "A1", status: "pending", amount: 2000 });
+  const rows = [loan, advance];
+
+  it("reads the tab from the address; anything else is Overview", () => {
+    expect(parseTab("loan")).toBe("loan");
+    expect(parseTab("advance")).toBe("advance");
+    expect(parseTab("")).toBe("overview");
+    expect(parseTab("nonsense")).toBe("overview");
+    expect(parseTab(null)).toBe("overview");
+  });
+
+  it("Term Loan lists the term loans, Term Advance the others, Overview both", () => {
+    expect(rowsOfTab(rows, "loan").map((r) => r.employeeCode)).toEqual(["L1"]);
+    expect(rowsOfTab(rows, "advance").map((r) => r.employeeCode)).toEqual(["A1"]);
+    expect(rowsOfTab(rows, "overview")).toHaveLength(2);
+  });
+
+  it("a typed tab ignores Overview's type choice", () => {
+    const termOnly = { ...NO_FILTERS, type: "term" as const };
+    expect(tabFilters(termOnly, "advance").type).toBe("all");
+    expect(tabFilters(termOnly, "overview").type).toBe("term");
+    const v = pageView(rows, page({ tab: "advance", filters: termOnly }));
+    expect(v.shown.map((r) => r.employeeCode)).toEqual(["A1"]);
+  });
+
+  it("each tab's figures are its own", () => {
+    expect(pageView(rows, page({ tab: "loan" })).summary).toMatchObject({
+      activeCount: 1,
+      pendingCount: 0,
+      monthlyEmi: 1000,
+    });
+    expect(pageView(rows, page({ tab: "advance" })).summary).toMatchObject({
+      activeCount: 0,
+      pendingCount: 1,
+      pendingAmount: 2000,
+    });
+    expect(pageView(rows, page()).summary).toMatchObject({ activeCount: 1, pendingCount: 1 });
+  });
+
+  it("the figures follow every filter but the status, which the status tabs split", () => {
+    const v = pageView(rows, page({ filters: { ...DEFAULT_FILTERS, query: "L1" } }));
+    expect(v.shown).toHaveLength(0); // L1 is active, the list opens on Pending
+    expect(v.summary.activeCount).toBe(1);
+    expect(pageView(rows, page({ filters: { ...NO_FILTERS, query: "nobody" } })).summary.activeCount).toBe(0);
+  });
+});
+
+describe("the month filter", () => {
+  // applied 5 Oct, decided 2 Nov, deducted Dec and Jan
+  const a = adv({
+    status: "approved",
+    advanceType: "term",
+    createdAt: "2026-10-05T08:00:00Z",
+    decidedAt: "2026-11-02T06:00:00Z",
+    approvedAt: "2026-11-02T06:00:00Z",
+    scheduleMonths: ["2026-12", "2027-01"],
+  });
+  const month = (m: number, y = 2026) => ({ month: m, year: y });
+
+  it("reads the month and year from the address; no month is All months", () => {
+    expect(parsePeriod("11", "2026")).toEqual({ month: 11, year: 2026 });
+    expect(parsePeriod("", "2026")).toBeNull();
+    expect(parsePeriod("13", "2026")).toBeNull();
+    expect(parsePeriod("0", "2026")).toBeNull();
+    expect(parsePeriod("3", "", new Date(2027, 0, 5))).toEqual({ month: 3, year: 2027 });
+    expect(parsePeriod("3", "99", new Date(2027, 0, 5))).toEqual({ month: 3, year: 2027 });
+    expect(periodLabel({ month: 11, year: 2026 })).toBe("November 2026");
+    expect(periodLabel(null)).toBe("All months");
+    expect(parseBasis("deducted")).toBe("deducted");
+    expect(parseBasis("x")).toBe("any");
+  });
+
+  it("puts an advance in the month it was applied, decided or deducted in, as the basis says", () => {
+    expect(inPeriod(a, null, "applied")).toBe(true);
+    expect(inPeriod(a, month(10), "any")).toBe(true);
+    expect(inPeriod(a, month(10), "applied")).toBe(true);
+    expect(inPeriod(a, month(10), "decided")).toBe(false);
+    expect(inPeriod(a, month(11), "decided")).toBe(true);
+    expect(inPeriod(a, month(11), "applied")).toBe(false);
+    expect(inPeriod(a, month(12), "deducted")).toBe(true);
+    expect(inPeriod(a, month(1, 2027), "deducted")).toBe(true);
+    expect(inPeriod(a, month(1, 2027), "any")).toBe(true);
+    expect(inPeriod(a, month(2, 2027), "any")).toBe(false);
+    expect(inPeriod(a, month(10, 2025), "any")).toBe(false);
+  });
+
+  it("an older advance: approvedAt is the decision, the schedule is worked out from the advance", () => {
+    const old = adv({
+      status: "approved",
+      advanceType: "term",
+      amount: 3000,
+      emiAmount: 1000,
+      repaymentStartMonth: 12,
+      repaymentStartYear: 2026,
+      approvedAt: "2026-11-02T06:00:00Z",
+      decidedAt: null,
+      scheduleMonths: undefined,
+    });
+    expect(decidedAtOf(old)).toBe("2026-11-02T06:00:00Z");
+    expect(deductionMonths(old)).toEqual(["2026-12", "2027-01", "2027-02"]);
+    expect(inPeriod(old, month(2, 2027), "deducted")).toBe(true);
+    expect(inPeriod(old, month(11), "decided")).toBe(true);
+    // a waiting advance has no decision and nothing deducted (even one decided before and sent back)
+    const waiting = adv({ status: "pending", decidedAt: "2026-11-02T06:00:00Z", scheduleMonths: [] });
+    expect(decidedAtOf(waiting)).toBeNull();
+    expect(inPeriod(waiting, month(11), "decided")).toBe(false);
+    expect(deductionMonths(adv({ status: "pending", scheduleMonths: undefined }))).toEqual([]);
+  });
+
+  it("the list, the counts and the figures follow the month", () => {
+    const other = adv({ createdAt: "2026-08-01T08:00:00Z", status: "pending", employeeCode: "OLD" });
+    const v = pageView([a, other], page({ period: month(10), filters: NO_FILTERS }));
+    expect(v.periodRows).toEqual([a]);
+    expect(v.shown).toEqual([a]);
+    expect(v.summary.pendingCount).toBe(0);
+    expect(pageView([a, other], page({ period: month(8), basis: "applied" })).shown.map((r) => r.employeeCode)).toEqual(
+      ["OLD"],
+    );
+  });
+
+  it("offers last year to next year, widened to the years advances are in", () => {
+    const now = new Date(2026, 10, 20);
+    expect(yearOptions([], null, now)).toEqual([2027, 2026, 2025]);
+    expect(yearOptions([a], null, now)).toEqual([2027, 2026, 2025]);
+    expect(yearOptions([adv({ createdAt: "2022-03-01T08:00:00Z" })], { month: 1, year: 2029 }, now)).toEqual([
+      2029, 2028, 2027, 2026, 2025, 2024, 2023, 2022,
+    ]);
+  });
+});
+
+describe("remarks on a decision (owner 2026-11-20)", () => {
+  const asked = adv({ amount: 1000, requestedAmount: 1000 });
+
+  it("cleans a remark as the server does", () => {
+    expect(cleanRemark("  Budget \n\n limit  ")).toBe("Budget limit");
+    expect(cleanRemark("   ")).toBe("");
+  });
+
+  it("approving another amount than was asked for needs a remark; the full amount does not", () => {
+    expect(remarkRequired(asked, { amount: "700" })).toBe(true);
+    expect(remarkRequired(asked, { amount: "1000" })).toBe(false);
+    expect(remarkRequired(asked, { amount: "1000.00" })).toBe(false);
+    expect(remarkRequired(asked, { amount: "" })).toBe(false);
+    expect(approvalRemarkProblem(asked, edit({ amount: "700" }))).toBe(
+      "You are approving ₹700 of the ₹1,000 asked for - write why.",
+    );
+    expect(approvalRemarkProblem(asked, edit({ amount: "700", remark: " a  b" }))).toBeNull(); // "a b" = 3
+    expect(approvalRemarkProblem(asked, edit({ amount: "700", remark: " ab " }))).not.toBeNull();
+    expect(approvalRemarkProblem(asked, edit({ amount: "1000" }))).toBeNull();
+    // an older advance HR recorded: the amount on it is what was asked for
+    expect(remarkRequired(adv({ amount: 5000, requestedAmount: null }), { amount: "4000" })).toBe(true);
+  });
+
+  it("sends the remark with the approval only when there is one", () => {
+    expect(approvalPayload(asked, edit({ amount: "1000" }))).toEqual({
+      status: "approved",
+      repaymentStartMonth: 11,
+      repaymentStartYear: 2026,
+    });
+    expect(approvalPayload(asked, edit({ amount: "700", remark: "Budget limit" }))).toMatchObject({
+      status: "approved",
+      amount: 700,
+      decisionRemark: "Budget limit",
+    });
+    expect(approvalPayload(asked, edit({ amount: "1000", remark: "Paid in cash first" })).decisionRemark).toBe(
+      "Paid in cash first",
+    );
+  });
+
+  it("a rejection always needs its reason, at least 3 characters", () => {
+    expect(rejectionProblem("")).toBe("Write the reason for rejecting (at least 3 characters).");
+    expect(rejectionProblem("  no ")).not.toBeNull();
+    expect(rejectionProblem("Has a loan running")).toBeNull();
+    expect(rejectionPayload("  Has a loan\nrunning ")).toEqual({
+      status: "rejected",
+      decisionRemark: "Has a loan running",
+    });
+  });
+
+  it("shows the server's own words for a refusal, and says when it was about the remark", () => {
+    const refused = new ApiError(
+      new Response(null, { status: 400, statusText: "Bad Request" }),
+      { error: "Write a remark: you are approving ₹700 of the ₹1,000 asked for.", code: "remark" },
+      { method: "PUT", url: "/api/advances/1" },
+    );
+    expect(serverError(refused, "x")).toEqual({
+      text: "Write a remark: you are approving ₹700 of the ₹1,000 asked for.",
+      code: "remark",
+    });
+    const plain = new ApiError(new Response(null, { status: 500, statusText: "Server Error" }), null, {
+      method: "PUT",
+      url: "/api/advances/1",
+    });
+    expect(serverError(plain, "x").text).toMatch(/HTTP 500/);
+    expect(serverError(new Error("Network down"), "x")).toEqual({ text: "Network down", code: null });
+    expect(serverError("??", "Could not save")).toEqual({ text: "Could not save", code: null });
+  });
+
+  it("knows the approved amount only once approved", () => {
+    expect(approvedOf(adv({ status: "approved", amount: 700 }))).toBe(700);
+    expect(approvedOf(adv({ status: "closed", amount: 700 }))).toBe(700);
+    expect(approvedOf(adv({ status: "pending" }))).toBeNull();
+    expect(approvedOf(adv({ status: "rejected" }))).toBeNull();
+  });
+});
+
+describe("the decision history", () => {
+  const item = {
+    id: 1,
+    action: "approved" as const,
+    requestedAmount: 1000,
+    approvedAmount: 700,
+    startMonth: 11,
+    startYear: 2026,
+    remark: "Budget",
+    by: "HR Admin",
+    at: "2026-11-20T05:00:00Z",
+  };
+
+  it("says what was asked for, what was approved and from when it is deducted", () => {
+    expect(historyText(item, "term")).toEqual({
+      title: "Approved ₹700 of the ₹1,000 asked for",
+      detail: "Deductions from Nov 2026",
+    });
+    expect(historyText({ ...item, approvedAmount: 1000 }, "general")).toEqual({
+      title: "Approved ₹1,000",
+      detail: "Deducted in Nov 2026",
+    });
+    expect(historyText({ ...item, action: "rejected", approvedAmount: null }, "general")).toEqual({
+      title: "Rejected (₹1,000 asked for)",
+      detail: null,
+    });
+    expect(historyText({ ...item, action: "reopened" }, "term").title).toBe("Sent back to pending");
+  });
+});
+
+describe("the page's state in the address", () => {
+  it("opens on the pending approvals, newest first, with a clean address", () => {
+    expect(filtersFromUrl(SETTLEMENT_URL_DEFAULTS)).toEqual(DEFAULT_FILTERS);
+    expect(parseSort(SETTLEMENT_URL_DEFAULTS.sort)).toEqual(DEFAULT_SORT);
+    expect(filtersToUrl(DEFAULT_FILTERS, DEFAULT_SORT)).toEqual(DEFAULT_FILTER_URL);
+  });
+
+  it("round-trips the filters and refuses what it does not know", () => {
+    const f = {
+      ...NO_FILTERS,
+      query: "asha",
+      status: "rejected" as const,
+      type: "term" as const,
+      department: "staff|Cutting",
+      employee: "left" as const,
+      from: "2026-10-01",
+    };
+    const sort = { key: "amount" as const, dir: "asc" as const };
+    const u = { ...SETTLEMENT_URL_DEFAULTS, ...filtersToUrl(f, sort) };
+    expect(filtersFromUrl(u)).toEqual(f);
+    expect(parseSort(u.sort)).toEqual(sort);
+    expect(filtersFromUrl({ status: "maybe", type: "x", emp: "y", from: "yesterday" })).toMatchObject({
+      status: "pending",
+      type: "all",
+      employee: "all",
+      from: "",
+    });
+    expect(parseSort("bogus:asc")).toEqual(DEFAULT_SORT);
+  });
+
+  it("a tab's own part leaves the tab and the month out", () => {
+    const own = pickFilterUrl({ ...SETTLEMENT_URL_DEFAULTS, tab: "loan", month: "11", q: "asha" });
+    expect(own).toMatchObject({ q: "asha", status: "pending" });
+    expect(own).not.toHaveProperty("tab");
+    expect(own).not.toHaveProperty("month");
+  });
+});
+
+describe("exports per tab (owner 2026-11-20)", () => {
+  const headers = (tab: PageState["tab"]) => exportColumns(tab).map((c) => c.header);
+  const loanRow = adv({
+    advanceType: "term",
+    status: "approved",
+    employeeCode: "L1",
+    amount: 700,
+    requestedAmount: 1000,
+    emiAmount: 234,
+    repaymentMonths: 3,
+    repaymentStartMonth: 12,
+    repaymentStartYear: 2026,
+    totalRepaid: 234,
+    outstanding: 466,
+    decisionRemark: "Budget limit",
+    approvedBy: "HR Admin",
+    decidedAt: "2026-11-20T05:00:00Z",
+  });
+  const pendingLoan = adv({
+    advanceType: "term",
+    status: "pending",
+    employeeCode: "L2",
+    amount: 5000,
+    requestedAmount: 5000,
+  });
+  const rejectedAdvance = adv({
+    advanceType: "general",
+    status: "rejected",
+    employeeCode: "A1",
+    amount: 3000,
+    requestedAmount: 3000,
+    outstanding: 3000,
+    decisionRemark: "Already has one",
+    approvedBy: "HR Admin",
+    decidedAt: "2026-11-19T05:00:00Z",
+  });
+
+  it("Overview has every column the owner listed, in order", () => {
+    expect(headers("overview")).toEqual([
+      "Code",
+      "Employee",
+      "Department",
+      "Type",
+      "Requested amount",
+      "Approved amount",
+      "EMI / months",
+      "Deduction start",
+      "Repaid",
+      "Outstanding",
+      "Status",
+      "Decided by",
+      "Decided on",
+      "Remark",
+      "Applied on",
+      "Applied by",
+    ]);
+  });
+
+  it("Term Loan drops the type; Term Advance drops the type and the EMI (it is deducted once)", () => {
+    expect(headers("loan")).not.toContain("Type");
+    expect(headers("loan")).toContain("EMI / months");
+    expect(headers("loan")).toContain("Deduction start");
+    expect(headers("advance")).not.toContain("Type");
+    expect(headers("advance")).not.toContain("EMI / months");
+    expect(headers("advance")).toContain("Deducted in");
+    expect(headers("advance")).toHaveLength(14);
+  });
+
+  it("writes requested and approved apart, nothing approved or repaid on a waiting or rejected one, and the totals", () => {
+    const t = buildExport([loanRow, pendingLoan], page({ tab: "loan", period: { month: 11, year: 2026 } }), 3);
+    const col = (h: string) => t.columns.findIndex((c) => c.header === h);
+    expect(t.rows.map((r) => r[col("Code")])).toEqual(["L1", "L2"]);
+    expect(t.rows[0][col("Requested amount")]).toBe(1000);
+    expect(t.rows[0][col("Approved amount")]).toBe(700);
+    expect(t.rows[0][col("EMI / months")]).toBe("₹234 x 3 months");
+    expect(t.rows[0][col("Remark")]).toBe("Budget limit");
+    expect(t.rows[0][col("Decided on")]).toBe("20 Nov 2026");
+    expect(t.rows[1][col("Approved amount")]).toBe("");
+    expect(t.rows[1][col("Outstanding")]).toBe("");
+    expect(t.rows[1][col("Decided by")]).toBe("");
+    expect(t.totals[col("Employee")]).toBe("Total (2 term loans)");
+    expect(t.totals[col("Requested amount")]).toBe(6000);
+    expect(t.totals[col("Approved amount")]).toBe(700);
+    expect(t.totals[col("Outstanding")]).toBe(466);
+    expect(t.totals).toHaveLength(t.columns.length);
+    expect(t.title).toBe("Settlement - Term Loan - November 2026");
+    expect(t.subtitle).toBe("2 of 3 term loans");
+    expect(t.fileStem).toBe("Settlement_Term Loan_November 2026");
+    expect(t.sheet).toBe("Term Loan Nov 2026");
+  });
+
+  it("a rejected term advance keeps its reason and has nothing to recover", () => {
+    const t = buildExport([rejectedAdvance], page({ tab: "advance" }), 1);
+    const col = (h: string) => t.columns.findIndex((c) => c.header === h);
+    expect(t.rows[0][col("Status")]).toBe("Rejected");
+    expect(t.rows[0][col("Remark")]).toBe("Already has one");
+    expect(t.rows[0][col("Repaid")]).toBe("");
+    expect(t.rows[0][col("Outstanding")]).toBe("");
+    expect(t.totals[col("Outstanding")]).toBe(0);
+    expect(t.title).toBe("Settlement - Term Advance - All months");
+  });
+
+  it("the export is the list as shown: tab, month, filters, search and sort", () => {
+    const rows = [loanRow, pendingLoan, rejectedAdvance];
+    const s = page({
+      tab: "loan",
+      filters: { ...NO_FILTERS, status: "approved", query: "L1" },
+      sort: { key: "amount", dir: "asc" },
+    });
+    const v = pageView(rows, s);
+    const t = buildExport(v.shown, s, v.periodRows.length);
+    expect(t.rows).toHaveLength(1);
+    expect(t.subtitle).toBe('1 of 2 term loans · Status: Active · Search: "L1" · Sorted: Amount: low to high');
+  });
+
+  it("describes what narrows the list", () => {
+    expect(describeScope(page())).toBe("");
+    expect(
+      describeScope(
+        page({
+          period: { month: 11, year: 2026 },
+          basis: "deducted",
+          filters: {
+            ...NO_FILTERS,
+            type: "term",
+            department: "production|Cutting",
+            employee: "left",
+            to: "2026-11-30",
+          },
+        }),
+      ),
+    ).toBe(
+      "Deducted in the month · Type: Term loan · Department: Cutting (Production) · Employees who left · Raised to 30 Nov 2026",
+    );
+    // the type is the tab's own on Term Advance, so it is not repeated
+    expect(describeScope(page({ tab: "advance", filters: { ...NO_FILTERS, type: "term" } }))).toBe("");
   });
 });

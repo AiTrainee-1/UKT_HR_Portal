@@ -1,13 +1,15 @@
 """SMS one-time codes (2Factor): the settings row and the send log.
 
 Two tables (both new, nothing existing is touched):
-  SmsSettings    singleton (pk=1): which channel delivers the one-time codes (WhatsApp or SMS), and every SMS limit
+  SmsSettings    singleton (pk=1): SMS codes on or off (`otp_enabled`, independent of WhatsApp codes since 2026-11-20),
+                 what they may be used for, every SMS limit, and the price / budget of the cost estimate
   SmsMessageLog  one row per SMS attempt (sent, failed, or blocked by a cap / the circuit breaker). It NEVER holds the
                  code, the text, the API key or a full phone number: only the masked number and an HMAC of the number
                  (so the per-number limit can count by number across workers).
 
 The behaviour lives in api/sms_service.py (the send pipeline), api/twofactor_client.py (the HTTP
-call), api/otp_service.py (the channel switch) and api/sms_control_views.py (the HR page's API).
+call), api/otp_service.py (which channels are available for each purpose) and api/sms_control_views.py (the HR
+page's API). SMS carries one-time codes only.
 """
 
 from django.db import models
@@ -18,8 +20,10 @@ from .core import Employee
 
 
 class SmsSettings(models.Model):
-    """The SMS Control page's settings. `otp_channel` decides who delivers codes; while it is 'whatsapp' the three OTP
-    switches below do nothing (the WhatsApp Control switches keep ruling) and WhatsApp behaves exactly as before."""
+    """The SMS Control page's settings. `otp_enabled` is the SMS codes master switch and the three OTP switches say what
+    SMS codes may be used for; WhatsApp codes have their own switches (WhatsAppSettings), and either channel alone is
+    enough. `otp_channel` is DEPRECATED (2026-11-20, migration 0169 copied it into `otp_enabled`): never read, kept only
+    so no migration drops a column."""
 
     CHANNEL_WHATSAPP = "whatsapp"
     CHANNEL_SMS = "sms"

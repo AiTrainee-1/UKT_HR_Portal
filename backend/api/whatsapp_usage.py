@@ -569,6 +569,12 @@ def otp_summary(qs, s, month_start: date) -> dict:
         "templateStatus": status.get("templateStatus") or (None if choice.status == "MISSING" else choice.status),
         "expiryMinutes": int(s.otp_expiry_minutes),
         "templateExpiryMinutes": template_minutes,
+        # set up but held at this moment (Meta's account pause, failures at Meta, a code limit used up): password
+        # sign-in stays open meanwhile (otp_service)
+        "paused": bool(status.get("paused")),
+        "pauseReason": status.get("pauseReason"),
+        # {perEmployeePerDay, perNumberPerHour, hourlyCap, dailyCap, hourUsed, dayUsed}
+        "limits": status.get("limits"),
         "month": {
             "sent": sum(agg.get(k, 0) for k in ACCEPTED),
             "delivered": agg.get("delivered", 0) + agg.get("read", 0),
@@ -699,6 +705,15 @@ def alerts(s, connection: dict, month: dict, cost: dict, templates: dict, otp: d
                 "otp_template",
                 f"WhatsApp codes are on, but the code template {otp.get('templateName')} is {state}: employees get no "
                 "code by WhatsApp until Meta approves it (OTP tab).",
+            )
+        )
+    elif otp.get("enabled") and otp.get("available") and otp.get("paused"):
+        out.append(
+            _alert(
+                "warning",
+                "otp_paused",
+                f"WhatsApp codes are on hold: {otp.get('pauseReason') or 'they cannot be sent right now.'} Employees can "
+                "sign in with their password (or an SMS code) meanwhile.",
             )
         )
     template_minutes = otp.get("templateExpiryMinutes")

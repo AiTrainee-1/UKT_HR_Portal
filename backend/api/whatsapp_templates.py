@@ -21,7 +21,9 @@ them, and keeps the local mirror (WhatsAppTemplate) in step with Meta. It never 
     payload_for(clean, header_handle=None) -> dict          Meta's create-template body
     create(clean, user=None, s=None) -> (row, message)      submit to Meta (a REJECTED template is edited and
                                                             resubmitted under its Meta id), save the local row, point
-                                                            the message type at it when it has another name
+                                                            the message type at it when it has another name -at once
+                                                            when the type has no approved template, else once Meta
+                                                            approves it (adopt_if_approved: webhook or sync)
     create_missing(user=None, s=None) -> list[dict]         one draft submitted per switched-on type that has neither
                                                             an approved nor a pending template (a shared template, e.g.
                                                             hrms_otp, is submitted once); one result per type
@@ -222,7 +224,7 @@ def catalog_body(spec) -> tuple[str, list[str]]:
     body = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if not body:
         return "", notes
-    # An optional line that is nothing but a variable (WAClient dropped it when empty; a template can't drop a line)
+    # An optional line that is nothing but a variable (free text dropped it when empty; a template can't drop a line)
     # is flattened into a labelled line, so it never stands next to another variable and an empty value reads "Note: -".
     if not _PLACEHOLDER.fullmatch(body):
         flat = []
@@ -716,15 +718,34 @@ def _point_type_at(type_key: str, name: str, s) -> bool:
     return True
 
 
+def adopt_if_approved(row, before: str, s=None) -> bool:
+    """A template HR made for a message type (row.message_type) whose review just ended APPROVED (it was PENDING or
+    IN_APPEAL): that type goes out as it from now on. create() leaves a type on its approved template while the new one
+    is reviewed, so a new wording that Meta rejects (or takes a day over) never stops the type. Called by the webhook
+    and by sync() on every status change. True when the type was pointed at it."""
+    if not row.message_type or str(row.status or "").upper() != APPROVED or str(before or "").upper() not in IN_REVIEW:
+        return False
+    s = _settings(s)
+    if whatsapp_service.template_name_for(row.message_type, s) == row.name:
+        return False
+    return _point_type_at(row.message_type, row.name, s)
+
+
 def create(clean: dict, user=None, s=None) -> tuple:
     """Submit a validated template to Meta and save the local row. A REJECTED template of the same name and language
-    that Meta knows is edited and resubmitted instead (Meta keeps the name). Returns (row, message)."""
+    that Meta knows is edited and resubmitted instead (Meta keeps the name). Returns (row, message).
+
+    With `messageType` the template is made for that type. The type goes out as it at once when the type has no approved
+    template (nothing is lost) or Meta approved it at once; otherwise the type keeps its approved template until Meta
+    approves the new one (adopt_if_approved), so new wording never stops a working type for up to a day."""
     from .models import WhatsAppTemplate
 
     if not cloud.is_configured():
         raise TemplateError(not_configured_message())
     s = _settings(s)
     name, language = clean["name"], clean["language"]
+    type_key = clean.get("messageType") or ""
+    current = whatsapp_service.template_for(type_key, s) if catalog.get(type_key) is not None else None
     existing = WhatsAppTemplate.objects.filter(name=name, language=language).first()
     if existing is not None and existing.status.upper() in TAKEN:
         raise TemplateError(
@@ -775,8 +796,12 @@ def create(clean: dict, user=None, s=None) -> tuple:
                 "created_by": user if user is not None else (existing.created_by if existing else None),
             },
         )
-        if clean.get("messageType"):
-            _point_type_at(clean["messageType"], name, s)
+        keeps = None  # the approved template the type keeps going out as while this one is reviewed
+        if current is not None:
+            if status == APPROVED or current.problem is not None or current.name == name:
+                _point_type_at(type_key, name, s)
+            else:
+                keeps = current.name
     if category != clean["category"]:
         message = f"Submitted. Meta classified it as {category.title()}, not {clean['category'].title()}."
     elif status == APPROVED:
@@ -787,6 +812,10 @@ def create(clean: dict, user=None, s=None) -> tuple:
         message = (
             "Resubmitted" if resubmit else "Submitted"
         ) + " to Meta for approval: usually minutes, at most 24 hours."
+    if keeps and status != "REJECTED":
+        message += f" {catalog.label(type_key)} keeps going out as {keeps} until Meta approves {name}."
+    elif keeps:
+        message += f" {catalog.label(type_key)} keeps going out as {keeps}."
     return row, message
 
 
@@ -883,11 +912,13 @@ def sync(now=None) -> dict:
                 )
                 created += 1
             else:
+                before = str(row.status or "").upper()
                 for k, v in fields.items():
                     setattr(row, k, v)
                 if not row.message_type and uses.get(name):
                     row.message_type = uses[name][0]
                 row.save()
+                adopt_if_approved(row, before, s)
                 updated += 1
         gone = 0
         for row in WhatsAppTemplate.objects.exclude(status__in=NOT_AT_META):

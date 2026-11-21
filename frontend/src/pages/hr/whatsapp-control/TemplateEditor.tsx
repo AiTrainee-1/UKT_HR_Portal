@@ -31,11 +31,14 @@ const LANGUAGES = [
   { value: "ta", label: "Tamil" },
 ];
 
+// The server refuses Marketing (UK Textiles HRMS sends no promotions), so it is never offered here; a synced Marketing
+// template still shows its category on the Templates list.
 const CATEGORIES = [
   { value: "UTILITY", label: "Utility", help: "About the employee's own work (₹0.115 a message)." },
   { value: "AUTHENTICATION", label: "Authentication", help: "One-time codes only; Meta writes the text." },
-  { value: "MARKETING", label: "Marketing", help: "Promotions (₹0.86 a message). The HRMS sends none." },
 ];
+const offeredCategory = (value: string): string =>
+  CATEGORIES.some((c) => c.value === value.toUpperCase()) ? value : "UTILITY";
 
 const HEADERS: { value: WhatsAppTemplateHeader; label: string }[] = [
   { value: "", label: "None" },
@@ -82,7 +85,7 @@ function EditorForm({
   const create = useCreateMetaTemplate();
   const [name, setName] = useState(draft.name);
   const [language, setLanguage] = useState(draft.language);
-  const [category, setCategory] = useState(draft.category);
+  const [category, setCategory] = useState(() => offeredCategory(draft.category));
   const [header, setHeader] = useState<WhatsAppTemplateHeader>(draft.header);
   const [body, setBody] = useState(draft.body);
   const [footer, setFooter] = useState(draft.footer);
@@ -203,6 +206,7 @@ function EditorForm({
             <p className="text-[11px] text-muted-foreground">
               {CATEGORIES.find((c) => c.value === category.toUpperCase())?.help}
             </p>
+            <FieldError text={errors.category} testId="wa-tpl-category-error" />
           </div>
           {!isAuth && (
             <div className="space-y-1">

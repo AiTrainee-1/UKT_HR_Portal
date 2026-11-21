@@ -84,7 +84,12 @@ export function GenerateDialog({
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-lg" data-testid="staff-generate-dialog">
+      {/* Never taller than the window (owner 2026-11-20: the dialog was cut off on a laptop screen): the title and the
+          buttons stay in view, only the part between them scrolls. */}
+      <DialogContent
+        className="flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-1.5rem)] max-w-lg flex-col gap-4 sm:w-full"
+        data-testid="staff-generate-dialog"
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Play size={16} className="text-indigo-600" /> Generate Staff Payroll
@@ -94,7 +99,7 @@ export function GenerateDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-1">
+        <div className="-mx-6 min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-1" data-testid="staff-generate-body">
           <div className="grid grid-cols-2 gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Month</Label>

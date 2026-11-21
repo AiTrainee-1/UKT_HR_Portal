@@ -13,6 +13,7 @@ import {
   Play,
   RefreshCw,
   SearchX,
+  UserMinus,
   Users,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -25,6 +26,7 @@ import { EmptyNote, PayrollLoader, SectionCard } from "@/components/payroll/kit/
 import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
 import { ViewSwitch, type ViewOption } from "@/components/payroll/kit/ViewSwitch";
+import { NotIncludedView, notIncludedCount } from "@/components/payroll/not-included";
 import {
   ALL,
   DEFAULT_FILTERS,
@@ -56,6 +58,7 @@ import {
   useListProductionPayroll,
   usePayrollIssues,
   usePayrollRules,
+  usePeriodNotIncluded,
   useProductionPeriodStatus,
   useProductionPeriodWorkflow,
   type CyclePeriod,
@@ -89,14 +92,16 @@ const VIEW_KEY: Record<ProductionView, string> = {
   records: "production_payroll.payroll.records",
   issues: "production_payroll.payroll.issues",
   skipped: "production_payroll.payroll.skipped",
+  not_included: "production_payroll.payroll.not_included",
   rules: "production_payroll.payroll.rules",
   moved: "production_payroll.payroll.moved_out",
 };
 
 /**
  * Payroll tab of a cycle page: the actions (Generate, Skipped Employees, Payroll Done / Payment Pending / Paid, Export,
- * bank file), the period's timeline (no dashboard of tiles and charts: owner 2026-11-16), its New Joiners and its five
- * views - Records, Issues, Skipped, Rules and Moved out - all about the one pay period the page chose and the workers on this cycle. Like Staff Payroll's: the
+ * bank file), the period's timeline (no dashboard of tiles and charts: owner 2026-11-16), its New Joiners and its six
+ * views - Records, Issues, Skipped, Not included (2026-11-20: everyone not in the period's payroll, and why), Rules and
+ * Moved out - all about the one pay period the page chose and the workers on this cycle. Like Staff Payroll's: the
  * records are a table by default, listed one department at a time, and Export is the printed Production Salary Statement
  * (Excel / PDF) of the Report Center. The period workflow (owner 2026-11-16): a period is generated only once it has
  * ended; New Joiners wait until added; Payroll Done locks the period for good; Mark as Paid records the paid day.
@@ -160,6 +165,8 @@ export function PayrollTab({
   const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
   const issuesQuery = usePayrollIssues(canSee("issues") ? scope : null);
   const rulesQuery = usePayrollRules(canSee("rules") ? scope : null);
+  // who is not in the period's payroll: its count on the view switch (the view reads the same cached answer)
+  const notIncludedQuery = usePeriodNotIncluded(scope, canSee("not_included"));
 
   const issues = issuesQuery.data;
   const issueIndex = useMemo(() => buildIssueIndex(issues?.issues ?? []), [issues]);
@@ -230,6 +237,13 @@ export function PayrollTab({
         icon: CircleSlash,
         count: status.isLoading ? null : skippedCount,
         tone: "warning",
+      },
+      {
+        value: "not_included",
+        label: "Not included",
+        icon: UserMinus,
+        // what the view lists when it opens: production employees (staff are paid on the Staff Payroll)
+        count: notIncludedQuery.isLoading ? null : (notIncludedCount(notIncludedQuery.data, "production") ?? undefined),
       },
       { value: "rules", label: "Rules", icon: BookOpenCheck },
       { value: "moved", label: "Moved out", icon: LogOut },
@@ -481,6 +495,15 @@ export function PayrollTab({
           periodLabel={periodLabel}
           kind="production"
           accent="amber"
+        />
+      ) : view === "not_included" ? (
+        <NotIncludedView
+          scope={scope}
+          periodLabel={`${info.label} ${periodLabel}`}
+          url={url}
+          setUrl={setUrl}
+          onOpenPayroll={(payrollId) => openPayrollDetails(navigate, "production", payrollId)}
+          onGenerate={mayGenerate && !generateBlocked && status.data ? () => setShowGenerate(true) : undefined}
         />
       ) : view === "moved" ? (
         <MovedOutView cycle={cycle} onOpenDetails={(id) => openPayrollDetails(navigate, "production", id)} />

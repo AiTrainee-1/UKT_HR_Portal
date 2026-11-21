@@ -22,6 +22,8 @@ import {
   groupTestTypes,
   limitError,
   metaErrorHelp,
+  missingTemplateRows,
+  offReasonText,
   moneyError,
   monthLabel,
   numberStatusInfo,
@@ -175,6 +177,30 @@ describe("Meta's words for the number's health", () => {
     expect(alertTab(a("warning", "", "The webhook has not been heard from"))).toBe("config");
     expect(alertTab(a("info", "quality_drop", "Quality fell to medium"))).toBeNull();
   });
+
+  it("sends every alert the server raises to the tab that fixes it, by its code before its words", () => {
+    const a = (code: string, message = "x"): WhatsAppAlert => ({ level: "warning", code, message });
+    // the server's exact sentence mentions "template approvals", but the webhook address is on Settings
+    const never =
+      "Meta's webhook has never reached this server: delivery and read ticks, template approvals and STOP replies " +
+      "are not recorded. Paste the webhook address from Settings into Meta.";
+    expect(alertTab(a("webhook_never", never))).toBe("config");
+    expect(alertTab(a("webhook_stale", "No word from Meta's webhook since 01 Nov 2026 10:00"))).toBe("config");
+    expect(alertTab(a("token_invalid", "Meta refused the access token: template x"))).toBe("config");
+    expect(alertTab(a("engine_off", "The master switch is OFF: no WhatsApp message is sent, codes included."))).toBe(
+      "controls",
+    );
+    expect(alertTab(a("queue_paused", "Sending is paused: template"))).toBe("controls");
+    expect(alertTab(a("otp_paused", "WhatsApp codes are on hold"))).toBe("otp");
+    expect(alertTab(a("otp_expiry_mismatch", "The code template tells employees"))).toBe("otp");
+    expect(alertTab(a("templates_missing", "3 switched-on message types have no template"))).toBe("templates");
+    expect(alertTab(a("template_quality", "hrms_x has low quality"))).toBe("templates");
+    expect(alertTab(a("budget_projected_over", "At this pace"))).toBe("usage");
+    expect(alertTab(a("failures", "7 messages failed this month: see Messages for Meta's reasons."))).toBe("messages");
+    // a code a newer server may add: its family, else its words
+    expect(alertTab(a("template_flagged", "Meta flagged it"))).toBe("templates");
+    expect(alertTab(a("something_new", "Check the webhook"))).toBe("config");
+  });
 });
 
 describe("templates", () => {
@@ -199,6 +225,36 @@ describe("templates", () => {
     expect(templateNameFor("otp_reset", {}, null)).toBe("hrms_otp");
     expect(templateNameFor("absent_alert", {}, templates)).toBe("hrms_absent_alert");
     expect(templateNameFor("visitor_contact", {}, templates)).toBeNull();
+  });
+
+  it("knows the catalog's default names that are not hrms_<type> (backend whatsapp_catalog meta_template)", () => {
+    for (const [type, name] of Object.entries({
+      four_punch_alert: "hrms_punch_reminder",
+      other: "hrms_document",
+      visitor_notification: "hrms_visitor_at_reception",
+      outpass_gate_out: "hrms_gate_out",
+      outpass_gate_in: "hrms_gate_in",
+      otp_activate: "hrms_otp",
+    }))
+      expect(templateNameFor(type, {}, []), type).toBe(name);
+    // a template deleted at Meta no longer serves the type: the default name is shown, not hrms_<type>
+    const { templates } = readMetaTemplates({
+      templates: [{ id: 1, name: "hrms_punch_reminder", status: "DELETED", messageTypes: ["four_punch_alert"] }],
+    });
+    expect(templateNameFor("four_punch_alert", {}, templates)).toBe("hrms_punch_reminder");
+  });
+
+  it("takes the server's own resolution of a type's template when it has one", () => {
+    const server = {
+      four_punch_alert: { templateName: "hrms_punch_reminder_v2", switches: [] },
+      visitor_contact: { templateName: null, switches: [] },
+    };
+    expect(templateNameFor("four_punch_alert", { four_punch_alert: "stale_choice" }, [], server)).toBe(
+      "hrms_punch_reminder_v2",
+    );
+    expect(templateNameFor("visitor_contact", {}, [], server)).toBeNull();
+    // a type the server did not list: the page's own fallback
+    expect(templateNameFor("outpass_gate_in", {}, [], server)).toBe("hrms_gate_in");
   });
 
   it("finds the best row of a name (approved before rejected)", () => {
@@ -245,7 +301,10 @@ describe("templates", () => {
     ).toContain("One line");
     expect(checkTemplate({ ...ok, footer: "x".repeat(61) }).errors.footer).toContain("60");
     expect(checkTemplate({ ...ok, body: "Hi {{a}}, {{b}} ok" }).warnings[0]).toContain("Few fixed words");
-    expect(checkTemplate({ ...ok, category: "MARKETING" }).warnings[0]).toContain("Marketing");
+    // the server refuses Marketing: a blocking error, never a warning that still lets Submit go
+    expect(checkTemplate({ ...ok, category: "MARKETING" }).errors.category).toContain("Utility");
+    expect(checkTemplate({ ...ok, category: "marketing" }).errors.category).toBeDefined();
+    expect(checkTemplate(ok).errors.category).toBeUndefined();
     // a code template's text is Meta's: only the name is checked
     expect(checkTemplate({ ...ok, category: "AUTHENTICATION", body: "" })).toEqual({ errors: {}, warnings: [] });
   });
@@ -335,25 +394,146 @@ describe("Message Controls: every type with its switch, template and count", () 
     // the attendance section switch is OFF
     expect(rows.late_alert).toMatchObject({ templateState: "rejected", off: "module" });
     expect(rows.visitor_notification).toMatchObject({ templateState: "pending", off: "template" });
-    expect(rows.visitor_contact).toMatchObject({ templateName: null, templateState: "none", off: "own" });
+    // never sent through Meta: that comes first, whatever its switch says
+    expect(rows.visitor_contact).toMatchObject({ templateName: null, templateState: "none", off: "none" });
+    expect(rows.visitor_contact.switchedOn).toBe(false);
   });
 
   it("puts the engine and the OTP master first, and reads no template status while templates can't be read", () => {
     const off = controlSections({ ...settings, engineEnabled: false }, templates, null).flatMap((s) => s.types);
-    expect(off.every((r) => r.off === "engine")).toBe(true);
+    expect(off.filter((r) => r.type !== "visitor_contact").every((r) => r.off === "engine")).toBe(true);
+    expect(off.find((r) => r.type === "visitor_contact")!.off).toBe("none");
     const noOtp = controlSections({ ...settings, otpEnabled: false }, templates, null).flatMap((s) => s.types);
     expect(noOtp.find((r) => r.type === "otp_login")!.off).toBe("otp");
     const blind = controlSections(settings, null, null).flatMap((s) => s.types);
     expect(blind.find((r) => r.type === "id_card")).toMatchObject({ templateState: null, off: null, monthCount: null });
   });
 
-  it("sums up what goes out", () => {
+  it("sums up what goes out, leaving out a type that is never sent", () => {
     expect(controlSummary(controlSections(settings, templates, byType))).toEqual({
-      total: 10,
+      total: 9,
       live: 3,
-      off: 4,
+      off: 3,
       noTemplate: 3,
     });
+  });
+});
+
+describe("Message Controls: the switches a type shares, and what the server says about each type", () => {
+  const tpl = (name: string, types: string[], status = "APPROVED") => ({
+    id: name.length,
+    name,
+    language: "en",
+    category: "UTILITY",
+    status,
+    messageTypes: types,
+    components: [],
+  });
+  const f = (key: string, group: string, enabled = true) => ({ key, group, label: key, description: "", enabled });
+  const geoSettings = (geoOn: boolean) =>
+    readWhatsAppSettings({
+      engineEnabled: true,
+      otpEnabled: true,
+      groups: [{ key: "geo", title: "Geo Attendance", blurb: "" }],
+      features: [f("geoApprovalEnabled", "geo", geoOn), f("type:geo_approval", "geo"), f("type:geo_rejection", "geo")],
+      templateOverrides: {},
+    });
+  const geoTemplates = readMetaTemplates({
+    templates: [tpl("hrms_geo_approval", ["geo_approval"]), tpl("hrms_geo_rejection", ["geo_rejection"])],
+  }).templates;
+
+  it("holds the geo types while their shared switch is OFF, and names it", () => {
+    const rows = controlSections(geoSettings(false), geoTemplates, null)[0].types;
+    expect(rows.map((r) => r.off)).toEqual(["shared", "shared"]);
+    expect(rows[0].offBy?.key).toBe("geoApprovalEnabled");
+    expect(offReasonText(rows[0])).toBe("Held: \u201cgeoApprovalEnabled\u201d is OFF.");
+    expect(rows.every((r) => !r.switchedOn)).toBe(true);
+    expect(controlSummary(controlSections(geoSettings(false), geoTemplates, null)).live).toBe(0);
+    expect(controlSummary(controlSections(geoSettings(true), geoTemplates, null)).live).toBe(2);
+  });
+
+  it("holds both punch reminders while the 4-punch switch is OFF, inside an ON section", () => {
+    const settings = readWhatsAppSettings({
+      engineEnabled: true,
+      otpEnabled: true,
+      groups: [{ key: "attendance", title: "Attendance", blurb: "" }],
+      features: [
+        f("attendanceAlertsEnabled", "attendance"),
+        f("fourPunchAlertEnabled", "attendance", false),
+        f("type:four_punch_alert", "attendance"),
+        f("type:on_duty_punch_reminder", "attendance"),
+      ],
+      templateOverrides: {},
+    });
+    const templates = readMetaTemplates({
+      templates: [
+        tpl("hrms_punch_reminder", ["four_punch_alert"]),
+        tpl("hrms_on_duty_punch_reminder", ["on_duty_punch_reminder"]),
+      ],
+    }).templates;
+    const sections = controlSections(settings, templates, null);
+    expect(sections[0].types.map((r) => [r.type, r.off])).toEqual([
+      ["four_punch_alert", "shared"],
+      ["on_duty_punch_reminder", "shared"],
+    ]);
+    expect(controlSummary(sections).live).toBe(0);
+  });
+
+  it("follows the switches the server lists for a type (settings.messageTypes)", () => {
+    const settings = readWhatsAppSettings({
+      engineEnabled: true,
+      otpEnabled: true,
+      groups: [{ key: "outpass", title: "Outpass", blurb: "" }],
+      features: [f("someNewGateSwitch", "outpass", false), f("type:outpass_gate_in", "outpass")],
+      templateOverrides: {},
+      messageTypes: {
+        outpass_gate_in: { templateName: "hrms_gate_in", switches: ["someNewGateSwitch", "type:outpass_gate_in"] },
+      },
+    });
+    const templates = readMetaTemplates({ templates: [tpl("hrms_gate_in", ["outpass_gate_in"])] }).templates;
+    const row = controlSections(settings, templates, null)[0].types[0];
+    expect(row).toMatchObject({ templateName: "hrms_gate_in", templateState: "approved", off: "shared" });
+    expect(row.offBy?.key).toBe("someNewGateSwitch");
+  });
+
+  it("never counts a type that no Meta template can carry, and names why", () => {
+    const settings = readWhatsAppSettings({
+      engineEnabled: true,
+      otpEnabled: true,
+      groups: [{ key: "visitors", title: "Visitors", blurb: "" }],
+      features: [f("visitorNotificationEnabled", "visitors"), f("type:visitor_contact", "visitors")],
+      templateOverrides: {},
+    });
+    const sections = controlSections(settings, [], null);
+    const row = sections[0].types[0];
+    expect(row).toMatchObject({ type: "visitor_contact", templateState: "none", off: "none", switchedOn: false });
+    expect(offReasonText(row)).toContain("Not sent");
+    expect(controlSummary(sections)).toEqual({ total: 0, live: 0, off: 0, noTemplate: 0 });
+  });
+
+  it("lists as missing exactly what the server's Create all missing submits", () => {
+    const base = settingsFixture();
+    const templates = readMetaTemplates(metaTemplatesFixture()).templates;
+    const missing = (patch: Record<string, unknown>) =>
+      missingTemplateRows(controlSections(readWhatsAppSettings({ ...base, ...patch }), templates, null)).map(
+        (r) => r.type,
+      );
+    // id_card and approval_approved have none; late_alert is rejected but its section is OFF; visitor_notification is
+    // in review; otp_activate is switched off
+    expect(missing({})).toEqual(["id_card", "approval_approved"]);
+    // the code types need the WhatsApp OTP master too
+    const noOtpTemplate = readMetaTemplates({
+      templates: metaTemplatesFixture().templates.filter((t) => t.name !== "hrms_otp"),
+    }).templates;
+    const codes = (otpEnabled: boolean) =>
+      missingTemplateRows(controlSections(readWhatsAppSettings({ ...base, otpEnabled }), noOtpTemplate, null)).map(
+        (r) => r.type,
+      );
+    expect(codes(true)).toContain("otp_login");
+    expect(codes(true).filter((t) => t.startsWith("otp_"))).toEqual(["otp_login"]); // one shared template, once
+    expect(codes(false).some((t) => t.startsWith("otp_"))).toBe(false);
+    // the engine is left aside: templates are prepared before sending starts
+    expect(missing({ engineEnabled: false })).toEqual(["id_card", "approval_approved"]);
   });
 });
 

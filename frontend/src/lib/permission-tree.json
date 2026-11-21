@@ -228,6 +228,14 @@
               "enforce": "server"
             },
             {
+              "key": "employees.factory",
+              "label": "Factory Employees",
+              "type": "page",
+              "help": "Drivers, housekeeping, chefs, security and other factory support staff: their labels, and the list. Editing, departments, designations, shifts and pay cycles there still need their own rights.",
+              "routes": ["/hr/employees/factory-emp"],
+              "enforce": "server"
+            },
+            {
               "key": "employees.departments",
               "label": "Departments",
               "type": "page",
@@ -1241,6 +1249,13 @@
               "enforce": "server"
             },
             {
+              "key": "payroll.not_included",
+              "label": "Payroll - Not included",
+              "type": "view",
+              "help": "Every employee who is not in the month's payroll, and why.",
+              "enforce": "server"
+            },
+            {
               "key": "payroll.generate",
               "label": "Generate payroll",
               "type": "feature",
@@ -1256,9 +1271,9 @@
             },
             {
               "key": "payroll.adjust",
-              "label": "Adjust bonus / deductions",
+              "label": "Adjust deductions / notes",
               "type": "feature",
-              "help": "Change one employee's bonus, deductions or notes.",
+              "help": "Change one employee's deductions or notes.",
               "enforce": "screen"
             },
             {
@@ -1271,9 +1286,9 @@
             },
             {
               "key": "salary",
-              "label": "Salary",
+              "label": "Excess",
               "type": "tab",
-              "help": "The Salary tab: the month's salary statement.",
+              "help": "The Excess tab (was Salary): amounts HR adds to (Excess) or takes off (Detection) an employee's earned salary for the month, with a remark, and their history. Edit = add, change and remove.",
               "own": true,
               "enforce": "server"
             },
@@ -1368,6 +1383,13 @@
                   "type": "view",
                   "help": "Workers who moved from this cycle to another, with what this cycle paid them.",
                   "enforce": "server"
+                },
+                {
+                  "key": "production_payroll.payroll.not_included",
+                  "label": "Not included",
+                  "type": "view",
+                  "help": "Every employee who is not in the period's payroll, and why.",
+                  "enforce": "server"
                 }
               ]
             },
@@ -1401,9 +1423,9 @@
             },
             {
               "key": "production_payroll.adjust",
-              "label": "Adjust bonus / deductions",
+              "label": "Adjust deductions / notes",
               "type": "feature",
-              "help": "Change one worker's bonus, deductions or notes on a pay period that is not finalized.",
+              "help": "Change one worker's deductions or notes on a pay period that is not finalized (the bonus is the Excess tab).",
               "enforce": "server"
             },
             {
@@ -1415,9 +1437,9 @@
             },
             {
               "key": "production_payroll.salary",
-              "label": "Salary tab (every cycle)",
+              "label": "Excess tab (every cycle)",
               "type": "tab",
-              "help": "The period's salary statement.",
+              "help": "The Excess tab (was Salary): amounts HR adds to (Excess) or takes off (Detection) a worker's earned salary for the period, with a remark, and their history. Edit = add, change and remove.",
               "enforce": "server"
             },
             {
@@ -1425,7 +1447,7 @@
               "label": "Payslip tab (every cycle)",
               "type": "tab",
               "help": "The period's payslips (their data also needs Staff Payroll -> Payslip).",
-              "enforce": "screen"
+              "enforce": "server"
             },
             {
               "key": "production_payroll.generate",

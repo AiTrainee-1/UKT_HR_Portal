@@ -174,7 +174,9 @@ describe("filters", () => {
     code: "50011",
     category: "production",
     departmentId: 9,
+    department: "STITCHING",
     designationId: 11,
+    designation: "TAILOR",
     branchId: 2,
     monthlySalary: null,
     salaryPerShift: 650,
@@ -189,9 +191,11 @@ describe("filters", () => {
   it("filters by category, department, designation, unit, status and slip", () => {
     expect(matchesFilters(prod, f({ category: "production" }))).toBe(true);
     expect(matchesFilters(staff, f({ category: "production" }))).toBe(false);
-    expect(matchesFilters(prod, f({ department: "9" }))).toBe(true);
-    expect(matchesFilters(staff, f({ department: "9" }))).toBe(false);
-    expect(matchesFilters(prod, f({ designation: "11" }))).toBe(true);
+    // by name, any case: each unit has its own department of the same name
+    expect(matchesFilters(prod, f({ department: "stitching" }))).toBe(true);
+    expect(matchesFilters(staff, f({ department: "STITCHING" }))).toBe(false);
+    expect(matchesFilters(prod, f({ designation: "TAILOR" }))).toBe(true);
+    expect(matchesFilters(emp({ department: null }), f({ department: "ACCOUNTS" }))).toBe(false);
     expect(matchesFilters(staff, f({ unit: "2" }))).toBe(false);
     expect(matchesFilters(staff, f({ status: "active" }))).toBe(true);
     expect(matchesFilters(staff, f({ status: "inactive" }))).toBe(false);
@@ -201,11 +205,19 @@ describe("filters", () => {
   });
 
   it("round-trips through the address, unknown values falling back", () => {
-    const url = { q: "arun", cat: "production", dept: "9", desig: ALL, unit: "2", status: "bogus", slip: "generated" };
+    const url = {
+      q: "arun",
+      cat: "production",
+      dept: "STITCHING",
+      desig: ALL,
+      unit: "2",
+      status: "bogus",
+      slip: "generated",
+    };
     expect(filtersFromUrl(url)).toEqual({
       search: "arun",
       category: "production",
-      department: "9",
+      department: "STITCHING",
       designation: ALL,
       unit: "2",
       status: "all",
@@ -242,18 +254,13 @@ describe("filters", () => {
     { id: 11, title: "TAILOR", category: "production" },
   ];
 
-  it("offers the departments and designations of the chosen category, telling twins apart", () => {
+  it("offers the departments and designations of the chosen category, once per name", () => {
     expect(departmentOptions(departments, "production")).toEqual([
-      { value: "12", label: "QUALITY" },
-      { value: "9", label: "STITCHING" },
+      { value: "QUALITY", label: "QUALITY" },
+      { value: "STITCHING", label: "STITCHING" },
     ]);
-    expect(departmentOptions(departments, "all").map((o) => o.label)).toEqual([
-      "ACCOUNTS",
-      "QUALITY (Production)",
-      "QUALITY (Staff)",
-      "STITCHING",
-    ]);
-    expect(designationOptions(designations, "staff")).toEqual([{ value: "5", label: "ACCOUNTANT" }]);
+    expect(departmentOptions(departments, "all").map((o) => o.label)).toEqual(["ACCOUNTS", "QUALITY", "STITCHING"]);
+    expect(designationOptions(designations, "staff")).toEqual([{ value: "ACCOUNTANT", label: "ACCOUNTANT" }]);
     expect(
       unitOptions([
         { id: 2, name: "Unit 2" },
@@ -266,17 +273,18 @@ describe("filters", () => {
   });
 
   it("drops a department or designation the new category does not offer", () => {
-    expect(changeCategory(f({ department: "3", designation: "5" }), "production", departments, designations)).toEqual({
+    const picked = f({ department: "ACCOUNTS", designation: "ACCOUNTANT" });
+    expect(changeCategory(picked, "production", departments, designations)).toEqual({
       category: "production",
       department: ALL,
       designation: ALL,
     });
-    expect(changeCategory(f({ department: "9" }), "production", departments, designations)).toEqual({
+    expect(changeCategory(f({ department: "stitching" }), "production", departments, designations)).toEqual({
       category: "production",
-      department: "9",
+      department: "stitching",
       designation: ALL,
     });
-    expect(changeCategory(f({ department: "3" }), "all", departments, designations).department).toBe("3");
+    expect(changeCategory(f({ department: "ACCOUNTS" }), "all", departments, designations).department).toBe("ACCOUNTS");
   });
 });
 

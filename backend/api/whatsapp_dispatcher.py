@@ -202,8 +202,9 @@ def error_code(error_message: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _account_pause(now: datetime) -> tuple[bool, str | None, datetime | None]:
-    """Paused when the last provider failure says the account cannot send and nothing was sent after it."""
+def _account_failure(now: datetime) -> tuple[str | None, datetime | None]:
+    """(why, when) while the last provider failure (in the last day) says the account itself cannot send and nothing was
+    sent after it; (None, None) otherwise."""
     M = _model()
     provider = Q()
     for prefix in PROVIDER_ERROR_PREFIXES:
@@ -216,14 +217,30 @@ def _account_pause(now: datetime) -> tuple[bool, str | None, datetime | None]:
         .first()
     )
     if last is None:
-        return False, None, None
+        return None, None
     code = error_code(last["error_message"])
     why = ACCOUNT_ERRORS.get(code) if code in cloud.ACCOUNT_CODES else None
     if why is None and code in cloud.ACCOUNT_CODES:
         why = cloud.friendly_error(code)
     if why is None or M.objects.filter(sent_at__gt=last["updated_at"]).exists():
+        return None, None
+    return why, last["updated_at"]
+
+
+def account_problem(now: datetime | None = None) -> str | None:
+    """Why the WhatsApp ACCOUNT cannot send (an expired token, a blocked / locked number, a payment problem ...: Meta's
+    last answer to a send said so and nothing was sent after it), or None. Unlike pause_state it stays set through the
+    probe that is allowed every ACCOUNT_PAUSE, until a message really goes out again: otp_service keeps password sign-in
+    and the open first-password setup available meanwhile. Nobody outside can bring this about."""
+    return _account_failure(now or timezone.now())[0]
+
+
+def _account_pause(now: datetime) -> tuple[bool, str | None, datetime | None]:
+    """Paused when the last provider failure says the account cannot send and nothing was sent after it."""
+    why, failed_at = _account_failure(now)
+    if why is None:
         return False, None, None
-    until = last["updated_at"] + ACCOUNT_PAUSE
+    until = failed_at + ACCOUNT_PAUSE
     if now >= until:
         return False, None, None  # time for one probe
     at = until.astimezone(FACTORY_TZ).strftime("%I:%M %p").lstrip("0")

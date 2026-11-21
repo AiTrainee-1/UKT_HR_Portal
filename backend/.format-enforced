@@ -595,3 +595,14 @@ api/salary_slip_center/bank_file.py
 api/salary_slip_center/views.py
 api/salary_slip_center/urls.py
 api/tests_salary_slip_center.py
+api/models/payroll_excess.py
+api/payroll_excess.py
+api/payroll_excess_views.py
+api/urls_payroll_excess.py
+api/tests_payroll_excess.py
+api/tests_otp_pauses.py
+api/models/factory.py
+api/factory_employee_views.py
+api/urls_factory_employees.py
+api/tests_factory_employees.py
+api/tests_settlement_decisions.py

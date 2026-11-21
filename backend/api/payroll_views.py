@@ -832,9 +832,18 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
     total_deductions = _d2(
         pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty + permission_penalty
     )
+    # The month's Excess / Detection entries (Staff Payroll -> Excess tab, payroll_excess.py; owner 2026-11-20): HR's
+    # amounts added to / taken off the earned salary, kept in their own table so every Generate / Generate again carries
+    # them. This used to be a hard-coded bonus of 0, so an amount HR had set on the payroll disappeared on a regeneration.
+    # Nothing else of the calculation changes.
+    from .payroll_excess import amounts_for as _excess_amounts, breakdown_json as _excess_json
+
+    excess = _excess_amounts(emp, month, year)
+    bonus_amount = excess.net
+
     # NET rounded UP to the next whole rupee (owner 2026-11-10): the stored net is what the statement prints and the bank
     # file pays, to the rupee. The ESI inside total_deductions is already a whole rupee (pf_esi.round_up_rupee).
-    net_salary = round_up_rupee(base_gross + ot_amount - total_deductions)
+    net_salary = round_up_rupee(base_gross + ot_amount + bonus_amount - total_deductions)
 
     # 9. Build breakdown JSON (full traceability)
     breakdown = {
@@ -924,6 +933,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             "inLatePool": bool(getattr(_settings, "early_out_penalty_in_late_pool", False)),
             "inPaidDays": True,
         },
+        # HR's Excess / Detection of the month (payroll_excess.py): their net is the payroll's bonus, inside netSalary
+        "excess": _excess_json(excess),
         "netSalary": float(net_salary),
     }
 
@@ -949,7 +960,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             deductions=total_deductions,
             tds_deduction=tds_deduction,
             tds_percent=statutory.tds_percent,
-            bonus=Decimal("0"),
+            bonus=bonus_amount,
             final_salary=net_salary,
             status=Payroll.STATUS_PAID if cleared else Payroll.STATUS_PENDING,
             notes=(
@@ -982,7 +993,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             hra=hra,
             allowances=allowances,
             incentives=Decimal("0"),
-            bonuses=Decimal("0"),
+            bonuses=bonus_amount,
             ot_amount=ot_amount,
             gross_salary=base_gross,
             pf_deduction=pf_deduction,
@@ -1207,8 +1218,15 @@ def _generate_production_payroll(
     advance_total, advance_details = _pending_advance_repayments(emp, month, year, again=again)
 
     total_deductions = _d2(pf_deduction + esi_deduction + tds_deduction + advance_total + late_penalty)
+    # The period's Excess / Detection entries (Production Payroll -> Excess tab, payroll_excess.py; owner 2026-11-20): HR's
+    # amounts added to / taken off the earned salary, kept in their own table so every Generate / Generate again carries
+    # them (the bonus used to be a hard-coded 0 here). Nothing else of the calculation changes.
+    from .payroll_excess import amounts_for_period as _excess_for_period, breakdown_json as _excess_json
+
+    excess = _excess_for_period(emp, period_start, period_end)
+    bonus_amount = excess.net
     # NET rounded UP to the next whole rupee, as on staff payroll (owner 2026-11-10)
-    net_salary = round_up_rupee(gross_amount - total_deductions)
+    net_salary = round_up_rupee(gross_amount + bonus_amount - total_deductions)
 
     # The days this row pays: the whole period on an ordinary run; after a pay-cycle change the period's unpaid days plus
     # any catch-up days (production_coverage.py). `periodDays` is always the period's own length.
@@ -1261,6 +1279,8 @@ def _generate_production_payroll(
             "lateSummary": late_summary,
             "total": float(total_deductions),
         },
+        # HR's Excess / Detection of the period (payroll_excess.py): their net is the payroll's bonus, inside netSalary
+        "excess": _excess_json(excess),
         "netSalary": float(net_salary),
     }
 
@@ -1290,7 +1310,7 @@ def _generate_production_payroll(
             deductions=total_deductions,
             tds_deduction=tds_deduction,
             tds_percent=statutory.tds_percent,
-            bonus=Decimal("0"),
+            bonus=bonus_amount,
             final_salary=net_salary,
             status=Payroll.STATUS_PAID if cleared else Payroll.STATUS_PENDING,
             notes=(
@@ -1313,7 +1333,7 @@ def _generate_production_payroll(
             hra=Decimal("0"),
             allowances=Decimal("0"),
             incentives=Decimal("0"),
-            bonuses=Decimal("0"),
+            bonuses=bonus_amount,
             ot_amount=Decimal("0"),
             gross_salary=gross_amount,
             pf_deduction=pf_deduction,
@@ -1977,6 +1997,10 @@ def patch_production_payroll(request: Request, p: Payroll) -> Response:
         deductions = _money_field(d, "deductions") if "deductions" in d else p.deductions
     except ValueError as exc:
         return _error(str(exc))
+    if bonus != (p.bonus or 0):
+        # A period's bonus is its Excess / Detection entries (Excess tab, payroll_excess.py, owner 2026-11-20): a bonus typed
+        # here would be gone on the next Generate again. The same value (an old client re-sending it) is accepted.
+        return _error("Add an excess or a detection on the Excess tab instead (a remark is required there).", 400)
     slip = SalarySlip.objects.filter(
         employee_id=p.employee_id, period_start=p.period_start, period_end=p.period_end
     ).first()
@@ -2038,6 +2062,15 @@ def payroll_detail(request: Request, pk: int) -> Response:
 
         if refused := hr_access.approval_refusal(request, "payroll_mark_cleared"):
             return refused
+    if "bonus" in d and month_workflow.is_staff_month_row(p):
+        # A staff month's bonus is its Excess / Detection entries (Excess tab, payroll_excess.py, owner 2026-11-20): a bonus
+        # typed here would be gone on the next Generate again. The same value (an old client re-sending it) is accepted.
+        try:
+            same = Decimal(str(d["bonus"])) == Decimal(str(p.bonus or 0))
+        except (ArithmeticError, TypeError, ValueError):
+            same = False
+        if not same:
+            return _error("Add an excess or a detection on the Excess tab instead (a remark is required there).", 400)
     if "status" in d:
         p.status = d["status"]
     if "bonus" in d:

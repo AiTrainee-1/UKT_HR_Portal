@@ -310,8 +310,22 @@ export type WhatsAppOtpSummary = {
   available: boolean;
   templateStatus: string | null;
   templateName: string | null;
+  /** Set up but held right now (Meta's account pause, failures at Meta, a code limit used up): password sign-in stays
+   *  open meanwhile. */
+  paused: boolean;
+  pauseReason: string | null;
+  /** The code limits in force and what is used of the global ones; null from an older server. */
+  limits: WhatsAppOtpLimits | null;
   /** This month's WhatsApp codes, when the server counts them. */
   month: { sent: number; delivered: number | null; verified: number | null } | null;
+};
+export type WhatsAppOtpLimits = {
+  perEmployeePerDay: number;
+  perNumberPerHour: number;
+  hourlyCap: number;
+  dailyCap: number;
+  hourUsed: number;
+  dayUsed: number;
 };
 
 export type WhatsAppOverview = {
@@ -407,6 +421,18 @@ export function readWhatsAppOverview(raw: unknown): WhatsAppOverview {
       available: o.available === true,
       templateStatus: strOrNull(o.templateStatus),
       templateName: strOrNull(o.templateName) ?? strOrNull(o.template),
+      paused: o.paused === true,
+      pauseReason: strOrNull(o.pauseReason),
+      limits: isRecord(o.limits)
+        ? {
+            perEmployeePerDay: num(o.limits.perEmployeePerDay),
+            perNumberPerHour: num(o.limits.perNumberPerHour),
+            hourlyCap: num(o.limits.hourlyCap),
+            dailyCap: num(o.limits.dailyCap),
+            hourUsed: num(o.limits.hourUsed),
+            dayUsed: num(o.limits.dayUsed),
+          }
+        : null,
       month: om ? { sent: num(om.sent), delivered: numOrNull(om.delivered), verified: numOrNull(om.verified) } : null,
     },
     queue: isRecord(r.queue) ? readWhatsAppQueue(r.queue) : null,
@@ -776,11 +802,22 @@ export type WhatsAppControlSettings = {
   quietHours: WhatsAppQuietHours | undefined;
   /** HR's choice of Meta template for a message type: {typeKey: templateName}. */
   templateOverrides: Record<string, string>;
+  /** What the server knows about every message type: the Meta template it goes out as and the switches it needs.
+   *  Empty from an older server (the page then falls back to its own mirror of the catalog). */
+  messageTypes: Record<string, WhatsAppMessageTypeInfo>;
   /** Rupees per delivered billable message, before GST, per Meta pricing category. */
   priceRates: Record<WhatsAppPricingCategory, number>;
   /** Rupees a month; null = no budget set. */
   monthlyBudget: number | null;
   updatedAt: string | null;
+};
+/** One message type as the server resolves it. */
+export type WhatsAppMessageTypeInfo = {
+  /** The Meta template it goes out as (HR's choice, else the catalog's default); null: never sent through Meta. */
+  templateName: string | null;
+  /** The keys of every switch that must be ON for it besides the engine, in order: the WhatsApp OTP master, its
+   *  section's master, a switch it shares with other types, its own switch. */
+  switches: string[];
 };
 /** A change carries only what changed: a feature key, a timing or queue limit, engineEnabled, otpEnabled, (part of)
  *  quietHours, templateOverrides, priceRates, monthlyBudget. */
@@ -799,6 +836,14 @@ export function readWhatsAppSettings(raw: unknown): WhatsAppControlSettings {
   const q = isRecord(r.quietHours) ? r.quietHours : null;
   const overrides: Record<string, string> = {};
   for (const [k, v] of Object.entries(rec(r.templateOverrides))) if (typeof v === "string" && v) overrides[k] = v;
+  const messageTypes: Record<string, WhatsAppMessageTypeInfo> = {};
+  for (const [k, v] of Object.entries(rec(r.messageTypes))) {
+    if (!isRecord(v)) continue;
+    messageTypes[k] = {
+      templateName: typeof v.templateName === "string" && v.templateName ? v.templateName : null,
+      switches: Array.isArray(v.switches) ? v.switches.filter((x): x is string => typeof x === "string" && !!x) : [],
+    };
+  }
   return {
     engineEnabled: r.engineEnabled !== false,
     otpEnabled: r.otpEnabled !== false,
@@ -837,6 +882,7 @@ export function readWhatsAppSettings(raw: unknown): WhatsAppControlSettings {
       ? { enabled: q.enabled === true, start: str(q.start) || "21:00", end: str(q.end) || "07:00" }
       : undefined,
     templateOverrides: overrides,
+    messageTypes,
     priceRates: readRates(r.priceRates),
     monthlyBudget: numOrNull(r.monthlyBudget),
     updatedAt: strOrNull(r.updatedAt),

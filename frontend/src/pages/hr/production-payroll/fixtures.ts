@@ -1,7 +1,13 @@
 import type {
   CycleSummary,
   EmployeeRules,
+  ExcessEntry,
+  NotIncludedEmployee,
   PayCycle,
+  PayrollExcessData,
+  ProductionNotIncluded,
+  ProductionPayslipRow,
+  ProductionPayslips,
   PayrollIssue,
   PayrollIssuesResponse,
   PayrollPeriodInfo,
@@ -451,3 +457,296 @@ export const skipCheckOf = (over: Partial<ProductionSkipCheck> = {}): Production
   skipped: [{ employeeId: 3, employeeCode: "PC-N1", name: "Esha Worker", reason: NO_RATE }],
   ...over,
 });
+
+// ── Excess, payslips and Not included (2026-11-20) ──
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const inPeriodOf = (period: { periodStart: string; periodEnd: string }) => (p: ProductionPayrollItem) =>
+  p.periodStart === period.periodStart && p.periodEnd === period.periodEnd;
+
+/** An Excess (or Detection) entry of WEEK on the Weekly cycle. */
+export const excessEntry = (id: number, employeeId: number, over: Partial<ExcessEntry> = {}): ExcessEntry => ({
+  id,
+  employeeId,
+  kind: "excess",
+  amount: 200,
+  remark: "Festival incentive approved by MD",
+  source: "manual",
+  createdBy: "HR",
+  createdAt: "2026-02-09T11:00:00+05:30",
+  updatedBy: "HR",
+  updatedAt: "2026-02-09T11:00:00+05:30",
+  cycle: "weekly",
+  periodStart: WEEK.periodStart,
+  periodEnd: WEEK.periodEnd,
+  ...over,
+});
+
+/**
+ * GET /api/production-payroll-excess/period, built like the server does: one department (Weaving) with every worker who has
+ * an entry in the period, the earned salary before (the payroll's gross) and after, and the picker's options (a worker
+ * without a rate cannot be picked).
+ */
+export function excessPeriodOf(
+  people: PeriodEmployee[],
+  entries: ExcessEntry[],
+  period: { periodStart: string; periodEnd: string },
+  opts: { cycle?: PayCycle; locked?: boolean; canEdit?: boolean } = {},
+): PayrollExcessData {
+  const cycle = opts.cycle ?? "weekly";
+  const mine = entries.filter((e) => e.periodStart === period.periodStart && e.periodEnd === period.periodEnd);
+  const payrolls = people
+    .flatMap((p) => (p.payroll ? [p.payroll as ProductionPayrollItem] : []))
+    .filter(inPeriodOf(period));
+  const rows = people
+    .filter((p) => mine.some((e) => e.employeeId === p.employeeId))
+    .map((p) => {
+      const own = mine.filter((e) => e.employeeId === p.employeeId).sort((a, b) => b.id - a.id);
+      const excess = round2(own.filter((e) => e.kind === "excess").reduce((s, e) => s + e.amount, 0));
+      const detection = round2(own.filter((e) => e.kind === "detection").reduce((s, e) => s + e.amount, 0));
+      const net = round2(excess - detection);
+      const payroll = payrolls.find((r) => r.employeeId === p.employeeId) ?? null;
+      return {
+        employeeId: p.employeeId,
+        code: p.employeeCode,
+        name: p.name,
+        designation: "Weaver",
+        department: p.departmentName,
+        excess,
+        detection,
+        net,
+        payrollId: payroll?.id ?? null,
+        inPayroll: !!payroll,
+        earnedSalary: payroll ? payroll.grossSalary : null,
+        earnedWithExcess: payroll ? round2(payroll.grossSalary + net) : null,
+        netPay: payroll ? payroll.finalSalary : null,
+        entries: own,
+      };
+    });
+  const sum = (key: "excess" | "detection" | "net") => round2(rows.reduce((s, r) => s + r[key], 0));
+  const label = `${LABEL[cycle]} ${formatPeriod(period)}`;
+  return {
+    cycle,
+    ...period,
+    periodLabel: label,
+    locked: !!opts.locked,
+    lockedMessage: opts.locked
+      ? `${label} is finalized (Payroll Done): no excess or detection can be added, changed or removed.`
+      : null,
+    payrollGenerated: payrolls.length > 0,
+    canEdit: opts.canEdit ?? true,
+    summary: {
+      employees: rows.length,
+      entries: mine.length,
+      excessTotal: sum("excess"),
+      detectionTotal: sum("detection"),
+      net: sum("net"),
+    },
+    departments:
+      rows.length > 0
+        ? [
+            {
+              departmentId: 4,
+              department: "Weaving",
+              unit: "HO",
+              employees: rows.length,
+              excessTotal: sum("excess"),
+              detectionTotal: sum("detection"),
+              net: sum("net"),
+              rows,
+            },
+          ]
+        : [],
+    employeeOptions: people.map((p) => ({
+      id: p.employeeId,
+      code: p.employeeCode,
+      name: p.name,
+      department: p.departmentName,
+      designation: "Weaver",
+      eligible: p.salaryPerShift !== null,
+      reason: p.salaryPerShift === null ? "No salary per shift on the profile" : null,
+    })),
+  };
+}
+
+/** GET /api/payslips/production: one payslip per payroll of the period, with the lines its PDF prints. */
+export function productionPayslipsOf(
+  people: PeriodEmployee[],
+  period: { periodStart: string; periodEnd: string },
+  opts: { cycle?: PayCycle; locked?: boolean; slips?: SalarySlipItem[]; excess?: ExcessEntry[] } = {},
+): ProductionPayslips {
+  const cycle = opts.cycle ?? "weekly";
+  const rows: ProductionPayslipRow[] = people.flatMap((p) => {
+    const payroll = p.payroll as ProductionPayrollItem | null;
+    if (!payroll || !inPeriodOf(period)(payroll)) return [];
+    const own = (opts.excess ?? []).filter(
+      (e) => e.employeeId === p.employeeId && e.periodStart === period.periodStart && e.periodEnd === period.periodEnd,
+    );
+    const excess = round2(own.filter((e) => e.kind === "excess").reduce((s, e) => s + e.amount, 0));
+    const detection = round2(own.filter((e) => e.kind === "detection").reduce((s, e) => s + e.amount, 0));
+    const slip = (opts.slips ?? []).find((s) => s.employeeCode === p.employeeCode) ?? null;
+    const earnings = [{ label: "Shift wages", amount: payroll.grossSalary }];
+    if (excess) earnings.push({ label: "Excess (added by HR)", amount: excess });
+    if (detection) earnings.push({ label: "Detection (taken off by HR)", amount: -detection });
+    return [
+      {
+        payrollId: payroll.id,
+        slipId: slip?.id ?? null,
+        hasSlip: !!slip,
+        employeeId: p.employeeId,
+        code: p.employeeCode,
+        name: p.name,
+        department: p.departmentName,
+        designation: "Weaver",
+        unit: "HO",
+        joinDate: "2025-04-21",
+        bankAccountMasked: null,
+        pfNumber: null,
+        esiNumber: null,
+        status: payroll.status,
+        paymentStatus: "unpaid",
+        salaryPerShift: p.salaryPerShift,
+        shifts: payroll.presentDays,
+        daysWorked: payroll.presentDays,
+        absent: payroll.absentDays,
+        earned: payroll.grossSalary,
+        ot: 0,
+        excess,
+        detection,
+        eSalary: round2(payroll.grossSalary + excess - detection),
+        pf: 0,
+        esi: 0,
+        tds: 0,
+        advance: payroll.deductions,
+        others: 0,
+        totalDeduction: payroll.deductions,
+        net: payroll.finalSalary,
+        earnings,
+        deductions: [{ label: "Advance", amount: payroll.deductions }],
+      },
+    ];
+  });
+  const sum = (key: "earned" | "excess" | "detection" | "totalDeduction" | "net") =>
+    round2(rows.reduce((s, r) => s + r[key], 0));
+  return {
+    cycle,
+    ...period,
+    periodLabel: `${LABEL[cycle]} ${formatPeriod(period)}`,
+    locked: !!opts.locked,
+    summary: {
+      employees: rows.length,
+      earned: sum("earned"),
+      excess: sum("excess"),
+      detection: sum("detection"),
+      deductions: sum("totalDeduction"),
+      net: sum("net"),
+    },
+    rows,
+  };
+}
+
+/** A staff employee and a BiWeekly worker: never in the Weekly payroll, whatever happens. */
+export const NOT_INCLUDED_OTHERS: NotIncludedEmployee[] = [
+  {
+    id: 90,
+    code: "S-1",
+    name: "Siva Staff",
+    category: "staff",
+    status: "active",
+    departmentId: 7,
+    department: "Accounts",
+    designationId: 8,
+    designation: "Accountant",
+    branchId: 1,
+    unit: "HO",
+    joinDate: "2024-06-01",
+    reasonCode: "staff",
+    reason: "Staff employee: paid on the Staff Payroll.",
+    detail: null,
+    payrollId: null,
+  },
+  {
+    id: 91,
+    code: "PC-B1",
+    name: "Banu Biweekly",
+    category: "production",
+    status: "active",
+    departmentId: 5,
+    department: "Stitching",
+    designationId: 9,
+    designation: "Tailor",
+    branchId: 1,
+    unit: "HO",
+    joinDate: "2025-01-10",
+    reasonCode: "other_cycle",
+    reason: "On the BiWeekly cycle: paid on that cycle's page.",
+    detail: "BiWeekly",
+    payrollId: null,
+  },
+];
+
+/**
+ * GET /api/payroll/production/not-included: the Weekly roster without a payroll in the period (no rate, or would be paid:
+ * generate again / not generated yet) plus the people who are never on it (a staff employee, a BiWeekly worker).
+ */
+export function notIncludedOf(
+  people: PeriodEmployee[],
+  period: { periodStart: string; periodEnd: string },
+  cycle: PayCycle = "weekly",
+): ProductionNotIncluded {
+  const payrolls = people
+    .flatMap((p) => (p.payroll ? [p.payroll as ProductionPayrollItem] : []))
+    .filter(inPeriodOf(period));
+  const generated = payrolls.length > 0;
+  const roster: NotIncludedEmployee[] = people
+    .filter((p) => !payrolls.some((r) => r.employeeId === p.employeeId))
+    .map((p) => {
+      const noRate = p.salaryPerShift === null;
+      return {
+        id: p.employeeId,
+        code: p.employeeCode,
+        name: p.name,
+        category: "production",
+        status: "active",
+        departmentId: 4,
+        department: p.departmentName,
+        designationId: 6,
+        designation: "Weaver",
+        branchId: 1,
+        unit: "HO",
+        joinDate: "2025-04-21",
+        reasonCode: noRate ? "no_salary" : "not_generated",
+        reason: noRate
+          ? "No salary per shift on the profile: payroll cannot work out the wages."
+          : "Would be paid: generate the payroll again to add the worker.",
+        detail: null,
+        payrollId: null,
+      };
+    });
+  const employees = [...roster, ...NOT_INCLUDED_OTHERS];
+  const byReason: Record<string, number> = {};
+  for (const e of employees) byReason[e.reasonCode] = (byReason[e.reasonCode] ?? 0) + 1;
+  return {
+    cycle,
+    ...period,
+    generated,
+    notGeneratedCount: generated ? 0 : roster.filter((e) => e.reasonCode === "not_generated").length,
+    summary: {
+      total: employees.length,
+      staff: employees.filter((e) => e.category === "staff").length,
+      production: employees.filter((e) => e.category === "production").length,
+      byReason,
+    },
+    employees,
+    departments: [
+      { id: 4, name: "Weaving" },
+      { id: 5, name: "Stitching" },
+      { id: 7, name: "Accounts" },
+    ],
+    designations: [
+      { id: 6, title: "Weaver" },
+      { id: 8, title: "Accountant" },
+      { id: 9, title: "Tailor" },
+    ],
+  };
+}

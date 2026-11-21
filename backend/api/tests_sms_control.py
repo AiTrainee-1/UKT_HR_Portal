@@ -156,6 +156,36 @@ class AccessTests(ControlBase):
             r = self.post("test", {"phone": "9876543210"}, editor)
         self.assertEqual((r.status_code, r.json()["ok"]), (200, True))
 
+    def test_each_value_needs_edit_on_its_settings_sub_tab(self):
+        role = Role.objects.create(
+            name="Limits only",
+            permissions={
+                "sms_control": "edit",
+                "sms_control.settings.switches": "view",
+                "sms_control.settings.cost": "hidden",
+            },
+        )
+        clerk = _hr("sms_clerk", super_admin=False, role=role)
+        for body, subtab in (
+            ({"otpEnabled": True}, "sms_control.settings.switches"),
+            ({"otpLoginEnabled": False}, "sms_control.settings.switches"),
+            ({"pricePerSms": 0.5}, "sms_control.settings.cost"),
+            ({"monthlyBudget": 100}, "sms_control.settings.cost"),
+            ({"hourlyCap": 50, "otpEnabled": True}, "sms_control.settings.switches"),  # all or nothing
+        ):
+            r = self.patch("settings", body, clerk)
+            self.assertEqual(
+                (r.status_code, r.json()["code"], r.json()["subtabs"]), (403, "permission_denied", [subtab])
+            )
+            self.assertIn("SMS Control -> Settings", r.json()["error"])
+        s = SmsSettings.get()
+        self.assertEqual((s.otp_enabled, s.otp_login_enabled, s.hourly_cap, s.price_per_sms), (False, True, 300, None))
+        # its own sub-tab saves, also when the page sends the whole section back with the other values unchanged
+        doc = self.get("settings").json()
+        r = self.put("settings", {**doc, "hourlyCap": 50}, clerk)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(SmsSettings.get().hourly_cap, 50)
+
     def test_a_role_without_the_module_is_locked_out_of_everything(self):
         role = Role.objects.create(name="Other", permissions={"payroll": "edit", "whatsapp_control": "edit"})
         other = _hr("sms_other", super_admin=False, role=role)
@@ -494,6 +524,7 @@ class OverviewTests(ControlBase):
                 "purposes": {"login": False, "reset": False, "activate": False},
                 "paused": False,
                 "pauseReason": None,
+                "accountProblem": None,
                 "devLock": {"active": False, "onlyToEmployees": []},
             },
         )
@@ -617,6 +648,19 @@ class OverviewTests(ControlBase):
         self.balance_read.side_effect = twofactor_client.TwoFactorError("auth", "2Factor did not accept the API key.")
         alerts = {a["code"]: a for a in self.get("overview").json()["alerts"]}
         self.assertIn("2Factor did not accept the API key.", alerts["balance_unknown"]["message"])
+
+    def test_an_account_that_refuses_is_an_alert_until_an_sms_goes_out_again(self):
+        self.sms_codes_on()
+        self.row(self.asha, "failed", error_code="auth")
+        body = self.get("overview").json()
+        self.assertIn("API key", body["status"]["accountProblem"])
+        alert = next(a for a in body["alerts"] if a["code"] == "account_problem")
+        self.assertEqual(alert["level"], "error")
+        self.assertIn("password", alert["message"])
+        self.row(self.asha, "sent")
+        body = self.get("overview").json()
+        self.assertIsNone(body["status"]["accountProblem"])
+        self.assertNotIn("account_problem", [a["code"] for a in body["alerts"]])
 
     def test_a_projected_overspend_is_warned_about_before_it_happens(self):
         today = timezone.now().astimezone(FACTORY_TZ).date()

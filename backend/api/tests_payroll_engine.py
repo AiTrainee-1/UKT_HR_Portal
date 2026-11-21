@@ -1278,6 +1278,7 @@ class PayrollEndpointTests(TestCase):
     def test_patch_recomputes_final_salary_from_bonus_and_deductions(self):
         self._generate()
         p = Payroll.objects.get(employee=self.emp)
+        Payroll.objects.filter(pk=p.pk).update(bonus=1500)  # set before the Excess tab (2026-11-20): only re-sent below
         r = self.client.patch(
             f"/api/payroll/{p.id}",
             {"bonus": 1500, "deductions": 500, "status": "paid"},

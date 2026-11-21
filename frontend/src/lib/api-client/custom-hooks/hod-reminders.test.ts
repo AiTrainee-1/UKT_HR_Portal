@@ -139,7 +139,14 @@ describe("readHodRun", () => {
     expect(readHodRunPage(undefined)).toEqual({ items: [], total: 0, page: 1, pageSize: 1 });
     expect(
       readHodPreview({ messages: [{ managerId: 1, name: "Ravi", pending: 2, text: "Hi" }, { name: "x" }] }),
-    ).toEqual([{ managerId: 1, name: "Ravi", pending: 2, text: "Hi" }]);
+    ).toEqual([{ managerId: 1, name: "Ravi", pending: 2, text: "Hi", whatsappText: null }]);
+    // the WhatsApp message is the approved template's text, sent alongside
+    expect(
+      readHodPreview({
+        messages: [{ managerId: 1, name: "Ravi", pending: 2, text: "Hi", whatsappText: "Dear Ravi, Leave 2" }],
+        whatsappTemplate: { name: "hrms_hod_pending_reminder", status: "APPROVED" },
+      })[0].whatsappText,
+    ).toBe("Dear Ravi, Leave 2");
   });
 });
 

@@ -99,6 +99,7 @@ class StaffEngineRoundingTests(TestCase):
         emp = _staff(code="RND_ADJ", salary="24000.00")
         _present_all(emp)
         p = _generate_staff_payroll(emp, MONTH, YEAR)["payroll"]
+        Payroll.objects.filter(pk=p.pk).update(bonus=Decimal("100.40"))  # set before the Excess tab (2026-11-20)
         r = self.client.patch(
             f"/api/payroll/{p.id}", data=json.dumps({"bonus": 100.40}), content_type="application/json", **_hr()
         )

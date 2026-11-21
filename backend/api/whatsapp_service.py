@@ -467,9 +467,11 @@ def template_for(document_type: str, s=None) -> TemplateChoice:
         problem = f"The WhatsApp template '{name}' is {status or 'not submitted'} at Meta, not approved yet: not sent."
         if status == "REJECTED" and row.rejected_reason:
             problem = f"The WhatsApp template '{name}' was rejected by Meta ({row.rejected_reason}): not sent."
-    return TemplateChoice(
-        document_type, name, row.language or language, status, (row.category or category).upper(), row, problem
-    )
+    # A row this server only knows from a webhook event has no components yet (Sync now fills them in): its category is
+    # the catalog's for the type, never a default guess (an AUTHENTICATION code sent as a Utility template is refused).
+    if row.components:
+        category = row.category or category
+    return TemplateChoice(document_type, name, row.language or language, status, category.upper(), row, problem)
 
 
 def template_problem(document_type: str, s=None) -> str | None:

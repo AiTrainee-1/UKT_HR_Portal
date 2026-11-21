@@ -1,18 +1,35 @@
-import { AlertTriangle, CheckCircle2, CheckCheck, Clock, History, Printer, Trash2, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  CheckCheck,
+  Clock,
+  History,
+  ListChecks,
+  MessageSquareText,
+  Printer,
+  RotateCcw,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAdvanceDetail, type AdvanceRepaymentItem } from "@/lib/api-client";
+import { useAdvanceDetail, type AdvanceDecisionItem, type AdvanceRepaymentItem } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import {
+  HISTORY_ACTION_LABEL,
   STATUS_LABEL,
   STATUS_TONE,
   TYPE_LABEL,
   appliedByEmployee,
-  approvedLess,
+  approvedOf,
+  decidedAtOf,
+  decidedByOf,
   hasLeft,
+  historyText,
   progressPct,
+  requestedOf,
   type SettlementRow,
 } from "./logic";
 import { Chip, InitialsAvatar, ProgressBar } from "./parts";
@@ -48,7 +65,57 @@ function Detail({ label, value }: { label: string; value: string | null | undefi
   );
 }
 
-/** One advance in full: what is owed, what is recovered, what is still scheduled, and every deduction. */
+const HISTORY_ICON: Record<AdvanceDecisionItem["action"], { icon: typeof CheckCircle2; tone: string }> = {
+  approved: { icon: CheckCircle2, tone: "bg-green-100 text-green-700" },
+  rejected: { icon: XCircle, tone: "bg-red-100 text-red-600" },
+  reopened: { icon: RotateCcw, tone: "bg-slate-100 text-slate-600" },
+};
+
+/** Every approval, rejection and reopening, newest first, with the amounts, the deduction month and the remark. */
+function DecisionHistory({ items, type }: { items: AdvanceDecisionItem[]; type: SettlementRow["advanceType"] }) {
+  return (
+    <section className="space-y-3" aria-label="Decision history" data-testid="advance-history">
+      <div className="flex items-center gap-2">
+        <ListChecks size={14} className="text-gray-400" />
+        <p className="text-xs font-bold uppercase tracking-wider text-gray-400">History ({items.length})</p>
+      </div>
+      {items.length === 0 ? (
+        <p className="py-3 text-center text-xs text-muted-foreground">Not approved or rejected yet.</p>
+      ) : (
+        <ol className="space-y-2">
+          {items.map((item) => {
+            const { title, detail } = historyText(item, type);
+            const { icon: Icon, tone } = HISTORY_ICON[item.action];
+            return (
+              <li
+                key={item.id}
+                className="flex gap-3 rounded-xl border border-gray-100 bg-white p-3"
+                data-testid={`advance-history-${item.id}`}
+              >
+                <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", tone)}>
+                  <Icon size={14} aria-label={HISTORY_ACTION_LABEL[item.action]} />
+                </div>
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <p className="text-sm font-semibold text-gray-900">{title}</p>
+                  {detail && <p className="text-xs text-gray-600">{detail}</p>}
+                  {item.remark && (
+                    <p className="break-words text-xs italic text-gray-700">&ldquo;{item.remark}&rdquo;</p>
+                  )}
+                  <p className="text-[11px] text-gray-400">
+                    {[item.by && `by ${item.by}`, item.at && formatDateTime(item.at)].filter(Boolean).join(" · ")}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+/** One advance in full: what was asked for and approved, what is recovered, what is still scheduled, every deduction and
+ *  every decision. */
 export default function DetailSheet({
   advanceId,
   onClose,
@@ -64,6 +131,7 @@ export default function DetailSheet({
   const deducted = repayments.filter((r) => r.isProcessed).length;
   // the part of what is owed that no deduction is lined up for
   const unscheduled = adv && adv.status === "approved" ? Math.max(0, adv.outstanding - scheduled) : 0;
+  const approved = adv ? approvedOf(adv) : null;
 
   return (
     <Sheet open={advanceId !== null} onOpenChange={(o) => !o && onClose()}>
@@ -108,6 +176,27 @@ export default function DetailSheet({
               </div>
             </SheetHeader>
 
+            {adv.status !== "pending" && (adv.decisionRemark ?? "").trim() && (
+              <div
+                className={cn(
+                  "flex items-start gap-2 rounded-xl border p-3 text-xs",
+                  adv.status === "rejected"
+                    ? "border-red-200 bg-red-50 text-red-900"
+                    : "border-slate-200 bg-slate-50 text-slate-800",
+                )}
+                data-testid="advance-decision-remark"
+              >
+                <MessageSquareText size={14} className="mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-semibold">
+                    {adv.status === "rejected" ? "Reason for rejecting" : "HR's remark"}
+                    {decidedByOf(adv) ? ` (${decidedByOf(adv)})` : ""}
+                  </p>
+                  <p className="break-words">{adv.decisionRemark}</p>
+                </div>
+              </div>
+            )}
+
             {hasLeft(adv) && adv.outstanding > 0 && adv.status === "approved" && (
               <div
                 className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
@@ -123,15 +212,26 @@ export default function DetailSheet({
 
             <section className="space-y-2" aria-label="Settlement breakdown">
               <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Breakdown</p>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="advance-figures">
+                <Figure label="Requested" value={formatMoney(requestedOf(adv))} tone="text-gray-800" />
                 <Figure
-                  label={adv.requestedAmount != null && adv.status !== "pending" ? "Approved" : "Amount"}
-                  value={formatMoney(adv.amount)}
-                  tone="text-blue-700"
+                  label="Approved"
+                  value={approved != null ? formatMoney(approved) : adv.status === "rejected" ? "Rejected" : "Waiting"}
+                  tone={approved != null && approved < requestedOf(adv) ? "text-amber-700" : "text-blue-700"}
                 />
                 <Figure label="Recovered" value={formatMoney(adv.totalRepaid)} tone="text-green-600" />
-                <Figure label="Outstanding" value={formatMoney(adv.outstanding)} tone="text-red-500" />
+                <Figure
+                  label="Outstanding"
+                  value={approved != null ? formatMoney(adv.outstanding) : "-"}
+                  tone="text-red-500"
+                />
               </div>
+              {approved != null && approved < requestedOf(adv) && (
+                <p className="text-xs font-medium text-amber-700" data-testid="advance-approved-less">
+                  {formatMoney(approved)} approved of the {formatMoney(requestedOf(adv))} asked for. Only the approved
+                  amount is deducted.
+                </p>
+              )}
               {(adv.status === "approved" || adv.status === "closed") && (
                 <>
                   <div className="space-y-1">
@@ -158,13 +258,10 @@ export default function DetailSheet({
 
             <dl className="space-y-1.5 rounded-xl bg-gray-50 p-3" aria-label="Advance details">
               <Detail label="Purpose" value={adv.purpose} />
-              {adv.requestedAmount != null && (
-                <Detail
-                  label="Asked for"
-                  value={`${formatMoney(adv.requestedAmount)}${approvedLess(adv) ? ` (approved ${formatMoney(adv.amount)})` : ""}`}
-                />
-              )}
-              {appliedByEmployee(adv) && <Detail label="Applied by" value="The employee, from the mobile app" />}
+              <Detail
+                label="Applied by"
+                value={appliedByEmployee(adv) ? "The employee, from the mobile app" : "HR (recorded here)"}
+              />
               {adv.salaryAtRequest != null && (
                 <Detail
                   label="Monthly salary when applying"
@@ -185,9 +282,9 @@ export default function DetailSheet({
                     : null
                 }
               />
-              <Detail label="Raised" value={adv.createdAt ? formatDateTime(adv.createdAt) : null} />
-              <Detail label="Decided by" value={adv.approvedBy} />
-              <Detail label="Decided on" value={adv.approvedAt ? formatDateTime(adv.approvedAt) : null} />
+              <Detail label="Applied on" value={adv.createdAt ? formatDateTime(adv.createdAt) : null} />
+              <Detail label="Decided by" value={decidedByOf(adv)} />
+              <Detail label="Decided on" value={decidedAtOf(adv) ? formatDateTime(decidedAtOf(adv)) : null} />
               <Detail label="Disbursed" value={adv.disbursedAt ? formatDate(adv.disbursedAt) : null} />
               <Detail label="Notes" value={adv.notes} />
               <Detail label="Phone" value={adv.employeePhone} />
@@ -319,6 +416,13 @@ export default function DetailSheet({
                 </ul>
               )}
             </section>
+
+            {adv.history && (
+              <>
+                <Separator />
+                <DecisionHistory items={adv.history} type={adv.advanceType} />
+              </>
+            )}
           </div>
         )}
       </SheetContent>

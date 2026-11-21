@@ -26,13 +26,13 @@ export type SlipCategory = "staff" | "production";
 /** The month's saved slip of one employee, in short. */
 export type SavedSlipSummary = {
   slipNumber: string;
-  generatedAt: string;
+  generatedAt: string | null;
   generatedBy: string | null;
   gross: number;
   deductions: number;
   net: number;
   /** Staff: paid days; production: total shifts. */
-  paidDays: number;
+  paidDays: number | null;
   options: SlipOptions;
   /** The last day counted (a month in progress is counted up to the day it was generated). */
   countedTo: string | null;

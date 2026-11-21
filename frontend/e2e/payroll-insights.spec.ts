@@ -2,8 +2,9 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import ExcelJS from "exceljs";
 import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 
-// The Staff Payroll page's insight views (dashboard, Issues, Skipped, Rules), the Salary Statement and the details page,
-// all read-only explanations of the payroll the engine already stored. Data (seed_e2e.py, February 2026, 24 Mon-Sat days):
+// The Staff Payroll page's insight views (dashboard, Issues, Skipped, Rules), the Salary Statement (the Payroll tab's Export;
+// the Salary tab is the Excess tab since 2026-11-20, see payroll-excess.spec.ts for it in full) and the details page, all
+// read-only explanations of the payroll the engine already stored. Data (seed_e2e.py, February 2026, 24 Mon-Sat days):
 //   Asha Kumar  E2E001 - 24,000, present all 24 days -> paid 24,000 (no shift assigned, no bank details)
 //   Ravi Nair   E2E002 - 30,000, present 12 days, absent 16-28 Feb (12 working days) -> paid 15,000
 //   Meena       E2E003 - no salary -> skipped at generation
@@ -162,192 +163,141 @@ test.describe("Rules and skipped employees", () => {
   });
 });
 
-test.describe("Salary Statement", () => {
-  test("shows the printed statement for the month, grouped by department, with totals", async ({ page }) => {
+// The on-screen Salary Statement of the Salary tab is gone (owner 2026-11-20): the tab is the Excess tab now (same address
+// ?tab=salary), and the printed statement is a download of the Payroll tab's Export menu (the Report Center's file).
+test.describe("Salary Statement and the Excess tab", () => {
+  test("the Salary tab's address opens the Excess tab: the month's excess and detection, no on-screen statement", async ({
+    page,
+  }) => {
     await openAs(page, adminToken, `${FEB}&tab=salary`);
-    const panel = page.getByTestId("statement-panel");
-    await expect(panel).toContainText("Salary Statement From 01-02-2026 To 28-02-2026", { timeout: 30_000 });
-    await expect(panel).toContainText("Asha Kumar");
-    await expect(panel).toContainText("Ravi Nair");
-    await expect(panel).toContainText("GRAND TOTAL");
-    await expect(page.getByTestId("statement-count")).toContainText("2 employees in 1 department");
-    // the Pages view is the same statement as a paper preview
-    await page.getByRole("tab", { name: /^Pages\b/ }).click();
-    await expect(page).toHaveURL(/sview=pages/);
-    await expect(panel).toContainText("Paper preview");
-    await page.getByRole("tab", { name: /^Scroll\b/ }).click();
-    await expect(page).not.toHaveURL(/sview=/);
+    await expect(page.getByRole("tab", { name: /^Excess\b/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tab", { name: /^Salary\b/ })).toHaveCount(0);
+    await expect(page.getByTestId("excess-title")).toHaveText("Excess & Detection · February 2026", {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("excess-kpi-entries-value")).toHaveText("0");
+    await expect(page.getByTestId("excess-empty")).toBeVisible();
+    await expect(page.getByTestId("statement-panel")).toHaveCount(0);
   });
 
-  test("the Excel export has the printed columns and the right figures", async ({ page }) => {
-    await openAs(page, adminToken, `${FEB}&tab=salary`);
-    await expect(page.getByTestId("statement-panel")).toContainText("Asha Kumar", { timeout: 30_000 });
-    await page.getByTestId("statement-export").click();
+  test("the statement's Excel from the Payroll tab's Export menu has the printed columns and the right figures", async ({
+    page,
+  }) => {
+    await openAs(page, adminToken, FEB);
+    await expect(page.getByTestId("staff-record-count")).toContainText("2 records", { timeout: 30_000 });
+    await page.getByTestId("staff-export").click();
     const [download] = await Promise.all([
-      page.waitForEvent("download"),
-      page.getByTestId("statement-export-xlsx").click(),
+      page.waitForEvent("download", { timeout: 60_000 }),
+      page.getByTestId("staff-export-statement-xlsx").click(),
     ]);
-    expect(download.suggestedFilename()).toBe("Salary_Statement_February_2026.xlsx");
+    expect(download.suggestedFilename()).toMatch(/\.xlsx$/i);
     const book = new ExcelJS.Workbook();
     await book.xlsx.readFile((await download.path())!);
     const sheet = book.worksheets[0];
     const rows: Record<string, unknown>[] = [];
     let header: string[] = [];
+    const plain = (c: unknown) => (c && typeof c === "object" && "result" in c ? (c as { result: unknown }).result : c);
     sheet.eachRow((row) => {
-      const cells = (row.values as unknown[]).slice(1);
-      if (cells[0] === "SNO") header = cells.map((c) => String(c ?? "").split("\n")[0]);
-      else if (header.length && typeof cells[0] === "number")
+      const cells = (row.values as unknown[]).slice(1).map(plain);
+      if (cells.includes("ID NO")) header = cells.map((c) => String(c ?? "").split("\n")[0]);
+      else if (header.length && /^E2E\d+$/.test(String(cells[header.indexOf("ID NO")] ?? "")))
         rows.push(Object.fromEntries(header.map((h, i) => [h, cells[i]])));
     });
-    expect(header).toEqual([
-      "SNO",
-      "ID NO",
-      "Name",
-      "Designation",
-      "Basic salary",
-      "Total",
-      "Present",
-      "CL",
-      "LOP",
-      "HD",
-      "Total Days",
-      "PTRL",
-      "Others Allow",
-      "E salary",
-      // no T.Advance (owner 2026-11-04: the statement and the salary slip show only what applies to this month)
-      "Advance",
-      "ESI",
-      "PF",
-      "TDS",
-      "Others",
-      "Lop& PSAmt",
-      "Total Deduction",
-      "NET",
-      "Remarks",
-    ]);
+    // the owner's columns, in the owner's order (2026-11-05)
+    for (const [before, after] of [
+      ["SNO", "ID NO"],
+      ["ID NO", "Name"],
+      ["Total Salary", "Present"],
+      ["Earned Salary", "PF"],
+      ["Total Deduction", "NET"],
+    ])
+      expect(header.indexOf(before), `${before} before ${after}`).toBe(header.indexOf(after) - 1);
     const asha = rows.find((r) => r["ID NO"] === "E2E001")!;
     const ravi = rows.find((r) => r["ID NO"] === "E2E002")!;
-    // Asha: full month, nothing lost. Ravi: salary 30,000, 12 of 24 days -> E salary 15,000, 12 days of LOP
-    expect(asha).toMatchObject({
-      Total: 24000,
-      "Basic salary": 12000,
-      Present: 24,
-      LOP: 0,
-      "Total Days": 24,
-      "E salary": 24000,
-      NET: 24000,
-    });
-    expect(ravi).toMatchObject({
-      Total: 30000,
-      "Basic salary": 15000,
-      Present: 12,
-      LOP: 12,
-      "Total Days": 12,
-      "E salary": 15000,
-      NET: 15000,
-    });
-    expect(Number(ravi["Lop& PSAmt"])).toBe(15000);
-  });
-
-  test("the statement can be narrowed to one branch, like the printed one for a single unit", async ({ page }) => {
-    await openAs(page, adminToken, `${FEB}&tab=salary`);
-    await expect(page.getByTestId("statement-panel")).toContainText("Asha Kumar", { timeout: 30_000 });
-    await expect(page.getByTestId("statement-company")).toHaveText("UKTextiles");
-    // the seed's two branches: the employees are in "E2E Head Office"
-    await page.getByTestId("statement-branch").click();
-    await page.getByRole("option", { name: "E2E Head Office" }).click();
-    await expect(page).toHaveURL(/sbranch=\d+/);
-    await expect(page.getByTestId("statement-company")).toContainText("E2E Head Office");
-    await expect(page.getByTestId("statement-panel")).toContainText("Asha Kumar");
-    // the other branch has nobody on this payroll
-    await page.getByTestId("statement-branch").click();
-    await page.getByRole("option", { name: "Head Office", exact: true }).click();
-    await expect(page.getByTestId("statement-panel")).not.toContainText("Asha Kumar");
-    // a reload keeps the branch
-    await page.reload();
-    await expect(page.getByTestId("statement-branch")).toContainText("Head Office");
-    // and "All branches" brings everyone back
-    await page.getByTestId("statement-branch").click();
-    await page.getByRole("option", { name: "All branches" }).click();
-    await expect(page).not.toHaveURL(/sbranch=/);
-    await expect(page.getByTestId("statement-panel")).toContainText("Asha Kumar", { timeout: 30_000 });
-  });
-
-  test("the PDF export downloads a real PDF, and Print is offered too", async ({ page }) => {
-    await openAs(page, adminToken, `${FEB}&tab=salary`);
-    await expect(page.getByTestId("statement-panel")).toContainText("Asha Kumar", { timeout: 30_000 });
-    await page.getByTestId("statement-export").click();
-    await expect(page.getByTestId("statement-export-print")).toBeVisible();
-    const [download] = await Promise.all([
-      page.waitForEvent("download"),
-      page.getByTestId("statement-export-pdf").click(),
+    // Asha: full month, nothing lost. Ravi: salary 30,000, 12 of 24 days -> earned 15,000, 12 days of LOP
+    expect(asha).toMatchObject({ "Total Salary": 24000, Present: 24, LOP: 0, "Earned Salary": 24000, NET: 24000 });
+    expect(ravi).toMatchObject({ "Total Salary": 30000, Present: 12, LOP: 12, "Earned Salary": 15000, NET: 15000 });
+    // the PDF of the same statement is the menu's other item
+    await expect(page.getByTestId("staff-export-statement-xlsx")).toHaveCount(0); // the menu closes once the file is saved
+    await page.getByTestId("staff-export").click();
+    const [pdf] = await Promise.all([
+      page.waitForEvent("download", { timeout: 60_000 }),
+      page.getByTestId("staff-export-statement-pdf").click(),
     ]);
-    expect(download.suggestedFilename()).toBe("Salary_Statement_February_2026.pdf");
     const fs = await import("node:fs/promises");
-    const head = (await fs.readFile((await download.path())!)).subarray(0, 5).toString("latin1");
-    expect(head).toBe("%PDF-");
+    expect((await fs.readFile((await pdf.path())!)).subarray(0, 5).toString("latin1")).toBe("%PDF-");
   });
 
-  test("search and department narrow the statement, and the export follows what is on screen", async ({ page }) => {
-    await openAs(page, adminToken, `${FEB}&tab=salary`);
-    await expect(page.getByTestId("statement-panel")).toContainText("Asha Kumar", { timeout: 30_000 });
-    await page.getByTestId("statement-search").fill("Ravi");
-    await expect(page).toHaveURL(/sq=Ravi/);
-    await expect(page.getByTestId("statement-count")).toContainText("Showing 1 of 2 employees");
-    await expect(page.getByTestId("statement-panel")).not.toContainText("Asha Kumar");
-    await page.getByTestId("statement-export").click();
-    const [download] = await Promise.all([
-      page.waitForEvent("download"),
-      page.getByTestId("statement-export-xlsx").click(),
-    ]);
-    const book = new ExcelJS.Workbook();
-    await book.xlsx.readFile((await download.path())!);
-    const names: string[] = [];
-    book.worksheets[0].eachRow((row) => {
-      const cells = (row.values as unknown[]).slice(1);
-      if (typeof cells[0] === "number") names.push(String(cells[2]));
-    });
-    expect(names).toEqual(["Ravi Nair"]);
-    // a reload lands on the same filtered statement
-    await page.reload();
-    await expect(page.getByTestId("statement-search")).toHaveValue("Ravi");
+  test("the statement can be narrowed to one branch, like the printed one for a single unit", async ({ request }) => {
+    const branches = (await api(request, adminToken, "GET", "/api/branches")).body as { id: number; name: string }[];
+    const codesOf = async (branch?: number) => {
+      const run = await api(
+        request,
+        adminToken,
+        "GET",
+        `/api/reports/run/hr-salary-statement?period=2026-02${branch ? `&branchIds=${branch}` : ""}`,
+      );
+      expect(run.status, JSON.stringify(run.body)).toBe(200);
+      return (run.body.rows as { code: string | null; _kind?: string }[])
+        .filter((r) => !r._kind && r.code)
+        .map((r) => r.code)
+        .sort();
+    };
+    // the seed's two branches: the employees are in "E2E Head Office", the other has nobody on this payroll
+    expect(await codesOf()).toEqual(["E2E001", "E2E002"]);
+    expect(await codesOf(branches.find((b) => b.name === "E2E Head Office")!.id)).toEqual(["E2E001", "E2E002"]);
+    expect(await codesOf(branches.find((b) => b.name === "Head Office")!.id)).toEqual([]);
   });
 
-  test("a row is adjusted from the statement and marked paid; the figures follow", async ({ page, request }) => {
-    await openAs(page, adminToken, `${FEB}&tab=salary`);
+  test("an Excess on the Excess tab and Cleared on the Payroll tab: the figures follow, and generating again keeps both", async ({
+    page,
+    request,
+  }) => {
     const ravi = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body.find(
       (r: { employeeCode: string }) => r.employeeCode === "E2E002",
     );
-    await expect(page.getByTestId("statement-panel")).toContainText("Ravi Nair", { timeout: 30_000 });
-    await page.getByTestId(`staff-salary-adjust-${ravi.id}`).click();
-    const dialog = page.getByTestId("adjust-payroll-dialog");
-    await expect(dialog).toBeVisible();
-    await dialog.getByLabel(/bonus/i).fill("1000");
-    await expect(page.getByTestId("adjust-net-preview")).toContainText("16,000");
-    await dialog.getByRole("button", { name: /apply changes/i }).click();
-    await expect(dialog).toBeHidden();
-    await expect
-      .poll(async () => {
-        const list = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body;
-        return list.find((r: { id: number }) => r.id === ravi.id)?.finalSalary;
-      })
-      .toBe(16000);
+    const current = async () =>
+      (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body.find(
+        (r: { id: number }) => r.id === ravi.id,
+      );
+    await openAs(page, adminToken, `${FEB}&tab=salary`);
+    await expect(page.getByTestId("excess-empty")).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("excess-add-open").click();
+    const dialog = page.getByTestId("excess-add-dialog");
+    await dialog.getByTestId("excess-amount").fill("1000");
+    await dialog.getByTestId("excess-remark").fill("Night shift allowance");
+    await dialog.getByTestId("excess-picker-search").fill("Ravi");
+    await dialog.getByTestId(`excess-option-${ravi.employeeId}`).click();
+    await expect(dialog.getByTestId("excess-add-summary")).toHaveText("Adds ₹1,000 to Ravi Nair's earned salary.");
+    await dialog.getByTestId("excess-add-save").click();
+    await expect(dialog).toBeHidden({ timeout: 15_000 });
+    await expect(page.getByTestId("excess-row-netpay-E2E002")).toContainText("₹16,000");
+    expect((await current()).finalSalary).toBe(16000);
 
-    await page.getByTestId(`staff-salary-pay-${ravi.id}`).click();
-    await expect
-      .poll(async () => {
-        const list = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body;
-        return list.find((r: { id: number }) => r.id === ravi.id)?.status;
-      })
-      .toBe("paid");
-    await expect(page.getByTestId(`staff-salary-pay-${ravi.id}`)).toHaveCount(0);
+    await page.goto(FEB_CARDS);
+    await expect(card(page, "Ravi Nair")).toContainText("₹16,000", { timeout: 30_000 });
+    await card(page, "Ravi Nair")
+      .getByRole("button", { name: /Mark as Cleared/ })
+      .click();
+    await expect.poll(async () => (await current()).status).toBe("paid");
+    await expect(card(page, "Ravi Nair")).toHaveAttribute("data-status", "paid");
 
-    // put the month back the way the other specs expect it. Cleared survives a regeneration (owner 2026-11-05), so it is
-    // taken back to Pending first; generating again then recomputes the figures (the bonus goes).
-    await api(request, adminToken, "PATCH", `/api/payroll/${ravi.id}`, { status: "pending" });
+    // Cleared and the Excess both survive a regeneration (owner 2026-11-05 / 2026-11-20)
     await generateFebruary(request);
-    const again = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body;
-    expect(Number(again.find((r: { employeeCode: string }) => r.employeeCode === "E2E002").finalSalary)).toBe(15000);
+    expect(await current()).toMatchObject({ status: "paid", finalSalary: 16000, bonus: 1000 });
+
+    // put the month back the way the other specs expect it: Pending, the Excess removed (with a reason)
+    await api(request, adminToken, "PATCH", `/api/payroll/${ravi.id}`, { status: "pending" });
+    const month = (await api(request, adminToken, "GET", "/api/payroll-excess/month?month=2&year=2026")).body;
+    const entryIds = month.departments.flatMap((d: { rows: { entries: { id: number }[] }[] }) =>
+      d.rows.flatMap((r) => r.entries.map((e) => e.id)),
+    );
+    const removed = await api(request, adminToken, "POST", "/api/payroll-excess/remove", {
+      entryIds,
+      remark: "Back to the seeded month",
+    });
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+    expect(await current()).toMatchObject({ status: "pending", finalSalary: 15000, bonus: 0 });
   });
 });
 
@@ -365,30 +315,32 @@ test.describe("Loaders", () => {
     await expect(card(page, "Ravi Nair")).toContainText("Absent ×12");
   });
 
-  test("the statement shows its loader, then the sheet", async ({ page }) => {
-    await page.route("**/api/payroll/salary-statement**", async (route) => {
+  test("the Excess tab shows its loader, then the month", async ({ page }) => {
+    await page.route("**/api/payroll-excess/month**", async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 2500));
       await route.continue();
     });
     await openAs(page, adminToken, `${FEB}&tab=salary`);
-    // a sheet-shaped skeleton while the statement is on its way, then the statement
-    await expect(page.getByTestId("statement-skeleton")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId("statement-panel")).toContainText("GRAND TOTAL", { timeout: 30_000 });
-    await expect(page.getByTestId("statement-skeleton")).toHaveCount(0);
+    // tile-shaped skeletons while the month is on its way, then the figures
+    const tab = page.getByTestId("excess-tab");
+    await expect(tab.getByTestId("skeleton-kpis")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("excess-summary")).toBeVisible({ timeout: 30_000 });
+    await expect(tab.getByTestId("skeleton-kpis")).toHaveCount(0);
   });
 
-  test("a failed insights request says so and offers a retry", async ({ page }) => {
+  test("a failed request says so and offers a retry", async ({ page }) => {
     let failing = true;
-    await page.route("**/api/payroll/salary-statement**", async (route) => {
+    await page.route("**/api/payroll-excess/month**", async (route) => {
       if (failing) await route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' });
       else await route.continue();
     });
     await openAs(page, adminToken, `${FEB}&tab=salary`);
-    // the request is retried once by the app, then the panel says it could not load and offers Retry
-    await expect(page.getByTestId("statement-error")).toBeVisible({ timeout: 30_000 });
+    // the request is retried once by the app, then the tab says it could not load and offers Try again
+    await expect(page.getByTestId("excess-error")).toBeVisible({ timeout: 30_000 });
     failing = false;
-    await page.getByTestId("statement-retry").click();
-    await expect(page.getByTestId("statement-panel")).toContainText("GRAND TOTAL", { timeout: 30_000 });
+    await page.getByTestId("excess-retry").click();
+    await expect(page.getByTestId("excess-summary")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("excess-error")).toHaveCount(0);
   });
 });
 
@@ -401,8 +353,10 @@ test.describe("Phone width", () => {
       "&view=issues",
       "&view=skipped",
       "&view=rules",
+      "&view=not_included",
       "&layout=table",
       "&tab=salary",
+      "&tab=salary&exview=history",
       "&tab=payslip",
     ]) {
       await page.goto(`${FEB}${query}`);
@@ -415,8 +369,9 @@ test.describe("Phone width", () => {
 });
 
 test.describe("Who may see what", () => {
-  test("a view-only role browses, filters and exports the statement but cannot generate, adjust or pay", async ({
+  test("a view-only role browses, filters and exports but cannot generate, add an excess or pay", async ({
     page,
+    request,
   }) => {
     await openAs(page, viewerToken, FEB_CARDS);
     await expect(page.getByText(/View only/).first()).toBeVisible();
@@ -432,11 +387,32 @@ test.describe("Who may see what", () => {
     await page.getByTestId("view-records").click();
     await expect(page.getByTestId("staff-export")).toBeEnabled();
 
+    // the statement is still the Payroll tab's export
+    await page.getByTestId("staff-export").click();
+    await expect(page.getByTestId("staff-export-statement-xlsx")).toBeEnabled();
+    await page.keyboard.press("Escape");
+
+    // the Excess tab (the old Salary tab): the month's figures and history to read, nothing to add
     await page.goto(`${FEB}&tab=salary`);
-    await expect(page.getByTestId("statement-panel")).toContainText("Ravi Nair", { timeout: 30_000 });
-    await expect(page.getByTestId("statement-export")).toBeEnabled();
-    await expect(page.getByRole("button", { name: /Edit the bonus and deductions of Ravi Nair/ })).toBeDisabled();
-    await expect(page.getByRole("button", { name: /Update the status of Ravi Nair/ })).toBeDisabled();
+    await expect(page.getByTestId("excess-summary")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("excess-export")).toBeEnabled();
+    await expect(page.getByTestId("excess-add-open")).toHaveCount(0);
+    await expect(page.getByTestId("excess-empty-add")).toHaveCount(0);
+    await page.getByTestId("excess-view-history").click();
+    await expect(page.getByTestId("excess-history")).toBeVisible();
+    // and the server refuses an add from this role
+    const ravi = (await api(request, adminToken, "GET", "/api/payroll?month=2&year=2026")).body.find(
+      (r: { employeeCode: string }) => r.employeeCode === "E2E002",
+    );
+    const add = await api(request, viewerToken, "POST", "/api/payroll-excess/entries", {
+      month: 2,
+      year: 2026,
+      kind: "excess",
+      amount: 100,
+      remark: "not allowed",
+      employeeIds: [ravi.employeeId],
+    });
+    expect(add.status).toBe(403);
   });
 
   test("a payslip-only role sees only the Payslip tab, and the payroll insights are closed to it", async ({
@@ -446,12 +422,20 @@ test.describe("Who may see what", () => {
     await openAs(page, slipOnlyToken, FEB);
     await expect(page.getByRole("tab", { name: /^Payslip\b/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /^Payroll\b/ })).toHaveCount(0);
-    await expect(page.getByRole("tab", { name: /^Salary\b/ })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: /^Excess\b/ })).toHaveCount(0);
     await expect(page.getByTestId("staff-payroll-tab")).toHaveCount(0);
+    // the payslips of the month's payroll, with no way to the Payroll tab or a payroll's details
+    await expect(page.getByTestId("ps-heading")).toHaveText("February 2026 · 2 payslips", { timeout: 30_000 });
+    await page.getByTestId("staff-payslips-tab").getByRole("button", { name: "Ravi Nair", exact: true }).click();
+    await expect(page.getByTestId("ps-sheet")).toBeVisible();
+    await expect(page.getByTestId("ps-sheet-open-payroll")).toHaveCount(0);
+    expect((await api(request, slipOnlyToken, "GET", "/api/payslips/staff?month=2&year=2026")).status).toBe(200);
     for (const url of [
       "/api/payroll/issues?month=2&year=2026",
       "/api/payroll/rules?month=2&year=2026",
       "/api/payroll/salary-statement?month=2&year=2026",
+      "/api/payroll-excess/month?month=2&year=2026",
+      "/api/payroll/not-included?month=2&year=2026",
     ]) {
       expect((await api(request, slipOnlyToken, "GET", url)).status, url).toBe(403);
     }
@@ -517,6 +501,10 @@ test.describe("Who may see what", () => {
       const statement = (await api(request, scoped, "GET", "/api/payroll/salary-statement?month=2&year=2026")).body;
       expect(statement.groups.flatMap((g: { rows: unknown[] }) => g.rows)).toEqual([]);
       expect(statement.counts.employees).toBe(0);
+      // the Excess tab offers none of this branch's employees either
+      const excess = (await api(request, scoped, "GET", "/api/payroll-excess/month?month=2&year=2026")).body;
+      expect(excess.departments).toEqual([]);
+      expect(excess.employeeOptions.map((o: { code: string }) => o.code)).not.toContain("E2E002");
       // a payroll of another branch is not found, as if it did not exist
       expect((await api(request, scoped, "GET", `/api/payroll/${ravi.id}/details`)).status).toBe(404);
       // the admin still sees all of it

@@ -7,7 +7,7 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 // a direct call), the manager approves both and sees the assistant's activity. Everything made here is called e2e_hc_*
 // and removed again; the HOD set-up (E2E003 for E2E001) is removed too, the days touched are reset.
 
-const FAKE_WACLIENT = "http://127.0.0.1:8190";
+const FAKE_META = "http://127.0.0.1:8190";
 const HOD_CODE = "E2E003";
 const HOD_PASSWORD = "employee-pass-1"; // the password the other specs use for this account
 const ASSISTANT = "e2e_hc_asst";
@@ -38,12 +38,12 @@ async function token(page: Page, username: string, password: string): Promise<st
 }
 
 async function hodToken(page: Page): Promise<string> {
-  await page.request.post(`${FAKE_WACLIENT}/reset`);
+  await page.request.post(`${FAKE_META}/reset`);
   const ask = await page.request.post("/api/auth/otp/request", {
     data: { employeeCode: HOD_CODE, purpose: "activate" },
   });
   if (ask.status() === 200) {
-    const sent = await (await page.request.get(`${FAKE_WACLIENT}/messages`)).json();
+    const sent = await (await page.request.get(`${FAKE_META}/messages`)).json();
     const otp = sent[0].message.match(/\b(\d{6})\b/)![1];
     const activate = await page.request.post("/api/auth/otp/activate", {
       data: { employeeCode: HOD_CODE, otp, password: HOD_PASSWORD },
@@ -168,7 +168,8 @@ test("HR Manager and HR Assistant: created by the Super Admin, the assistant edi
 
     // ── the assistant ──
     const asst = await token(page, ASSISTANT, PASSWORD);
-    // edits payroll (a bonus on a payroll row of a month nobody else uses)
+    // edits payroll (a deduction on a payroll row of a month nobody else uses; a bonus is an Excess on the Excess tab
+    // since 2026-11-20, which the payroll row itself refuses)
     await api(page, "POST", "/api/payroll/generate", { month: 4, year: 2025 }, admin);
     const rows = (await api(page, "GET", "/api/payroll?month=4&year=2025", undefined, admin)).body as unknown as {
       id: number;
@@ -176,7 +177,7 @@ test("HR Manager and HR Assistant: created by the Super Admin, the assistant edi
     }[];
     const row = rows.find((r) => r.salaryMode === "monthly")!;
     expect(row, "a staff payroll row for April 2025").toBeTruthy();
-    const edited = await api(page, "PATCH", `/api/payroll/${row.id}`, { bonus: 321 }, asst);
+    const edited = await api(page, "PATCH", `/api/payroll/${row.id}`, { deductions: 321 }, asst);
     expect(edited.status, JSON.stringify(edited.body)).toBe(200);
     // proposes an attendance change (editing attendance is allowed; it waits for the HOD, then HR)
     const proposal = await api(

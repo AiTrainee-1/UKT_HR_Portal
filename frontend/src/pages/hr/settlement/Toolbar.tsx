@@ -1,36 +1,64 @@
 import { categoryForEmploymentType, keepIfOffered, namedOrgOptions } from "@/lib/departments";
 import { OrgSelectItems } from "@/lib/org-select";
 import { useMemo } from "react";
-import { Search, X } from "lucide-react";
+import { CalendarDays, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  BASIS_OPTIONS,
   DEFAULT_SORT,
-  NO_FILTERS,
   SORT_OPTIONS,
   filtersActive,
   parseSort,
+  sortValue,
   statusCounts,
   type Filters,
+  type MonthBasis,
+  type Period,
+  type SettlementTab,
   type Sort,
   type SettlementRow,
 } from "./logic";
-import { distinct, rangeProblem } from "./shared";
+import { MONTH_FULL, distinct, rangeProblem } from "./shared";
 
 type Props = {
+  tab: SettlementTab;
+  /** The tab's advances in the chosen month: the status counts, the choices and "of N" read these. */
   rows: SettlementRow[];
   filters: Filters;
   onFilters: (next: Filters) => void;
   sort: Sort;
   onSort: (next: Sort) => void;
+  period: Period;
+  basis: MonthBasis;
+  years: number[];
+  onPeriod: (next: Period) => void;
+  onBasis: (next: MonthBasis) => void;
+  /** Clears the filters, the sort and the month. */
+  onClear: () => void;
   shown: number;
 };
 
 const TRIGGER = "h-10";
+const ALL_MONTHS = "all";
 
-/** Search, filters and sorting for the advances list, with how many match. */
-export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown }: Props) {
+/** The month, search, filters and sorting for one tab's list, with how many match. */
+export default function Toolbar({
+  tab,
+  rows,
+  filters,
+  onFilters,
+  sort,
+  onSort,
+  period,
+  basis,
+  years,
+  onPeriod,
+  onBasis,
+  onClear,
+  shown,
+}: Props) {
   const set = (patch: Partial<Filters>) => onFilters({ ...filters, ...patch });
   const counts = useMemo(() => statusCounts(rows, filters), [rows, filters]);
   const branches = useMemo(() => distinct(rows.map((r) => r.employeeBranch)), [rows]);
@@ -45,7 +73,9 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
     );
   const departments = departmentsFor(filters.employeeType);
   const problem = rangeProblem(filters.from, filters.to);
-  const active = filtersActive(filters);
+  const active = filtersActive(filters) || period !== null || sortValue(sort) !== sortValue(DEFAULT_SORT);
+  const overview = tab === "overview";
+  const thisYear = new Date().getFullYear();
 
   return (
     <div className="space-y-3 rounded-2xl border bg-white p-3" data-testid="settlement-toolbar">
@@ -55,7 +85,7 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
           <Input
             value={filters.query}
             onChange={(e) => set({ query: e.target.value })}
-            placeholder="Search by employee name or code, department, branch or purpose"
+            placeholder="Search by employee name or code, department, branch, purpose or remark"
             aria-label="Search advances"
             className="h-10 pl-9 pr-9"
             data-testid="settlement-search"
@@ -71,7 +101,7 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
             </button>
           )}
         </div>
-        <Select value={`${sort.key}:${sort.dir}`} onValueChange={(v) => onSort(parseSort(v))}>
+        <Select value={sortValue(sort)} onValueChange={(v) => onSort(parseSort(v))}>
           <SelectTrigger className={`${TRIGGER} lg:w-52`} aria-label="Sort advances" data-testid="settlement-sort">
             <SelectValue />
           </SelectTrigger>
@@ -85,17 +115,77 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
         </Select>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-        <Select value={filters.type} onValueChange={(v) => set({ type: v as Filters["type"] })}>
-          <SelectTrigger className={TRIGGER} aria-label="Filter by advance type" data-testid="filter-type">
+      {/* the month: when the advance was applied, decided or is deducted (any of them by default) */}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,1.4fr)] xl:max-w-3xl">
+        <Select
+          value={period ? String(period.month) : ALL_MONTHS}
+          onValueChange={(v) =>
+            onPeriod(v === ALL_MONTHS ? null : { month: Number(v), year: period?.year ?? thisYear })
+          }
+        >
+          <SelectTrigger className={TRIGGER} aria-label="Month" data-testid="filter-month">
+            <span className="flex min-w-0 items-center gap-2">
+              <CalendarDays size={14} className="shrink-0 text-gray-400" />
+              <SelectValue />
+            </span>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_MONTHS}>All months</SelectItem>
+            {MONTH_FULL.map((m, i) => (
+              <SelectItem key={m} value={String(i + 1)}>
+                {m}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={String(period?.year ?? thisYear)}
+          onValueChange={(v) => period && onPeriod({ month: period.month, year: Number(v) })}
+          disabled={!period}
+        >
+          <SelectTrigger className={TRIGGER} aria-label="Year" data-testid="filter-year">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All types</SelectItem>
-            <SelectItem value="general">General advance</SelectItem>
-            <SelectItem value="term">Term loan</SelectItem>
+            {years.map((y) => (
+              <SelectItem key={y} value={String(y)}>
+                {y}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
+        <Select value={basis} onValueChange={(v) => onBasis(v as MonthBasis)} disabled={!period}>
+          <SelectTrigger
+            className={`${TRIGGER} col-span-2 md:col-span-1`}
+            aria-label="Which activity counts for the month"
+            title={period ? undefined : "Choose a month first"}
+            data-testid="filter-basis"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {BASIS_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+        {overview && (
+          <Select value={filters.type} onValueChange={(v) => set({ type: v as Filters["type"] })}>
+            <SelectTrigger className={TRIGGER} aria-label="Filter by advance type" data-testid="filter-type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All types</SelectItem>
+              <SelectItem value="term">Term loan</SelectItem>
+              <SelectItem value="general">Term advance</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
         <Select value={filters.branch} onValueChange={(v) => set({ branch: v })}>
           <SelectTrigger className={TRIGGER} aria-label="Filter by branch" data-testid="filter-branch">
             <SelectValue />
@@ -190,13 +280,10 @@ export default function Toolbar({ rows, filters, onFilters, sort, onSort, shown 
         </div>
         <p className="text-xs text-gray-500" data-testid="settlement-count">
           Showing <b>{shown}</b> of {rows.length}
-          {(active || sort.key !== DEFAULT_SORT.key || sort.dir !== DEFAULT_SORT.dir) && (
+          {active && (
             <button
               type="button"
-              onClick={() => {
-                onFilters(NO_FILTERS);
-                onSort(DEFAULT_SORT);
-              }}
+              onClick={onClear}
               className="ml-2 font-semibold text-blue-600 hover:underline"
               data-testid="settlement-clear-filters"
             >

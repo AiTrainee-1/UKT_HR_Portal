@@ -30,7 +30,7 @@ export default function EmployeesTab({ locked = false }: { locked?: boolean }) {
   const [selected, setSelected] = useState<WhatsAppEmployeeRow | null>(null);
   const debounced = useDebounced(search);
   const onlyOptOut = show === "optout";
-  const { data, isLoading } = useWhatsAppEmployees({
+  const { data, isLoading, isError, error } = useWhatsAppEmployees({
     search: debounced,
     optOut: onlyOptOut ? "true" : undefined,
     all: "1", // everyone, also those never messaged: No WhatsApp can be set before the first message
@@ -131,6 +131,17 @@ export default function EmployeesTab({ locked = false }: { locked?: boolean }) {
                   </td>
                 </tr>
               ))
+            ) : isError ? (
+              <tr>
+                <td
+                  colSpan={7}
+                  role="alert"
+                  className="px-3 py-10 text-center font-medium text-red-700 dark:text-red-300"
+                  data-testid="wa-employees-error"
+                >
+                  The employees could not be loaded: {whatsAppErrorMessage(error, "Try Refresh in a moment.")}
+                </td>
+              </tr>
             ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">

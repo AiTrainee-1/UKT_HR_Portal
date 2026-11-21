@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarClock } from "lucide-react";
 import EmployeeSearchSelect from "@/components/EmployeeSearchSelect";
 import type { Employee } from "@/lib/api-client";
@@ -32,6 +32,8 @@ type Props = {
   employees: Employee[] | undefined;
   /** Sends the advance; throws with the server's message when it is refused. */
   onSubmit: (payload: ReturnType<typeof toPayload>) => Promise<void>;
+  /** The kind the form opens on: the Term Loan tab opens it on a term loan, the others on a term advance. */
+  defaultType?: AdvanceForm["advanceType"];
 };
 
 function FieldError({ id, text }: { id: string; text?: string }) {
@@ -43,8 +45,8 @@ function FieldError({ id, text }: { id: string; text?: string }) {
   );
 }
 
-export default function CreateDialog({ open, onClose, employees, onSubmit }: Props) {
-  const [form, setForm] = useState<AdvanceForm>(() => emptyForm());
+export default function CreateDialog({ open, onClose, employees, onSubmit, defaultType = "general" }: Props) {
+  const [form, setForm] = useState<AdvanceForm>(() => emptyForm(new Date(), defaultType));
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -56,9 +58,14 @@ export default function CreateDialog({ open, onClose, employees, onSubmit }: Pro
   const term = form.advanceType === "term";
   const patch = (p: Partial<AdvanceForm>) => setForm((f) => ({ ...f, ...p }));
 
+  // every opening starts on a blank form of the tab's kind
+  useEffect(() => {
+    if (open) setForm(emptyForm(new Date(), defaultType));
+  }, [open, defaultType]);
+
   const close = () => {
     if (busy) return;
-    setForm(emptyForm());
+    setForm(emptyForm(new Date(), defaultType));
     setSubmitted(false);
     setServerError(null);
     onClose();
@@ -71,7 +78,7 @@ export default function CreateDialog({ open, onClose, employees, onSubmit }: Pro
     setBusy(true);
     try {
       await onSubmit(toPayload(form));
-      setForm(emptyForm());
+      setForm(emptyForm(new Date(), defaultType));
       setSubmitted(false);
       onClose();
     } catch (err) {
@@ -88,7 +95,8 @@ export default function CreateDialog({ open, onClose, employees, onSubmit }: Pro
         <DialogHeader>
           <DialogTitle>Create new advance</DialogTitle>
           <DialogDescription>
-            It is created as pending. Approving it creates the repayment schedule that payroll deducts.
+            A term loan is repaid in monthly EMIs; a term advance is deducted once. It is created as pending, and
+            approving it creates the schedule payroll deducts.
           </DialogDescription>
         </DialogHeader>
 
@@ -119,8 +127,8 @@ export default function CreateDialog({ open, onClose, employees, onSubmit }: Pro
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="general">General advance</SelectItem>
-                  <SelectItem value="term">Term advance (loan)</SelectItem>
+                  <SelectItem value="term">Term loan (monthly EMIs)</SelectItem>
+                  <SelectItem value="general">Term advance (deducted once)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

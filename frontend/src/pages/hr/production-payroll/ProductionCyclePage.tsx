@@ -21,13 +21,13 @@ import { moduleForPath } from "@/lib/permission-modules";
 import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { SetupNeeded, UnassignedNotice, cycleSettingsHref, errorText } from "./CycleNotices";
 import { EmployeesTab } from "./EmployeesTab";
+import { ExcessTab } from "./ExcessTab";
 import {
   PRODUCTION_TABS,
   cycleBlurb,
   defaultPeriod,
   isProductionTab,
   periodFromUrl,
-  resolveSlipMonth,
   samePeriod,
   type ProductionTab,
 } from "./logic";
@@ -37,7 +37,6 @@ import { PayslipTab } from "./PayslipTab";
 import { periodStateOf } from "./period-workflow";
 import { PeriodStateChip } from "./PeriodStatusButton";
 import { PeriodPicker } from "./PeriodPicker";
-import { SalaryTab } from "./SalaryTab";
 
 // Each tab's own permission key (the same on every cycle page); a key with no setting follows "production_payroll".
 const TAB_KEY: Record<ProductionTab, string> = {
@@ -47,10 +46,11 @@ const TAB_KEY: Record<ProductionTab, string> = {
   payslip: "production_payroll.payslip",
 };
 
+// The "salary" tab is the Excess tab since 2026-11-20 (same value and permission key, so old links and roles keep working).
 const TAB_LABEL: Record<ProductionTab, string> = {
   payroll: "Payroll",
   employees: "Employees",
-  salary: "Salary",
+  salary: "Excess",
   payslip: "Payslip",
 };
 
@@ -58,7 +58,7 @@ const TAB_LABEL: Record<ProductionTab, string> = {
  * One Production Payroll page: Weekly, BiWeekly or Monthly (four weeks). Everything on it is about the production
  * employees assigned to that cycle only. The page's state (tab, pay period, view, filters) lives in the address, so a
  * reload, a shared link and Back from a payroll's details page all land on the same screen; the pay period is chosen once,
- * here, for the Payroll, Employees and Salary tabs.
+ * here, for every tab (Payroll, Employees, Excess and Payslip).
  */
 export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
   const info = PAY_CYCLE_INFO[cycle];
@@ -75,7 +75,6 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
     !isRouteViewOnly(user, location, moduleForPath(location)) &&
     level(TAB_KEY[tab]) === "view";
   useViewOnlyLock(tabViewOnly, tab);
-  const slipMonth = useMemo(() => resolveSlipMonth({ month: url.month, year: url.year }), [url.month, url.year]);
   const refresh = useRefreshPayroll();
   const refreshing = useIsRefreshingPayroll();
 
@@ -110,14 +109,13 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
     setWanted(date);
   };
   const changePeriod = useCallback((next: CyclePeriod) => setUrl({ period: periodParam(next) }), [setUrl]);
-  const changeSlipMonth = (month: number, year: number) => setUrl({ month: String(month), year: String(year) });
   // Every tab keeps its own filters under its own keys, so switching tabs never mixes them (and the filters of a tab
   // that was left are still there when it is opened again).
   const changeTab = (next: string) => {
     if (visibleTabs.includes(next as ProductionTab)) setUrl({ tab: next });
   };
 
-  const showPeriodBar = visibleTabs.length > 0 && tab !== "payslip" && !cycles.isLoading && !needsSetup;
+  const showPeriodBar = visibleTabs.length > 0 && !cycles.isLoading && !needsSetup;
   // where the chosen pay period stands (Not generated / Generated / Payroll Done / Paid), beside the cycle's name
   const periodWorkflow = useProductionPeriodWorkflow(cycle, showPeriodBar ? period : null);
 
@@ -131,8 +129,6 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
         Nothing on this page is open to your role.
       </p>
     );
-  } else if (tab === "payslip") {
-    body = <PayslipTab cycle={cycle} month={slipMonth.month} year={slipMonth.year} onPeriodChange={changeSlipMonth} />;
   } else if (cycles.isLoading) {
     body = <PayrollLoader label="Loading the pay cycle" />;
   } else if (needsSetup) {
@@ -164,8 +160,10 @@ export default function ProductionCyclePage({ cycle }: { cycle: PayCycle }) {
     body = <PayrollTab cycle={cycle} period={period} url={url} setUrl={setUrl} onPeriodChange={changePeriod} />;
   } else if (tab === "employees") {
     body = <EmployeesTab cycle={cycle} period={period} url={url} setUrl={setUrl} onPeriodChange={changePeriod} />;
+  } else if (tab === "payslip") {
+    body = <PayslipTab cycle={cycle} period={period} url={url} setUrl={setUrl} />;
   } else {
-    body = <SalaryTab cycle={cycle} period={period} url={url} setUrl={setUrl} />;
+    body = <ExcessTab cycle={cycle} period={period} />;
   }
 
   return (

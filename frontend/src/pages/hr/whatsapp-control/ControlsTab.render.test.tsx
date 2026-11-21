@@ -99,10 +99,14 @@ describe("every message type", () => {
     expect(el('[data-testid="wa-type-off-id_card"]')!.textContent).toBe("Skipped: no approved Meta template.");
     expect(el('[data-testid="wa-type-off-late_alert"]')!.textContent).toBe("Its section switch is OFF.");
     expect(row("visitor_contact").textContent).toContain("Not via Meta");
+    // never sent through Meta: says so, its switch can't be flipped, and it is not counted
+    expect(el('[data-testid="wa-type-off-visitor_contact"]')!.textContent).toContain("Not sent");
+    expect(el('[data-testid="toggle-type:visitor_contact"]')!.hasAttribute("disabled")).toBe(true);
+    expect(el('[data-testid="wa-section-count-visitors"]')!.textContent).toBe("0 of 1 going out");
     expect(el('[data-testid="wa-type-template-visitor_notification"]')!.textContent).toBe("In review");
     // the three code types share hrms_otp
     expect(row("otp_reset").textContent).toContain("hrms_otp");
-    expect(el('[data-testid="wa-controls-summary"]')!.textContent).toContain("3 of 10 message types go out");
+    expect(el('[data-testid="wa-controls-summary"]')!.textContent).toContain("3 of 9 message types go out");
     expect(el('[data-testid="wa-controls-summary"]')!.textContent).toContain("3 wait for a template");
   });
 
@@ -123,6 +127,26 @@ describe("every message type", () => {
     await page!.click('[data-testid="toggle-attendanceAlertsEnabled"]');
     expect(server.patches).toEqual([{ attendanceAlertsEnabled: true }]);
     expect(el('[data-testid="wa-section-held-attendance"]')).toBeNull();
+  });
+
+  it("names the shared switch that holds a type back", async () => {
+    const server = settingsServer();
+    server.state.groups = [
+      ...(server.state.groups as unknown[]),
+      { key: "geo", title: "Geo Attendance", blurb: "On-Duty approvals." },
+    ];
+    server.state.features.push(
+      { key: "geoApprovalEnabled", group: "geo", label: "Geo Attendance approval & rejection", enabled: false },
+      { key: "type:geo_approval", group: "geo", label: "Geo Approval", enabled: true },
+    );
+    await open({ server });
+    expect(el('[data-testid="wa-type-geo_approval"]')!.dataset.off).toBe("shared");
+    expect(el('[data-testid="wa-type-off-geo_approval"]')!.textContent).toBe(
+      "Held: “Geo Attendance approval & rejection” is OFF.",
+    );
+    await page!.click('[data-testid="toggle-geoApprovalEnabled"]');
+    expect(server.patches).toEqual([{ geoApprovalEnabled: true }]);
+    expect(el('[data-testid="wa-type-off-geo_approval"]')!.textContent).toBe("Skipped: no approved Meta template.");
   });
 
   it("leaves password sign-in to the OTP tab and points there", async () => {
@@ -168,6 +192,13 @@ describe("who may do what", () => {
     );
     expect(switches.length).toBeGreaterThan(10);
     expect(switches.every((s) => s.disabled)).toBe(true);
+    // "Clear queue" is the Overview tab's (the server files whatsapp-control/queue/clear under it)
+    expect(el('[data-testid="wa-clear-queue"]')!.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("locks Clear queue by the Overview tab's level, as the server does, not by Message Controls'", async () => {
+    await open({ me: hrWith({ whatsapp_control: "edit", "whatsapp_control.overview": "view" }) });
+    expect(el('[data-testid="toggle-type:salary_slip"]')!.hasAttribute("disabled")).toBe(false);
     expect(el('[data-testid="wa-clear-queue"]')!.hasAttribute("disabled")).toBe(true);
   });
 });

@@ -64,6 +64,7 @@ export const navGroups: NavGroupData[] = [
         children: [
           { path: '/hr/employees', label: 'All Employees' },
           { path: '/hr/employees/productionEmployee', label: 'Production Employees' },
+          { path: '/hr/employees/factory-emp', label: 'Factory Employees' },
           { path: '/hr/departments', label: 'Departments' },
           { path: '/hr/designations', label: 'Designations' },
           { path: '/hr/branches', label: 'Manage Branch' },

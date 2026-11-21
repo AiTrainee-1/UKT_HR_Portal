@@ -8,7 +8,7 @@ from django.core.cache import cache
 from django.test import TestCase, override_settings
 
 from . import whatsapp_catalog as catalog
-from . import whatsapp_service
+from . import otp_service, whatsapp_service
 from . import whatsapp_templates as templates
 from .jwt_utils import sign_token
 from .models import HRUser, Role, WhatsAppSettings, WhatsAppTemplate
@@ -309,6 +309,43 @@ class CreateTests(TemplateBase):
         self.post(body=utility(name=default, messageType="approval_rejected"))
         self.assertNotIn("approval_rejected", WhatsAppSettings.get().template_overrides)
 
+    def test_new_wording_for_a_working_type_waits_for_metas_approval(self):
+        # the type has an approved template: it keeps going out as that one while the new one is reviewed
+        approve_templates("approval_approved")
+        r = self.post(body=utility(name="hrms_approval_approved_v2", messageType="approval_approved"))
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertIn("keeps going out as hrms_approval_approved until Meta approves", r.json()["message"])
+        self.assertEqual(whatsapp_service.template_name_for("approval_approved"), "hrms_approval_approved")
+        self.assertIsNone(whatsapp_service.template_problem("approval_approved"))
+        self.assertEqual(
+            WhatsAppTemplate.objects.get(name="hrms_approval_approved_v2").message_type, "approval_approved"
+        )
+        # Meta approves it (here: found by Sync now): the type moves onto it
+        self.meta.templates = [
+            {"id": t.meta_id, "name": t.name, "language": "en", "status": "APPROVED", "category": "UTILITY"}
+            for t in WhatsAppTemplate.objects.all()
+        ]
+        self.post("sync")
+        self.assertEqual(whatsapp_service.template_name_for("approval_approved"), "hrms_approval_approved_v2")
+
+    def test_a_new_code_template_never_takes_whatsapp_codes_away_while_it_is_reviewed(self):
+        approve_templates("otp_login", "otp_reset", "otp_activate")
+        WhatsAppSettings.objects.filter(pk=1).update(otp_enabled=True)
+        self.assertEqual(otp_service.available_channels("login"), ["whatsapp"])
+        draft = templates.draft_for("otp_login")
+        draft["name"] = "hrms_otp_v2"
+        checked = templates.validate(draft)
+        self.assertTrue(checked.ok, checked.errors)
+        row, message = templates.create(checked.clean)
+        self.assertEqual(row.status, "PENDING")
+        self.assertEqual(otp_service.available_channels("login"), ["whatsapp"])
+        self.assertEqual(otp_service.whatsapp_template_name("login"), "hrms_otp")
+
+    def test_a_type_without_an_approved_template_moves_onto_the_new_one_at_once(self):
+        make_template("hrms_approval_approved", status="REJECTED", message_type="approval_approved")
+        self.post(body=utility(name="hrms_approval_approved_v2", messageType="approval_approved"))
+        self.assertEqual(whatsapp_service.template_name_for("approval_approved"), "hrms_approval_approved_v2")
+
     def test_a_template_that_breaks_metas_rules_never_reaches_meta(self):
         r = self.post(body=utility(body="{{employee_name}} is late"))
         self.assertEqual(r.status_code, 400)
@@ -551,6 +588,17 @@ class SyncTests(TemplateBase):
         listed = {t["name"]: t for t in body["templates"]}
         self.assertEqual(listed[late]["messageTypes"], ["late_alert"])
         self.assertTrue(body["lastSyncedAt"])
+
+    def test_a_sync_never_takes_a_type_back_from_hrs_choice(self):
+        # only a review that ENDS in approval moves a type; an approved template seen again changes nothing
+        approve_templates("approval_approved")
+        make_template("hrms_approval_approved_v2", status="APPROVED", message_type="approval_approved")
+        self.meta.templates = [
+            {"id": t.meta_id, "name": t.name, "language": "en", "status": "APPROVED", "category": "UTILITY"}
+            for t in WhatsAppTemplate.objects.all()
+        ]
+        self.post("sync")
+        self.assertEqual(whatsapp_service.template_name_for("approval_approved"), "hrms_approval_approved")
 
     def test_a_new_template_learns_which_type_it_serves(self):
         name = catalog.get("absent_alert").default_template_name

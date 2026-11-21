@@ -5,8 +5,7 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 // payroll's details page, Bonus, Settlement, Promotion and Salary Increment, with their dialogs and the settlement sheet.
 // What is held here:
 //   * every page of the area, at a laptop and a phone width, is flat: nothing sticks out sideways, no frosted blur, no drop
-//     shadow outside a floating layer, no gradient fill (the printed-format salary statement is left as designed: its sheet is
-//     not themed, and the screen around it is checked like any other page);
+//     shadow outside a floating layer, no gradient fill;
 //   * the figure tiles are white tiles with a 1px line (not pastel boxes), the downloads are neutral buttons (not green), the
 //     views of a tab are underlined, the initials avatars are one colour, the production accent is the brand colour;
 //   * the same pages in the default theme keep the look they always had (the values below were read from the application
@@ -166,20 +165,18 @@ const PAGES: PageSpec[] = [
     click: '[data-testid="payroll-record-layout-table"]',
   },
   {
-    name: "staff payroll: salary statement",
-    path: () => `${FEB}&tab=salary`,
-    ready: '[data-testid="statement-toolbar"]',
+    name: "staff payroll: not included",
+    path: () => `${FEB}&view=not_included`,
+    ready: '[data-testid="not-included-view"]',
   },
+  // the Salary tab is the Excess tab since 2026-11-20 (same address); the on-screen statement and its paper preview are gone
+  { name: "staff payroll: excess", path: () => `${FEB}&tab=salary`, ready: '[data-testid="excess-summary"]' },
   {
-    // the one allowance: the paper preview of the printed-format statement is a document on a desk, so its sheet keeps the
-    // paper shadow it was designed with; everything around it is checked like any other page
-    name: "staff payroll: statement paper preview",
-    path: () => `${FEB}&tab=salary`,
-    ready: '[data-testid="statement-toolbar"]',
-    click: '[data-slot="pill-tab"]:has-text("Pages")',
-    allowShadow: '[data-testid="statement-pages"]',
+    name: "staff payroll: excess history",
+    path: () => `${FEB}&tab=salary&exview=history`,
+    ready: '[data-testid="excess-history"]',
   },
-  { name: "staff payroll: payslips", path: () => `${FEB}&tab=payslip`, ready: '[data-testid="staff-payroll-page"]' },
+  { name: "staff payroll: payslips", path: () => `${FEB}&tab=payslip`, ready: '[data-testid="ps-list"]' },
   { name: "payroll details", path: () => `/hr/payroll/details/${ashaPayrollId}`, ready: '[data-testid="pd-header"]' },
   { name: "production payroll", path: () => "/hr/production-payroll/weekly", ready: '[data-testid="pcp-cycle-badge"]' },
   { name: "bonus", path: () => "/hr/bonus", ready: '[data-ui-area="payroll"]' },
@@ -198,7 +195,7 @@ for (const width of WIDTHS) {
   test(`every payroll page is flat at ${width}px: no overflow, no blur, no drop shadow, no gradient`, async ({
     page,
   }) => {
-    // fourteen pages, each loaded and measured
+    // fifteen pages, each loaded and measured
     test.setTimeout(300_000);
     for (const spec of PAGES) {
       await open(page, "clean", spec.path(), width);
@@ -210,7 +207,7 @@ for (const width of WIDTHS) {
       expect(flat.overflow, `${spec.name} sticks out sideways`).toBeLessThanOrEqual(1);
       expect(flat.blurred, `${spec.name} has a backdrop blur`).toEqual([]);
       expect(flat.shadowed, `${spec.name} has a drop shadow`).toEqual([]);
-      // Allowed: nothing. (The salary statement's coloured strip is a flat colour here: the theme flattens gradient fills.)
+      // Allowed: nothing. (The theme flattens gradient fills, the solid buttons' included.)
       expect(flat.gradient, `${spec.name} has a gradient`).toEqual([]);
     }
   });

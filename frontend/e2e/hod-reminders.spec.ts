@@ -4,9 +4,10 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 // Requests -> HoD's and Notify (2026-11-04): every Department Head with what is pending WITH them, and the scheduled
 // reminder that goes to each of them. Ravi (E2E002) is made a Department Head of Asha (E2E001), Asha asks for a leave,
 // and the board, the drill-down, the preview and a "Send now" round are checked. The only WhatsApp here is the fake
-// WAClient of the e2e stack; nobody has a phone registered for push and no SMTP is set up, so nothing real goes out.
+// Meta WhatsApp Cloud API of the e2e stack (e2e/fake-meta.mjs; seed_e2e has every template approved there); nobody has a
+// phone registered for push and no SMTP is set up, so nothing real goes out.
 
-const FAKE_WACLIENT = "http://127.0.0.1:8190";
+const FAKE_META = "http://127.0.0.1:8190";
 
 type Reply = { status: number; body: Record<string, unknown> | null };
 
@@ -92,8 +93,8 @@ test("HoD's lists what is pending with each Department Head, and Notify sends ea
   await expect(preview).toContainText("Leave Requests: 1");
   await expect(preview).toContainText("HR Team");
 
-  // ── Send now: one round, WhatsApp through the fake WAClient, email and push skipped with a reason ──
-  await page.request.post(`${FAKE_WACLIENT}/reset`);
+  // ── Send now: one round, WhatsApp through the fake Meta API, email and push skipped with a reason ──
+  await page.request.post(`${FAKE_META}/reset`);
   await page.getByTestId("notify-send-now").click();
   const dialog = page.getByTestId("notify-send-dialog");
   await expect(dialog).toContainText("Ravi");
@@ -109,10 +110,16 @@ test("HoD's lists what is pending with each Department Head, and Notify sends ea
       { timeout: 60_000 },
     )
     .toBe("done");
-  const sent = (await (await page.request.get(`${FAKE_WACLIENT}/messages`)).json()) as { message: string }[];
-  const reminder = sent.find((m) => m.message.includes("Dear Ravi Nair"));
+  const sent = (await (await page.request.get(`${FAKE_META}/messages`)).json()) as {
+    message: string;
+    template: string;
+    params: Record<string, string>;
+  }[];
+  // one approved template message, its pending list on one line (a template variable can't hold several lines)
+  const reminder = sent.find((m) => m.template === "hrms_hod_pending_reminder");
   expect(reminder, JSON.stringify(sent)).toBeTruthy();
-  expect(reminder!.message).toContain("Leave Requests: 1");
+  expect(reminder!.message).toContain("Dear Ravi Nair");
+  expect(reminder!.params).toMatchObject({ hod_name: "Ravi Nair", total: "1", pending_list: "Leave 1" });
   const runs = (await api(page, "GET", "/api/hr/hod-reminders/runs", undefined, token)).body as {
     items: { id: number }[];
   };

@@ -267,6 +267,16 @@ def is_configured() -> bool:
     return all(_setting(name) for name in _SEND_ENV)
 
 
+def business_account_id() -> str:
+    """WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID ("" when it is not set): the webhook ignores template events of any other."""
+    return _setting("WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID")
+
+
+def phone_number_id() -> str:
+    """WHATSAPP_CLOUD_PHONE_NUMBER_ID ("" when it is not set): the webhook ignores messages to any other number."""
+    return _setting("WHATSAPP_CLOUD_PHONE_NUMBER_ID")
+
+
 def missing_env() -> list[str]:
     return [name for name, _secret, required in ENV_VARS if required and not _setting(name)]
 

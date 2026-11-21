@@ -1,6 +1,8 @@
 # 2Factor SMS OTP Integration - UKTextiles HRMS
 
-The HRMS sends its **one-time codes by SMS through 2Factor.in** instead of WhatsApp when HR switches the channel. That covers the three code messages an employee can ask for: **sign in with a code**, **forgot password**, and **first-time account activation**. Everything else (salary slips, attendance alerts, approvals, visitor and gate messages) keeps going out on WhatsApp through WAClient, exactly as described in `waclient-whatsapp-integration.md`. HR chooses the channel for the codes on the **SMS Control** page (sidebar -> Administration -> SMS Control); the default stays **WhatsApp**, so nothing changes until the 2Factor key is on the server and HR switches.
+The HRMS can send its **one-time codes by SMS through 2Factor.in**: **sign in with a code**, **forgot password** and **first-time account activation**. **SMS is used for these codes only** - no notification, document, bulk or promotional SMS exists in the code (`sms_service.send_otp` is the only send, and a test proves no other module calls the 2Factor client). Every other message goes by WhatsApp through the Meta WhatsApp Cloud API (`whatsapp-meta-cloud-integration.md`).
+
+**SMS codes and WhatsApp codes are independent (2026-11-20).** SMS codes have their own master switch on **SMS Control -> Settings -> OTP Switches** (default OFF), WhatsApp codes theirs on **WhatsApp Control -> OTP**. Either one alone is enough; with both on, the apps let the employee choose ("Send code by WhatsApp" / "Send code by SMS") and offer the other way after sending. Neither needs the other to be configured. The old single "channel" setting (`SmsSettings.otp_channel`) is no longer read; migration `0169` set `otp_enabled` from it.
 
 2Factor is the **only** SMS provider of the HRMS. (An earlier draft used another provider; it was removed completely. There is no provider setting any more.)
 
@@ -30,14 +32,14 @@ The HRMS sends its **one-time codes by SMS through 2Factor.in** instead of Whats
 
 | File | Role |
 |---|---|
-| `backend/api/otp_service.py` | Code generation, hashing, expiry, single use, attempts, per-employee limits, the **channel switch**. Shared by WhatsApp and SMS. |
-| `backend/api/sms_service.py` | The SMS pipeline: configuration and the placeholder rule, "may this machine send?", number validation, circuit breaker, caps, log row, `send_otp()` / `send_test()`, `temporarily_unavailable()`. |
-| `backend/api/twofactor_client.py` | The one HTTP call to 2Factor, timeouts, error classification, **API-key redaction** (the key is in the URL). |
+| `backend/api/otp_service.py` | Code generation, hashing, expiry, single use, attempts, per-employee limits, **which channels are available for each purpose** (`available_channels`, `channel_status`). Shared by WhatsApp and SMS; each channel has its own expiry, cooldown and limits. |
+| `backend/api/sms_service.py` | The SMS pipeline: configuration and the placeholder rule, "may this machine send?" (incl. the `SMS_ONLY_TO_EMPLOYEES` development lock), number validation, circuit breaker, caps, log row, `send_otp()` (the only send: 4-6 digits, a known purpose) / `send_test()`, `balance()` (cached 5 minutes), `temporarily_unavailable()`. |
+| `backend/api/twofactor_client.py` | The HTTP calls to 2Factor (the OTP send and the read-only balance `/{key}/BAL/SMS`), timeouts, error classification, **API-key redaction** (the key is in the URL). |
 | `backend/api/otp_views.py`, `auth_views.py` | The public endpoints `auth/login-options`, `auth/otp/*`, sign-in (per-address throttled). |
 | `backend/api/throttles.py` | The per-address throttle (`@throttle("scope")`) and its 429 shape. |
-| `backend/api/sms_control_views.py` | The HR endpoints `/api/sms-control/overview`, `settings`, `messages`, `test`. |
-| `backend/api/models/sms.py`, migrations `0123_sms_otp_channel`, `0124_sms_default_caps` | `SmsSettings`, `SmsMessageLog`. |
-| `backend/config/settings.py`, `backend/.env.example` | `TWOFACTOR_*`, `SMS_COUNTRY_CODE`, `SMS_ALLOW_SENDING`, `NUM_PROXIES`, `THROTTLE_RELAXED`. |
+| `backend/api/sms_control_views.py` | The HR endpoints `/api/sms-control/overview`, `usage`, `settings`, `messages`, `test`. |
+| `backend/api/models/sms.py`, migrations `0123_sms_otp_channel`, `0124_sms_default_caps`, `0169_meta_cloud_independent_otp` | `SmsSettings` (`otp_enabled`, `price_per_sms`, `monthly_budget` since 0169), `SmsMessageLog`; `EmployeeOtp.channel`. |
+| `backend/config/settings.py`, `backend/.env.example` | `TWOFACTOR_*`, `SMS_COUNTRY_CODE`, `SMS_ALLOW_SENDING`, `SMS_ONLY_TO_EMPLOYEES`, `NUM_PROXIES`, `THROTTLE_RELAXED`. |
 
 ## Setup, step by step
 
@@ -65,40 +67,41 @@ The HRMS sends its **one-time codes by SMS through 2Factor.in** instead of Whats
 | `TWOFACTOR_API_BASE` | `https://2factor.in/API/V1` | https only (plain http only for a localhost fake server). |
 | `SMS_COUNTRY_CODE` | blank = `WHATSAPP_DEFAULT_COUNTRY_CODE` (91) | Numbers are checked against it: Indian numbers must be 10-digit mobiles starting 6-9. |
 | `SMS_ALLOW_SENDING` | blank | See the safety rule below. |
+| `SMS_ONLY_TO_EMPLOYEES` | local only, e.g. `30020` | Employee codes a development machine may text (like `WHATSAPP_ONLY_TO_EMPLOYEES`). Required on a development machine that is allowed to send: with no list it sends nothing. A refused number is logged **Blocked** (`dev_lock`). Ignored in production; never set it on Railway. |
 
 - **Locally:** copy the block from `backend/.env.example` into `backend/.env`.
 - **Production (Railway):** service -> **Variables** -> add the `TWOFACTOR_*` values -> redeploy. The variables must be on **the server that answers**. **`DEBUG` must be `false` on Railway.**
 - A value that still looks like an example (`your_...`, `demo...`, `xxx`, `changeme`, `todo`, `<...>`, `..._here`) counts as **not configured**; the demo values can never cause a send.
 
-**Local machine safety rule.** A development machine (`DEBUG=true`, or `runserver`) **never sends SMS** unless `SMS_ALLOW_SENDING=true` says so; `false` forces it off everywhere. `python manage.py test` blanks the credentials and forces sending off, so the test suite can never send a real SMS.
+**Local machine safety rule.** A development machine (`DEBUG=true`, or `runserver`) **never sends SMS** unless `SMS_ALLOW_SENDING=true` says so, and then only to the employees named in `SMS_ONLY_TO_EMPLOYEES`; `false` forces it off everywhere. `python manage.py test` blanks the credentials and the list and forces sending off, so the test suite can never send a real SMS.
 
-### Step 3 - Test, then switch (developer + HR owner)
+### Step 3 - Test, then switch SMS codes on (developer + HR owner)
 
-1. Deploy the backend and run `python manage.py migrate` (migrations `0123`, `0124`: two tables, nothing seeded; the channel stays WhatsApp).
+1. Deploy the backend and run `python manage.py migrate` (`0123`, `0124`, `0169`: additive; SMS codes stay as they were).
 2. **SMS Control -> Overview** should show 2Factor set up: Yes and This machine sends: Allowed. If not, **Setup** lists what is missing.
-3. **SMS Control -> Test**: type your own mobile number and send. The real template goes out with the dummy code `1234`. Read the SMS: the four digits must appear where `XXXX` is. **Messages** shows the row (Sent, number masked). A test costs a real SMS and counts against the caps; 3 tests an hour per HR user.
-4. **SMS Control -> Settings -> Channel -> SMS -> Save**. **The server refuses to select SMS until 2Factor is configured on it** (400 with a sentence listing what is missing; nothing is saved).
+3. **SMS Control -> Test**: choose an employee (their registered number) or type your own mobile number and send. The real template goes out with the dummy code `1234`. Read the SMS: the four digits must appear where `XXXX` is. **Messages** shows the row (Sent, number masked). A test costs a real SMS and counts against the caps; 3 tests an hour per HR user.
+4. **SMS Control -> Settings -> OTP Switches -> SMS codes ON -> Save** (the page asks to confirm). **The server refuses to switch SMS codes on until 2Factor is configured on it** (400 with a sentence; nothing is saved). The three purpose switches below it choose what SMS codes are offered for. WhatsApp codes are not touched.
 5. Ask one employee of each kind to try it (code sign-in, forgot password, activation for a test employee without password). Watch **Messages** for the first day.
-6. **Keep password login ON** (WhatsApp Control -> Feature Controls; one switch serves both channels). It is the fallback: if SMS cannot send for the moment (a company cap used up, the breaker paused) the system lets password sign-in through by itself even if it was switched off, and `login-options` keeps saying `passwordLogin: true`.
+6. **Keep password login ON** (WhatsApp Control -> OTP; one switch serves both channels). It is the fallback: if SMS cannot send for the moment (a company cap used up, the breaker paused) the system lets password sign-in through by itself even if it was switched off, and `login-options` keeps saying `passwordLogin: true`. The same holds while 2Factor's ACCOUNT refuses (a refused key, no balance, a refused template: `sms_service.account_problem`), and that lasts until an SMS really goes out again, not only for the breaker's 10 minutes; such a failure also reopens the first-time password setup (a cap or the breaker never does: anybody can use a cap up).
 
-**Rollback:** SMS Control -> Settings -> Channel -> WhatsApp -> Save. From the next code on, codes go by WhatsApp again with every limit and sentence as before. Codes already sent by SMS stay valid until they expire.
+**Rollback:** SMS Control -> Settings -> OTP Switches -> SMS codes OFF -> Save. From the next code on no SMS is sent and the apps stop offering SMS (they re-read the options whenever a screen opens or the app comes back to the front); if WhatsApp codes are on, employees keep getting codes there, else they sign in with their password. Codes already sent by SMS stay valid until they expire.
 
 ## What employees see
 
-The apps read `otpChannel` and `codeLength` (4 for SMS, 6 for WhatsApp) from `GET /api/auth/login-options`, and `channel` and `codeLength` from the request answer; they size the code box, the "Enter the N-digit code" check and the hint from `codeLength` (an older server sends none: SMS 4, WhatsApp 6, unknown 6), and word every screen to match ("Send code by SMS", "Code sent by SMS to ••••••3210. It expires in 5 minutes."). An older server that sends no channel gets neutral wording. An employee without a valid mobile number on file cannot get a code and is told to contact HR. The mobile app needs a new APK and the Employee Web App its own deploy to show the new words and the 4-digit box; the server change is additive. An app build from before the 4-digit change only knows 6-digit codes: it cannot sign in with an SMS code until it is updated (WhatsApp codes still work in it).
+The apps read `otpChannels` (per purpose, WhatsApp first) and `channels` (`codeLength` 4 for SMS, 6 for WhatsApp) from `GET /api/auth/login-options` (never cached; re-read when a screen gains focus and when the app returns to the foreground), and `channel`, `codeLength` and `otherChannels` from the request answer. One channel available: it is used automatically. Both: the employee picks, the last pick is remembered on the device, and "Didn't get it? Send by SMS instead" appears after sending. Older app builds read only `otpChannel` / `codeLength` (the first channel) and send no channel, which still works; they size the code box, the "Enter the N-digit code" check and the hint from `codeLength` (an older server sends none: SMS 4, WhatsApp 6, unknown 6), and word every screen to match ("Send code by SMS", "Code sent by SMS to ••••••3210. It expires in 5 minutes."). An older server that sends no channel gets neutral wording. An employee without a valid mobile number on file cannot get a code and is told to contact HR. The mobile app needs a new APK and the Employee Web App its own deploy to show the new words and the 4-digit box; the server change is additive. An app build from before the 4-digit change only knows 6-digit codes: it cannot sign in with an SMS code until it is updated (WhatsApp codes still work in it).
 
 ## SMS Control (HR page)
 
-`/hr/sms-control` (permission module `sms_control`: **View** reads, **Edit** changes settings and sends tests; a branch login reads its own branch's messages but cannot change settings or send a test). Tabs: **Overview** (checklist, cards, 7-day chart; the balance card says to look in the 2Factor panel because 2Factor documents no balance call), **Settings** (Channel / Limits / Switches), **Messages** (every attempt, never a code or a full number), **Test**, **Setup**. The API key is **never shown, accepted or editable** on the page, only whether it is set. Settings changes and test sends are audited (module `sms_control`, masked number only).
+`/hr/sms-control` (permission module `sms_control`: **View** reads, **Edit** changes settings and sends tests; a branch login reads its own branch's messages but cannot change settings or send a test). Tabs (in the address, `/hr/sms-control/<tab>`): **Overview** (status: SMS codes on / 2Factor set up / this server sends / paused; the 2Factor balance, read with the balance call and cached 5 minutes; this month's sent, failed, blocked, used codes, delivery and used rates; cost so far against the budget with the projection; today against the caps; alerts), **Usage & Cost** (month picker, daily chart, by purpose, cost), **Settings** (OTP Switches / Limits / Cost: price per SMS, default ₹0.20, and a monthly budget; the old `settings/channel` address opens OTP Switches), **Messages** (every attempt, never a code or a full number), **Test** (a test code to an employee or a number; no free text), **Setup** (the variables by name, the template and sender, the voice-call note). The API key is **never shown, accepted or editable** on the page, only whether it is set. Settings changes and test sends are audited (module `sms_control`, masked number only).
 
 ## Limits and protections
 
-All apply to SMS only; with the channel on WhatsApp everything is as it was before.
+All apply to SMS only; WhatsApp codes keep their own limits. A cap or the breaker pauses SMS (the request fails with the sentence below) but SMS stays listed in `login-options`, and WhatsApp codes keep working for the same employee.
 
 | Protection | Default | Range | When it trips |
 |---|---|---|---|
 | Code lifetime | 5 min | 1-15 | the code is "incorrect or expired" |
-| Resend cooldown (employee + purpose) | 60 s | 30-600 | 429 with `retryAfterSeconds` |
+| Resend cooldown (employee + purpose, SMS codes only) | 60 s | 30-600 | 429 with `retryAfterSeconds` |
 | Codes per employee per hour | 5 | 1-20 | 429 |
 | Wrong tries per code | 5 | 3-5 (a larger value saved earlier acts as 5) | the code is dead (429) |
 | Codes per employee and purpose in 24 hours | **10** | fixed | 429 "Too many codes requested today" (SMS only: 4-digit codes are easy to guess, see below) |
@@ -114,9 +117,9 @@ The caps and the per-number limit count `sent` rows of the log (a send counts fr
 
 ## API contract
 
-Public endpoints (apps; per-address throttled): `GET /api/auth/login-options` -> `{ otpLogin, otpReset, otpActivate, passwordLogin, otpChannel, codeLength }`; `POST /api/auth/otp/request` `{ employeeCode, purpose }` -> `{ message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength }`; `POST /api/auth/otp/login`, `/otp/reset-password`, `/otp/activate`. Errors are `{ "error": "<sentence>" }` (plus `retryAfterSeconds` for a cooldown or throttle). Hostile input (a non-text code or password, a NUL byte, a body that is not a JSON object) is a clean 400 and never uses up a code. `POST /api/auth/set-password` stays refused for an unauthenticated first-time call while activation codes are ON and SMS is configured and allowed.
+Public endpoints (apps; per-address throttled): `GET /api/auth/login-options` -> `{ otpLogin, otpReset, otpActivate, passwordLogin, otpChannel, codeLength, otpChannels: {login, reset, activate}, channels: {whatsapp?, sms?} }`; `POST /api/auth/otp/request` `{ employeeCode, purpose, channel? }` -> `{ message, maskedPhone, expiresInSeconds, resendAfterSeconds, channel, codeLength, otherChannels }` (a channel that is not available: 400 `{ code: "channel_unavailable", availableChannels }`); `POST /api/auth/otp/login`, `/otp/reset-password`, `/otp/activate`. Errors are `{ "error": "<sentence>" }` (plus `retryAfterSeconds` for a cooldown or throttle). Hostile input (a non-text code or password, a NUL byte, a body that is not a JSON object) is a clean 400 and never uses up a code. `POST /api/auth/set-password` stays refused for an unauthenticated first-time call while activation codes are ON and SMS is configured and allowed.
 
-HR endpoints (module `sms_control`: GET view, PUT/POST edit): `GET /api/sms-control/overview` -> `{ provider: "twofactor", channel, configured, sendingAllowed, sendingNote, env: { authKey: bool, senderId, templateName, apiBase }, balance: { available: null, checkedAt: null, error }, today, last7Days, lastSentAt, limits: { hourlyCap, dailyCap, hourUsed, dayUsed }, circuit }`; `GET|PUT /api/sms-control/settings` (all-or-nothing, `expectedVersion` stale guard; selecting `sms` while 2Factor is not configured is `400`); `GET /api/sms-control/messages`; `POST /api/sms-control/test` `{ phone }`. None ever returns the key.
+HR endpoints (module `sms_control`: GET view, PUT/PATCH/POST edit): `GET /api/sms-control/overview` (status, balance, month, cost, alerts, today, limits, circuit), `GET /api/sms-control/usage?month=YYYY-MM`, `GET|PUT|PATCH /api/sms-control/settings` (all-or-nothing, `expectedVersion` stale guard; `otpEnabled`, `pricePerSms`, `monthlyBudget`; `otpChannel` is refused with 400; switching `otpEnabled` on while 2Factor is not configured is 400), `GET /api/sms-control/messages`, `POST /api/sms-control/test` `{ employeeCode | employeeId | phone }`. Full shapes: `api-database-reference.md`. None ever returns the key.
 
 ## The 2Factor call, as implemented
 
@@ -158,15 +161,17 @@ GET {TWOFACTOR_API_BASE}/{api_key}/SMS/+{country code + number}/{otp}/{template_
 | "Blocked: SMS sending is paused until HH:MM (IST) ..." | Circuit breaker: three provider-side failures in ten minutes. Fix the cause above; it restarts by itself. Employees use their password meanwhile. |
 | "Blocked: the hourly / daily limit of N SMS was reached." | Raise the cap in Settings -> Limits if the use is genuine; otherwise look for one caller asking again and again. |
 | "2Factor did not answer in time: the SMS may still arrive." | A read timeout: 2Factor had the request. The employee asks again; the previous code stays valid. |
-| Saving the SMS channel is refused ("SMS cannot be selected until 2Factor is configured on the server: missing: ...") | Set the variables, restart, check Overview, save again. |
+| Switching SMS codes on is refused (2Factor is not configured on the server) | Set the variables, restart, check Overview, save again. |
+| A development machine refuses every number ("not on the development list", `dev_lock`) | `SMS_ONLY_TO_EMPLOYEES` names who this machine may text; it is empty or does not include that employee. |
+| The employee gets a phone call instead of an SMS | 2Factor may voice-deliver a code (its own fallback); nothing in the HRMS can change it: ask 2Factor support. |
 | Employee: "Too many attempts from this network. Please wait N seconds and try again." | The per-address throttle. If normal use hits it, raise the rate in `settings.py` and check `NUM_PROXIES`. |
 
 ## Deploy notes
 
-- Backend: `migrate` (0123, 0124), set the `TWOFACTOR_*` variables, keep `DEBUG=false`, confirm `NUM_PROXIES` matches the proxies in front of Django (Railway: 1), keep `THROTTLE_RELAXED` unset.
-- Frontend: Employee Web App deploys separately (Vercel); the mobile app needs a new APK for the new wording. Old apps keep working during the switch.
+- Backend: `migrate` (0123, 0124, 0169), set the `TWOFACTOR_*` variables (never `SMS_ONLY_TO_EMPLOYEES` on Railway), keep `DEBUG=false`, confirm `NUM_PROXIES` matches the proxies in front of Django (Railway: 1), keep `THROTTLE_RELAXED` unset.
+- Frontend: Employee Web App deploys separately (Vercel); the mobile app needs a new APK (or OTA update) for the WhatsApp / SMS choice. Old apps keep working (they read `otpChannel` / `codeLength` and send no channel).
 - Rolling back the code is safe: the migrations only add tables and change defaults.
 
 ## Tests
 
-`python manage.py test api.tests_twofactor api.tests_sms_otp api.tests_sms_control api.tests_otp api.tests_throttles` covers the client (request shape, every failure, key never leaking through exceptions, logs, rows, answers), the send pipeline (caps, per-number cap, breaker, bounded blocked rows, concurrency), the channel switch and the "never lock everybody out" matrix, the SMS Control API and the throttles. 2Factor itself is mocked and credentials are blanked while tests run, so nothing sends a real SMS.
+`python manage.py test api.tests_twofactor api.tests_sms_otp api.tests_sms_control api.tests_otp api.tests_otp_channels api.tests_throttles` covers the channel independence matrix (only WhatsApp, only SMS, both, neither, mixed per purpose, the `channel` parameter, old clients, per-channel limits, the lockout rules), the development lock, the balance and the usage figures, and the client (request shape, every failure, key never leaking through exceptions, logs, rows, answers), the send pipeline (caps, per-number cap, breaker, bounded blocked rows, concurrency), the "never lock everybody out" matrix, the SMS Control API and the throttles. 2Factor itself is mocked and credentials are blanked while tests run, so nothing sends a real SMS.

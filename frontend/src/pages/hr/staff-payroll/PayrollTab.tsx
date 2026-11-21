@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Lock,
   SearchX,
+  UserMinus,
   Users,
 } from "lucide-react";
 import { useLocation } from "wouter";
@@ -55,6 +56,7 @@ import {
   getPayrollSkipCheckQueryKey,
   usePayrollIssues,
   usePayrollMonthStatus,
+  usePayrollNotIncluded,
   usePayrollRules,
   usePayrollSkipCheck,
   type PayrollMonthSkipped,
@@ -69,6 +71,8 @@ import { GenerateDialog } from "./GenerateDialog";
 import { MonthStatusButton } from "./month-workflow/MonthStatusButton";
 import { MonthTimeline } from "./month-workflow/MonthTimeline";
 import { StaffSkippedView } from "./month-workflow/StaffSkippedView";
+import { notIncludedCount } from "@/components/payroll/not-included";
+import { StaffNotIncludedView } from "./not-included/StaffNotIncludedView";
 import {
   STATEMENT_REPORT_ID,
   STAFF_VIEWS,
@@ -89,13 +93,14 @@ const VIEW_KEY: Record<StaffView, string> = {
   records: "payroll.records",
   issues: "payroll.issues",
   skipped: "payroll.skipped",
+  not_included: "payroll.not_included",
   rules: "payroll.rules",
 };
 
 /**
- * Payroll tab of the Staff Payroll page: the actions (Generate, Skipped, Export) and its four views - Records, Issues,
- * Skipped and Rules - all about the one month the page header chose. (It has no dashboard of the month: the counts are on
- * the view switch.)
+ * Payroll tab of the Staff Payroll page: the actions (Generate, Skipped, Export) and its five views - Records, Issues,
+ * Skipped, Not included and Rules - all about the one month the page header chose. (It has no dashboard of the month: the
+ * counts are on the view switch.)
  */
 export function PayrollTab({
   month,
@@ -150,6 +155,8 @@ export function PayrollTab({
   const runs = useMemo(() => onlyStaff(runsQuery.data), [runsQuery.data]);
   const issuesQuery = usePayrollIssues(canSee("issues") ? scope : null);
   const rulesQuery = usePayrollRules(canSee("rules") ? scope : null);
+  // who is not in the month's payroll: its count on the view switch (the view reads the same cached answer)
+  const notIncludedQuery = usePayrollNotIncluded(month, year, canSee("not_included"));
   // Runs on arrival (not behind a button) so the Skipped tile and the view's count are always live; the Generate dialog
   // and the Skipped view read the same cached answer.
   const skipQuery = usePayrollSkipCheck(
@@ -251,6 +258,13 @@ export function PayrollTab({
         icon: CircleSlash,
         count: skipQuery.isLoading || monthSkipped.isLoading ? null : skippedTotal,
         tone: "warning",
+      },
+      {
+        value: "not_included",
+        label: "Not included",
+        icon: UserMinus,
+        // what the view lists when it opens: staff only (production employees are paid on Production Payroll)
+        count: notIncludedQuery.isLoading ? null : (notIncludedCount(notIncludedQuery.data, "staff") ?? undefined),
       },
       { value: "rules", label: "Rules", icon: BookOpenCheck },
     ],
@@ -460,6 +474,16 @@ export function PayrollTab({
           checkError={skipQuery.error}
           onRecheck={() => void recheckSkips()}
           rechecking={rechecking || (skipQuery.isFetching && !skipQuery.isLoading)}
+        />
+      ) : view === "not_included" ? (
+        <StaffNotIncludedView
+          month={month}
+          year={year}
+          periodLabel={periodLabel}
+          url={url}
+          setUrl={setUrl}
+          onOpenPayroll={(payrollId) => openPayrollDetails(navigate, "staff", payrollId)}
+          onGenerate={locked || level("payroll.generate") === "hidden" ? undefined : () => setShowGenerate(true)}
         />
       ) : (
         <RulesPanel scope={scope} accent="indigo" />

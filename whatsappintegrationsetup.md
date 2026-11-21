@@ -1,16 +1,26 @@
 # Meta WhatsApp Cloud API: complete migration guide for UK Textiles HRMS
 
-Moving the HRMS's WhatsApp messages from WAClient (an unofficial WhatsApp Web link) to Meta's official **WhatsApp Cloud API**.
+Moving the HRMS's WhatsApp messages from the old provider (an unofficial WhatsApp Web link) to Meta's official **WhatsApp
+Cloud API**.
 
 Written 2026-11-18 for this codebase (Django backend in `backend/`, React HR portal in `frontend/`, Railway deployment, API at
 `https://api.uktextiles.in`). Meta changes its screens and limits from time to time: where a step says "check the dashboard",
 trust what Meta shows you over this file.
 
+> **Status (2026-11-20): built and tested in the code.** The HRMS now sends WhatsApp only through the Meta WhatsApp Cloud
+> API; the old provider is gone from the code, the settings, the tests and the e2e stack. What was actually built (the
+> modules, the WhatsApp Control page, the endpoints, the variables, the webhook, the usage and cost figures, the independent
+> WhatsApp and SMS codes, the tests) is in **`whatsapp-meta-cloud-integration.md`**, which replaces Step 9 and Step 10 of this
+> guide where they differ (notably: there is no `WHATSAPP_PROVIDER` variable, templates are drafted, submitted, synced and
+> deleted from WhatsApp Control -> Templates, and the WhatsApp Web groups and contact card are dropped). Steps 1-8 and 11-12
+> (Meta's side: the number, verification, the app, the token, the templates, the webhook, Railway) are still the instructions
+> to follow before go-live.
+
 ---
 
 ## Contents
 
-0. [Read this first: what changes when you leave WAClient](#0-read-this-first-what-changes-when-you-leave-waclient)
+0. [Read this first: what changes when you leave the WhatsApp Web link](#0-read-this-first-what-changes-when-you-leave-the-whatsapp-web-link)
 1. [Choose the phone number](#1-choose-the-phone-number)
 2. [What you need before you start](#2-what-you-need-before-you-start)
 3. [Step 1: Meta Business portfolio](#step-1-meta-business-portfolio)
@@ -31,28 +41,28 @@ trust what Meta shows you over this file.
 
 ---
 
-## 0. Read this first: what changes when you leave WAClient
+## 0. Read this first: what changes when you leave the WhatsApp Web link
 
-WAClient sent any text to anyone from a phone logged in to WhatsApp Web. That is exactly what WhatsApp restricts. The Cloud API
+The old provider sent any text to anyone from a phone logged in to WhatsApp Web. That is exactly what WhatsApp restricts. The Cloud API
 is the official channel: no restrictions for automation, but it has rules the HRMS must follow.
 
-| Topic | WAClient (today) | Meta Cloud API |
+| Topic | WhatsApp Web link (before 2026-11-20) | Meta Cloud API |
 |---|---|---|
 | What you may send first | Any text, any time | **Only pre-approved message templates.** Free text is allowed only within 24 hours after the employee last messaged *you* (the "customer service window"). Almost every HRMS message is business-initiated, so **every message type needs an approved template**. |
 | Editing the wording | HR edits freely on WhatsApp Control → Message Text | Wording lives in Meta. A change means submitting a new template (or an edited one) and waiting for Meta's approval (usually minutes, up to 24 h). Only the **variables** change per message. |
 | Variables | `{{employee_name}}` etc. anywhere, multi-line values | Same idea, but a variable's value **may not contain new lines, tabs or more than 4 spaces in a row**, and the template text has length limits (body up to 1024 characters). |
 | One-time codes (login, reset, activation) | Plain text | A special **Authentication** template with Meta's fixed wording ("123456 is your verification code.") and a copy-code button. |
-| Documents (salary slip, ID card, letters) | Text + PDF link WAClient downloads | A template with a **document (or image) header**. The file is uploaded to Meta first (or given as a public HTTPS link). |
+| Documents (salary slip, ID card, letters) | Text + a PDF link the old provider downloaded | A template with a **document (or image) header**. The file is uploaded to Meta first (or given as a public HTTPS link). |
 | WhatsApp groups (Attendance Notify) | Supported (`chat_id …@g.us`) | **Not supported** for sending into your existing groups. Send to individual numbers instead. |
 | Contact card (visitor) | Supported any time | Allowed only inside the 24 h window. Put the visitor's number in the template text instead. |
 | Delivery / read status | Undocumented webhook | Documented webhook: `sent`, `delivered`, `read`, `failed` with an error code. |
 | Sender identity | A personal-style number | A business number with a **display name** Meta approves (for example "UK Textiles HR"). |
 | Volume | Unlimited until the number got restricted | **Messaging limit** per business portfolio: starts at **250 different people per 24 hours**, then 2,000 → 10,000 → 100,000 → unlimited as quality stays good (details in [Running it](#running-it-limits-quality-pricing-consent)). |
-| Cost | WAClient subscription | **Meta charges per template message** (utility / authentication / marketing rates per country). Messages inside an open 24 h window are cheaper or free depending on the current pricing. |
+| Cost | The old provider's subscription | **Meta charges per template message** (utility / authentication / marketing rates per country). Messages inside an open 24 h window are cheaper or free depending on the current pricing. |
 | Restrictions | Number restricted for "automated behaviour" | Official automation. Meta watches **quality** (blocks and reports by recipients); bad quality pauses templates or lowers limits, it does not ban the number for being automated. |
 
 **Bottom line for the HRMS:** the send queue, the switches, the logs, the Department Head messages and the local test lock all
-stay. What changes is (1) the provider call (Graph API instead of WAClient), (2) each message type maps to an approved template,
+stay. What changes is (1) the provider call (Graph API instead of the WhatsApp Web link), (2) each message type maps to an approved template,
 (3) the webhook format, (4) documents are uploaded to Meta, (5) one-time codes use an Authentication template, (6) groups and
 contact cards are dropped or replaced.
 
@@ -60,7 +70,7 @@ contact cards are dropped or replaced.
 
 ## 1. Choose the phone number
 
-1. **Use a new, dedicated number.** The current WAClient number (…5110) has been restricted. A number restricted or banned on
+1. **Use a new, dedicated number.** The old provider's number (…5110) has been restricted. A number restricted or banned on
    WhatsApp may be refused when you register it on the Cloud API, and even if accepted it starts with a poor history. A fresh
    number avoids that.
 2. The number **must not be active on WhatsApp** (the normal app or the WhatsApp Business app) when you register it. If it is,
@@ -248,7 +258,7 @@ each HRMS message type to its template in the backend.
   list of an HOD reminder, an attendance report) must be flattened, for example `Leave 2, Permission 1`.
 - **A template may not start or end with a variable**, and needs enough fixed text around variables (Meta rejects templates that
   are mostly variables).
-- **Optional lines:** WAClient dropped a line whose variables were empty ("Note: …"). Templates cannot drop lines. Send a dash
+- **Optional lines:** the old free-text messages dropped a line whose variables were empty ("Note: …"). Templates cannot drop lines. Send a dash
   (`-`) or `None` for an empty value, or make a second template without that line.
 - **Sign-off:** a footer of up to 60 characters can hold `UK Textiles HR`.
 
@@ -450,7 +460,7 @@ the database, never shown in the portal):
 
 ```python
 # Meta WhatsApp Cloud API
-WHATSAPP_PROVIDER = os.environ.get("WHATSAPP_PROVIDER", "waclient").strip().lower()  # "meta" after the migration
+WHATSAPP_CLOUD_API_BASE = os.environ.get("WHATSAPP_CLOUD_API_BASE", "https://graph.facebook.com").strip()  # e2e: its fake
 WHATSAPP_CLOUD_API_VERSION = os.environ.get("WHATSAPP_CLOUD_API_VERSION", "v23.0").strip()
 WHATSAPP_CLOUD_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_CLOUD_PHONE_NUMBER_ID", "").strip()
 WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID = os.environ.get("WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID", "").strip()
@@ -458,7 +468,7 @@ WHATSAPP_CLOUD_ACCESS_TOKEN = os.environ.get("WHATSAPP_CLOUD_ACCESS_TOKEN", "").
 WHATSAPP_CLOUD_APP_SECRET = os.environ.get("WHATSAPP_CLOUD_APP_SECRET", "").strip()
 WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN = os.environ.get("WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN", "").strip()
 WHATSAPP_CLOUD_TEMPLATE_LANGUAGE = os.environ.get("WHATSAPP_CLOUD_TEMPLATE_LANGUAGE", "en").strip()
-if len(sys.argv) > 1 and sys.argv[1] == "test":  # tests never reach Meta (same rule as WACLIENT_*)
+if len(sys.argv) > 1 and sys.argv[1] == "test":  # tests never reach Meta
     WHATSAPP_CLOUD_ACCESS_TOKEN = ""
 ```
 
@@ -541,7 +551,7 @@ def phone_number_status() -> dict:
     return _raise_for(resp)
 ```
 
-(The original Meta integration of this project, before Gupshup and WAClient, is still in git history: `git show 29533f4` /
+(The original Meta integration of this project, before Gupshup and the WhatsApp Web link, is still in git history: `git show 29533f4` /
 `git show eca404c`, search for `graph.facebook.com`. Useful for reference; the module above is the one to build.)
 
 ### 9.3 Each HRMS message type gets its template
@@ -559,7 +569,7 @@ one line built from `by_category` (`Leave 2, Permission 1`) instead of the free 
 
 ### 9.4 Change the provider call in `backend/api/whatsapp_service.py`
 
-Today `_post_send()` posts to WAClient. Keep its contract (raise `WhatsAppServiceError(message, temporary, http_status,
+Before the migration `_post_send()` posted to the WhatsApp Web link. Keep its contract (raise `WhatsAppServiceError(message, temporary, http_status,
 provider_response)`; return something with the provider message id) and branch on the provider:
 
 ```python
@@ -607,7 +617,7 @@ Points to change around it:
   for reference. Editing = a link to WhatsApp Manager (or a "submit change" action that calls the templates API and goes back to
   PENDING). Mark a type whose template is missing or not approved as "cannot be sent".
 - **Feature Controls:** unchanged (the switches, including **Department Head notifications**, work the same).
-- **Configuration → Connection check:** replace the WAClient instance status with `whatsapp_cloud.phone_number_status()`: display
+- **Configuration → Connection check:** replace the old instance status with `whatsapp_cloud.phone_number_status()`: display
   name and its status, quality rating (GREEN / YELLOW / RED), platform `CLOUD_API`, plus how many templates are approved.
 - **Send a test:** sends the chosen type's template (with sample variables and the employee's name); shows Meta's error code and
   message on failure.
@@ -663,7 +673,7 @@ template status in the database (for example a `WhatsAppTemplateStatus` table fi
 
 ### 9.8 Tests
 
-- Mock `api.whatsapp_cloud.requests.post` / `.get` like the WAClient tests mock `requests.post` today.
+- Mock `api.whatsapp_cloud.requests.post` / `.get` like the old provider's tests mocked `requests.post`.
 - Cover: a template send builds the right body (named parameters, language, header document); a Meta error becomes the right
   `WhatsAppServiceError` (temporary for 130429 / 5xx, account pause for 131031 / 368 / 190); the webhook verifies GET, rejects a
   bad signature, applies `delivered` / `read` / `failed`; groups and contact cards are refused with Meta; the local test lock
@@ -679,7 +689,6 @@ template status in the database (for example a `WhatsAppTemplateStatus` table fi
 2. Local `backend/.env` (never committed):
 
 ```
-WHATSAPP_PROVIDER=meta
 WHATSAPP_CLOUD_API_VERSION=v23.0
 WHATSAPP_CLOUD_PHONE_NUMBER_ID=<test or production phone number id>
 WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID=<WABA id>
@@ -703,7 +712,7 @@ WHATSAPP_ONLY_TO_EMPLOYEES=30020
 6. **Webhook locally (optional):** Meta cannot reach `localhost`. Use a tunnel (for example `cloudflared tunnel --url
    http://localhost:8000`), temporarily set the tunnel URL as the callback in the app, watch statuses arrive, then set the callback
    back to `https://api.uktextiles.in/api/whatsapp/webhook/`. Simpler: test the webhook on production in Step 11.
-7. When local testing is done, remove the Meta variables from your local `.env` (as you did with WAClient).
+7. When local testing is done, remove the Meta variables from your local `.env` (as you did with the old provider's).
 
 ---
 
@@ -711,7 +720,7 @@ WHATSAPP_ONLY_TO_EMPLOYEES=30020
 
 1. **Code:** commit and push the integration (Steps 9.1–9.8) with all tests passing. Deploy on Railway.
 2. **Railway → backend service → Variables:**
-   - **Add:** `WHATSAPP_PROVIDER=meta`, `WHATSAPP_CLOUD_API_VERSION`, `WHATSAPP_CLOUD_PHONE_NUMBER_ID` (the **production**
+   - **Add:** `WHATSAPP_CLOUD_API_VERSION`, `WHATSAPP_CLOUD_PHONE_NUMBER_ID` (the **production**
      number's id), `WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID`, `WHATSAPP_CLOUD_ACCESS_TOKEN` (system user token),
      `WHATSAPP_CLOUD_APP_SECRET`, `WHATSAPP_CLOUD_WEBHOOK_VERIFY_TOKEN`, `WHATSAPP_CLOUD_TEMPLATE_LANGUAGE=en`.
    - **Remove:** `WACLIENT_INSTANCE_ID`, `WACLIENT_ACCESS_TOKEN`, `WACLIENT_API_URL`, `WACLIENT_CONTACT_API_URL`,
@@ -746,14 +755,13 @@ WHATSAPP_ONLY_TO_EMPLOYEES=30020
 - [ ] Templates for the enabled message types APPROVED (Department Head ones first).
 - [ ] Webhook verified; fields subscribed; `subscribed_apps` done; statuses update in Messages.
 - [ ] Connection check all green on production; a test message delivered and read.
-- [ ] WAClient variables removed from Railway; `WHATSAPP_ONLY_TO_EMPLOYEES` not set in Railway.
+- [ ] The old provider's variables (Step 11) removed from Railway; `WHATSAPP_ONLY_TO_EMPLOYEES` not set in Railway.
 - [ ] Employees told about the new number; opt-out handling works (an employee writing STOP is opted out).
 - [ ] App switched to **Live** mode.
 
-**Rollback:** WAClient's number is restricted, so going back is not a real option. If something fails after go-live, switch the
+**Rollback:** the old provider's number is restricted, so going back is not a real option. If something fails after go-live, switch the
 WhatsApp **master switch OFF** in WhatsApp Control (nothing is sent, nothing breaks: the HRMS workflows, phone notifications and
-emails carry on), fix, and switch it on again. Keep `WHATSAPP_PROVIDER` in the code so the provider can be changed by a variable
-if you ever add another one.
+emails carry on), fix, and switch it on again.
 
 ---
 
@@ -822,7 +830,6 @@ them if anyone who knew them leaves.
 
 | Variable | Where | Example / note |
 |---|---|---|
-| `WHATSAPP_PROVIDER` | Railway + local | `meta` |
 | `WHATSAPP_CLOUD_API_VERSION` | Railway + local | `v23.0` (the version your app dashboard shows) |
 | `WHATSAPP_CLOUD_PHONE_NUMBER_ID` | Railway + local | the production number's id (local: may be the test number's) |
 | `WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID` | Railway + local | WABA id |
@@ -833,7 +840,9 @@ them if anyone who knew them leaves.
 | `WHATSAPP_DEFAULT_COUNTRY_CODE` | existing | `91` |
 | `WHATSAPP_ALLOW_SENDING` | local only | `true` to let the local runserver send |
 | `WHATSAPP_ONLY_TO_EMPLOYEES` | **local only** | `30020`; ignored in production; never set it in Railway |
-| `WACLIENT_*`, `WHATSAPP_WEBHOOK_TOKEN` | remove | WAClient is retired |
+| `WHATSAPP_CLOUD_API_BASE` | optional | only the e2e suite sets it (its local fake); unset = `https://graph.facebook.com` |
+| `WHATSAPP_CLOUD_APP_ID` | optional | the Meta app id, for the sample upload of a document / image template; unset = asked from Meta |
+| the old provider's variables (Step 11), `WHATSAPP_WEBHOOK_TOKEN` | remove | retired 2026-11-20: nothing reads them |
 
 ### B. curl cheat sheet
 

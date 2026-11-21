@@ -39,7 +39,16 @@ describe("readWhatsAppOverview", () => {
       readRate: null,
     });
     expect(o.cost).toEqual({ soFar: 0, projected: 0, budget: null, budgetUsedPct: null, currency: "INR" });
-    expect(o.otp).toEqual({ enabled: false, available: false, templateStatus: null, templateName: null, month: null });
+    expect(o.otp).toEqual({
+      enabled: false,
+      available: false,
+      templateStatus: null,
+      templateName: null,
+      paused: false,
+      pauseReason: null,
+      limits: null,
+      month: null,
+    });
     expect(o.queue).toBeNull();
     expect(o.alerts).toEqual([]);
   });
@@ -155,6 +164,60 @@ describe("readWhatsAppSettings", () => {
     expect(s.priceRates.utility).toBe(0.12);
     expect(s.monthlyBudget).toBe(750);
     expect(s.quietHours).toEqual({ enabled: true, start: "22:00", end: "06:00" });
+  });
+
+  it("reads each message type's template and switches, and none from an older server", () => {
+    expect(readWhatsAppSettings({}).messageTypes).toEqual({});
+    const s = readWhatsAppSettings({
+      messageTypes: {
+        four_punch_alert: {
+          templateName: "hrms_punch_reminder",
+          switches: ["attendanceAlertsEnabled", "fourPunchAlertEnabled", 3, "", "type:four_punch_alert"],
+        },
+        visitor_contact: { templateName: null, switches: ["visitorNotificationEnabled"] },
+        broken: "x",
+      },
+    });
+    expect(s.messageTypes).toEqual({
+      four_punch_alert: {
+        templateName: "hrms_punch_reminder",
+        switches: ["attendanceAlertsEnabled", "fourPunchAlertEnabled", "type:four_punch_alert"],
+      },
+      visitor_contact: { templateName: null, switches: ["visitorNotificationEnabled"] },
+    });
+  });
+});
+
+describe("readWhatsAppOverview: WhatsApp codes on hold", () => {
+  it("reads the hold, its reason and the code limits", () => {
+    const o = readWhatsAppOverview({
+      otp: {
+        enabled: true,
+        available: true,
+        paused: true,
+        pauseReason: "The hourly limit of 300 WhatsApp codes is used up.",
+        limits: {
+          perEmployeePerDay: 10,
+          perNumberPerHour: 10,
+          hourlyCap: 300,
+          dailyCap: 1500,
+          hourUsed: 300,
+          dayUsed: 8,
+        },
+      },
+    });
+    expect(o.otp).toMatchObject({
+      paused: true,
+      pauseReason: "The hourly limit of 300 WhatsApp codes is used up.",
+      limits: {
+        hourlyCap: 300,
+        hourUsed: 300,
+        dailyCap: 1500,
+        dayUsed: 8,
+        perEmployeePerDay: 10,
+        perNumberPerHour: 10,
+      },
+    });
   });
 });
 

@@ -7,6 +7,11 @@ Calendar: February 2026 starts on a Sunday, so it has exactly 24 Mon-Sat
 working days. Asha (salary 24,000) is present every one of them and must be
 paid exactly 24,000; Ravi (salary 30,000) is present for the first 12 and must
 be paid exactly 15,000. Meena has no salary and must be reported as skipped.
+
+WhatsApp: every message type's Meta template is submitted to the local fake of Meta's WhatsApp Cloud API
+(frontend/e2e/fake-meta.mjs, which approves at once) through the real create path, so the stack sends WhatsApp the way a
+live server with approved templates does (codes included). Skipped when WhatsApp is not configured or the API address is
+not this machine: nothing here ever reaches Meta.
 """
 
 import bcrypt
@@ -18,6 +23,37 @@ from api.models import AttendanceDayRecord, Branch, Department, Employee, HRUser
 HR_USERNAME = "e2e_admin"
 HR_PASSWORD = "E2e-Passw0rd!"
 MONTH_START = "2026-02-01"
+
+
+def _whatsapp_templates() -> str:
+    """Submit each catalog type's draft template to the local fake Meta (see the module docstring). Returns a summary."""
+    from api import whatsapp_catalog as catalog
+    from api import whatsapp_cloud as cloud
+    from api import whatsapp_templates as templates
+    from api.models import WhatsAppTemplate
+
+    if not (cloud.is_configured() and cloud.base_is_local()):
+        return "WhatsApp templates: skipped (the WhatsApp Cloud API is not configured, or not a local fake)"
+    done: dict[str, str] = {}
+    for key, spec in catalog.TYPES.items():
+        name = spec.default_template_name
+        if not name or name in done:
+            continue
+        if WhatsAppTemplate.objects.filter(name=name, status=templates.APPROVED).exists():
+            done[name] = templates.APPROVED
+            continue
+        checked = templates.validate(templates.draft_for(key))
+        if not checked.ok:
+            done[name] = f"draft refused: {checked.first_error()}"
+            continue
+        try:
+            row, _message = templates.create(checked.clean)
+            done[name] = row.status
+        except templates.TemplateError as exc:
+            done[name] = f"not created: {exc.message}"
+    problems = {name: state for name, state in done.items() if state != templates.APPROVED}
+    summary = f"WhatsApp templates: {len(done) - len(problems)} of {len(done)} approved at the local fake"
+    return summary + "".join(f"\n  {name}: {state}" for name, state in sorted(problems.items()))
 
 
 def _working_days():
@@ -84,4 +120,5 @@ class Command(BaseCommand):
                     defaults={"status": "present", "shifts_earned": "1.00", "source": "manual"},
                 )
 
+        self.stdout.write(_whatsapp_templates())
         self.stdout.write(self.style.SUCCESS(f"Seeded e2e fixtures into {db_name}"))

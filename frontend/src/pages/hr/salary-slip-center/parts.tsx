@@ -99,7 +99,7 @@ export function SlipCell({ row }: { row: SlipCenterEmployee }) {
       {row.slip ? (
         <div className="leading-tight" title={`${row.slip.slipNumber} · by ${row.slip.generatedBy ?? "—"}`}>
           <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
-            <CheckCircle2 size={12} /> Generated {dateShort(row.slip.generatedAt.slice(0, 10))}
+            <CheckCircle2 size={12} /> Generated {dateShort(row.slip.generatedAt)}
           </span>
           <p className="text-sm font-bold tabular-nums text-gray-900">
             {inr(row.slip.net)} <span className="text-[11px] font-medium text-gray-400">net</span>

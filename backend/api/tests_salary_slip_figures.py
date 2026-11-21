@@ -84,6 +84,7 @@ class SlipEqualsReportTests(pe.Base):
 
     def test_a_bonus_added_on_the_payroll_after_generation_is_on_the_slip(self):
         p = Payroll.objects.get(employee=self.c, month=MONTH, year=YEAR)
+        Payroll.objects.filter(pk=p.pk).update(bonus=1000)  # set before the Excess tab (2026-11-20): only re-sent below
         r = self.send("patch", f"/api/payroll/{p.pk}", {"bonus": "1000"})
         self.assertEqual(r.status_code, 200, r.content[:300])
         p.refresh_from_db()

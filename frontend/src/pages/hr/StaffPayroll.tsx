@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { CreditCard, Eye } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
-import { PayslipsPanel } from "@/components/payroll/panels/payslips";
 import { useIsRefreshingPayroll, useRefreshPayroll } from "@/components/payroll/kit/use-payroll-actions";
 import { STAFF_PAYROLL_PATH, useUrlParams } from "@/components/payroll/kit/url-state";
 import { PillTabs } from "@/components/ui/pill-tabs";
@@ -11,7 +10,8 @@ import { moduleForPath } from "@/lib/permission-modules";
 import { lockMutatingControls } from "@/lib/view-only-lock";
 import { PayrollTab } from "./staff-payroll/PayrollTab";
 import { PeriodControls } from "./staff-payroll/PeriodControls";
-import { SalaryTab } from "./staff-payroll/SalaryTab";
+import { StaffPayslipsTab } from "./staff-payroll/payslips/StaffPayslipsTab";
+import { ExcessTab } from "./staff-payroll/excess/ExcessTab";
 import { STAFF_TABS, STAFF_URL_DEFAULTS, isStaffTab, resolvePeriod, type StaffTab } from "./staff-payroll/logic";
 
 // Staff Payroll's 3 sub-tabs map to 3 independently-permissioned module keys (unchanged from before this page consolidated
@@ -23,10 +23,11 @@ const STAFF_PAYROLL_TAB_MODULE: Record<StaffTab, string> = {
   payslip: "salary_slip",
 };
 
-const TAB_LABEL: Record<StaffTab, string> = { payroll: "Payroll", salary: "Salary", payslip: "Payslip" };
+// The "salary" tab is the Excess tab since 2026-11-20 (same value and permission key, so old links and roles keep working).
+const TAB_LABEL: Record<StaffTab, string> = { payroll: "Payroll", salary: "Excess", payslip: "Payslip" };
 
 /**
- * Monthly payroll for staff employees - Payroll, Salary and Payslip in one place. The page's state (tab, month, view, filters)
+ * Monthly payroll for staff employees - Payroll, Excess and Payslip in one place. The page's state (tab, month, view, filters)
  * lives in the address, so a reload, a shared link and Back from a payroll's details page all land on the same screen.
  */
 export default function StaffPayroll() {
@@ -70,8 +71,8 @@ export default function StaffPayroll() {
               <CreditCard size={22} className="text-indigo-600" /> Payroll
             </h2>
             <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">
-              Monthly payroll for staff employees - generate it, check every rule and issue behind it, and read the
-              salary statement and payslips in one place.
+              Monthly payroll for staff employees - generate it, check every rule and issue behind it, add or take off
+              amounts by hand (Excess / Detection) and download or send the payslips, in one place.
             </p>
           </div>
           <PeriodControls
@@ -80,7 +81,6 @@ export default function StaffPayroll() {
             onChange={changePeriod}
             onRefresh={() => void refresh()}
             refreshing={refreshing}
-            showPeriod={tab !== "payslip"}
           />
         </div>
 
@@ -118,11 +118,9 @@ export default function StaffPayroll() {
         {visibleTabs.includes("payroll") && tab === "payroll" && (
           <PayrollTab month={month} year={year} url={url} setUrl={setUrl} onPeriodChange={changePeriod} />
         )}
-        {visibleTabs.includes("salary") && tab === "salary" && (
-          <SalaryTab month={month} year={year} url={url} setUrl={setUrl} />
-        )}
+        {visibleTabs.includes("salary") && tab === "salary" && <ExcessTab month={month} year={year} />}
         {visibleTabs.includes("payslip") && tab === "payslip" && (
-          <PayslipsPanel kind="staff" accent="indigo" month={month} year={year} onPeriodChange={changePeriod} />
+          <StaffPayslipsTab month={month} year={year} url={url} setUrl={setUrl} />
         )}
       </div>
     </HrLayout>

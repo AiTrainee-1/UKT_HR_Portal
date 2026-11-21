@@ -120,4 +120,28 @@ describe("the OTP tab", () => {
     expect(page!.requests()).toContain("/api/whatsapp-control/meta-templates/draft/otp_login");
     expect(el('[data-testid="wa-tpl-auth-note"]')!.textContent).toContain("expires in 5 minutes");
   });
+
+  it("says when WhatsApp codes are on hold and why, and shows the code limits", async () => {
+    const overview = overviewFixture() as ReturnType<typeof overviewFixture> & { otp: Record<string, unknown> };
+    overview.otp = {
+      ...overview.otp,
+      paused: true,
+      pauseReason: "The hourly limit of 300 WhatsApp codes is used up.",
+      limits: {
+        perEmployeePerDay: 10,
+        perNumberPerHour: 10,
+        hourlyCap: 300,
+        dailyCap: 1500,
+        hourUsed: 300,
+        dayUsed: 812,
+      },
+    };
+    await open(settingsServer(), { "/api/whatsapp-control/overview": overview });
+    expect(el('[data-testid="wa-otp-verdict"]')!.textContent).toBe("ON, not available");
+    expect(el('[data-testid="wa-otp-master"]')!.textContent).toContain("hourly limit of 300 WhatsApp codes is used up");
+    expect(el('[data-testid="wa-otp-master"]')!.textContent).toContain("Password sign-in stays open");
+    const limits = el('[data-testid="wa-otp-limits"]')!.textContent!;
+    expect(limits).toContain("300 of 300 this hour");
+    expect(limits).toContain("812 of 1,500 today");
+  });
 });

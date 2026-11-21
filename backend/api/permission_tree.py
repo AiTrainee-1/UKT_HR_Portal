@@ -180,6 +180,15 @@ EMPLOYEES = N(
         api=["employees/production"],
     ),
     N(
+        "employees.factory",
+        "Factory Employees",
+        "page",
+        "Drivers, housekeeping, chefs, security and other factory support staff: their labels, and the list. Editing,"
+        " departments, designations, shifts and pay cycles there still need their own rights.",
+        routes=["/hr/employees/factory-emp"],
+        api=["employees/factory"],
+    ),
+    N(
         "employees.departments",
         "Departments",
         "page",
@@ -837,6 +846,13 @@ STAFF_PAYROLL = N(
     ),
     N("payroll.rules", "Payroll - Rules", "view", "The rules the month was worked out with.", api=["payroll/rules"]),
     N(
+        "payroll.not_included",
+        "Payroll - Not included",
+        "view",
+        "Every employee who is not in the month's payroll, and why.",
+        api=["payroll/not-included"],
+    ),
+    N(
         "payroll.generate",
         "Generate payroll",
         "feature",
@@ -849,7 +865,7 @@ STAFF_PAYROLL = N(
         "feature",
         "The Excel / PDF salary statement and the bank file (the statement also needs Reports).",
     ),
-    N("payroll.adjust", "Adjust bonus / deductions", "feature", "Change one employee's bonus, deductions or notes."),
+    N("payroll.adjust", "Adjust deductions / notes", "feature", "Change one employee's deductions or notes."),
     N(
         "payroll.details",
         "Payroll details",
@@ -858,7 +874,15 @@ STAFF_PAYROLL = N(
         routes=["/hr/payroll/details"],
         apiPatterns=[r"payroll/\d+/details"],
     ),
-    N("salary", "Salary", "tab", "The Salary tab: the month's salary statement.", own=True),
+    N(
+        "salary",
+        "Excess",
+        "tab",
+        "The Excess tab (was Salary): amounts HR adds to (Excess) or takes off (Detection) an employee's earned salary "
+        "for the month, with a remark, and their history. Edit = add, change and remove.",
+        api=["payroll-excess"],
+        own=True,
+    ),
     N(
         "salary_slip",
         "Payslip",
@@ -877,6 +901,7 @@ STAFF_PAYROLL = N(
             ],
             apiPatterns=[r"salary-slips/\d+/(email|whatsapp)"],
         ),
+        api=["payslips"],
         own=True,
     ),
 )
@@ -911,6 +936,13 @@ PRODUCTION_PAYROLL = N(
             "Workers who moved from this cycle to another, with what this cycle paid them.",
             api=["payroll/production/moved-out"],
         ),
+        N(
+            "production_payroll.payroll.not_included",
+            "Not included",
+            "view",
+            "Every employee who is not in the period's payroll, and why.",
+            api=["payroll/production/not-included"],
+        ),
     ),
     N(
         "production_payroll.new_joiners",
@@ -943,9 +975,9 @@ PRODUCTION_PAYROLL = N(
     ),
     N(
         "production_payroll.adjust",
-        "Adjust bonus / deductions",
+        "Adjust deductions / notes",
         "feature",
-        "Change one worker's bonus, deductions or notes on a pay period that is not finalized.",
+        "Change one worker's deductions or notes on a pay period that is not finalized (the bonus is the Excess tab).",
         viewCheck=True,
     ),
     N(
@@ -956,16 +988,18 @@ PRODUCTION_PAYROLL = N(
     ),
     N(
         "production_payroll.salary",
-        "Salary tab (every cycle)",
+        "Excess tab (every cycle)",
         "tab",
-        "The period's salary statement.",
-        api=["payroll/production/salary-statement"],
+        "The Excess tab (was Salary): amounts HR adds to (Excess) or takes off (Detection) a worker's earned salary for "
+        "the period, with a remark, and their history. Edit = add, change and remove.",
+        api=["payroll/production/salary-statement", "production-payroll-excess"],
     ),
     N(
         "production_payroll.payslip",
         "Payslip tab (every cycle)",
         "tab",
         "The period's payslips (their data also needs Staff Payroll -> Payslip).",
+        api=["payslips/production"],
     ),
     N(
         "production_payroll.generate",

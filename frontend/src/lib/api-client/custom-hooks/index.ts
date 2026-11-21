@@ -38,6 +38,12 @@ export * from "./production-shifts";
 export * from "./shared-endpoints";
 export * from "./payroll-insights";
 export * from "./payroll-month";
+// Staff Payroll's "Not included" view (2026-11-20): every employee not in the month's payroll, with the reason
+export * from "./payroll-not-included";
+// Staff Payroll's Payslip tab (2026-11-20): the month's payroll employees only, with the full payslip breakdown
+export * from "./staff-payslips";
+// The Excess tab of Staff Payroll (2026-11-20): amounts HR adds to / takes off the month's earned salary, with history
+export * from "./payroll-excess";
 // The standalone Salary Slip page (/hr/salary-slip, 2026-11-20): slips for any employee, statement, bank file, Hold
 export * from "./salary-slip-center";
 export * from "./recruitment";
@@ -54,3 +60,5 @@ export * from "./attendance-notify";
 export * from "./support";
 export * from "./md";
 export * from "./md-admin";
+// Employees -> Factory Employees (2026-11-20): drivers, housekeeping, chefs, security; their labels and the list
+export * from "./factory-employees";

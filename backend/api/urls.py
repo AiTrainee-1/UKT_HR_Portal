@@ -1052,4 +1052,8 @@ urlpatterns = [
     path("", include("api.urls_attendance_notify")),
     # ── HR -> Payroll -> Salary Slip: standalone slips, statement and bank file (no payroll; api/salary_slip_center/) ──
     path("salary-slip-center/", include("api.salary_slip_center.urls")),
+    # ── Staff Payroll: Excess tab, Not included view, Payslip tab (payroll_excess_views.py; 2026-11-20) ──
+    path("", include("api.urls_payroll_excess")),
+    # ── Employees -> Factory Employees (factory_employee_views.py; 2026-11-20) ──
+    path("", include("api.urls_factory_employees")),
 ]

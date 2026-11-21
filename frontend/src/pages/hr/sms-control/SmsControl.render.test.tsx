@@ -835,7 +835,7 @@ describe("2Factor is the only provider, and SMS is for codes only", () => {
       await open(`${BASE}/${tabPath}`, `sms-panel-${tabPath.split("/")[0]}`);
       await settle(20);
       const page = text(document.body);
-      expect(page, tabPath).not.toMatch(/MSG91|Twilio|WAClient|Codes go by|Channel for codes/);
+      expect(page, tabPath).not.toMatch(/MSG91|Twilio|Codes go by|Channel for codes/);
       expect(document.body.querySelectorAll("textarea").length, tabPath).toBe(0);
       unmountPage();
     }

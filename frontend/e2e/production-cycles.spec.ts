@@ -19,8 +19,11 @@ const WEEK1_PARAM = `${WEEK1.periodStart}_${WEEK1.periodEnd}`;
 // A payroll entry is a card (an <article> named "Payroll of <employee>").
 const card = (page: Page, name: string) => page.getByRole("article", { name: `Payroll of ${name}` });
 
-/** A tab of a cycle page. The tab row draws each label twice (its animation), so the role is the reliable handle. */
-const pageTab = (page: Page, label: "Payroll" | "Employees" | "Salary" | "Payslip") =>
+/**
+ * A tab of a cycle page. The tab row draws each label twice (its animation), so the role is the reliable handle. The
+ * Excess tab was the Salary tab until 2026-11-20 (it keeps the address ?tab=salary).
+ */
+const pageTab = (page: Page, label: "Payroll" | "Employees" | "Excess" | "Payslip") =>
   page.getByRole("tab", { name: new RegExp(`^${label}\\b`) });
 
 type Reply = { status: number; body: any };
@@ -96,7 +99,7 @@ async function payrollRows(page: Page, cycle: string, period = WEEK1) {
       "GET",
       `/api/payroll/production?cycle=${cycle}&periodStart=${period.periodStart}&periodEnd=${period.periodEnd}&includeParked=1`,
     )
-  ).body as { employeeCode: string; status: string; payCycle: string }[];
+  ).body as { id: number; employeeCode: string; status: string; payCycle: string }[];
 }
 
 /** Opens the period holding `date` on a cycle page, whichever tab is showing. */
@@ -303,14 +306,23 @@ test("Generate Payroll pays the rest of the cycle and leaves existing payroll al
   const dialog = page.getByTestId("pcp-generate-dialog");
   await expect(dialog).toContainText("Weekly");
   await expect(dialog).toContainText("2 Feb - 8 Feb 2026");
-  await expect(dialog).toContainText(/1 employee already has payroll/);
+  // the payslip already made (Asha's) can be worked out again (2026-11-16); unticked, it is left alone
+  await expect(page.getByTestId("pcp-generate-again-count")).toHaveText("1 payslip");
+  await page.getByTestId("pcp-generate-again").uncheck();
   await expect(dialog).toContainText(/cannot be generated/);
   await expect(page.getByTestId("pcp-generate-ready")).toHaveText("1 employee");
+  // Bala went to BiWeekly and back (the test above): a worker moved in waits in New Joiners until HR adds them
+  await expect(page.getByTestId("pcp-generate-moved-PC-W2")).toContainText("BiWeekly → Weekly");
+  const asha = (await payrollRows(page, "weekly")).find((r) => r.employeeCode === "PC-W1")!;
   await page.getByTestId("pcp-generate-confirm").click();
 
   await expect
     .poll(async () => (await payrollRows(page, "weekly")).map((r) => r.employeeCode).sort())
     .toEqual(["PC-W1", "PC-W2"]);
+  // Asha's payslip was left alone
+  const ashaNow = (await payrollRows(page, "weekly")).find((r) => r.employeeCode === "PC-W1")!;
+  expect(ashaNow.id).toBe(asha.id);
+  await page.getByTestId("pcp-nj-add-PC-W2").click({ timeout: 30_000 });
   await expect(page.getByTestId("pcp-records")).toContainText("Bala Worker", { timeout: 30_000 });
   await expect(page.getByTestId("pcp-records")).toContainText("Asha Worker");
   // the period it was started for is kept in the address
@@ -361,15 +373,17 @@ test("a payroll's Details open on their own page, and Back returns to the same p
   await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026");
   await expect(card(page, "Asha Worker")).toBeVisible();
 
-  // from a row of the Salary Statement
-  await pageTab(page, "Salary").click();
-  await page.getByRole("button", { name: "Details of Asha Worker" }).click();
+  // from a payslip on the Payslip tab (the on-screen Salary Statement it used to be reached from is gone, 2026-11-20)
+  await pageTab(page, "Payslip").click();
+  await page.getByTestId("pcp-payslip-tab").getByRole("button", { name: "Asha Worker", exact: true }).click();
+  await expect(page.getByTestId("ps-sheet")).toContainText("Asha Worker");
+  await page.getByTestId("ps-sheet-open-payroll").click();
   await expect(page.getByTestId("pd-employee-name")).toHaveText("Asha Worker");
   await page.getByTestId("pd-back").click();
-  await expect(page).toHaveURL(/tab=salary/);
-  await expect(pageTab(page, "Salary")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/tab=payslip/);
+  await expect(pageTab(page, "Payslip")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026");
-  await expect(page.getByTestId("statement-table")).toContainText("PC-W1");
+  await expect(page.getByTestId("ps-list")).toContainText("PC-W1");
 
   // from the Employees tab
   await pageTab(page, "Employees").click();
@@ -394,11 +408,11 @@ test("the tab and the pay period live in the address, so a reload lands on the s
   await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026", { timeout: 30_000 });
   await expect(page.getByTestId("pcp-roster-row-PC-W1")).toBeVisible();
 
-  // a link carries the same screen: another tab of the same period
+  // a link carries the same screen: another tab of the same period (?tab=salary is the Excess tab since 2026-11-20)
   await page.goto(`/hr/production-payroll/weekly?tab=salary&period=${WEEK1_PARAM}`);
-  await expect(pageTab(page, "Salary")).toHaveAttribute("aria-selected", "true");
+  await expect(pageTab(page, "Excess")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("pcp-period")).toContainText("2 Feb - 8 Feb 2026", { timeout: 30_000 });
-  await expect(page.getByTestId("statement-title")).toContainText("From 02-02-2026 To 08-02-2026");
+  await expect(page.getByTestId("excess-title")).toContainText(/Weekly .*2 Feb.*8 Feb 2026/);
 });
 
 test("the Issues view lists what payroll found, each issue with the day it was detected", async ({ page }) => {
@@ -435,7 +449,8 @@ test("Skipped Employees explains who cannot be paid, from the roster, and writes
   await expect(panel).toContainText("Esha Worker", { timeout: 30_000 });
   await expect(panel).toContainText(/No Salary Per Shift/);
   await expect(page.getByTestId("skipped-banner-title")).toHaveText(/1 of 3 employees was skipped/);
-  await expect(page.getByTestId("pcp-dash-kpi-skipped")).toContainText("1");
+  // the count is on the Skipped view's own tab (the cycle pages have no dashboard of tiles since 2026-11-16)
+  await expect(page.getByTestId("view-skipped-count")).toHaveText("1");
   expect(await payrollRows(page, "weekly")).toHaveLength(2);
 });
 
@@ -595,60 +610,54 @@ test("the Payroll tab is a table, one department at a time, and exports the Prod
   expect((await bank).suggestedFilename()).toMatch(/^Payroll_Production_Weekly_.*\.xlsx$/);
 });
 
-test("Salary is the period's Production Salary Statement, and Payslip shows only the slips of the cycle", async ({
+test("Excess is the period's Excess & Detection for the cycle's workers, and Payslip shows only the period's slips of the cycle", async ({
   page,
 }) => {
-  test.setTimeout(120_000); // the statement is exported to Excel in the browser
+  // (the on-screen Production Salary Statement this tab used to be is gone since 2026-11-20: the Payroll tab's Export menu
+  // downloads it, see the test above; the Excess tab keeps the address ?tab=salary)
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
-  await pageTab(page, "Salary").click();
+  await pageTab(page, "Excess").click();
   await openPeriodHolding(page, "2026-02-04", /2 Feb - 8 Feb 2026/);
+  await expect(page).toHaveURL(/tab=salary/);
 
-  // the printed statement's format, with the production columns (shifts, not the staff day columns)
-  await expect(page.getByTestId("statement-title")).toContainText(
-    "Production Salary Statement From 02-02-2026 To 08-02-2026",
-    { timeout: 30_000 },
-  );
-  const heads = page.getByTestId("statement-head-labels");
-  for (const label of ["ID NO", "Name", "Rate / shift", "Shifts", "E salary", "ESI / EF", "Total Deduction", "NET"]) {
-    await expect(heads).toContainText(label);
+  // the period's own Excess & Detection: nothing added yet, and the payroll is generated
+  await expect(page.getByTestId("excess-tab")).toHaveAttribute("data-kind", "production");
+  await expect(page.getByTestId("excess-title")).toContainText(/Weekly .*2 Feb.*8 Feb 2026/, { timeout: 30_000 });
+  await expect(page.getByTestId("excess-empty")).toBeVisible();
+  await expect(page.getByTestId("excess-not-generated-note")).toHaveCount(0);
+
+  // an amount can be added for the workers of this cycle only: everyone else is listed with the reason
+  const people = Object.fromEntries((await testEmployees(page)).map((e) => [e.employeeCode, e.id]));
+  await page.getByTestId("excess-add-open").click();
+  const dialog = page.getByTestId("excess-add-dialog");
+  await dialog.getByTestId("excess-picker-search").fill("PC-");
+  for (const code of ["PC-W1", "PC-W2"])
+    await expect(dialog.getByTestId(`excess-option-${people[code]}`)).toBeEnabled();
+  for (const [code, reason] of [
+    ["PC-B1", "On the BiWeekly cycle"],
+    ["PC-U1", "Not assigned to a pay cycle"],
+    ["PC-N1", "No salary per shift on the profile"],
+  ]) {
+    await expect(dialog.getByTestId(`excess-option-${people[code]}`)).toBeDisabled();
+    await expect(dialog.getByTestId(`excess-option-${people[code]}`)).toContainText(reason);
   }
-  await expect(heads).not.toContainText("LOP");
-  await expect(heads).not.toContainText("Present");
-  const statement = page.getByTestId("pcp-salary-tab");
-  await expect(statement).toContainText("PC-W1");
-  await expect(statement).toContainText("PC-W2");
-  await expect(statement).not.toContainText("PC-B1");
-  await expect(page.getByTestId("statement-total")).toContainText("GRAND TOTAL");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 
-  // every row can be adjusted, and the statement exports (Excel, PDF, Print)
-  await expect(
-    page
-      .getByTestId("statement-panel")
-      .getByRole("button", { name: /^Edit the bonus/ })
-      .first(),
-  ).toBeVisible();
-  await page.getByTestId("statement-export").click();
-  for (const item of ["xlsx", "pdf", "print"]) {
-    await expect(page.getByTestId(`statement-export-${item}`)).toBeVisible();
-  }
-  const excel = page.waitForEvent("download", { timeout: 60_000 });
-  await page.getByTestId("statement-export-xlsx").click();
-  expect((await excel).suggestedFilename()).toMatch(/^Salary_Statement.*\.xlsx$/);
-  await page.keyboard.press("Escape"); // the menu stays open after an export
-
+  // Payslip: the slips of this cycle's payroll for the period the page shows
   await pageTab(page, "Payslip").click();
-  await page.getByLabel("Month").selectOption({ label: "February" });
-  await page.getByLabel("Year").fill("2026");
-  await expect(page.getByTestId("pcp-payslip-tab")).toContainText("Asha Worker");
-  await expect(page.getByTestId("pcp-payslip-tab")).toContainText("Bala Worker");
-  await expect(page.getByTestId("pcp-payslip-tab")).not.toContainText("Chitra Worker");
+  const slips = page.getByTestId("pcp-payslip-tab");
+  await expect(page.getByTestId("ps-heading")).toContainText("2 payslips", { timeout: 30_000 });
+  await expect(slips).toContainText("Asha Worker");
+  await expect(slips).toContainText("Bala Worker");
+  await expect(slips).not.toContainText("Chitra Worker");
+  await expect(slips).not.toContainText("Esha Worker");
 
   await page.goto("/hr/production-payroll/biweekly");
   await pageTab(page, "Payslip").click();
-  await page.getByLabel("Month").selectOption({ label: "February" });
-  await page.getByLabel("Year").fill("2026");
-  await expect(page.getByTestId("pcp-payslip-tab")).toContainText("Chitra Worker");
+  await openPeriodHolding(page, "2026-02-10", /2 Feb - 15 Feb 2026/);
+  await expect(page.getByTestId("pcp-payslip-tab")).toContainText("Chitra Worker", { timeout: 30_000 });
   await expect(page.getByTestId("pcp-payslip-tab")).not.toContainText("Asha Worker");
 });
 
@@ -656,8 +665,16 @@ test("a period that has not ended cannot be generated yet", async ({ page }) => 
   await loginAsHr(page);
   await page.goto("/hr/production-payroll/weekly");
   await pageTab(page, "Employees").click();
-  // a week far in the future, so the check never depends on today's date or time zone
-  await openPeriodHolding(page, "2099-01-07", /5 Jan - 11 Jan 2099/);
+  // next week: the period picker only offers dates up to a few months ahead (2026-11-16), and a week that starts after
+  // today can never have ended, whatever the time zone (Weekly weeks run Monday to Sunday)
+  const day = new Date();
+  day.setDate(day.getDate() + 8);
+  const sunday = new Date(day);
+  sunday.setDate(day.getDate() + ((7 - day.getDay()) % 7));
+  const iso = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][sunday.getMonth()];
+  await openPeriodHolding(page, iso(day), new RegExp(`- ${sunday.getDate()} ${month} ${sunday.getFullYear()}`));
   await expect(page.getByTestId("pcp-not-ended")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("pcp-generate-PC-W1")).toBeDisabled();
 
@@ -723,7 +740,8 @@ test("Settings -> Production Payroll offers every weekday as the week start, and
     ]);
 
     await select.selectOption("wednesday");
-    await expect(page.getByTestId("weekly-today-preview")).toContainText(/Wed \d+ \w+ 20\d\d to Tue \d+ \w+ 20\d\d/);
+    // the panel says how the weeks would run (its old "today" preview line became this line and the cycle card, 2026-11-16)
+    await expect(page.getByTestId("weekly-week-runs-line")).toHaveText("Week runs Wednesday → Tuesday");
     await page.getByRole("button", { name: "Save Weekly settings" }).click();
     // asked only when payroll was already generated for days the new weeks would cover
     await page
@@ -778,7 +796,14 @@ test("a read-only login can look but not generate or assign", async ({ page }) =
     await expect(card(page, "Asha Worker").getByRole("button", { name: /^details/i })).toBeEnabled();
     // ... writing is: the bank transfer file and Mark as Cleared
     await expect(page.getByTestId("pcp-export-bank")).toBeDisabled();
-    await expect(card(page, "Asha Worker").getByRole("button", { name: /mark as cleared/i })).toBeDisabled();
+    // (Mark as Cleared is an approval of its own: a login without it gets no button at all)
+    await expect(card(page, "Asha Worker").getByRole("button", { name: /mark as cleared/i })).toHaveCount(0);
+    // the Excess tab: the period's figures are there to read, but nothing can be added
+    await page.goto(`/hr/production-payroll/weekly?tab=salary&period=${WEEK1_PARAM}`);
+    await expect(page.getByTestId("excess-summary")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("excess-add-open")).toHaveCount(0);
+    await page.getByTestId("excess-view-history").click();
+    await expect(page.getByTestId("excess-history")).toBeVisible();
     await page.goto("/hr/employees/productionEmployee");
     await peTab(page, "Weekly").click();
     await expect(page.getByTestId("pe-row-assign-PC-W1")).toBeDisabled();
@@ -800,6 +825,14 @@ test("a read-only login can look but not generate or assign", async ({ page }) =
       viewer,
     );
     expect(generating.status).toBe(403);
+    const adding = await api(
+      page,
+      "POST",
+      "/api/production-payroll-excess/entries",
+      { cycle: "weekly", ...WEEK1, kind: "excess", amount: 100, remark: "not allowed", employeeIds: [1] },
+      viewer,
+    );
+    expect(adding.status).toBe(403);
   } finally {
     await api(page, "DELETE", `/api/hr-users/${user.body.id}`);
     await api(page, "DELETE", `/api/roles/${role.body.id}`);
@@ -1015,6 +1048,20 @@ test("Weekly -> Monthly: the move warns with the real dates, and Monthly pays on
       timeout: 30_000,
     },
   );
+
+  // the two periods finalized here are unlocked again (nothing in them is paid), so the test after this one can generate
+  // and finalize them itself
+  for (const [cycle, period] of [
+    ["weekly", WEEK1],
+    ["monthly", MONTH_BEFORE],
+  ] as const) {
+    const unlocked = await api(page, "POST", "/api/payroll/production/period-unlock", {
+      cycle,
+      ...period,
+      reason: "E2E: open again for the next test",
+    });
+    expect(unlocked.status, JSON.stringify(unlocked.body)).toBe(200);
+  }
 });
 
 test("Monthly -> Weekly: the days neither cycle paid are added to the first Weekly payroll as catch-up days", async ({
